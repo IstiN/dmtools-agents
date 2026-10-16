@@ -2401,3 +2401,108 @@ suite('sm github source: rework-on-red-gate-unlatched covers the FIRST validatio
             'the arming is bounded per head — the shared 🔴 red-head marker budget');
     });
 });
+
+suite('sm github source: trigger fail-open overfetch (gh-922)', function () {
+    // gh-922 (live fa pr-1615 2026-10-16): a candidate whose workflow
+    // trigger 422s (deleted head ref) must not consume the dispatch slot.
+    // The SM engine loop already gives failed candidates no slot credit —
+    // the starvation came from queryPrs slicing the candidate list to
+    // `limit` BEFORE any dispatch: a limit:1 rule returned ONLY the dead
+    // head and the loop had nothing to fall through to. The source now
+    // over-fetches `limit + TRIGGER_FALLTHROUGH_RESERVE` tier-sorted
+    // candidates; the engine's processedKeys cap still bounds successful
+    // dispatches at `limit`. The 🥇 preemption marker stays keyed on the
+    // `limit` boundary (the slot count), not the overfetch boundary.
+
+    var load = function (tools, prs, statuses) {
+        var localProvider = {
+            prStatus: function (n) { return (statuses || {})[n] || null; }
+        };
+        var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
+            './common/smProvider.js': {
+                createSmProvider: function () { return localProvider; }
+            }
+        }), tools || {});
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': {
+                createSmProvider: function () { return localProvider; }
+            },
+            '../../common/smAsync.js': smAsyncMod
+        }), tools);
+    };
+
+    function listPr(n, labels, ref) {
+        return { number: n, state: 'open', draft: false, body: '',
+                 head: { sha: 'ovsha' + n, ref: ref || ('feat/ov-' + n) },
+                 labels: (labels || []).map(function (l) { return { name: l }; }),
+                 user: { login: 'ai-teammate' } };
+    }
+
+    test('queryPrs returns limit + fallthrough-reserve candidates (the FIFO survives a dead head)', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(306, ['agent:review']),
+                    listPr(305, ['agent:review']),
+                    listPr(304, ['agent:review']),
+                    listPr(303, ['agent:review']),
+                    listPr(302, ['agent:review', 'priority_blocker']),
+                    listPr(301, ['agent:review'])
+                ];
+            }
+        });
+
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 1
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate' });
+
+        assert.equal(items.length, 4,
+            'limit 1 must still return the reserve candidates (limit + 3) for the same-tick fallthrough');
+        assert.equal(items[0].prNumber, 302,
+            'the blocker still leads the tier sort');
+        assert.deepEqual(items.slice(1).map(function (i) { return i.prNumber; }),
+            [301, 303, 304],
+            'the rest is plain FIFO — oldest mediums first');
+    });
+
+    test('a parked (validation_failed) blocker does NOT preempt — its tier is voided to medium', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review', 'priority_blocker', 'validation_failed']),
+                    listPr(301, ['agent:review'])
+                ];
+            }
+        });
+
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 1
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate' });
+
+        assert.equal(items[0].prNumber, 301,
+            'the parked blocker waits in plain FIFO order — a park can never preempt');
+    });
+
+    test('the 🥇 preemption marker still fires at the limit boundary (not the overfetch boundary)', function () {
+        var logs = [];
+        var srcMod = load({
+            console: { log: function () { logs.push(Array.prototype.map.call(arguments, String).join(' ')); },
+                       warn: function () {}, error: function () {} },
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review', 'priority_blocker']),
+                    listPr(301, ['agent:review'])
+                ];
+            }
+        });
+
+        srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 1
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate' });
+
+        assert.ok(logs.some(function (l) {
+            return l.indexOf('\uD83E\uDD47') !== -1 && l.indexOf('pr-302') !== -1;
+        }), 'the blocker taking the limit:1 slot over a cut medium still logs the preemption line');
+    });
+});

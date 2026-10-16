@@ -6436,6 +6436,231 @@ suite('smAgent: PR priority tiers (owner directive 2026-10-08)', function () {
     });
 });
 
+suite('smAgent: trigger fail-open dispatch (gh-922)', function () {
+    // gh-922 (live IstiN/flutter_agent_harness 2026-10-16, pr-1615): a PR
+    // whose head ref was deleted on the fork fails EVERY dispatch with
+    // 422 'No ref found for: <ref>'. Pre-fix the candidate list was sliced
+    // at query time (limit:1 + the blocker tier sort), so the failed
+    // trigger consumed the dispatch slot: 6 non-blocker PRs starved for
+    // hours behind a dead head that was re-selected and re-failed every
+    // tick. Fail-open dispatch (owner ask): a candidate whose trigger
+    // fails must NOT consume the slot — skip with a recorded reason and
+    // continue down the FIFO in the SAME tick; a priority blocker that
+    // cannot be dispatched yields the slot (it keeps its label); after
+    // triggerFailParkCap (default 3) no-ref failures on one head the PR
+    // parks validation_failed with a restore/re-push comment, and a
+    // parked item never preempts.
+    //
+    // Modeled on the priority-tier suite above: the REAL github source
+    // (realSource) exercises queryPrs' tier sort + limit slicing, and the
+    // rule dispatches through triggerWorkflow with workflowRef={branch} —
+    // the exact path the live 422s came from.
+
+    var RULE_TF = { source: 'github', id: 'review-on-label-gh922',
+        query: { type: 'pr', labels: ['agent:review'], draft: false },
+        inputs: { pr: '{prNumber}', leg: 'review' },
+        workflowRef: '{branch}', limit: 1 };
+
+    function tfConfig(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function sha40(n) {
+        var s = 'abc' + n;
+        while (s.length < 40) s += '0';
+        return s;
+    }
+
+    // Raw REST /pulls payload (github_list_prs serves it verbatim).
+    function tfPr(n, labels, ref) {
+        return { number: n, state: 'open', draft: false, body: '',
+                 head: { sha: sha40(n), ref: ref },
+                 base: { sha: 'tfbase0' },
+                 labels: (labels || []).map(function (l) { return { name: l }; }),
+                 user: { login: 'ai-teammate' } };
+    }
+
+    var DEAD_REF = 'gone/deleted-branch';
+    var NO_REF_ERR = '422: No ref found for: ' + DEAD_REF;
+
+    function tfRun(opts) {
+        var gh = Object.assign({ realSource: true }, opts.github || {});
+        var sm = makeSmAgent(Object.assign(tfConfig('o', 'r'), {
+            captureConsole: true,
+            github: gh,
+            onTrigger: opts.onTrigger
+        }));
+        sm.action({ jobParams: { owner: 'o', repo: 'r', machineAuthor: 'ai-teammate',
+                                 rules: [RULE_TF] } });
+        return sm;
+    }
+
+    function triggeredRefs(sm) {
+        return sm.capturedTriggers.map(function (t) { return t.ref; });
+    }
+
+    function parkAdds(sm) {
+        return sm.capturedPrLabelAdds.filter(function (a) {
+            return (a.labels || []).indexOf('validation_failed') !== -1;
+        }).map(function (a) { return a.number; });
+    }
+
+    function bodyOf(sm, marker) {
+        return sm.capturedPrComments.filter(function (c) {
+            return String(c.body || '').indexOf(marker) !== -1;
+        }).map(function (c) { return String(c.body); });
+    }
+
+    test('a 422 no-ref trigger failure does NOT consume the slot — the next FIFO candidate dispatches in the same tick', function () {
+        var sm = tfRun({
+            github: { prList: JSON.stringify([
+                tfPr(302, ['agent:review', 'priority_blocker'], DEAD_REF), // younger blocker, DEAD head
+                tfPr(301, ['agent:review'], 'feat/alive')                  // older medium, live head
+            ]) },
+            onTrigger: function (o, r, w, inputs, ref) {
+                if (ref === DEAD_REF) throw new Error(NO_REF_ERR);
+            }
+        });
+
+        var refs = triggeredRefs(sm);
+        assert.ok(refs.indexOf(DEAD_REF) !== -1,
+            'the dead-head candidate was attempted (the failure itself still happens)');
+        assert.ok(refs.indexOf('feat/alive') !== -1,
+            'FAIL-OPEN: the non-blocker candidate receives the slot in the SAME tick');
+        // PR-as-carrier untouched: the failed blocker keeps every label.
+        assert.deepEqual(sm.capturedPrLabelRemoves.filter(function (r) {
+            return r.number === 302; }), [],
+            'the failed candidate loses no labels');
+    });
+
+    test('the failure is recorded with a reason: a trigger-failed marker comment (attempt 1/3), no park on the first failure', function () {
+        var sm = tfRun({
+            github: { prList: JSON.stringify([
+                tfPr(302, ['agent:review', 'priority_blocker'], DEAD_REF)
+            ]) },
+            onTrigger: function () { throw new Error(NO_REF_ERR); }
+        });
+
+        var markers = bodyOf(sm, 'trigger-failed');
+        assert.equal(markers.length, 1,
+            'exactly one marker comment for one failed dispatch');
+        assert.ok(markers[0].indexOf('attempt 1/3') !== -1,
+            'the marker carries the consecutive-failure attempt count');
+        assert.ok(markers[0].indexOf(DEAD_REF) !== -1,
+            'the marker records the dead ref (the asked-for recorded reason)');
+        assert.deepEqual(parkAdds(sm), [],
+            'the FIRST failure must not park the PR');
+    });
+
+    test('3 consecutive no-ref failures on one head park the PR validation_failed with a restore/re-push ask', function () {
+        var priorAttempts = [1, 2].map(function (n) {
+            return { body: '\u26A0\uFE0F trigger-failed ' + DEAD_REF + ' \u2014 attempt ' + n +
+                '/3 at 2026-10-16T13:0' + n + ':00Z — prior failure' };
+        });
+        var sm = tfRun({
+            github: {
+                prList: JSON.stringify([
+                    tfPr(302, ['agent:review', 'priority_blocker'], DEAD_REF)
+                ]),
+                prComments: priorAttempts,
+                pr: { number: 302, head: { sha: sha40(302) } }
+            },
+            onTrigger: function () { throw new Error(NO_REF_ERR); }
+        });
+
+        assert.deepEqual(parkAdds(sm), [302],
+            'the THIRD consecutive failure on the head parks validation_failed');
+        var parks = bodyOf(sm, 'parked-head: ');
+        assert.equal(parks.length, 1, 'the park posts exactly one park comment');
+        assert.ok(parks[0].indexOf('parked-head: ' + sha40(302)) !== -1,
+            'the park comment carries the parked-head sha (the #633 RESET key)');
+        assert.ok(/restore|re-push/i.test(parks[0]),
+            'the park comment tells the author to restore/re-push the branch');
+        assert.ok(parks[0].indexOf('attempt 3/3') !== -1,
+            'the park comment records the capped attempt count');
+        assert.deepEqual(sm.capturedPrLabelRemoves, [],
+            'parking never strips labels (PR-as-carrier rule)');
+    });
+
+    test('prior failures on a DIFFERENT head do not count — a moved head starts a fresh attempt count', function () {
+        var sm = tfRun({
+            github: {
+                prList: JSON.stringify([
+                    tfPr(302, ['agent:review'], 'moved/branch')
+                ]),
+                prComments: [{
+                    body: '\u26A0\uFE0F trigger-failed other/branch \u2014 attempt 2/3 at 2026-10-16T13:00:00Z — old head'
+                }]
+            },
+            onTrigger: function () { throw new Error('422: No ref found for: moved/branch'); }
+        });
+
+        assert.deepEqual(parkAdds(sm), [],
+            '2 prior failures were on ANOTHER head — this is attempt 1, no park');
+        var markers = bodyOf(sm, 'trigger-failed');
+        assert.ok(markers.some(function (b) {
+            return b.indexOf('attempt 1/3') !== -1;
+        }), 'the count restarts at 1/3 for the new head');
+    });
+
+    test('an already-parked PR never re-marks or re-parks', function () {
+        var sm = tfRun({
+            github: { prList: JSON.stringify([
+                tfPr(302, ['agent:review', 'priority_blocker', 'validation_failed'], DEAD_REF)
+            ]) },
+            onTrigger: function () { throw new Error(NO_REF_ERR); }
+        });
+
+        assert.deepEqual(bodyOf(sm, 'trigger-failed'), [],
+            'no marker comments once parked');
+        assert.deepEqual(bodyOf(sm, 'parked-head: '), [],
+            'no duplicate park comment');
+    });
+
+    test('transient trigger failures fall through the FIFO but never park (log-only)', function () {
+        var sm = tfRun({
+            github: { prList: JSON.stringify([
+                tfPr(302, ['agent:review'], 'feat/flaky'),
+                tfPr(301, ['agent:review'], 'feat/alive')
+            ]) },
+            onTrigger: function (o, r, w, inputs, ref) {
+                if (ref === 'feat/flaky') throw new Error('500: Server Error — rate limited');
+            }
+        });
+
+        assert.ok(triggeredRefs(sm).indexOf('feat/alive') !== -1,
+            'a transient failure also yields the slot (fail-open)');
+        assert.deepEqual(bodyOf(sm, 'trigger-failed'), [],
+            'no marker comments for transient failures (they are not head-dead evidence)');
+        assert.deepEqual(parkAdds(sm), [], 'no parking on transient failures');
+    });
+
+    test('an issue-carrier dispatch failure records nothing (parking is PR-carrier only)', function () {
+        var sm = makeSmAgent(Object.assign(tfConfig('o', 'r'), {
+            captureConsole: true,
+            github: {
+                items: [{ key: 'gh-5', labels: ['agent:rework'], issueNumber: 5,
+                          prNumber: null, draft: false }],
+                prComments: []
+            },
+            onTrigger: function () { throw new Error(NO_REF_ERR); }
+        }));
+        sm.action({ jobParams: { owner: 'o', repo: 'r', rules: [
+            { source: 'github', id: 'issue-anchored-gh922',
+              query: { type: 'issue', labels: ['agent:rework'] },
+              inputs: { issue: '{issueNumber}', leg: 'rework' },
+              workflowRef: 'main', limit: 1 }
+        ] } });
+
+        assert.equal(sm.capturedTriggers.length, 1,
+            'the dispatch was attempted');
+        assert.deepEqual(sm.capturedPrComments, [],
+            'no PR comments for an issue-carrier item');
+        assert.deepEqual(parkAdds(sm), [], 'no parking for an issue-carrier item');
+    });
+});
+
 suite('smAgent: stamp check-run deep links (owner 2026-09-27)', function () {
     // Owner complaint (live on fa PR checks): bridge stamp check-runs
     // concluded with 'This check concluded as success' + the generic
