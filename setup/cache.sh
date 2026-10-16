@@ -159,6 +159,29 @@ _cache_konan() {
   export_var "KONAN_CACHE_RESTORE_KEY" "konan-"
 }
 
+_cache_dart() {
+  # Dart SDK (gh-918: factory legs on dart repos need the same gate toolchain
+  # as CI — setup/dart.sh resolves the channel/version and installs under
+  # ~/.dart-sdk/dart-sdk). Key on the target dart.sh ACTUALLY resolves — the
+  # same precedence (explicit dart:<version> arg > DART_VERSION env >
+  # quality.yml dart-lang/setup-dart detection > stable) — so the key the
+  # restore step computes ("cache.sh keys dart", BEFORE the install) is the
+  # key the save step derives after it, and the primary key can round-trip.
+  # (Keying on ${DART_VERSION:-stable} alone keyed the env var, not the
+  # resolution: on a beta-pinned repo the restore step exported dart-stable-…
+  # while dart.sh installed beta.) dart.sh keeps DART_VERSION a pure input
+  # pin — it does not re-export the installed version under it — so this plan
+  # call resolves identically before and after the install.
+  local version="${1:-}"
+  if [ -z "${version}" ]; then
+    version="$(bash "${SCRIPT_DIR}/dart.sh" plan 2>/dev/null | sed -n 's/^requested=//p' | head -1)"
+  fi
+  [ -n "${version}" ] || version="stable"
+  export_var "DART_CACHE_PATH" "${HOME}/.dart-sdk"
+  export_var "DART_CACHE_KEY"  "dart-${version}-${OS_TAG}"
+  export_var "DART_CACHE_RESTORE_KEY" "dart-"
+}
+
 _cache_android() {
   local compile_sdk="${1:-${ANDROID_COMPILE_SDK:-36}}"
   # Android SDK packages are large but stable — key on compileSdk version.
@@ -191,6 +214,7 @@ _dispatch_tool() {
     cursor)   _cache_cursor ;;
     gradle)   _cache_gradle ;;
     konan)    _cache_konan ;;
+    dart)     _cache_dart  "${version}" ;;
     android)  _cache_android  "${version}" ;;
     *)        echo "⚠️  Unknown tool '${tool}' — skipping cache config" ;;
   esac
@@ -213,6 +237,7 @@ _print_info() {
   printf "│ %-11s │ %-32s │ %-46s │\n" "playwright" "~/.cache/ms-playwright" "playwright-browsers-latest-linux-x86_64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "gradle"    "~/.gradle/wrapper + caches" "gradle-wrapper-<hash> / gradle-caches-<hash>"
   printf "│ %-11s │ %-32s │ %-46s │\n" "konan"     "~/.konan"            "konan-<libs.versions.toml-hash>"
+  printf "│ %-11s │ %-32s │ %-46s │\n" "dart"      "~/.dart-sdk"         "dart-stable-linux-x86_64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "android"   "\$ANDROID_HOME/..."  "android-sdk-36-linux-x86_64"
   echo "└─────────────┴──────────────────────────────────┴────────────────────────────────────────────────┘"
   echo ""
@@ -231,7 +256,7 @@ _print_info() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-ALL_TOOLS="java node dmtools maestro copilot copilot-session kimi-session fa-session cursor-session codemie cursor codegraph playwright kimi"  # cursor has no cache
+ALL_TOOLS="java node dmtools maestro copilot copilot-session kimi-session fa-session cursor-session codemie cursor codegraph playwright kimi dart"  # cursor has no cache
 MODE="${1:-info}"
 shift || true
 
