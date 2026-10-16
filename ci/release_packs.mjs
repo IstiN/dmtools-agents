@@ -117,7 +117,13 @@ function setupTouched() {
       f === 'scripts/close-review-cycle.sh' ||
       f === 'scripts/close-rework-cycle.sh' ||
       f === 'scripts/hand-issue-to-reviewer.sh' ||
-      f === 'scripts/publish-token-usage.sh',
+      f === 'scripts/publish-token-usage.sh' ||
+      f === 'scripts/quarantine-fa-session.sh' ||
+      f === 'scripts/restore-fa-session.sh' ||
+      f === 'scripts/persist-fa-session.sh' ||
+      f === 'scripts/persist-fa-memory.sh' ||
+      f === 'scripts/collect-fa-crash-log.sh' ||
+      f === 'scripts/fa-trace-watchdog.sh',
   );
 }
 
@@ -141,6 +147,12 @@ function buildFactorySetup() {
       'close-rework-cycle.sh',
       'hand-issue-to-reviewer.sh',
       'publish-token-usage.sh',
+      'quarantine-fa-session.sh',
+      'restore-fa-session.sh',
+      'persist-fa-session.sh',
+      'persist-fa-memory.sh',
+      'collect-fa-crash-log.sh',
+      'fa-trace-watchdog.sh',
     ]) {
       copyFileSync(join(ROOT, 'scripts', engineScript), join(staging, 'scripts', engineScript));
     }
