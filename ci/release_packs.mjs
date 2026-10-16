@@ -106,7 +106,15 @@ function setupTouched() {
   // setup/ content or THIS builder — either way the factory-setup asset
   // must re-ship (live: the builder-only diff cut no release and the
   // factory-setup asset never landed, 2026-10-03).
-  return changed.some((f) => f.startsWith('setup/') || f === 'ci/release_packs.mjs');
+  return changed.some(
+    (f) =>
+      f.startsWith('setup/') ||
+      f === 'ci/release_packs.mjs' ||
+      // Engine-side factory scripts ship in the factory-setup asset too —
+      // a change to any of them must re-cut the asset (awf flip depends on
+      // the pack landing first).
+      f === 'scripts/apply-review-verdict.sh',
+  );
 }
 
 /** Builds dist/factory-setup-<datestamp>.zip + .sha256 sidecar. */
@@ -119,7 +127,12 @@ function buildFactorySetup() {
     mkdirSync(join(staging, 'configs'), { recursive: true });
     cpSync(join(ROOT, 'setup'), join(staging, 'setup'), { recursive: true });
     mkdirSync(join(staging, 'scripts'), { recursive: true });
-    copyFileSync(join(ROOT, 'scripts', 'git-push-guard.sh'), join(staging, 'scripts', 'git-push-guard.sh'));
+    // Engine-side factory scripts (awf de-bloat 2026-10-16): these carry SM
+    // cycle logic, not factory-bootstrap glue — they belong to the engine
+    // pack. Keep this list in sync with awf's call sites.
+    for (const engineScript of ['git-push-guard.sh', 'apply-review-verdict.sh']) {
+      copyFileSync(join(ROOT, 'scripts', engineScript), join(staging, 'scripts', engineScript));
+    }
     for (const leg of FACTORY_SETUP_LEGS) {
       copyFileSync(join(ROOT, `${leg}.json`), join(staging, 'configs', `${leg}.json`));
     }
