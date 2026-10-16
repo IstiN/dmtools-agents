@@ -27,14 +27,10 @@ var mergeState = require('./common/mergeState.js');
 const { STATUSES } = require('./config.js');
 var trackersModule = require('./common/trackers.js');
 
+// Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
+// common/pullRequest.js once — this delegate keeps every local call site.
 function cleanCommandOutput(output) {
-    if (!output) return '';
-    return output.split('\n').filter(function(line) {
-        return line.indexOf('Script started') === -1 &&
-               line.indexOf('Script done') === -1 &&
-               line.indexOf('COMMAND=') === -1 &&
-               line.indexOf('COMMAND_EXIT_CODE=') === -1;
-    }).join('\n').trim();
+    return prHelper.cleanCommandOutput(output);
 }
 
 /** Run a git / shell command inside the test automation repo working directory. */
@@ -107,11 +103,17 @@ function checkoutAutomationBranch(ticketKey, config) {
         runInRepo('git checkout ' + branchName, workingDir);
         syncWithBase();
     } else {
-        var remoteBranches = cleanCommandOutput(
-            runInRepo('git ls-remote --heads origin ' + branchName, workingDir) || ''
-        );
+        var remoteBranchExists = false;
+        try {
+            // gh-912: decide on a real refs/heads/<branch> ref line — a
+            // warning-only capture (central-mode insteadOf origin, git ≥
+            // 2.54) must classify as "branch absent".
+            remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
+        } catch (e) {
+            console.warn('Error checking remote branches:', e);
+        }
 
-        if (remoteBranches.trim()) {
+        if (remoteBranchExists) {
             console.log('Branch exists on remote, checking out:', branchName);
             runInRepo('git checkout -b ' + branchName + ' origin/' + branchName, workingDir);
             syncWithBase();

@@ -263,6 +263,10 @@ suite('wave2d2 ado — prepareBugFixBatchContext', function() {
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock(),
             './fetchQuestionsToInput.js': stub, './fetchLinkedTestsToInput.js': stub,
+            // Real PR helper (gh-912): prepareBugFixBatchContext delegates
+            // cleanCommandOutput to it — canonical implementation required.
+            './common/pullRequest.js': loadModule('js/common/pullRequest.js',
+                makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
             './common/trackers.js': w2Trackers(rec.mocks)
         }), Object.assign({ file_write: function() {}, cli_execute_command: function() { return ''; } }, rec.mocks));
         mod.action({ inputFolderPath: 'input/20', customParams: { trackerProvider: 'ado' } });

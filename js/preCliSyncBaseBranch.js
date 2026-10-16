@@ -19,6 +19,7 @@
  */
 
 var configLoader = require('./configLoader.js');
+var prHelper = require('./common/pullRequest.js');
 
 var _workingDir = null;
 function runCmd(args) {
@@ -26,14 +27,10 @@ function runCmd(args) {
     return cli_execute_command(args);
 }
 
+// Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
+// common/pullRequest.js once — this delegate keeps every local call site.
 function cleanCommandOutput(output) {
-    if (!output) return '';
-    return output.split('\n').filter(function (line) {
-        return line.indexOf('Script started') === -1 &&
-               line.indexOf('Script done') === -1 &&
-               line.indexOf('COMMAND=') === -1 &&
-               line.indexOf('COMMAND_EXIT_CODE=') === -1;
-    }).join('\n').trim();
+    return prHelper.cleanCommandOutput(output);
 }
 
 function action(params) {

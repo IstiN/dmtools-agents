@@ -20,14 +20,10 @@ function smLabelForContext(contextId) {
     return map[contextId] || null;
 }
 
+// Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
+// common/pullRequest.js once — this delegate keeps every local call site.
 function cleanCommandOutput(output) {
-    if (!output) return '';
-    return output.split('\n').filter(function(line) {
-        return line.indexOf('Script started') === -1 &&
-               line.indexOf('Script done') === -1 &&
-               line.indexOf('COMMAND=') === -1 &&
-               line.indexOf('COMMAND_EXIT_CODE=') === -1;
-    }).join('\n').trim();
+    return prHelper.cleanCommandOutput(output);
 }
 
 function readFile(path) {
@@ -158,8 +154,15 @@ function commitAndPush(storyKey, config) {
         runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
     }
 
-    var remoteCheck = cleanCommandOutput(runInRepo('git ls-remote --heads origin ' + branchName, workingDir) || '');
-    if (!remoteCheck.trim()) throw new Error('Branch not found on remote after push');
+    var remoteBranchExists = false;
+    try {
+        // gh-912: verify the push produced a real refs/heads/<branch> ref
+        // line — stderr noise never counts as the branch existing.
+        remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
+    } catch (lsRemoteErr) {
+        console.warn('Error checking remote branches:', lsRemoteErr);
+    }
+    if (!remoteBranchExists) throw new Error('Branch not found on remote after push');
     console.log('✅ Pushed to remote branch:', branchName);
     return branchName;
 }

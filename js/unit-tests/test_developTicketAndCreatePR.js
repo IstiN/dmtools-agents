@@ -1401,3 +1401,47 @@ suite('developTicketAndCreatePR > ado tracker provider', function () {
         assert.equal(calls.filter(function (c) { return c[0] === 'rm'; }).length, 2);
     });
 });
+
+// ── gh-912: branch-name collision detection decides on ref lines ─────────────
+// generateUniqueBranchName probes the remote with a glob ls-remote and used to
+// branch on capture non-emptiness — a `warning: redirecting to …` line
+// (central-mode insteadOf origin, git ≥ 2.54) read as "name taken" and forced
+// a bogus _1 suffix onto the first run of every ticket.
+
+suite('developTicketAndCreatePR.generateUniqueBranchName — warning-only ls-remote capture (gh-912)', function() {
+
+    var WARNING = 'warning: redirecting to https://git.example.com/\n';
+
+    function nameProbeMock(capture) {
+        return {
+            cli_execute_command: function(args) {
+                var command = args && args.command;
+                if (command === 'git branch --list "*feature/PROJ-1*"') return '';
+                if (command === 'git ls-remote --heads origin "feature/PROJ-1*"') return capture;
+                return '';
+            }
+        };
+    }
+
+    test('warning-only capture → base name is free, no _1 suffix', function() {
+        var mod = loadDevelopTicketAndCreatePRWithRealGitHelpers(nameProbeMock(WARNING));
+
+        var name = mod.generateUniqueBranchName('feature', 'PROJ-1');
+
+        assert.equal(name, 'feature/PROJ-1',
+            'stderr noise must never be read as an existing branch — got suffix: ' + name);
+    });
+
+    test('a real matching ref line still forces the _1 suffix (warning + ref, both orders)', function() {
+        var refLine = '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/feature/PROJ-1';
+        [WARNING + refLine, refLine + '\n' + WARNING.replace('\n', '')].forEach(function(capture) {
+            var mod = loadDevelopTicketAndCreatePRWithRealGitHelpers(nameProbeMock(capture));
+
+            var name = mod.generateUniqueBranchName('feature', 'PROJ-1');
+
+            assert.equal(name, 'feature/PROJ-1_1',
+                'a real existing branch must still trigger the collision suffix, got: ' + name);
+        });
+    });
+
+});

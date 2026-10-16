@@ -39,6 +39,11 @@ var trackersModuleReal = loadModule(
     {}
 );
 
+// Real PR helper (gh-912): cleanCommandOutput + the remote-existence probes
+// live there — the strict ref-line parser must be exercised, not a stub.
+var PR_HELPER_REAL = loadModule('js/common/pullRequest.js',
+    makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
+
 /**
  * Load preCliDevelopmentSetup with controlled mocks.
  * Returns { module, calls } where calls accumulates every cli_execute_command invocation.
@@ -79,20 +84,7 @@ function loadPreCli(workingDir) {
         makeRequire({
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
-            './common/pullRequest.js': {
-                buildOriginFetchCommand: function(refSpec) {
-                    return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
-                },
-                ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
-                    if (!branchName) return false;
-                    try {
-                        runCommand('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName, workingDir);
-                        return true;
-                    } catch (e) {
-                        return false;
-                    }
-                }
-            },
+            './common/pullRequest.js': PR_HELPER_REAL,
             './fetchParentContextToInput.js': { action: function() {} },
             './fetchQuestionsToInput.js': { action: function() {} },
             './fetchLinkedTestsToInput.js': { action: function() {} },
@@ -178,7 +170,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
         var mockCli = function(args) {
             calls.push(args.command);
             if (args.command === 'git branch --list "ai/TS-1302"') return '';
-            if (args.command === 'git ls-remote --heads origin ai/TS-1302') return 'abc\trefs/heads/ai/TS-1302\n';
+            if (args.command === 'git ls-remote --heads origin ai/TS-1302') return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/TS-1302\n';
             if (args.command === 'git -c fetch.recurseSubmodules=no fetch origin ai/TS-1302:ai/TS-1302') {
                 fetchCheckoutFailed = true;
                 throw new Error('fatal: refusing to fetch into checked out branch');
@@ -203,20 +195,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             makeRequire({
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
-                './common/pullRequest.js': {
-                    buildOriginFetchCommand: function(refSpec) {
-                        return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
-                    },
-                    ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
-                        if (!branchName) return false;
-                        try {
-                            runCommand('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName, workingDir);
-                            return true;
-                        } catch (e) {
-                            return false;
-                        }
-                    }
-                },
+                './common/pullRequest.js': PR_HELPER_REAL,
                 './fetchParentContextToInput.js': { action: function() {} },
                 './fetchQuestionsToInput.js': { action: function() {} },
                 './fetchLinkedTestsToInput.js': { action: function() {} },
@@ -282,20 +261,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             makeRequire({
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
-                './common/pullRequest.js': {
-                    buildOriginFetchCommand: function(refSpec) {
-                        return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
-                    },
-                    ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
-                        if (!branchName) return false;
-                        try {
-                            runCommand('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName, workingDir);
-                            return true;
-                        } catch (e) {
-                            return false;
-                        }
-                    }
-                },
+                './common/pullRequest.js': PR_HELPER_REAL,
                 './fetchParentContextToInput.js': { action: function() {} },
                 './fetchQuestionsToInput.js': { action: function() {} },
                 './fetchLinkedTestsToInput.js': { action: function() {} },
@@ -365,20 +331,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             makeRequire({
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
-                './common/pullRequest.js': {
-                    buildOriginFetchCommand: function(refSpec) {
-                        return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
-                    },
-                    ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
-                        if (!branchName) return false;
-                        try {
-                            runCommand('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName, workingDir);
-                            return true;
-                        } catch (e) {
-                            return false;
-                        }
-                    }
-                },
+                './common/pullRequest.js': PR_HELPER_REAL,
                 './fetchParentContextToInput.js': { action: function() {} },
                 './fetchQuestionsToInput.js': { action: function() {} },
                 './fetchLinkedTestsToInput.js': { action: function() {} },
@@ -448,20 +401,7 @@ function loadPreCliTestAutomation(workingDir) {
     var mod = (function (_m) { return loadModule('js/preCliTestAutomationSetup.js', makeRequire(Object.assign({}, {
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
-            './common/pullRequest.js': {
-                buildOriginFetchCommand: function(refSpec) {
-                    return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
-                },
-                ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
-                    if (!branchName) return false;
-                    try {
-                        runCommand('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName, workingDir);
-                        return true;
-                    } catch (e) {
-                        return false;
-                    }
-                }
-            },
+            './common/pullRequest.js': PR_HELPER_REAL,
             './fetchLinkedBugsToInput.js': { action: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
@@ -540,20 +480,7 @@ suite('preCliTestAutomationSetup > workingDir', function() {
         var mod = (function (_m) { return loadModule('js/preCliTestAutomationSetup.js', makeRequire(Object.assign({}, {
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
-                './common/pullRequest.js': {
-                    buildOriginFetchCommand: function(refSpec) {
-                        return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
-                    },
-                    ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
-                        if (!branchName) return false;
-                        try {
-                            runCommand('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName, workingDir);
-                            return true;
-                        } catch (e) {
-                            return false;
-                        }
-                    }
-                },
+                './common/pullRequest.js': PR_HELPER_REAL,
                 './fetchLinkedBugsToInput.js': { action: function() {} }
             ,
             './common/commentMarkup.js': commentMarkupModule,
@@ -609,20 +536,7 @@ suite('preCliTestAutomationSetup > workingDir', function() {
         var mod = (function (_m) { return loadModule('js/preCliTestAutomationSetup.js', makeRequire(Object.assign({}, {
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
-                './common/pullRequest.js': {
-                    buildOriginFetchCommand: function(refSpec) {
-                        return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
-                    },
-                    ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
-                        if (!branchName) return false;
-                        try {
-                            runCommand('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName, workingDir);
-                            return true;
-                        } catch (e) {
-                            return false;
-                        }
-                    }
-                },
+                './common/pullRequest.js': PR_HELPER_REAL,
                 './fetchLinkedBugsToInput.js': { action: function() {} }
             ,
             './common/commentMarkup.js': commentMarkupModule,
@@ -667,7 +581,7 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
         if (args.command === 'pwd') return '/workspace';
         if (args.command.indexOf('git branch --show-current') === 0) return 'test/AITS-1';
         if (args.command.indexOf('git diff --cached --stat') === 0) return ' tests/FooTest.php | 1 +';
-        if (args.command.indexOf('git ls-remote --heads origin') === 0) return 'abc123\trefs/heads/test/AITS-1';
+        if (args.command.indexOf('git ls-remote --heads origin') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/AITS-1';
         if (args.command.indexOf('gh pr create') === 0) return 'https://github.com/ExampleOrg-Production/api-client-sdk/pull/1';
         if (args.command.indexOf('gh pr list --head') === 0) return '';
         if (args.command.indexOf('git config --get remote.origin.url') === 0) return 'git@github.com:ExampleOrg-Production/api-client-sdk.git';

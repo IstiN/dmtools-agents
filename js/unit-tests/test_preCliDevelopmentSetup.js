@@ -32,37 +32,15 @@ var trackersModuleReal = loadModule(
     {}
 );
 
-var DEFAULT_PR_HELPER_STUB = {
-    buildTargetedOriginFetchCommand: function(branches) {
-        var list = (branches || []).filter(function(b) { return b; });
-        if (!list.length) return null;
-        return 'git -c fetch.recurseSubmodules=no fetch origin ' + list.map(function(b) {
-            return '+refs/heads/' + b + ':refs/remotes/origin/' + b;
-        }).join(' ');
-    },
-    buildOriginFetchCommand: function(refSpec) {
-        return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
-    },
-    ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
-        if (!branchName) return false;
-        try {
-            runCommand(
-                'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName,
-                workingDir
-            );
-            return true;
-        } catch (e) {
-            return false;
-        }
-    }
-};
+var PR_HELPER_REAL = loadModule('js/common/pullRequest.js',
+    makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
 
 function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
     return loadModule(
         'js/preCliDevelopmentSetup.js',
         makeRequire({
             './configLoader.js': configLoaderStub,
-            './common/pullRequest.js': DEFAULT_PR_HELPER_STUB,
+            './common/pullRequest.js': PR_HELPER_REAL,
             './config.js': NOOP_CONFIG_JS,
             './fetchQuestionsToInput.js': NOOP_MODULE,
             './fetchLinkedTestsToInput.js': NOOP_MODULE,
@@ -195,7 +173,7 @@ suite('preCliDevelopmentSetup.checkoutBranch — two-branch mode feature branch 
         var responses = {};
         // Dev branch (ai/PROJ-1) does not exist yet, so we do reach the two-branch block, but
         // the feature branch itself already exists remotely — the hook must not be consulted.
-        responses['git ls-remote --heads origin release/rc_mobile_proj-1'] = 'abc123\trefs/heads/release/rc_mobile_proj-1';
+        responses['git ls-remote --heads origin release/rc_mobile_proj-1'] = '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/release/rc_mobile_proj-1';
         var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
             cli_execute_command: makeCliMock(calls, responses)
         });
@@ -432,7 +410,7 @@ suite('preCliDevelopmentSetup.reportExistingDevBranch — existing remote work s
         var calls = [];
         var writes = [];
         var responses = {};
-        responses['git ls-remote --heads origin ai/PROJ-7'] = 'abc123\trefs/heads/ai/PROJ-7';
+        responses['git ls-remote --heads origin ai/PROJ-7'] = '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/PROJ-7';
         responses['git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main +refs/heads/ai/PROJ-7:refs/remotes/origin/ai/PROJ-7'] = '';
         responses['git rev-list --count --right-only origin/main...origin/ai/PROJ-7'] = '3';
         responses['git log --oneline -20 origin/main..origin/ai/PROJ-7'] = 'abc123 PROJ-7 WIP auto-save\ndef456 PROJ-7 part A\n789abc PROJ-7 scaffold';
@@ -472,7 +450,7 @@ suite('preCliDevelopmentSetup.reportExistingDevBranch — existing remote work s
         var calls = [];
         var writes = [];
         var responses = {};
-        responses['git ls-remote --heads origin ai/PROJ-7'] = 'abc123\trefs/heads/ai/PROJ-7';
+        responses['git ls-remote --heads origin ai/PROJ-7'] = '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/PROJ-7';
         responses['git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main +refs/heads/ai/PROJ-7:refs/remotes/origin/ai/PROJ-7'] = '';
         responses['git rev-list --count --right-only origin/main...origin/ai/PROJ-7'] = '0';
         responses['git log --oneline -20 origin/main..origin/ai/PROJ-7'] = '';
@@ -551,7 +529,7 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
             'js/preCliDevelopmentSetup.js',
             makeRequire({
                 './configLoader.js': makeActionConfigLoaderStub(config),
-                './common/pullRequest.js': DEFAULT_PR_HELPER_STUB,
+                './common/pullRequest.js': PR_HELPER_REAL,
                 './config.js': NOOP_CONFIG_JS,
                 './fetchQuestionsToInput.js': { action: function () {} },
                 './fetchLinkedTestsToInput.js': { action: function () {} },
@@ -719,7 +697,7 @@ suite('preCliDevelopmentSetup.postSetupErrorComment — routes through the probe
                     loadProjectConfig: function () { return makeConfig(); },
                     paramsForConfigLoad: function (p) { return p; }
                 },
-                './common/pullRequest.js': DEFAULT_PR_HELPER_STUB,
+                './common/pullRequest.js': PR_HELPER_REAL,
                 './config.js': NOOP_CONFIG_JS,
                 './fetchQuestionsToInput.js': NOOP_MODULE,
                 './fetchLinkedTestsToInput.js': NOOP_MODULE,
@@ -775,6 +753,134 @@ suite('preCliDevelopmentSetup.postSetupErrorComment — routes through the probe
         var mod = loadWithTrackerStub(posted, true);
         mod.postSetupErrorComment({}, {}, 'PROJ-12', 'Git Branch Setup', 'boom');
         assert.equal(posted.length, 0);
+    });
+
+});
+
+// ── gh-912: warning-only ls-remote captures must classify as "branch absent" ─
+// The JS bridge merges git's stderr into every capture; on central-mode
+// (insteadOf-rewritten origin) git ≥ 2.54 prints `warning: redirecting to …`
+// on EVERY network command. The old `.trim()`-emptiness probes read that
+// warning-only capture as "branch exists on remote" → fetch of the missing
+// ref fails → `git checkout -B <b> origin/<b>` → fatal → the dev job dies
+// before the CLI agent starts. These tests pin the AC1 behavior: the
+// create-branch path runs and the action completes.
+
+suite('preCliDevelopmentSetup.checkoutBranch — warning-only ls-remote captures (gh-912)', function() {
+
+    var WARNING = 'warning: redirecting to https://git.example.com/\n';
+    var SHA40 = '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec';
+
+    // Faithful git double for the first-run scenario: the ticket branch does
+    // not exist on the remote, so a fetch of its ref and a checkout of
+    // origin/<branch> fail exactly like real git does.
+    function makeFirstRunCli(calls, responses) {
+        return function(opts) {
+            var command = opts && opts.command;
+            calls.push(command);
+            if (responses && responses[command] !== undefined) return responses[command];
+            if (command === 'git fetch origin ai/PROJ-1:ai/PROJ-1' ||
+                command === 'git -c fetch.recurseSubmodules=no fetch origin ai/PROJ-1:ai/PROJ-1') {
+                throw new Error('fatal: couldn\'t find remote refs/heads/ai/PROJ-1');
+            }
+            if (command === 'git checkout -B ai/PROJ-1 origin/ai/PROJ-1') {
+                throw new Error('fatal: \'origin/ai/PROJ-1\' is not a commit');
+            }
+            return '';
+        };
+    }
+
+    test('AC1: warning-only capture on a first run takes the create-branch path and completes', function() {
+        var calls = [];
+        var config = makeConfig();
+        var configLoaderStub = makeConfigLoaderStub(
+            { development: 'ai/PROJ-1', feature: 'release/rc_mobile_proj-1' },
+            'master',
+            null,
+            []
+        );
+        var responses = {};
+        responses['git ls-remote --heads origin ai/PROJ-1'] = WARNING;
+        responses['git ls-remote --heads origin release/rc_mobile_proj-1'] = WARNING;
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: makeFirstRunCli(calls, responses)
+        });
+
+        assert.doesNotThrow(function() {
+            mod.checkoutBranch('PROJ-1', config, TICKET, {});
+        }, 'warning-only capture must be read as "branch absent" — the dev leg must start, not die pre-agent');
+        assert.ok(calls.indexOf('git checkout -b ai/PROJ-1') !== -1,
+            'the create-branch path must run, got: ' + JSON.stringify(calls));
+        assert.equal(calls.indexOf('git checkout -B ai/PROJ-1 origin/ai/PROJ-1'), -1,
+            'must never checkout a tracking ref that was never fetched');
+    });
+
+    test('AC1b: warning-only capture on the FEATURE probe creates the feature branch instead of dying', function() {
+        var calls = [];
+        var config = makeConfig();
+        var configLoaderStub = makeConfigLoaderStub(
+            { development: 'ai/PROJ-1', feature: 'release/rc_mobile_proj-1' },
+            'master',
+            null,
+            []
+        );
+        var responses = {};
+        responses['git ls-remote --heads origin ai/PROJ-1'] = '';
+        responses['git ls-remote --heads origin release/rc_mobile_proj-1'] = WARNING;
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: makeFirstRunCli(calls, responses)
+        });
+
+        assert.doesNotThrow(function() {
+            mod.checkoutBranch('PROJ-1', config, TICKET, {});
+        });
+        assert.ok(calls.indexOf('git checkout -b release/rc_mobile_proj-1') !== -1,
+            'feature branch must be created from base, got: ' + JSON.stringify(calls));
+        assert.equal(calls.indexOf('git checkout -b release/rc_mobile_proj-1 origin/release/rc_mobile_proj-1'), -1,
+            'must not checkout the feature branch from an origin ref that does not exist');
+    });
+
+    test('AC3: warning + real ref line still classifies "exists" (both merge orders)', function() {
+        var config = makeConfig();
+        var configLoaderStub = makeConfigLoaderStub(
+            { development: 'ai/PROJ-1', feature: 'release/rc_mobile_proj-1' },
+            'master',
+            null,
+            []
+        );
+        var refLine = SHA40 + '\trefs/heads/ai/PROJ-1';
+        ['warning: redirecting to https://git.example.com/\n' + refLine, refLine + '\nwarning: redirecting to https://git.example.com/']
+            .forEach(function(capture) {
+                var calls = [];
+                var responses = {};
+                responses['git ls-remote --heads origin ai/PROJ-1'] = capture;
+                responses['git ls-remote --heads origin release/rc_mobile_proj-1'] = WARNING;
+                // The branch EXISTS in this scenario — its fetch succeeds like real git.
+                responses['git -c fetch.recurseSubmodules=no fetch origin ai/PROJ-1:ai/PROJ-1'] = '';
+                var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+                    cli_execute_command: makeFirstRunCli(calls, responses)
+                });
+                mod.checkoutBranch('PROJ-1', config, TICKET, {});
+                assert.ok(calls.indexOf('git checkout ai/PROJ-1') !== -1,
+                    'an existing branch (noise-polluted capture) must still be checked out, got: ' + JSON.stringify(calls));
+            });
+    });
+
+    test('existing-work report: warning-only capture means a FRESH leg, no resumed-leg warning file', function() {
+        var calls = [];
+        var writes = [];
+        var configLoaderStub = makeConfigLoaderStub({ development: 'ai/PROJ-1' }, 'main', null, []);
+        var responses = {};
+        responses['git ls-remote --heads origin ai/PROJ-1'] = WARNING;
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: makeFirstRunCli(calls, responses),
+            file_write: function(args) { writes.push(args); }
+        });
+
+        var result = mod.reportExistingDevBranch('PROJ-1', makeConfig({ git: { featureBranch: { enabled: false } } }), TICKET, 'input/PROJ-1');
+
+        assert.equal(result, false, 'a warning-only capture must report a fresh development leg');
+        assert.equal(writes.length, 0, 'no existing_work.md may be written from stderr noise');
     });
 
 });

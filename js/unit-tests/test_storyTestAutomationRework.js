@@ -30,7 +30,8 @@ function loadRework(mocks) {
             triggerConfiguredWorkflowForTicket: function () { return true; },
             triggerSmIfIdle: function () {}
         },
-        './common/pullRequest.js': {},
+        './common/pullRequest.js': loadModule('js/common/pullRequest.js',
+            makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
         './common/mergeState.js': loadModule('js/common/mergeState.js'),
         './config.js': { LABELS: {} },
         './common/tokenUsageComment.js': {
@@ -145,7 +146,8 @@ suite('storyTestAutomationRework — mergeMain mid-merge guard (gh-761)', functi
                 formatTemplate: function (t) { return t; }
             },
             './common/autoStart.js': { triggerSmIfIdle: function () {} },
-            './common/pullRequest.js': {},
+            './common/pullRequest.js': loadModule('js/common/pullRequest.js',
+            makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
             './config.js': { LABELS: {} },
             './common/tokenUsageComment.js': { postTokenUsageComments: function () {} },

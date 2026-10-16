@@ -343,10 +343,16 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
 
         if (!stagedOutput || !stagedOutput.trim()) {
             console.warn('No new staged changes in ' + addPath + ' (files may already exist on branch)');
-            var remoteBranchCheck = cleanCommandOutput(
-                runInRepo('git ls-remote --heads origin ' + branchName, workingDir) || ''
-            );
-            if (!remoteBranchCheck.trim()) {
+            var remoteBranchExists = false;
+            try {
+                // gh-912: decide on a real refs/heads/<branch> ref line — a
+                // warning-only capture (central-mode insteadOf origin, git
+                // ≥ 2.54) must classify as "branch absent" so the push runs.
+                remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
+            } catch (lsRemoteErr) {
+                console.warn('Error checking remote branches:', lsRemoteErr);
+            }
+            if (!remoteBranchExists) {
                 console.log('No remote branch found, pushing current branch state...');
                 try {
                     runInRepo('git push -u origin ' + branchName, workingDir);
@@ -380,10 +386,15 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
             }
         }
 
-        const remoteBranch = cleanCommandOutput(
-            runInRepo('git ls-remote --heads origin ' + branchName, workingDir) || ''
-        );
-        if (!remoteBranch.trim()) {
+        var remoteBranchExists = false;
+        try {
+            // gh-912: verify the push produced a real refs/heads/<branch> ref
+            // line — stderr noise never counts as the branch existing.
+            remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
+        } catch (lsRemoteErr) {
+            console.warn('Error checking remote branches:', lsRemoteErr);
+        }
+        if (!remoteBranchExists) {
             throw new Error('Branch not found on remote after push');
         }
 
