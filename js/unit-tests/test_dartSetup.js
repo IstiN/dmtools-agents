@@ -80,23 +80,24 @@ function dsOsArch() {
  */
 function dsRun(subcommand, opts) {
     opts = opts || {};
-    var lines = ['d="$(mktemp -d)"'];
+    var lines = ['r="$(pwd)"', 'd="$(mktemp -d)"'];
     if (opts.qualityYml !== undefined) {
         lines.push('mkdir -p "$d/.github/workflows"');
-        lines.push('printf %s ' + dsShq(opts.qualityYml) + " > '$d/.github/workflows/quality.yml'");
+        lines.push('printf %s ' + dsShq(opts.qualityYml) + ' > "$d/.github/workflows/quality.yml"');
     }
     if (opts.stubDart !== undefined) {
         lines.push('mkdir -p "$d/bin"');
-        lines.push("printf '#!/bin/sh\\necho %s\\n' " + dsShq(opts.stubDart) + " > '$d/bin/dart'");
+        lines.push("printf '#!/bin/sh\\necho %s\\n' " + dsShq(opts.stubDart) + ' > "$d/bin/dart"');
         lines.push('chmod +x "$d/bin/dart"');
     }
     var env = (opts.env || []).slice();
     if (opts.stubDart !== undefined) {
         env.push('PATH="$d/bin:$PATH"');
     }
+    lines.push('cd "$d"');
     lines.push((env.length ? env.join(' ') + ' ' : '') +
-        'bash ' + dsShq(process.cwd() + '/setup/dart.sh') + ' ' + subcommand);
-    lines.push('rc=$?; rm -rf "$d"; exit $rc');
+        'bash "$r/setup/dart.sh" ' + subcommand);
+    lines.push('rc=$?; cd /; rm -rf "$d"; exit $rc');
     return dsParseKv(cli_execute_command({ command: 'bash -c ' + dsShq(lines.join('\n')) }));
 }
 
@@ -163,11 +164,22 @@ suite('setup/dart.sh: target resolution precedence (gh-918)', function () {
         assert.equal(r.source, 'quality workflow');
     });
 
-    test('explicit version argument wins over quality.yml detection', function () {
+    test('explicit version argument wins over quality.yml detection, riding the detected channel', function () {
         var r = dsRun('plan 3.5.0', { qualityYml: DS_QUALITY_BETA });
         assert.equal(r.mode, 'version');
         assert.equal(r.version, '3.5.0');
-        assert.equal(r.channel, 'stable', 'a pinned version without a detected channel rides stable');
+        assert.equal(r.channel, 'beta', 'a pinned version rides the quality.yml channel (same gate as CI)');
+        assert.equal(r.source, 'argument');
+        assert.ok(String(r.sdk_url).indexOf('/channels/beta/release/3.5.0/sdk/') !== -1,
+            'pinned version must download from the detected channel, got: ' + r.sdk_url);
+    });
+
+    test('explicit version argument without quality workflow rides stable', function () {
+        var r = dsRun('plan 3.5.0');
+        assert.equal(r.mode, 'version');
+        assert.equal(r.version, '3.5.0');
+        assert.equal(r.channel, 'stable');
+        assert.equal(r.source, 'argument');
     });
 
     test('DART_VERSION env is honored when no argument is given (source=environment)', function () {
