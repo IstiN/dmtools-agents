@@ -23,7 +23,8 @@ function moveToInTestingCapturingLogs(mocks) {
     var withConsole = Object.assign({
         console: {
             log: function(msg) { logs.push(String(msg)); },
-            warn: function(msg) { warns.push(String(msg)); }
+            warn: function(msg) { warns.push(String(msg)); },
+            error: function(msg) { warns.push(String(msg)); }
         }
     }, mocks || {});
     return {
@@ -81,6 +82,7 @@ suite('moveToInTesting', function() {
         });
 
         assert.equal(result.success, false);
-        assert.ok(x.logs.some(function(l) { return l.indexOf('❌ Error in moveToInTesting') !== -1; }));
+        var all = x.logs.concat(x.warns);
+        assert.ok(all.some(function(l) { return l.indexOf('❌ Error in moveToInTesting') !== -1; }));
     });
 });

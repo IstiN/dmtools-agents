@@ -70,10 +70,11 @@ suite('finishTestCasesGeneration: stage-label fallback (gh-916)', function() {
     function finishGh916WithLogs(mocks) {
         var logs = [];
         var warns = [];
+        var join = function() { return Array.prototype.slice.call(arguments).map(String).join(' '); };
         var withConsole = Object.assign({
             console: {
-                log: function(msg) { logs.push(String(msg)); },
-                warn: function(msg) { warns.push(String(msg)); }
+                log: function() { logs.push(join.apply(null, arguments)); },
+                warn: function() { warns.push(join.apply(null, arguments)); }
             }
         }, mocks);
         return { module: loadFinishTestCasesGeneration(withConsole), logs: logs, warns: warns };

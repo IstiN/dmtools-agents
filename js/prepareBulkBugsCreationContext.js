@@ -97,7 +97,9 @@ function action(params) {
             statusConfig);
 
         var failedTCsJql = configLoader.interpolateJql(customParams.failedTCsJql ||
-            'project = {jiraProject} AND issuetype = "Test Case" AND status = {status.FAILED:Failed} AND (labels is EMPTY OR labels NOT IN (sm_bug_creation_triggered)) ORDER BY created ASC',
+            // gh-916: {stage.*} — in label mode a TC carrying the stage_failed marker is selectable too;
+            // in 'none' mode this expands to the same `status in ('Failed')` clause as before.
+            'project = {jiraProject} AND issuetype = "Test Case" AND {stage.FAILED:Failed} AND (labels is EMPTY OR labels NOT IN (sm_bug_creation_triggered)) ORDER BY created ASC',
             statusConfig);
 
         var tracker = trackersModule.createTracker(config, customParams);

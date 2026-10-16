@@ -21,7 +21,8 @@ function moveToReadyForTestingCapturingLogs(mocks) {
     var withConsole = Object.assign({
         console: {
             log: function(msg) { logs.push(String(msg)); },
-            warn: function(msg) { logs.push('WARN: ' + String(msg)); }
+            warn: function(msg) { logs.push('WARN: ' + String(msg)); },
+            error: function(msg) { logs.push('WARN: ' + String(msg)); }
         }
     }, mocks || {});
     return {
