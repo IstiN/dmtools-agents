@@ -56,7 +56,8 @@
 function classifyTriggerError(message) {
     var s = String(message == null ? '' : message);
     if (/no ref found/i.test(s)) return 'no-ref';
-    if (/\b422\b/.test(s) && /ref/i.test(s)) return 'no-ref';
+    if (/\b422\b/.test(s) &&
+        /ref[^.]{0,60}(not found|does not exist|missing|unknown)/i.test(s)) return 'no-ref';
     return 'transient';
 }
 
@@ -69,7 +70,12 @@ function classifyTriggerError(message) {
 // The branch name keys the count: the failures are consecutive for THAT
 // head ref by construction (every tick re-fails until the ref is restored
 // or the cap parks the PR).
-var TRIGGER_FAIL_MARKER_RE = /\u26A0\uFE0F trigger-failed (\S+) \u2014 attempt (\d+)\/\d+ at (\S+)/g;
+//
+// Anchored to LINE STARTS (^ + m): the writer always puts the marker on
+// its own line, and smAgent flattens interpolated error messages — so a
+// marker-shaped phrase embedded inline in prose (a crafted error body,
+// gh-922 review) can never inflate an attempt counter.
+var TRIGGER_FAIL_MARKER_RE = /^\u26A0\uFE0F trigger-failed (\S+) \u2014 attempt (\d+)\/\d+ at (\S+)/gm;
 
 /**
  * Aggregate marker lines over comment bodies → { <branch>: <max N> }.
@@ -109,10 +115,10 @@ function triggerFailMarkerLine(count, branch, cap, atIso) {
 function capOf(jobParams) {
     var raw = (jobParams || {}).triggerFailParkCap;
     if (raw === undefined || raw === null || raw === '') return 3; // unset → default
-    if (typeof raw === 'string' && /false/i.test(raw)) return 0;   // explicit disable
-    var n = typeof raw === 'string' ? parseInt(raw, 10) : raw;
-    if (typeof n !== 'number' || isNaN(n) || n <= 0) return 0;     // 0 / negative = disable
-    return Math.floor(n);
+    if (/false/i.test(String(raw))) return 0;                      // 'false'/false → disable
+    var n = parseInt(raw, 10);                                     // numbers pass through; strings parse
+    if (isNaN(n) || n <= 0) return 0;                              // 0 / negative / garbage = disable
+    return n;
 }
 
 module.exports = {

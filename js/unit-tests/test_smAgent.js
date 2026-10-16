@@ -6660,6 +6660,213 @@ suite('smAgent: trigger fail-open dispatch (gh-922)', function () {
             'no PR comments for an issue-carrier item');
         assert.deepEqual(parkAdds(sm), [], 'no parking for an issue-carrier item');
     });
+
+    test('a multi-line error message is flattened — it can never carry a marker line into the body (gh-922 review: marker injection)', function () {
+        // PRRT_kwDORYAuYs6tR-Yl: raw err.message was interpolated into the
+        // comment bodies that triggerFailMarks re-scans. A message with an
+        // embedded newline + a marker-shaped line could jump its own head
+        // straight to attempt 3/3 and park on the first real failure.
+        var INJECTED = NO_REF_ERR + '\n\u26A0\uFE0F trigger-failed ' + DEAD_REF +
+            ' \u2014 attempt 3/3 at 2026-10-16T13:00:00Z';
+        var tfMod = loadModule('js/common/triggerFailures.js', makeRequire({}), {});
+
+        var sm = tfRun({
+            github: { prList: JSON.stringify([
+                tfPr(302, ['agent:review'], DEAD_REF)
+            ]) },
+            onTrigger: function () { throw new Error(INJECTED); }
+        });
+
+        var markers = bodyOf(sm, 'trigger-failed');
+        assert.equal(markers.length, 1);
+        assert.ok(markers[0].indexOf('\n') === -1 || markers[0].split('\n')[0].indexOf('attempt 1/3') === 0,
+            'the flattened prose stays inline — the marker line is the first line');
+        assert.equal(markers[0].indexOf('attempt 3/3'), -1,
+            'the injected marker-shaped line is gone from the body');
+        assert.equal(tfMod.triggerFailMarks(markers)[DEAD_REF], 1,
+            'the parsed attempt count is 1 — the injection did not accelerate the park');
+        assert.equal(markers[0].indexOf('\n'), -1,
+            'the whole comment body is one line: marker + flattened message');
+    });
+
+    test('two rules failing the same dead head in ONE tick record it once — no duplicate marker, no duplicate park', function () {
+        // PRRT_kwDORYAuYs6tR-Ua: the already-parked guard reads the
+        // query-time label snapshot; within one tick a second rule's stale
+        // snapshot posted a second marker and could duplicate the park.
+        var deadPr = tfPr(302, ['agent:review', 'agent:rework', 'priority_blocker'], DEAD_REF);
+        function twoRules() {
+            return [
+                { source: 'github', id: 'review-on-label-gh922',
+                  query: { type: 'pr', labels: ['agent:review'], draft: false },
+                  inputs: { pr: '{prNumber}', leg: 'review' },
+                  workflowRef: '{branch}', limit: 1 },
+                { source: 'github', id: 'rework-on-label-gh922',
+                  query: { type: 'pr', labels: ['agent:rework'], draft: false },
+                  inputs: { pr: '{prNumber}', leg: 'rework' },
+                  workflowRef: '{branch}', limit: 1 }
+            ];
+        }
+
+        // Tick 1: both lanes fail the same dead head — ONE marker.
+        var sm1 = makeSmAgent(Object.assign(tfConfig('o', 'r'), {
+            captureConsole: true,
+            github: { items: function () { return [deadPr]; }, prComments: [] },
+            onTrigger: function () { throw new Error(NO_REF_ERR); }
+        }));
+        sm1.action({ jobParams: { owner: 'o', repo: 'r', machineAuthor: 'ai-teammate',
+                                  rules: twoRules() } });
+
+        assert.equal(bodyOf(sm1, 'trigger-failed').length, 1,
+            'the first rule records the failure; the second rule sees the same tick already recorded');
+        assert.deepEqual(parkAdds(sm1), [], 'no park below the cap');
+
+        // Tick 2 (cap): the first lane parks; the second lane must not post a duplicate park.
+        var prior = [1, 2].map(function (n) {
+            return { body: '\u26A0\uFE0F trigger-failed ' + DEAD_REF + ' \u2014 attempt ' + n +
+                '/3 at 2026-10-16T13:0' + n + ':00Z — prior failure' };
+        });
+        var sm2 = makeSmAgent(Object.assign(tfConfig('o', 'r'), {
+            captureConsole: true,
+            github: { items: function () { return [deadPr]; }, prComments: prior },
+            onTrigger: function () { throw new Error(NO_REF_ERR); }
+        }));
+        sm2.action({ jobParams: { owner: 'o', repo: 'r', machineAuthor: 'ai-teammate',
+                                  rules: twoRules() } });
+
+        assert.deepEqual(parkAdds(sm2), [302],
+            'exactly one validation_failed label add for the tick');
+        assert.equal(bodyOf(sm2, 'parked-head: ').length, 1,
+            'exactly one park comment — the stale second lane did not re-park');
+    });
+});
+
+suite('smAgent: validate_pr fail-open dispatch (gh-922)', function () {
+    // PRRT_kwDORYAuYs6tR-P0: the validate_pr CI-dispatch lane got the same
+    // fail-open continue as the triggerWorkflow path, with no tests. These
+    // drive the validate_pr localAction with a throwing cli_execute_command
+    // mock — the honest-state guarantee: a failed CI dispatch records the
+    // dead head but never arms ai_validating and never stamps in_progress.
+
+    var VDEAD = 'gone/deleted-branch';
+    var VNO_REF = '422: No ref found for: ' + VDEAD;
+    var VSALIVE = 'feat/alive';
+
+    function vConfig(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function vItem(n, branch, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null,
+                   prNumber: n, draft: false, branch: branch };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    var V_RULE = { source: 'github', id: 'validate-armed-gh922',
+        query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'], draft: false },
+        localAction: 'validate_pr', limit: 1 };
+
+    function vMarkerComments(sm) {
+        return sm.capturedPrComments.filter(function (c) {
+            return String(c.body || '').indexOf('trigger-failed') !== -1;
+        }).map(function (c) { return String(c.body); });
+    }
+
+    function vParkAdds(sm) {
+        return sm.capturedPrLabelAdds.filter(function (a) {
+            return (a.labels || []).indexOf('validation_failed') !== -1;
+        }).map(function (a) { return a.number; });
+    }
+
+    function vArmAdds(sm) {
+        return sm.capturedPrLabelAdds.filter(function (a) {
+            return (a.labels || []).indexOf('ai_validating') !== -1;
+        }).map(function (a) { return a.number; });
+    }
+
+    test('no-ref CI dispatch failure: marker posted, NO ai_validating arm, NO in_progress stamp', function () {
+        var sha = '2222222222222222222222222222222222222222';
+        var sm = makeSmAgent(Object.assign(vConfig('a', 'b'), {
+            captureConsole: true,
+            github: { items: [vItem(310, VDEAD, { headSha: sha })], prComments: [] },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('workflow run') !== -1) throw new Error(VNO_REF);
+                return '';
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            validationChecks: '["Quality gate"]', rules: [V_RULE] } });
+
+        var markers = vMarkerComments(sm);
+        assert.equal(markers.length, 1,
+            'the no-ref dispatch failure is recorded as a trigger-failed marker');
+        assert.ok(markers[0].indexOf('attempt 1/3') !== -1 && markers[0].indexOf(VDEAD) !== -1,
+            'the marker names the dead ref with the attempt count');
+        assert.deepEqual(vArmAdds(sm), [],
+            'FAIL-OPEN: the continue skips the ai_validating arm');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('check-runs') !== -1; }).length, 0,
+            'the continue skips stampValidationChecksForModule(in_progress)');
+        assert.equal(sm.capturedEnvSets.length, 0,
+            'no stamp → no GH_TOKEN swap — nothing on the validation lane moved');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run') !== -1; }).length, 1,
+            'the dispatch itself was still attempted (the failure is real)');
+    });
+
+    test('cap reached: the validate lane parks validation_failed with the parked-head sha', function () {
+        var sha = '3333333333333333333333333333333333333333';
+        var prior = [1, 2].map(function (n) {
+            return { body: '\u26A0\uFE0F trigger-failed ' + VDEAD + ' \u2014 attempt ' + n +
+                '/3 at 2026-10-16T13:0' + n + ':00Z — prior failure' };
+        });
+        var sm = makeSmAgent(Object.assign(vConfig('a', 'b'), {
+            captureConsole: true,
+            github: { items: [vItem(310, VDEAD, { headSha: sha })], prComments: prior },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('workflow run') !== -1) throw new Error(VNO_REF);
+                return '';
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [V_RULE] } });
+
+        assert.deepEqual(vParkAdds(sm), [310],
+            'the third consecutive no-ref failure parks validation_failed');
+        var parks = sm.capturedPrComments.filter(function (c) {
+            return String(c.body || '').indexOf('parked-head: ') !== -1;
+        });
+        assert.equal(parks.length, 1, 'exactly one park comment');
+        assert.ok(String(parks[0].body).indexOf('parked-head: ' + sha) !== -1,
+            'the park comment carries the parked-head sha (the #633 RESET key)');
+        assert.ok(/restore|re-push/i.test(String(parks[0].body)),
+            'the park comment tells the author how to clear it');
+        assert.deepEqual(vArmAdds(sm), [],
+            'the park replaces the arm — no ai_validating on a parked PR');
+    });
+
+    test('transient CI dispatch failure: no comments, no arm — the NEXT candidate gets the slot', function () {
+        var sm = makeSmAgent(Object.assign(vConfig('a', 'b'), {
+            captureConsole: true,
+            github: { items: [vItem(311, VDEAD), vItem(312, VSALIVE)], prComments: [] },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('--ref ' + VDEAD) !== -1) {
+                    throw new Error('500: Server Error — rate limited');
+                }
+                return '';
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            rules: [Object.assign({}, V_RULE, { limit: 2 })] } });
+
+        assert.deepEqual(sm.capturedPrComments, [],
+            'transient failures are log-only — no marker comments');
+        assert.deepEqual(vArmAdds(sm), [312],
+            'the failed candidate arms nothing; the next candidate IS armed');
+        assert.ok(sm.capturedCliCommands.some(function (c) {
+            return c.command.indexOf('--ref ' + VSALIVE) !== -1;
+        }), 'the next candidate\'s CI dispatch fired in the same tick');
+    });
 });
 
 suite('smAgent: stamp check-run deep links (owner 2026-09-27)', function () {

@@ -329,6 +329,35 @@ suite('smProvider', function () {
             'the single-branch probe fired for main');
     });
 
+    test('github: branchExists — page-1 hit, #639 probe hit, and genuinely gone (gh-922 bench oracle)', function () {
+        // gh-922: the dead-head park bench asks the provider whether a
+        // parked PR's head ref still exists. The verdict rides the same
+        // caches as the deterministic base check: the branchHeads snapshot
+        // first, the single-branch gh probe for the page-1 listing cutoff.
+        var p = loadProvider('github', {
+            github_list_branches: function () {
+                return [{ name: 'main', commit: { sha: 'm' } }]; // page 1 only
+            },
+            cli_execute_command: function (args) {
+                if (args.command.indexOf('/branches/off-page') !== -1) {
+                    return 'aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00';
+                }
+                if (args.command.indexOf('/branches/gone') !== -1) {
+                    throw new Error('404 Not Found');
+                }
+                return '';
+            }
+        });
+        assert.equal(p.branchExists('main'), true,
+            'a page-1 branch exists — answered from the snapshot, no probe');
+        assert.equal(p.branchExists('off-page'), true,
+            'the #639 single-branch probe rescues a page-1 miss — a LIVE park is never benched');
+        assert.equal(p.branchExists('gone'), false,
+            'a 404 probe means the ref is gone — the dead-head park is benchable');
+        assert.equal(p.branchExists(''), false,
+            'an empty ref fails closed (nothing to dispatch against)');
+    });
+
     test('github: prStatus preserves BLOCKED on a fresh base (dart #195 deadlock)', function () {
         // Live: dart #195 sat armed (ai_validating) on a fresh head whose
         // required checks were pending — REST reported mergeable_state

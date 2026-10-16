@@ -152,6 +152,13 @@ var reworkConsumptionModule = require('./common/reworkConsumption.js');
 // ⚠️ trigger-failed marker math and the dead-head park cap. The pure
 // half lives in the module; recordDispatchFailure below wires transport.
 var triggerFailuresModule = require('./common/triggerFailures.js');
+// gh-922 (same-tick dedup, review): PR numbers whose dispatch failure was
+// already recorded THIS tick. The already-parked guard in
+// recordDispatchFailure reads the query-time label snapshot — within one
+// tick it cannot see a sibling rule's label add, so two rules failing the
+// same dead head would post two markers and could duplicate the park.
+// Reset per tick in action() (the tickReworkLatch pattern).
+var tickParkedRecorded = null;
 
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
@@ -654,9 +661,12 @@ function recordDispatchFailure(repoInfo, ticketKey, item, err, expandedRef, fail
         if (DRY || failClass !== 'no-ref') return;
         if (!item || !item.prNumber || !item.branch) return;
         if (String(expandedRef || '') !== String(item.branch)) return;
-        if ((item.labels || []).indexOf('validation_failed') !== -1) return; // already parked
+        if ((item.labels || []).indexOf('validation_failed') !== -1) return; // already parked (query-time snapshot)
+        if (tickParkedRecorded && tickParkedRecorded[item.prNumber]) return; // a sibling rule already recorded this PR earlier in the SAME tick — the stale label snapshot cannot see its park (gh-922 review: no duplicate marker, no duplicate park)
         var cap = triggerFailuresModule.capOf(RUN_JOB_PARAMS);
         if (cap <= 0) return;
+        if (!tickParkedRecorded) tickParkedRecorded = {}; // defensive: never throws outside a tick
+        tickParkedRecorded[item.prNumber] = true; // claim the recording slot before any I/O — first recorder in the tick wins
         var bodies = [];
         try {
             var raw = github_get_pr_comments({
@@ -672,7 +682,7 @@ function recordDispatchFailure(repoInfo, ticketKey, item, err, expandedRef, fail
         var headSha = null;
         try { headSha = resolveHeadSha(repoInfo, item); } catch (eSha) { headSha = null; }
         var tr = githubTracker(repoInfo.owner, repoInfo.repo);
-        var msg = String((err && err.message) || err);
+        var msg = String((err && err.message) || err).replace(/\s+/g, ').trim(); // gh-922 review: flattened — a multi-line error must never carry a marker-shaped line into a scanned body
         if (count >= cap) {
             var parkBody = '🅿️ validation_failed — dispatch dead-head park (gh-922).' +
                 ' The head branch `' + item.branch + '` no longer exists — every dispatch fails (' + msg + ').' +
@@ -6552,6 +6562,7 @@ function action(params) {
     var p     = params.jobParams || params;
     RUN_JOB_PARAMS = p;    DRY = p.dryRun === true;
     tickReworkLatch = null;
+    tickParkedRecorded = {}; // gh-922: fresh same-tick dedup window (see recordDispatchFailure)
     if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
     var rules = p.rules;
 

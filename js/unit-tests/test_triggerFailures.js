@@ -32,6 +32,24 @@ suite('triggerFailures (gh-922)', function () {
             assert.equal(mod.classifyTriggerError(null), 'transient');
             assert.equal(mod.classifyTriggerError(undefined), 'transient');
         });
+
+        test('a 422 whose text never STATES a missing ref is transient (no two-token heuristic)', function () {
+            // gh-922 review (PRRT_kwDORYAuYs6tR-c1): the `422` + any-`ref`
+            // heuristic is shape-coupled — "refresh", "referer" and proxy
+            // bodies quoting refs/… would park a LIVE PR after 3 ticks.
+            // The classifier now demands an explicit missing-ref statement.
+            assert.equal(mod.classifyTriggerError('HTTP 422 while refreshing the auth token'), 'transient',
+                '"refresh" contains "ref" — a transient 422 must not become head-dead evidence');
+            assert.equal(mod.classifyTriggerError('422 — proxy body quoted refs/heads/fix/x'), 'transient',
+                'a quoted ref path is not a missing-ref statement');
+            assert.equal(mod.classifyTriggerError('422: referer header rejected'), 'transient');
+        });
+
+        test('a 422 that explicitly states the ref is missing still classifies no-ref', function () {
+            assert.equal(mod.classifyTriggerError('gh: workflow run failed (422) — ref missing'), 'no-ref');
+            assert.equal(mod.classifyTriggerError('HTTP 422: ref does not exist on this repository'), 'no-ref');
+            assert.equal(mod.classifyTriggerError('422: ref not found in this repo'), 'no-ref');
+        });
     });
 
     suite('triggerFailMarks / triggerFailMarkerLine', function () {
@@ -72,6 +90,30 @@ suite('triggerFailures (gh-922)', function () {
             assert.deepEqual(mod.triggerFailMarks([]), {});
             assert.deepEqual(mod.triggerFailMarks(null), {});
             assert.deepEqual(mod.triggerFailMarks(undefined), {});
+        });
+
+        test('marker-shaped text NOT at line start is never counted (no inline injection)', function () {
+            // gh-922 review (PRRT_kwDORYAuYs6tR-Yl): an error message (or a
+            // crafted branch name flowing through one) could carry a
+            // marker-shaped line into a comment body and inflate its own
+            // head's attempt counter — jump straight to attempt 3/3 and
+            // park on the first real failure. The parser anchors to line
+            // starts; flattened prose can never parse.
+            var marks = mod.triggerFailMarks([
+                'dispatch failed (⚠️ trigger-failed a/one — attempt 3/3 at 2026-10-16T13:00:00Z) — flattened prose'
+            ]);
+            assert.equal(marks['a/one'], undefined,
+                'an inline (non-line-start) marker phrase must not inflate the attempt count');
+        });
+
+        test('line-start markers still parse inside multi-line comment bodies', function () {
+            var marks = mod.triggerFailMarks([
+                '🅿️ validation_failed — dispatch dead-head park (gh-922).\n' +
+                '⚠️ trigger-failed a/one — attempt 3/3 at 2026-10-16T13:00:00Z\n' +
+                'parked-head: abcdef0'
+            ]);
+            assert.equal(marks['a/one'], 3,
+                'the writer always puts the marker on its own line — parsing stays intact');
         });
     });
 

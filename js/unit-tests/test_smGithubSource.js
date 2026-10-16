@@ -2509,4 +2509,80 @@ suite('sm github source: trigger fail-open overfetch (gh-922)', function () {
             return l.indexOf('\uD83E\uDD47') !== -1 && l.indexOf('pr-302') !== -1;
         }), 'the blocker taking the limit:1 slot over a cut medium still logs the preemption line');
     });
+
+    test('a dead-head park (validation_failed + gone head ref) is benched from the candidate list', function () {
+        // PRRT_kwDORYAuYs6tR-Jq: parked heads are never removed from
+        // candidacy — 4+ simultaneously dead heads burned the whole
+        // limit+3 slice every tick and re-starved the FIFO. The source
+        // benches validation_failed candidates whose head ref the
+        // provider cannot see; the reserve stays free for live failures.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review', 'validation_failed'], 'gone/deleted-branch'),
+                    listPr(301, ['agent:review'], 'feat/alive')
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 1
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate',
+             provider: { branchExists: function (name) { return name !== 'gone/deleted-branch'; } } });
+
+        assert.deepEqual(items.map(function (i) { return i.prNumber; }), [301],
+            'the dead-head park never reaches the dispatch loop — no burned attempts, no reserve slots');
+    });
+
+    test('a LIVE parked PR (red park, head ref present) stays a candidate — park-reset keeps its lane', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(303, ['validation_failed'], 'gone/really-deleted'),
+                    listPr(302, ['validation_failed'], 'feat/red-but-alive')
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['validation_failed'], draft: false }, limit: 5
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate',
+             provider: { branchExists: function (name) { return name !== 'gone/really-deleted'; } } });
+
+        assert.deepEqual(items.map(function (i) { return i.prNumber; }), [302],
+            'only DEAD heads are benched — the park-reset rule must still find red-parked PRs');
+    });
+
+    test('non-parked candidates are never benched (the bench keys on the park label)', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review'], 'gone/deleted-branch'),
+                    listPr(301, ['agent:review'], 'feat/alive')
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 1
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate',
+             provider: { branchExists: function () { return false; } } });
+
+        assert.equal(items.length, 2,
+            'an UNPARKED dead head keeps its candidacy — the marker/park ladder owns it (fail-open dispatch)');
+    });
+
+    test('fail-open: a provider without branchExists benches nothing (pre-fix behavior)', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review', 'validation_failed'], 'gone/deleted-branch'),
+                    listPr(301, ['agent:review'], 'feat/alive')
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 1
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate' });
+
+        assert.equal(items.length, 2,
+            'no branch-existence oracle → no benching (a blind tick never strands a candidate)');
+    });
 });
