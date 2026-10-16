@@ -1,0 +1,44 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "issue_planning",
+      "descriptionPath": "agents/docs/agents/issue_planning.md"
+    },
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "attachResponseAsFile": false,
+    "skipAIProcessing": true,
+    "alwaysPostComments": false,
+    "envVariables": {
+      "CLI_ALLOWED_COMMANDS": "find,ls,cat,mkdir,bash,run-agent.sh"
+    },
+    "preJSAction": "agents/js/checkWipLabel.js",
+    "postJSAction": "agents/js/createPlannedSubIssues.js",
+    "inputJql": "key = PROJ-1",
+    "cliPrompts": [
+      "Senior Software Architect planning delivery",
+      "./agents/instructions/common/agent_task_preamble.md",
+      "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/common/investigate_before_solution.md",
+      "./agents/instructions/common/no_development.md",
+      "./agents/instructions/issue_planning/workflow.md",
+      "./agents/instructions/issue_planning/output_rules.md",
+      "./agents/instructions/common/error_handling.md",
+      "./agents/instructions/common/session_ephemerality.md",
+      "./agents/prompts/issue_planning_prompt.md",
+      "./agents/prompts/bash_tools.md"
+    ],
+    "cliPromptsByTracker": {
+      "jira": [
+        "./agents/instructions/tracker/jira_markup_transform.md"
+      ],
+      "ado": [
+        "./agents/instructions/tracker/ado_markup_transform.md"
+      ]
+    }
+  }
+}

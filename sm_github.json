@@ -780,6 +780,19 @@
           "localAction": "close_issue",
           "limit": 5,
           "id": "close-on-merge"
+        },
+        {
+          "description": "GitHub: sequential issue plan (issue_planning agent) -> start the next step. A parent labeled ai_planned has its steps as ordered sub-issues; the first open sub-issue gets the dev label (issuePlanning.devLabel, default agent:dev) once every earlier one is closed, a started step is waited on, and the parent closes when every step is closed. Runs AFTER close-on-merge so a step closed this tick starts the next one in the same tick. Labels and limits come from the project's issuePlanning config block; a project with a different planned label overrides this query.",
+          "source": "github",
+          "query": {
+            "type": "issue",
+            "labels": [
+              "ai_planned"
+            ]
+          },
+          "localAction": "advance_plan",
+          "limit": 10,
+          "id": "plan-advance"
         }
       ]
     }

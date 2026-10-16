@@ -151,6 +151,9 @@ var configModule = require('./config.js');
 // gh-807: machine review-verdict records + their reconciliation logic.
 var reviewVerdictsModule = require('./common/reviewVerdicts.js');
 var redConvergenceModule = require('./common/redConvergence.js');
+// Sequential issue plans (issue_planning agent): the shared planning contract
+// and the next-step decision of the advance_plan localAction.
+var issuePlanModule = require('./common/issuePlan.js');
 // gh-840 (hoisted, never lazy — the gh-823 pack-require rule): fail-closed
 // agent:rework consumption bookkeeping — the consume-audit markers the
 // processRule consumeLabels paths stamp, and the pure consumed-without-work
@@ -1526,6 +1529,60 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ close_issue failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
+        if (rule.localAction === 'advance_plan') {
+            // Sequential issue plans: the issue_planning agent split this
+            // issue into ordered sub-issues and labeled it planned. Start ONE
+            // step at a time — the first open sub-issue gets the dev label
+            // once every earlier one is closed; a started step (it carries
+            // the dev label) is waited on; when every step is closed the
+            // parent closes. Convergent: the dev label is added once, and a
+            // closed parent no longer matches the open-issue query.
+            try {
+                var planCfg = issuePlanModule.resolvePlanningConfig(effectiveConfig,
+                    (RUN_JOB_PARAMS && RUN_JOB_PARAMS.customParams) || {});
+                var planTracker = githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo);
+                var planStep = issuePlanModule.decideNextStep(
+                    planTracker.listChildTickets(ticket.issueNumber), planCfg);
+                if (planStep.type === 'empty') {
+                    console.warn('  ⚠️  ' + key + ' is labeled ' + planCfg.plannedLabel +
+                        ' but has no sub-issues — nothing to sequence');
+                    skippedKeys.push(key);
+                    continue;
+                }
+                if (planStep.type === 'wait') {
+                    console.log('  ⏭️  ' + key + ' step ' + planStep.index + '/' + planStep.total + ' (' +
+                        planStep.child.key + ') is in progress');
+                    skippedKeys.push(key);
+                    continue;
+                }
+                if (DRY) {
+                    console.log('  🧪 [dry] ' + key + (planStep.type === 'start'
+                        ? ' would start step ' + planStep.index + '/' + planStep.total + ' (' + planStep.child.key + ')'
+                        : ' would close the plan (all ' + planStep.total + ' steps closed)'));
+                    processedKeys.push(key);
+                    continue;
+                }
+                if (planStep.type === 'start') {
+                    planTracker.addLabel(planStep.child.key, planCfg.devLabel);
+                    planTracker.postComment(ticket.issueNumber, issuePlanModule.renderStepComment(planStep, planCfg));
+                    console.log('  ✅ ' + key + ' step ' + planStep.index + '/' + planStep.total + ' started: ' +
+                        planStep.child.key + ' +' + planCfg.devLabel);
+                } else {
+                    planTracker.postComment(ticket.issueNumber, issuePlanModule.renderCompleteComment(planStep));
+                    github_close_issue({
+                        workspace: effectiveRepoInfo.owner,
+                        repository: effectiveRepoInfo.repo,
+                        number: ticket.issueNumber
+                    });
+                    console.log('  ✅ ' + key + ' plan complete (' + planStep.total + ' steps) — issue closed');
+                }
+                processedKeys.push(key);
+            } catch (e) {
+                console.error('  ❌ advance_plan failed for ' + key + ': ' + (e.message || e));
             }
             continue;
         }

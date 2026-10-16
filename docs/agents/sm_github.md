@@ -16,9 +16,10 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 
 ## Labels
 
-The machine's state lives in labels; two are owner-facing semantics worth knowing:
+The machine's state lives in labels; three are owner-facing semantics worth knowing:
 
 - `blocked` — human hold: the item is invisible to EVERY rule (all legs) until a human removes the label.
+- `ai_planned` — a parent issue planned into ordered sub-issues by the `issue_planning` agent. The rule `plan-advance` (local action `advance_plan`) adds the dev label (`issuePlanning.devLabel`, default `agent:dev`) to the first open sub-issue once every earlier one is closed, and closes the parent when every sub-issue is closed.
 - `validation_failed` — sticky guest park (owner 2026-09-27, live: fa#923 — a guest PR cycled arm→CI red→silent-update→re-arm every tick, holding the validate-armed limit-1 slot hostage). The silent-update action sets it on a GUEST PR whose current head has red checks; while it is set the PR is excluded from the validate-armed arm queue and NO validation CI is dispatched for it at all. It is removed only when the head's last committer is NOT `sm-silent-update` — i.e. an author push; the SM's own silent-update merges never clear it. Machine-authored PRs never carry the label (their heads are pushed by the machine; they re-enter validation on a new head as usual).
 
 

@@ -37,6 +37,11 @@
  * with graceful degradation where it does not (Dart catalog): moveToStatus
  * falls back to close-on-done + status-as-label over the basic issue tools,
  * while search/assignTo throw a clear error.
+ *
+ * Parent → child: createTicketWithParent works on every provider (on GitHub
+ * the child becomes a SUB-ISSUE of the parent). listChildTickets(parentKey)
+ * returns the children in the parent's order and is GitHub-only (sub-issues);
+ * jira/ado throw. Both GitHub calls go to the REST API through `gh api`.
  */
 
 const { STATUSES, LABELS, stageLabel: stageLabelOf } = require('../config.js');
@@ -654,6 +659,70 @@ function createTracker(config, customParams) {
         return t ? t.key : null;
     }
 
+    // ── github sub-issues (REST via gh) ───────────────────────────────────
+    //
+    // GitHub models a parent → child relation as SUB-ISSUES (ordered; the
+    // order is the parent's list order). No dmtools runtime ships a sub-issue
+    // tool, so these two calls go to the REST API through `gh api`, the way
+    // the SM's own probes already do (smProvider.js). The command lines carry
+    // no shell metacharacters — cli_execute_command rejects them.
+
+    function _jsonPart(out) {
+        var s = String(out == null ? '' : out);
+        var i = s.search(/[\[{]/);
+        return i === -1 ? s : s.substring(i);
+    }
+
+    function githubRestViaGh(method, path, fields) {
+        var cmd = 'gh api' + (method && method !== 'GET' ? ' --method ' + method : '') + ' ' + path;
+        (fields || []).forEach(function (f) { cmd += ' -F ' + f; });
+        return _parseJson(_jsonPart(cli_execute_command({ command: cmd })));
+    }
+
+    function githubParentArgs(parentKey) {
+        var parent = githubIssueArgs(parentKey);
+        if (!parent.owner || !parent.repo) {
+            throw new Error('trackers: no repository for GitHub issue ' + parentKey +
+                ' (use an owner/repo#N key or configure repository)');
+        }
+        return parent;
+    }
+
+    function githubCreateTicketWithParent(project, type, title, description, parentKey) {
+        // project/type are Jira/ADO concepts. The child is created as a plain
+        // issue, then attached to the parent as a sub-issue; the sub-issue
+        // API takes the child's REST id, not its number.
+        var parent = githubParentArgs(parentKey);
+        var child = normalizeTicket(github_create_issue({
+            owner: parent.owner,
+            repo: parent.repo,
+            title: title,
+            body: description
+        }));
+        if (!child || !child.id) {
+            throw new Error('trackers: github_create_issue returned no issue id for "' + title + '"');
+        }
+        githubRestViaGh('POST',
+            'repos/' + parent.owner + '/' + parent.repo + '/issues/' + parent.number + '/sub_issues',
+            ['sub_issue_id=' + child.id]);
+        return child.key;
+    }
+
+    function githubListChildTickets(parentKey) {
+        var parent = githubParentArgs(parentKey);
+        var list = githubRestViaGh('GET',
+            'repos/' + parent.owner + '/' + parent.repo + '/issues/' + parent.number + '/sub_issues?per_page=100');
+        if (!Array.isArray(list)) {
+            throw new Error('trackers: unexpected sub_issues response for ' + parentKey);
+        }
+        var out = [];
+        list.forEach(function (raw) {
+            var t = normalizeTicket(raw);
+            if (t) out.push(t);
+        });
+        return out;
+    }
+
     // ── dispatch tables ───────────────────────────────────────────────────
 
     var impls = {
@@ -680,7 +749,8 @@ function createTracker(config, customParams) {
             attachFile: jiraAttachFile,
             fieldCode: jiraFieldCode,
             createTicketWithParent: jiraCreateWithParent,
-            createTicketWithFields: jiraCreateWithFields
+            createTicketWithFields: jiraCreateWithFields,
+            listChildTickets: function () { unsupported('listChildTickets'); }
         },
         ado: {
             getTicket: adoGetTicket,
@@ -701,7 +771,8 @@ function createTracker(config, customParams) {
             attachFile: adoAttachFile,
             fieldCode: adoFieldCode,
             createTicketWithParent: adoCreateWithParent,
-            createTicketWithFields: adoCreateWithFields
+            createTicketWithFields: adoCreateWithFields,
+            listChildTickets: function () { unsupported('listChildTickets'); }
         },
         github: {
             getTicket: githubGetTicket,
@@ -724,8 +795,10 @@ function createTracker(config, customParams) {
             setPriority: function () { unsupported('setPriority'); },
             attachFile: function () { unsupported('attachFile'); },
             fieldCode: function () { return null; },
-            createTicketWithParent: function () { unsupported('createTicketWithParent'); },
-            createTicketWithFields: function () { unsupported('createTicketWithFields'); }
+            // A child is a sub-issue of its parent (see githubCreateTicketWithParent).
+            createTicketWithParent: githubCreateTicketWithParent,
+            createTicketWithFields: function () { unsupported('createTicketWithFields'); },
+            listChildTickets: githubListChildTickets
         }
     };
     var impl = impls[providerName];
@@ -1134,6 +1207,7 @@ function createTracker(config, customParams) {
         fieldCode: function (p, n) { return impl.fieldCode(p, n); },
         createTicketWithParent: function (p, t, ti, d, pk, x) { return impl.createTicketWithParent(p, t, ti, d, pk, x); },
         createTicketWithFields: function (p, f) { return impl.createTicketWithFields(p, f); },
+        listChildTickets: function (k) { return impl.listChildTickets(k); },
         normalizeTicket: normalizeTicket,
         toIssueView: toIssueView,
         extractTicketKey: extractTicketKey,
