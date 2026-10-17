@@ -227,6 +227,33 @@ suite('postPRReviewComments', function() {
         assert.ok(calls[0].text.indexOf('trackstate-setup/README.md:12') !== -1);
     });
 
+    test('gh-949 rework: 422 on a submodule-mapped inline comment falls back with the submodule-content prefix', function() {
+        var mod = loadPostPRReviewComments();
+        var diff =
+            'diff --git a/trackstate-setup b/trackstate-setup\n' +
+            'index bab3e4453..20a4bc2a1 160000\n' +
+            '--- a/trackstate-setup\n' +
+            '+++ b/trackstate-setup\n' +
+            '@@ -1 +1 @@\n' +
+            '-Subproject commit bab3e445305c78295b72f1fa4fe5e85f12055546\n' +
+            '+Subproject commit 20a4bc2a11e528d173e9fbe046b1ee31514e9259\n';
+        var fallbackCalls = [];
+        var scm = {
+            getPrDiff: function() { return diff; },
+            addInlineComment: function() { throw new Error('422 Validation Failed'); },
+            addComment: function(prId, body) { fallbackCalls.push({ prId: prId, body: body }); }
+        };
+
+        var posted = mod.postInlineComment(scm, 1930, { path: 'trackstate-setup', line: 7, body: 'description issue' }, 'TS-1383', null);
+
+        assert.equal(posted, true, 'fallback comment must be posted');
+        assert.equal(fallbackCalls.length, 1);
+        assert.ok(fallbackCalls[0].body.indexOf('trackstate-setup:7') !== -1, 'fallback keeps the original location line');
+        assert.ok(fallbackCalls[0].body.indexOf('(submodule content line)') !== -1,
+            'fallback must keep the submodule-content prefix the pre-split code included');
+        assert.ok(fallbackCalls[0].body.indexOf('description issue') !== -1);
+    });
+
     // ── Regression guard: body held a comment-file path instead of text ──
     // The agent is instructed to reference comment text via `comment` (a path
     // to outputs/pr_review_comments/*.md), never inline in `body`. A prompt/
@@ -1959,19 +1986,6 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
         var renamed = 'diff --git a/old.js b/new.js\n--- a/old.js\n+++ b/new.js\n@@ -1 +1 @@\n-x\n+y\n';
         assert.deepEqual(mod.parseDiffLineInfo(renamed, 'new.js', 1), { present: true, side: 'RIGHT' });
         assert.deepEqual(mod.parseDiffLineInfo(renamed, 'old.js', 1), { present: false, side: null });
-    });
-
-    test('deriveProjectKey: projectKey wins; configPath basename; config.js → empty', function() {
-        var mod = loadPostPRReviewComments();
-
-        assert.equal(mod.deriveProjectKey(undefined), '');
-        assert.equal(mod.deriveProjectKey({}), '');
-        assert.equal(mod.deriveProjectKey({ projectKey: 'pk' }), 'pk');
-        assert.equal(mod.deriveProjectKey({ projectKey: 'pk', configPath: '.dmtools/configs/other.js' }), 'pk');
-        assert.equal(mod.deriveProjectKey({ configPath: '.dmtools/configs/myproject.js' }), 'myproject');
-        assert.equal(mod.deriveProjectKey({ configPath: '.dmtools/config.js' }), '');
-        assert.equal(mod.deriveProjectKey({ configPath: 'config.js' }), '');
-        assert.equal(mod.deriveProjectKey({ configPath: '' }), '');
     });
 
     test('isFileDeletedInDiff: deleted file mode detected per file segment', function() {

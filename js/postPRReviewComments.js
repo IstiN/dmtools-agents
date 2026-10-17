@@ -46,28 +46,6 @@ function hasLabel(labels, label) {
     return (labels || []).indexOf(label) !== -1;
 }
 
-/**
- * Derive project key from customParams.configPath or customParams.projectKey.
- * e.g. ".dmtools/configs/myproject.js" → "myproject"
- */
-function deriveProjectKey(customParams) {
-    if (!customParams) return '';
-    if (customParams.projectKey) return customParams.projectKey;
-    return projectKeyFromConfigPath(customParams.configPath);
-}
-
-function projectKeyFromConfigPath(configPath) {
-    var base = basenameNoJs(configPath);
-    if (!base) return '';
-    if (base === 'config') return '';
-    return base;
-}
-
-function basenameNoJs(configPath) {
-    if (!configPath) return '';
-    return configPath.substring(configPath.lastIndexOf('/') + 1).replace(/\.js$/, '');
-}
-
 function ticketLabels(ticket) {
     if (!ticket) return [];
     return ticketFieldLabels(ticket.fields);
@@ -827,10 +805,22 @@ function postAnchoredInlineComment(scm, pullRequestId, inlineComment, filePath, 
         return true;
     }
 
-    scm.addInlineComment(
-        pullRequestId, plan.effectivePath, plan.effectiveLine, plan.commentText,
-        plan.startLine, plan.requestedSide
-    );
+    return postPlannedInlineComment(scm, pullRequestId, inlineComment, filePath, plan);
+}
+
+function postPlannedInlineComment(scm, pullRequestId, inlineComment, filePath, plan) {
+    try {
+        scm.addInlineComment(
+            pullRequestId, plan.effectivePath, plan.effectiveLine, plan.commentText,
+            plan.startLine, plan.requestedSide
+        );
+    } catch (error) {
+        // 422 = line not in diff hunk — fall back to a regular PR comment. Use
+        // plan.commentText (not the caller's commentText): the plan carries the
+        // submodule-content 📍 prefix, which the pre-split code had already
+        // mutated into commentText at this point, so the fallback kept it.
+        return fallbackInlineComment(scm, pullRequestId, filePath, inlineComment.line, plan.commentText, error);
+    }
 
     console.log('✅ Posted inline comment on ' + plan.effectivePath + ':' + plan.effectiveLine +
         (inlineCommentMapped(plan, filePath, inlineComment) ?
@@ -888,12 +878,19 @@ function applyFormalGithubReview(scm, pullRequestId, isApproved, recommendation,
         console.warn('formalGithubReview: SCM provider does not support submitReview — skipping');
         return;
     }
+    // Resolve the review body BEFORE the try boundary (gh-949): a failure in
+    // resolveCommentFileReference/readMarkdownFile must propagate to action()'s
+    // outer catch — the pre-split behavior — so the ticket gets the loud
+    // '❌ PR Review Error' comment instead of a silently skipped formal review.
+    var reviewBody = isApproved
+        ? formalApproveBody(generalComment, ticketKey, workingDir)
+        : formalRejectBody(generalComment, recommendation, ticketKey, workingDir);
     try {
         if (isApproved) {
-            applyFormalApprove(scm, pullRequestId, formalApproveBody(generalComment, ticketKey, workingDir));
+            applyFormalApprove(scm, pullRequestId, reviewBody);
             return;
         }
-        scm.submitReview(pullRequestId, 'REQUEST_CHANGES', formalRejectBody(generalComment, recommendation, ticketKey, workingDir));
+        scm.submitReview(pullRequestId, 'REQUEST_CHANGES', reviewBody);
         console.log('✅ Submitted formal Request Changes review');
     } catch (e) {
         console.warn('formalGithubReview: failed to apply formal review:', e.message || e);
@@ -1504,17 +1501,9 @@ function postInlineCommentsIfPresent(ctx, pr, reviewData) {
 function addPRLabelQuietly(scm, prNumber, label, okMessage, warnPrefix) {
     try {
         scm.addLabel(prNumber, label);
-        console.log(okMessage);
+        if (okMessage) console.log(okMessage);
     } catch (labelErr) {
-        console.warn(warnPrefix, labelErr);
-    }
-}
-
-function addPRLabelQuietlyDetailed(scm, prNumber, label, warnPrefix) {
-    try {
-        scm.addLabel(prNumber, label);
-    } catch (prLabelError) {
-        console.warn(warnPrefix, prLabelError.message || prLabelError);
+        console.warn(warnPrefix, labelErr.message || labelErr);
     }
 }
 
@@ -1624,7 +1613,7 @@ function rearmLinkedIssueRework(ctx, pr, repoInfo) {
  * comments) assume a hydrated ticket this run does not have.
  */
 function finishPRAnchoredReview(ctx, pr, repoInfo, isApproved, recommendation) {
-    addPRLabelQuietlyDetailed(ctx.scm, pr.number, LABELS.AI_PR_REVIEWED,
+    addPRLabelQuietly(ctx.scm, pr.number, LABELS.AI_PR_REVIEWED, null,
         'Failed to add ai_pr_reviewed to PR #' + pr.number + ':');
     // Consume the on-demand trigger so the label never loops.
     removePRLabelQuietly(ctx.scm, pr.number, 'agent:review', 'No agent:review label to remove from PR #' + pr.number);
@@ -1712,7 +1701,7 @@ function addTicketAiPrReviewedLabel(tracker, ticketKey) {
 function addReviewMarkers(ctx, ticketKey, pr, repoInfo) {
     addTicketAiPrReviewedLabel(ctx.tracker, ticketKey);
     if (!hasGitHubTarget(pr, repoInfo)) return;
-    addPRLabelQuietlyDetailed(ctx.scm, pr.number, LABELS.AI_PR_REVIEWED,
+    addPRLabelQuietly(ctx.scm, pr.number, LABELS.AI_PR_REVIEWED, null,
         'Failed to add ai_pr_reviewed to PR #' + pr.number + ':');
 }
 
@@ -2148,7 +2137,6 @@ if (typeof module !== 'undefined' && module.exports) {
         hasLabel,
         ticketLabels,
         scmProviderOf,
-        deriveProjectKey,
         parseGitHubRemoteUrl,
         buildResumePrompt,
         attemptResumeIfReviewOutputsMissing,
