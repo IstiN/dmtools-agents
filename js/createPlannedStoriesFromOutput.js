@@ -260,205 +260,412 @@ function buildSummaryComment(results, title) {
     return lines.join('\n');
 }
 
+// ── Run context and guards ─────────────────────────────────────────────────
+
+function firstObject(a, b) {
+    return a ? a : b;
+}
+
+function firstOf3(a, b, c) {
+    return firstObject(firstObject(a, b), c);
+}
+
+function hasSkipLabel(config, labels) {
+    if (!config.skipIfLabel) return false;
+    return labels.indexOf(config.skipIfLabel) !== -1;
+}
+
+function logSkipLabelReuse(plan) {
+    if (!plan.skipLabelReuse) return;
+    console.log('Story plan label "' + plan.config.skipIfLabel + '" is present on ' + plan.sourceTicketKey + ', continuing in reuse mode');
+}
+
+function prepareStoryPlan(params) {
+    var jobParams = firstObject(params.jobParams, {});
+    var customParams = firstOf3(params.customParams, jobParams.customParams, {});
+    var config = firstObject(customParams.storyPlanCreation, {});
+    tracker = trackersModule.createTracker(null, customParams);
+    var sourceTicketKey = params.ticket && params.ticket.key;
+    var sourceLabels = getSourceLabels(params);
+    var plan = {
+        params: params,
+        config: config,
+        customParams: customParams,
+        tracker: tracker,
+        sourceTicketKey: sourceTicketKey,
+        sourceLabels: sourceLabels,
+        skipLabelPresent: hasSkipLabel(config, sourceLabels),
+        skipLabelMode: firstObject(config.skipIfLabelMode, 'strict'),
+        outputFile: firstObject(config.outputFile, 'outputs/stories.json'),
+        keyMap: {}
+    };
+    plan.skipLabelReuse = plan.skipLabelPresent && plan.skipLabelMode === 'reuse';
+    logSkipLabelReuse(plan);
+    return plan;
+}
+
+function planGuardResult(plan) {
+    if (plan.config.enabled === false) {
+        return { result: { success: true, skipped: true, message: 'storyPlanCreation disabled' } };
+    }
+    return sourceKeyGuardResult(plan);
+}
+
+function sourceKeyGuardResult(plan) {
+    if (plan.sourceTicketKey) return null;
+    return { result: { success: false, error: 'Missing source ticket key' } };
+}
+
+function skipLabelGuardResult(plan) {
+    if (!plan.skipLabelPresent) return null;
+    if (plan.skipLabelMode !== 'reuse') {
+        console.log('Story plan creation skipped for ' + plan.sourceTicketKey + ' because label "' + plan.config.skipIfLabel + '" is present');
+        return { result: { success: true, skipped: true, message: 'Skip label present' } };
+    }
+    return null;
+}
+
+function earlyPlanResult(plan) {
+    var guard = planGuardResult(plan);
+    if (guard) return guard;
+    return skipLabelGuardResult(plan);
+}
+
+function fileGuardResult(plan, parsed) {
+    if (parsed.error) {
+        return { result: { success: false, error: parsed.error } };
+    }
+    return filePresenceResult(plan, parsed);
+}
+
+function filePresenceResult(plan, parsed) {
+    if (parsed.found) return null;
+    return missingFileResult(plan);
+}
+
+function missingFileResult(plan) {
+    if (plan.config.required) {
+        return { result: { success: false, error: plan.outputFile + ' not found or empty' } };
+    }
+    console.log(plan.outputFile + ' not found — skipping planned story creation');
+    return { result: { success: true, skipped: true, message: 'No story plan file found' } };
+}
+
+function storiesEmptyResult(plan, stories) {
+    if (stories.length > 0) return null;
+    console.log(plan.outputFile + ' contains no planned stories');
+    return { result: { success: true, createdTickets: [], message: 'No planned stories to create' } };
+}
+
+// ── Story entry processing ─────────────────────────────────────────────────
+
+function unsupportedEntryResult(entry, summary) {
+    return {
+        type: entry.type || 'Unknown',
+        summary: summary,
+        key: null,
+        success: false,
+        error: 'Unsupported entry type for story plan: ' + (entry.type || '(missing)')
+    };
+}
+
+function missingParentResult(summary) {
+    return {
+        type: ISSUE_TYPES.STORY,
+        summary: summary,
+        key: null,
+        success: false,
+        error: 'No parent key resolved for story'
+    };
+}
+
+function createdEntryResult(summary, createdKey) {
+    return {
+        type: ISSUE_TYPES.STORY,
+        summary: summary,
+        key: createdKey,
+        success: true,
+        existing: false
+    };
+}
+
+function failedEntryResult(summary, error) {
+    return {
+        type: ISSUE_TYPES.STORY,
+        summary: summary,
+        key: null,
+        success: false,
+        error: error.toString()
+    };
+}
+
+function parentStoryMap(existingByParent, resolvedParentKey, issueTypeName) {
+    if (existingByParent[resolvedParentKey]) return existingByParent[resolvedParentKey];
+    var map = fetchExistingStoriesByParent(resolvedParentKey, issueTypeName);
+    existingByParent[resolvedParentKey] = map;
+    return map;
+}
+
+function recordCreatedKey(plan, entry, summary, parentMap, createdKey) {
+    entry._createdKey = createdKey;
+    parentMap[summary] = createdKey;
+    if (entry.tempId) plan.keyMap[entry.tempId] = createdKey;
+    plan.keyMap[createdKey] = createdKey;
+}
+
+function reuseExistingStory(plan, entry, summary, existingKey, results) {
+    entry._createdKey = existingKey;
+    if (entry.tempId) plan.keyMap[entry.tempId] = existingKey;
+    plan.keyMap[existingKey] = existingKey;
+    linkStory(existingKey, plan.params, plan.config, true);
+    results.push({
+        type: ISSUE_TYPES.STORY,
+        summary: summary,
+        key: existingKey,
+        success: true,
+        existing: true
+    });
+}
+
+function createStoryEntry(plan, entry, summary, resolvedParentKey, parentMap, results) {
+    try {
+        var createdKey = createStory(entry, resolvedParentKey, plan.params, plan.config);
+        recordCreatedKey(plan, entry, summary, parentMap, createdKey);
+        linkStory(createdKey, plan.params, plan.config, false);
+        results.push(createdEntryResult(summary, createdKey));
+    } catch (error) {
+        entry._createdKey = null;
+        results.push(failedEntryResult(summary, error));
+    }
+}
+
+function reuseOrCreateStory(plan, entry, summary, resolvedParentKey, existingByParent, parentMap, existingKey, results) {
+    if (existingKey) {
+        reuseExistingStory(plan, entry, summary, existingKey, results);
+        return;
+    }
+    createStoryEntry(plan, entry, summary, resolvedParentKey, parentMap, results);
+}
+
+function createOrReuseStory(plan, entry, summary, resolvedParentKey, existingByParent, results) {
+    if (!resolvedParentKey) {
+        results.push(missingParentResult(summary));
+        return;
+    }
+    var parentMap = parentStoryMap(existingByParent, resolvedParentKey, plan.issueTypeName);
+    var existingKey = firstObject(parentMap[summary], null);
+    reuseOrCreateStory(plan, entry, summary, resolvedParentKey, existingByParent, parentMap, existingKey, results);
+}
+
+function processStoryEntry(plan, stories, i, existingByParent, results) {
+    var entry = firstObject(stories[i], {});
+    var summary = buildSummary(entry.summary, i);
+    var resolvedParentKey = firstObject(entry.parent, plan.defaultParentKey);
+    if (!isStoryEntry(entry)) {
+        results.push(unsupportedEntryResult(entry, summary));
+        return;
+    }
+    createOrReuseStory(plan, entry, summary, resolvedParentKey, existingByParent, results);
+}
+
+function processStoryEntries(plan, stories) {
+    var existingByParent = {};
+    var results = [];
+    for (var i = 0; i < stories.length; i++) {
+        processStoryEntry(plan, stories, i, existingByParent, results);
+    }
+    return results;
+}
+
+// ── blockedBy / integrates links ───────────────────────────────────────────
+
+function resolvePlanKey(plan, ref) {
+    return plan.keyMap[ref] || null;
+}
+
+function attemptBlockerLink(trackerInst, blockedKey, blockerKey, anyBlocked, relationship) {
+    try {
+        trackerInst.linkIssues(blockedKey, blockerKey, relationship);
+        return true;
+    } catch (e) {
+        console.warn('Failed to create ' + relationship + ' link between ' + blockerKey + ' and ' + blockedKey + ':', e);
+        return anyBlocked;
+    }
+}
+
+function tryBlockerLink(plan, blockedKey, ref, anyBlocked) {
+    var blockerKey = resolvePlanKey(plan, ref);
+    if (!blockerKey) return anyBlocked;
+    var relationship = firstObject(plan.config.blockedByRelationship, 'Blocks');
+    return attemptBlockerLink(plan.tracker, blockedKey, blockerKey, anyBlocked, relationship);
+}
+
+function linkAllBlockers(plan, story) {
+    var anyBlocked = false;
+    var refs = story.blockedBy;
+    for (var b = 0; b < refs.length; b++) {
+        anyBlocked = tryBlockerLink(plan, story._createdKey, refs[b], anyBlocked);
+    }
+    return anyBlocked;
+}
+
+function tryMoveToBlocked(trackerInst, blockedKey, blockedStatusName) {
+    try {
+        trackerInst.moveToStatus(blockedKey, blockedStatusName);
+    } catch (statusError) {
+        console.warn('Failed to move ' + blockedKey + ' to Blocked:', statusError);
+    }
+}
+
+function moveToBlockedStatus(trackerInst, blockedKey, config) {
+    if (config.blockedStatusName === false) return;
+    tryMoveToBlocked(trackerInst, blockedKey, firstObject(config.blockedStatusName, STATUSES.BLOCKED));
+}
+
+function moveBlockedStory(plan, blockedKey, anyBlocked) {
+    if (!anyBlocked) return;
+    moveToBlockedStatus(plan.tracker, blockedKey, plan.config);
+}
+
+function linkBlockedStory(plan, story) {
+    if (!story._createdKey) return;
+    if (!Array.isArray(story.blockedBy)) return;
+    var anyBlocked = linkAllBlockers(plan, story);
+    moveBlockedStory(plan, story._createdKey, anyBlocked);
+}
+
+function processBlockedByLinks(plan, stories) {
+    for (var j = 0; j < stories.length; j++) {
+        linkBlockedStory(plan, stories[j]);
+    }
+}
+
+function attemptRelatesLink(trackerInst, storyKey, otherKey) {
+    try {
+        trackerInst.linkIssues(storyKey, otherKey, 'Relates');
+    } catch (e) {
+        console.warn('Failed to create Relates link between ' + storyKey + ' and ' + otherKey + ':', e);
+    }
+}
+
+function tryIntegratesLink(plan, storyKey, ref) {
+    var otherKey = resolvePlanKey(plan, ref);
+    if (!otherKey) return;
+    if (otherKey === storyKey) return;
+    attemptRelatesLink(plan.tracker, storyKey, otherKey);
+}
+
+function linkAllIntegrations(plan, story) {
+    var refs = story.integrates;
+    for (var l = 0; l < refs.length; l++) {
+        tryIntegratesLink(plan, story._createdKey, refs[l]);
+    }
+}
+
+function linkIntegratesStory(plan, story) {
+    if (!story._createdKey) return;
+    if (!Array.isArray(story.integrates)) return;
+    linkAllIntegrations(plan, story);
+}
+
+function processIntegratesLinks(plan, stories) {
+    for (var k = 0; k < stories.length; k++) {
+        linkIntegratesStory(plan, stories[k]);
+    }
+}
+
+// ── Finalize: summary comment + label + result ─────────────────────────────
+
+function isSuccessful(item) {
+    return item.success;
+}
+
+function countSuccessful(results) {
+    return results.filter(isSuccessful).length;
+}
+
+function tryPostSummary(plan, results) {
+    try {
+        tracker.postComment(plan.sourceTicketKey, buildSummaryComment(results, firstObject(plan.config.summaryCommentTitle, 'Planned Follow-up Stories')));
+    } catch (commentError) {
+        console.warn('Failed to post story plan summary comment to ' + plan.sourceTicketKey + ':', commentError);
+    }
+}
+
+function postSummaryComment(plan, results) {
+    if (plan.config.postSummaryComment === false) return;
+    tryPostSummary(plan, results);
+}
+
+function tryTrackerAddLabel(trackerInst, key, label) {
+    try {
+        trackerInst.addLabel(key, label);
+    } catch (labelError) {
+        console.warn('Failed to add label "' + label + '" to ' + key + ':', labelError);
+    }
+}
+
+function tryAddPlanLabel(plan) {
+    if (!plan.config.addLabel) return;
+    tryTrackerAddLabel(tracker, plan.sourceTicketKey, plan.config.addLabel);
+}
+
+function addPlanLabel(plan, results) {
+    if (countSuccessful(results) === 0) return;
+    tryAddPlanLabel(plan);
+}
+
+function finalizeStoryPlan(plan, results) {
+    postSummaryComment(plan, results);
+    addPlanLabel(plan, results);
+}
+
+function storyPlural(count) {
+    return count === 1 ? 'y' : 'ies';
+}
+
+function failureSuffix(failureCount) {
+    return failureCount ? ', ' + failureCount + ' failed' : '';
+}
+
+function buildPlanMessage(successfulCount, failureCount) {
+    return 'Processed ' + successfulCount + ' planned stor' + storyPlural(successfulCount) + failureSuffix(failureCount);
+}
+
+function planResultMessage(results) {
+    var successfulCount = countSuccessful(results);
+    var failureCount = results.length - successfulCount;
+    return {
+        success: failureCount === 0,
+        createdTickets: results,
+        message: buildPlanMessage(successfulCount, failureCount)
+    };
+}
+
+// ── Orchestration ──────────────────────────────────────────────────────────
+
 function action(params) {
     try {
-        var jobParams = params.jobParams || {};
-        var customParams = (params.customParams) || (jobParams.customParams) || {};
-        var config = customParams.storyPlanCreation || {};
-        tracker = trackersModule.createTracker(null, customParams);
-        var sourceTicketKey = params.ticket && params.ticket.key;
-        var sourceLabels = getSourceLabels(params);
+        var plan = prepareStoryPlan(params);
+        var early = earlyPlanResult(plan);
+        if (early) return early.result;
 
-        if (config.enabled === false) {
-            return { success: true, skipped: true, message: 'storyPlanCreation disabled' };
-        }
+        var parsed = readStoriesJson(plan.outputFile);
+        var fileResult = fileGuardResult(plan, parsed);
+        if (fileResult) return fileResult.result;
 
-        if (!sourceTicketKey) {
-            return { success: false, error: 'Missing source ticket key' };
-        }
+        var stories = firstObject(parsed.stories, []);
+        var emptyResult = storiesEmptyResult(plan, stories);
+        if (emptyResult) return emptyResult.result;
 
-        var skipLabelPresent = config.skipIfLabel && sourceLabels.indexOf(config.skipIfLabel) !== -1;
-        var skipIfLabelMode = config.skipIfLabelMode || 'strict';
-        if (skipLabelPresent && skipIfLabelMode !== 'reuse') {
-            console.log('Story plan creation skipped for ' + sourceTicketKey + ' because label "' + config.skipIfLabel + '" is present');
-            return { success: true, skipped: true, message: 'Skip label present' };
-        }
-        if (skipLabelPresent) {
-            console.log('Story plan label "' + config.skipIfLabel + '" is present on ' + sourceTicketKey + ', continuing in reuse mode');
-        }
+        plan.defaultParentKey = getDefaultParentKey(plan.params, plan.config);
+        plan.issueTypeName = getJiraIssueTypeName(plan.config);
 
-        var outputFile = config.outputFile || 'outputs/stories.json';
-        var parsed = readStoriesJson(outputFile);
-        if (parsed.error) {
-            return { success: false, error: parsed.error };
-        }
-
-        if (!parsed.found) {
-            if (config.required) {
-                return { success: false, error: outputFile + ' not found or empty' };
-            }
-            console.log(outputFile + ' not found — skipping planned story creation');
-            return { success: true, skipped: true, message: 'No story plan file found' };
-        }
-
-        var stories = parsed.stories || [];
-        if (stories.length === 0) {
-            console.log(outputFile + ' contains no planned stories');
-            return { success: true, createdTickets: [], message: 'No planned stories to create' };
-        }
-
-        var defaultParentKey = getDefaultParentKey(params, config);
-        var issueTypeName = getJiraIssueTypeName(config);
-        var existingByParent = {};
-        var keyMap = {};
-        var results = [];
-
-        for (var i = 0; i < stories.length; i++) {
-            var entry = stories[i] || {};
-            var summary = buildSummary(entry.summary, i);
-            var resolvedParentKey = entry.parent || defaultParentKey;
-
-            if (!isStoryEntry(entry)) {
-                results.push({
-                    type: entry.type || 'Unknown',
-                    summary: summary,
-                    key: null,
-                    success: false,
-                    error: 'Unsupported entry type for story plan: ' + (entry.type || '(missing)')
-                });
-                continue;
-            }
-
-            if (!resolvedParentKey) {
-                results.push({
-                    type: ISSUE_TYPES.STORY,
-                    summary: summary,
-                    key: null,
-                    success: false,
-                    error: 'No parent key resolved for story'
-                });
-                continue;
-            }
-
-            if (!existingByParent[resolvedParentKey]) {
-                existingByParent[resolvedParentKey] = fetchExistingStoriesByParent(resolvedParentKey, issueTypeName);
-            }
-
-            var existingKey = existingByParent[resolvedParentKey][summary] || null;
-            if (existingKey) {
-                entry._createdKey = existingKey;
-                if (entry.tempId) keyMap[entry.tempId] = existingKey;
-                keyMap[existingKey] = existingKey;
-                linkStory(existingKey, params, config, true);
-                results.push({
-                    type: ISSUE_TYPES.STORY,
-                    summary: summary,
-                    key: existingKey,
-                    success: true,
-                    existing: true
-                });
-                continue;
-            }
-
-            try {
-                var createdKey = createStory(entry, resolvedParentKey, params, config);
-                entry._createdKey = createdKey;
-                existingByParent[resolvedParentKey][summary] = createdKey;
-                if (entry.tempId) keyMap[entry.tempId] = createdKey;
-                keyMap[createdKey] = createdKey;
-                linkStory(createdKey, params, config, false);
-
-                results.push({
-                    type: ISSUE_TYPES.STORY,
-                    summary: summary,
-                    key: createdKey,
-                    success: true,
-                    existing: false
-                });
-            } catch (error) {
-                entry._createdKey = null;
-                results.push({
-                    type: ISSUE_TYPES.STORY,
-                    summary: summary,
-                    key: null,
-                    success: false,
-                    error: error.toString()
-                });
-            }
-        }
-
-        function resolveKey(ref) {
-            return keyMap[ref] || null;
-        }
-
-        for (var j = 0; j < stories.length; j++) {
-            var story = stories[j];
-            var blockedKey = story._createdKey;
-            if (!blockedKey || !Array.isArray(story.blockedBy)) continue;
-
-            var anyBlocked = false;
-            var blockedByRelationship = config.blockedByRelationship || 'Blocks';
-            for (var b = 0; b < story.blockedBy.length; b++) {
-                var blockerKey = resolveKey(story.blockedBy[b]);
-                if (!blockerKey) continue;
-                try {
-                    tracker.linkIssues(blockedKey, blockerKey, blockedByRelationship);
-                    anyBlocked = true;
-                } catch (e) {
-                    console.warn('Failed to create ' + blockedByRelationship + ' link between ' + blockerKey + ' and ' + blockedKey + ':', e);
-                }
-            }
-
-            if (anyBlocked && config.blockedStatusName !== false) {
-                try {
-                    tracker.moveToStatus(blockedKey, config.blockedStatusName || STATUSES.BLOCKED);
-                } catch (statusError) {
-                    console.warn('Failed to move ' + blockedKey + ' to Blocked:', statusError);
-                }
-            }
-        }
-
-        for (var k = 0; k < stories.length; k++) {
-            var storyForLinking = stories[k];
-            var storyKey = storyForLinking._createdKey;
-            if (!storyKey || !Array.isArray(storyForLinking.integrates)) continue;
-
-            for (var l = 0; l < storyForLinking.integrates.length; l++) {
-                var otherKey = resolveKey(storyForLinking.integrates[l]);
-                if (!otherKey || otherKey === storyKey) continue;
-                try {
-                    tracker.linkIssues(storyKey, otherKey, 'Relates');
-                } catch (e) {
-                    console.warn('Failed to create Relates link between ' + storyKey + ' and ' + otherKey + ':', e);
-                }
-            }
-        }
-
-        var successfulCount = results.filter(function(item) { return item.success; }).length;
-        var failureCount = results.filter(function(item) { return !item.success; }).length;
-
-        if (config.postSummaryComment !== false) {
-            try {
-                tracker.postComment(sourceTicketKey, buildSummaryComment(results, config.summaryCommentTitle || 'Planned Follow-up Stories'));
-            } catch (commentError) {
-                console.warn('Failed to post story plan summary comment to ' + sourceTicketKey + ':', commentError);
-            }
-        }
-
-        if (successfulCount > 0 && config.addLabel) {
-            try {
-                tracker.addLabel(sourceTicketKey, config.addLabel);
-            } catch (labelError) {
-                console.warn('Failed to add label "' + config.addLabel + '" to ' + sourceTicketKey + ':', labelError);
-            }
-        }
-
-        return {
-            success: failureCount === 0,
-            createdTickets: results,
-            message: 'Processed ' + successfulCount + ' planned stor' + (successfulCount === 1 ? 'y' : 'ies') +
-                (failureCount ? ', ' + failureCount + ' failed' : '')
-        };
+        var results = processStoryEntries(plan, stories);
+        processBlockedByLinks(plan, stories);
+        processIntegratesLinks(plan, stories);
+        finalizeStoryPlan(plan, results);
+        return planResultMessage(results);
     } catch (error) {
         console.error('Error in createPlannedStoriesFromOutput:', error);
         return { success: false, error: error.toString() };
