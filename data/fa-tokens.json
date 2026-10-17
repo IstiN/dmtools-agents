@@ -1713,6 +1713,15 @@
       "total": 107149,
       "cacheRead": 2973952,
       "model": "kimi-for-coding"
+    },
+    {
+      "leg": "rework",
+      "at": "2026-10-17T14:51:35Z",
+      "prompt": 312531,
+      "completion": 67496,
+      "total": 380027,
+      "cacheRead": 8781568,
+      "model": "kimi-for-coding"
     }
   ],
   "issue-962": [
