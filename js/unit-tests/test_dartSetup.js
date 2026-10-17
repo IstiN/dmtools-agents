@@ -115,7 +115,11 @@ function dsRun(subcommand, opts) {
     // of this very ticket) would leak into `status`/`plan`. Point the
     // install dir INSIDE the sandbox for every invocation.
     env.push('DART_INSTALL_DIR="$d/nodart"');
-    if (opts.stubDart !== undefined || opts.stubCurlFails) {
+    if (opts.noHostDart) {
+        // Hermetic against a dart already on the host PATH: only the sandbox bin + system dirs.
+        lines.push('mkdir -p "$d/bin"');
+        env.push('PATH="$d/bin:/usr/bin:/bin"');
+    } else if (opts.stubDart !== undefined || opts.stubCurlFails) {
         env.push('PATH="$d/bin:$PATH"');
     }
     if (opts.trailTarget !== undefined) {
@@ -379,7 +383,7 @@ suite('setup/dart.sh: install layout + PATH exposure contract', function () {
     });
 
     test('status reports an empty installed version when dart is absent (the gh-918 leg state)', function () {
-        var r = dsRun('status');
+        var r = dsRun('status', { noHostDart: true });
         assert.equal(r.installed, '');
     });
 });
