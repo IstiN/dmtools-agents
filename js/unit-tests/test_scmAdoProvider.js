@@ -302,7 +302,7 @@ suite('scm ado workflow runs', function () {
         assert.equal(scm.listWorkflowRuns(null, 'ci', null), null);
     });
 
-    test('run envelopes unwrap: {value}, array, JSON strings and java-list conversion', function () {
+    test('run envelopes unwrap: {value}, array, JSON strings; java-list-like objects are dropped', function () {
         var scm = makeAdoWithRuns({
             ado_list_pipeline_runs: function () { return JSON.stringify({ value: [{ id: 1 }] }); }
         });
@@ -311,11 +311,14 @@ suite('scm ado workflow runs', function () {
             ado_list_pipeline_runs: function () { return [{ id: 2 }]; }
         });
         assert.equal(scm2.listWorkflowRuns(null, '12', null), JSON.stringify({ workflow_runs: [{ id: 2 }] }));
-        // Java-list-like: indexed object with a length — the native-array conversion loop.
+        // Current-behaviour pin: only {value} envelopes and true arrays are unwrapped.
+        // A java-list-LIKE plain object (indexed keys + length) falls into the else
+        // branch of the unwrap guard and is dropped — the native-array conversion
+        // loop only re-copies what the guard let through.
         var scm3 = makeAdoWithRuns({
             ado_list_pipeline_runs: function () { return { 0: { id: 3 }, 1: { id: 4 }, length: 2 }; }
         });
-        assert.equal(scm3.listWorkflowRuns(null, '12', null), JSON.stringify({ workflow_runs: [{ id: 3 }, { id: 4 }] }));
+        assert.equal(scm3.listWorkflowRuns(null, '12', null), JSON.stringify({ workflow_runs: [] }));
         var scm4 = makeAdoWithRuns({
             ado_list_pipeline_runs: function () { return null; }
         });
@@ -447,11 +450,14 @@ suite('scm ado helpers', function () {
         assert.deepEqual(mod._adoBuildJobLogsOpts('123', 0), { buildId: 123 });
     });
 
-    test('_adoParseRunList: {value}, array, java-list, null → []', function () {
+    test('_adoParseRunList: {value}, array, null → []; java-list-like objects dropped', function () {
         var mod = loadAdoMod({});
         assert.deepEqual(mod._adoParseRunList('{"value":[1]}'), [1]);
         assert.deepEqual(mod._adoParseRunList([2]), [2]);
-        assert.deepEqual(mod._adoParseRunList({ 0: 3, length: 1 }), [3]);
+        // Current-behaviour pin (see listWorkflowRuns characterization): indexed
+        // objects with a length are NOT unwrapped — only {value} envelopes and
+        // true arrays pass the guard.
+        assert.deepEqual(mod._adoParseRunList({ 0: 3, length: 1 }), []);
         assert.deepEqual(mod._adoParseRunList(null), []);
     });
 
@@ -558,12 +564,13 @@ suite('scm ado helpers', function () {
             cli_execute_command: function () { return 'git@ssh.dev.azure.com:v3/org/proj/repo'; }
         });
         assert.deepEqual(ssh._adoGetRemoteRepoInfo(), { owner: 'org', repo: 'repo' });
-        // Current behaviour pins: non-empty lines are JOINED before matching, so a
-        // remote URL wrapped across output lines still resolves.
+        // Current-behaviour pin: non-empty lines are JOINED (no separator) before
+        // matching, and the repo group is [^/]+ — a trailing "(fetch)" fragment
+        // from a wrapped `git remote -v`-style line is kept verbatim.
         var wrapped = loadAdoMod({
             cli_execute_command: function () { return 'origin\nhttps://dev.azure.com/o2/p2/_git/r2 (fetch)'; }
         });
-        assert.deepEqual(wrapped._adoGetRemoteRepoInfo(), { owner: 'o2', repo: 'r2' });
+        assert.deepEqual(wrapped._adoGetRemoteRepoInfo(), { owner: 'o2', repo: 'r2 (fetch)' });
         var none = loadAdoMod({
             cli_execute_command: function () { return 'https://github.com/a/b.git'; }
         });

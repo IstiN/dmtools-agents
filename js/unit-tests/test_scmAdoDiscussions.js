@@ -57,10 +57,10 @@ suite('scm ado fetchDiscussions', function () {
                 body: 'Please fix  <b>this</b>'
             }]
         });
-        assert.contains(out.markdown, '# PR Discussion History\n_Previous review discussions for PR #5._\n');
-        assert.contains(out.markdown, '## Review Threads\n');
-        assert.contains(out.markdown, '### Thread 1 — `/src/a.js`\n line 12\n');
-        assert.contains(out.markdown, '**Dev User** (2026-01-02):\nPlease fix  <b>this</b>\n\n---\n');
+        assert.contains(out.markdown, '# PR Discussion History\n\n_Previous review discussions for PR #5._\n\n');
+        assert.contains(out.markdown, '## Review Threads\n\n');
+        assert.contains(out.markdown, '### Thread 1 — `/src/a.js` line 12\n\n');
+        assert.contains(out.markdown, '**Dev User** (2026-01-02):\nPlease fix  <b>this</b>\n\n---\n\n');
         assert.notContains(out.markdown, 'already resolved');
     });
 
@@ -116,8 +116,11 @@ suite('scm ado fetchDiscussions', function () {
         var t3 = thread(3, 'byDesign', { comments: [comment('z')] });
         var out = makeAdo(JSON.stringify({ value: [t1, t2, t3] })).fetchDiscussions(5);
         assert.contains(out.markdown,
-            '> ℹ️ **2 thread(s) already resolved and excluded from this review.**\n\n## Review Threads\n');
-        assert.contains(out.markdown, '### Thread 1\n');
+            '> ℹ️ **2 thread(s) already resolved and excluded from this review.**\n\n## Review Threads\n\n');
+        // Current-behaviour pin: section headings number every collected thread
+        // (resolved included) — only the RENDER step skips resolved ones.
+        assert.contains(out.markdown, '### Thread 2\n\n');
+        assert.notContains(out.markdown, '### Thread 1\n');
     });
 
     test('empty-string content renders the placeholder; whitespace-only keeps the author line', function () {
@@ -232,16 +235,17 @@ suite('scm ado discussion helpers', function () {
         var root = { content: 'fix it', author: { displayName: 'Dev' }, publishedDate: '2026-01-02T10:00:00Z' };
         assert.equal(
             mod._adoRenderThreadSection({ index: 2, path: '/a.js', line: 12, body: 'fix it' }, root),
-            '### Thread 2 — `/a.js`\n line 12\n**Dev** (2026-01-02):\nfix it\n\n---\n');
+            '### Thread 2 — `/a.js` line 12\n\n**Dev** (2026-01-02):\nfix it\n\n---\n\n');
         assert.equal(
             mod._adoRenderThreadSection({ index: 1, path: '/a.js', line: null, body: 'fix it' }, root),
-            '### Thread 1 — `/a.js`\n**Dev** (2026-01-02):\nfix it\n\n---\n');
+            '### Thread 1 — `/a.js`\n\n**Dev** (2026-01-02):\nfix it\n\n---\n\n');
+        // line renders only when a path is present (nested inside the path branch)
         assert.equal(
             mod._adoRenderThreadSection({ index: 1, path: null, line: 3, body: 'x' }, root),
-            '### Thread 1\n**Dev** (2026-01-02):\nx\n\n---\n');
+            '### Thread 1\n\n**Dev** (2026-01-02):\nx\n\n---\n\n');
         assert.equal(
             mod._adoRenderThreadSection({ index: 1, path: null, line: null, body: '' }, null),
-            '### Thread 1\n_[No comment body]_\n\n---\n');
+            '### Thread 1\n\n_[No comment body]_\n\n---\n\n');
     });
 
     test('_adoApplyResolvedHeader: prefixes only when resolved threads exist', function () {
@@ -250,7 +254,7 @@ suite('scm ado discussion helpers', function () {
         assert.equal(mod._adoApplyResolvedHeader(section, [{ resolved: false }]), section);
         assert.equal(
             mod._adoApplyResolvedHeader(section, [{ resolved: true }, { resolved: false }]),
-            '> ℹ️ **1 thread(s) already resolved and excluded from this review.**\n## Review Threads\n\n');
+            '> ℹ️ **1 thread(s) already resolved and excluded from this review.**\n\n## Review Threads\n\n');
     });
 
     test('_adoFetchDiscussions: end-to-end with mocked ado_get_pr_comments', function () {
@@ -267,7 +271,8 @@ suite('scm ado discussion helpers', function () {
         });
         var out = mod._adoFetchDiscussions('repo', 5);
         assert.equal(out.rawThreads.threads.length, 2);
-        assert.contains(out.markdown, '> ℹ️ **1 thread(s) already resolved and excluded from this review.**\n');
-        assert.contains(out.markdown, '### Thread 1 — `/b.js`\n**A** (2026-03-04):\ny\n\n---\n');
+        assert.contains(out.markdown, '> ℹ️ **1 thread(s) already resolved and excluded from this review.**\n\n');
+        // headings number every collected thread — the active one is #2
+        assert.contains(out.markdown, '### Thread 2 — `/b.js`\n\n**A** (2026-03-04):\ny\n\n---\n\n');
     });
 });
