@@ -51,9 +51,12 @@ function prLoad(opts) {
         },
         getPRDetails: function(scm, prNumber) {
             record.ghCalls.push({ fn: 'getPRDetails', prNumber: prNumber });
-            return opts.prDetails !== undefined ? opts.prDetails : {
-                number: 42,
-                html_url: 'https://example.com/pull/42',
+            if (opts.prDetails !== undefined) return opts.prDetails;
+            // Echo the requested PR number — the real helper returns the
+            // full PR object for the id it fetched.
+            return {
+                number: prNumber,
+                html_url: 'https://example.com/pull/' + prNumber,
                 head: { ref: 'ai/TS-42', sha: 'abc123def' },
                 base: { ref: 'main' },
                 changed_files: 3
@@ -193,7 +196,7 @@ test('failed CI checks are rendered as a jira panel with one line per check', fu
 
     assert.equal(result.success, true);
     var comment = rec.comments[0].args.comment;
-    assert.contains(comment, 'CI checks failing — 2 check(s) did not pass');
+    assert.contains(comment, '*CI checks failing* — 2 check(s) did not pass');
     assert.contains(comment, '{panel:bgColor=#FFEBE6|borderColor=#DE350B}');
     assert.contains(comment, '* {code}build{code}');
     assert.contains(comment, '* {code}test{code}');
@@ -213,7 +216,7 @@ test('pr-N anchored: no ticket lookup, no ticket comments, repo from git remote'
     assert.deepEqual(result, {
         success: true,
         prNumber: 99,
-        prUrl: 'https://example.com/pull/42',
+        prUrl: 'https://example.com/pull/99',
         branchName: 'ai/TS-42',
         owner: 'octo',
         repo: 'app'
@@ -226,7 +229,7 @@ test('pr-N anchored: no ticket lookup, no ticket comments, repo from git remote'
 });
 
 test('jobParams.prNumber and jobParams.pr act as PR anchors', function() {
-    var loadedNumber = prLoad({ config: {}, remoteRepoInfo: null });
+    var loadedNumber = prLoad({ config: {} });
     var r1 = loadedNumber.module.action({ inputFolderPath: 'input/TS-77', jobParams: { prNumber: '77' } });
     assert.equal(r1.success, true);
     assert.equal(r1.prNumber, 77);
@@ -234,7 +237,7 @@ test('jobParams.prNumber and jobParams.pr act as PR anchors', function() {
         ['getPRDetails', 'fetchDiscussionsAndRawData', 'detectFailedChecks']);
     assert.equal(loadedNumber.record.ghCalls[0].prNumber, 77);
 
-    var loadedPr = prLoad({ config: {}, remoteRepoInfo: null });
+    var loadedPr = prLoad({ config: {} });
     var r2 = loadedPr.module.action({ inputFolderPath: 'input/TS-78', jobParams: { pr: '55' } });
     assert.equal(r2.success, true);
     assert.equal(r2.prNumber, 55);
@@ -370,7 +373,7 @@ test('checkout failure is non-fatal: review continues', function() {
     var rec = prRecorder();
     var loaded = prLoad({
         record: rec,
-        config: { repository: { owner: 'acme', repo: 'widget' }, workingDir: '/w' },
+        config: { repository: { owner: 'acme', repo: 'widget' }, workingDir: '/w', git: { baseBranch: 'main' } },
         checkoutError: new Error('local changes')
     });
 
@@ -378,6 +381,7 @@ test('checkout failure is non-fatal: review continues', function() {
 
     assert.equal(result.success, true);
     assert.equal(rec.gitOps.length, 3);
+    assert.deepEqual(rec.gitOps[0], { fn: 'checkoutPRBranch', branchName: 'ai/TS-42', workingDir: '/w', baseBranch: 'main' });
     assert.deepEqual(rec.gitOps[1], { fn: 'getPRDiff', baseBranch: 'main', headBranch: 'ai/TS-42', workingDir: '/w' });
 });
 
@@ -395,8 +399,8 @@ test('missing head branch: checkout skipped, diff head null, branch unknown in c
     assert.equal(result.branchName, null);
     assert.deepEqual(rec.gitOps[0], { fn: 'getPRDiff', baseBranch: 'dev', headBranch: null, workingDir: undefined });
     assert.ok(rec.gitOps.every(function(c) { return c.fn !== 'checkoutPRBranch'; }));
-    assert.equal(rec.ghCalls[2].fn, 'detectFailedChecks');
-    assert.equal(rec.ghCalls[2].headSha, null);
+    assert.equal(rec.ghCalls[3].fn, 'detectFailedChecks');
+    assert.equal(rec.ghCalls[3].headSha, null);
     var comment = rec.comments[0].args.comment;
     assert.contains(comment, '*Branch*: {code}unknown{code}');
 });
@@ -486,7 +490,7 @@ test('buildSetupFailedComment / buildNoPrComment / buildDetailsFailureComment', 
     var noPr = m.buildNoPrComment('TS-2');
     assert.contains(noPr, 'Could not find an open Pull Request associated with *TS-2*.');
     assert.contains(noPr, 'Please ensure:');
-    assert.equal(m.buildDetailsFailureComment(42),
+    assert.equal(m.buildDetailsFailureComment('TS-3', 42),
         'h3. ⚠️ PR Review Setup Failed\n\nCould not fetch details for PR #42.\n\n_Review cancelled._');
 });
 
