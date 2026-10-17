@@ -601,7 +601,12 @@ function loadForLandingGuard(mocks, opts) {
     var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({
         './common/commentMarkup.js': commentMarkupModule,
         './mergeState.js': loadModule('js/common/mergeState.js'),
-    }), {});
+    }), {
+        // file_write/file_delete: PR-body temp file is written through dmtools
+        // globals — absent in the node harness unless stubbed here.
+        file_write: function () { },
+        file_delete: function () { }
+    });
     var resumeCalls = [];
     var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
@@ -804,7 +809,12 @@ function loadForPrTail(mocks, opts) {
     var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({
         './common/commentMarkup.js': commentMarkupModule,
         './mergeState.js': loadModule('js/common/mergeState.js'),
-    }), opts.prHelperGlobals || {});
+    }), opts.prHelperGlobals || {
+        // file_write/file_delete: PR-body temp file is written through dmtools
+        // globals — absent in the node harness unless stubbed here.
+        file_write: function () { },
+        file_delete: function () { }
+    });
     var logs = [];
     var errors = [];
     var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
@@ -1083,7 +1093,12 @@ function loadForMissingResponseResume(opts) {
     var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({
         './common/commentMarkup.js': commentMarkupModule,
         './mergeState.js': loadModule('js/common/mergeState.js')
-    }), {});
+    }), {
+        // file_write/file_delete: PR-body temp file is written through dmtools
+        // globals — absent in the node harness unless stubbed here.
+        file_write: function () { },
+        file_delete: function () { }
+    });
     var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': realPrHelper,
@@ -1845,6 +1860,110 @@ suite('developTicketAndCreatePR > leg outcome characterization (gh-930)', functi
         assert.equal(loaded.telemetry.tokenUsage.length, 1);
         assert.equal(loaded.telemetry.tokenUsage[0].ticketKey, 'TS-60');
         assert.equal(loaded.telemetry.tokenUsage[0].options.initiator, 'initiator-2');
+    });
+
+    // Push-rejection mock: initial push rejected; the first N force pushes
+    // (performGitOperations retries internally once) rejected too, later ones succeed.
+    function pushRejectedGitMock(branchName, prUrl, opts) {
+        opts = opts || {};
+        var forceRejections = opts.forceRejections === undefined ? 1 : opts.forceRejections;
+        var forceCount = 0;
+        var inner = committedWorkGitMock(branchName, prUrl, opts);
+        return function (args) {
+            var command = args.command;
+            if (command === 'git push -u origin ' + branchName) {
+                return 'error: failed to push some refs — rejected (non-fast-forward)';
+            }
+            if (command === 'git push -u origin ' + branchName + ' --force') {
+                forceCount++;
+                if (forceCount <= forceRejections) {
+                    return 'remote rejected: GH013: push declined';
+                }
+                return '';
+            }
+            return inner(args);
+        };
+    }
+
+    test('a rejected push is retried with force after the agent fix — the leg continues to PR', function () {
+        var prUrl = 'https://github.com/acme/widgets/pull/71';
+        var commands = [];
+        var written = [];
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: function (args) {
+                commands.push(args.command);
+                return pushRejectedGitMock('ai/TS-70', prUrl)(args);
+            },
+            file_write: function (args) { written.push(args.path); }
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n'
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-70', fields: { summary: 'push rejected then fixed', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'ok'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, prUrl);
+        assert.ok(commands.some(function (c) { return c.indexOf('git push -u origin ai/TS-70 --force') === 0; }),
+            'the force-push retry must run — commands: ' + JSON.stringify(commands));
+        assert.ok(written.indexOf('input/TS-70/push_error.md') !== -1,
+            'the agent-facing push_error.md must be written before the retry — written: ' + JSON.stringify(written));
+    });
+
+    test('a push that stays rejected after the retry resets the ticket for retry', function () {
+        var comments = [];
+        var movedTo = [];
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: pushRejectedGitMock('ai/TS-72', '', { forceRejections: 99 }),
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); }
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n'
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-72', fields: { summary: 'push stays rejected', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'ok'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'development-reset-for-retry');
+        assert.contains(result.error, 'Git push failed even after retry:');
+        assert.contains(result.error, 'Push still rejected after agent fix');
+        assert.deepEqual(movedTo, ['Ready For Development']);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'Git Push (after retry)');
+    });
+
+    test('a resumable push failure re-runs the leg once before falling back to the reset', function () {
+        var resumeCalls = 0;
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: pushRejectedGitMock('ai/TS-73', '', { forceRejections: 99 })
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n',
+            feedbackLoop: {
+                resumeAgent: function () {
+                    resumeCalls++;
+                    return { attempted: resumeCalls === 1, reason: resumeCalls === 1 ? 'resumed' : 'attempts-exhausted' };
+                }
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-73', fields: { summary: 'push failure resume', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'ok'
+        });
+
+        assert.equal(resumeCalls, 2, 'the wrapper is re-invoked once, then the attempts are exhausted');
+        assert.equal(result.path, 'development-reset-for-retry');
     });
 
 });
