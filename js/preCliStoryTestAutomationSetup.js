@@ -247,22 +247,39 @@ function findTestPr(scm, storyKey, config) {
     }
 }
 
-function writePrContext(storyKey, scm, pr) {
-    var inputDir = 'input/' + storyKey;
+// ── gh-930: writePrContext split into formatting helpers ────────────────────
+// Every helper is source-agnostic: it only consumes the scm abstraction
+// (getPrDiff / fetchDiscussions) and the PR object shape, so GitHub, GitLab
+// and ADO PRs flow through the same code paths.
+
+function prUserLogin(pr) {
+    return pr.user && pr.user.login ? pr.user.login : '';
+}
+
+function prBranchPair(pr) {
+    return '`' + (pr.head && pr.head.ref ? pr.head.ref : '') + '` → `' + (pr.base && pr.base.ref ? pr.base.ref : '') + '`';
+}
+
+function buildPrInfoMarkdown(pr) {
+    return '# Pull Request Information\n' +
+        '- **PR #**: ' + (pr.number || '') + '\n' +
+        '- **URL**: ' + (pr.html_url || '') + '\n' +
+        '- **Title**: ' + (pr.title || '') + '\n' +
+        '- **Author**: ' + prUserLogin(pr) + '\n' +
+        '- **Branch**: ' + prBranchPair(pr) + '\n' +
+        '- **State**: ' + (pr.state || '') + '\n';
+}
+
+function writePrInfo(inputDir, pr) {
     try {
-        var prInfo = '# Pull Request Information\n\n' +
-            '- **PR #**: ' + (pr.number || '') + '\n' +
-            '- **URL**: ' + (pr.html_url || '') + '\n' +
-            '- **Title**: ' + (pr.title || '') + '\n' +
-            '- **Author**: ' + (pr.user && pr.user.login ? pr.user.login : '') + '\n' +
-            '- **Branch**: `' + (pr.head && pr.head.ref ? pr.head.ref : '') + '` → `' + (pr.base && pr.base.ref ? pr.base.ref : '') + '`\n' +
-            '- **State**: ' + (pr.state || '') + '\n';
-        file_write({ path: inputDir + '/pr_info.md', content: prInfo });
+        file_write({ path: inputDir + '/pr_info.md', content: buildPrInfoMarkdown(pr) });
         console.log('✅ Wrote pr_info.md for PR #' + pr.number);
     } catch (e) {
         console.warn('Could not write pr_info.md:', e);
     }
+}
 
+function writePrDiff(inputDir, scm, pr) {
     try {
         var diff = scm.getPrDiff(pr.number);
         if (diff) {
@@ -272,40 +289,58 @@ function writePrContext(storyKey, scm, pr) {
     } catch (e) {
         console.warn('Could not write pr_diff.txt:', e);
     }
+}
 
+function writePrDiscussionsMarkdown(inputDir, discussions) {
+    if (!discussions || !discussions.markdown) return;
+    var trimmedMarkdown = trimDiscussionsMarkdown(discussions.markdown, MAX_DISCUSSION_THREADS);
+    if (trimmedMarkdown !== discussions.markdown) {
+        console.warn('⚠️ PR discussions markdown truncated from full history to last ' + MAX_DISCUSSION_THREADS + ' threads to keep agent context bounded');
+    }
+    file_write({ path: inputDir + '/pr_discussions.md', content: trimmedMarkdown });
+    console.log('✅ Wrote pr_discussions.md');
+}
+
+function openThreadReplies(rawThreads) {
+    var threads = rawThreads.threads;
+    if (threads.length > MAX_DISCUSSION_THREADS) {
+        console.warn('⚠️ PR discussions raw threads truncated from ' + threads.length + ' to last ' + MAX_DISCUSSION_THREADS + ' for review replies');
+        threads = threads.slice(threads.length - MAX_DISCUSSION_THREADS);
+    }
+    return threads
+        .filter(function(t) { return !t.resolved && t.body; })
+        .map(function(t) {
+            return {
+                file: t.path,
+                line: t.line,
+                comment: t.body,
+                severity: 'important',
+                threadId: t.threadId || t.id || null,
+                inReplyToId: t.rootCommentId || t.id || null
+            };
+        });
+}
+
+function writeReviewReplies(replies) {
+    if (replies.length > 0) {
+        file_write({ path: 'outputs/review_replies.json', content: JSON.stringify({ replies: replies }, null, 2) });
+        console.log('✅ Wrote outputs/review_replies.json with', replies.length, 'open review thread(s)');
+    }
+}
+
+function writePrDiscussions(inputDir, discussions) {
+    writePrDiscussionsMarkdown(inputDir, discussions);
+    if (discussions && discussions.rawThreads && discussions.rawThreads.threads) {
+        writeReviewReplies(openThreadReplies(discussions.rawThreads));
+    }
+}
+
+function writePrContext(storyKey, scm, pr) {
+    var inputDir = 'input/' + storyKey;
+    writePrInfo(inputDir, pr);
+    writePrDiff(inputDir, scm, pr);
     try {
-        var discussions = scm.fetchDiscussions(pr.number);
-        if (discussions && discussions.markdown) {
-            var trimmedMarkdown = trimDiscussionsMarkdown(discussions.markdown, MAX_DISCUSSION_THREADS);
-            if (trimmedMarkdown !== discussions.markdown) {
-                console.warn('⚠️ PR discussions markdown truncated from full history to last ' + MAX_DISCUSSION_THREADS + ' threads to keep agent context bounded');
-            }
-            file_write({ path: inputDir + '/pr_discussions.md', content: trimmedMarkdown });
-            console.log('✅ Wrote pr_discussions.md');
-        }
-        if (discussions && discussions.rawThreads && discussions.rawThreads.threads) {
-            var rawThreads = discussions.rawThreads.threads;
-            if (rawThreads.length > MAX_DISCUSSION_THREADS) {
-                console.warn('⚠️ PR discussions raw threads truncated from ' + rawThreads.length + ' to last ' + MAX_DISCUSSION_THREADS + ' for review replies');
-                rawThreads = rawThreads.slice(rawThreads.length - MAX_DISCUSSION_THREADS);
-            }
-            var replies = rawThreads
-                .filter(function(t) { return !t.resolved && t.body; })
-                .map(function(t) {
-                    return {
-                        file: t.path,
-                        line: t.line,
-                        comment: t.body,
-                        severity: 'important',
-                        threadId: t.threadId || t.id || null,
-                        inReplyToId: t.rootCommentId || t.id || null
-                    };
-                });
-            if (replies.length > 0) {
-                file_write({ path: 'outputs/review_replies.json', content: JSON.stringify({ replies: replies }, null, 2) });
-                console.log('✅ Wrote outputs/review_replies.json with', replies.length, 'open review thread(s)');
-            }
-        }
+        writePrDiscussions(inputDir, scm.fetchDiscussions(pr.number));
     } catch (e) {
         console.warn('Could not write PR discussions:', e);
     }
