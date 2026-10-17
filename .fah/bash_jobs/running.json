@@ -1,1 +1,1 @@
-[]
+[{"id":"sh-6-hnb26ka7zp13r8oos","command":"ls js/common/ | head -50; echo ===; ls js/ | grep -i helper; echo ===; head -60 js/common/postTestAutomationResultsHelpers.js 2>/dev/null || ls js/unit-tests/test_postTestAutomationResultsHelpers.js && head -40 js/unit-tests/test_postTestAutomationResultsHelpers.js","pid":"3617","startedAtMs":1792271547534}]
