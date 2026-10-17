@@ -2209,5 +2209,16 @@
       "cacheRead": 1311721,
       "model": "kimi-for-coding"
     }
+  ],
+  "pr-997": [
+    {
+      "leg": "review",
+      "at": "2026-10-17T18:52:21Z",
+      "prompt": 29344,
+      "completion": 7620,
+      "total": 36964,
+      "cacheRead": 616192,
+      "model": "kimi-for-coding"
+    }
   ]
 }
