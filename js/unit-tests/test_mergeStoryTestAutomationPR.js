@@ -379,3 +379,147 @@ suite('mergeStoryTestAutomationPR: stage-label fallback (gh-916)', function() {
         assert.deepEqual(moves, [], 'a marker-only TC has no resolvable final status in none mode');
     });
 });
+
+// ── gh-964: pure helpers extracted from checkCiStatus / attemptMerge ──
+
+suite('mergeStoryTestAutomationPR: pure check-run classification (gh-964)', function() {
+
+    function loadPureHelpers() {
+        return loadMergeStoryTestAutomationPR({});
+    }
+
+    test('classifyCheckRuns: each pending status sets inProgress', function() {
+        var m = loadPureHelpers();
+        ['in_progress', 'queued', 'pending', 'waiting'].forEach(function(status) {
+            var r = m.classifyCheckRuns([{ name: 'c1', status: status, conclusion: '' }]);
+            assert.equal(r.inProgress, true, status + ' must set inProgress');
+            assert.equal(r.failed, false);
+            assert.equal(r.total, 1);
+        });
+    });
+
+    test('classifyCheckRuns: each failing conclusion sets failed and records the name', function() {
+        var m = loadPureHelpers();
+        ['failure', 'timed_out', 'action_required'].forEach(function(conclusion) {
+            var r = m.classifyCheckRuns([{ name: 'build-' + conclusion, status: 'completed', conclusion: conclusion }]);
+            assert.equal(r.failed, true, conclusion + ' must set failed');
+            assert.equal(r.inProgress, false);
+            assert.deepEqual(r.failedNames, ['build-' + conclusion]);
+        });
+    });
+
+    test('classifyCheckRuns: mixed runs combine pending and failed; total counts all', function() {
+        var m = loadPureHelpers();
+        var r = m.classifyCheckRuns([
+            { name: 'unit', status: 'completed', conclusion: 'success' },
+            { name: 'e2e', status: 'in_progress', conclusion: '' },
+            { name: 'lint', status: 'completed', conclusion: 'failure' }
+        ]);
+        assert.equal(r.inProgress, true);
+        assert.equal(r.failed, true);
+        assert.deepEqual(r.failedNames, ['lint']);
+        assert.equal(r.total, 3);
+    });
+
+    test('classifyCheckRuns: non-failing conclusions and missing names are ignored', function() {
+        var m = loadPureHelpers();
+        var r = m.classifyCheckRuns([
+            { name: 'a', status: 'completed', conclusion: 'success' },
+            { name: 'b', status: 'completed', conclusion: 'skipped' },
+            { name: 'c', status: 'completed', conclusion: 'neutral' },
+            { name: 'd', status: 'completed', conclusion: 'cancelled' },
+            { name: null, status: 'completed', conclusion: 'failure' }
+        ]);
+        assert.equal(r.inProgress, false);
+        assert.equal(r.failed, true, 'failure still flags even without a name');
+        assert.deepEqual(r.failedNames, [], 'a nameless failing check adds no failedName');
+        assert.equal(r.total, 5);
+    });
+
+    test('classifyCheckRuns: status and conclusion are matched case-insensitively', function() {
+        var m = loadPureHelpers();
+        var r = m.classifyCheckRuns([{ name: 'x', status: 'IN_PROGRESS', conclusion: 'FAILURE' }]);
+        assert.equal(r.inProgress, true);
+        assert.equal(r.failed, true);
+        assert.deepEqual(r.failedNames, ['x']);
+    });
+
+    test('normalizeCheckRuns: accepts arrays, wrapped objects and JSON strings', function() {
+        var m = loadPureHelpers();
+        assert.deepEqual(m.normalizeCheckRuns([{ name: 'a' }]), [{ name: 'a' }]);
+        assert.deepEqual(m.normalizeCheckRuns({ check_runs: [{ name: 'b' }] }), [{ name: 'b' }]);
+        assert.deepEqual(m.normalizeCheckRuns(JSON.stringify([{ name: 'c' }])), [{ name: 'c' }]);
+        assert.deepEqual(m.normalizeCheckRuns(JSON.stringify({ check_runs: [{ name: 'd' }] })), [{ name: 'd' }]);
+    });
+
+    test('normalizeCheckRuns: anything else yields an empty list', function() {
+        var m = loadPureHelpers();
+        assert.deepEqual(m.normalizeCheckRuns(null), []);
+        assert.deepEqual(m.normalizeCheckRuns(undefined), []);
+        assert.deepEqual(m.normalizeCheckRuns('not json'), []);
+        assert.deepEqual(m.normalizeCheckRuns({ total_count: 1 }), []);
+        assert.deepEqual(m.normalizeCheckRuns(42), []);
+    });
+});
+
+suite('mergeStoryTestAutomationPR: pure merge-decision helpers (gh-964)', function() {
+
+    function loadPureHelpers() {
+        return loadMergeStoryTestAutomationPR({});
+    }
+
+    test('decideCiBlock: failed beats everything, empty/unknown means still running', function() {
+        var m = loadPureHelpers();
+        assert.equal(m.decideCiBlock({ inProgress: false, failed: true, failedNames: ['a'], total: 1 }), 'ci_failed');
+        assert.equal(m.decideCiBlock({ inProgress: true, failed: true, failedNames: [], total: 2 }), 'ci_failed');
+        assert.equal(m.decideCiBlock({ inProgress: true, failed: false, failedNames: [], total: 1 }), 'ci_running');
+        assert.equal(m.decideCiBlock({ inProgress: false, failed: false, failedNames: [], total: 0 }), 'ci_running');
+        assert.equal(m.decideCiBlock({ inProgress: false, failed: false, failedNames: [], total: 3 }), null);
+    });
+
+    test('classifyMergeError: conflict substring, CI-blocking codes and plain errors', function() {
+        var m = loadPureHelpers();
+        assert.deepEqual(m.classifyMergeError(new Error('Merge conflict detected')),
+            { errMsg: 'Error: Merge conflict detected', isConflict: true, isCIBlocking: false });
+        assert.equal(m.classifyMergeError('CONFLICT in file.js').isConflict, true, 'conflict match is case-insensitive');
+        assert.deepEqual(m.classifyMergeError('Resource blocked by required checks'),
+            { errMsg: 'Resource blocked by required checks', isConflict: false, isCIBlocking: true });
+        assert.equal(m.classifyMergeError('HTTP 422').isCIBlocking, true);
+        assert.equal(m.classifyMergeError('HTTP 405').isCIBlocking, true);
+        assert.deepEqual(m.classifyMergeError('network timeout'),
+            { errMsg: 'network timeout', isConflict: false, isCIBlocking: false });
+        assert.deepEqual(m.classifyMergeError(null),
+            { errMsg: '', isConflict: false, isCIBlocking: false });
+    });
+
+    test('isUndeterminedMergeState: null mergeable or any undetermined state triggers the CI gate', function() {
+        var m = loadPureHelpers();
+        assert.equal(m.isUndeterminedMergeState(null, 'clean'), true, 'mergeable null always gates');
+        assert.equal(m.isUndeterminedMergeState(null, null), true);
+        ['unknown', 'blocked', 'unstable', 'checking', 'unchecked', 'preparing', 'ci_must_pass', 'ci_still_running']
+            .forEach(function(state) {
+                assert.equal(m.isUndeterminedMergeState(true, state), true, state + ' must gate');
+            });
+        assert.equal(m.isUndeterminedMergeState(true, 'clean'), false);
+        assert.equal(m.isUndeterminedMergeState(false, 'dirty'), false);
+        assert.equal(m.isUndeterminedMergeState(true, 'behind'), false);
+        assert.equal(m.isUndeterminedMergeState(true, undefined), false);
+    });
+
+    test('isConflictMergeState: dirty requires mergeable false; named conflict states always conflict', function() {
+        var m = loadPureHelpers();
+        assert.equal(m.isConflictMergeState(false, 'dirty'), true);
+        assert.equal(m.isConflictMergeState(true, 'dirty'), false);
+        assert.equal(m.isConflictMergeState(null, 'cannot_be_merged'), true);
+        assert.equal(m.isConflictMergeState(true, 'conflict'), true);
+        assert.equal(m.isConflictMergeState(false, 'clean'), false);
+    });
+
+    test('resolveCustomParams: jobParams win over params, defaulting to {}', function() {
+        var m = loadPureHelpers();
+        assert.deepEqual(m.resolveCustomParams({ jobParams: { customParams: { a: 1 } }, customParams: { b: 2 } }), { a: 1 });
+        assert.deepEqual(m.resolveCustomParams({ customParams: { b: 2 } }), { b: 2 });
+        assert.deepEqual(m.resolveCustomParams({}), {});
+        assert.deepEqual(m.resolveCustomParams({ jobParams: {} }), {});
+    });
+});
