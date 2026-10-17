@@ -265,14 +265,19 @@ function _githubTryPrDiffTool(workspace, repository, prIdStr) {
 }
 
 // Final diff tier: generate the diff locally from the checked-out branch.
+function _githubPrBaseHeadRefs(pr) {
+    var baseRef = pr.base && pr.base.ref ? pr.base.ref : null;
+    var headRef = pr.head && pr.head.ref ? pr.head.ref : null;
+    if (!baseRef || !headRef) throw new Error('PR missing base or head ref');
+    return { baseRef: baseRef, headRef: headRef };
+}
+
 function _githubLocalGitDiffFallback(workspace, repository, prIdStr, workingDir) {
     try {
         var pr = github_get_pr({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
         if (!pr) throw new Error('github_get_pr returned empty PR details');
-        var baseRef = pr.base && pr.base.ref ? pr.base.ref : null;
-        var headRef = pr.head && pr.head.ref ? pr.head.ref : null;
-        if (!baseRef || !headRef) throw new Error('PR missing base or head ref');
-        return _runGitDiff(baseRef, headRef, workingDir);
+        var refs = _githubPrBaseHeadRefs(pr);
+        return _runGitDiff(refs.baseRef, refs.headRef, workingDir);
     } catch (e2) {
         console.warn('Local git diff fallback failed:', e2.message || e2);
         return '';
@@ -373,12 +378,23 @@ function _githubFetchReviewThreadInventory(workspace, repository, prIdStr) {
     } catch (e) {
         console.warn('github_get_pr_review_threads failed (falling back to conversations-only inventory):', e.message || e);
     }
+    var inv = _githubCollectThreadInventory(conversations, graphqlRaw);
+    if (!inv) return null;
+    var rawThreads = inv.threads;
+    _githubLogInventoryCounts(inv, rawThreads);
+    return { rawThreads: rawThreads, section: inv.markdownSection, census: inv.census };
+}
+
+// Runs the shared inventory builder; the block counts when EITHER source has
+// data: a PR whose conversations export is empty/incomplete but whose GraphQL
+// census carries open threads (the live dart #424 shape) must still produce
+// the full inventory, otherwise the rework leg can never see what the armer
+// counted and the no-op loop never converges.
+function _githubCollectThreadInventory(conversations, graphqlRaw) {
     try {
         var inv = reviewThreadInventory.collectThreadInventory(conversations, graphqlRaw);
         if (conversations.length > 0 || inv.threads.length > 0) {
-            var rawThreads = inv.threads;
-            _githubLogInventoryCounts(inv, rawThreads);
-            return { rawThreads: rawThreads, section: inv.markdownSection, census: inv.census };
+            return inv;
         }
     } catch (e) {
         console.warn('review-thread inventory build failed:', e.message || e);
@@ -923,13 +939,7 @@ function _gitlabCreatePr(workspace, repository, options) {
 function _createGitLabProvider(workspace, repository) {
     return {
         listPrs: function(state) {
-            var requestedState = _normalizeGitLabState(state);
-            var raw = gitlab_list_mrs({ workspace: workspace, repository: repository, state: requestedState });
-            var prs = _toArray(raw).map(_normalizeGitLabMr);
-            if (state === 'closed') {
-                return prs.filter(function(pr) { return pr.state === 'closed' || pr.merged_at; });
-            }
-            return prs;
+            return _gitlabListPrs(workspace, repository, state);
         },
         getPr: function(prId) {
             return _normalizeGitLabMr(_parseJson(gitlab_get_mr({
@@ -941,67 +951,28 @@ function _createGitLabProvider(workspace, repository) {
         },
         // See _createGithubProvider.getDiffText — same rationale (works post-merge).
         getDiffText: function(prId) {
-            try {
-                return gitlab_get_mr_diff_text({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
-            } catch (e) {
-                console.warn('getDiffText (gitlab) failed:', e && e.toString ? e.toString() : String(e));
-                return null;
-            }
+            return _gitlabGetDiffText(workspace, repository, prId);
         },
         addComment: function(prId, text) {
             return gitlab_add_mr_comment({ workspace: workspace, repository: repository, pullRequestId: String(prId), text: text });
         },
-        // Formal review decision, provider-agnostic surface (see the github
-        // provider's submitReview). GitLab has no REQUEST_CHANGES event: the
-        // native mapping is APPROVE -> gitlab_approve_mr, REQUEST_CHANGES ->
-        // revoke our approval (gitlab_unapprove_mr) with the explanation left
-        // as a plain MR comment, COMMENT -> plain MR comment. GitLab (like
-        // GitHub) refuses approvals from the MR author unless the instance
-        // allows self-approval — callers must tolerate that error.
+        // Formal review decision — see _gitlabSubmitReview for the event mapping.
         submitReview: function(prId, event, body) {
-            var normalized = String(event || '').toUpperCase();
-            if (normalized === 'APPROVE') {
-                return gitlab_approve_mr({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
-            }
-            if (normalized === 'REQUEST_CHANGES') {
-                var result = gitlab_unapprove_mr({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
-                this.addComment(prId, body || 'AI review requested changes on this merge request.');
-                return result;
-            }
-            return this.addComment(prId, body || '');
+            var self = this;
+            return _gitlabSubmitReview(workspace, repository, prId, event, body, function(p, t) {
+                return self.addComment(p, t);
+            });
         },
         replyToThread: function(prId, thread, text) {
-            var threadId = thread.threadId || thread.rootCommentId || thread.discussionId;
-            if (threadId) {
-                return gitlab_reply_to_mr_thread({
-                    workspace: workspace, repository: repository,
-                    pullRequestId: String(prId), discussionId: String(threadId), text: text
-                });
-            }
-            return gitlab_add_mr_comment({ workspace: workspace, repository: repository, pullRequestId: String(prId), text: text });
+            return _gitlabReplyToThread(workspace, repository, prId, thread, text);
         },
         resolveThread: function(prId, thread) {
-            var threadId = thread.threadId || thread.discussionId;
-            if (threadId) {
-                return gitlab_resolve_mr_thread({
-                    workspace: workspace, repository: repository,
-                    pullRequestId: String(prId), discussionId: String(threadId)
-                });
-            }
-            console.warn('SCM GitLab: No discussion id to resolve');
+            return _gitlabResolveThread(workspace, repository, prId, thread);
         },
         addInlineComment: function(prId, filePath, line, text, startLine, side) {
-            var mr = this.getPr(prId);
-            var refs = (mr && mr.diff_refs) || {};
-            if (!refs.base_sha || !refs.head_sha || !refs.start_sha) {
-                throw new Error('GitLab inline comments require MR diff_refs; gitlab_get_mr did not return them');
-            }
-            return gitlab_add_inline_mr_comment({
-                workspace: workspace, repository: repository,
-                pullRequestId: String(prId), filePath: filePath,
-                line: String(line), text: text,
-                baseSha: refs.base_sha, headSha: refs.head_sha, startSha: refs.start_sha
-            });
+            var self = this;
+            return _gitlabAddInlineComment(function(p) { return self.getPr(p); },
+                workspace, repository, prId, filePath, line, text, startLine, side);
         },
         mergePr: function(prId, mergeMethod, commitTitle, commitMessage) {
             return gitlab_merge_mr({
@@ -1017,122 +988,25 @@ function _createGitLabProvider(workspace, repository) {
             return gitlab_remove_mr_label({ workspace: workspace, repository: repository, pullRequestId: String(prId), label: label });
         },
         getPrDiff: function(prId, workingDir) {
-            var prIdStr = String(prId);
-
-            // Primary: dmtools v1.7.221+ exposes a tool that returns the raw diff text directly.
-            if (typeof gitlab_get_mr_diff_text !== 'undefined') {
-                try {
-                    var textRaw = gitlab_get_mr_diff_text({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
-                    var textDiff = _extractDiffFromToolResult(textRaw);
-                    if (_isUsableDiff(textDiff)) {
-                        return textDiff;
-                    }
-                } catch (e) {
-                    console.warn('gitlab_get_mr_diff_text failed:', e.message || e);
-                }
-            }
-
-            // Legacy fallback: gitlab_get_mr_diff returns diff stats/metadata (IDiffStats) in
-            // most builds, which serializes to a broken Java object toString (e.g.
-            // "GitLab$4@abc123") instead of usable diff text through the MCP/JS bridge.
-            var raw = '';
-            try {
-                raw = gitlab_get_mr_diff({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
-            } catch (e) {
-                console.warn('gitlab_get_mr_diff failed:', e.message || e);
-            }
-
-            var extracted = _extractDiffFromToolResult(raw);
-            if (_isUsableDiff(extracted)) {
-                return extracted;
-            }
-
-            // Final fallback: generate the diff locally from the checked-out branch using the
-            // MR's base/head commit SHAs (requires the repo to be checked out at workingDir).
-            console.log('GitLab MR diff MCP returned no usable diff; falling back to local git diff');
-            try {
-                var mr = this.getPr(prIdStr);
-                var refs = (mr && mr.diff_refs) || {};
-                if (!refs.base_sha || !refs.head_sha) {
-                    throw new Error('MR missing diff_refs base_sha/head_sha');
-                }
-                var localDiff = _runGitDiff(refs.base_sha, refs.head_sha, workingDir);
-                if (_isUsableDiff(localDiff)) {
-                    return localDiff;
-                }
-            } catch (e2) {
-                console.warn('Local git diff fallback failed:', e2.message || e2);
-            }
-
-            return raw || '';
+            var self = this;
+            return _gitlabGetPrDiff(workspace, repository, prId, workingDir, function(p) {
+                return self.getPr(p);
+            });
         },
         getCommitCheckRuns: function(sha) {
-            if (!sha) return null;
-            try {
-                var raw = gitlab_get_commit_statuses({ workspace: workspace, repository: repository, commitSha: sha });
-                var statuses = _toArray(raw);
-                if (!statuses.length) return null;
-                return statuses.map(_normalizeGitLabCommitStatus);
-            } catch (e) {
-                console.warn('SCM GitLab: failed to fetch commit statuses for', sha, ':', e.message || e);
-                return null;
-            }
+            return _gitlabGetCommitCheckRuns(workspace, repository, sha);
         },
         getJobLogs: function(jobId) {
             return gitlab_get_job_logs({ workspace: workspace, repository: repository, jobId: String(jobId) });
         },
         listWorkflowRuns: function(status, workflowId, limit, owner, repo) {
-            var runs = _toArray(gitlab_list_pipeline_runs({
-                workspace: owner || workspace,
-                repository: repo || repository,
-                status: _normalizeGitLabPipelineStatus(status),
-                ref: null,
-                limit: String(limit || 50)
-            }));
-            var mapped = runs.map(function(run) {
-                return Object.assign({}, run, {
-                    name: run.name || run.ref || '',
-                    display_title: run.name || run.ref || '',
-                    status: run.status === 'running' ? 'in_progress' : run.status,
-                    run_number: run.id
-                });
-            });
-            return JSON.stringify({ workflow_runs: mapped });
+            return _gitlabListWorkflowRuns(workspace, repository, status, workflowId, limit, owner, repo);
         },
         triggerWorkflow: function(owner, repo, workflowFile, payload, ref) {
-            var variables = {};
-            var parsed = _parseJson(payload);
-            if (parsed && typeof parsed === 'object') {
-                Object.keys(parsed).forEach(function(key) {
-                    variables[key] = parsed[key];
-                });
-            }
-            variables.workflow_file = workflowFile;
-            return gitlab_trigger_pipeline({
-                workspace: owner || workspace,
-                repository: repo || repository,
-                ref: ref || 'main',
-                variablesJson: JSON.stringify(variables)
-            });
+            return _gitlabTriggerPipeline(owner, repo, workspace, repository, workflowFile, payload, ref);
         },
         createPr: function(options) {
-            options = options || {};
-            var raw = gitlab_create_mr({
-                workspace: workspace,
-                repository: repository,
-                sourceBranch: options.branchName,
-                targetBranch: options.baseBranch || 'main',
-                title: options.title,
-                description: options.body || '',
-                removeSourceBranch: options.removeSourceBranch === false ? 'false' : 'true'
-            });
-            var mr = _normalizeGitLabMr(_parseJson(raw));
-            return {
-                success: true,
-                prUrl: mr && mr.html_url,
-                number: mr && mr.number,
-                output: raw
-            };
+            return _gitlabCreatePr(workspace, repository, options);
         },
         updateBranch: function(prId, owner, repo) {
             return gitlab_rebase_mr({
@@ -1559,6 +1433,41 @@ module.exports = {
     _normalizeGithubCommitStatus: _normalizeGithubCommitStatus,
     _getLegacyGithubCommitStatuses: _getLegacyGithubCommitStatuses,
     _unwrapGithubCheckRuns: _unwrapGithubCheckRuns,
+    // gh-981: GitHub/GitLab provider internals exposed as testable pure helpers
+    _githubGetDiffText: _githubGetDiffText,
+    _githubReplyToThread: _githubReplyToThread,
+    _githubResolveThread: _githubResolveThread,
+    _githubBuildInlineCommentOpts: _githubBuildInlineCommentOpts,
+    _githubTryPrDiffText: _githubTryPrDiffText,
+    _githubTryPrDiffTool: _githubTryPrDiffTool,
+    _githubLocalGitDiffFallback: _githubLocalGitDiffFallback,
+    _githubPrBaseHeadRefs: _githubPrBaseHeadRefs,
+    _githubGetPrDiff: _githubGetPrDiff,
+    _githubMergeLegacyStatuses: _githubMergeLegacyStatuses,
+    _githubGetCommitCheckRuns: _githubGetCommitCheckRuns,
+    _githubLogInventoryCounts: _githubLogInventoryCounts,
+    _githubFetchReviewThreadInventory: _githubFetchReviewThreadInventory,
+    _githubCollectThreadInventory: _githubCollectThreadInventory,
+    _githubRenderCommentsSection: _githubRenderCommentsSection,
+    _githubFetchGeneralCommentsSection: _githubFetchGeneralCommentsSection,
+    _githubBuildDiscussionsMarkdown: _githubBuildDiscussionsMarkdown,
+    _githubFetchDiscussions: _githubFetchDiscussions,
+    _githubGetRemoteRepoInfo: _githubGetRemoteRepoInfo,
+    _gitlabListPrs: _gitlabListPrs,
+    _gitlabGetDiffText: _gitlabGetDiffText,
+    _gitlabSubmitReview: _gitlabSubmitReview,
+    _gitlabReplyToThread: _gitlabReplyToThread,
+    _gitlabResolveThread: _gitlabResolveThread,
+    _gitlabAddInlineComment: _gitlabAddInlineComment,
+    _gitlabTryMrDiffText: _gitlabTryMrDiffText,
+    _gitlabMrDiffLocalFallback: _gitlabMrDiffLocalFallback,
+    _gitlabGetPrDiff: _gitlabGetPrDiff,
+    _gitlabGetCommitCheckRuns: _gitlabGetCommitCheckRuns,
+    _gitlabMapPipelineRun: _gitlabMapPipelineRun,
+    _gitlabListWorkflowRuns: _gitlabListWorkflowRuns,
+    _gitlabBuildPipelineVariables: _gitlabBuildPipelineVariables,
+    _gitlabTriggerPipeline: _gitlabTriggerPipeline,
+    _gitlabCreatePr: _gitlabCreatePr,
     // gh-925: ADO/GitLab provider internals exposed as testable pure helpers
     _gitlabThreadPosition: _gitlabThreadPosition,
     _gitlabMapDiscussionThread: _gitlabMapDiscussionThread,

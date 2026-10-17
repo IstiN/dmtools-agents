@@ -1127,7 +1127,7 @@ suite('postTestReworkResults.stageUnmergedPaths — characterization (gh-981)', 
             { cmd: 'git add -- "testing/x.js"' },
             { cmd: 'git add -- "src/y.js"' },
             { cmd: 'git diff --cached --check',
-              out: 'testing/x.js:2: leftover conflict marker\nsrc/y.js:5: leftover conflict marker' },
+              out: 'testing/x.js:2: conflict marker\nsrc/y.js:5: conflict marker' },
             { cmd: 'git checkout --ours -- "testing/x.js"' },
             { cmd: 'git add -- "testing/x.js"' },
             { cmd: 'git checkout --theirs -- "src/y.js"' },
@@ -1144,7 +1144,7 @@ suite('postTestReworkResults.stageUnmergedPaths — characterization (gh-981)', 
             { cmd: 'git diff --name-only --diff-filter=U', out: 'src/y.js' },
             { cmd: 'git add -- "src/y.js"' },
             { cmd: 'git diff --cached --check',
-              out: 'src/y.js:5: leftover conflict marker\nsrc/y.js:9: leftover conflict marker' },
+              out: 'src/y.js:5: conflict marker\nsrc/y.js:9: conflict marker' },
             { cmd: 'git checkout --theirs -- "src/y.js"' },
             { cmd: 'git add -- "src/y.js"' },
             { cmd: 'git diff --name-only --diff-filter=U', out: '' },
@@ -1234,9 +1234,9 @@ suite('postTestReworkResults — path classification helpers (gh-981)', function
         var m = helperModule();
         assert.deepEqual(
             m.parseConflictMarkerPaths(
-                'src/a.js:3: leftover conflict marker\n' +
-                'src/b.js:7: leftover conflict marker\n' +
-                'src/a.js:9: leftover conflict marker\n' +
+                'src/a.js:3: conflict marker\n' +
+                'src/b.js:7: conflict marker\n' +
+                'src/a.js:9: conflict marker\n' +
                 'unrelated output line\n'
             ),
             ['src/a.js', 'src/b.js']
