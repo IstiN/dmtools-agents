@@ -37,7 +37,18 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `adoTextFormat`
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
   - `checkOpenPR`
+  - `configPath`
+  - `customStatuses`
+  - `featureBranchEnabled`
+  - `prSearchFnPath`
+  - `scmProvider`
+  - `stageFallback`
+  - `targetRepository`
+  - `trackerProvider`
 
 ### preCliJSAction: `fetchParentContextToInput.js`
 
@@ -45,11 +56,22 @@ _Fetch Parent Context To Input_
 
 - Source: `agents/js/fetchParentContextToInput.js`
 - Parameters (customParams):
+  - `adoTextFormat`
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
   - `childQuestions`
+  - `configPath`
   - `contexts`
+  - `customStatuses`
+  - `featureBranchEnabled`
   - `fields`
   - `jql`
   - `parentContextFetch`
+  - `prSearchFnPath`
+  - `scmProvider`
+  - `stageFallback`
+  - `targetRepository`
+  - `trackerProvider`
 
 
 ### postJSAction: `enhanceSolutionDesignDescriptionAndAssess.js`
@@ -57,7 +79,18 @@ _Fetch Parent Context To Input_
 _Enhance SD CORE Description and Assess Action_
 
 - Source: `agents/js/enhanceSolutionDesignDescriptionAndAssess.js`
-- No detected file I/O or side effects.
+- Parameters (customParams):
+  - `adoTextFormat`
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
+  - `configPath`
+  - `customStatuses`
+  - `featureBranchEnabled`
+  - `prSearchFnPath`
+  - `scmProvider`
+  - `stageFallback`
+  - `targetRepository`
+  - `trackerProvider`
 
 
 ## LLM step
@@ -67,7 +100,18 @@ _Enhance SD CORE Description and Assess Action_
 
 ## Custom params
 
+- `adoTextFormat` _(used by JS action)_
+- `branchCreateFnPath` _(used by JS action)_
+- `branchNamingFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
+- `configPath` _(used by JS action)_
+- `customStatuses` _(used by JS action)_
+- `featureBranchEnabled` _(used by JS action)_
+- `prSearchFnPath` _(used by JS action)_
+- `scmProvider` _(used by JS action)_
+- `stageFallback` _(used by JS action)_
+- `targetRepository` _(used by JS action)_
+- `trackerProvider` _(used by JS action)_
 - `childQuestions` _(used by JS action)_
 - `contexts` _(used by JS action)_
 - `fields` _(used by JS action)_
