@@ -907,6 +907,15 @@ function isAddressedThread(t, byThreadId, byRootId, cited) {
 }
 
 /**
+ * Count one successful resolution toward the gh-957 lap marker (no-op when
+ * the caller passed no counter).
+ */
+function countResolution(counter) {
+    if (!counter) return;
+    counter.resolved = (counter.resolved || 0) + 1;
+}
+
+/**
  * The fresh open-thread sweep: re-reads the PR's live threads and resolves
  * every still-open one this rework addressed. Fail-quiet: a sweep probe
  * failure degrades to the cited-ids direct resolution below. Returns
@@ -926,7 +935,7 @@ function sweepAddressedThreads(scm, pullRequestId, freshThreads, addressed, coun
             scm.resolveThread(pullRequestId, { threadId: t.threadId });
             console.log('✅ Resolved still-open addressed thread (fresh sweep):', t.threadId);
             resolvedCount++;
-            if (counter) counter.resolved = (counter.resolved || 0) + 1;
+            countResolution(counter);
             if (t.threadId) resolvedViaSweep[String(t.threadId)] = true;
         } catch (e) {
             console.warn('Failed to resolve thread', t.threadId + ':', e.message || e);
@@ -948,7 +957,7 @@ function resolveCitedThreads(scm, pullRequestId, cited, resolvedViaSweep, counte
             scm.resolveThread(pullRequestId, { threadId: threadId });
             console.log('✅ Resolved thread cited in rework response:', threadId);
             resolvedCount++;
-            if (counter) counter.resolved = (counter.resolved || 0) + 1;
+            countResolution(counter);
         } catch (e) {
             console.warn('Failed to resolve cited thread', threadId + ':', e.message || e);
         }

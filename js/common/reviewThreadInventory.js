@@ -127,12 +127,30 @@ function resolveNodeLine(node, conversation) {
 }
 
 /**
+ * The first comment of a GraphQL reviewThread node — {} when the node
+ * carries no comments.
+ */
+function firstCommentOf(node) {
+    var comments = node.comments && node.comments.nodes;
+    if (!comments || !comments.length) return {};
+    return comments[0] || {};
+}
+
+/**
+ * The root-comment holder of a conversation — {} when there is none.
+ */
+function conversationRootOf(conversation) {
+    if (!conversation) return {};
+    return conversation.rootComment || conversation;
+}
+
+/**
  * The identity fields of an internal thread straight from the GraphQL node
  * (ids, path, resolved). The RESOLVED flag is GraphQL truth only — the arm
  * rule counts isResolved, so the inventory must never disagree.
  */
 function threadIdentityFromNode(node, conversation) {
-    var first = (node.comments && node.comments.nodes && node.comments.nodes[0]) || {};
+    var first = firstCommentOf(node);
     return {
         rootCommentId: first.databaseId || null,
         threadId: node.id || null,
@@ -147,8 +165,8 @@ function threadIdentityFromNode(node, conversation) {
  * GraphQL first comment and the matched conversation.
  */
 function enrichThreadFromConversation(t, node, conversation) {
-    var first = (node.comments && node.comments.nodes && node.comments.nodes[0]) || {};
-    var convRoot = conversation ? (conversation.rootComment || conversation) : {};
+    var first = firstCommentOf(node);
+    var convRoot = conversationRootOf(conversation);
     var author = nodeAuthor(first, convRoot);
     t.bot = machineNotice.isBotAuthor(author);
     t.body = String(first.body || convRoot.body || '').trim();
@@ -175,7 +193,7 @@ function threadFromGraphQLNode(node, conversation) {
  * databaseId — such threads keep their GraphQL-only shape).
  */
 function matchConversationForNode(node, convById) {
-    var first = (node.comments && node.comments.nodes && node.comments.nodes[0]) || {};
+    var first = firstCommentOf(node);
     if (first.databaseId === null || first.databaseId === undefined) {
         return { conv: null, dbId: null };
     }
@@ -241,6 +259,28 @@ function buildFromGraphQL(nodes, conversations) {
 }
 
 /**
+ * The comments holder of a GraphQL node — null unless the node is joinable
+ * (has an id and a comments payload; the id becomes the enriched threadId).
+ */
+function nodeCommentsOf(rt) {
+    if (!rt || !rt.id || !rt.comments) return null;
+    return rt.comments.nodes || null;
+}
+
+/**
+ * The join key of one GraphQL node — its first comment's databaseId as a
+ * string, null when the node cannot be joined (no comments / no id).
+ */
+function firstDatabaseIdOf(rt) {
+    var nodes = nodeCommentsOf(rt);
+    if (!nodes || !nodes.length) return null;
+    var first = nodes[0] || {};
+    var dbId = first.databaseId;
+    if (dbId === null || dbId === undefined) return null;
+    return String(dbId);
+}
+
+/**
  * Index the GraphQL nodes by first-comment databaseId — the join keys for
  * the legacy path's threadId/resolved enrichment.
  */
@@ -248,13 +288,10 @@ function indexGraphqlByCommentId(nodes) {
     var threadIdByCommentId = {};
     var resolvedByCommentId = {};
     (nodes || []).forEach(function(rt) {
-        if (rt && rt.id && rt.comments && rt.comments.nodes && rt.comments.nodes.length > 0) {
-            var dbId = rt.comments.nodes[0].databaseId;
-            if (dbId !== null && dbId !== undefined) {
-                threadIdByCommentId[String(dbId)] = rt.id;
-                resolvedByCommentId[String(dbId)] = rt.isResolved === true;
-            }
-        }
+        var dbId = firstDatabaseIdOf(rt);
+        if (dbId === null) return;
+        threadIdByCommentId[dbId] = rt.id;
+        resolvedByCommentId[dbId] = rt.isResolved === true;
     });
     return { threadIdByCommentId: threadIdByCommentId, resolvedByCommentId: resolvedByCommentId };
 }
@@ -268,28 +305,52 @@ function conversationAuthor(root) {
 }
 
 /**
+ * The path/line/body/date/replies fields straight from the REST conversation
+ * root (no GraphQL enrichment).
+ */
+function conversationShapeFields(thread, root) {
+    return {
+        path: thread.path || null,
+        line: thread.line || thread.original_line || null,
+        body: String(root.body || '').trim(),
+        date: root.created_at ? String(root.created_at).substring(0, 10) : '',
+        replies: Array.isArray(thread.replies) ? thread.replies : []
+    };
+}
+
+/**
+ * The resolved flag of a legacy thread: the REST export's own flags first,
+ * then the GraphQL isResolved enrichment matched by root comment id.
+ */
+function conversationResolution(thread, rootId, idIndex) {
+    if (thread.resolved === true || thread.isResolved === true) return true;
+    if (rootId === null || rootId === undefined) return false;
+    return idIndex.resolvedByCommentId[String(rootId)] === true;
+}
+
+/**
+ * The GraphQL threadId matched by root comment id — null when unknown.
+ */
+function conversationThreadIdFor(rootId, idIndex) {
+    if (rootId === null || rootId === undefined) return null;
+    return idIndex.threadIdByCommentId[String(rootId)] || null;
+}
+
+/**
  * Map one REST conversation to the internal thread shape, enriching
  * threadId/resolved from the GraphQL index (matched by root comment id).
  */
 function threadFromConversation(thread, idIndex) {
     var root = thread.rootComment || thread;
-    var body = String(root.body || '').trim();
     var rootId = conversationRootId(thread);
-    var hasRootId = rootId !== null && rootId !== undefined;
     var author = conversationAuthor(root);
-    return {
-        rootCommentId: rootId,
-        threadId: hasRootId ? (idIndex.threadIdByCommentId[String(rootId)] || null) : null,
-        path: thread.path || null,
-        line: thread.line || thread.original_line || null,
-        resolved: thread.resolved === true || thread.isResolved === true ||
-            (hasRootId && idIndex.resolvedByCommentId[String(rootId)] === true),
-        bot: machineNotice.isBotAuthor(author),
-        body: body,
-        author: author || 'unknown',
-        date: root.created_at ? String(root.created_at).substring(0, 10) : '',
-        replies: Array.isArray(thread.replies) ? thread.replies : []
-    };
+    var t = conversationShapeFields(thread, root);
+    t.rootCommentId = rootId;
+    t.threadId = conversationThreadIdFor(rootId, idIndex);
+    t.resolved = conversationResolution(thread, rootId, idIndex);
+    t.bot = machineNotice.isBotAuthor(author);
+    t.author = author || 'unknown';
+    return t;
 }
 
 /**

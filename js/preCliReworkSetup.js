@@ -199,6 +199,18 @@ function buildCensusNote(census, openCount) {
 }
 
 /**
+ * The reviewer login of a concluded review: user.login (GitHub export) or
+ * author.login/name (other exports) — 'unknown' when unnamed.
+ */
+function reviewAuthorOf(latest) {
+    if (latest.user && latest.user.login) return latest.user.login;
+    if (latest.author && (latest.author.login || latest.author.name)) {
+        return latest.author.login || latest.author.name;
+    }
+    return 'unknown';
+}
+
+/**
  * The reviewer-verdict lines: the latest concluded decision (state, reviewer,
  * submission date, first-line summary) or the honest 'no concluded review'
  * note. Returns [] when the provider exposes no review support at all.
@@ -217,9 +229,7 @@ function renderVerdictLines(reviews) {
     lines.push('Latest concluded review:');
     lines.push('');
     lines.push('- **State**: ' + latest.state);
-    var author = (latest.user && latest.user.login) ||
-        (latest.author && (latest.author.login || latest.author.name)) || 'unknown';
-    lines.push('- **Reviewer**: ' + author);
+    lines.push('- **Reviewer**: ' + reviewAuthorOf(latest));
     lines.push('- **Submitted**: ' + (latest.submitted_at || 'unknown'));
     var summary = firstLineExcerpt(latest.body);
     if (summary) lines.push('- **Summary**: ' + summary);
@@ -228,17 +238,24 @@ function renderVerdictLines(reviews) {
 }
 
 /**
- * The actionable open-thread bullet list — id, location, and a bounded
- * first-line excerpt per thread.
+ * One actionable open-thread bullet: id (threadId, else comment#rootId,
+ * else no-id), the path:line location, and a bounded first-line excerpt.
+ */
+function renderOpenThreadLine(t) {
+    var id = t.threadId ||
+        (t.rootCommentId !== null && t.rootCommentId !== undefined ? 'comment#' + t.rootCommentId : 'no-id');
+    var loc = t.path ? (t.path + (t.line ? ':' + t.line : '')) : '';
+    var excerpt = firstLineExcerpt(t.body, 160);
+    return '- `' + id + '`' + (loc ? ' — `' + loc + '`' : '') + (excerpt ? ' — "' + excerpt + '"' : '');
+}
+
+/**
+ * The actionable open-thread bullet list — one line per thread.
  */
 function renderOpenThreadLines(openThreads) {
     var lines = ['Each open thread below is blocking reviewer feedback — fix it and reply via `outputs/review_replies.json`:', ''];
     (openThreads || []).forEach(function(t) {
-        var id = t.threadId ||
-            (t.rootCommentId !== null && t.rootCommentId !== undefined ? 'comment#' + t.rootCommentId : 'no-id');
-        var loc = t.path ? (t.path + (t.line ? ':' + t.line : '')) : '';
-        var excerpt = firstLineExcerpt(t.body, 160);
-        lines.push('- `' + id + '`' + (loc ? ' — `' + loc + '`' : '') + (excerpt ? ' — "' + excerpt + '"' : ''));
+        lines.push(renderOpenThreadLine(t));
     });
     lines.push('');
     return lines;

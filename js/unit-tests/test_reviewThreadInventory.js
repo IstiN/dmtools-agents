@@ -255,4 +255,18 @@ suite('reviewThreadInventory.buildFromConversations — GraphQL id enrichment', 
         assert.equal(result.enriched[1].threadId, 'PRRT_b');
         assert.equal(result.enriched[1].resolved, true, 'GraphQL isResolved enriches the legacy path');
     });
+
+    test('GraphQL nodes that cannot be joined (no id / no comments / no databaseId) are skipped', function() {
+        var inv = loadInventory();
+        var conversations = [conversation({ id: 1101, body: 'unjoined finding' })];
+        var unjoinable = [
+            { id: 'PRRT_noid', isResolved: true, comments: { nodes: [{}] } },
+            { id: 'PRRT_nodbid', isResolved: true, comments: { nodes: [{ databaseId: null }] } },
+            { id: 'PRRT_nocomments', isResolved: true },
+            null
+        ];
+        var result = inv.buildFromConversations(conversations, unjoinable);
+        assert.equal(result.enriched[0].threadId, null, 'no threadId enrichment from unjoinable nodes');
+        assert.equal(result.enriched[0].resolved, false, 'no resolved enrichment either');
+    });
 });

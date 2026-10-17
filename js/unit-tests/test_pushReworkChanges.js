@@ -2149,59 +2149,77 @@ suite('pushReworkChanges.evaluateAuditResolveGate — failed probe (null) semant
 suite('pushReworkChanges.action — failed diff probe never stamps a false no-op lap (gh-957)', function() {
     var BASE = 'd'.repeat(40);
 
-    // diffProbe: 'THROW' makes the hasRealCodeChanges probe fail (null);
-    // noCommits: the leg's own commit lands nothing.
-    function run(diffProbe, opts) {
-        opts = opts || {};
-        var resolved = [], replies = [], comments = [];
-        var loaded = loadPushReworkChangesForAction({
-            cli_execute_command: function(a) {
-                if (a.command === 'git branch --show-current') return 'bug/PROJ-123\n';
-                if (a.command.indexOf('git ls-remote --heads origin') === 0) {
-                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
-                }
-                if (a.command.indexOf('git diff --name-only') === 0 && diffProbe === 'THROW') throw new Error('git failed');
-                return '';
-            },
-            file_read: function(a) {
-                var p = a && (a.path || a);
-                if (p.indexOf('rework_setup_failed.md') !== -1) throw new Error('nope');
-                if (p.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
-                if (p.indexOf('rework_base_head.txt') !== -1) return BASE;
-                if (p.indexOf('pr_discussions_raw.json') !== -1) {
-                    return JSON.stringify({ threads: [{ threadId: 'T1', rootCommentId: 11, resolved: false }] });
+    // The leg always lands on its expected branch and pushes fine; only the
+    // hasRealCodeChanges diff probe is parameterized.
+    function lapGateCli(diffProbe) {
+        return function(a) {
+            if (a.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+            if (a.command.indexOf('git ls-remote --heads origin') === 0) {
+                return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
+            }
+            if (a.command.indexOf('git diff --name-only') === 0 && diffProbe === 'THROW') throw new Error('git failed');
+            return '';
+        };
+    }
+
+    // One open thread in the input snapshot, fully covered by the reply below.
+    function lapGateFileRead() {
+        return function(a) {
+            var p = a && (a.path || a);
+            if (p.indexOf('rework_setup_failed.md') !== -1) throw new Error('nope');
+            if (p.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
+            if (p.indexOf('rework_base_head.txt') !== -1) return BASE;
+            if (p.indexOf('pr_discussions_raw.json') !== -1) {
+                return JSON.stringify({ threads: [{ threadId: 'T1', rootCommentId: 11, resolved: false }] });
+            }
+            return null;
+        };
+    }
+
+    function lapGateScm(capture) {
+        return {
+            addComment: function(n, body) { capture.comments.push(String(body)); },
+            resolveThread: function(n, t) { capture.resolved.push(t); },
+            replyToThread: function(n, thread, text) { capture.replies.push(String(text)); }
+        };
+    }
+
+    function lapGateOutputFiles() {
+        return {
+            readOutputFile: function(name) {
+                if (name === 'review_replies.json') {
+                    return JSON.stringify({ replies: [
+                        { inReplyToId: 11, threadId: 'T1', reply: 'Already addressed on this head.' }
+                    ] });
                 }
                 return null;
             }
+        };
+    }
+
+    // diffProbe 'THROW' makes the hasRealCodeChanges probe fail (null);
+    // noCommits: the leg's own commit lands nothing.
+    function runLapGateAction(diffProbe, opts) {
+        opts = opts || {};
+        var capture = { resolved: [], replies: [], comments: [] };
+        var loaded = loadPushReworkChangesForAction({
+            cli_execute_command: lapGateCli(diffProbe),
+            file_read: lapGateFileRead()
         }, {
             stagedDiffStat: opts.noCommits ? function() { return ''; } : undefined,
-            scm: {
-                addComment: function(n, body) { comments.push(String(body)); },
-                resolveThread: function(n, t) { resolved.push(t); },
-                replyToThread: function(n, thread, text) { replies.push(String(text)); }
-            },
-            outputFiles: {
-                readOutputFile: function(name) {
-                    if (name === 'review_replies.json') {
-                        return JSON.stringify({ replies: [
-                            { inReplyToId: 11, threadId: 'T1', reply: 'Already addressed on this head.' }
-                        ] });
-                    }
-                    return null;
-                }
-            }
+            scm: lapGateScm(capture),
+            outputFiles: lapGateOutputFiles()
         });
-        // One open thread in the input snapshot, fully covered by the reply above.
-        var result = loaded.mod.action({
+        capture.result = loaded.mod.action({
             ticket: { key: 'PROJ-123', fields: { labels: [] } },
             response: 'Fix summary long enough to be a meaningful rework completion summary.',
             customParams: {}
         });
-        return { result: result, resolved: resolved, replies: replies, comments: comments };
+        return capture;
     }
 
     test('probe failed but commits landed: the lap marker records pushed=1 and replies carry NO audit line', function() {
-        var r = run('THROW', {});
+        var r = runLapGateAction('THROW', {});
         assert.equal(r.result.success, true);
         assert.equal(r.resolved.length, 1, 'the covered thread is resolved');
         assert.equal(r.replies.length, 1);
@@ -2212,7 +2230,7 @@ suite('pushReworkChanges.action — failed diff probe never stamps a false no-op
     });
 
     test('probe failed and no commits landed: replies carry the audit line and the marker records pushed=0', function() {
-        var r = run('THROW', { noCommits: true });
+        var r = runLapGateAction('THROW', { noCommits: true });
         assert.equal(r.result.success, true);
         assert.equal(r.resolved.length, 1, 'full reply coverage — audit-resolve is allowed');
         assert.equal(r.replies.length, 1);

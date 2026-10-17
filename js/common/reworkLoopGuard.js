@@ -148,10 +148,20 @@ function sortMarkersByTime(out) {
     return out;
 }
 
+/**
+ * The machine-author allowlist from the options — null when absent/empty
+ * (every author counts when there is no allowlist).
+ */
+function authorAllowlist(opts) {
+    if (opts && Array.isArray(opts.authorLogins) && opts.authorLogins.length) {
+        return opts.authorLogins;
+    }
+    return null;
+}
+
 function parseMarkers(comments, prefix, opts) {
     var list = Array.isArray(comments) ? comments : [];
-    var allow = (opts && Array.isArray(opts.authorLogins) && opts.authorLogins.length)
-        ? opts.authorLogins : null;
+    var allow = authorAllowlist(opts);
     var out = [];
     for (var i = 0; i < list.length; i++) {
         if (allow && !isTrustedAuthor(list[i], allow)) continue;
@@ -163,7 +173,6 @@ function parseMarkers(comments, prefix, opts) {
     }
     return sortMarkersByTime(out);
 }
-
 function parseLapMarkers(comments, opts) {
     return parseMarkers(comments, LAP_MARKER_PREFIX, opts);
 }
