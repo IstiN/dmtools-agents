@@ -2,6 +2,116 @@
  * Unit tests for js/writeSolutionAndDiagrams.js module loading.
  */
 
+// Shared full-fidelity loader for the gh-978 characterization suites: wires the
+// module against jira globals with per-test failure switches, and exposes the
+// call log so tests can assert side-effect order and partial-failure behaviour.
+function wd3LoadFull(opts) {
+    opts = opts || {};
+    var jiraUpdates = [];
+    var calls = {
+        autoStartConfigured: [],
+        smIdle: 0,
+        tokenUsage: 0,
+        postComments: []
+    };
+    var globals = {
+        jira_update_field: function(args) {
+            if (opts.failUpdateField === args.field) {
+                throw new Error('updateField boom: ' + args.field);
+            }
+            jiraUpdates.push(args);
+        },
+        jira_get_ticket: function() {
+            if (opts.existingFieldThrows) {
+                throw new Error('getIssue boom');
+            }
+            var fields = { summary: 'Some story' };
+            if (opts.existingFieldValue !== undefined) {
+                fields[opts.solutionField || 'description'] = opts.existingFieldValue;
+            }
+            return { key: 'PROJ-1', fields: fields };
+        },
+        jira_assign_ticket_to: function() {
+            if (opts.failAssign) { throw new Error('assign boom'); }
+            calls.assigned = true;
+        },
+        jira_move_to_status: function() {
+            if (opts.failMove) { throw new Error('move boom'); }
+            calls.moved = true;
+        },
+        jira_add_label: function() {
+            if (opts.failAddLabel) { throw new Error('addLabel boom'); }
+        },
+        jira_remove_label: function() {
+            if (opts.failRemoveLabel) { throw new Error('removeLabel boom'); }
+            calls.removedLabels = (calls.removedLabels || 0) + 1;
+        },
+        jira_post_comment: function(args) {
+            if (opts.failPostComment) { throw new Error('postComment boom'); }
+            calls.postComments.push(args);
+        },
+        confluence_get_children_by_id: function() { return []; },
+        confluence_create_page: function(args) {
+            if (opts.failConfluenceCreate) { throw new Error('confluence boom'); }
+            return { id: '777', title: args.title };
+        },
+        confluence_sync_markdown_directory: function() {},
+        file_write: function() {},
+        file_read: function(o) {
+            throw new Error('not found: ' + (o && (o.path || o)));
+        }
+    };
+    var autoStartMock = {
+        triggerConfiguredWorkflowForTicket: function(a) {
+            calls.autoStartConfigured.push(a);
+            if (opts.autoStartThrows) { throw new Error('autoStart boom'); }
+            return opts.autoStartResult === undefined ? false : opts.autoStartResult;
+        },
+        triggerSmIfIdle: function() { calls.smIdle++; }
+    };
+    var tokenUsageMock = {
+        postTokenUsageComments: function() {
+            calls.tokenUsage++;
+            if (opts.tokenUsageThrows) { throw new Error('tokenUsage boom'); }
+        }
+    };
+    var outputFilesMock = {
+        readOutputFile: function(name) {
+            if (name === 'response.md') return opts.responseMd || 'Solution body';
+            if (name === 'diagram.md') {
+                return (opts.diagramMd !== undefined) ? opts.diagramMd : 'graph TD\nA --> B';
+            }
+            if (name === 'affected_repos.json') return opts.affectedRepos || null;
+            return null;
+        }
+    };
+    var configLoaderMock = {
+        loadProjectConfig: function() {
+            return { jira: { statuses: { READY_FOR_DEVELOPMENT: 'Ready' } } };
+        }
+    };
+    var module = loadModule(
+        'js/writeSolutionAndDiagrams.js',
+        makeRequire({
+            './common/trackers.js': wd3Trackers(globals),
+            './config.js': configModule,
+            './configLoader.js': configLoaderMock,
+            './common/scm.js': { createScm: function() { return {}; } },
+            './common/autoStart.js': autoStartMock,
+            './common/outputFiles.js': outputFilesMock,
+            './common/tokenUsageComment.js': tokenUsageMock,
+            './common/contentOutput.js': loadModule('js/common/contentOutput.js',
+                makeRequire({
+                    '../configLoader.js': configLoaderMock,
+                    './trackers.js': trackersMock()
+                }),
+                globals)
+        }),
+        globals
+    );
+    return { module: module, jiraUpdates: jiraUpdates, calls: calls };
+}
+
 function wd3Trackers(mocks) {
     return loadModule('js/common/trackers.js', makeRequire({
         '../config.js': configModule,
@@ -338,5 +448,314 @@ suite('writeSolutionAndDiagrams — ado tracker (wave2d3)', function() {
         assert.ok(tools.indexOf('ado_assign_work_item') !== -1, 'ado_assign_work_item called');
         assert.ok(tools.indexOf('ado_move_to_state') !== -1, 'ado_move_to_state called');
         calls.forEach(function(c) { assert.equal(String(c.args.id), '55'); });
+    });
+});
+
+suite('writeSolutionAndDiagrams — pure builders (gh-978 refactor)', function() {
+
+    function loadPure() {
+        return wd3LoadFull({}).module;
+    }
+
+    test('resolveOutputOptions: defaults when customParams are absent', function() {
+        var m = loadPure();
+        var options = m.resolveOutputOptions({});
+        assert.equal(options.solutionField, configModule.JIRA_FIELDS.SOLUTION, 'default solution field');
+        assert.equal(options.diagramField, configModule.JIRA_FIELDS.DIAGRAMS, 'default diagram field');
+        assert.equal(options.outputType, 'replace', 'default output type');
+        assert.equal(options.requireDiagram, false, 'diagram not required by default');
+    });
+
+    test('resolveOutputOptions: explicit overrides win, empty diagramField is preserved, string requireDiagram works', function() {
+        var m = loadPure();
+        var options = m.resolveOutputOptions({
+            solutionField: 'description',
+            diagramField: '',
+            outputType: 'append',
+            requireDiagram: 'true'
+        });
+        assert.equal(options.solutionField, 'description');
+        assert.equal(options.diagramField, '', 'empty diagramField stays empty (means prepend/publish)');
+        assert.equal(options.outputType, 'append');
+        assert.equal(options.requireDiagram, true, "'true' string is accepted");
+    });
+
+    test('decideDiagramPlacement: jira target prepends, confluence-only defers, dedicated field keeps both', function() {
+        var m = loadPure();
+        var jira = m.decideDiagramPlacement('graph TD\nA', '', false);
+        assert.equal(jira.prependToSolution, true, 'jira target prepends as {code}');
+        assert.equal(jira.deferToConfluence, false);
+
+        var conf = m.decideDiagramPlacement('graph TD\nA', '', true);
+        assert.equal(conf.prependToSolution, false, 'confluence-only target must not get a jira {code} block');
+        assert.equal(conf.deferToConfluence, true, 'confluence-only target defers to the publish step');
+
+        var dedicated = m.decideDiagramPlacement('graph TD\nA', 'Diagrams', false);
+        assert.equal(dedicated.prependToSolution, false);
+        assert.equal(dedicated.deferToConfluence, false, 'dedicated diagram field needs no special handling');
+
+        var noDiagram = m.decideDiagramPlacement('', '', false);
+        assert.equal(noDiagram.prependToSolution, false);
+        assert.equal(noDiagram.deferToConfluence, false);
+    });
+
+    test('buildAppendValue: separator only when existing content is present', function() {
+        var m = loadPure();
+        assert.equal(m.buildAppendValue('Existing', 'Fresh'), 'Existing\n\n----\n\nFresh', 'separator between old and new');
+        assert.equal(m.buildAppendValue('', 'Fresh'), 'Fresh', 'no separator without existing content');
+    });
+
+    test('buildConfluencePageContent: strips managed sections then appends a single Diagram section', function() {
+        var m = loadPure();
+        var solution = '## Solution\nBody\n\n## Diagram\n\n```mermaid\nOLD --> STALE\n```\n\n---\n';
+        var content = m.buildConfluencePageContent(solution, 'graph TD\nA --> B');
+        assert.equal(content.split('## Diagram').length - 1, 1, 'exactly one Diagram section');
+        assert.ok(content.indexOf('OLD --> STALE') === -1, 'stale diagram stripped');
+        assert.ok(content.indexOf('```mermaid\ngraph TD\nA --> B\n```') !== -1, 'fresh single-fenced diagram appended');
+
+        var noDiagram = m.buildConfluencePageContent('Plain body', '');
+        assert.equal(noDiagram, 'Plain body', 'no diagram section when diagram is empty');
+    });
+
+    test('buildConfluenceLinkText: url vs page-id fallback', function() {
+        var m = loadPure();
+        assert.equal(m.buildConfluenceLinkText('http://x/123', { page: { id: '123' } }),
+            'Solution published to Confluence: http://x/123', 'url form when available');
+        assert.equal(m.buildConfluenceLinkText('', { page: { id: '123' } }),
+            'Solution published to Confluence page 123', 'page-id form without url');
+    });
+
+    test('buildConfluenceCommentText: url vs page-id fallback', function() {
+        var m = loadPure();
+        assert.equal(m.buildConfluenceCommentText('http://x/123', { page: { id: '123' } }),
+            'h3. 📐 Solution published to Confluence\n\nPage: http://x/123', 'url form when available');
+        assert.equal(m.buildConfluenceCommentText(null, { page: { id: '123' } }),
+            'h3. 📐 Solution published to Confluence\n\nPage id: 123', 'page-id form without url');
+    });
+
+    test('stripMermaidFence unit checks', function() {
+        var m = loadPure();
+        assert.equal(m.stripMermaidFence('```mermaid\ngraph TD\nA\n```'), 'graph TD\nA', 'wrapped fence stripped');
+        assert.equal(m.stripMermaidFence('```\ngraph TD\nA\n```'), 'graph TD\nA', 'bare fence stripped');
+        assert.equal(m.stripMermaidFence('graph TD\n```\nA --> B'), 'graph TD\nA --> B', 'stray fence lines removed');
+        assert.equal(m.stripMermaidFence('graph TD\nA --> B'), 'graph TD\nA --> B', 'clean diagram untouched');
+        assert.equal(m.stripMermaidFence(''), '', 'empty stays empty');
+    });
+
+    test('appendAffectedRepositoriesSection: null/empty repos leave content unchanged, valid repos append sorted section', function() {
+        var m = loadPure();
+        var shared = {
+            topologicalSort: function(repos) { return repos.slice().reverse(); },
+            buildConfluenceMarkdownSection: function(sorted) {
+                return '## Affected Repositories\n\n' + sorted.map(function(r) { return r.name; }).join(',');
+            }
+        };
+        assert.equal(m.appendAffectedRepositoriesSection('body', null, shared), 'body', 'null reposJson untouched');
+        assert.equal(m.appendAffectedRepositoriesSection('body', '[]', shared), 'body', 'empty array untouched');
+        var repos = JSON.stringify([{ name: 'a' }, { name: 'b' }]);
+        var out = m.appendAffectedRepositoriesSection('body', repos, shared);
+        assert.ok(out.indexOf('## Affected Repositories') !== -1, 'section appended');
+        assert.ok(out.indexOf('b,a') !== -1, 'repos sorted through shared.topologicalSort');
+        assert.ok(out.indexOf('body') === 0, 'original content kept as prefix');
+    });
+});
+
+suite('writeSolutionAndDiagrams — append outputType (gh-978 characterization)', function() {
+
+    function runAppend(opts, customParams) {
+        var env = wd3LoadFull(opts);
+        var params = {
+            ticket: { key: 'PROJ-1', fields: { summary: 'Some story' } },
+            initiator: 'user@x',
+            customParams: customParams
+        };
+        var result = env.module.action(params);
+        return { result: result, jiraUpdates: env.jiraUpdates };
+    }
+
+    var APPEND_PARAMS = {
+        solutionField: 'description',
+        diagramField: '',
+        outputType: 'append'
+    };
+
+    test('append: existing plain-text value is merged after the ---- separator', function() {
+        var env = wd3LoadFull({ solutionField: 'description', existingFieldValue: 'Existing solution text' });
+        var result = env.module.action({
+            ticket: { key: 'PROJ-1', fields: { summary: 'Some story' } },
+            customParams: APPEND_PARAMS
+        });
+        assert.equal(result.success, true, 'action succeeds: ' + JSON.stringify(result));
+        assert.equal(env.jiraUpdates.length, 1, 'single solution field update');
+        assert.ok(env.jiraUpdates[0].value.indexOf('Existing solution text\n\n----\n\n') === 0,
+            'existing content kept as prefix before separator');
+        assert.ok(env.jiraUpdates[0].value.indexOf('Solution body') !== -1, 'fresh solution appended');
+        // no diagram field and no confluence target → diagram prepended as {code} into the solution
+        assert.ok(env.jiraUpdates[0].value.indexOf('{code}\ngraph TD\nA --> B\n{code}') !== -1,
+            'diagram prepended as jira {code} block');
+    });
+
+    test('append: ADF object in the field falls back to replace mode (no merge)', function() {
+        var env = wd3LoadFull({
+            solutionField: 'description',
+            existingFieldValue: { type: 'doc', content: [] }
+        });
+        var result = env.module.action({
+            ticket: { key: 'PROJ-1', fields: { summary: 'Some story' } },
+            customParams: APPEND_PARAMS
+        });
+        assert.equal(result.success, true, 'action succeeds: ' + JSON.stringify(result));
+        assert.ok(env.jiraUpdates[0].value.indexOf('Existing') === -1, 'ADF content not merged');
+        assert.ok(env.jiraUpdates[0].value.indexOf('{code}') === 0, 'plain replace with diagram prepend');
+    });
+
+    test('append: unreadable existing field appends without prefix', function() {
+        var env = wd3LoadFull({ solutionField: 'description', existingFieldThrows: true });
+        var result = env.module.action({
+            ticket: { key: 'PROJ-1', fields: { summary: 'Some story' } },
+            customParams: APPEND_PARAMS
+        });
+        assert.equal(result.success, true, 'action succeeds despite unreadable field: ' + JSON.stringify(result));
+        assert.ok(env.jiraUpdates[0].value.indexOf('----') === -1, 'no separator without existing content');
+        assert.ok(env.jiraUpdates[0].value.indexOf('Solution body') !== -1, 'fresh solution written');
+    });
+});
+
+suite('writeSolutionAndDiagrams — finalization and partial-failure paths (gh-978 characterization)', function() {
+
+    var JIRA_PARAMS = { solutionField: 'description', diagramField: '' };
+
+    test('autoStartDevelopment with config file triggers the configured workflow and skips the SM idle trigger', function() {
+        var env = wd3LoadFull({ autoStartResult: true });
+        var result = env.module.action({
+            ticket: { key: 'PROJ-1', fields: { summary: 's' } },
+            customParams: {
+                solutionField: 'description',
+                diagramField: '',
+                autoStartDevelopment: true,
+                autoStartDevelopmentConfigFile: 'story_development.json'
+            }
+        });
+        assert.equal(result.success, true, 'action succeeds: ' + JSON.stringify(result));
+        assert.equal(env.calls.autoStartConfigured.length, 1, 'configured workflow triggered');
+        assert.equal(env.calls.autoStartConfigured[0].configFile, 'story_development.json', 'config file forwarded');
+        assert.equal(env.calls.autoStartConfigured[0].label, 'development', 'label forwarded');
+        assert.deepEqual(env.calls.autoStartConfigured[0].stripKeys,
+            ['autoStartDevelopment', 'autoStartDevelopmentConfigFile'], 'autoStart keys stripped from follow-up params');
+        assert.equal(env.calls.smIdle, 0, 'SM idle trigger skipped when dev workflow started');
+    });
+
+    test('autoStartDevelopment trigger failure falls back to the SM idle trigger (non-fatal)', function() {
+        var env = wd3LoadFull({ autoStartThrows: true });
+        var result = env.module.action({
+            ticket: { key: 'PROJ-1', fields: { summary: 's' } },
+            customParams: {
+                solutionField: 'description',
+                diagramField: '',
+                autoStartDevelopment: true,
+                autoStartDevelopmentConfigFile: 'story_development.json'
+            }
+        });
+        assert.equal(result.success, true, 'action still succeeds: ' + JSON.stringify(result));
+        assert.equal(env.calls.smIdle, 1, 'SM idle trigger used as fallback');
+    });
+
+    test('dedicated diagram field receives the diagram as a separate update (same order: solution first, diagram second)', function() {
+        var env = wd3LoadFull({});
+        var result = env.module.action({
+            ticket: { key: 'PROJ-1', fields: { summary: 's' } },
+            customParams: { solutionField: 'description', diagramField: 'Diagrams' }
+        });
+        assert.equal(result.success, true, 'action succeeds: ' + JSON.stringify(result));
+        assert.equal(env.jiraUpdates.length, 2, 'solution + diagram updates');
+        assert.equal(env.jiraUpdates[0].field, 'description', 'solution field first');
+        assert.equal(env.jiraUpdates[1].field, 'Diagrams', 'diagram field second');
+        assert.equal(env.jiraUpdates[1].value, 'graph TD\nA --> B', 'raw diagram written to diagram field');
+        assert.ok(env.jiraUpdates[0].value.indexOf('{code}') === -1, 'solution not prepended when a diagram field exists');
+    });
+
+    test('confluence publish failure returns a failure result', function() {
+        var env = wd3LoadFull({ failConfluenceCreate: true });
+        var result = env.module.action({
+            ticket: { key: 'PROJ-1', fields: { summary: 'Some story' } },
+            customParams: {
+                solutionField: 'description',
+                diagramField: '',
+                contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42' }
+            }
+        });
+        assert.equal(result.success, false, 'action fails');
+        assert.ok(result.error.indexOf('Confluence publish failed') === 0, 'publish failure surfaced: ' + result.error);
+    });
+
+    test('confluence-only target: link write and link comment failures are non-fatal', function() {
+        var env = wd3LoadFull({ failUpdateField: 'description', failPostComment: true });
+        var result = env.module.action({
+            ticket: { key: 'PROJ-1', fields: { summary: 'Some story' } },
+            customParams: {
+                solutionField: 'description',
+                diagramField: '',
+                contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42' }
+            }
+        });
+        assert.equal(result.success, true, 'action still succeeds: ' + JSON.stringify(result));
+        assert.equal(env.jiraUpdates.length, 0, 'failed link write not recorded');
+    });
+
+    test('confluence-only target with updateTrackerField false: no tracker link write at all', function() {
+        var env = wd3LoadFull({});
+        var result = env.module.action({
+            ticket: { key: 'PROJ-1', fields: { summary: 'Some story' } },
+            customParams: {
+                solutionField: 'description',
+                diagramField: '',
+                contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42', updateTrackerField: false }
+            }
+        });
+        assert.equal(result.success, true, 'action succeeds: ' + JSON.stringify(result));
+        assert.equal(env.jiraUpdates.length, 0, 'tracker field untouched when updateTrackerField is false');
+        assert.ok(env.calls.removedLabels === undefined, 'no label activity needed for this path');
+    });
+
+    test('both target: jira field write and confluence publish both happen', function() {
+        var env = wd3LoadFull({});
+        var result = env.module.action({
+            ticket: { key: 'PROJ-1', fields: { summary: 'Some story' } },
+            customParams: {
+                solutionField: 'description',
+                diagramField: '',
+                contentOutput: { target: 'both', space: 'DOC', parentPageId: '42' }
+            }
+        });
+        assert.equal(result.success, true, 'action succeeds: ' + JSON.stringify(result));
+        assert.equal(env.jiraUpdates.length, 1, 'jira solution field written (no confluence link — target is both)');
+        assert.ok(env.jiraUpdates[0].value.indexOf('Solution body') !== -1, 'solution body in jira field');
+        assert.equal(env.calls.postComments.length, 1, 'confluence link comment posted');
+    });
+
+    test('finalize step failures (assign/move/labels) never fail the action', function() {
+        var env = wd3LoadFull({ failAssign: true, failMove: true, failAddLabel: true, failRemoveLabel: true });
+        var result = env.module.action({
+            ticket: { key: 'PROJ-1', fields: { summary: 's' } },
+            initiator: 'user@x',
+            metadata: { contextId: 'story_solution' },
+            customParams: {
+                solutionField: 'description',
+                diagramField: '',
+                removeLabel: 'sm_trigger_label'
+            }
+        });
+        assert.equal(result.success, true, 'action still succeeds: ' + JSON.stringify(result));
+        assert.equal(env.jiraUpdates.length, 1, 'solution still written');
+        assert.equal(env.calls.tokenUsage, 1, 'token usage step still reached');
+    });
+
+    test('token usage comment failure is non-fatal', function() {
+        var env = wd3LoadFull({ tokenUsageThrows: true });
+        var result = env.module.action({
+            ticket: { key: 'PROJ-1', fields: { summary: 's' } },
+            customParams: JIRA_PARAMS
+        });
+        assert.equal(result.success, true, 'action still succeeds: ' + JSON.stringify(result));
     });
 });
