@@ -1156,3 +1156,1317 @@ suite('postPRReviewComments — gh-807 verdict persistence (postVerdictRecord)',
         assert.equal(mod.__testHarness.addedComments.length, 0, 'nothing recorded — and nothing thrown');
     });
 });
+
+// ═══ gh-926: action() characterization + extracted-pipeline helpers ══════════
+// action() is being flattened into a tested pipeline (CRAP 2010 → < 30).
+// These suites pin the CURRENT behaviour per verdict branch (APPROVE /
+// REQUEST_CHANGES / overridden approve, formal review, suggestions-only,
+// dispatch-race guard, markers) and the exact side-effect ORDER, so the
+// extraction can be verified as behaviour-preserving.
+
+/**
+ * Instrumented action() harness: every observable touchpoint (scm calls,
+ * tracker tools, autoStart triggers, github/bitrise bridges, resume writes,
+ * token usage) appends to one ordered op log, so tests can pin the exact
+ * side-effect sequence — the gh-926 acceptance is "same effects, same order".
+ */
+function loadReviewActionHarness(opts) {
+    opts = opts || {};
+    var ops = [];
+    function rec(op, detail) { ops.push(Object.assign({ op: op }, detail || {})); }
+
+    var scm = Object.assign(
+        {},
+        gh926ScmReadMocks(opts),
+        gh926ScmWriteMocks(rec),
+        gh926ScmThreadMocks(opts, rec)
+    );
+    var autoStartMock = gh926AutoStartMock(opts, rec);
+    var outputFilesMock = gh926OutputFilesMock(opts);
+
+    var mocks = Object.assign({}, gh926IoMocks(opts, rec), {
+        jira_add_label: gh926JiraMock(rec, 'jira.addLabel', ['key', 'label']),
+        jira_remove_label: gh926JiraMock(rec, 'jira.removeLabel', ['key', 'label']),
+        jira_move_to_status: gh926JiraMock(rec, 'jira.moveToStatus', ['key', 'statusName']),
+        jira_post_comment: gh926JiraMock(rec, 'jira.postComment', ['key', 'comment']),
+        jira_assign_ticket_to: gh926JiraMock(rec, 'jira.assign', ['key', 'accountId'])
+    });
+
+    var merged = Object.assign({}, mocks, opts.mocks || {});
+
+    var mod = gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged, rec);
+
+    return {
+        mod: mod,
+        ops: ops,
+        opNames: function() { return ops.map(function(o) { return o.op; }); },
+        opsOf: function(op) { return ops.filter(function(o) { return o.op === op; }); }
+    };
+}
+
+// Mock builders below are named function declarations (not nested closures) on
+// purpose: the CRAP gate counts function expressions toward their enclosing
+// function, so each builder stays small enough to keep CRAP <= 8 regardless of
+// the coverage the harness run happens to collect.
+
+function gh926ScmReadMocks(opts) {
+    return {
+        listPrs: function() { return opts.openPrs || []; },
+        getRemoteRepoInfo: function() { return opts.repoInfo !== undefined ? opts.repoInfo : null; },
+        fetchDiscussions: function() { return { rawThreads: { threads: opts.threads || [] } }; },
+        listReviews: function() { return opts.existingReviews || []; }
+    };
+}
+
+function gh926ScmWriteMocks(rec) {
+    return {
+        addLabel: function(number, label) { rec('scm.addLabel', { number: number, label: label }); },
+        removeLabel: function(number, label) { rec('scm.removeLabel', { number: number, label: label }); },
+        addComment: function(number, body) { rec('scm.addComment', { number: number, body: body }); },
+        addInlineComment: function(number, path, line, text, startLine, side) {
+            rec('scm.addInlineComment', { number: number, path: path, line: line, text: text, startLine: startLine, side: side });
+        },
+        submitReview: function(prId, event, body) { rec('scm.submitReview', { prId: prId, event: event, body: body }); },
+        dismissReview: function(prId, reviewId, message) { rec('scm.dismissReview', { prId: prId, reviewId: reviewId, message: message }); }
+    };
+}
+
+function gh926ScmThreadMocks(opts, rec) {
+    return {
+        resolveThread: function(number, o) { rec('scm.resolveThread', { number: number, threadId: o && o.threadId }); },
+        getPrDiff: function() {
+            if (opts.diffError) throw new Error(opts.diffError);
+            return opts.diff !== undefined ? opts.diff : '';
+        }
+    };
+}
+
+function gh926AutoStartMock(opts, rec) {
+    return {
+        triggerConfiguredWorkflowForTicket: function(args) {
+            rec('autoStart.triggerConfiguredWorkflowForTicket', gh926TriggerDetail(args));
+            return gh926TriggerResult(opts);
+        },
+        triggerSmIfIdle: function() { rec('autoStart.triggerSmIfIdle', {}); }
+    };
+}
+
+function gh926TriggerDetail(args) {
+    return {
+        configFile: args && args.configFile,
+        label: args && args.label,
+        workflowFile: args && args.workflowFile,
+        stripKeys: args && args.stripKeys
+    };
+}
+
+function gh926TriggerResult(opts) {
+    return opts.reworkTriggerStarted !== undefined ? opts.reworkTriggerStarted : true;
+}
+
+function gh926OutputFilesMock(opts) {
+    return {
+        readOutputFileDetailed: function() {
+            if (opts.reviewData === null || opts.reviewData === undefined) return null;
+            return { content: JSON.stringify(opts.reviewData), path: 'outputs/pr_review.json' };
+        },
+        readOutputFile: function(p) {
+            return (opts.outputFileContents && opts.outputFileContents[p]) || null;
+        }
+    };
+}
+
+function argPathOf(args) {
+    return args && (args.path || args);
+}
+
+function isResumeMarkerPath(p) {
+    return p === 'outputs/.pr-review-missing-output-resume-attempted';
+}
+
+function gh926FileReadMock(opts) {
+    return function(args) {
+        return gh926FileReadFor(opts, argPathOf(args));
+    };
+}
+
+function gh926FileReadFor(opts, p) {
+    if (typeof p === 'string' && p.indexOf('pr_info.md') !== -1) return opts.prInfoContent || null;
+    if (isResumeMarkerPath(p)) return opts.resumeMarker || null;
+    return null;
+}
+
+function gh926GithubPrResult(opts) {
+    if (opts.githubPrError) throw new Error(opts.githubPrError);
+    return JSON.stringify(opts.githubPr || { number: 42, head: { sha: 'sha0000' }, body: opts.githubPrBody || '' });
+}
+
+function gh926IoMocks(opts, rec) {
+    return {
+        file_read: gh926FileReadMock(opts),
+        file_write: function(args) { rec('file_write', { path: argPathOf(args) }); },
+        cli_execute_command: gh926CliMock(opts, rec),
+        github_get_pr: function(args) {
+            rec('github_get_pr', { workspace: args && args.workspace, repository: args && args.repository, pullRequestId: args && args.pullRequestId });
+            return gh926GithubPrResult(opts);
+        },
+        bitrise_trigger_build: function(args) { rec('bitrise_trigger_build', args); return '{}'; }
+    };
+}
+
+function gh926CliMock(opts, rec) {
+    return function(args) {
+        rec('cli_execute_command', { command: args && args.command });
+        if (opts.resumeCliError) throw new Error(opts.resumeCliError);
+        return opts.resumeCliOutput || 'resume ok';
+    };
+}
+
+function gh926JiraMock(rec, op, fields) {
+    return function(args) {
+        var detail = {};
+        for (var i = 0; i < fields.length; i++) {
+            detail[fields[i]] = args && args[fields[i]];
+        }
+        rec(op, detail);
+    };
+}
+
+function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged, rec) {
+    return loadModule(
+        'js/postPRReviewComments.js',
+        makeRequire({
+            './common/machineAuthor.js': machineAuthorModule,
+            './config.js': configModule,
+            './common/scm.js': { createScm: function() { return scm; } },
+            './common/autoStart.js': autoStartMock,
+            './configLoader.js': {
+                loadProjectConfig: function() { return opts.config || {}; },
+                resolveInstructions: function() { return { jobParamPatch: opts.jobParamPatch || {} }; }
+            },
+            './common/outputFiles.js': outputFilesMock,
+            './common/githubHelpers.js': githubHelpersStub,
+            './common/trackers.js': makeTrackersModule(merged),
+            './common/tokenUsageComment.js': {
+                postTokenUsageComments: function(key, o) { rec('tokenUsage', { key: key, initiator: o && o.initiator }); }
+            },
+            './common/commentMarkup.js': commentMarkupModule,
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+        }),
+        merged
+    );
+}
+
+var GH926_PR_INFO_42 = '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n';
+
+var GH926_CLEAN_APPROVE = {
+    recommendation: 'APPROVE',
+    issueCounts: { blocking: 0, important: 0, suggestions: 0 },
+    inlineComments: []
+};
+
+function gh926ActionParams(opts) {
+    opts = opts || {};
+    var params = {
+        ticket: { key: 'PROJ-1', fields: { labels: opts.ticketLabels || [] } },
+        response: 'Jira review content',
+        inputFolderPath: 'input/PROJ-1'
+    };
+    if (opts.customParams) params.customParams = opts.customParams;
+    if (opts.metadata) params.metadata = opts.metadata;
+    if (opts.initiator) params.initiator = opts.initiator;
+    return params;
+}
+
+var GH926_REPO = { owner: 'IstiN', repo: 'dmtools-agents' };
+
+suite('postPRReviewComments — gh-926 action characterization', function() {
+
+    test('clean APPROVE: exact side-effect order, pr_approved on PR + ticket, no In Rework', function() {
+        var h = loadReviewActionHarness({
+            reviewData: GH926_CLEAN_APPROVE,
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.success, true);
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge');
+        assert.equal(result.recommendation, 'APPROVE');
+        assert.equal(result.githubCommentsPosted, true);
+
+        assert.deepEqual(h.opNames(), [
+            'github_get_pr',             // verdict record head probe
+            'scm.addComment',            // gh-807 machine verdict record
+            'scm.addLabel',              // pr_approved on the PR
+            'jira.postComment',          // ticket review summary
+            'jira.addLabel',             // pr_approved on the ticket
+            'jira.addLabel',             // ai_pr_reviewed on the ticket
+            'scm.addLabel',              // ai_pr_reviewed on the PR (#750)
+            'jira.removeLabel',          // WIP label
+            'autoStart.triggerSmIfIdle', // approved SM merge fallback
+            'tokenUsage'
+        ], 'side-effect order drifted');
+        assert.equal(h.opsOf('scm.addLabel')[0].number, 42);
+        assert.equal(h.opsOf('scm.addLabel')[0].label, 'pr_approved');
+        assert.equal(h.opsOf('scm.addLabel')[1].number, 42);
+        assert.equal(h.opsOf('scm.addLabel')[1].label, 'ai_pr_reviewed');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"APPROVE"');
+        assert.equal(h.opsOf('jira.moveToStatus').length, 0, 'no In Rework move on approval');
+        assert.deepEqual(
+            h.opsOf('jira.addLabel').map(function(o) { return o.label; }),
+            ['pr_approved', 'ai_pr_reviewed'],
+            'no rework markers on approval'
+        );
+    });
+
+    test('APPROVE with suggestions (no knobs) is overridden: record says REQUEST_CHANGES, In Rework + rework labels + SM', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 2 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        var result = h.mod.action(gh926ActionParams({}));
+
+        assert.equal(result.success, true);
+        assert.equal(result.message, 'Changes requested, ticket returned to In Development');
+        assert.equal(result.recommendation, 'APPROVE', 'the raw verdict is preserved in the result');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"REQUEST_CHANGES"',
+            'the record stamps what the leg DID, not the raw token');
+        assert.deepEqual(h.opNames(), [
+            'github_get_pr',
+            'scm.addComment',
+            'jira.postComment',
+            'jira.moveToStatus',
+            'jira.addLabel',
+            'scm.addLabel',
+            'jira.removeLabel',
+            'jira.addLabel',
+            'jira.addLabel',
+            'autoStart.triggerSmIfIdle',
+            'tokenUsage'
+        ], 'side-effect order drifted');
+        assert.equal(h.opsOf('jira.moveToStatus')[0].statusName, 'In Rework');
+        assert.deepEqual(
+            h.opsOf('jira.addLabel').map(function(o) { return o.label; }),
+            ['ai_pr_reviewed', 'sm_story_rework_triggered', 'agent:rework']
+        );
+        assert.equal(h.opsOf('scm.addLabel').filter(function(o) { return o.label === 'pr_approved'; }).length, 0,
+            'an overridden approve must NOT arm the merge pipeline');
+    });
+
+    test('allowApproveWithSuggestions=true keeps APPROVE effective', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 1, suggestions: 2 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        var result = h.mod.action(gh926ActionParams({ customParams: { allowApproveWithSuggestions: true } }));
+
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge');
+        assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"APPROVE"');
+        assert.equal(h.opsOf('jira.moveToStatus').length, 0);
+        assert.ok(h.opsOf('scm.addLabel').some(function(o) { return o.label === 'pr_approved'; }));
+    });
+
+    test('dispatch-race guard: threads >= maxReviewThreadsBeforeForceApprove force-approves despite suggestions', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 3 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42,
+            threads: [{ id: 1 }, { id: 2 }]
+        });
+
+        var result = h.mod.action(gh926ActionParams({ customParams: { maxReviewThreadsBeforeForceApprove: 2 } }));
+
+        assert.equal(result.message, 'PR approved — awaiting reviewer merge', 'forced approve at the limit');
+        assert.ok(h.opsOf('scm.addLabel').some(function(o) { return o.label === 'pr_approved'; }));
+        assert.equal(h.opsOf('jira.moveToStatus').length, 0);
+        assert.equal(h.opsOf('github_get_pr').length, 1, 'verdict record still probed the head');
+    });
+
+    test('dispatch-race guard: threads under the limit still override to REQUEST_CHANGES', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: { blocking: 0, important: 0, suggestions: 3 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42,
+            threads: [{ id: 1 }]
+        });
+
+        var result = h.mod.action(gh926ActionParams({ customParams: { maxReviewThreadsBeforeForceApprove: 2 } }));
+
+        assert.equal(result.message, 'Changes requested, ticket returned to In Development');
+        assert.equal(h.opsOf('jira.moveToStatus').length, 1);
+    });
+
+    test('autoStartRework opt-in triggers the configured workflow and skips the SM rework fallback', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'REQUEST_CHANGES',
+                issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        h.mod.action(gh926ActionParams({
+            customParams: { autoStartRework: true, autoStartReworkConfigFile: 'agents/pr_rework.json' }
+        }));
+
+        var triggers = h.opsOf('autoStart.triggerConfiguredWorkflowForTicket');
+        assert.equal(triggers.length, 1);
+        assert.equal(triggers[0].configFile, 'agents/pr_rework.json');
+        assert.equal(triggers[0].label, 'pr_rework');
+        assert.deepEqual(triggers[0].stripKeys, ['removeLabel', 'autoStartRework', 'autoStartReworkConfigFile']);
+        assert.deepEqual(
+            h.opsOf('jira.addLabel').map(function(o) { return o.label; }),
+            ['ai_pr_reviewed'],
+            'no sm_story_rework_triggered / agent:rework when the configured workflow started'
+        );
+        assert.equal(h.opsOf('autoStart.triggerSmIfIdle').length, 0, 'SM not triggered when the workflow started');
+    });
+
+    test('autoStartRework trigger that does not start falls back to SM rework', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'REQUEST_CHANGES',
+                issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42,
+            reworkTriggerStarted: false
+        });
+
+        h.mod.action(gh926ActionParams({
+            customParams: { autoStartRework: true, autoStartReworkConfigFile: 'agents/pr_rework.json' }
+        }));
+
+        assert.deepEqual(
+            h.opsOf('jira.addLabel').map(function(o) { return o.label; }),
+            ['ai_pr_reviewed', 'sm_story_rework_triggered', 'agent:rework']
+        );
+        assert.equal(h.opsOf('autoStart.triggerSmIfIdle').length, 1);
+    });
+
+    test('autoStartRework is skipped when the ticket already has pr_approved (merge in progress)', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'REQUEST_CHANGES',
+                issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                inlineComments: []
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        h.mod.action(gh926ActionParams({
+            ticketLabels: ['pr_approved'],
+            customParams: { autoStartRework: true, autoStartReworkConfigFile: 'agents/pr_rework.json' }
+        }));
+
+        assert.equal(h.opsOf('autoStart.triggerConfiguredWorkflowForTicket').length, 0, 'workflow trigger skipped by label');
+        assert.deepEqual(
+            h.opsOf('jira.addLabel').map(function(o) { return o.label; }),
+            ['ai_pr_reviewed', 'sm_story_rework_triggered', 'agent:rework'],
+            'falls back to the SM rework path'
+        );
+    });
+
+    test('WIP label removal is contextId-prefixed when metadata carries contextId', function() {
+        var h = loadReviewActionHarness({
+            reviewData: GH926_CLEAN_APPROVE,
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        h.mod.action(gh926ActionParams({ metadata: { contextId: 'custom_review' } }));
+
+        assert.ok(
+            h.opsOf('jira.removeLabel').some(function(o) { return o.label === 'custom_review_wip'; }),
+            JSON.stringify(h.opsOf('jira.removeLabel'))
+        );
+    });
+
+    test('SM idempotency label removal and initiator reassignment', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'REQUEST_CHANGES',
+                issueCounts: { blocking: 0, important: 0, suggestions: 1 },
+                inlineComments: []
+            },
+            repoInfo: null
+        });
+
+        var result = h.mod.action(gh926ActionParams({
+            customParams: { removeLabel: 'sm_story_review_triggered' },
+            initiator: 'alice'
+        }));
+
+        assert.equal(result.success, true);
+        assert.ok(h.opsOf('jira.removeLabel').some(function(o) { return o.label === 'sm_story_review_triggered'; }));
+        assert.ok(h.opsOf('jira.assign').some(function(o) { return o.accountId === 'alice'; }));
+        assert.equal(h.opsOf('jira.moveToStatus').length, 0, 'no PR found → no In Rework move');
+        assert.ok(
+            h.opsOf('jira.postComment').some(function(o) { return o.comment.indexOf('PR Review Could Not Be Attached') !== -1; }),
+            'no-PR outcome is surfaced on the ticket'
+        );
+    });
+
+    test('onApproved.testCasesGenerator triggers the workflow and stamps ai_tests_generated', function() {
+        var h = loadReviewActionHarness({
+            reviewData: GH926_CLEAN_APPROVE,
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        h.mod.action(gh926ActionParams({
+            customParams: {
+                onApproved: { testCasesGenerator: { configFile: 'agents/test_cases_generator.json', workflow: 'ai-teammate.yml' } },
+                aiRepository: { owner: 'acme', repo: 'agents' }
+            }
+        }));
+
+        var triggers = h.opsOf('autoStart.triggerConfiguredWorkflowForTicket');
+        assert.equal(triggers.length, 1);
+        assert.equal(triggers[0].configFile, 'agents/test_cases_generator.json');
+        assert.equal(triggers[0].workflowFile, 'ai-teammate.yml');
+        assert.ok(h.opsOf('jira.addLabel').some(function(o) { return o.label === 'ai_tests_generated'; }));
+        assert.equal(h.opsOf('autoStart.triggerSmIfIdle').length, 1, 'approved SM fallback still runs');
+        var order = h.opNames();
+        assert.ok(
+            order.indexOf('autoStart.triggerConfiguredWorkflowForTicket') < order.indexOf('autoStart.triggerSmIfIdle'),
+            'TestCasesGenerator trigger precedes the SM fallback'
+        );
+    });
+
+    test('TestCasesGenerator is skipped when ai_tests_generated is already on the ticket', function() {
+        var h = loadReviewActionHarness({
+            reviewData: GH926_CLEAN_APPROVE,
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        h.mod.action(gh926ActionParams({
+            ticketLabels: ['ai_tests_generated'],
+            customParams: {
+                onApproved: { testCasesGenerator: { configFile: 'agents/test_cases_generator.json' } },
+                aiRepository: { owner: 'acme', repo: 'agents' }
+            }
+        }));
+
+        assert.equal(h.opsOf('autoStart.triggerConfiguredWorkflowForTicket').length, 0);
+        assert.equal(h.opsOf('jira.addLabel').filter(function(o) { return o.label === 'ai_tests_generated'; }).length, 0,
+            'no second ai_tests_generated stamp');
+    });
+
+    test('TestCasesGenerator without aiRepository/repo info is skipped', function() {
+        var h = loadReviewActionHarness({
+            reviewData: GH926_CLEAN_APPROVE,
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42,
+            config: {}
+        });
+
+        h.mod.action(gh926ActionParams({
+            customParams: { onApproved: { testCasesGenerator: { configFile: 'agents/test_cases_generator.json' } } }
+        }));
+
+        assert.equal(h.opsOf('autoStart.triggerConfiguredWorkflowForTicket').length, 0);
+        assert.equal(h.opsOf('jira.addLabel').filter(function(o) { return o.label === 'ai_tests_generated'; }).length, 0);
+        assert.equal(h.opsOf('autoStart.triggerSmIfIdle').length, 1, 'approved SM fallback still runs');
+    });
+
+    test('onApproved.bitriseBuild passes the PR branch and TICKET_KEY/PR_URL env vars', function() {
+        var h = loadReviewActionHarness({
+            reviewData: GH926_CLEAN_APPROVE,
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42
+        });
+
+        h.mod.action(gh926ActionParams({
+            customParams: {
+                onApproved: {
+                    bitriseBuild: {
+                        appSlug: 'app-slug',
+                        workflowId: 'wf-id',
+                        branch: 'develop',
+                        envVars: [{ mapped_to: 'X', value: '1', is_expand: true }]
+                    }
+                }
+            }
+        }));
+
+        var builds = h.opsOf('bitrise_trigger_build');
+        assert.equal(builds.length, 1);
+        assert.equal(builds[0].appSlug, 'app-slug');
+        assert.equal(builds[0].workflowId, 'wf-id');
+        assert.equal(builds[0].branch, 'bug/PROJ-1', 'the PR branch from pr_info wins over the configured default');
+        var envVars = JSON.parse(builds[0].envVars);
+        assert.equal(envVars.length, 3, 'configured envVars + TICKET_KEY + PR_URL');
+        assert.equal(envVars[0].mapped_to, 'X');
+        assert.equal(envVars[1].mapped_to, 'TICKET_KEY');
+        assert.equal(envVars[1].value, 'PROJ-1');
+        assert.equal(envVars[2].mapped_to, 'PR_URL');
+        assert.equal(envVars[2].value, 'https://github.com/IstiN/dmtools-agents/pull/42');
+    });
+
+    test('missing pr_review.json — one resume attempt, then missing-review-output handling', function() {
+        var h = loadReviewActionHarness({
+            reviewData: null,
+            repoInfo: GH926_REPO
+        });
+
+        var result = h.mod.action(gh926ActionParams({ customParams: { removeLabel: 'sm_story_review_triggered' } }));
+
+        assert.deepEqual(result, {
+            success: true,
+            action: 'missing_review_outputs',
+            error: 'No review data found in pr_review.json'
+        });
+        var cli = h.opsOf('cli_execute_command');
+        assert.equal(cli.length, 1, 'exactly one resume run');
+        assert.ok(cli[0].command.indexOf('run-agent.sh --continue outputs/.pr-review-resume-prompt.md') !== -1, cli[0].command);
+        assert.deepEqual(
+            h.opsOf('file_write').map(function(o) { return o.path; }),
+            ['outputs/.pr-review-missing-output-resume-attempted', 'outputs/.pr-review-resume-prompt.md']
+        );
+        assert.ok(h.opsOf('jira.postComment').some(function(o) { return o.comment.indexOf('PR Review Output Missing') !== -1; }));
+        assert.ok(h.opsOf('jira.removeLabel').some(function(o) { return o.label === 'sm_story_review_triggered'; }));
+        assert.equal(h.opsOf('autoStart.triggerSmIfIdle').length, 1, 'SM triggered after missing outputs');
+    });
+
+    test('the resume marker prevents a second resume attempt', function() {
+        var h = loadReviewActionHarness({
+            reviewData: null,
+            repoInfo: null,
+            resumeMarker: '2026-10-16T00:00:00.000Z\n'
+        });
+
+        h.mod.action(gh926ActionParams({}));
+
+        assert.equal(h.opsOf('cli_execute_command').length, 0, 'marker present → no resume run');
+        assert.equal(h.opsOf('file_write').length, 0, 'marker present → no marker/prompt rewrite');
+        assert.equal(h.opsOf('autoStart.triggerSmIfIdle').length, 1, 'missing-output handling still triggers SM');
+    });
+
+    test('PR-anchored APPROVE ends with the pr-anchored result shape; ticket side skipped', function() {
+        var h = loadReviewActionHarness({
+            reviewData: GH926_CLEAN_APPROVE,
+            repoInfo: GH926_REPO,
+            prInfoContent: '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: feat/x\n- **Author**: some-human\n',
+            config: {}
+        });
+
+        var result = h.mod.action({
+            ticket: { key: 'pr-42', fields: { labels: [] } },
+            response: 'review content',
+            inputFolderPath: 'input/pr-42'
+        });
+
+        assert.deepEqual(result, { success: true, prNumber: 42, recommendation: 'APPROVE' });
+        assert.deepEqual(
+            h.opsOf('scm.addLabel').map(function(o) { return o.label; }),
+            ['pr_approved', 'ai_pr_reviewed']
+        );
+        assert.ok(h.opsOf('scm.removeLabel').some(function(o) { return o.number === 42 && o.label === 'agent:review'; }),
+            'the on-demand review trigger is consumed');
+        assert.equal(h.opsOf('jira.postComment').length, 0, 'PR-anchored runs skip the ticket comment');
+        assert.equal(h.opsOf('github_get_pr').length, 1, 'only the verdict-record head probe runs');
+        assert.equal(h.opsOf('jira.addLabel').filter(function(o) { return o.label === 'agent:rework'; }).length, 0,
+            'external author → no linked-issue rework re-arm');
+    });
+
+    test('inline comments + resolved threads are posted on the PR before the verdict record', function() {
+        var h = loadReviewActionHarness({
+            reviewData: {
+                recommendation: 'APPROVE',
+                issueCounts: GH926_CLEAN_APPROVE.issueCounts,
+                generalComment: 'outputs/pr_review_general.md',
+                inlineComments: [
+                    { path: 'src/a.js', line: 3, body: 'inline text one' },
+                    { path: 'src/b.js', line: 2, body: 'inline text two' }
+                ],
+                resolvedThreadIds: [777, 888]
+            },
+            repoInfo: GH926_REPO,
+            prInfoContent: GH926_PR_INFO_42,
+            outputFileContents: { 'outputs/pr_review_general.md': '## Automated Code Review — APPROVE\n\nAll good.' },
+            diff: 'diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n@@ -1,2 +1,3 @@\n x\n+changed\n y\n' +
+                'diff --git a/src/b.js b/src/b.js\n--- a/src/b.js\n+++ b/src/b.js\n@@ -1,2 +1,3 @@\n x\n+added here\n y\n'
+        });
+
+        h.mod.action(gh926ActionParams({}));
+
+        var order = h.opNames();
+        assert.ok(order.indexOf('scm.addInlineComment') < order.indexOf('scm.resolveThread'), 'inline comments precede thread resolves');
+        assert.ok(order.indexOf('scm.resolveThread') < order.lastIndexOf('scm.addComment'), 'thread resolves precede the verdict record');
+        assert.equal(h.opsOf('scm.addInlineComment').length, 2, 'both inline comments posted');
+        assert.deepEqual(
+            h.opsOf('scm.resolveThread').map(function(o) { return o.threadId; }),
+            [777, 888]
+        );
+        assert.equal(h.opsOf('scm.addComment').length, 2, 'general comment + verdict record');
+        assert.contains(h.opsOf('scm.addComment')[0].body, 'Automated Code Review', 'general comment resolved from the file');
+    });
+});
+
+suite('postPRReviewComments — gh-926 inline-comment fallbacks', function() {
+
+    function inlineHarness(opts) {
+        var calls = { inline: [], comments: [] };
+        var scm = {
+            getPrDiff: function() {
+                if (opts.diffError) throw new Error(opts.diffError);
+                return opts.diff !== undefined ? opts.diff : '';
+            },
+            addInlineComment: function(prId, path, line, text, startLine, side) {
+                calls.inline.push({ prId: prId, path: path, line: line, text: text, startLine: startLine, side: side });
+            },
+            addComment: function(prId, body) { calls.comments.push({ prId: prId, body: body }); }
+        };
+        return { scm: scm, calls: calls };
+    }
+
+    test('getPrDiff failure falls back to a general PR comment and reports success', function() {
+        var h = inlineHarness({ diffError: 'api down' });
+        var mod = loadPostPRReviewComments();
+
+        var ok = mod.postInlineComment(h.scm, 9, { path: 'src/a.js', line: 3, body: 'note' }, 'PROJ-1', null);
+
+        assert.equal(ok, true, 'nothing is lost — the comment lands as a general PR comment');
+        assert.equal(h.calls.inline.length, 0);
+        assert.equal(h.calls.comments.length, 1);
+        assert.contains(h.calls.comments[0].body, '📍 **`src/a.js:3`**');
+    });
+
+    test('line present only on the opposite side falls back to a general PR comment', function() {
+        // old 1..3, new 1..1: line 2 exists only on the LEFT side of this diff.
+        var diff = 'diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n@@ -1,3 +1,1 @@\n-a1\n-a2\n a3\n';
+        var h = inlineHarness({ diff: diff });
+        var mod = loadPostPRReviewComments();
+
+        var ok = mod.postInlineComment(h.scm, 9, { path: 'src/a.js', line: 2, body: 'note', side: 'RIGHT' }, 'PROJ-1', null);
+
+        assert.equal(ok, true);
+        assert.equal(h.calls.inline.length, 0, 'line 2 only exists on the LEFT — RIGHT request falls back');
+        assert.equal(h.calls.comments.length, 1);
+    });
+
+    test('comment on a deleted file anchors on the LEFT side', function() {
+        var diff = 'diff --git a/old.js b/old.js\ndeleted file mode 100644\n--- a/old.js\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-gone\n';
+        var h = inlineHarness({ diff: diff });
+        var mod = loadPostPRReviewComments();
+
+        var ok = mod.postInlineComment(h.scm, 9, { path: 'old.js', line: 1, body: 'note' }, 'PROJ-1', null);
+
+        assert.equal(ok, true);
+        assert.equal(h.calls.inline.length, 1);
+        assert.equal(h.calls.inline[0].side, 'LEFT');
+    });
+
+    test('no comment content → false and no SCM calls', function() {
+        var h = inlineHarness({ diff: '' });
+        var mod = loadPostPRReviewComments();
+
+        var ok = mod.postInlineComment(h.scm, 9, { path: 'src/a.js', line: 3 }, 'PROJ-1', null);
+
+        assert.equal(ok, false);
+        assert.equal(h.calls.inline.length, 0);
+        assert.equal(h.calls.comments.length, 0);
+    });
+
+    test('no file path → false and no SCM calls', function() {
+        var h = inlineHarness({ diff: '' });
+        var mod = loadPostPRReviewComments();
+
+        var ok = mod.postInlineComment(h.scm, 9, { line: 3, body: 'note' }, 'PROJ-1', null);
+
+        assert.equal(ok, false);
+        assert.equal(h.calls.inline.length, 0);
+    });
+
+    test('happy path: startLine and side are passed through to addInlineComment', function() {
+        var diff = 'diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n@@ -2,3 +2,4 @@\n ctx\n+added\n ctx\n';
+        var h = inlineHarness({ diff: diff });
+        var mod = loadPostPRReviewComments();
+
+        var ok = mod.postInlineComment(h.scm, 9, {
+            path: 'src/a.js', line: 3, startLine: 2, body: 'note', side: 'RIGHT'
+        }, 'PROJ-1', null);
+
+        assert.equal(ok, true);
+        assert.deepEqual(h.calls.inline, [{
+            prId: 9, path: 'src/a.js', line: 3, text: 'note', startLine: 2, side: 'RIGHT'
+        }]);
+    });
+});
+
+suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', function() {
+
+    test('parseDiffLineInfo: no-newline markers, non-numeric lines, deleted files and metadata lines', function() {
+        var mod = loadPostPRReviewComments();
+
+        // Missing/blank inputs are treated as "not verifiable — present"
+        assert.deepEqual(mod.parseDiffLineInfo(null, 'a.js', 3), { present: true, side: null });
+        assert.deepEqual(mod.parseDiffLineInfo('', 'a.js', 3), { present: true, side: null });
+        assert.deepEqual(mod.parseDiffLineInfo('x', null, 3), { present: true, side: null });
+        assert.deepEqual(mod.parseDiffLineInfo('x', 'a.js', null), { present: true, side: null });
+        assert.deepEqual(mod.parseDiffLineInfo('x', 'a.js', 'not-a-number'), { present: true, side: null });
+
+        // '\ No newline at end of file' is skipped, not counted as a line
+        var nnl = 'diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1,2 +1,2 @@\n-old tail\n+new tail\n\\ No newline at end of file\n';
+        assert.deepEqual(mod.parseDiffLineInfo(nnl, 'a.js', 1), { present: true, side: 'RIGHT' });
+        assert.deepEqual(mod.parseDiffLineInfo(nnl, 'a.js', 2), { present: false, side: null });
+
+        // File metadata lines between the +++ header and the first hunk are
+        // skipped without crashing (oldLine/newLine still null).
+        var withMeta = 'diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\nindex aaa..bbb 100644\n@@ -1 +1 @@\n-x\n+y\n';
+        assert.deepEqual(mod.parseDiffLineInfo(withMeta, 'a.js', 1), { present: true, side: 'RIGHT' });
+
+        // Deleted file (+++ /dev/null): lines resolve on the old path, LEFT side
+        var deleted = 'diff --git a/gone.js b/gone.js\n--- a/gone.js\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n';
+        assert.deepEqual(mod.parseDiffLineInfo(deleted, 'gone.js', 1), { present: true, side: 'LEFT' });
+
+        // Context lines match on either side; RIGHT wins for shared numbers
+        var ctx = 'diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1,2 +1,2 @@\n shared\n+added\n';
+        assert.deepEqual(mod.parseDiffLineInfo(ctx, 'a.js', 1), { present: true, side: 'RIGHT' });
+
+        // A line outside every hunk is absent
+        assert.deepEqual(mod.parseDiffLineInfo(ctx, 'a.js', 99), { present: false, side: null });
+
+        // Rename-style header (--- a/old +++ b/new): the new path anchors lines
+        var renamed = 'diff --git a/old.js b/new.js\n--- a/old.js\n+++ b/new.js\n@@ -1 +1 @@\n-x\n+y\n';
+        assert.deepEqual(mod.parseDiffLineInfo(renamed, 'new.js', 1), { present: true, side: 'RIGHT' });
+        assert.deepEqual(mod.parseDiffLineInfo(renamed, 'old.js', 1), { present: false, side: null });
+    });
+
+    test('deriveProjectKey: projectKey wins; configPath basename; config.js → empty', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.deriveProjectKey(undefined), '');
+        assert.equal(mod.deriveProjectKey({}), '');
+        assert.equal(mod.deriveProjectKey({ projectKey: 'pk' }), 'pk');
+        assert.equal(mod.deriveProjectKey({ projectKey: 'pk', configPath: '.dmtools/configs/other.js' }), 'pk');
+        assert.equal(mod.deriveProjectKey({ configPath: '.dmtools/configs/myproject.js' }), 'myproject');
+        assert.equal(mod.deriveProjectKey({ configPath: '.dmtools/config.js' }), '');
+        assert.equal(mod.deriveProjectKey({ configPath: 'config.js' }), '');
+        assert.equal(mod.deriveProjectKey({ configPath: '' }), '');
+    });
+
+    test('isFileDeletedInDiff: deleted file mode detected per file segment', function() {
+        var mod = loadPostPRReviewComments();
+        var diff = 'diff --git a/kept.js b/kept.js\n--- a/kept.js\n+++ b/kept.js\n@@ -1,1 +1,1 @@\n-a\n+b\n' +
+            'diff --git a/gone.js b/gone.js\ndeleted file mode 100644\n--- a/gone.js\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-gone\n';
+
+        assert.equal(mod.isFileDeletedInDiff(diff, 'gone.js'), true);
+        assert.equal(mod.isFileDeletedInDiff(diff, 'kept.js'), false);
+        assert.equal(mod.isFileDeletedInDiff(diff, 'missing.js'), false);
+        assert.equal(mod.isFileDeletedInDiff(null, 'gone.js'), false);
+        assert.equal(mod.isFileDeletedInDiff(diff, ''), false);
+    });
+
+    test('submoduleHasNewPointer: only a new (+) pointer counts as updated', function() {
+        var mod = loadPostPRReviewComments();
+        var updated = 'diff --git a/sub b/sub\n--- a/sub\n+++ b/sub\n-Subproject commit aaa\n+Subproject commit bbb\n';
+        var removedOnly = 'diff --git a/sub b/sub\n--- a/sub\n+++ b/sub\n-Subproject commit aaa\n';
+
+        assert.equal(mod.submoduleHasNewPointer(updated, 'sub'), true);
+        assert.equal(mod.submoduleHasNewPointer(removedOnly, 'sub'), false);
+        assert.equal(mod.submoduleHasNewPointer(updated, 'other'), false);
+        assert.equal(mod.submoduleHasNewPointer(null, 'sub'), false);
+    });
+
+    test('resolveApprovedThreads: resolves in order, survives a failing thread, no-ops on empty', function() {
+        var resolved = [];
+        var scm = {
+            resolveThread: function(prId, o) {
+                if (o.threadId === 777) throw new Error('already merged');
+                resolved.push(o.threadId);
+            }
+        };
+        var mod = loadPostPRReviewComments();
+
+        mod.resolveApprovedThreads(scm, 5, [777, 888]);
+        assert.deepEqual(resolved, [888], 'the failing thread did not stop the rest');
+
+        resolved.length = 0;
+        mod.resolveApprovedThreads(scm, 5, []);
+        mod.resolveApprovedThreads(scm, 5, null);
+        assert.deepEqual(resolved, [], 'empty/null lists are a no-op');
+    });
+
+    test('hasPrApprovedLabel', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.hasPrApprovedLabel({ fields: { labels: ['pr_approved'] } }), true);
+        assert.equal(mod.hasPrApprovedLabel({ fields: { labels: [] } }), false);
+        assert.equal(mod.hasPrApprovedLabel({ fields: {} }), false);
+        assert.equal(mod.hasPrApprovedLabel(null), false);
+    });
+
+    test('readReviewJson: malformed JSON → null (and the empty-output branch)', function() {
+        var bad = loadModule('js/postPRReviewComments.js', makeRequire({
+            './common/machineAuthor.js': machineAuthorModule,
+            './config.js': configModule,
+            './common/scm.js': { createScm: function() { return {}; } },
+            './common/autoStart.js': {},
+            './configLoader.js': {
+                loadProjectConfig: function() { return {}; },
+                resolveInstructions: function() { return { jobParamPatch: {} }; }
+            },
+            './common/outputFiles.js': {
+                readOutputFileDetailed: function() { return { content: 'not json {', path: 'outputs/pr_review.json' }; },
+                readOutputFile: function() { return null; }
+            },
+            './common/githubHelpers.js': githubHelpersStub,
+            './common/trackers.js': makeTrackersModule({}),
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/commentMarkup.js': commentMarkupModule,
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+        }), {});
+
+        assert.equal(bad.readReviewJson('PROJ-1', null), null);
+    });
+
+    test('attemptResumeIfReviewOutputsMissing: no-op when review JSON or marker already present', function() {
+        var present = makeResumeHarness({ reviewJson: { recommendation: 'APPROVE' } });
+        assert.equal(present.mod.attemptResumeIfReviewOutputsMissing('PROJ-1'), false);
+        assert.deepEqual(present.calls.writes, [], 'nothing written when outputs exist');
+        assert.deepEqual(present.calls.cli, []);
+
+        var marked = makeResumeHarness({ marker: 'earlier run\n' });
+        assert.equal(marked.mod.attemptResumeIfReviewOutputsMissing('PROJ-1'), false);
+        assert.deepEqual(marked.calls.writes, [], 'nothing written when the marker exists');
+        assert.deepEqual(marked.calls.cli, []);
+    });
+
+    test('attemptResumeIfReviewOutputsMissing: writes marker + prompt, runs the resume CLI once', function() {
+        var h = makeResumeHarness({});
+        assert.equal(h.mod.attemptResumeIfReviewOutputsMissing('PROJ-1'), true);
+        assert.deepEqual(h.calls.writes.map(function(w) { return w.path; }), [
+            'outputs/.pr-review-missing-output-resume-attempted',
+            'outputs/.pr-review-resume-prompt.md'
+        ]);
+        assert.contains(h.calls.writes[1].content, 'PROJ-1', 'the resume prompt names the ticket');
+        assert.contains(h.calls.writes[1].content, 'outputs/pr_review.json');
+        assert.equal(h.calls.cli.length, 1);
+        assert.ok(h.calls.cli[0].indexOf('run-agent.sh --continue outputs/.pr-review-resume-prompt.md') !== -1);
+    });
+
+    test('attemptResumeIfReviewOutputsMissing: resume CLI failure is reported as false', function() {
+        var h = makeResumeHarness({ cliError: 'cli down' });
+        assert.equal(h.mod.attemptResumeIfReviewOutputsMissing('PROJ-1'), false);
+        assert.equal(h.calls.cli.length, 1);
+    });
+
+    test('getGitHubRepoInfo: parses https and ssh remotes, warns on garbage', function() {
+        var mod = makeResumeHarness({ remoteUrl: 'https://github.com/acme/repo.git\nScript done\n' });
+        assert.deepEqual(mod.mod.getGitHubRepoInfo(), { owner: 'acme', repo: 'repo' });
+
+        var ssh = makeResumeHarness({ remoteUrl: 'git@github.com:acme/other.git\n' });
+        assert.deepEqual(ssh.mod.getGitHubRepoInfo(), { owner: 'acme', repo: 'other' });
+
+        var junk = makeResumeHarness({ remoteUrl: 'not a remote\n' });
+        assert.equal(junk.mod.getGitHubRepoInfo(), null);
+    });
+});
+
+/**
+ * Harness for the resume-attempt / remote-info paths: mocks the file + CLI
+ * globals and captures writes and commands.
+ */
+function makeResumeHarness(opts) {
+    var calls = { writes: [], cli: [] };
+    var mod = loadModule(
+        'js/postPRReviewComments.js',
+        gh926ResumeRequire(opts),
+        gh926ResumeGlobalMocks(opts, calls)
+    );
+    return { mod: mod, calls: calls };
+}
+
+// Named declarations (not nested closures) so the CRAP gate does not sweep
+// these lambdas into makeResumeHarness — same rule as the action harness.
+function gh926ResumeRequire(opts) {
+    return makeRequire({
+        './common/machineAuthor.js': machineAuthorModule,
+        './config.js': configModule,
+        './common/scm.js': { createScm: function() { return {}; } },
+        './common/autoStart.js': {},
+        './configLoader.js': {
+            loadProjectConfig: function() { return {}; },
+            resolveInstructions: function() { return { jobParamPatch: {} }; }
+        },
+        './common/outputFiles.js': {
+            readOutputFileDetailed: function() {
+                return opts.reviewJson
+                    ? { content: JSON.stringify(opts.reviewJson), path: 'outputs/pr_review.json' }
+                    : null;
+            },
+            readOutputFile: function() { return null; }
+        },
+        './common/githubHelpers.js': githubHelpersStub,
+        './common/trackers.js': makeTrackersModule({}),
+        './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+        './common/commentMarkup.js': commentMarkupModule,
+        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+    });
+}
+
+function gh926ResumeGlobalMocks(opts, calls) {
+    return {
+        file_read: function(args) {
+            if (isResumeMarkerPath(argPathOf(args))) return opts.marker || null;
+            return null;
+        },
+        file_write: function(args) {
+            calls.writes.push({ path: argPathOf(args), content: args && args.content });
+            return null;
+        },
+        cli_execute_command: gh926ResumeCliMock(opts, calls)
+    };
+}
+
+function gh926ResumeCliMock(opts, calls) {
+    return function(args) {
+        calls.cli.push(args && args.command);
+        if (opts.cliError) throw new Error(opts.cliError);
+        return opts.remoteUrl !== undefined ? opts.remoteUrl : 'resume output';
+    };
+}
+
+suite('postPRReviewComments — gh-926 extracted pipeline helpers', function() {
+
+    test('parsePRAnchor: folder anchor wins, jobParams fallback, null when absent', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.parsePRAnchor({ inputFolderPath: 'input/pr-42' }, {}), 42);
+        assert.equal(mod.parsePRAnchor({ inputFolderPath: 'input/PROJ-1' }, { prNumber: 7 }), 7);
+        assert.equal(mod.parsePRAnchor({ inputFolderPath: 'input/PROJ-1' }, { pr: '9' }), 9);
+        assert.equal(mod.parsePRAnchor({ inputFolderPath: 'input/pr-42' }, { prNumber: 7 }), 42, 'folder anchor wins');
+        assert.equal(mod.parsePRAnchor({ inputFolderPath: 'input/PROJ-1' }, {}), null);
+        assert.equal(mod.parsePRAnchor({ inputFolderPath: 'input/pr-abc' }, {}), null);
+    });
+
+    test('resolveReviewTicketKey: pr-<n> for anchored runs, ticket key otherwise', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.resolveReviewTicketKey({ ticket: { key: 'PROJ-1' } }, 42), 'pr-42');
+        assert.equal(mod.resolveReviewTicketKey({ ticket: { key: 'PROJ-1' } }, null), 'PROJ-1');
+    });
+
+    test('parsePRInfoMarkdown: number/url/branch parsed; Author only when PR-anchored; misses carry current', function() {
+        var mod = loadPostPRReviewComments();
+        var prInfo = '- **PR #**: 42\n- **URL**: https://github.com/acme/repo/pull/42\n- **Branch**: feat/x\n- **Author**: some-human\n';
+
+        var anchored = mod.parsePRInfoMarkdown(prInfo, 42, { prNumber: 42, prUrl: null, prBranch: null, prAuthor: null });
+        assert.equal(anchored.prNumber, 42);
+        assert.equal(anchored.prUrl, 'https://github.com/acme/repo/pull/42');
+        assert.equal(anchored.prBranch, 'feat/x');
+        assert.equal(anchored.prAuthor, 'some-human', 'Author parsed only for PR-anchored runs');
+
+        var issueAnchored = mod.parsePRInfoMarkdown(prInfo, null, { prNumber: null, prUrl: null, prBranch: null, prAuthor: null });
+        assert.equal(issueAnchored.prAuthor, null, 'issue-anchored runs never read the author');
+
+        var partial = mod.parsePRInfoMarkdown('- **Branch**: feat/y\n', null, { prNumber: 33, prUrl: 'u', prBranch: null, prAuthor: null });
+        assert.equal(partial.prNumber, 33, 'no PR # match → prior value kept');
+        assert.equal(partial.prUrl, 'u');
+        assert.equal(partial.prBranch, 'feat/y');
+
+        var absent = mod.parsePRInfoMarkdown(null, null, { prNumber: 33, prUrl: null, prBranch: null, prAuthor: null });
+        assert.equal(absent.prNumber, 33, 'missing pr_info.md → current values carried');
+    });
+
+    test('normalizeRecommendation: APPROVED → APPROVE, verdict fallback, default REQUEST_CHANGES', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.normalizeRecommendation({ recommendation: 'APPROVED' }), 'APPROVE');
+        assert.equal(mod.normalizeRecommendation({ recommendation: 'APPROVE' }), 'APPROVE');
+        assert.equal(mod.normalizeRecommendation({ verdict: 'BLOCK' }), 'BLOCK');
+        assert.equal(mod.normalizeRecommendation({}), 'REQUEST_CHANGES');
+        assert.equal(mod.normalizeRecommendation({ recommendation: 'REQUEST_CHANGES' }), 'REQUEST_CHANGES');
+    });
+
+    test('normalizeIssueCounts + hasAnyOpenIssue: any non-zero count opens issues', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.deepEqual(mod.normalizeIssueCounts({}), { blocking: 0, important: 0, suggestions: 0 });
+        assert.equal(mod.hasAnyOpenIssue({ blocking: 0, important: 0, suggestions: 0 }), false);
+        assert.equal(mod.hasAnyOpenIssue({ blocking: 1 }), true);
+        assert.equal(mod.hasAnyOpenIssue({ important: 2 }), true);
+        assert.equal(mod.hasAnyOpenIssue({ suggestions: 3 }), true);
+        assert.equal(mod.hasAnyOpenIssue({}), false);
+    });
+
+    test('decideApproval: APPROVE stands unless open issues are not excused', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.decideApproval('APPROVE', false, false, false), true);
+        assert.equal(mod.decideApproval('APPROVE', true, false, false), false);
+        assert.equal(mod.decideApproval('APPROVE', true, true, false), true, 'allowApproveWithSuggestions');
+        assert.equal(mod.decideApproval('APPROVE', true, false, true), true, 'thread-limit force approve');
+        assert.equal(mod.decideApproval('REQUEST_CHANGES', false, false, false), false);
+        assert.equal(mod.decideApproval('BLOCK', true, false, false), false);
+    });
+
+    test('isApprovalOverridden + warning text', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.isApprovalOverridden('APPROVE', true, false, false), true);
+        assert.equal(mod.isApprovalOverridden('APPROVE', true, false, true), false, 'force-approved is not an override');
+        assert.equal(mod.isApprovalOverridden('APPROVE', true, true, false), false);
+        assert.equal(mod.isApprovalOverridden('REQUEST_CHANGES', true, false, false), false);
+
+        var warning = mod.buildApprovalOverrideWarning({ blocking: 1, important: 2, suggestions: 3 });
+        assert.contains(warning, 'blocking=1');
+        assert.contains(warning, 'important=2');
+        assert.contains(warning, 'suggestions=3');
+        assert.contains(warning, 'allowApproveWithSuggestions=true');
+    });
+
+    test('shouldProbeThreadLimit + maxThreadLimitOf: probe only under full preconditions', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, 42, GH926_REPO, 2), true);
+        assert.equal(mod.shouldProbeThreadLimit('REQUEST_CHANGES', true, false, 42, GH926_REPO, 2), false);
+        assert.equal(mod.shouldProbeThreadLimit('APPROVE', false, false, 42, GH926_REPO, 2), false);
+        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, true, 42, GH926_REPO, 2), false);
+        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, null, GH926_REPO, 2), false);
+        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, 42, null, 2), false);
+        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, 42, GH926_REPO, 0), false);
+        assert.equal(mod.shouldProbeThreadLimit('APPROVE', true, false, 42, GH926_REPO, undefined), false);
+
+        assert.equal(mod.maxThreadLimitOf({ maxReviewThreadsBeforeForceApprove: 5 }), 5);
+        assert.equal(mod.maxThreadLimitOf({}), 0);
+        assert.equal(mod.maxThreadLimitOf(undefined), 0);
+    });
+
+    test('resolveFormalReviewEnabled: per-run flag beats project default beats off', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.resolveFormalReviewEnabled({ formalGithubReview: true }, {}), true);
+        assert.equal(mod.resolveFormalReviewEnabled({ formalGithubReview: false }, { formalGithubReview: true }), false);
+        assert.equal(mod.resolveFormalReviewEnabled({}, { formalGithubReview: true }), true);
+        assert.equal(mod.resolveFormalReviewEnabled(undefined, { formalGithubReview: true }), true);
+        assert.equal(mod.resolveFormalReviewEnabled(undefined, {}), false);
+    });
+
+    test('parseLinkedIssueNumber: closes/fixes/resolves, case-insensitive, null otherwise', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.parseLinkedIssueNumber('ci: fix\ncloses #12'), 12);
+        assert.equal(mod.parseLinkedIssueNumber('Fixes #7'), 7);
+        assert.equal(mod.parseLinkedIssueNumber('resolves #99 later'), 99);
+        assert.equal(mod.parseLinkedIssueNumber('no refs here'), null);
+        assert.equal(mod.parseLinkedIssueNumber(''), null);
+        assert.equal(mod.parseLinkedIssueNumber(null), null);
+    });
+
+    test('resolveWipLabel: contextId-prefixed when present, default otherwise', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.resolveWipLabel({ metadata: { contextId: 'pr_review' } }), 'pr_review_wip');
+        assert.equal(mod.resolveWipLabel({ metadata: { contextId: 'custom_review' } }), 'custom_review_wip');
+        assert.equal(mod.resolveWipLabel({ metadata: {} }), 'pr_review_wip');
+        assert.equal(mod.resolveWipLabel({}), 'pr_review_wip');
+    });
+
+    test('buildBitriseEnvVars: copies configured envVars, appends TICKET_KEY, PR_URL only with a URL', function() {
+        var mod = loadPostPRReviewComments();
+        var bb = { envVars: [{ mapped_to: 'X', value: '1', is_expand: true }] };
+
+        var withUrl = mod.buildBitriseEnvVars(bb, 'PROJ-1', 'https://example.com/pull/1');
+        assert.equal(withUrl.length, 3);
+        assert.deepEqual(withUrl[0], { mapped_to: 'X', value: '1', is_expand: true });
+        assert.deepEqual(withUrl[1], { mapped_to: 'TICKET_KEY', value: 'PROJ-1', is_expand: false });
+        assert.deepEqual(withUrl[2], { mapped_to: 'PR_URL', value: 'https://example.com/pull/1', is_expand: false });
+        assert.equal(bb.envVars.length, 1, 'the configured list is copied, not mutated');
+
+        var noUrl = mod.buildBitriseEnvVars(bb, 'PROJ-1', null);
+        assert.equal(noUrl.length, 2);
+
+        var noConfigured = mod.buildBitriseEnvVars({}, 'PROJ-1', null);
+        assert.equal(noConfigured.length, 1);
+    });
+
+    test('resolveBitriseBranch: PR branch → configured branch → develop', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.resolveBitriseBranch({ branch: 'main' }, 'feat/x'), 'feat/x');
+        assert.equal(mod.resolveBitriseBranch({ branch: 'main' }, null), 'main');
+        assert.equal(mod.resolveBitriseBranch({}, null), 'develop');
+        assert.equal(mod.resolveBitriseBranch({}, 'feat/x'), 'feat/x');
+    });
+
+    test('resolveTestCasesGeneratorRepo: aiRepository beats config.repository', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.deepEqual(
+            mod.resolveTestCasesGeneratorRepo({ aiRepository: { owner: 'a', repo: 'b' } }, { repository: { owner: 'c', repo: 'd' } }),
+            { owner: 'a', repo: 'b' }
+        );
+        assert.deepEqual(
+            mod.resolveTestCasesGeneratorRepo({}, { repository: { owner: 'c', repo: 'd' } }),
+            { owner: 'c', repo: 'd' }
+        );
+        assert.deepEqual(
+            mod.resolveTestCasesGeneratorRepo({}, {}),
+            { owner: undefined, repo: undefined }
+        );
+        assert.deepEqual(
+            mod.resolveTestCasesGeneratorRepo(undefined, {}),
+            { owner: undefined, repo: undefined }
+        );
+    });
+
+    test('hasLabel + ticketLabels', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.hasLabel(['a', 'b'], 'b'), true);
+        assert.equal(mod.hasLabel(['a'], 'b'), false);
+        assert.equal(mod.hasLabel(undefined, 'b'), false);
+
+        assert.deepEqual(mod.ticketLabels({ fields: { labels: ['x'] } }), ['x']);
+        assert.deepEqual(mod.ticketLabels({ fields: {} }), []);
+        assert.deepEqual(mod.ticketLabels({}), []);
+        assert.deepEqual(mod.ticketLabels(null), []);
+    });
+
+    test('parseGitHubRemoteUrl: https and ssh forms, garbage → null', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.deepEqual(mod.parseGitHubRemoteUrl('https://github.com/acme/repo.git\nScript done\n'), { owner: 'acme', repo: 'repo' });
+        assert.deepEqual(mod.parseGitHubRemoteUrl('git@github.com:acme/other.git\n'), { owner: 'acme', repo: 'other' });
+        assert.equal(mod.parseGitHubRemoteUrl('not a remote\n'), null);
+        assert.equal(mod.parseGitHubRemoteUrl(''), null);
+    });
+
+    test('buildResumePrompt: names the ticket and the mandatory outputs', function() {
+        var mod = loadPostPRReviewComments();
+        var prompt = mod.buildResumePrompt('PROJ-1');
+
+        assert.contains(prompt, 'PROJ-1');
+        assert.contains(prompt, 'outputs/pr_review.json');
+        assert.contains(prompt, 'outputs/pr_review_general.md');
+        assert.contains(prompt, 'Do NOT write outputs/response.md');
+    });
+});
+
+suite('postPRReviewComments — gh-926 searchMissingPRNumber / ticketKeyOfParams', function() {
+
+    test('ticketKeyOfParams: null params, missing ticket, key passthrough', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.ticketKeyOfParams(null), null);
+        assert.equal(mod.ticketKeyOfParams({}), null);
+        assert.equal(mod.ticketKeyOfParams({ ticket: null }), null);
+        assert.equal(mod.ticketKeyOfParams({ ticket: { key: 'PROJ-1' } }), 'PROJ-1');
+    });
+
+    test('searchMissingPRNumber: existing PR number wins, no GitHub search', function() {
+        var h = loadForPrSearch({ number: 99, html_url: 'https://example.com/pull/99', head: { ref: 'other' } });
+        var pr = { number: 7, url: null, branch: null };
+
+        h.mod.searchMissingPRNumber({}, {}, 'PROJ-1', pr, { owner: 'a', repo: 'b' });
+
+        assert.equal(pr.number, 7);
+        assert.equal(h.searchCalls.length, 0, 'no search when the PR number is already known');
+    });
+
+    test('searchMissingPRNumber: without repo info it leaves the PR empty and does not search', function() {
+        var h = loadForPrSearch({ number: 99, html_url: 'https://example.com/pull/99', head: { ref: 'other' } });
+        var pr = { number: null, url: null, branch: null };
+
+        h.mod.searchMissingPRNumber({}, {}, 'PROJ-1', pr, null);
+
+        assert.equal(pr.number, null);
+        assert.equal(pr.url, null);
+        assert.equal(h.searchCalls.length, 0, 'no search without repo info');
+    });
+
+    test('searchMissingPRNumber: applies the PR found via GitHub search', function() {
+        var found = { number: 42, html_url: 'https://example.com/pull/42', head: { ref: 'bug/PROJ-1' } };
+        var h = loadForPrSearch(found);
+        var pr = { number: null, url: null, branch: null };
+
+        h.mod.searchMissingPRNumber({}, {}, 'PROJ-1', pr, { owner: 'a', repo: 'b' });
+
+        assert.equal(pr.number, 42);
+        assert.equal(pr.url, 'https://example.com/pull/42');
+        assert.equal(pr.branch, 'bug/PROJ-1');
+        assert.equal(h.searchCalls.length, 1);
+        assert.equal(h.searchCalls[0].ticketKey, 'PROJ-1');
+    });
+
+    test('searchMissingPRNumber: leaves the PR empty when the search finds nothing', function() {
+        var h = loadForPrSearch(null);
+        var pr = { number: null, url: null, branch: null };
+
+        h.mod.searchMissingPRNumber({}, {}, 'PROJ-1', pr, { owner: 'a', repo: 'b' });
+
+        assert.equal(pr.number, null);
+        assert.equal(h.searchCalls.length, 1);
+    });
+});
+
+/**
+ * Loads js/postPRReviewComments.js with a controllable
+ * githubHelpers.findPRForTicket so searchMissingPRNumber can be exercised
+ * directly (the shared githubHelpersStub always returns null).
+ */
+function loadForPrSearch(foundPr) {
+    var searchCalls = [];
+    var ghMock = {
+        findPRForTicket: function(scm, ticketKey, options) {
+            searchCalls.push({ ticketKey: ticketKey, options: options });
+            return foundPr;
+        },
+        findMergedPRForTicket: function() { return null; }
+    };
+    var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+        './common/commentMarkup.js': commentMarkupModule
+    }), {
+        file_read: function() { return null; }
+    });
+    var mod = loadModule(
+        'js/postPRReviewComments.js',
+        makeRequire({
+            './common/machineAuthor.js': machineAuthorModule,
+            './config.js': configModule,
+            './common/scm.js': { createScm: function() { return {}; } },
+            './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
+            './configLoader.js': configLoaderModule,
+            './common/outputFiles.js': outputFiles,
+            './common/githubHelpers.js': ghMock,
+            './common/trackers.js': makeTrackersModule({}),
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/commentMarkup.js': commentMarkupModule,
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+        }),
+        {
+            file_read: function() { return null; }
+        }
+    );
+    return { mod: mod, searchCalls: searchCalls };
+}
