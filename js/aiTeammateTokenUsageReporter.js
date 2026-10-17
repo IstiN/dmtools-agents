@@ -762,235 +762,345 @@ function buildRowsFromCache(cache) {
     return { rows: rows, attemptRows: attemptRows };
 }
 
-function action(params) {
-    var custom = (params && params.jobParams && params.jobParams.customParams) || {};
-    var projectConfig = configLoader.loadProjectConfig(params || {});
+// Returns the first truthy argument, or the last argument when all preceding
+// ones are falsy — the multi-value form of the `a || b || c` chain.
+function firstDefined() {
+    for (var i = 0; i < arguments.length - 1; i++) {
+        if (arguments[i]) return arguments[i];
+    }
+    return arguments[arguments.length - 1];
+}
+
+function verboseLog(verbose, message) {
+    if (verbose) console.log(message);
+}
+
+function resolveWorkspace(custom, projectConfig) {
     custom.workspace = custom.workspace || custom.owner;
-    custom.repository = custom.repository || custom.repo;
     if (!custom.workspace || custom.workspace.indexOf('{') !== -1) {
         custom.workspace = projectConfig.repository && projectConfig.repository.owner;
     }
+}
+
+function resolveRepositoryName(custom, projectConfig) {
+    custom.repository = custom.repository || custom.repo;
     if (!custom.repository || custom.repository.indexOf('{') !== -1) {
         custom.repository = projectConfig.repository && projectConfig.repository.repo;
     }
+}
+
+// Resolves workspace/repository (with {placeholder} fallback to the project
+// config) and the default workflow id, mutating customParams in place.
+function resolveRepository(custom, projectConfig) {
+    resolveWorkspace(custom, projectConfig);
+    resolveRepositoryName(custom, projectConfig);
     custom.workflowId = custom.workflowId || 'ai-teammate.yml';
+    return custom;
+}
 
-    if (!custom.workspace || !custom.repository) {
-        return { success: false, error: 'customParams.workspace and customParams.repository are required' };
+function resolveOutputPaths(custom) {
+    var outputDir = firstDefined(custom.outputDir, 'outputs/token_usage');
+    return {
+        outputDir: outputDir,
+        csvPath: firstDefined(custom.csvPath, outputDir + '/ai_teammate_token_usage.csv'),
+        attemptsCsvPath: firstDefined(custom.attemptsCsvPath, outputDir + '/ai_teammate_token_usage_attempts.csv'),
+        jsonPath: firstDefined(custom.jsonPath, outputDir + '/ai_teammate_token_usage.json'),
+        htmlPath: firstDefined(custom.htmlPath, outputDir + '/ai_teammate_token_usage.html'),
+        cachePath: firstDefined(custom.cachePath, outputDir + '/ai_teammate_token_usage_cache.json')
+    };
+}
+
+function parseMaxLogDownloads(custom) {
+    var parsed = parseInt(custom.maxLogDownloads, 10);
+    if (custom.maxLogDownloads == null || custom.maxLogDownloads === '') return null;
+    if (isNaN(parsed)) return 0;
+    return Math.max(0, parsed);
+}
+
+function parseCacheOptions(custom) {
+    return {
+        useCache: custom.useCache !== false && custom.useCache !== 'false',
+        cacheWriteEvery: Math.max(1, parseInt(custom.cacheWriteEvery || 25, 10) || 25),
+        logDownloadSleepMs: parseInt(custom.logDownloadSleepMs || 0, 10) || 0,
+        maxLogDownloads: parseMaxLogDownloads(custom)
+    };
+}
+
+function shouldLogRunProgress(verbose, index, total, logEvery) {
+    return verbose || index === 0 || (index + 1) % logEvery === 0 || index === total - 1;
+}
+
+function renderOnlyReport(custom, paths) {
+    var inputJsonPath = firstDefined(custom.inputJsonPath, paths.jsonPath);
+    var existing = parseJson(readInput(inputJsonPath), null);
+    if (!existing || !existing.summary || !existing.rows) {
+        return { success: false, error: 'Cannot render HTML: invalid token usage JSON at ' + inputJsonPath };
     }
+    writeOutput(paths.htmlPath, buildHtml(existing.rows, existing.summary));
+    console.log('Wrote HTML: ' + paths.htmlPath);
+    return { success: true, renderOnly: true, jsonPath: inputJsonPath, htmlPath: paths.htmlPath, summary: existing.summary };
+}
 
-    var outputDir = custom.outputDir || 'outputs/token_usage';
-    var csvPath = custom.csvPath || (outputDir + '/ai_teammate_token_usage.csv');
-    var attemptsCsvPath = custom.attemptsCsvPath || (outputDir + '/ai_teammate_token_usage_attempts.csv');
-    var jsonPath = custom.jsonPath || (outputDir + '/ai_teammate_token_usage.json');
-    var htmlPath = custom.htmlPath || (outputDir + '/ai_teammate_token_usage.html');
-    var cachePath = custom.cachePath || (outputDir + '/ai_teammate_token_usage_cache.json');
-    var useCache = custom.useCache !== false && custom.useCache !== 'false';
-    var cacheWriteEvery = Math.max(1, parseInt(custom.cacheWriteEvery || 25, 10) || 25);
-    var logDownloadSleepMs = parseInt(custom.logDownloadSleepMs || 0, 10) || 0;
-    var parsedMaxLogDownloads = parseInt(custom.maxLogDownloads, 10);
-    var maxLogDownloads = custom.maxLogDownloads == null || custom.maxLogDownloads === ''
-        ? null
-        : Math.max(0, isNaN(parsedMaxLogDownloads) ? 0 : parsedMaxLogDownloads);
+function cacheOnlyReport(paths) {
+    var cacheOnly = loadUsageCache(paths.cachePath);
+    var cached = buildRowsFromCache(cacheOnly);
+    var cachedTotalRuns = Object.keys(cacheOnly.entries || {}).length;
+    var summaryFromCache = buildSummary(cached.rows, cachedTotalRuns);
+    summaryFromCache.cache = {
+        enabled: true,
+        path: paths.cachePath,
+        cacheOnly: true,
+        hits: cached.rows.length,
+        logDownloads: 0,
+        maxLogDownloads: 0,
+        stoppedByDownloadLimit: false,
+        logDownloadSleepMs: 0
+    };
+    var cachedPayload = { summary: summaryFromCache, rows: cached.rows, attempts: cached.attemptRows };
+    writeOutput(paths.csvPath, buildCsv(cached.rows));
+    writeOutput(paths.attemptsCsvPath, buildAttemptsCsv(cached.attemptRows));
+    writeOutput(paths.jsonPath, JSON.stringify(cachedPayload, null, 2));
+    writeOutput(paths.htmlPath, buildHtml(cached.rows, summaryFromCache));
+    console.log('Wrote CSV: ' + paths.csvPath);
+    console.log('Wrote attempts CSV: ' + paths.attemptsCsvPath);
+    console.log('Wrote JSON: ' + paths.jsonPath);
+    console.log('Wrote HTML: ' + paths.htmlPath);
+    console.log('Cache-only report rows=' + cached.rows.length + ', log downloads=0');
+    return { success: true, cacheOnly: true, csvPath: paths.csvPath, attemptsCsvPath: paths.attemptsCsvPath, jsonPath: paths.jsonPath, htmlPath: paths.htmlPath, summary: summaryFromCache };
+}
 
-    if (custom.renderOnly === true || custom.renderOnly === 'true') {
-        var inputJsonPath = custom.inputJsonPath || jsonPath;
-        var existing = parseJson(readInput(inputJsonPath), null);
-        if (!existing || !existing.summary || !existing.rows) {
-            return { success: false, error: 'Cannot render HTML: invalid token usage JSON at ' + inputJsonPath };
-        }
-        writeOutput(htmlPath, buildHtml(existing.rows, existing.summary));
-        console.log('Wrote HTML: ' + htmlPath);
-        return { success: true, renderOnly: true, jsonPath: inputJsonPath, htmlPath: htmlPath, summary: existing.summary };
+function buildUsageRow(run, meta, durationSeconds, duration, usage) {
+    return {
+        runId: String(firstDefined(run.id, run.databaseId)),
+        runNumber: firstDefined(run.run_number, run.runNumber, ''),
+        createdAt: firstDefined(run.created_at, run.createdAt, ''),
+        startedAt: firstDefined(run.run_started_at, run.runStartedAt, ''),
+        updatedAt: firstDefined(run.updated_at, run.updatedAt, ''),
+        day: isoDay(firstDefined(run.created_at, run.createdAt, run.run_started_at, run.runStartedAt)),
+        conclusion: firstDefined(run.conclusion, ''),
+        agent: meta.agent,
+        ticketKey: meta.ticketKey,
+        configFile: meta.configFile,
+        title: meta.title,
+        durationSeconds: durationSeconds,
+        duration: duration,
+        requests: firstDefined(usage.requests, 0),
+        requestTier: firstDefined(usage.requestTier, ''),
+        requestDuration: firstDefined(usage.requestDuration, ''),
+        readTokens: firstDefined(usage.readTokens, 0),
+        writeTokens: firstDefined(usage.writeTokens, 0),
+        cachedTokens: firstDefined(usage.cachedTokens, 0),
+        reasoningTokens: firstDefined(usage.reasoningTokens, 0),
+        samples: firstDefined(usage.samples, 1),
+        resumeDetected: usage.resumeDetected === true,
+        resumeStages: firstDefined(usage.resumeStages, []).join('; '),
+        feedbackLoopCount: firstDefined(usage.feedbackLoopCount, 0),
+        rateLimitRetryCount: firstDefined(usage.rateLimitRetryCount, 0),
+        rateLimitDetected: usage.rateLimitDetected === true,
+        timeoutCount: firstDefined(usage.timeoutCount, 0),
+        source: firstDefined(usage.source, ''),
+        url: firstDefined(run.html_url, run.htmlUrl, '')
+    };
+}
+
+function buildAttemptRow(run, meta, durationSeconds, duration, usage, attempt) {
+    return {
+        runId: String(firstDefined(run.id, run.databaseId)),
+        runNumber: firstDefined(run.run_number, run.runNumber, ''),
+        createdAt: firstDefined(run.created_at, run.createdAt, ''),
+        day: isoDay(firstDefined(run.created_at, run.createdAt, run.run_started_at, run.runStartedAt)),
+        conclusion: firstDefined(run.conclusion, ''),
+        durationSeconds: durationSeconds,
+        duration: duration,
+        agent: meta.agent,
+        ticketKey: meta.ticketKey,
+        attemptIndex: firstDefined(attempt.attemptIndex, 1),
+        resumeDetected: usage.resumeDetected === true,
+        feedbackLoopCount: firstDefined(usage.feedbackLoopCount, 0),
+        rateLimitRetryCount: firstDefined(usage.rateLimitRetryCount, 0),
+        rateLimitDetected: usage.rateLimitDetected === true,
+        timeoutCount: firstDefined(usage.timeoutCount, 0),
+        requests: firstDefined(attempt.requests, 0),
+        requestTier: firstDefined(attempt.requestTier, ''),
+        requestDuration: firstDefined(attempt.requestDuration, ''),
+        readTokens: firstDefined(attempt.readTokens, 0),
+        writeTokens: firstDefined(attempt.writeTokens, 0),
+        cachedTokens: firstDefined(attempt.cachedTokens, 0),
+        reasoningTokens: firstDefined(attempt.reasoningTokens, 0),
+        rawTokensLine: firstDefined(attempt.rawTokensLine, ''),
+        source: firstDefined(attempt.source, ''),
+        url: firstDefined(run.html_url, run.htmlUrl, '')
+    };
+}
+
+function buildCacheSummaryInfo(options, paths, state) {
+    return {
+        enabled: options.useCache,
+        path: options.useCache ? paths.cachePath : '',
+        hits: state.cacheHits,
+        logDownloads: state.downloadedLogs,
+        maxLogDownloads: options.maxLogDownloads,
+        stoppedByDownloadLimit: state.stoppedByDownloadLimit,
+        logDownloadSleepMs: options.logDownloadSleepMs
+    };
+}
+
+function writeReportOutputs(paths, rows, attemptRows, summary) {
+    var payload = { summary: summary, rows: rows, attempts: attemptRows };
+    writeOutput(paths.csvPath, buildCsv(rows));
+    writeOutput(paths.attemptsCsvPath, buildAttemptsCsv(attemptRows));
+    writeOutput(paths.jsonPath, JSON.stringify(payload, null, 2));
+    writeOutput(paths.htmlPath, buildHtml(rows, summary));
+    console.log('Wrote CSV: ' + paths.csvPath);
+    console.log('Wrote attempts CSV: ' + paths.attemptsCsvPath);
+    console.log('Wrote JSON: ' + paths.jsonPath);
+    console.log('Wrote HTML: ' + paths.htmlPath);
+}
+
+// Reads the cache entry for a run and classifies it: a cached row, a cached
+// "no usage" marker, or null when the run must be (re-)processed — including
+// error entries, which the original loop fell through to re-download.
+function getCachedRunState(cache, runId, useCache) {
+    if (!useCache) return null;
+    var cached = cache.entries[runId];
+    if (!cached) return null;
+    if (cached.row) return { kind: 'row', row: cached.row, attemptRows: cached.attemptRows || [] };
+    if (cached.noUsage) return { kind: 'noUsage' };
+    return null;
+}
+
+function applyCachedRunState(state, cachedRun) {
+    if (!cachedRun) return false;
+    if (cachedRun.kind === 'row') {
+        state.rows.push(cachedRun.row);
+        cachedRun.attemptRows.forEach(function(attemptRow) { state.attemptRows.push(attemptRow); });
+        state.cacheHits += 1;
+        verboseLog(state.verbose, '    cache hit');
+        return true;
     }
+    state.cacheHits += 1;
+    verboseLog(state.verbose, '    cache hit: no token summary');
+    return true;
+}
 
-    if (custom.cacheOnly === true || custom.cacheOnly === 'true') {
-        var cacheOnly = loadUsageCache(cachePath);
-        var cached = buildRowsFromCache(cacheOnly);
-        var cachedTotalRuns = Object.keys(cacheOnly.entries || {}).length;
-        var summaryFromCache = buildSummary(cached.rows, cachedTotalRuns);
-        summaryFromCache.cache = {
-            enabled: true,
-            path: cachePath,
-            cacheOnly: true,
-            hits: cached.rows.length,
-            logDownloads: 0,
-            maxLogDownloads: 0,
-            stoppedByDownloadLimit: false,
-            logDownloadSleepMs: 0
-        };
-        var cachedPayload = { summary: summaryFromCache, rows: cached.rows, attempts: cached.attemptRows };
-        writeOutput(csvPath, buildCsv(cached.rows));
-        writeOutput(attemptsCsvPath, buildAttemptsCsv(cached.attemptRows));
-        writeOutput(jsonPath, JSON.stringify(cachedPayload, null, 2));
-        writeOutput(htmlPath, buildHtml(cached.rows, summaryFromCache));
-        console.log('Wrote CSV: ' + csvPath);
-        console.log('Wrote attempts CSV: ' + attemptsCsvPath);
-        console.log('Wrote JSON: ' + jsonPath);
-        console.log('Wrote HTML: ' + htmlPath);
-        console.log('Cache-only report rows=' + cached.rows.length + ', log downloads=0');
-        return { success: true, cacheOnly: true, csvPath: csvPath, attemptsCsvPath: attemptsCsvPath, jsonPath: jsonPath, htmlPath: htmlPath, summary: summaryFromCache };
+function cacheNoUsage(state, runId, options) {
+    if (!options.useCache) return;
+    state.cache.entries[runId] = { runId: runId, noUsage: true, cachedAt: new Date().toISOString() };
+}
+
+function cacheRunUsage(state, runId, row, attemptRows, options) {
+    state.cache.entries[runId] = {
+        runId: runId,
+        cachedAt: new Date().toISOString(),
+        row: row,
+        attemptRows: attemptRows
+    };
+    if (state.downloadedLogs % options.cacheWriteEvery === 0) writeUsageCache(state.cachePath, state.cache);
+}
+
+function newUsageCollectionState(custom, paths, options) {
+    return {
+        rows: [],
+        attemptRows: [],
+        cache: options.useCache ? loadUsageCache(paths.cachePath) : { version: 1, entries: {} },
+        downloadedLogs: 0,
+        cacheHits: 0,
+        stoppedByDownloadLimit: false,
+        verbose: custom.verbose === true || custom.verbose === 'true',
+        cachePath: paths.cachePath
+    };
+}
+
+function recordRunFailure(state, runId, options, error) {
+    if (options.useCache) {
+        state.cache.entries[runId] = { runId: runId, error: String(error.message || error), cachedAt: new Date().toISOString() };
     }
+    console.warn('    failed to process run ' + runId + ': ' + (error.message || error));
+}
 
-    console.log('AI Teammate Token Usage Reporter — ' + custom.workspace + '/' + custom.repository + ' [' + custom.workflowId + ']');
-    var runs = listCompletedRuns(custom);
-    console.log('Found ' + runs.length + ' completed workflow run(s)');
+// Downloads and parses one run's logs, appending the aggregate and attempt
+// rows to the collection state (or caching a noUsage marker).
+function processRunLogs(custom, run, runId, meta, durationSeconds, duration, state, options) {
+    if (options.maxLogDownloads != null && state.downloadedLogs >= options.maxLogDownloads) {
+        state.stoppedByDownloadLimit = true;
+        verboseLog(state.verbose, '    skipped: maxLogDownloads reached');
+        return;
+    }
+    if (state.downloadedLogs > 0 && options.logDownloadSleepMs > 0) sleepMilliseconds(options.logDownloadSleepMs);
+    var logs = downloadRunLogs(custom, run);
+    state.downloadedLogs += 1;
+    var usage = extractTokenUsage(logs);
+    if (!usage) {
+        cacheNoUsage(state, runId, options);
+        verboseLog(state.verbose, '    no token summary found');
+        return;
+    }
+    var row = buildUsageRow(run, meta, durationSeconds, duration, usage);
+    var runAttemptRows = [];
+    state.rows.push(row);
+    (usage.attempts || []).forEach(function(attempt) {
+        var attemptRow = buildAttemptRow(run, meta, durationSeconds, duration, usage, attempt);
+        state.attemptRows.push(attemptRow);
+        runAttemptRows.push(attemptRow);
+    });
+    if (options.useCache) cacheRunUsage(state, runId, row, runAttemptRows, options);
+    verboseLog(state.verbose, '    tokens read=' + usage.readTokens + ' write=' + usage.writeTokens + ' cached=' + usage.cachedTokens + ' reasoning=' + usage.reasoningTokens + ' attempts=' + usage.samples);
+}
 
-    var rows = [];
-    var attemptRows = [];
+function collectUsageRows(custom, runs, paths, options) {
     var logEvery = custom.logEvery || 50;
-    var verbose = custom.verbose === true || custom.verbose === 'true';
-    var cache = useCache ? loadUsageCache(cachePath) : { version: 1, entries: {} };
-    var downloadedLogs = 0;
-    var cacheHits = 0;
-    var stoppedByDownloadLimit = false;
-
+    var state = newUsageCollectionState(custom, paths, options);
     for (var i = 0; i < runs.length; i++) {
         var run = runs[i];
         var meta = extractAgentAndKey(run);
         var runId = String(run.id || run.databaseId);
         var durationSeconds = calculateDurationSeconds(run);
         var duration = formatDuration(durationSeconds);
-        if (verbose || i === 0 || (i + 1) % logEvery === 0 || i === runs.length - 1) {
+        if (shouldLogRunProgress(state.verbose, i, runs.length, logEvery)) {
             console.log('  [' + (i + 1) + '/' + runs.length + '] ' + runId + ' ' + meta.title);
         }
-
         try {
-            var cached = useCache && cache.entries[runId];
-            if (cached && cached.row) {
-                rows.push(cached.row);
-                (cached.attemptRows || []).forEach(function(attemptRow) { attemptRows.push(attemptRow); });
-                cacheHits += 1;
-                if (verbose) console.log('    cache hit');
-                continue;
-            }
-            if (cached && cached.noUsage) {
-                cacheHits += 1;
-                if (verbose) console.log('    cache hit: no token summary');
-                continue;
-            }
-
-            if (maxLogDownloads != null && downloadedLogs >= maxLogDownloads) {
-                stoppedByDownloadLimit = true;
-                if (verbose) console.log('    skipped: maxLogDownloads reached');
-                continue;
-            }
-
-            if (downloadedLogs > 0 && logDownloadSleepMs > 0) sleepMilliseconds(logDownloadSleepMs);
-            var logs = downloadRunLogs(custom, run);
-            downloadedLogs += 1;
-            var usage = extractTokenUsage(logs);
-            if (!usage) {
-                if (useCache) cache.entries[runId] = { runId: runId, noUsage: true, cachedAt: new Date().toISOString() };
-                if (verbose) console.log('    no token summary found');
-                continue;
-            }
-
-            var row = {
-                runId: runId,
-                runNumber: run.run_number || run.runNumber || '',
-                createdAt: run.created_at || run.createdAt || '',
-                startedAt: run.run_started_at || run.runStartedAt || '',
-                updatedAt: run.updated_at || run.updatedAt || '',
-                day: isoDay(run.created_at || run.createdAt || run.run_started_at || run.runStartedAt),
-                conclusion: run.conclusion || '',
-                agent: meta.agent,
-                ticketKey: meta.ticketKey,
-                configFile: meta.configFile,
-                title: meta.title,
-                durationSeconds: durationSeconds,
-                duration: duration,
-                requests: usage.requests || 0,
-                requestTier: usage.requestTier || '',
-                requestDuration: usage.requestDuration || '',
-                readTokens: usage.readTokens || 0,
-                writeTokens: usage.writeTokens || 0,
-                cachedTokens: usage.cachedTokens || 0,
-                reasoningTokens: usage.reasoningTokens || 0,
-                samples: usage.samples || 1,
-                resumeDetected: usage.resumeDetected === true,
-                resumeStages: (usage.resumeStages || []).join('; '),
-                feedbackLoopCount: usage.feedbackLoopCount || 0,
-                rateLimitRetryCount: usage.rateLimitRetryCount || 0,
-                rateLimitDetected: usage.rateLimitDetected === true,
-                timeoutCount: usage.timeoutCount || 0,
-                source: usage.source || '',
-                url: run.html_url || run.htmlUrl || ''
-            };
-            var runAttemptRows = [];
-            rows.push(row);
-            (usage.attempts || []).forEach(function(attempt) {
-                var attemptRow = {
-                    runId: runId,
-                    runNumber: run.run_number || run.runNumber || '',
-                    createdAt: run.created_at || run.createdAt || '',
-                    day: isoDay(run.created_at || run.createdAt || run.run_started_at || run.runStartedAt),
-                    conclusion: run.conclusion || '',
-                    durationSeconds: durationSeconds,
-                    duration: duration,
-                    agent: meta.agent,
-                    ticketKey: meta.ticketKey,
-                    attemptIndex: attempt.attemptIndex || 1,
-                    resumeDetected: usage.resumeDetected === true,
-                    feedbackLoopCount: usage.feedbackLoopCount || 0,
-                    rateLimitRetryCount: usage.rateLimitRetryCount || 0,
-                    rateLimitDetected: usage.rateLimitDetected === true,
-                    timeoutCount: usage.timeoutCount || 0,
-                    requests: attempt.requests || 0,
-                    requestTier: attempt.requestTier || '',
-                    requestDuration: attempt.requestDuration || '',
-                    readTokens: attempt.readTokens || 0,
-                    writeTokens: attempt.writeTokens || 0,
-                    cachedTokens: attempt.cachedTokens || 0,
-                    reasoningTokens: attempt.reasoningTokens || 0,
-                    rawTokensLine: attempt.rawTokensLine || '',
-                    source: attempt.source || '',
-                    url: run.html_url || run.htmlUrl || ''
-                };
-                attemptRows.push(attemptRow);
-                runAttemptRows.push(attemptRow);
-            });
-            if (useCache) {
-                cache.entries[runId] = {
-                    runId: runId,
-                    cachedAt: new Date().toISOString(),
-                    row: row,
-                    attemptRows: runAttemptRows
-                };
-                if (downloadedLogs % cacheWriteEvery === 0) writeUsageCache(cachePath, cache);
-            }
-            if (verbose) {
-                console.log('    tokens read=' + usage.readTokens + ' write=' + usage.writeTokens + ' cached=' + usage.cachedTokens + ' reasoning=' + usage.reasoningTokens + ' attempts=' + usage.samples);
-            }
+            if (applyCachedRunState(state, getCachedRunState(state.cache, runId, options.useCache))) continue;
+            processRunLogs(custom, run, runId, meta, durationSeconds, duration, state, options);
         } catch (e) {
-            if (useCache) cache.entries[runId] = { runId: runId, error: String(e.message || e), cachedAt: new Date().toISOString() };
-            console.warn('    failed to process run ' + runId + ': ' + (e.message || e));
+            recordRunFailure(state, runId, options, e);
         }
     }
+    if (options.useCache) writeUsageCache(paths.cachePath, state.cache);
+    return state;
+}
 
-    if (useCache) writeUsageCache(cachePath, cache);
-    var summary = buildSummary(rows, runs.length);
-    summary.cache = {
-        enabled: useCache,
-        path: useCache ? cachePath : '',
-        hits: cacheHits,
-        logDownloads: downloadedLogs,
-        maxLogDownloads: maxLogDownloads,
-        stoppedByDownloadLimit: stoppedByDownloadLimit,
-        logDownloadSleepMs: logDownloadSleepMs
-    };
-    var payload = { summary: summary, rows: rows, attempts: attemptRows };
-    writeOutput(csvPath, buildCsv(rows));
-    writeOutput(attemptsCsvPath, buildAttemptsCsv(attemptRows));
-    writeOutput(jsonPath, JSON.stringify(payload, null, 2));
-    writeOutput(htmlPath, buildHtml(rows, summary));
+function action(params) {
+    var custom = (params && params.jobParams && params.jobParams.customParams) || {};
+    var projectConfig = configLoader.loadProjectConfig(params || {});
+    resolveRepository(custom, projectConfig);
 
-    console.log('Wrote CSV: ' + csvPath);
-    console.log('Wrote attempts CSV: ' + attemptsCsvPath);
-    console.log('Wrote JSON: ' + jsonPath);
-    console.log('Wrote HTML: ' + htmlPath);
-    console.log('Cache hits=' + cacheHits + ', log downloads=' + downloadedLogs + (stoppedByDownloadLimit ? ', stopped by maxLogDownloads' : ''));
-    return { success: true, csvPath: csvPath, attemptsCsvPath: attemptsCsvPath, jsonPath: jsonPath, htmlPath: htmlPath, summary: summary };
+    if (!custom.workspace || !custom.repository) {
+        return { success: false, error: 'customParams.workspace and customParams.repository are required' };
+    }
+
+    var paths = resolveOutputPaths(custom);
+    var options = parseCacheOptions(custom);
+
+    if (custom.renderOnly === true || custom.renderOnly === 'true') {
+        return renderOnlyReport(custom, paths);
+    }
+
+    if (custom.cacheOnly === true || custom.cacheOnly === 'true') {
+        return cacheOnlyReport(paths);
+    }
+
+    console.log('AI Teammate Token Usage Reporter — ' + custom.workspace + '/' + custom.repository + ' [' + custom.workflowId + ']');
+    var runs = listCompletedRuns(custom);
+    console.log('Found ' + runs.length + ' completed workflow run(s)');
+
+    var state = collectUsageRows(custom, runs, paths, options);
+    var summary = buildSummary(state.rows, runs.length);
+    summary.cache = buildCacheSummaryInfo(options, paths, state);
+    writeReportOutputs(paths, state.rows, state.attemptRows, summary);
+
+    console.log('Cache hits=' + state.cacheHits + ', log downloads=' + state.downloadedLogs + (state.stoppedByDownloadLimit ? ', stopped by maxLogDownloads' : ''));
+    return { success: true, csvPath: paths.csvPath, attemptsCsvPath: paths.attemptsCsvPath, jsonPath: paths.jsonPath, htmlPath: paths.htmlPath, summary: summary };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -1008,6 +1118,22 @@ if (typeof module !== 'undefined' && module.exports) {
         buildSummary: buildSummary,
         buildHtml: buildHtml,
         loadUsageCache: loadUsageCache,
-        sortAttr: sortAttr
+        sortAttr: sortAttr,
+        firstDefined: firstDefined,
+        resolveRepository: resolveRepository,
+        resolveOutputPaths: resolveOutputPaths,
+        parseCacheOptions: parseCacheOptions,
+        parseMaxLogDownloads: parseMaxLogDownloads,
+        shouldLogRunProgress: shouldLogRunProgress,
+        renderOnlyReport: renderOnlyReport,
+        cacheOnlyReport: cacheOnlyReport,
+        buildUsageRow: buildUsageRow,
+        buildAttemptRow: buildAttemptRow,
+        buildCacheSummaryInfo: buildCacheSummaryInfo,
+        writeReportOutputs: writeReportOutputs,
+        getCachedRunState: getCachedRunState,
+        applyCachedRunState: applyCachedRunState,
+        processRunLogs: processRunLogs,
+        collectUsageRows: collectUsageRows
     };
 }
