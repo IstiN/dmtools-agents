@@ -241,6 +241,37 @@ suite('createIntakeTickets: full intake flow', function() {
         assert.equal(rec.calls.filter(function(c) { return c[0] === 'move' && c[1].statusName === 'Blocked'; }).length, 0);
     });
 
+    test('github: field-based creation unsupported -> failed results, finalize still works via github_*', function() {
+        var rec = intakeRecorder();
+        var boom = function(name) {
+            return function() { throw new Error(name + ' must not be called'); };
+        };
+        var mocks = rec.jiraMocks();
+        mocks.jira_create_ticket_with_json = boom('jira_create_ticket_with_json');
+        mocks.jira_post_comment = boom('jira_post_comment');
+        mocks.github_create_comment = function(a) { rec.calls.push(['comment', a]); };
+        mocks.github_add_labels = function(a) { rec.calls.push(['label', a]); };
+        mocks.github_remove_label = function(a) { rec.calls.push(['rm', a]); };
+        mocks.github_assign_issue = function(a) { rec.calls.push(['assign', a]); };
+        mocks.github_move_issue_to_status = function(a) { rec.calls.push(['move', a]); };
+        var mod = loadIntake(intakeFiles([
+            { tempId: 'e1', type: 'Epic', summary: 'Epic one', description: 'x' }
+        ], mocks));
+        var r = mod.action({
+            ticket: { key: '963' }, initiator: 'octocat', metadata: { contextId: 'intake' },
+            jobParams: { customParams: { trackerProvider: 'github' } }
+        });
+        assert.equal(r.success, true);
+        // createTicketWithFields is not expressible on GitHub issues — entry reported as failed
+        assert.equal(r.results.length, 1);
+        assert.equal(r.results[0].success, false);
+        assert.equal(r.results[0].error, 'Creation failed (see logs)');
+        var seq = toolSequence(rec.calls);
+        assert.deepEqual(seq, ['comment', 'label', 'label', 'assign', 'move', 'rm']);
+        assert.equal(rec.calls.filter(function(c) { return c[0] === 'comment'; })[0][1].pullRequestId, 963);
+        assert.deepEqual(rec.calls.filter(function(c) { return c[0] === 'assign'; })[0][1].user, 'octocat');
+    });
+
     test('exception in body posts error comment and returns success:false', function() {
         var rec = intakeRecorder();
         var mocks = rec.jiraMocks();
