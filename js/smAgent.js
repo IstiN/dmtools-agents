@@ -1654,6 +1654,43 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     });
                     if (noopDecision.withhold) {
                         if (noopDecision.escalate) {
+                            // gh-990 (2nd live instance, dart #424/#419,
+                            // 2026-10-17): a budget exhausted on a head with
+                            // NOTHING to rework (unresolved-thread census 0 —
+                            // the operator already addressed the threads,
+                            // which is why the legs no-op'd) and NO red
+                            // validation on the head (no validation_failed
+                            // park, no failing check) is NOT a human-handoff
+                            // state: parking it (label + 🛑 comment) was a
+                            // false positive that wedged the whole queue's
+                            // validate-armed pointer behind a human-owned
+                            // PR. The probes run ONLY at this escalation
+                            // point — the common below-cap tick pays nothing
+                            // — and a probe failure fails closed to the
+                            // legacy escalation. The arm stays withheld (the
+                            // gh-957 bound is untouched); validate-armed
+                            // re-flows validation on the PR independently.
+                            var fpSuppress = false;
+                            try {
+                                var fpHeadRed = (ticket.labels || []).indexOf('validation_failed') !== -1 ||
+                                    noopGuardHeadIsRed(effectiveRepoInfo, noopHead);
+                                fpSuppress = reworkLoopGuardModule.escalationIsFalsePositive({
+                                    unresolvedThreads: unresolvedThreadCount(effectiveRepoInfo, ticket.prNumber),
+                                    headRed: fpHeadRed
+                                });
+                            } catch (eFp) {
+                                console.warn('  ⚠️ ' + key + ' gh-990 false-positive probe failed — legacy' +
+                                    ' escalation stands: ' + (eFp.message || eFp));
+                            }
+                            if (fpSuppress) {
+                                console.log('  ⏭️  ' + key + ' agent:rework stays withheld (gh-957 budget ' +
+                                    noopDecision.laps + '/' + noopDecision.maxLaps + ' on head ' +
+                                    String(noopHead).substring(0, 7) + ') — escalation SUPPRESSED (gh-990):' +
+                                    ' 0 unresolved threads and no red validation — validation re-flow owns' +
+                                    ' this PR, not a human park');
+                                processedKeys.push(key);
+                                continue;
+                            }
                             try {
                                 githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo)
                                     .addLabel(ticket.prNumber, reworkLoopGuardModule.ESCALATION_LABEL);
@@ -4973,6 +5010,64 @@ function auditReworkConsumption(repoInfo, ticket, label, path) {
             ') on PR #' + ticket.prNumber);
     } catch (eAudit) {
         console.warn('  ⚠️ gh-840: consumption audit comment failed (non-fatal): ' + (eAudit.message || eAudit));
+    }
+}
+
+// gh-990: ALL unresolved review threads on the PR — the census the
+// rework-unresolved-threads rule matches on (human and machine threads
+// alike), as opposed to unresolvedMachineThreadCount below (the gh-840
+// sweep's machine-only census). Returns a count >= 0, or -1 when the
+// threads tool is unavailable or the read fails — the no-op-guard
+// false-positive suppression requires POSITIVE evidence of an empty
+// census, so an unknown census keeps the legacy escalation.
+function unresolvedThreadCount(repoInfo, prNumber) {
+    if (typeof github_get_pr_review_threads !== 'function') return -1;
+    try {
+        var raw = github_get_pr_review_threads({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestId: String(prNumber)
+        });
+        var res = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+        var nodes = (res && res.data && res.data.repository &&
+            res.data.repository.pullRequest &&
+            res.data.repository.pullRequest.reviewThreads &&
+            res.data.repository.pullRequest.reviewThreads.nodes) || [];
+        var n = 0;
+        nodes.forEach(function (t) {
+            if (t && t.isResolved !== true) n++;
+        });
+        return n;
+    } catch (eCensus) {
+        console.warn('  ⚠️ gh-990: unresolved-thread census failed (fail closed): ' + (eCensus.message || eCensus));
+        return -1;
+    }
+}
+
+// gh-990: the red-validation side of the false-positive probe — TRUE when
+// some non-bookkeeping context's LATEST check run on the head concluded
+// FAILURE/TIMED_OUT (#628/#695 parity with headHasRealFailure's reader).
+// Deliberately NOT that helper itself: headHasRealFailure fails OPEN on an
+// EMPTY rollup (its callers matched a red query — an empty read there is a
+// degraded probe), while for this guard an empty rollup has NO failing
+// checks — a fresh head whose CI never ran belongs to validation re-flow,
+// not to a human park. An UNREADABLE rollup (null) still fails closed to
+// red: suppression demands positive no-red evidence.
+function noopGuardHeadIsRed(repoInfo, headSha) {
+    if (!headSha) return true;
+    try {
+        var rollup = headCheckRunsSafe(repoInfo, headSha);
+        if (rollup === null || rollup === undefined) return true;
+        var latest = latestCheckRunConclusions(rollup);
+        var names = Object.keys(latest);
+        for (var i = 0; i < names.length; i++) {
+            if (isBookkeepingCheckName(names[i])) continue;
+            var concl = latest[names[i]].concl;
+            if (concl === 'FAILURE' || concl === 'TIMED_OUT') return true;
+        }
+        return false;
+    } catch (eRed) {
+        console.warn('  ⚠️ gh-990: head red probe failed (fail closed): ' + (eRed.message || eRed));
+        return true;
     }
 }
 

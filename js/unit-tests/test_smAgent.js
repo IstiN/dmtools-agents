@@ -1114,6 +1114,89 @@ suite('smAgent: arm_rework no-op loop guard (gh-957)', function () {
             'the lap markers are head-keyed — a fix push restarts the budget on the NEW head');
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
     });
+
+    // gh-990 (dart #424 ~16:37Z / #419 ~17:2xZ, 2026-10-17): both live
+    // instances escalated on legs that no-op'd CORRECTLY — census 0, no red
+    // validation — and the escalated label jammed the whole queue's
+    // validate-armed pointer. The refinement probes the census + the head
+    // red-ness only at the escalation point and suppresses the label +
+    // comment when both read clean.
+
+    function threadsGraphql(unresolved) {
+        // GraphQL reviewThreads shape; unresolved N = N open threads
+        var nodes = [];
+        var i;
+        for (i = 0; i < unresolved; i++) {
+            nodes.push({ isResolved: false, comments: { nodes: [{ author: { login: 'ai-teammate' } }] } });
+        }
+        for (i = 0; i < 2; i++) {
+            nodes.push({ isResolved: true, comments: { nodes: [{ author: { login: 'ai-teammate' } }] } });
+        }
+        return function () {
+            return { data: { repository: { pullRequest: { reviewThreads: { nodes: nodes } } } } };
+        };
+    }
+
+    test('gh-990: empty census + green head SUPPRESS the escalation — no label, no comment, no arm', function () {
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-agents'), {
+            github: {
+                items: [devItem(1364, HEAD)],
+                pr: { number: 1364, body: 'Closes #1363', head: { sha: HEAD } },
+                prComments: [lapComment(HEAD, 1), lapComment(HEAD, 2)],
+                commitCheckRuns: { check_runs: [
+                    { name: 'gate', conclusion: 'success', completed_at: '2026-10-17T04:00:00Z' }
+                ] }
+            },
+            extraMocks: { github_get_pr_review_threads: threadsGraphql(0) }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-agents', noopLapMax: 2,
+            machineAuthor: 'ai-teammate', rules: [RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'nothing to rework and nothing red — the escalation label must not land (gh-990)');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'the 🛑 owner-handoff comment is suppressed with the label');
+        assert.equal(sm.capturedTriggers.length, 0, 'the arm stays withheld — no rework leg');
+    });
+
+    test('gh-990: failing head checks keep the legacy escalation', function () {
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-agents'), {
+            github: {
+                items: [devItem(1364, HEAD)],
+                pr: { number: 1364, body: 'Closes #1363', head: { sha: HEAD } },
+                prComments: [lapComment(HEAD, 1), lapComment(HEAD, 2)],
+                commitCheckRuns: { check_runs: [
+                    { name: 'test', conclusion: 'failure', completed_at: '2026-10-17T04:00:00Z' }
+                ] }
+            },
+            extraMocks: { github_get_pr_review_threads: threadsGraphql(0) }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-agents', noopLapMax: 2,
+            machineAuthor: 'ai-teammate', rules: [RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'a red head is a genuine human handoff');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['rework-loop-escalated']);
+        assert.equal(sm.capturedPrComments.length, 1, 'the escalation comment leads');
+    });
+
+    test('gh-990: open threads (multi-thread census) keep the legacy escalation', function () {
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-agents'), {
+            github: {
+                items: [devItem(1364, HEAD)],
+                pr: { number: 1364, body: 'Closes #1363', head: { sha: HEAD } },
+                prComments: [lapComment(HEAD, 1), lapComment(HEAD, 2)],
+                commitCheckRuns: { check_runs: [
+                    { name: 'gate', conclusion: 'success', completed_at: '2026-10-17T04:00:00Z' }
+                ] }
+            },
+            extraMocks: { github_get_pr_review_threads: threadsGraphql(3) }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-agents', noopLapMax: 2,
+            machineAuthor: 'ai-teammate', rules: [RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'unresolved threads are real rework work');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['rework-loop-escalated']);
+    });
 });
 
 suite('smAgent: sm_github.json rule hygiene', function () {
