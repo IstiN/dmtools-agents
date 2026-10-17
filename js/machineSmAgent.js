@@ -371,11 +371,36 @@ function action(params) {
     // 1. Global concurrency gate — the user contract: with parallel runs
     //    in flight, wait them out; the cron tick re-fires soon.
     var activeIssues = provider.activeMachineRuns(cfg.workflowFile);
-    if (activeIssues.length >= cfg.maxConcurrentRuns) {
+    // gh-952 (live fa 2026-10-17): release the slot for orphaned runs. PR
+    // #1661 was merged by the OWNER via bypass while its machine run was
+    // still active — the run outlived its issue's lifecycle and can never
+    // be consumed by the loop, but activeMachineRuns kept counting it, so
+    // the gate saw a busy machine on EVERY tick ('⏳ idle — active machine
+    // run(s) for issue(s) 1661') and the approved queue starved, arms
+    // nobody. A run whose linked PR is MERGED is archaeology, not a slot
+    // event — drop it from the count (the reconcile loop below still
+    // closes the issue via the Fixes #N safety net). Fail closed: a probe
+    // error or an unresolvable PR keeps the run in the count, and the
+    // 'unknown' placeholder (run's issue indeterminate) is never dropped.
+    var liveActiveIssues = activeIssues.filter(function (n) {
+        if (n === 'unknown') return true;
+        try {
+            var orphanRef = provider.findPr(n, cfg.branchPrefix);
+            if (orphanRef && orphanRef.state === 'MERGED') {
+                console.log('  🔓 gh-' + n + ': the active run\'s linked PR #' + orphanRef.number +
+                    ' is MERGED (owner bypass) — it can never be consumed; releasing the slot (gh-952)');
+                return false;
+            }
+        } catch (eOrphan) {
+            console.warn('  ⚠️  gh-' + n + ': orphan-slot probe failed — keeping the run in the count (fail closed)');
+        }
+        return true;
+    });
+    if (liveActiveIssues.length >= cfg.maxConcurrentRuns) {
         console.log('  ⏳ idle — active machine run(s) for ' +
-            (activeIssues.join(', ') === 'unknown' ? 'this project' : 'issue(s) ' + activeIssues.join(', ')) +
+            (liveActiveIssues.join(', ') === 'unknown' ? 'this project' : 'issue(s) ' + liveActiveIssues.join(', ')) +
             '; waiting for the next tick');
-        return { success: true, idle: true, waitingFor: activeIssues };
+        return { success: true, idle: true, waitingFor: liveActiveIssues };
     }
 
     // 2. Reconcile every machine-managed issue through the provider.
@@ -385,7 +410,7 @@ function action(params) {
 
     var dispatched = 0, acted = 0, skipped = 0, failures = 0;
     var activeSet = {};
-    activeIssues.forEach(function (n) { activeSet[n] = true; });
+    liveActiveIssues.forEach(function (n) { activeSet[n] = true; });
 
     issues.forEach(function (issue) {
         var prRef = provider.findPr(issue.number, cfg.branchPrefix);

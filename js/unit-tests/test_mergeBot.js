@@ -1,6 +1,32 @@
 /* Unit tests for js/sm/mergeBot.js — the event-driven merge fast path. */
 /* global loadModule, assert, test, suite, makeRequire */
 
+// gh-952: state-aware list payload for the multi-PR slot-holder
+// scenarios — extracted from `fixture` so the CRAP ratchet baseline
+// (fixture ≤ 12) holds; prIndex maps state → raw REST list payload,
+// absent, the legacy single-PR shape is served.
+function listPayload(opts, pr, state) {
+    if (opts.prIndex) return JSON.stringify(opts.prIndex[state || 'open'] || []);
+    return JSON.stringify([{ number: pr.number }]);
+}
+
+// gh-952: per-number get_pr / check-runs payloads — extracted from
+// `fixture` for the same ratchet reason; both opt-maps are scenario
+// knobs for multi-PR suites.
+function prPayload(opts, pr, pullRequestId) {
+    if (opts.prByNumber) {
+        return JSON.stringify(opts.prByNumber[pullRequestId] || { state: 'OPEN' });
+    }
+    return JSON.stringify(pr);
+}
+
+function checkRunsPayload(opts, checkRuns, commitSha) {
+    if (opts.checkRunsByNumber && opts.checkRunsByNumber[commitSha] !== undefined) {
+        return JSON.stringify({ check_runs: opts.checkRunsByNumber[commitSha] });
+    }
+    return JSON.stringify({ check_runs: checkRuns });
+}
+
 function fixture(opts) {
     opts = opts || {};
     var calls = { merges: [], adds: [], removes: [], comments: [], cli: [] };
@@ -24,13 +50,19 @@ function fixture(opts) {
     };
     var wfCalls = [];
     var crCalls = [];
+    var listCalls = [];
     var mods = {
         github_list_workflow_runs: function (a) {
             wfCalls.push(a);
             return JSON.stringify({ workflow_runs: opts.workflowRuns || [] });
         },
-        github_list_prs: function () { return JSON.stringify([{ number: pr.number }]); },
-        github_get_pr: function () { return JSON.stringify(pr); },
+        github_list_prs: function (a) {
+            listCalls.push(a);
+            return listPayload(opts, pr, a.state);
+        },
+        github_get_pr: function (a) {
+            return prPayload(opts, pr, a.pullRequestId);
+        },
         github_get_commit_check_runs: function (a) {
             // The Dart tool requires workspace/repository — a bare
             // {commitSha} call dies with 'Required parameter workspace is
@@ -38,7 +70,7 @@ function fixture(opts) {
             // Assert in the test body, not here: mocks run in the module
             // scope, where `assert` is not a global.
             crCalls.push(a);
-            return JSON.stringify({ check_runs: checkRuns });
+            return checkRunsPayload(opts, checkRuns, a.commitSha);
         },
         github_merge_pr: function (m) {
             calls.merges.push(m);
@@ -55,7 +87,7 @@ function fixture(opts) {
         }
     };
     var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
-    return { bot: bot, calls: calls, mods: mods, wfCalls: wfCalls, crCalls: crCalls };
+    return { bot: bot, calls: calls, mods: mods, wfCalls: wfCalls, crCalls: crCalls, listCalls: listCalls };
 }
 
 suite('mergeBot', function () {
@@ -614,5 +646,231 @@ suite('mergeBot: red-holder diagnostic (owner directive 2026-10-04: red yields t
         assert.ok(!result.log.some(function (l) {
             return l.indexOf('concluded-red') !== -1;
         }), 'a dev-lane arm does not hold the merge-window slot (owner rule 2026-09-22, fa #801)');
+    });
+});
+
+suite('mergeBot: externally-merged slot holder releases the merge window (gh-952)', function () {
+    // Live fa 2026-10-17 06:30–08:10Z: PR #1661 was merged by the OWNER via
+    // bypass while its validation was ARMED (Quality gate / Binaries smoke
+    // pending stamps at 06:04Z). The machine's merge path never ran, so the
+    // arm was never consumed — and the merged PR vanished from the open
+    // list the bot scans. From then on the bot logged every approved PR as
+    // '⏳ FIFO-queued (awaiting validate-armed turn)' with acted: 0: the
+    // slot bookkeeping saw neither a holder (it merged) nor a released
+    // slot, and the queue starved behind a holder that will NEVER validate
+    // again. gh-766 taught the bot to advance past a dead head it can SEE;
+    // gh-952 extends the same remedy to the dead head it cannot see: the
+    // armed holder whose PR already merged.
+
+    // gh-952: REST payload shaping for the state-aware list — extracted
+    // (review thread) so slotFixture stays under CRAP_THRESHOLD for new
+    // code; the branch coverage lives in this suite's tests.
+    function withLabelObjs(p) {
+        return { number: p.number, labels: (p.labels || []).map(function (n) { return { name: n }; }),
+                 head: { sha: p.headSha }, merged_at: p.merged_at };
+    }
+    function slotListPayload(openPrs, mergedPrs, state) {
+        var src = (state || 'open') === 'merged' ? (mergedPrs || []) : openPrs;
+        return JSON.stringify(src.map(withLabelObjs));
+    }
+    function slotPrBody(p) {
+        return { number: p.number, state: 'OPEN', draft: false, mergeable: true,
+                 mergeable_state: p.mergeableState || 'clean',
+                 head: { sha: p.headSha },
+                 labels: (p.labels || []).map(function (n) { return { name: n }; }) };
+    }
+    function slotCheckRunsBody(p) {
+        return { check_runs: p.checkRuns || [] };
+    }
+
+    // Multi-PR fixture with a STATE-AWARE PR list: openPrs/mergedPrs are
+    // raw REST list payloads (labels included), prByNumber serves the
+    // per-number get_pr bodies. Same mock surface as queueFixture above.
+    function slotFixture(openPrs, mergedPrs) {
+        var calls = { merges: [], adds: [], removes: [], cli: [] };
+        var byNumber = {};
+        openPrs.concat(mergedPrs || []).forEach(function (p) { byNumber[p.number] = p; });
+        var byHead = {};
+        openPrs.forEach(function (p) { byHead[p.headSha] = p; });
+        var listCalls = [];
+        var mods = {
+            github_list_workflow_runs: function () {
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_list_prs: function (a) {
+                listCalls.push(a);
+                return slotListPayload(openPrs, mergedPrs, a.state);
+            },
+            github_get_pr: function (a) {
+                return JSON.stringify(slotPrBody(byNumber[a.pullRequestId] || {}));
+            },
+            github_get_commit_check_runs: function (a) {
+                return JSON.stringify(slotCheckRunsBody(byHead[a.commitSha] || {}));
+            },
+            github_merge_pr: function (m) { calls.merges.push(m); return JSON.stringify({ merged: true }); },
+            github_add_labels: function (a) { calls.adds.push(a); return '{}'; },
+            github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
+            cli_execute_command: function (c) { calls.cli.push(c); return ''; }
+        };
+        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        return { bot: bot, calls: calls, listCalls: listCalls };
+    }
+
+    var GREEN = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
+    function hoursAgoIso(h) {
+        return new Date(Date.now() - h * 60 * 60 * 1000).toISOString();
+    }
+    // The externally-merged slot holder: merged 1h ago, the merge-window
+    // arm labels still on it (labels outlive the merge).
+    function mergedHolder(hoursAgo) {
+        return { number: 1661, labels: ['ai_validating', 'pr_approved'],
+                 headSha: 'sha1661', merged_at: hoursAgoIso(hoursAgo || 1) };
+    }
+
+    test('recently-merged armed holder → slot released: the release is logged and the merged probe is scoped to this repo', function () {
+        var fx = slotFixture([
+            { number: 1563, labels: ['pr_approved'], headSha: 'sha1563', checkRuns: GREEN },
+            { number: 1564, labels: ['pr_approved'], headSha: 'sha1564', checkRuns: GREEN }
+        ], [mergedHolder(1)]);
+        var result = fx.bot.action({ jobParams: { repo: 'o/r' } });
+
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('pr-1661') !== -1 && l.indexOf('MERGED') !== -1 &&
+                   l.indexOf('slot released') !== -1;
+        }), 'the operator sees WHICH PR held the slot and that it merged: ' + JSON.stringify(result.log));
+        assert.ok(fx.listCalls.some(function (c) {
+            return c.state === 'merged' && c.workspace === 'o'.split('/')[0] || c.state === 'merged';
+        }), 'the holder probe lists MERGED PRs');
+        assert.ok(fx.listCalls.every(function (c) {
+            return c.workspace !== undefined && c.repository !== undefined;
+        }), 'every list call is repo-scoped');
+    });
+
+    test('a WRAPPED merged-list payload ({ pullRequests: [...] }) still releases the slot (action() shape parity)', function () {
+        // The bridge has returned both bare arrays and wrapped objects
+        // ({ pullRequests / items }) from these list tools; action()
+        // normalizes with Array.isArray + the pullRequests/items fallback.
+        // mergedSlotHolder must normalize the same way — otherwise
+        // merged.length is undefined, the release loop never runs, and
+        // the gh-952 starvation reproduces with zero log evidence.
+        var calls = { merges: [], cli: [] };
+        var validatedLabels = ['pr_approved', 'ai_validated'].map(function (n) { return { name: n }; });
+        var mods = {
+            github_list_workflow_runs: function () {
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_list_prs: function (a) {
+                if (a && a.state === 'merged') {
+                    return JSON.stringify({ pullRequests: [mergedHolder(1)] });
+                }
+                return JSON.stringify([{ number: 1563, labels: validatedLabels, head: { sha: 'sha1563' } }]);
+            },
+            github_get_pr: function () {
+                return JSON.stringify({ number: 1563, state: 'OPEN', draft: false, mergeable: true,
+                    mergeable_state: 'clean', head: { sha: 'sha1563' }, labels: validatedLabels });
+            },
+            github_get_commit_check_runs: function () {
+                return JSON.stringify({ check_runs: GREEN });
+            },
+            github_merge_pr: function (m) { calls.merges.push(m); return JSON.stringify({ merged: true }); },
+            github_add_labels: function () { return '{}'; },
+            github_remove_label: function () { return '{}'; },
+            cli_execute_command: function (c) { calls.cli.push(c); return ''; }
+        };
+        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        var result = bot.action({ jobParams: { repo: 'o/r' } });
+
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('pr-1661') !== -1 && l.indexOf('slot released') !== -1;
+        }), 'the release fires with the wrapped payload: ' + JSON.stringify(result.log));
+        assert.equal(calls.merges.length, 1,
+            'the validated candidate advances — the wrapped shape did not silently disable the release');
+        assert.equal(calls.merges[0].pullRequestId, 1563);
+        assert.equal(result.acted, 1);
+    });
+
+    test('a live validated candidate advances past the released slot on existing evidence (gh-766 parity)', function () {
+        var fx = slotFixture([
+            { number: 1563, labels: ['pr_approved', 'ai_validated'], headSha: 'sha1563', checkRuns: GREEN },
+            { number: 1564, labels: ['pr_approved'], headSha: 'sha1564', checkRuns: GREEN }
+        ], [mergedHolder(1)]);
+        var result = fx.bot.action({ jobParams: { repo: 'o/r' } });
+
+        assert.equal(fx.calls.merges.length, 1, 'the validated head merges on existing evidence');
+        assert.equal(fx.calls.merges[0].pullRequestId, 1563, 'the FIRST live candidate takes the released turn (FIFO)');
+        assert.equal(result.acted, 1, 'the merge is motion');
+        assert.equal(fx.calls.cli.length, 0, 'acted>0 — the merge events carry the conveyor, no self-tick');
+    });
+
+    test('no validated candidate → deferrals continue and the self-tick still arms the fresh head (the incident shape)', function () {
+        // Live 07:00–08:10Z: all 7 approved PRs lacked a validation stamp
+        // on their current heads — nothing can merge on evidence. The
+        // release must still be visible and the SM still asked to arm the
+        // queue head.
+        var fx = slotFixture([
+            { number: 1563, labels: ['pr_approved'], headSha: 'sha1563', checkRuns: GREEN },
+            { number: 1564, labels: ['pr_approved'], headSha: 'sha1564', checkRuns: GREEN }
+        ], [mergedHolder(1)]);
+        var result = fx.bot.action({ jobParams: { repo: 'o/r' } });
+
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('slot released') !== -1;
+        }), 'the release is logged even when nobody can advance yet');
+        assert.equal(fx.calls.merges.length, 0, 'nothing merges without validation evidence');
+        assert.equal(result.acted, 0);
+        assert.equal(fx.calls.cli.length, 1, 'exactly one self-tick — the SM must arm the fresh head');
+        assert.equal(fx.calls.cli[0].command,
+            'gh workflow run machine-sm.yml -F dryRun=false --repo o/r',
+            'the self-heal tick command, verbatim');
+    });
+
+    test('a merged PR WITHOUT the merge-window arm is not a slot holder (dev-lane labels and unlabeled merged PRs are ignored)', function () {
+        var fx = slotFixture([
+            { number: 1563, labels: ['pr_approved', 'ai_validated'], headSha: 'sha1563', checkRuns: GREEN }
+        ], [
+            { number: 1650, labels: ['ai_validating', 'ai_developed'], headSha: 'sha1650',
+              merged_at: hoursAgoIso(1) },
+            { number: 1655, labels: [], headSha: 'sha1655', merged_at: hoursAgoIso(2) }
+        ]);
+        var result = fx.bot.action({ jobParams: { repo: 'o/r' } });
+
+        assert.ok(!result.log.some(function (l) {
+            return l.indexOf('slot released') !== -1;
+        }), 'no release without the mutex-scoped holder (ai_validating + pr_approved): ' + JSON.stringify(result.log));
+        assert.equal(fx.calls.merges.length, 0, 'the validated candidate does NOT jump a live slot');
+        assert.ok(result.log.some(function (l) { return l.indexOf('FIFO-queued') !== -1; }),
+            'the candidate defers — the slot still belongs to the armed turn');
+    });
+
+    test('an OPEN armed holder still owns the slot — no merged probe, no release', function () {
+        var fx = slotFixture([
+            { number: 1660, labels: ['pr_approved', 'ai_validating'], headSha: 'sha1660',
+              checkRuns: [{ status: 'IN_PROGRESS', conclusion: null }] },
+            { number: 1662, labels: ['pr_approved', 'ai_validated'], headSha: 'sha1662', checkRuns: GREEN }
+        ], [mergedHolder(1)]);
+        var result = fx.bot.action({ jobParams: { repo: 'o/r' } });
+
+        assert.ok(!fx.listCalls.some(function (c) { return c.state === 'merged'; }),
+            'the merged list is not even fetched while a live holder owns the window');
+        assert.ok(!result.log.some(function (l) { return l.indexOf('slot released') !== -1; }),
+            'no release line — the holder is alive and in flight');
+        assert.equal(fx.calls.merges.length, 0, 'the validated candidate waits its turn');
+    });
+
+    test('an old merged holder (labels never cleaned) does not fuse deadHeadPassed into every future run', function () {
+        // Labels on merged PRs are inert; weeks later the release is
+        // archaeology, not news. The bot must not keep signalling a
+        // release for a slot that changed hands long ago — the armed turn
+        // bookkeeping stays honest.
+        var fx = slotFixture([
+            { number: 1563, labels: ['pr_approved', 'ai_validated'], headSha: 'sha1563', checkRuns: GREEN }
+        ], [mergedHolder(24 * 8)]);
+        var result = fx.bot.action({ jobParams: { repo: 'o/r' } });
+
+        assert.ok(!result.log.some(function (l) {
+            return l.indexOf('slot released') !== -1;
+        }), 'no release line for a week-old holder');
+        assert.equal(fx.calls.merges.length, 0, 'no advance — the slot bookkeeping is not hijacked by stale labels');
+        assert.ok(result.log.some(function (l) { return l.indexOf('FIFO-queued') !== -1; }));
     });
 });

@@ -12546,3 +12546,149 @@ suite('smAgent: targetStatus stage-label fallback (gh-916)', function() {
         assert.deepEqual(added, [{ key: 'T-12', label: 'stage_ready_for_testing' }]);
     });
 });
+suite('smAgent: stale validation_failed label cleanup (gh-952)', function () {
+    // Live fa 2026-10-17 (gh-952): the approved queue head (#1563,
+    // machine-authored) carried a STALE validation_failed label from an
+    // OLDER head. The park's red verdict belonged to a sha that no longer
+    // exists — but neither self-clear rung could fire: the #633
+    // head-change rung and the gh-750 machine self-clear BOTH sit behind
+    // the substantive-commit/park-time probes, and in the incident window
+    // every one of those gh api probes failed (CLI outage — the tick log
+    // is full of 'Tool execution failed: Command execution failed'). The
+    // ladder's null-guard fail-closed HOLD each tick, so the park was
+    // permanent and validate-armed's notLabels excluded the queue head
+    // forever — the whole approved FIFO starved for 3+h.
+    // gh-952 rung: when the probes fail, a MACHINE-authored PR whose
+    // park comment names a parked-head sha that differs from the current
+    // head still clears — the comment sha names the punished head, so the
+    // difference alone proves the head moved, and the memoized
+    // dispatched-verdict probe (fail-open by #633 design) guards the
+    // fresh head. Guests keep their contracts in full: none of this
+    // evaluates for them (fa#923/#681/#1249 pins).
+
+    var PARK_RESET = { source: 'github', query: { type: 'pr',
+        labels: ['validation_failed'], notLabels: ['ai_validating', 'blocked'], draft: false },
+        localAction: 'update_branch', limit: 10, id: 'park-reset' };
+
+    function gh952Config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+    // Machine-authored (gh-952 live shape: the machine's own PR approved
+    // and reviewed through the machine review leg).
+    function parkedItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['validation_failed'], prNumber: n, draft: false,
+                   branch: 'ai/gh-' + n, headSha: '11ab22cd3' + n, author: 'ai-teammate' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+    var HEAD = 'cc445566aabbccddeeff00112233445566778899';
+    var OLD_PARKED_HEAD = 'dd99887766554433221100aabbccddeeff001122';
+    var STALE_PARK_COMMENT = [{ body:
+        '🛑 validation_failed — parked-head: ' + OLD_PARKED_HEAD }];
+    var RED_RUN = { status: 'completed', conclusion: 'failure', id: 9002,
+        head_sha: HEAD };
+    // Full probe outage: every gh api probe answers '' (CLI outage — the
+    // incident window). The events probe (park time), the commits probe
+    // (head actor) and the runs probe (dispatched verdict) all fail; only
+    // the tracker's park-comment read (mock-backed) still resolves.
+    function outageCli(runsAnswer) {
+        return function (cmd) {
+            var c = cmd.command || '';
+            if (runsAnswer && c.indexOf('/actions/workflows/quality.yml/runs?head_sha=') !== -1) {
+                return runsAnswer;
+            }
+            return '';
+        };
+    }
+    function gh952Action(sm, rules) {
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: rules || [PARK_RESET] } });
+    }
+
+    test('gh-952 RED: a sha-keyed stale park on a machine PR clears during a full probe outage', function () {
+        // The fail-closed null-guard used to HOLD every tick when the
+        // probes died — the park comment's parked-head sha needs none of
+        // them: it names the punished sha, so a different current sha
+        // proves the head moved, and the (fail-open) verdict probe finds
+        // no red on the fresh head. The label must clear so
+        // validate-armed re-arms the fresh head the SAME tick.
+        var sm = makeSmAgent(Object.assign(gh952Config('a', 'b'), {
+            github: {
+                items: [parkedItem(1563, { headSha: undefined })],
+                pr: { number: 1563, head: { sha: HEAD, ref: 'ai/gh-1563' } },
+                prComments: STALE_PARK_COMMENT
+            },
+            onCliExecute: outageCli(null)
+        }));
+        gh952Action(sm);
+
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.label === 'validation_failed';
+        }), 'the stale park clears during the outage: ' + JSON.stringify(sm.capturedPrLabelRemoves));
+        assert.ok(sm.capturedPrComments.some(function (c) {
+            return c.body.indexOf('🅿️→▶') !== -1 && c.body.indexOf('gh-952') !== -1 &&
+                c.body.indexOf(OLD_PARKED_HEAD) !== -1 && c.body.indexOf(HEAD) !== -1;
+        }), 'the clear comment names both shas and the rung: ' +
+            JSON.stringify(sm.capturedPrComments.map(function (c) { return c.body; })));
+        assert.ok(sm.capturedIoCacheDrops.some(function (d) {
+            return d.kind === 'openPrs' && d.owner === 'a' && d.repo === 'b';
+        }), 'the open-PR cache drops so validate-armed re-queries the same tick (same-tick slot yield)');
+        assert.ok(!sm.capturedCliCommands.some(function (c) {
+            return (c.command || '').indexOf('gh workflow run') === 0;
+        }), 'park-reset never dispatches CI itself');
+    });
+
+    test('gh-952: a parked-head sha KNOWN and EQUAL to the current head keeps the park', function () {
+        // The park comment names THIS head — the verdict still describes
+        // it (the #633 ruling gh-952 extends, not widens).
+        var sm = makeSmAgent(Object.assign(gh952Config('a', 'b'), {
+            github: {
+                items: [parkedItem(1564, { headSha: undefined })],
+                pr: { number: 1564, head: { sha: HEAD, ref: 'ai/gh-1564' } },
+                prComments: [{ body: '🛑 validation_failed — parked-head: ' + HEAD }]
+            },
+            onCliExecute: outageCli(null)
+        }));
+        gh952Action(sm);
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'the sha-keyed verdict still describes THIS head — the park stands');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+    });
+
+    test('gh-952: a red verdict ON the fresh head keeps the park (the verdict re-justifies itself)', function () {
+        // Only the dispatched-verdict probe survives the outage and it
+        // reports FAILURE for the current head — genuinely red, the park
+        // stands (the verdict probe is the one fail-open input by #633
+        // design; a real red answer is load-bearing).
+        var sm = makeSmAgent(Object.assign(gh952Config('a', 'b'), {
+            github: {
+                items: [parkedItem(1565, { headSha: undefined })],
+                pr: { number: 1565, head: { sha: HEAD, ref: 'ai/gh-1565' } },
+                prComments: STALE_PARK_COMMENT
+            },
+            onCliExecute: outageCli(JSON.stringify({ workflow_runs: [RED_RUN] }))
+        }));
+        gh952Action(sm);
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'a red fresh head stays parked');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+    });
+
+    test('gh-952: a GUEST parked PR keeps the sticky park during a probe outage (owner contracts in full)', function () {
+        // The gh-952 rung is machine-scoped: fa#923/#681/#1249 pin that
+        // machine movement NEVER speaks for a guest — not even when the
+        // probes die. The human-push RESET is their only exit.
+        var sm = makeSmAgent(Object.assign(gh952Config('a', 'b'), {
+            github: {
+                items: [parkedItem(1566, { headSha: undefined, author: 'vendor-human' })],
+                pr: { number: 1566, head: { sha: HEAD, ref: 'feat/gh-1566' } },
+                prComments: STALE_PARK_COMMENT
+            },
+            onCliExecute: outageCli(null)
+        }));
+        gh952Action(sm);
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'guests keep the sticky park — the human-push RESET is their only exit');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+    });
+});

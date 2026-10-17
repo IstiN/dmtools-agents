@@ -1836,8 +1836,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     var lastCommitter = actorVf ? String(actorVf.committer || '') : null;
                     // gh-728: machine movement = a push by ANY machineAuthor
                     // list entry (the knob is comma-separated now).
-                    var machinePushVf = lastCommitter === 'sm-silent-update' ||
-                        machineAuthorModule.isMachineLogin(actorLoginVf, prMachineAuthorU);
+                    var machinePushVf = isMachineParkPush(lastCommitter, actorLoginVf, prMachineAuthorU);
                     var freshPushVf = !!(actorVf && actorVf.date && parkedAtVf &&
                         Date.parse(actorVf.date) > Date.parse(parkedAtVf));
                     // Head-change without its own red verdict (dmtools-
@@ -1933,8 +1932,32 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                               ' > park ' + parkedAtVf + ')';
                     }
                     if (actorVf === null || parkedAtVf === null) {
-                        console.warn('  ⚠️  ' + key + ' ' + parkLabelVf +
-                            ': park probe failed (substantive commit / park time) — keeping the park (fail closed)');
+                        // gh-952 (live fa 2026-10-17): PROBE-OUTAGE exemption
+                        // for MACHINE-authored PRs with a sha-keyed park
+                        // comment. Both self-clear rungs below sit behind the
+                        // substantive-commit/park-time probes — during the
+                        // CLI outage that froze fa's queue every probe came
+                        // back null and this branch fail-closed HOLD each
+                        // tick, so a machine park with a moved head was
+                        // permanent (gh-750's own comment: 'the park is
+                        // permanent'). The park comment's parked-head sha
+                        // needs NONE of those probes: it names the sha the
+                        // park punished, so any different current sha proves
+                        // the head moved, and the memoized dispatched-verdict
+                        // probe (fail-open by #633 design) guards the fresh
+                        // head. Guests keep their contracts in full — none
+                        // of this evaluates for them (fa#923/#681/#1249
+                        // pins): the guest pins below still hold.
+                        if (isMachinePrU && uHead && parkedHeadVf &&
+                                uHead !== parkedHeadVf &&
+                                probeHeadVerdictVf() !== 'failure') {
+                            clearStalePark952(effectiveRepoInfo, ticket, uHead,
+                                parkedHeadVf, key);
+                            unparkedThisPass = true;
+                        } else {
+                            console.warn('  ⚠️  ' + key + ' ' + parkLabelVf +
+                                ': park probe failed (substantive commit / park time) — keeping the park (fail closed)');
+                        }
                     } else if (headChangedNoVerdictVf) {
                         if (!DRY) {
                             try {
@@ -6204,6 +6227,43 @@ function parkedHeadSha(repoInfo, prNumber) {
         console.warn('  ⚠️  park-head probe failed: ' + (e.message || e));
         return null;
     }
+}
+
+function isMachineParkPush(lastCommitter, actorLogin, machineAuthorLogin) {
+    // gh-728: machine movement = a push by ANY machineAuthor list entry
+    // (the knob is comma-separated now); 'sm-silent-update' is the
+    // silent-update bot's committer identity (owner 2026-09-27).
+    return lastCommitter === 'sm-silent-update' ||
+        machineAuthorModule.isMachineLogin(actorLogin, machineAuthorLogin);
+}
+
+// gh-952 STALE-LABEL CLEANUP body (the probe-outage exemption in the
+// update_branch park ladder). Same side effects as every other park
+// clear (label off, auditable 🅿️→▶ comment naming both shas) plus the
+// same-tick slot yield: the open-PR cache drop lets validate-armed
+// re-query the freed label in THIS tick (rule 12 park-reset runs before
+// rule 13 validate-armed), so the fresh head arms without waiting a
+// full tick.
+function clearStalePark952(repoInfo, ticket, uHead, parkedHeadVf, key) {
+    if (!DRY) {
+        try {
+            githubTracker(repoInfo.owner, repoInfo.repo).removeLabel(ticket.prNumber, 'validation_failed');
+        } catch (eClr952) {
+            console.warn('  ⚠️  un-park label failed: ' + (eClr952.message || eClr952));
+        }
+        try {
+            githubTracker(repoInfo.owner, repoInfo.repo).postComment(ticket.prNumber,
+                '🅿️→▶ validation_failed cleared — the park was set on head `' + parkedHeadVf +
+                '`, but the head is now `' + uHead + '` and this head has no red verdict of ' +
+                'its own. The substantive-commit/park-time probes failed this tick, but the ' +
+                'park comment names the punished sha — the old verdict does not transfer ' +
+                'across sha changes — stale-label cleanup, re-entering validation (gh-952).');
+        } catch (eClrSay952) { /* the label clear is the load-bearing part */ }
+    }
+    dropOpenPrsCache(repoInfo);
+    console.log('  ▶ ' + key + ' validation_failed cleared: head `' + String(uHead).slice(0, 8) +
+        '` moved past the park-comment head `' + String(parkedHeadVf).slice(0, 8) +
+        '` with no red verdict of its own — stale-label cleanup (gh-952, probe-outage rung)');
 }
 
 function newestDispatchedRun(repoInfo, ciWorkflow, headSha) {
