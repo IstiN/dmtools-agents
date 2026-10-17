@@ -282,6 +282,22 @@ function def1002(value, fallback) {
     return value === undefined ? fallback : value;
 }
 
+// Failure-mode switch for the harness: throws when the overrides bag enables
+// the named failure. A function call instead of an inline `if` so the harness
+// body carries no extra branches.
+function fail1002(overides, key, message) {
+    if (overides[key]) {
+        throw new Error(message);
+    }
+}
+
+var DEFAULT_REWORK_STATUSES = { IN_DEVELOPMENT: 'In Development', IN_REWORK: 'In Rework' };
+
+// File-level so the closure adds no branches to makeActionHarness() itself.
+function resolveStatusesMock(customParams, jiraStatuses) {
+    return jiraStatuses || DEFAULT_REWORK_STATUSES;
+}
+
 // Swap global console for a recorder for the duration of fn, then restore it.
 // The eval-loaded modules look console up dynamically, so the swap is visible.
 function captureConsole1002(fn) {
@@ -328,11 +344,11 @@ function makeActionHarness(overides) {
     var tracker = {
         postComment: function(key, body) {
             calls.postComment.push({ key: key, body: body });
-            if (overides.failTrackerPostComment) { throw new Error('postComment failed'); }
+            fail1002(overides, 'failTrackerPostComment', 'postComment failed');
         },
         moveToStatus: function(key, status) {
             calls.moveToStatus.push(status);
-            if (overides.failMoveToStatus) { throw new Error('transition failed'); }
+            fail1002(overides, 'failMoveToStatus', 'transition failed');
         }
     };
 
@@ -364,7 +380,7 @@ function makeActionHarness(overides) {
     var gitOpsStub = {
         checkoutPRBranch: function(branch, dir, base) {
             calls.checkoutPRBranch.push({ branch: branch, dir: dir, base: base });
-            if (overides.failCheckout) { throw new Error('checkout failed'); }
+            fail1002(overides, 'failCheckout', 'checkout failed');
         },
         detectMergeConflicts: function() { return def1002(overides.conflictFiles, []); },
         getPRDiff: function() { return 'diff --git a/README.md b/README.md'; },
@@ -383,7 +399,7 @@ function makeActionHarness(overides) {
 
     var configLoaderStub = {
         loadProjectConfig: function() {
-            if (overides.failConfigLoad) { throw new Error('config load failed'); }
+            fail1002(overides, 'failConfigLoad', 'config load failed');
             return config;
         },
         paramsForConfigLoad: function(p) { return p; },
@@ -394,7 +410,7 @@ function makeActionHarness(overides) {
     var trackersModuleStub = {
         createTracker: function() {
             calls.createTracker++;
-            if (overides.failTrackerCreate) { throw new Error('tracker create failed'); }
+            fail1002(overides, 'failTrackerCreate', 'tracker create failed');
             return tracker;
         }
     };
@@ -405,7 +421,7 @@ function makeActionHarness(overides) {
         truncateSetupError: function(s) { return s; },
         runSetupCommands: function() {
             calls.runSetupCommands++;
-            if (overides.failSetupCommands) { throw new Error('npm ci exploded'); }
+            fail1002(overides, 'failSetupCommands', 'npm ci exploded');
             return { ok: true };
         },
         buildSetupWarningsMarkdown: function() {
@@ -426,13 +442,12 @@ function makeActionHarness(overides) {
             './common/trackers.js': trackersModuleStub,
             './common/setupCommands.js': setupCommandsStub,
             './common/baseBranchMarker.js': { writeBaseBranchMarker: function(base) { calls.writeBaseBranchMarker = base; } },
-            './config.js': { resolveStatuses: function(customParams, jiraStatuses) {
-                return jiraStatuses || { IN_DEVELOPMENT: 'In Development', IN_REWORK: 'In Rework' };
-            } }
+            './config.js': { resolveStatuses: resolveStatusesMock }
         }),
         {
             file_write: function(args) {
-                if (overides.failFileWritePaths && overides.failFileWritePaths.indexOf(args.path) !== -1) {
+                var failPaths = def1002(overides.failFileWritePaths, []);
+                if (failPaths.indexOf(args.path) !== -1) {
                     throw new Error('disk full');
                 }
                 files[args.path] = args.content;
@@ -1092,6 +1107,14 @@ suite('preCliReworkSetup — extracted helpers (gh-1002)', function() {
             assert.equal(parsed.inputFolder, 'input/PROJ-9');
             assert.equal(parsed.prAnchor, 5);
         });
+
+        test('parsePrAnchor resolves the folder anchor before jobParams and null when neither exists', function() {
+            var h = makeActionHarness({});
+            assert.equal(h.module.parsePrAnchor('pr-42', {}), 42);
+            assert.equal(h.module.parsePrAnchor('PROJ-123', { jobParams: { prNumber: '9' } }), 9);
+            assert.equal(h.module.parsePrAnchor('PROJ-123', { jobParams: { pr: 11 } }), 11);
+            assert.equal(h.module.parsePrAnchor('PROJ-123', {}), null);
+        });
     });
 
     suite('resolveRepoInfo', function() {
@@ -1344,6 +1367,13 @@ suite('preCliReworkSetup — extracted helpers (gh-1002)', function() {
 
             assert.equal(h.calls.createTracker, 0);
             assert.equal(h.calls.postComment.length, 0);
+        });
+
+        test('errorTicketKeyOf resolves the key from flat params or jobParams, empty when none', function() {
+            var h = makeActionHarness({});
+            assert.equal(h.module.errorTicketKeyOf({ inputFolderPath: 'input/PROJ-123' }), 'PROJ-123');
+            assert.equal(h.module.errorTicketKeyOf({ jobParams: { inputFolderPath: 'input/PROJ-9' } }), 'PROJ-9');
+            assert.equal(h.module.errorTicketKeyOf({}), '');
         });
     });
 

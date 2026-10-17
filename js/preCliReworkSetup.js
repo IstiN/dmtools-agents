@@ -577,6 +577,49 @@ function postReworkStartedCommentStep(tracker, ticketKey, customParams, ctx) {
 }
 
 /**
+ * The ticket key an action()-level error should be reported to: derived from
+ * inputFolderPath (flat params or jobParams), '' when none is derivable.
+ * (gh-1002) Extracted from reportActionError().
+ */
+function errorTicketKeyOf(params) {
+    return (params.inputFolderPath ||
+        (params.jobParams && params.jobParams.inputFolderPath) || '').split('/').pop();
+}
+
+/**
+ * Tracker for the error comment: reuse the probed tracker when there is one,
+ * otherwise build one from the params. Returns null when creation fails.
+ * (gh-1002) Extracted from reportActionError().
+ */
+function createErrorTracker(params, tracker) {
+    var errorTracker = (typeof tracker !== 'undefined' && tracker) ? tracker : null;
+    if (!errorTracker) {
+        try {
+            errorTracker = trackersModule.createTracker(
+                configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params)),
+                (params.jobParams && params.jobParams.customParams) || params.customParams);
+        } catch (trackerError) {
+            console.error('Failed to create tracker for error comment:', trackerError);
+        }
+    }
+    return errorTracker;
+}
+
+/**
+ * Post the "❌ Rework Setup Error" comment, in the flavor of the ticket's
+ * tracker (gh-770): Markdown on GitHub issues, wiki markup on Jira.
+ * (gh-1002) Extracted from reportActionError().
+ */
+function postErrorComment(errorTracker, ticketKey, error, params) {
+    var errorCustomParams = (params.jobParams && params.jobParams.customParams) || params.customParams;
+    var em = commentMarkup.forTicket(ticketKey, errorCustomParams);
+    errorTracker.postComment(
+        ticketKey,
+        em.h(3, '❌ Rework Setup Error') + '\n\n' + em.code(truncateForComment(error.toString()))
+    );
+}
+
+/**
  * Report an action()-level failure to the tracker as a "❌ Rework Setup
  * Error" comment. Optional helper — every failure mode (no ticket key,
  * tracker creation, the comment itself) is logged and swallowed.
@@ -584,29 +627,12 @@ function postReworkStartedCommentStep(tracker, ticketKey, customParams, ctx) {
  */
 function reportActionError(params, tracker, error) {
     try {
-        const ticketKey = (params.inputFolderPath ||
-            (params.jobParams && params.jobParams.inputFolderPath) || '').split('/').pop();
+        const ticketKey = errorTicketKeyOf(params);
         if (ticketKey) {
             // Post the error to the ticket via the probed tracker provider
-            var errorTracker = (typeof tracker !== 'undefined' && tracker) ? tracker : null;
-            if (!errorTracker) {
-                try {
-                    errorTracker = trackersModule.createTracker(
-                        configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params)),
-                        (params.jobParams && params.jobParams.customParams) || params.customParams);
-                } catch (trackerError) {
-                    console.error('Failed to create tracker for error comment:', trackerError);
-                }
-            }
+            var errorTracker = createErrorTracker(params, tracker);
             if (errorTracker) {
-                // Flavor follows the ticket's tracker (gh-770): Markdown
-                // on GitHub issues, wiki markup on Jira.
-                var errorCustomParams = (params.jobParams && params.jobParams.customParams) || params.customParams;
-                var em = commentMarkup.forTicket(ticketKey, errorCustomParams);
-                errorTracker.postComment(
-                    ticketKey,
-                    em.h(3, '❌ Rework Setup Error') + '\n\n' + em.code(truncateForComment(error.toString()))
-                );
+                postErrorComment(errorTracker, ticketKey, error, params);
             }
         }
     } catch (e) {
@@ -792,6 +818,8 @@ if (typeof module !== 'undefined' && module.exports) {
         // gh-1002: helpers extracted from action() to bring its CRAP under the
         // quality-gate threshold — exported for direct unit testing.
         parseReworkParams,
+        resolveActualParams,
+        parsePrAnchor,
         resolveRepoInfo,
         postRepoResolutionFailure,
         findPrForRework,
@@ -800,6 +828,9 @@ if (typeof module !== 'undefined' && module.exports) {
         runSetupCommandsStep,
         writeReworkBaseHead,
         postReworkStartedCommentStep,
-        reportActionError
+        reportActionError,
+        createErrorTracker,
+        postErrorComment,
+        errorTicketKeyOf
     };
 }
