@@ -38,6 +38,23 @@ function branchSlugFor(customParams) {
     return 'update-' + ts;
 }
 
+/**
+ * Builds a git command scoped to the knowledge-hosting repository.
+ *
+ * By default (no customParams.knowledgeRepoDir) the knowledge base lives in the
+ * current working repository and plain `git <args>` is used — the original
+ * single-repo behavior. When the knowledge base lives in a SEPARATE repository
+ * checked out inside the workspace (e.g. a shared memory repo cloned under
+ * dependencies/ via .dmtools/repositories.json), customParams.knowledgeRepoDir
+ * points at that checkout and every git command is scoped to it via `git -C`,
+ * so branch/commit/push hit the memory repo's origin and never touch the outer
+ * working repo. knowledgeDir stays relative to that repo root.
+ */
+function gitCommand(customParams, args) {
+    var repoDir = customParams.knowledgeRepoDir;
+    return repoDir ? 'git -C "' + repoDir + '" ' + args : 'git ' + args;
+}
+
 function action(params) {
     try {
         var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
@@ -50,7 +67,7 @@ function action(params) {
             return { success: true, skipped: true };
         }
 
-        var status = cleanOutput(cli_execute_command({ command: 'git status --porcelain -- "' + knowledgeDir + '"' }));
+        var status = cleanOutput(cli_execute_command({ command: gitCommand(customParams, 'status --porcelain -- "' + knowledgeDir + '"') }));
         if (!status) {
             console.log('pushKnowledgeUpdate: no changes under', knowledgeDir, '— nothing to push.');
             return { success: true, skipped: true };
@@ -58,8 +75,8 @@ function action(params) {
 
         console.log('pushKnowledgeUpdate: detected changes under', knowledgeDir, ':\n' + status);
 
-        cli_execute_command({ command: 'git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"' });
-        cli_execute_command({ command: 'git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"' });
+        cli_execute_command({ command: gitCommand(customParams, 'config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"') });
+        cli_execute_command({ command: gitCommand(customParams, 'config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"') });
 
         var slug = branchSlugFor(customParams);
         var branchName = 'knowledge/' + slug + '-review-lessons';
@@ -67,15 +84,17 @@ function action(params) {
             ? 'knowledge(pr-' + customParams.prNumber + '): distill review lessons from merged PR'
             : 'knowledge: distill review lessons';
 
-        cli_execute_command({ command: 'git checkout -b "' + branchName + '"' });
-        cli_execute_command({ command: 'git add -- "' + knowledgeDir + '"' });
-        cli_execute_command({ command: 'git commit -m "' + commitSubject + '"' });
+        cli_execute_command({ command: gitCommand(customParams, 'checkout -b "' + branchName + '"') });
+        cli_execute_command({ command: gitCommand(customParams, 'add -- "' + knowledgeDir + '"') });
+        cli_execute_command({ command: gitCommand(customParams, 'commit -m "' + commitSubject + '"') });
 
-        var pushOutput = cleanOutput(cli_execute_command({ command: 'git push -u origin "' + branchName + '"' }));
+        var pushOutput = cleanOutput(cli_execute_command({ command: gitCommand(customParams, 'push -u origin "' + branchName + '"') }));
         console.log('pushKnowledgeUpdate: pushed branch', branchName);
         console.log(pushOutput);
 
-        return { success: true, branchName: branchName, knowledgeDir: knowledgeDir };
+        var result = { success: true, branchName: branchName, knowledgeDir: knowledgeDir };
+        if (customParams.knowledgeRepoDir) result.knowledgeRepoDir = customParams.knowledgeRepoDir;
+        return result;
 
     } catch (error) {
         console.error('❌ Error in pushKnowledgeUpdate:', error);
@@ -84,5 +103,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = { action, gitCommand };
 }
