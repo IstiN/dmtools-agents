@@ -1981,6 +1981,15 @@
       "total": 6699,
       "cacheRead": 0,
       "model": "kimi-for-coding"
+    },
+    {
+      "leg": "rework",
+      "at": "2026-10-17T16:03:41Z",
+      "prompt": 52105,
+      "completion": 7189,
+      "total": 59294,
+      "cacheRead": 976896,
+      "model": "kimi-for-coding"
     }
   ],
   "pr-968": [
