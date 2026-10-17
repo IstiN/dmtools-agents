@@ -1,6 +1,32 @@
 /* Unit tests for js/sm/mergeBot.js — the event-driven merge fast path. */
 /* global loadModule, assert, test, suite, makeRequire */
 
+// gh-952: state-aware list payload for the multi-PR slot-holder
+// scenarios — extracted from `fixture` so the CRAP ratchet baseline
+// (fixture ≤ 12) holds; prIndex maps state → raw REST list payload,
+// absent, the legacy single-PR shape is served.
+function listPayload(opts, pr, state) {
+    if (opts.prIndex) return JSON.stringify(opts.prIndex[state || 'open'] || []);
+    return JSON.stringify([{ number: pr.number }]);
+}
+
+// gh-952: per-number get_pr / check-runs payloads — extracted from
+// `fixture` for the same ratchet reason; both opt-maps are scenario
+// knobs for multi-PR suites.
+function prPayload(opts, pr, pullRequestId) {
+    if (opts.prByNumber) {
+        return JSON.stringify(opts.prByNumber[pullRequestId] || { state: 'OPEN' });
+    }
+    return JSON.stringify(pr);
+}
+
+function checkRunsPayload(opts, checkRuns, commitSha) {
+    if (opts.checkRunsByNumber && opts.checkRunsByNumber[commitSha] !== undefined) {
+        return JSON.stringify({ check_runs: opts.checkRunsByNumber[commitSha] });
+    }
+    return JSON.stringify({ check_runs: checkRuns });
+}
+
 function fixture(opts) {
     opts = opts || {};
     var calls = { merges: [], adds: [], removes: [], comments: [], cli: [] };
@@ -32,20 +58,10 @@ function fixture(opts) {
         },
         github_list_prs: function (a) {
             listCalls.push(a);
-            // gh-952: state-aware list (open/merged) for the multi-PR
-            // slot-holder scenarios. prIndex maps state → raw REST list
-            // payload; absent, the legacy single-PR shape is served.
-            if (opts.prIndex) {
-                var state = (a && a.state) || 'open';
-                return JSON.stringify(opts.prIndex[state] || []);
-            }
-            return JSON.stringify([{ number: pr.number }]);
+            return listPayload(opts, pr, a && a.state);
         },
         github_get_pr: function (a) {
-            if (opts.prByNumber) {
-                return JSON.stringify(opts.prByNumber[a.pullRequestId] || { state: 'OPEN' });
-            }
-            return JSON.stringify(pr);
+            return prPayload(opts, pr, a && a.pullRequestId);
         },
         github_get_commit_check_runs: function (a) {
             // The Dart tool requires workspace/repository — a bare
@@ -54,10 +70,7 @@ function fixture(opts) {
             // Assert in the test body, not here: mocks run in the module
             // scope, where `assert` is not a global.
             crCalls.push(a);
-            if (opts.checkRunsByNumber && opts.checkRunsByNumber[a.commitSha] !== undefined) {
-                return JSON.stringify({ check_runs: opts.checkRunsByNumber[a.commitSha] });
-            }
-            return JSON.stringify({ check_runs: checkRuns });
+            return checkRunsPayload(opts, checkRuns, a && a.commitSha);
         },
         github_merge_pr: function (m) {
             calls.merges.push(m);
@@ -649,6 +662,27 @@ suite('mergeBot: externally-merged slot holder releases the merge window (gh-952
     // gh-952 extends the same remedy to the dead head it cannot see: the
     // armed holder whose PR already merged.
 
+    // gh-952: REST payload shaping for the state-aware list — extracted
+    // (review thread) so slotFixture stays under CRAP_THRESHOLD for new
+    // code; the branch coverage lives in this suite's tests.
+    function withLabelObjs(p) {
+        return { number: p.number, labels: (p.labels || []).map(function (n) { return { name: n }; }),
+                 head: { sha: p.headSha }, merged_at: p.merged_at };
+    }
+    function slotListPayload(openPrs, mergedPrs, state) {
+        var src = (state || 'open') === 'merged' ? (mergedPrs || []) : openPrs;
+        return JSON.stringify(src.map(withLabelObjs));
+    }
+    function slotPrBody(p) {
+        return { number: p.number, state: 'OPEN', draft: false, mergeable: true,
+                 mergeable_state: p.mergeableState || 'clean',
+                 head: { sha: p.headSha },
+                 labels: (p.labels || []).map(function (n) { return { name: n }; }) };
+    }
+    function slotCheckRunsBody(p) {
+        return { check_runs: p.checkRuns || [] };
+    }
+
     // Multi-PR fixture with a STATE-AWARE PR list: openPrs/mergedPrs are
     // raw REST list payloads (labels included), prByNumber serves the
     // per-number get_pr bodies. Same mock surface as queueFixture above.
@@ -658,9 +692,6 @@ suite('mergeBot: externally-merged slot holder releases the merge window (gh-952
         openPrs.concat(mergedPrs || []).forEach(function (p) { byNumber[p.number] = p; });
         var byHead = {};
         openPrs.forEach(function (p) { byHead[p.headSha] = p; });
-        var labelObjs = function (p) {
-            return (p.labels || []).map(function (n) { return { name: n }; });
-        };
         var listCalls = [];
         var mods = {
             github_list_workflow_runs: function () {
@@ -668,24 +699,13 @@ suite('mergeBot: externally-merged slot holder releases the merge window (gh-952
             },
             github_list_prs: function (a) {
                 listCalls.push(a);
-                var state = (a && a.state) || 'open';
-                var src = state === 'merged' ? (mergedPrs || []) : openPrs;
-                return JSON.stringify(src.map(function (p) {
-                    return { number: p.number, labels: labelObjs(p),
-                             head: { sha: p.headSha }, merged_at: p.merged_at };
-                }));
+                return slotListPayload(openPrs, mergedPrs, a && a.state);
             },
             github_get_pr: function (a) {
-                var p = byNumber[a.pullRequestId] || {};
-                return JSON.stringify({
-                    number: p.number, state: 'OPEN', draft: false, mergeable: true,
-                    mergeable_state: p.mergeableState || 'clean',
-                    head: { sha: p.headSha }, labels: labelObjs(p)
-                });
+                return JSON.stringify(slotPrBody(byNumber[a.pullRequestId] || {}));
             },
             github_get_commit_check_runs: function (a) {
-                var p = byHead[a.commitSha] || {};
-                return JSON.stringify({ check_runs: p.checkRuns || [] });
+                return JSON.stringify(slotCheckRunsBody(byHead[a.commitSha] || {}));
             },
             github_merge_pr: function (m) { calls.merges.push(m); return JSON.stringify({ merged: true }); },
             github_add_labels: function (a) { calls.adds.push(a); return '{}'; },

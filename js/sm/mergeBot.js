@@ -44,6 +44,19 @@ function labelNames(pr) {
 }
 
 /**
+ * The list tools have returned both bare arrays and wrapped objects
+ * ({ pullRequests: [...] } / { items: [...] }) across bridge versions.
+ * Every consumer normalizes through here: a wrapped payload iterated as
+ * a bare array has length undefined, the loop never runs, and the op
+ * vanishes from the log (gh-952 review: mergedSlotHolder once iterated
+ * the merged list raw — a shape mismatch would have silently disabled
+ * the slot release the whole PR exists for).
+ */
+function listArray(prs) {
+    return Array.isArray(prs) ? prs : (prs.pullRequests || prs.items || []);
+}
+
+/**
  * Epoch ms when the run started waiting (check-run started_at, workflow-run
  * created_at) or null when the payload carries no usable timestamp — the
  * gh-766 stale-head detection FAILS OPEN on null (treated as live).
@@ -213,9 +226,9 @@ function hasActiveSmRun(owner, name) {
 var MERGED_SLOT_HOLDER_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 function mergedSlotHolder(owner, name) {
-    var merged = parseMcp(github_list_prs({
+    var merged = listArray(parseMcp(github_list_prs({
         workspace: owner, repository: name, state: 'merged'
-    }));
+    })));
     for (var i = 0; i < merged.length; i++) {
         var p = merged[i];
         var labels = labelNames(p);
@@ -299,7 +312,7 @@ function action(params) {
     function say(line) { log.push(line); console.log(line); }
 
     var prs = parseMcp(github_list_prs({ workspace: owner, repository: name, state: 'open' }));
-    var list = Array.isArray(prs) ? prs : (prs.pullRequests || prs.items || []);
+    var list = listArray(prs);
     var acted = 0;
     var deferredApproved = false;
     // gh-766 dead-head skip: the FIFO head position is checked for liveness
