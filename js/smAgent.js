@@ -2755,53 +2755,59 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                     }
                                 }
                             } else if (vOrphans && vOrphans.length) {
-                                // gh-998 NEUTRAL SWEEP — the finally-path rows
-                                // the gh-857 mirror never covered: terminal-
-                                // owner orphans (the gh-865 detector: pending
-                                // check-runs whose owning run concluded, past
-                                // the grace) whose cycle left NO verdict on the
-                                // head (no green cover — the failure/
-                                // superseded/cancelled/died rows of the gh-998
-                                // capability table). Live fa #1563 (2026-10-17,
-                                // head f3d58647): the kicker-suite placeholder
-                                // Quality gate (check-run 117469671401) stayed
-                                // in_progress 40+ min past its cycle and held
-                                // mergeStateStatus=BLOCKED with 58 green
-                                // siblings; the fall-through legacy cure (a
-                                // same-sha re-dispatch) cannot conclude a stamp
-                                // nothing will conclude (gh-865's own note).
-                                // The honest terminal state is 'neutral' — a
-                                // terminal owner carries no live verdict about
-                                // its head (I3) — closed under the cycle's own
-                                // app token (I4) with the gh-857 AC2 fail-safe
-                                // already established above (no ACTIVE run on
-                                // the head). Link-less placeholders deliberately
-                                // keep the gh-852 fresh-sha reset below: a
-                                // same-sha re-dispatch RE-MINTS them, so only a
-                                // fresh head cures that pathology (gh-852 AC3).
-                                // A neutral close is not a green verdict — the
-                                // PR still re-validates via the legacy dispatch
-                                // fall-through; the sweep only retires the
-                                // zombie. Every swept check-run logs the
-                                // zombie-swept line and increments the tick
-                                // counter ridden into the factory-state payload
-                                // (I5) — and a close that GitHub rejects (403
-                                // ownership, transient) is retried next tick,
-                                // never silently dropped (E2 degradation).
+                                // gh-998 NEUTRAL SWEEP — the finally-path
+                                // rows the gh-857 mirror never covered:
+                                // terminal-owner orphans (the gh-865
+                                // detector: pending check-runs whose owning
+                                // run concluded, past the grace) whose
+                                // cycle left NO verdict on the head (no
+                                // green cover — the failure/superseded/
+                                // cancelled/died rows of the gh-998
+                                // capability table). Live fa #1563
+                                // (2026-10-17, head f3d58647): the kicker-
+                                // suite placeholder Quality gate (check-run
+                                // 117469671401) stayed in_progress 40+ min
+                                // past its cycle and held mergeStateStatus=
+                                // BLOCKED with 58 green siblings; the
+                                // fall-through legacy cure (a same-sha
+                                // re-dispatch) cannot conclude a stamp
+                                // nothing will conclude (gh-865's own
+                                // note). The honest terminal state is
+                                // 'neutral' — a terminal owner carries no
+                                // live verdict about its head (I3) — closed
+                                // under the cycle's own app token (I4) with
+                                // the gh-857 AC2 fail-safe established
+                                // above (no ACTIVE run on the head).
+                                // Link-less placeholders deliberately keep
+                                // the gh-852 fresh-sha reset below: a
+                                // same-sha re-dispatch RE-MINTS them, so
+                                // only a fresh head cures that pathology
+                                // (gh-852 AC3). A neutral close is not a
+                                // green verdict — the PR still re-validates
+                                // via the legacy dispatch fall-through; the
+                                // sweep only retires the zombie. Every
+                                // swept check-run logs the zombie-swept
+                                // line and increments the tick counter
+                                // ridden into the factory-state payload
+                                // (I5); a close GitHub rejects (403
+                                // ownership, transient) is retried next
+                                // tick, never silently dropped (E2).
                                 var swConc = sweepZombieCheckRunsNeutral(
                                     effectiveRepoInfo, vOrphans, vHead0);
                                 if (swConc.concluded > 0) {
                                     console.log('  🧹 ' + key + ' zombie-swept ' +
-                                        swConc.concluded + ' terminal-owner check-run(s) as' +
-                                        ' neutral (gh-998)' +
+                                        swConc.concluded + ' terminal-owner check-run(s)' +
+                                        ' as neutral (gh-998)' +
                                         (swConc.rejected
                                             ? ' — ' + swConc.rejected + ' rejected, retry next tick'
                                             : ''));
                                     tickZombiesSwept += swConc.concluded;
                                 } else if (swConc.rejected) {
-                                    console.warn('  ⚠️  ' + key + ' zombie sweep rejected (' +
-                                        swConc.rejected + ') — retry next tick (gh-998)');
+                                    console.warn('  ⚠️  ' + key + ' zombie sweep' +
+                                        ' rejected (' + swConc.rejected + ') — retry next' +
+                                        ' tick (gh-998)');
                                 }
+                            }
                         } else if (phHeadRuns !== null) {
                             console.log('  ⏭️  ' + key + ' placeholders carry a LIVE run on' +
                                         ' the head (gh-857 AC2) — no in-place conclusion,' +
@@ -4082,6 +4088,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // gh-806: this tick's rework latch rides the snapshot —
                     // the next tick's armer consults what this tick armed.
                     reworkInFlight: tickReworkLatch ? tickReworkLatch.map : {},
+                    // gh-998 (I5): this tick's zombie-swept count rides the
+                    // snapshot cumulatively — operators see the leak rate.
+                    zombiesSwept: tickZombiesSwept,
                     legWorkflow: reworkLatchModule.DEFAULT_LEG_WORKFLOW
                 });
                 var spUrl = factoryStateModule.publishFactoryState(
@@ -5924,6 +5933,74 @@ function concludePlaceholderCheckRuns(repoInfo, placeholders, coverRun) {
                         ' -f "output[summary]=' + coverLine + '"'
                 });
                 out.concluded++;
+            } catch (ePatch) {
+                if (!out.rejected) out.rejected = (ePatch && ePatch.message) || String(ePatch);
+            }
+        });
+    } finally {
+        if (swapped && sourceTok) {
+            try { set_env_variable('GH_TOKEN', sourceTok); } catch (e3) {}
+        }
+    }
+    return out;
+}
+
+// gh-998 sweper transport — force-complete terminal-owner zombie check-runs
+// as 'neutral'. Same creator-token contract as concludePlaceholderCheckRuns
+// (the check-runs belong to the github-actions App; the PATCH rides
+// jobParams.silentToken with checks:write, the tick PAT would 403 — gh-848
+// belt, gh-857): the close runs under the SAME app identity that minted the
+// stamps (I4 — GitHub rejects cross-app completion with 404 by design, live
+// fa #1563: operator REST close of check-run 117469671401 404'd). Every
+// successful close emits the I5 machine-log line
+// `zombie-swept: <check-run-id> head <sha>`; the caller accumulates the
+// count into the tick counter ridden into the factory-state snapshot.
+// Returns { concluded, rejected } — rejected carries the first failure
+// message; a rejection is a degradation retried next tick, never a silent
+// leak (gh-998 E2).
+function sweepZombieCheckRunsNeutral(repoInfo, zombies, headSha) {
+    var out = { concluded: 0, rejected: null };
+    if (!zombies || !zombies.length) return out;
+    var summary = 'Zombie-swept by the SM tick (gh-998): the check-run outlived its' +
+        ' validation cycle — the owning workflow run terminated without' +
+        ' concluding it. Closed as neutral: a dead cycle carries no verdict' +
+        ' about its head. The PR re-validates through the normal dispatch path.';
+    var appToken = (RUN_JOB_PARAMS || {}).silentToken;
+    var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
+    var swapped = false;
+    if (appToken) {
+        try {
+            set_env_variable('GH_TOKEN', appToken);
+            swapped = true;
+        } catch (eSwap) {
+            console.warn('  ⚠️  gh-998 token swap failed, sweep uses the PAT' +
+                         ' (may 403): ' + (eSwap.message || eSwap));
+        }
+    }
+    try {
+        zombies.forEach(function (z) {
+            if (!z || z.id === null || z.id === undefined) {
+                if (!out.rejected) out.rejected = 'check-run id missing (cannot PATCH)';
+                return;
+            }
+            if (DRY) {
+                console.log('  🧪 [dry] zombie-swept check-run ' + z.id + ' ("' +
+                            (z.name || '?') + '") completed/neutral on ' +
+                            String(headSha).slice(0, 7) + ' (gh-998)');
+                out.concluded++;
+                return;
+            }
+            try {
+                cli_execute_command({
+                    command: 'gh api -X PATCH repos/' + repoInfo.owner +
+                        '/' + repoInfo.repo + '/check-runs/' + z.id +
+                        ' -f status=completed' +
+                        ' -f conclusion=neutral' +
+                        ' -f "output[title]=SM swept a zombie check-run (gh-998)"' +
+                        ' -f "output[summary]=' + summary + '"'
+                });
+                out.concluded++;
+                console.log('  ' + checkRunZombiesModule.zombieSweptLine(z.id, headSha));
             } catch (ePatch) {
                 if (!out.rejected) out.rejected = (ePatch && ePatch.message) || String(ePatch);
             }
