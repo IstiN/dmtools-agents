@@ -111,9 +111,8 @@ jobs:
           # nyc instrument copies only .js — add the json/md/sh payloads the
           # suite reads (configs, instructions, prompts, fixtures).
           rsync -a --exclude '*.js' --exclude '.git' ./ "$RUNNER_TEMP/inst/"
-          # Source-level guards read site/ browser scripts as TEXT (they are never executed by the
-          # suite): restore the pristine app.js so the counters nyc injected do not break them.
-          cp site/factory/app.js "$RUNNER_TEMP/inst/site/factory/app.js"
+          # (the factory board — and its pristine-app source guard — moved to
+          # the dmtools-factory repo; nothing browser-side is text-read here anymore)
           # Tests call `git ls-files` (agentDocsCoverage): give the copied tree a throwaway
           # index of the same tracked files, without the real history.
           (cd "$RUNNER_TEMP/inst" && git init -q && git add -A -f . >/dev/null 2>&1 || true)

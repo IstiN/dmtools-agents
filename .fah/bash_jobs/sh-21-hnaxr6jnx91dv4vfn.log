@@ -1,0 +1,13 @@
+7bbda248 chore(site): move factory board to the dmtools-factory repo
+599c245b fix(sm): config fallback matches the stub input exactly (add github-actions[bot])
+59fefe81 Merge branch 'main' into fix/machine-author-bot
+cab0c4b1 gh-978 [CRAP] writeSolutionAndDiagrams.action (266): split solution write-out and diagram handling (#985)
+622d0241 fix(sm): recognize dmtools-factory-bot as a machine author (app-migration fall-out)
+---
+ js/unit-tests/test_scmGithubProvider.js            | 512 +++++++++++
+ js/unit-tests/test_scmGitlabProvider.js            | 414 +++++++++
+ js/unit-tests/test_writeSolutionAndDiagrams.js     | 436 ++++++++++
+ js/writeSolutionAndDiagrams.js                     | 604 ++++++++-----
+ 18 files changed, 4260 insertions(+), 924 deletions(-)
+---upstream search---
+be374aa8 fix(sm): recognize dmtools-factory-bot as a machine author (#988)

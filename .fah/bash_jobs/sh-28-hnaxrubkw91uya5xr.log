@@ -1,0 +1,15 @@
+commit 7bbda248478b94a809043f07677ad2ef338d3581
+Author: IstiN <IstiN@users.noreply.github.com>
+Date:   Sat Oct 17 21:29:11 2026 +0300
+
+    chore(site): move factory board to the dmtools-factory repo
+    
+    The board now lives (and publishes) at IstiN/dmtools-factory;
+    drop site/factory here and the factory exclude in pages.yml.
+
+ .github/workflows/pages.yml                        |   5 +-
+ site/factory/README.md                             | 311 -------
+ site/factory/app.js                                | 932 ---------------------
+ site/factory/config.js                             |  86 --
+ site/factory/flow.js                               | 302 -------
+ site/factory/index.html                            | 116 ---
