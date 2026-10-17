@@ -1744,6 +1744,15 @@
       "total": 133978,
       "cacheRead": 4477952,
       "model": "kimi-for-coding"
+    },
+    {
+      "leg": "review",
+      "at": "2026-10-17T12:36:32Z",
+      "prompt": 39148,
+      "completion": 10628,
+      "total": 49776,
+      "cacheRead": 946489,
+      "model": "kimi-for-coding"
     }
   ],
   "issue-961": [
