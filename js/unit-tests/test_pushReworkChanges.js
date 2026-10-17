@@ -39,7 +39,8 @@ var githubHelpersModule = loadModule(
             writePRContext: function() {}
         },
         './machineNotice.js': loadModule('js/common/machineNotice.js'),
-        './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') }))
+        './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })),
+        './ci.js': loadModule('js/common/ci.js')
     }),
     {}
 );

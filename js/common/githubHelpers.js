@@ -21,6 +21,7 @@
 const prHelper = require('./pullRequest.js');
 const gitOps = require('./gitOps.js');
 const reviewThreadInventory = require('./reviewThreadInventory.js');
+const ciModule = require('./ci.js');
 
 // Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
 // common/pullRequest.js once — this delegate keeps every local call site.
@@ -413,6 +414,31 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
 }
 
 /**
+ * Unwrap a dmtools tool result: when the raw value is a JSON string
+ * carrying a `.result` payload, return the payload; otherwise return
+ * the value as-is (plain logs pass through untouched).
+ */
+function _unwrapToolResult(raw) {
+    if (typeof raw !== 'string') return raw;
+    try {
+        var parsed = JSON.parse(raw);
+        return (parsed && parsed.result) ? parsed.result : raw;
+    } catch (e) { return raw; }
+}
+
+/**
+ * Fetch a workflow job's logs either through an SCM provider or the
+ * github_get_job_logs tool, with the JSON-string `.result` unwrapping
+ * applied. Shared by the /jobs/N and /runs/N details_url paths.
+ */
+function _fetchJobLogs(scm, owner, repo, jobId) {
+    var raw = scm
+        ? scm.getJobLogs(String(jobId))
+        : github_get_job_logs({ workspace: owner, repository: repo, jobId: String(jobId) });
+    return _unwrapToolResult(raw);
+}
+
+/**
  * Detect failed CI checks for the PR head commit.
  * Uses github_get_commit_check_runs to find failures, then fetches job logs.
  * Writes ci_failures.md to the input folder when failures are found.
@@ -512,26 +538,42 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
             var jobIdMatch = check.details_url && check.details_url.match(/\/jobs?\/(\d+)/);
             if (jobIdMatch) {
                 try {
-                    var rawLogs;
-                    if (scm) {
-                        rawLogs = scm.getJobLogs(jobIdMatch[1]);
-                    } else {
-                        rawLogs = github_get_job_logs({
-                            workspace: owner,
-                            repository: repo,
-                            jobId: jobIdMatch[1]
-                        });
-                    }
-                    var logs = rawLogs;
-                    if (typeof rawLogs === 'string') {
-                        try {
-                            var parsed = JSON.parse(rawLogs);
-                            if (parsed && parsed.result) logs = parsed.result;
-                        } catch (e) { /* use as-is */ }
-                    }
-                    appendLog(check, logs, 'Error log');
+                    appendLog(check, _fetchJobLogs(scm, owner, repo, jobIdMatch[1]), 'Error log');
                 } catch (e) {
                     console.warn('Could not fetch logs for job', jobIdMatch[1], ':', e.message || e);
+                }
+            } else {
+                // gh-982: check-run URLs shaped /actions/runs/N carry no job id —
+                // resolve the run's failed jobs and fetch each job's log.
+                var runIdMatch = check.details_url && check.details_url.match(/\/runs\/(\d+)/);
+                if (runIdMatch) {
+                    try {
+                        var rawJobs = null;
+                        if (scm) {
+                            if (typeof scm.getWorkflowRunJobs === 'function') {
+                                rawJobs = scm.getWorkflowRunJobs(runIdMatch[1]);
+                            }
+                        } else {
+                            rawJobs = github_get_workflow_run_jobs({
+                                workspace: owner,
+                                repository: repo,
+                                runId: runIdMatch[1]
+                            });
+                        }
+                        var runJobs = ciModule._jobsOf(rawJobs);
+                        for (var ji = 0; ji < runJobs.length; ji++) {
+                            var runJob = runJobs[ji];
+                            if (!runJob || (runJob.conclusion !== 'failure' && runJob.conclusion !== 'timed_out')) {
+                                continue;
+                            }
+                            if (runJob.id === undefined || runJob.id === null) continue;
+                            var jobLogs = _fetchJobLogs(scm, owner, repo, runJob.id);
+                            var jobLabel = runJob.name ? 'Error log (' + runJob.name + ')' : 'Error log';
+                            appendLog(check, jobLogs, jobLabel);
+                        }
+                    } catch (e) {
+                        console.warn('Could not fetch jobs/logs for run', runIdMatch[1], ':', e.message || e);
+                    }
                 }
             }
 
@@ -553,13 +595,7 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
                         var jenkinsJobPath = jenkinsJobPathParts.join('/');
                         jenkins_get_job_info({ jobPath: jenkinsJobPath, buildNumber: jenkinsBuildNumber });
                         var jenkinsRawLogs = jenkins_get_build_log({ jobPath: jenkinsJobPath, buildNumber: jenkinsBuildNumber });
-                        var jenkinsLogs = jenkinsRawLogs;
-                        if (typeof jenkinsRawLogs === 'string') {
-                            try {
-                                var jenkinsParsed = JSON.parse(jenkinsRawLogs);
-                                if (jenkinsParsed && jenkinsParsed.result) jenkinsLogs = jenkinsParsed.result;
-                            } catch (e) { /* use as-is */ }
-                        }
+                        var jenkinsLogs = _unwrapToolResult(jenkinsRawLogs);
                         appendLog(check, jenkinsLogs, 'Jenkins error log');
                     }
                 } catch (e) {
