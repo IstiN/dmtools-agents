@@ -521,3 +521,244 @@ suite('triggerBitriseTestAutomation — characterization', function() {
         assert.equal(taCalls(rec, 'createScm').length, 0);
     });
 });
+
+suite('triggerBitriseTestAutomation — extracted helpers', function() {
+
+    test('resolveInitialTrackerCustomParams tier order', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.deepEqual(mod.resolveInitialTrackerCustomParams(
+            { jobParams: { customParams: { a: 1 } }, customParams: { b: 2 } }), { a: 1 });
+        assert.deepEqual(mod.resolveInitialTrackerCustomParams(
+            { jobParams: { inputJql: 'x' }, customParams: { b: 2 } }), { inputJql: 'x' });
+        assert.deepEqual(mod.resolveInitialTrackerCustomParams(
+            { customParams: { b: 2 } }), { b: 2 });
+        assert.deepEqual(mod.resolveInitialTrackerCustomParams({}), {});
+    });
+
+    test('resolveJql precedence: params.inputJql beats jobParams', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.equal(mod.resolveJql({ inputJql: 'a', jobParams: { inputJql: 'b' } }), 'a');
+        assert.equal(mod.resolveJql({ jobParams: { inputJql: 'b' } }), 'b');
+        assert.equal(mod.resolveJql({}), '');
+    });
+
+    test('parseJqlTicketKey extracts and uppercases, or empty string', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.equal(mod.parseJqlTicketKey('key = ts-42 AND x'), 'TS-42');
+        assert.equal(mod.parseJqlTicketKey('labels = nokey'), '');
+    });
+
+    test('parseIssueList: string/object with issues, bare array, junk, null', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.deepEqual(mod.parseIssueList('{"issues":[{"key":"A"}]}'), [{ key: 'A' }]);
+        assert.deepEqual(mod.parseIssueList({ issues: [{ key: 'B' }] }), [{ key: 'B' }]);
+        assert.deepEqual(mod.parseIssueList([{ key: 'C' }]), [{ key: 'C' }]);
+        assert.deepEqual(mod.parseIssueList(null), []);
+        assert.throws(function() { mod.parseIssueList('{bad json'); });
+    });
+
+    test('fetchTicketByKey: found, keyless, throwing tracker', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.deepEqual(mod.fetchTicketByKey({ getIssue: function() { return { key: 'K1' }; } }, 'K1'),
+            { ticket: { key: 'K1' } });
+        assert.deepEqual(mod.fetchTicketByKey({ getIssue: function() { return {}; } }, 'K2'),
+            { error: 'Could not fetch ticket: K2' });
+        assert.deepEqual(mod.fetchTicketByKey({ getIssue: function() { throw new Error('x'); } }, 'K3'),
+            { error: 'Failed to fetch ticket K3: Error: x' });
+    });
+
+    test('searchFirstTicket: found, empty, junk payload', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.deepEqual(
+            mod.searchFirstTicket({ searchIssues: function() { return [{ key: 'S1' }]; } }, 'j'),
+            { ticket: { key: 'S1' } });
+        assert.deepEqual(
+            mod.searchFirstTicket({ searchIssues: function() { return []; } }, 'j'),
+            { error: 'No tickets found for JQL: j' });
+        var junk = mod.searchFirstTicket({ searchIssues: function() { return '{oops'; } }, 'j');
+        assert.contains(junk.error, 'jira_search_by_jql failed: SyntaxError');
+    });
+
+    test('resolveTicketParams: passthrough, by key, errors, by search', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        var withTicket = { ticket: { key: 'T' }, jobParams: { j: 1 } };
+        assert.equal(mod.resolveTicketParams(withTicket, null).params, withTicket);
+        var byKey = mod.resolveTicketParams({ inputJql: 'key = X-1', jobParams: { j: 1 } },
+            { getIssue: function() { return { key: 'X-1' }; } });
+        assert.deepEqual(byKey.params, { ticket: { key: 'X-1' }, jobParams: { j: 1 } });
+        assert.deepEqual(
+            mod.resolveTicketParams({ inputJql: 'key = X-2' }, { getIssue: function() { return null; } }),
+            { error: 'Could not fetch ticket: X-2' });
+        var bySearch = mod.resolveTicketParams({ inputJql: 'label = y' },
+            { searchIssues: function() { return [{ key: 'X-3' }]; } });
+        assert.deepEqual(bySearch.params.ticket, { key: 'X-3' });
+        assert.deepEqual(
+            mod.resolveTicketParams({ inputJql: 'label = z' }, { searchIssues: function() { return []; } }),
+            { error: 'No tickets found for JQL: label = z' });
+    });
+
+    test('pickActualParams and resolveCustomParams tier order', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        var p = { ticket: { key: 'T' }, jobParams: {} };
+        assert.equal(mod.pickActualParams(p), p);
+        assert.equal(mod.pickActualParams({ jobParams: { a: 1 } }).a, 1);
+        assert.equal(mod.pickActualParams({ b: 2 }).b, 2);
+        assert.deepEqual(mod.resolveCustomParams(
+            { jobParams: { customParams: { a: 1 } } }, {}), { a: 1 });
+        assert.deepEqual(mod.resolveCustomParams(
+            { jobParams: { flat: true } }, { customParams: { c: 3 } }), { flat: true });
+        assert.deepEqual(mod.resolveCustomParams(
+            {}, { customParams: { c: 3 } }), { c: 3 });
+        assert.deepEqual(mod.resolveCustomParams({}, {}), {});
+    });
+
+    test('resolveTicketSummary falls back to key', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.equal(mod.resolveTicketSummary({ ticket: { key: 'K', fields: { summary: 'S' } } }), 'S');
+        assert.equal(mod.resolveTicketSummary({ ticket: { key: 'K', fields: {} } }), 'K');
+        assert.equal(mod.resolveTicketSummary({ ticket: { key: 'K' } }), 'K');
+    });
+
+    test('resolveBitriseConfig defaults', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.deepEqual(mod.resolveBitriseConfig({ bitriseBuild: { appSlug: 'a', workflowId: 'w', branch: 'b' } }),
+            { appSlug: 'a', workflowId: 'w', branch: 'b' });
+        assert.deepEqual(mod.resolveBitriseConfig({}),
+            { appSlug: undefined, workflowId: 'ai_teammate_test_automation', branch: 'main' });
+    });
+
+    test('pr matching helpers', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.equal(mod.prHeadRef({ head: { ref: 'r' } }), 'r');
+        assert.equal(mod.prHeadRef({}), '');
+        assert.equal(mod.prViewUrl({ html_url: 'h', url: 'u' }), 'h');
+        assert.equal(mod.prViewUrl({ url: 'u' }), 'u');
+        assert.equal(mod.prViewUrl({}), '');
+        assert.equal(mod.prMatchesTicket({ title: 'fix TS-1' }, 'TS-1'), true);
+        assert.equal(mod.prMatchesTicket({ head: { ref: 'ai/TS-1' } }, 'TS-1'), true);
+        assert.equal(mod.prMatchesTicket({ title: 'x', head: { ref: 'y' } }, 'TS-1'), false);
+    });
+
+    test('findFeaturePr scans past non-matching PRs and tolerates null list', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        var prs = [
+            { number: 1, title: 'nope', head: { ref: 'x' }, html_url: 'h1' },
+            { number: 2, title: 'TS-9 yes', head: { ref: 'y' }, url: 'h2' }
+        ];
+        assert.deepEqual(mod.findFeaturePr(prs, 'TS-9'), { url: 'h2', number: '2' });
+        assert.deepEqual(mod.findFeaturePr(prs, 'TS-99'), { url: '', number: '' });
+        assert.deepEqual(mod.findFeaturePr(null, 'TS-9'), { url: '', number: '' });
+    });
+
+    test('resolveFeaturePrConfig partial config', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.deepEqual(mod.resolveFeaturePrConfig({ featurePR: { owner: 'o', repo: 'r' } }), { owner: 'o', repo: 'r' });
+        assert.deepEqual(mod.resolveFeaturePrConfig({ featurePR: { owner: 'o' } }), { owner: 'o', repo: '' });
+        assert.deepEqual(mod.resolveFeaturePrConfig({}), { owner: '', repo: '' });
+    });
+
+    test('parseBuildList mirrors bitrise payload shapes', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.deepEqual(mod.parseBuildList('{"data":[{"slug":"s"}]}'), [{ slug: 's' }]);
+        assert.deepEqual(mod.parseBuildList({ data: [{ slug: 's' }] }), [{ slug: 's' }]);
+        assert.deepEqual(mod.parseBuildList([{ slug: 's' }]), [{ slug: 's' }]);
+        assert.deepEqual(mod.parseBuildList(null), []);
+        assert.throws(function() { mod.parseBuildList('{bad'); });
+    });
+
+    test('matchesTicketBuild requires commit message match AND slug', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.equal(mod.matchesTicketBuild({ commit_message: 'x TS-1 y', slug: 's' }, 'TS-1'), true);
+        assert.equal(mod.matchesTicketBuild({ commit_message: 'x TS-1 y' }, 'TS-1'), false);
+        assert.equal(mod.matchesTicketBuild({ commit_message: 'nope', slug: 's' }, 'TS-1'), false);
+        assert.equal(mod.matchesTicketBuild({}, 'TS-1'), false);
+    });
+
+    test('abortOneBuild and abortBuildsForTicket count successes only', function() {
+        var mod = loadTaModule({
+            rec: makeTaRecorder(),
+            bitriseAbortBuild: function() { throw new Error('nope'); }
+        });
+        assert.equal(mod.abortOneBuild('app', { slug: 's' }, 'TS-1'), false);
+        assert.deepEqual(mod.abortBuildsForTicket('app', [
+            { commit_message: 'TS-1 a', slug: 's1' },
+            { commit_message: 'TS-1 b' }
+        ], 'TS-1'), 0);
+
+        var ok = loadTaModule({ rec: makeTaRecorder() });
+        assert.equal(ok.abortBuildsForTicket('app', [
+            { commit_message: 'TS-1 a', slug: 's1', build_number: 1 },
+            { commit_message: 'other', slug: 's2' },
+            { commit_message: 'TS-1 b', slug: 's3', build_number: 3 }
+        ], 'TS-1'), 2);
+    });
+
+    test('abortInFlightBuilds survives unparseable list payloads', function() {
+        var mod = loadTaModule({
+            rec: makeTaRecorder(),
+            bitriseListBuilds: function() { return '{bad'; }
+        });
+        assert.equal(mod.abortInFlightBuilds({ appSlug: 'a', workflowId: 'w', branch: 'b' }, 'TS-1'), 0);
+    });
+
+    test('buildTriggerEnvVars matrix', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.deepEqual(mod.buildTriggerEnvVars('TS-1', { url: 'u', number: '2', owner: 'o', repo: 'r' }), [
+            { mapped_to: 'TICKET_KEY', value: 'TS-1', is_expand: false },
+            { mapped_to: 'INPUT_JQL', value: 'key = TS-1', is_expand: false },
+            { mapped_to: 'FEATURE_PR_URL', value: 'u', is_expand: false },
+            { mapped_to: 'FEATURE_PR_NUMBER', value: '2', is_expand: false },
+            { mapped_to: 'FEATURE_REPO', value: 'o/r', is_expand: false }
+        ]);
+    });
+
+    test('resolveBuildUrl / resolveBuildNumber priority chain', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.equal(mod.resolveBuildUrl({ build_url: 'a' }, null), 'a');
+        assert.equal(mod.resolveBuildUrl({}, { build_url: 'b' }), 'b');
+        assert.equal(mod.resolveBuildUrl({ build_slug: 's' }, null), 'https://app.bitrise.io/build/s');
+        assert.equal(mod.resolveBuildUrl({}, null), '');
+        assert.equal(mod.resolveBuildNumber({ build_number: 1 }, null), '1');
+        assert.equal(mod.resolveBuildNumber({}, { build_number: 2 }), '2');
+        assert.equal(mod.resolveBuildNumber({}, null), '');
+    });
+
+    test('moveToInTesting tolerates no-move results and tracker errors', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        mod.moveToInTesting({ moveToStatusOrMark: function() { return { moved: true, marked: false }; } }, 'K', { IN_TESTING: 'S' });
+        mod.moveToInTesting({ moveToStatusOrMark: function() { return { moved: false, marked: true }; } }, 'K', { IN_TESTING: 'S' });
+        mod.moveToInTesting({ moveToStatusOrMark: function() { return { moved: false, marked: false }; } }, 'K', { IN_TESTING: 'S' });
+        mod.moveToInTesting({ moveToStatusOrMark: function() { throw new Error('nope'); } }, 'K', { IN_TESTING: 'S' });
+    });
+
+    test('safeRemoveLabel announce flag, empty label, silent failure', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        var removed = [];
+        var okTracker = { removeLabel: function(key, label) { removed.push(key + ':' + label); } };
+        mod.safeRemoveLabel(okTracker, 'K', '', true);
+        mod.safeRemoveLabel(okTracker, 'K', 'L', true);
+        mod.safeRemoveLabel(okTracker, 'K', 'L2', false);
+        var failTracker = { removeLabel: function() { throw new Error('x'); } };
+        mod.safeRemoveLabel(failTracker, 'K', 'L', true);
+        assert.deepEqual(removed, ['K:L', 'K:L2']);
+    });
+
+    test('resolveWipLabel from contextId with default fallback', function() {
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        assert.equal(mod.resolveWipLabel({ metadata: { contextId: 'ios' } }), 'ios_wip');
+        assert.equal(mod.resolveWipLabel({ metadata: {} }), 'test_automation_wip');
+        assert.equal(mod.resolveWipLabel({}), 'test_automation_wip');
+    });
+
+    test('reportFatalError posts only when ticket key exists, survives tracker absence', function() {
+        var posted = [];
+        var tracker = { postComment: function(key, comment) { posted.push({ key: key, comment: comment }); } };
+        var mod = loadTaModule({ rec: makeTaRecorder() });
+        mod.reportFatalError(tracker, { ticket: { key: 'K' } }, new Error('e1'));
+        assert.equal(posted[0].key, 'K');
+        assert.contains(posted[0].comment, '{code}Error: e1{code}');
+        mod.reportFatalError(tracker, {}, new Error('e2'));
+        mod.reportFatalError(undefined, { ticket: { key: 'K' } }, new Error('e3'));
+        assert.equal(posted.length, 1);
+    });
+});

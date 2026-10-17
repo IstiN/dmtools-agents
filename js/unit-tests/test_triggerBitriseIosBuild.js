@@ -348,3 +348,138 @@ suite('triggerBitriseIosBuild — characterization', function() {
         assert.equal(iosCalls(rec, 'getIssue')[0].key, 'IOS-13');
     });
 });
+
+suite('triggerBitriseIosBuild — extracted helpers', function() {
+
+    test('resolveJql precedence', function() {
+        var mod = loadIosModule({ rec: makeIosRecorder() });
+        assert.equal(mod.resolveJql({ inputJql: 'a' }, { inputJql: 'b' }), 'a');
+        assert.equal(mod.resolveJql({}, { inputJql: 'b' }), 'b');
+        assert.equal(mod.resolveJql({}, {}), '');
+    });
+
+    test('parseJqlTicketKey extraction', function() {
+        var mod = loadIosModule({ rec: makeIosRecorder() });
+        assert.equal(mod.parseJqlTicketKey('key = ios-7'), 'IOS-7');
+        assert.equal(mod.parseJqlTicketKey('no key'), '');
+    });
+
+    test('parseIssueList shapes', function() {
+        var mod = loadIosModule({ rec: makeIosRecorder() });
+        assert.deepEqual(mod.parseIssueList('{"issues":[1]}'), [1]);
+        assert.deepEqual(mod.parseIssueList({ issues: [2] }), [2]);
+        assert.deepEqual(mod.parseIssueList([3]), [3]);
+        assert.deepEqual(mod.parseIssueList(undefined), []);
+        assert.throws(function() { mod.parseIssueList('{bad'); });
+    });
+
+    test('ticketSummaryOf fallback chain', function() {
+        var mod = loadIosModule({ rec: makeIosRecorder() });
+        assert.equal(mod.ticketSummaryOf({ fields: { summary: 'S' } }, 'K'), 'S');
+        assert.equal(mod.ticketSummaryOf({ fields: {} }, 'K'), 'K');
+        assert.equal(mod.ticketSummaryOf(null, 'K'), 'K');
+    });
+
+    test('resolveIosBitriseConfig defaults', function() {
+        var mod = loadIosModule({ rec: makeIosRecorder() });
+        assert.deepEqual(mod.resolveIosBitriseConfig({ bitriseBuild: { appSlug: 'a', workflowId: 'w', triggerBranch: 't' } }),
+            { appSlug: 'a', workflowId: 'w', triggerBranch: 't' });
+        assert.deepEqual(mod.resolveIosBitriseConfig({ bitriseBuild: { appSlug: 'a' } }),
+            { appSlug: 'a', workflowId: 'build_ios_simulator', triggerBranch: '' });
+    });
+
+    test('pr matching helpers', function() {
+        var mod = loadIosModule({ rec: makeIosRecorder() });
+        assert.equal(mod.prHeadRef({ head: { ref: 'r' } }), 'r');
+        assert.equal(mod.prViewUrl({ url: 'u' }), 'u');
+        assert.equal(mod.prMatchesTicket({ head: { ref: 'x/IOS-1' } }, 'IOS-1'), true);
+        assert.equal(mod.prMatchesTicket({}, 'IOS-1'), false);
+    });
+
+    test('findFeaturePrWithBranch: ref branch, default branch, no match, null list', function() {
+        var mod = loadIosModule({ rec: makeIosRecorder() });
+        assert.deepEqual(
+            mod.findFeaturePrWithBranch([{ number: 1, title: 'IOS-2 go', head: { ref: 'ai/i2' }, html_url: 'h' }], 'IOS-2', 'develop'),
+            { branch: 'ai/i2', url: 'h' });
+        assert.deepEqual(
+            mod.findFeaturePrWithBranch([{ number: 2, title: 'IOS-2' }], 'IOS-2', 'develop').branch,
+            'develop');
+        assert.equal(mod.findFeaturePrWithBranch([{ number: 3, title: 'x' }], 'IOS-2'), null);
+        assert.equal(mod.findFeaturePrWithBranch(null, 'IOS-2'), null);
+    });
+
+    test('resolveIosFeatureBranch: missing owner/repo skips scm, scm failure falls back', function() {
+        var rec = makeIosRecorder();
+        var mod = loadIosModule({ rec: rec, listPrs: function() { throw new Error('down'); } });
+        assert.deepEqual(mod.resolveIosFeatureBranch({}, { featurePR: { owner: 'o' } }, 'K'),
+            { branch: 'develop', url: '' });
+        assert.deepEqual(mod.resolveIosFeatureBranch({}, { featurePR: { owner: 'o', repo: 'r' } }, 'K'),
+            { branch: 'develop', url: '' });
+        assert.equal(iosCalls(rec, 'createScm').length, 1);
+    });
+
+    test('buildIosEnvVars optional PR url entry', function() {
+        var mod = loadIosModule({ rec: makeIosRecorder() });
+        assert.deepEqual(mod.buildIosEnvVars('K', 'br', ''), [
+            { mapped_to: 'TICKET_KEY', value: 'K', is_expand: false },
+            { mapped_to: 'MOBILE_BRANCH', value: 'br', is_expand: false }
+        ]);
+        assert.deepEqual(mod.buildIosEnvVars('K', 'br', 'pu')[2],
+            { mapped_to: 'FEATURE_PR_URL', value: 'pu', is_expand: false });
+    });
+
+    test('resolveIosBuildUrl priority chain', function() {
+        var mod = loadIosModule({ rec: makeIosRecorder() });
+        assert.equal(mod.resolveIosBuildUrl({ build_url: 'a', build_slug: 's', results: [{ build_url: 'r' }] }), 'a');
+        assert.equal(mod.resolveIosBuildUrl({ build_slug: 's', results: [{ build_url: 'r' }] }),
+            'https://app.bitrise.io/build/s');
+        assert.equal(mod.resolveIosBuildUrl({ results: [{ build_url: 'r' }] }), 'r');
+        assert.equal(mod.resolveIosBuildUrl({}), '');
+    });
+
+    test('parseTriggerResult: object, JSON string, junk throws', function() {
+        var mod = loadIosModule({ rec: makeIosRecorder() });
+        assert.deepEqual(mod.parseTriggerResult({ build_number: 5, build_slug: 's' }),
+            { buildUrl: 'https://app.bitrise.io/build/s' });
+        assert.deepEqual(mod.parseTriggerResult('{"build_url":"j"}'), { buildUrl: 'j' });
+        assert.throws(function() { mod.parseTriggerResult('{bad'); });
+    });
+
+    test('buildIosComment rows appear only when values present', function() {
+        var mod = loadIosModule({ rec: makeIosRecorder() });
+        var base = mod.buildIosComment('K', 'wf', 'br', '', '');
+        assert.contains(base, '| Workflow | wf |');
+        assert.notContains(base, '| Build |');
+        assert.notContains(base, '| Feature PR |');
+        var full = mod.buildIosComment('K', 'wf', 'br', 'bu', 'pu');
+        assert.contains(full, '| Build | [View on Bitrise|bu] |');
+        assert.contains(full, '| Feature PR | pu |');
+    });
+
+    test('safeIosPostComment survives tracker errors', function() {
+        var rec = makeIosRecorder();
+        var mod = loadIosModule({ rec: rec });
+        mod.safeIosPostComment('K', 'c');
+        assert.equal(iosCalls(rec, 'postComment').length, 1);
+        var rec2 = makeIosRecorder();
+        var mod2 = loadIosModule({ rec: rec2, trackerApi: { postComment: function() { throw new Error('x'); } } });
+        mod2.safeIosPostComment('K', 'c');
+        assert.equal(iosCalls(rec2, 'postComment').length, 1);
+    });
+
+    test('resolveIosTicket: empty jql, key fetch, search fallback', function() {
+        var rec = makeIosRecorder();
+        var mod = loadIosModule({
+            rec: rec,
+            trackerApi: { getIssue: function(k) { return { key: k, fields: { summary: 'S' } }; } }
+        });
+        assert.deepEqual(mod.resolveIosTicket(''), { key: '', summary: '' });
+        assert.deepEqual(mod.resolveIosTicket('key = KK-1'), { key: 'KK-1', summary: 'S' });
+        var rec2 = makeIosRecorder();
+        var mod2 = loadIosModule({
+            rec: rec2,
+            trackerApi: { searchIssues: function() { return [{ key: 'KK-2', fields: {} }]; } }
+        });
+        assert.deepEqual(mod2.resolveIosTicket('labels = q'), { key: 'KK-2', summary: 'KK-2' });
+    });
+});
