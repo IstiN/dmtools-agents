@@ -79,7 +79,7 @@ echo "📥 Installing Node.js ${NODE_VERSION} via nvm..."
 
 if [ ! -s "${NVM_DIR}/nvm.sh" ]; then
   echo "Installing nvm..."
-  curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+  ( set -o pipefail; curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash )
 fi
 
 export NVM_DIR
