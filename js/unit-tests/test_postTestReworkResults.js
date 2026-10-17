@@ -277,6 +277,142 @@ var REWORK_PR12 = {
 
 var SHA40_ACTION = '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec';
 
+/** file_read double driven by an explicit path→content map (blocks real config). */
+function makeReworkFileReadMock(files) {
+    return function(args) {
+        var p = args && args.path ? args.path : args;
+        if (files[p] !== undefined) return files[p];
+        if (p && p.indexOf('.dmtools/config') !== -1) return null;
+        return null;
+    };
+}
+
+/** cli_execute_command double with realistic git answers for the rework flow. */
+function makeReworkCliMock(recorded, deps) {
+    return function(args) {
+        var command = args.command;
+        recorded.cli.push(command);
+        if (command === 'git branch --show-current') return 'test/PROJ-123';
+        if (command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
+            throw new Error('Command execution failed (exit code 1)'); // no MERGE_HEAD
+        }
+        if (command === 'git rev-parse HEAD') return SHA40_ACTION;
+        if (command.indexOf('git ls-remote --heads origin') === 0) {
+            return SHA40_ACTION + '\trefs/heads/' + command.replace('git ls-remote --heads origin ', '');
+        }
+        if (command === 'git diff --cached --stat') return deps.stagedStat || '';
+        return '';
+    };
+}
+
+/** scm double recording body/comment/thread side effects. */
+function makeReworkScmMock(recorded, deps) {
+    var scm = deps.scm || {
+        updatePrBody: function(number, body) { recorded.prBodies.push({ number: number, body: body }); },
+        addComment: function(number, body) { recorded.prComments.push({ number: number, body: body }); },
+        replyToThread: function(number, thread, text) { recorded.threadReplies.push({ number: number, thread: thread, text: text }); },
+        resolveThread: function(number, thread) { recorded.threadResolves.push({ number: number, thread: thread }); }
+    };
+    scm.openPrs = deps.openPrs !== undefined ? deps.openPrs : [REWORK_PR12];
+    scm.listPrs = function(state) { return this.openPrs; };
+    return scm;
+}
+
+/** tracker double recording comments, label removals and status moves. */
+function makeReworkTrackerMock(recorded) {
+    return {
+        postComment: function(key, body) { recorded.trackerComments.push({ key: key, body: body }); },
+        removeLabel: function(key, label) { recorded.labelRemovals.push({ key: key, label: label }); },
+        moveToStatusOrMark: function(key, status, stageKey) {
+            recorded.statusMoves.push({ key: key, status: status, stageKey: stageKey });
+            return { moved: true, marked: false };
+        },
+        getIssue: function(key) {
+            return { key: key, fields: { summary: 'Fix flaky login test' } };
+        }
+    };
+}
+
+/** feedbackLoop double with per-deps gate results and resume recording. */
+function makeReworkFeedbackLoopMock(recorded, deps) {
+    return {
+        runQualityGates: function(opts) {
+            recorded.qualityGates.push(opts);
+            return deps.qualityGateResult !== undefined ? deps.qualityGateResult : { success: true };
+        },
+        runPolicyGates: function(opts) {
+            recorded.policyGates.push(opts);
+            return deps.policyGateResult !== undefined ? deps.policyGateResult : { success: true };
+        },
+        resumeAgent: function(opts) {
+            recorded.resumeCalls.push(opts);
+            return deps.resumeAttempted ? { attempted: true } : { attempted: false };
+        }
+    };
+}
+
+/** autoStart double recording both trigger kinds. */
+function makeReworkAutoStartMock(recorded, deps) {
+    return {
+        triggerConfiguredWorkflowForTicket: function(opts) {
+            recorded.configuredTriggers.push(opts);
+            return deps.configuredTriggerResult || false;
+        },
+        triggerSmIfIdle: function(opts) { recorded.smTriggers.push(opts); }
+    };
+}
+
+// Shared mutable state for the hoisted configLoader closures — the factories
+// below must stay flat: nested closure bodies double-count into the factory's
+// complexity and blow the per-function CRAP ≤ 8 gate for new functions.
+var reworkHarnessState = { deps: {}, scm: null };
+
+function reworkLoadProjectConfig() {
+    var deps = reworkHarnessState.deps;
+    if (deps.configError) throw new Error(deps.configError);
+    return REWORK_ACTION_CONFIG;
+}
+
+function reworkCreateScm() {
+    return reworkHarnessState.scm;
+}
+
+function reworkFormatTemplate(template, vars) {
+    var out = template;
+    for (var k in vars) {
+        if (vars.hasOwnProperty(k)) {
+            out = out.split('{' + k + '}').join(vars[k] === undefined ? '' : vars[k]);
+        }
+    }
+    return out;
+}
+
+function reworkResolveInstructions() {
+    return { jobParamPatch: reworkHarnessState.deps.jobParamPatch || {} };
+}
+
+/** configLoader double over the shared REWORK_ACTION_CONFIG. */
+function makeReworkConfigLoaderMock(deps, scm) {
+    reworkHarnessState.deps = deps;
+    reworkHarnessState.scm = scm;
+    return {
+        loadProjectConfig: reworkLoadProjectConfig,
+        createScm: reworkCreateScm,
+        formatTemplate: reworkFormatTemplate,
+        resolveInstructions: reworkResolveInstructions
+    };
+}
+
+/** prHelper double: real helpers, recorded createPullRequest with a fixed result. */
+function makeReworkPrHelperMock(recorded, deps) {
+    return Object.assign({}, prHelperRealForRework, {
+        createPullRequest: function(opts) {
+            recorded.createPullRequests.push(opts);
+            return deps.createPullRequestResult || { success: true, prUrl: 'https://github.com/acme/widgets/pull/99' };
+        }
+    });
+}
+
 /**
  * Full-control harness for postTestReworkResults.action().
  * Every collaborator is a recorded double; file reads come from `deps.files`.
@@ -302,110 +438,16 @@ function loadReworkActionHarness(deps) {
     };
 
     var files = deps.files || {};
-    var fileReadMock = function(args) {
-        var p = args && args.path ? args.path : args;
-        if (files[p] !== undefined) return files[p];
-        if (p && p.indexOf('.dmtools/config') !== -1) return null;
-        return null;
-    };
-
-    var cliMock = function(args) {
-        var command = args.command;
-        recorded.cli.push(command);
-        if (command === 'git branch --show-current') return 'test/PROJ-123';
-        if (command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
-            throw new Error('Command execution failed (exit code 1)'); // no MERGE_HEAD
-        }
-        if (command === 'git rev-parse HEAD') return SHA40_ACTION;
-        if (command.indexOf('git ls-remote --heads origin') === 0) {
-            return SHA40_ACTION + '\trefs/heads/' + command.replace('git ls-remote --heads origin ', '');
-        }
-        if (command === 'git diff --cached --stat') return deps.stagedStat || '';
-        return '';
-    };
-
-    var scm = deps.scm || {
-        openPrs: deps.openPrs !== undefined ? deps.openPrs : [REWORK_PR12],
-        listPrs: function(state) { return this.openPrs; },
-        updatePrBody: function(number, body) { recorded.prBodies.push({ number: number, body: body }); },
-        addComment: function(number, body) { recorded.prComments.push({ number: number, body: body }); },
-        replyToThread: function(number, thread, text) { recorded.threadReplies.push({ number: number, thread: thread, text: text }); },
-        resolveThread: function(number, thread) { recorded.threadResolves.push({ number: number, thread: thread }); }
-    };
-
-    var tracker = {
-        postComment: function(key, body) { recorded.trackerComments.push({ key: key, body: body }); },
-        removeLabel: function(key, label) { recorded.labelRemovals.push({ key: key, label: label }); },
-        moveToStatusOrMark: function(key, status, stageKey) {
-            recorded.statusMoves.push({ key: key, status: status, stageKey: stageKey });
-            return { moved: true, marked: false };
-        },
-        getIssue: function(key) {
-            return { key: key, fields: { summary: 'Fix flaky login test' } };
-        }
-    };
-
-    var commentMarkupReal = loadModule('js/common/commentMarkup.js',
-        makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
-
-    var prHelper = Object.assign({}, prHelperRealForRework, {
-        createPullRequest: function(opts) {
-            recorded.createPullRequests.push(opts);
-            return deps.createPullRequestResult || { success: true, prUrl: 'https://github.com/acme/widgets/pull/99' };
-        }
-    });
-
-    var feedbackLoop = {
-        runQualityGates: function(opts) {
-            recorded.qualityGates.push(opts);
-            return (deps.qualityGateResult !== undefined) ? deps.qualityGateResult : { success: true };
-        },
-        runPolicyGates: function(opts) {
-            recorded.policyGates.push(opts);
-            return (deps.policyGateResult !== undefined) ? deps.policyGateResult : { success: true };
-        },
-        resumeAgent: function(opts) {
-            recorded.resumeCalls.push(opts);
-            return deps.resumeAttempted ? { attempted: true } : { attempted: false };
-        }
-    };
-
-    var autoStart = {
-        triggerConfiguredWorkflowForTicket: function(opts) {
-            recorded.configuredTriggers.push(opts);
-            return deps.configuredTriggerResult || false;
-        },
-        triggerSmIfIdle: function(opts) { recorded.smTriggers.push(opts); }
-    };
-
-    var configLoaderMock = {
-        loadProjectConfig: deps.loadProjectConfig || function() {
-            if (deps.configError) throw new Error(deps.configError);
-            return REWORK_ACTION_CONFIG;
-        },
-        createScm: function() { return scm; },
-        formatTemplate: function(template, vars) {
-            var out = template;
-            for (var k in vars) {
-                if (vars.hasOwnProperty(k)) {
-                    out = out.split('{' + k + '}').join(vars[k] === undefined ? '' : vars[k]);
-                }
-            }
-            return out;
-        },
-        resolveInstructions: function(contextId, nu, config) {
-            return { jobParamPatch: deps.jobParamPatch || {} };
-        }
-    };
-
+    var scm = makeReworkScmMock(recorded, deps);
+    var tracker = makeReworkTrackerMock(recorded);
     var moduleExports = loadModule(
         'js/postTestReworkResults.js',
         makeRequire({
-            './configLoader.js': configLoaderMock,
+            './configLoader.js': makeReworkConfigLoaderMock(deps, scm),
             './config.js': configModule,
-            './common/autoStart.js': autoStart,
-            './common/feedbackLoop.js': feedbackLoop,
-            './common/pullRequest.js': prHelper,
+            './common/autoStart.js': makeReworkAutoStartMock(recorded, deps),
+            './common/feedbackLoop.js': makeReworkFeedbackLoopMock(recorded, deps),
+            './common/pullRequest.js': makeReworkPrHelperMock(recorded, deps),
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
             './common/tokenUsageComment.js': {
                 postTokenUsageComments: function(key, opts) { recorded.tokenUsage.push({ key: key, opts: opts }); },
@@ -414,15 +456,16 @@ function loadReworkActionHarness(deps) {
             './common/trackers.js': {
                 createTracker: function(config, customParams) { return tracker; }
             },
-            './common/commentMarkup.js': commentMarkupReal
+            './common/commentMarkup.js': loadModule('js/common/commentMarkup.js',
+                makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }))
         }),
         {
-            cli_execute_command: deps.cliWrapper ? deps.cliWrapper(cliMock) : cliMock,
-            file_read: fileReadMock
+            cli_execute_command: deps.cliWrapper ? deps.cliWrapper(makeReworkCliMock(recorded, deps)) : makeReworkCliMock(recorded, deps),
+            file_read: makeReworkFileReadMock(files)
         }
     );
 
-    return { module: moduleExports, recorded: recorded, tracker: tracker, scm: scm, cliMock: cliMock };
+    return { module: moduleExports, recorded: recorded, tracker: tracker, scm: scm, cliMock: null };
 }
 
 function reworkActionParams(overrides) {
@@ -930,6 +973,24 @@ suite('postTestReworkResults — extracted helpers (gh-928)', function() {
         var tally = { posted: 0, resolved: 0 };
         m.handleReplyItem(scm, 12, { inReplyToId: 'r1', threadId: 't1', reply: 'Done' }, tally);
         assert.deepEqual(tally, { posted: 0, resolved: 0 }, 'failed reply/resolve do not count');
+    });
+
+    test('replyThreadIdOf prefers threadId, falls back to discussionId, else undefined', function() {
+        var m = helperModule();
+        assert.equal(m.replyThreadIdOf({ threadId: 't1', discussionId: 'd1' }), 't1');
+        assert.equal(m.replyThreadIdOf({ discussionId: 'd1' }), 'd1');
+        assert.equal(m.replyThreadIdOf({}), undefined);
+    });
+
+    test('reworkFormatTemplate substitutes every var and empties missing ones', function() {
+        assert.equal(reworkFormatTemplate('KEY {ticketKey} RESULT {result}', { ticketKey: 'PROJ-9', result: 'fix' }),
+            'KEY PROJ-9 RESULT fix');
+        // Keys absent from the map stay unreplaced; present-but-undefined values → ''.
+        assert.equal(reworkFormatTemplate('KEY {ticketKey} RESULT {result}', { ticketKey: 'PROJ-9' }),
+            'KEY PROJ-9 RESULT {result}', 'absent key stays unreplaced');
+        assert.equal(reworkFormatTemplate('KEY {ticketKey}', { ticketKey: undefined }),
+            'KEY ', 'undefined value → empty string');
+        assert.equal(reworkFormatTemplate('no vars', { ignored: 1 }), 'no vars');
     });
 
     test('handleReplyItem uses discussionId when threadId is absent (resolve skipped)', function() {

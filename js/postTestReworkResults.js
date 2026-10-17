@@ -215,6 +215,11 @@ function postReworkBodyAndComment(scm, pr, ticketKey, testStatus, passed, prBody
     }
 }
 
+/** The review-thread identifier for a reply item (threadId, else discussionId). */
+function replyThreadIdOf(item) {
+    return item.threadId || item.discussionId;
+}
+
 /**
  * One outputs/review_replies.json entry: post the explicit thread reply
  * and/or resolve the thread. Mutates the tally; call order is list order.
@@ -222,7 +227,7 @@ function postReworkBodyAndComment(scm, pr, ticketKey, testStatus, passed, prBody
 function handleReplyItem(scm, pullRequestId, item, tally) {
     const thread = {
         rootCommentId: item.inReplyToId,
-        threadId: item.threadId || item.discussionId
+        threadId: replyThreadIdOf(item)
     };
     const replyText = item.reply ? String(item.reply).trim() : '';
 
@@ -776,6 +781,7 @@ if (typeof module !== 'undefined' && module.exports) {
         runPublishGates,
         releaseReworkLock,
         postReworkBodyAndComment,
+        replyThreadIdOf,
         handleReplyItem,
         resumeOrReport,
         triggerAutoStart
