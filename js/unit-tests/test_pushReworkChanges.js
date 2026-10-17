@@ -756,6 +756,13 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
 // in the observed incident retrying instead led the CLI agent to fabricate a
 // fake pr_info.md just to slip past the "refuse to commit on base branch" guard.
 
+// gh-969 ratchet: opt() keeps loadPushReworkChangesForAction under its
+// baseline CRAP — every `(opts && opts.x) || default` site costs 2 decisions,
+// the accessor costs none at the call site.
+function opt(opts, key) {
+    return (opts && opts[key]) || null;
+}
+
 function loadPushReworkChangesForAction(mocks, opts) {
     var jiraPostCommentCalls = [];
     var jiraMoveToStatusCalls = [];
@@ -777,7 +784,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
             }];
         },
         getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; }
-    }, (opts && opts.scm) || {});
+    }, opt(opts, 'scm') || {});
 
     var defaultMocks = {
         cli_execute_command: function(args) {
@@ -815,7 +822,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
         makeRequire({
             './common/gitStaging.js': gitStagingModule,
             './configLoader.js': {
-                loadProjectConfig: function() { return baseConfig(opts && opts.config); },
+                loadProjectConfig: function() { return baseConfig(opt(opts, 'config')); },
                 resolveInstructions: function() { return { jobParamPatch: {} }; },
                 formatTemplate: function(template, vars) {
                     return template.replace(/\{(\w+)\}/g, function(m, key) {
@@ -826,12 +833,12 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './common/scm.js': { createScm: function() { return scm; } },
             './common/submodules.js': { pushManagedSubmodules: function() {} },
             './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
-                readStagedDiffStat: (opts && opts.stagedDiffStat) || function() { return 'M file.txt\n'; },
+                readStagedDiffStat: opt(opts, 'stagedDiffStat') || function() { return 'M file.txt\n'; },
                 syncBranchWithBase: function() { return { success: true, updated: false }; }
             }),
             './common/githubHelpers.js': githubHelpersModule,
             './common/feedbackLoop.js': (function() {
-                var fl = (opts && opts.feedbackLoop) || {
+                var fl = opt(opts, 'feedbackLoop') || {
                     runQualityGates: function() { return { success: true }; },
                     runPolicyGates: function() { return { success: true }; },
                     runPostPublishGates: function() { return { success: true }; },
@@ -844,11 +851,11 @@ function loadPushReworkChangesForAction(mocks, opts) {
                 };
                 return fl;
             })(),
-            './common/autoStart.js': (opts && opts.autoStart) || {
+            './common/autoStart.js': opt(opts, 'autoStart') || {
                 triggerSmIfIdle: function() {},
                 triggerConfiguredWorkflowForTicket: function() { return false; }
             },
-            './common/outputFiles.js': (opts && opts.outputFiles) || { readOutputFile: function() { return null; } },
+            './common/outputFiles.js': opt(opts, 'outputFiles') || { readOutputFile: function() { return null; } },
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },

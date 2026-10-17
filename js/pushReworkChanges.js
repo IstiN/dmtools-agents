@@ -1528,6 +1528,224 @@ function handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, 
     return { success: false, blocked: true, error: 'Rework blocked: no code changes while ' + openCount + ' review thread(s) are open' };
 }
 
+// gh-957 CRAP split (ratchet: action regressed 263.3 -> 288.5 against the
+// released baseline): the completion tail of action extracted into small
+// single-responsibility helpers. Behavior-preserving — the original block
+// order, comments and log lines live on in the helpers; each is covered by
+// the dedicated suite in test_pushReworkChanges.js so the ratchet stays
+// under CRAP_THRESHOLD for the new functions too.
+
+// Post general fix summary as a top-level PR comment only when there are no
+// review thread replies. When replies exist, the thread replies themselves are
+// sufficient; an extra top-level comment is noise — except non-blocking gate
+// warnings, which are worth a short standalone comment even then, since they
+// wouldn't otherwise be visible anywhere on the PR.
+function hasMeaningfulSummary(fixSummary) {
+    return fixSummary && fixSummary.length > 50
+        && fixSummary !== '_(No fix summary generated)_';
+}
+
+function postCompletionPrComment(scm, pr, ticketKey, fixSummary, fixSummaryWithWarnings, repliesPosted, nonBlockingGateWarningBlock, codeChangesCommitted) {
+    if (repliesPosted > 0) {
+        console.log('ℹ️ Review thread replies posted — skipping general PR comment');
+        if (nonBlockingGateWarningBlock) {
+            try {
+                scm.addComment(pr.number, '## ⚠️ Non-blocking gate warnings' + nonBlockingGateWarningBlock);
+            } catch (e) {
+                console.warn('Failed to post non-blocking gate warning comment:', e);
+            }
+        }
+        return false;
+    }
+    if (codeChangesCommitted || hasMeaningfulSummary(fixSummary)) {
+        return postPRComment(scm, pr.number, fixSummaryWithWarnings, ticketKey, repliesPosted);
+    }
+    console.log('ℹ️ No thread replies, no code changes, and no meaningful summary — skipping general PR comment');
+    return false;
+}
+
+// Ticket finalization on the completion path: In Review move, initiator
+// assign-back, WIP label removal, SM idempotency-label removal.
+function finalizeTicketState(tracker, ticketKey, statuses, actualParams, customParams) {
+    try {
+        tracker.moveToStatus(ticketKey, statuses.IN_REVIEW);
+        console.log('✅ Moved', ticketKey, 'to', statuses.IN_REVIEW);
+    } catch (statusError) {
+        console.warn('Failed to move ticket to In Review:', statusError);
+    }
+
+    // Assign back to initiator (if provided)
+    try {
+        const initiatorId = actualParams.initiator;
+        if (initiatorId) {
+            tracker.assignTo(ticketKey, initiatorId);
+            console.log('✅ Assigned ticket back to initiator');
+        }
+    } catch (e) {
+        console.warn('Failed to assign ticket:', e);
+    }
+
+    // Remove WIP label if present
+    const wipLabel = actualParams.metadata && actualParams.metadata.contextId
+        ? actualParams.metadata.contextId + '_wip'
+        : null;
+    if (wipLabel) {
+        try {
+            tracker.removeLabel(ticketKey, wipLabel);
+            console.log('Removed WIP label:', wipLabel);
+        } catch (e) {
+            console.warn('Failed to remove WIP label:', e);
+        }
+    }
+
+    // Remove SM idempotency label so the ticket can be re-triggered next cycle
+    removeConfiguredLabels(tracker, ticketKey, customParams);
+}
+
+// GitHub machine loop latches. A no-op rework (no new commits since the last
+// review's head) keeps the latch and goes straight back to rework — no LLM
+// re-review of the unchanged head; owner rule (sticky approval): never
+// re-review an approved PR.
+function latchGateOpen(stickyApproved, freshReviewWanted, pr) {
+    return !stickyApproved && !freshReviewWanted && pr && pr.number;
+}
+
+function rearmNoopRework(scm, tracker, pr, ticketKey) {
+    try {
+        tracker.addLabel(ticketKey, 'agent:rework');
+        console.log('✅ No-op rework: verdict head unchanged — agent:rework re-armed on ' + ticketKey);
+    } catch (e) {
+        console.warn('Failed to re-arm agent:rework on ' + ticketKey + ':', e.message || e);
+    }
+    try {
+        scm.addComment(pr.number,
+            '⚠️ Rework finished with **no new commits** — the previous review verdict (same head) ' +
+            'still stands and its findings are unchanged. Re-review skipped (token guard); rework re-armed.');
+    } catch (e) {
+        console.warn('Failed to post no-op rework comment on PR #' + pr.number + ':', e.message || e);
+    }
+}
+
+function noopLapDecisions(scm, tracker, pr, ticketKey, stickyApproved, freshReviewWanted, resolvedCount) {
+    if (!latchGateOpen(stickyApproved, freshReviewWanted, pr)) return;
+    if (resolvedCount === 0) {
+        rearmNoopRework(scm, tracker, pr, ticketKey);
+        return;
+    }
+    console.log('ℹ️ No-op push but ' + resolvedCount + ' thread(s) resolved this lap (gh-957 audit-resolve)' +
+        ' — agent:rework NOT re-armed; the threadsResolved sweep owns the next step');
+}
+
+function stickyApprovalNotice(scm, pr, stickyApproved) {
+    if (stickyApproved && pr && pr.number) {
+        // Owner rule (sticky approval): never re-review an approved PR.
+        // The rework pushed its fixes; validation re-runs on the new
+        // head and merge-validated closes the loop. Keep BOTH latches
+        // (pr_approved + ai_pr_reviewed) and arm nothing.
+        try {
+            scm.addComment(pr.number,
+                '✅ Rework finished. `pr_approved` is sticky (approved once — never re-reviewed): ' +
+                'the new head re-validates and merges directly.');
+        } catch (e) {
+            console.warn('Failed to post sticky-approval comment on PR #' + pr.number + ':', e.message || e);
+        }
+        console.log('ℹ️ Sticky approval on PR #' + pr.number + ' — re-review NOT armed; re-validation + merge follow');
+    }
+}
+
+function clearAiReviewedLatch(pr, freshReviewWanted, repoInfo) {
+    if (freshReviewWanted && pr && pr.number && typeof github_remove_label === 'function') {
+        try {
+            github_remove_label({
+                workspace: repoInfo.owner, repository: repoInfo.repo,
+                number: pr.number, label: 'ai_pr_reviewed'
+            });
+            console.log('✅ Cleared ai_pr_reviewed on PR #' + pr.number + ' — fresh review armed');
+        } catch (e) {
+            console.warn('Failed to clear ai_pr_reviewed on PR #' + pr.number + ':', e.message || e);
+        }
+    }
+}
+
+// Auto-start pr_review after rework is pushed to In Review (opt-in via customParams).
+function ticketOf(params, actualParams) {
+    return actualParams.ticket || (params.jobParams && params.jobParams.ticket);
+}
+
+function autoStartReviewSkipReason(freshReviewWanted, stickyApproved, ticket) {
+    if (!freshReviewWanted) return 'rework pushed no new commits (token guard)';
+    if (stickyApproved) return 'pr_approved is sticky on the PR (owner rule 2026-09-21)';
+    if (hasPrApprovedLabel(ticket)) return 'ticket has pr_approved label';
+    return null;
+}
+
+function triggerAutoStartReview(ticketKey, customParams, config, reviewConfigFile, scm) {
+    try {
+        return autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            config: config,
+            configFile: reviewConfigFile,
+            label: 'pr_review',
+            scm: scm,
+            stripKeys: [
+                'removeLabel',
+                'autoStartReview',
+                'autoStartReviewConfigFile'
+            ]
+        });
+    } catch (e) {
+        console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
+        return false;
+    }
+}
+
+function runAutoStartReview(scm, config, ticketKey, params, actualParams, customParams, freshReviewWanted, stickyApproved) {
+    var reviewStarted = false;
+    var reviewConfigFile = customParams && customParams.autoStartReviewConfigFile;
+    if (!(customParams && customParams.autoStartReview && reviewConfigFile)) {
+        autoStart.triggerSmIfIdle({ config: config, customParams: customParams, scm: scm });
+        return false;
+    }
+    var skipReason = autoStartReviewSkipReason(freshReviewWanted, stickyApproved, ticketOf(params, actualParams));
+    if (skipReason) {
+        console.log('ℹ️ autoStartReview: skipped — ' + skipReason);
+    } else {
+        reviewStarted = triggerAutoStartReview(ticketKey, customParams, config, reviewConfigFile, scm);
+    }
+    if (!reviewStarted) {
+        autoStart.triggerSmIfIdle({ config: config, customParams: customParams, scm: scm });
+    }
+    return reviewStarted;
+}
+
+function cacheCompletionArtifacts(params) {
+    try { cacheToReleases.action(params); } catch (e) { console.warn('⚠️ cacheToReleases failed (non-fatal):', e); }
+}
+
+// gh-957: stamp the lap marker (head the leg started from, whether a
+// real change landed, how many threads the leg resolved) — the SM
+// no-op loop guard counts consecutive empty laps on one head.
+function stampCompletionLapMarker(scm, pr, ticketKey, lapGate, lapResolutions) {
+    postLapMarker(
+        scm,
+        pr.number,
+        readReworkBaseHead(ticketKey) || (pr.head && (pr.head.sha || pr.head)) || null,
+        lapGate.lapPushed,
+        lapResolutions.resolved
+    );
+}
+
+function postCompletionTokenUsage(params, ticketKey) {
+    // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
+    // wrote outputs/*_usage.json during the agent run.
+    try {
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
 function action(params) {
     try {
         const actualParams = params.ticket ? params : (params.jobParams || params);
@@ -1746,46 +1964,10 @@ function action(params) {
         });
         console.log('Thread replies posted:', repliesPosted);
 
-        // Post general fix summary as a top-level PR comment only when there are no
-        // review thread replies. When replies exist, the thread replies themselves are
-        // sufficient; an extra top-level comment is noise — except non-blocking gate
-        // warnings, which are worth a short standalone comment even then, since they
-        // wouldn't otherwise be visible anywhere on the PR.
-        var hasMeaningfulSummary = fixSummary && fixSummary.length > 50
-            && fixSummary !== '_(No fix summary generated)_';
-        if (repliesPosted > 0) {
-            console.log('ℹ️ Review thread replies posted — skipping general PR comment');
-            if (nonBlockingGateWarningBlock) {
-                try {
-                    scm.addComment(pr.number, '## ⚠️ Non-blocking gate warnings' + nonBlockingGateWarningBlock);
-                } catch (e) {
-                    console.warn('Failed to post non-blocking gate warning comment:', e);
-                }
-            }
-        } else if (codeChangesCommitted || hasMeaningfulSummary) {
-            prCommentPosted = postPRComment(scm, pr.number, fixSummaryWithWarnings, ticketKey, repliesPosted);
-        } else {
-            console.log('ℹ️ No thread replies, no code changes, and no meaningful summary — skipping general PR comment');
-        }
+        prCommentPosted = postCompletionPrComment(scm, pr, ticketKey, fixSummary, fixSummaryWithWarnings,
+            repliesPosted, nonBlockingGateWarningBlock, codeChangesCommitted);
 
-        // Move ticket to In Review
-        try {
-            tracker.moveToStatus(ticketKey, statuses.IN_REVIEW);
-            console.log('✅ Moved', ticketKey, 'to', statuses.IN_REVIEW);
-        } catch (statusError) {
-            console.warn('Failed to move ticket to In Review:', statusError);
-        }
-
-        // Assign back to initiator (if provided)
-        try {
-            const initiatorId = actualParams.initiator;
-            if (initiatorId) {
-                tracker.assignTo(ticketKey, initiatorId);
-                console.log('✅ Assigned ticket back to initiator');
-            }
-        } catch (e) {
-            console.warn('Failed to assign ticket:', e);
-        }
+        finalizeTicketState(tracker, ticketKey, statuses, actualParams, _customParams);
 
         // Post completion comment to the ticket.
         // gh-799: the comment is generated from a LIVE unresolved-thread
@@ -1797,137 +1979,25 @@ function action(params) {
         postJiraComment(tracker, ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted,
             fixSummaryWithWarnings, buildCompletionLiveState(scm, pr, ticketKey, config));
 
-        // Remove WIP label if present
-        const wipLabel = actualParams.metadata && actualParams.metadata.contextId
-            ? actualParams.metadata.contextId + '_wip'
-            : null;
-        if (wipLabel) {
-            try {
-                tracker.removeLabel(ticketKey, wipLabel);
-                console.log('Removed WIP label:', wipLabel);
-            } catch (e) {
-                console.warn('Failed to remove WIP label:', e);
-            }
-        }
-
-        // Remove SM idempotency label so the ticket can be re-triggered next cycle
-        removeConfiguredLabels(tracker, ticketKey, _customParams);
-
         // GitHub machine loop: the once-guard lives on the PR (ai_pr_reviewed),
         // not the issue. Clear it so the reworked head gets a FRESH review —
         // otherwise review-after-dev (notPrLabels: ai_pr_reviewed) skips the
         // PR forever and the loop stalls after one review round.
-        //
-        // Token-burn guard: a no-op rework (no new commits since the last
-        // review's head) keeps the latch and goes straight back to rework —
-        // no LLM re-review of the unchanged head.
         var stickyApproved = prHasApproved(pr, actualParams.ticket || (params.jobParams && params.jobParams.ticket));
         var freshReviewWanted = !stickyApproved && headMovedSinceLastReview(scm, pr);
-        if (stickyApproved && pr && pr.number) {
-            // Owner rule (sticky approval): never re-review an approved PR.
-            // The rework pushed its fixes; validation re-runs on the new
-            // head and merge-validated closes the loop. Keep BOTH latches
-            // (pr_approved + ai_pr_reviewed) and arm nothing.
-            try {
-                scm.addComment(pr.number,
-                    '✅ Rework finished. `pr_approved` is sticky (approved once — never re-reviewed): ' +
-                    'the new head re-validates and merges directly.');
-            } catch (e) {
-                console.warn('Failed to post sticky-approval comment on PR #' + pr.number + ':', e.message || e);
-            }
-            console.log('ℹ️ Sticky approval on PR #' + pr.number + ' — re-review NOT armed; re-validation + merge follow');
-        }
-        if (!stickyApproved && !freshReviewWanted && lapResolutions.resolved === 0 && pr && pr.number) {
-            try {
-                tracker.addLabel(ticketKey, 'agent:rework');
-                console.log('✅ No-op rework: verdict head unchanged — agent:rework re-armed on ' + ticketKey);
-            } catch (e) {
-                console.warn('Failed to re-arm agent:rework on ' + ticketKey + ':', e.message || e);
-            }
-            try {
-                scm.addComment(pr.number,
-                    '⚠️ Rework finished with **no new commits** — the previous review verdict (same head) ' +
-                    'still stands and its findings are unchanged. Re-review skipped (token guard); rework re-armed.');
-            } catch (e) {
-                console.warn('Failed to post no-op rework comment on PR #' + pr.number + ':', e.message || e);
-            }
-        }
-        if (!stickyApproved && !freshReviewWanted && lapResolutions.resolved > 0 && pr && pr.number) {
-            console.log('ℹ️ No-op push but ' + lapResolutions.resolved + ' thread(s) resolved this lap (gh-957 audit-resolve)' +
-                ' — agent:rework NOT re-armed; the threadsResolved sweep owns the next step');
-        }
-        if (freshReviewWanted && pr && pr.number && typeof github_remove_label === 'function') {
-            try {
-                github_remove_label({
-                    workspace: repoInfo.owner, repository: repoInfo.repo,
-                    number: pr.number, label: 'ai_pr_reviewed'
-                });
-                console.log('✅ Cleared ai_pr_reviewed on PR #' + pr.number + ' — fresh review armed');
-            } catch (e) {
-                console.warn('Failed to clear ai_pr_reviewed on PR #' + pr.number + ':', e.message || e);
-            }
-        }
+        stickyApprovalNotice(scm, pr, stickyApproved);
+        noopLapDecisions(scm, tracker, pr, ticketKey, stickyApproved, freshReviewWanted, lapResolutions.resolved);
+        clearAiReviewedLatch(pr, freshReviewWanted, repoInfo);
 
-        // Auto-start pr_review after rework is pushed to In Review (opt-in via customParams)
-        var reviewStarted = false;
-        const autoStartReview = _customParams && _customParams.autoStartReview;
-        const reviewConfigFile = _customParams && _customParams.autoStartReviewConfigFile;
-        if (autoStartReview && reviewConfigFile) {
-            // Skip if ticket already has pr_approved label (already approved, merge pending)
-            const ticket = actualParams.ticket || (params.jobParams && params.jobParams.ticket);
-            if (!freshReviewWanted) {
-                console.log('ℹ️ autoStartReview: skipped — rework pushed no new commits (token guard)');
-            } else if (stickyApproved) {
-                console.log('ℹ️ autoStartReview: skipped — pr_approved is sticky on the PR (owner rule 2026-09-21)');
-            } else if (hasPrApprovedLabel(ticket)) {
-                console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
-            } else {
-                try {
-                    reviewStarted = autoStart.triggerConfiguredWorkflowForTicket({
-                        ticketKey: ticketKey,
-                        customParams: _customParams,
-                        config: config,
-                        configFile: reviewConfigFile,
-                        label: 'pr_review',
-                        scm: scm,
-                        stripKeys: [
-                            'removeLabel',
-                            'autoStartReview',
-                            'autoStartReviewConfigFile'
-                        ]
-                    });
-                } catch (e) {
-                    console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
-                }
-            }
-        }
-        if (!reviewStarted) {
-            autoStart.triggerSmIfIdle({ config: config, customParams: _customParams, scm: scm });
-        }
+        runAutoStartReview(scm, config, ticketKey, params, actualParams, _customParams, freshReviewWanted, stickyApproved);
 
         // Cache configured artefacts (e.g. cosmo test reports) to GitHub Release — non-fatal
-        try { cacheToReleases.action(params); } catch (e) { console.warn('⚠️ cacheToReleases failed (non-fatal):', e); }
+        cacheCompletionArtifacts(params);
 
         console.log('✅ Rework workflow completed successfully');
 
-        // gh-957: stamp the lap marker (head the leg started from, whether a
-        // real change landed, how many threads the leg resolved) — the SM
-        // no-op loop guard counts consecutive empty laps on one head.
-        postLapMarker(
-            scm,
-            pr.number,
-            readReworkBaseHead(ticketKey) || (pr.head && (pr.head.sha || pr.head)) || null,
-            lapGate.lapPushed,
-            lapResolutions.resolved
-        );
-
-        // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-        // wrote outputs/*_usage.json during the agent run.
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
+        stampCompletionLapMarker(scm, pr, ticketKey, lapGate, lapResolutions);
+        postCompletionTokenUsage(params, ticketKey);
 
         return {
             success: true,
@@ -1977,5 +2047,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker };
+    module.exports = { action, hasMeaningfulSummary, postCompletionPrComment, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker };
 }
