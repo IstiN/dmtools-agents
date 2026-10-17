@@ -4585,6 +4585,15 @@
       "total": 158512,
       "cacheRead": 0,
       "model": "kimi-for-coding"
+    },
+    {
+      "leg": "dev",
+      "at": "2026-10-17T20:50:13Z",
+      "prompt": 164370,
+      "completion": 0,
+      "total": 164370,
+      "cacheRead": 0,
+      "model": "kimi-for-coding"
     }
   ]
 }
