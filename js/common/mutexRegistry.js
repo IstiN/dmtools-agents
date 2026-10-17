@@ -1,289 +1,280 @@
-/**
- * Mutex registry reconciliation + validation-run conclusion mapping
- * (gh-1000 — "Phantom ai_validating mutex holder blocks the whole agents
- * validation queue").
- *
- * Live IstiN/dmtools-agents 2026-10-17 ~19:08Z, two divergences wedged the
- * queue at once:
- *
- *   (1) PHANTOM HOLDER — the mutex scan reported `slots 1/1 taken` on every
- *       SM tick while NO open PR carried the ai_validating label and the
- *       published factory state showed `lanes.validating: []`. The holder
- *       set M was read from the provider's per-tick ioCache and never
- *       reconciled against the live label layer: a holder that vanished
- *       from GitHub truth (arm strip racing the cached list) stayed a
- *       phantom turnstile — every candidate logged
- *       `🔒 mutex "ai_validating" slots 1/1 taken — candidate pr-N defers`
- *       and no validation ever armed.
- *   (2) CANCELLED ≠ VERDICT — a validation run concluded CANCELLED
- *       (gh-748 kicker/dispatch race) was treated as concluded-with-
- *       verdict: the run died pre-materialization, so no check context
- *       read CANCELED, `rerun_cancelled_checks` answered "nothing to
- *       rerun", the required check never re-reported and the merge gate
- *       refused forever (guest PR — no machine push can escape, gh-757).
- *
- * This module is the pure half of the fix:
- *
- *   derive(registry, liveHolders)  — I1 reconciliation: M is DERIVED from
- *                                    the label layer, never primary. Any
- *                                    registry entry absent from the live
- *                                    label layer is a phantom (including
- *                                    the recorded 19:08Z shape: registry
- *                                    1/1, labels ∅ → ∅ + phantom flagged).
- *   reconcile(state, live, nowMs)  — I2 self-heal with alarm: phantoms are
- *                                    dropped in the same tick, an alarm
- *                                    record lands, mutexSelfHeals /
- *                                    phantomHolderTicks counters move;
- *                                    ≥2 consecutive phantom ticks IS the
- *                                    alarm condition the card demands.
- *   tick events + mergeSnapshot     — per-tick accumulator (one SM process
- *                                    = one tick) and the carry-merge into
- *                                    the factory-state `mutex` block
- *                                    (metrics: mutex_self_heals /
- *                                    phantom_holder_ticks, second tier).
- *   conclusionMapping(conclusion)  — AC3/UT-2 the run-conclusion semantics:
- *                                    success/failure → verdict; cancelled/
- *                                    timed_out → NO verdict, re-dispatch
- *                                    (I3); unknown → null (caller keeps
- *                                    its fail-open path).
- *   isGhostCancelProbe(probe)      — the rerun_cancelled_checks ghost
- *                                    predicate: newest dispatched run
- *                                    completed cancelled/timed_out with
- *                                    nothing active on the head → the
- *                                    machine re-dispatches (never "nothing
- *                                    to rerun"); the fresh-cancel
- *                                    visibility grace (probe.active, gh-755)
- *                                    suppresses.
- *
- * Scope note (single-writer rule): derive() reconciles against the LABEL
- * LAYER (L) — GitHub truth. The RUN-STATE conjunct of the card's
- * derive(M) = { pr | L[pr]=armed ∧ run not concluded } is owned by the
- * gh-821 zombie liveness sweep (js/common/validationLiveness.js): a labeled
- * holder whose run concluded is a live-label fact the sweeper re-dispatches
- * or parks on its own query. This module never touches PRs at large — the
- * subject of every verb is the mutex registry entry / the run record.
- *
- * Pure functions, no tool globals — githubSource/smAgent wire the
- * transport, tests inject nothing. CommonJS module like every other js/
- * module. GraalJS rules apply: var + plain functions only.
- */
-
 'use strict';
 
-var MAX_ALARMS = 20;
+// gh-1000 — phantom ai_validating mutex holder + cancelled-run conclusion
+// mapping. Pure module: NO tool globals, NO fs, NO gh — the wiring points
+// own I/O (githubSource re-derives holders against a live list_prs re-read
+// on a full-slot defer; smAgent rerun_cancelled_checks probes the head
+// workflow runs). The card's contract (AC1/AC2/AC3, I1–I5):
+//
+//   M = { pr in open PRs | L[pr] = armed ∧ run(pr) not concluded }
+//
+// The run-state conjunct stays with the gh-821 liveness sweep (single-
+// writer rule); this module reconciles the label layer only.
+
+var MAX_ALARMS = 5;
+var PHANTOM_ALARM_CAP = 3;
+var FRESH_CANCEL_GRACE_MS = 15 * 60 * 1000; // gh-755 — do not re-dispatch a cancel still within its visibility grace
+
+function num(v) {
+    var n = Math.floor(Number(v));
+    return (typeof n === 'number' && !isNaN(n) && n >= 0) ? n : 0;
+}
+
+function str(v) {
+    return (typeof v === 'string' && v) ? v : '';
+}
 
 // ── I1 — derive(M): reconciliation from the label layer ─────────────────────
 
 function normalizeHolder(h) {
-    if (h && typeof h === 'object') {
-        var n = h.pr || h.prNumber || h.number || 0;
-        return Math.floor(Number(n)) || 0;
+    if (h === null || h === undefined) return 0;
+    if (typeof h === 'number') return Math.floor(h);
+    if (typeof h === 'string') {
+        var n = parseInt(h, 10);
+        return isNaN(n) ? 0 : n;
     }
-    var m = Math.floor(Number(h));
-    return isNaN(m) ? 0 : m;
+    if (typeof h === 'object') {
+        return normalizeHolder(h.prNumber !== undefined ? h.prNumber
+            : (h.number !== undefined ? h.number : h.pr));
+    }
+    return 0;
+}
+
+function uniquePositive(list) {
+    var seen = {};
+    var out = [];
+    (list || []).forEach(function (h) {
+        var n = normalizeHolder(h);
+        if (n > 0 && !seen[n]) {
+            seen[n] = true;
+            out.push(n);
+        }
+    });
+    return out;
 }
 
 /**
- * Reconcile a mutex registry against the live label layer.
- * registry / liveHolders: arrays of PR numbers or {pr|prNumber|number}.
- * Returns { registry: kept, phantoms: dropped } — both number arrays,
- * order-preserving, duplicates collapsed by the live-set membership test
- * (a holder is a holder; the caller counts slots).
+ * Reconcile a candidate holder list against the live label layer.
+ *   holders        — candidate mutex holders (numbers or PR items)
+ *   liveItems      — live open-PR items (label arrays)
+ *   isRunConcluded — fn(number) → true when the PR's run already concluded
+ *                    (the gh-821 liveness conjunct; pass noCompletedRuns
+ *                    when no run-state source exists at the call site)
+ * The armed layer counts first: a PR whose label layer shows the mutex
+ * armed is a holder even if missing from the candidate list.
  */
-function derive(registry, liveHolders) {
-    var live = {};
-    (liveHolders || []).forEach(function (h) {
-        var n = normalizeHolder(h);
-        if (n) live[n] = true;
+function derive(holders, liveItems, isRunConcluded, repo, nowIso) {
+    var concluded = (typeof isRunConcluded === 'function') ? isRunConcluded : function () { return false; };
+    var labelHolders = [];
+    (liveItems || []).forEach(function (it) {
+        var labels = (it && it.labels) || [];
+        if (labels.indexOf('ai_validating') !== -1) labelHolders.push(it.number);
     });
-    var kept = [];
-    var seen = {};
+    var cand = uniquePositive(holders);
+    var candSet = {};
+    cand.forEach(function (n) { candSet[n] = true; });
+    var labelSet = {};
+    labelHolders.forEach(function (n) { labelSet[n] = true; });
     var phantoms = [];
-    (registry || []).forEach(function (h) {
-        var n = normalizeHolder(h);
-        if (!n || seen[n]) return;
-        seen[n] = true;
-        if (live[n]) kept.push(n);
-        else phantoms.push(n);
+    var armedExtra = [];
+    labelHolders.forEach(function (n) {
+        if (!candSet[n]) armedExtra.push(n);
     });
-    return { registry: kept, phantoms: phantoms };
+    var merged = uniquePositive(cand.concat(labelHolders));
+    // The card's contract: M = { pr | L[pr]=armed ∧ run(pr) not concluded }.
+    // A candidate the live label layer does NOT show armed is not a holder —
+    // that divergence IS the phantom class (live 19:08Z: registry said 1/1,
+    // the label layer said none).
+    var liveHolders = merged.filter(function (n) {
+        if (!labelSet[n]) {
+            if (candSet[n]) phantoms.push(n);
+            return false;
+        }
+        if (concluded(n)) {
+            // label still on, run concluded → the label layer does not
+            // confirm; it is a phantom source, not a holder
+            if (candSet[n]) phantoms.push(n);
+            return false;
+        }
+        return true;
+    });
+    return {
+        holders: liveHolders,
+        phantoms: phantoms,
+        armedExtra: armedExtra,
+        repo: repo || null,
+        at: nowIso || null
+    };
 }
 
 // ── I2 — reconcile: self-heal with alarm, tick counters ─────────────────────
 
-function iso(nowMs) {
-    try { return new Date(nowMs).toISOString(); }
-    catch (e) { return String(nowMs); }
-}
-
-function initialState(nowMs) {
-    return {
-        registry: [],
-        mutexSelfHeals: 0,
-        phantomHolderTicks: 0,
-        consecutivePhantomTicks: 0,
-        alarms: [],
-        sinceMs: nowMs || null
-    };
+function defaultState() {
+    return { mutexSelfHeals: 0, phantomHolderTicks: 0, consecutivePhantomTicks: 0, alarms: [] };
 }
 
 /**
- * One reconciliation tick over the persistent state.
- *   healed  — phantoms were found and dropped (the registry is corrected
- *             IN THE SAME TICK — a queued candidate may arm immediately).
- *   alarm   — the alarm record emitted this tick (null when consistent).
- * Counters: mutexSelfHeals is cumulative; phantomHolderTicks is cumulative
- * across the state's lifetime; consecutivePhantomTicks resets on any
- * consistent tick — ≥2 consecutive is itself the alarm condition.
+ * Compare a cached registry snapshot against a freshly derived live one.
+ * Divergence ⇒ self-heal: corrected holders + alarm record + tick counters.
  */
-function reconcile(state, liveHolders, nowMs) {
-    var s = (state && typeof state === 'object') ? state : initialState(nowMs);
-    var rec = derive(s.registry, liveHolders);
-    var out = {
-        state: {
-            registry: rec.registry,
-            mutexSelfHeals: Math.floor(Number(s.mutexSelfHeals)) || 0,
-            phantomHolderTicks: Math.floor(Number(s.phantomHolderTicks)) || 0,
-            consecutivePhantomTicks: 0,
-            alarms: Array.isArray(s.alarms) ? s.alarms.slice() : [],
-            sinceMs: (s.sinceMs !== undefined) ? s.sinceMs : (nowMs || null)
-        },
-        healed: false,
-        alarm: null
-    };
-    if (rec.phantoms.length) {
-        out.healed = true;
-        out.alarm = {
-            type: 'phantom_mutex_holder',
-            holders: rec.phantoms,
-            at: iso(nowMs)
+function reconcile(cachedSnapshot, liveSnapshot) {
+    var cached = (cachedSnapshot && cachedSnapshot.holders) || [];
+    var live = (liveSnapshot && liveSnapshot.holders) || [];
+    var liveSet = {};
+    live.forEach(function (n) { liveSet[n] = true; });
+    var divergent = cached.some(function (n) { return !liveSet[n]; }) ||
+        live.some(function (n) { return cached.indexOf(n) === -1; });
+    if (!divergent) {
+        return {
+            selfHealed: false,
+            holders: live.slice(),
+            alarm: null,
+            mutexSelfHeals: 0,
+            phantomHolderTicks: 0,
+            consecutivePhantomTicks: 0
         };
-        out.state.mutexSelfHeals++;
-        out.state.consecutivePhantomTicks =
-            (Math.floor(Number(s.consecutivePhantomTicks)) || 0) + 1;
-        out.state.phantomHolderTicks++;
-        out.state.alarms.push(out.alarm);
-        if (out.state.alarms.length > MAX_ALARMS) {
-            out.state.alarms = out.state.alarms.slice(-MAX_ALARMS);
-        }
-    } else {
-        out.state.consecutivePhantomTicks = 0;
     }
-    return out;
-}
-
-// ── Per-tick events + factory-state carry ────────────────────────────────────
-//
-// One SM process = one tick, so the accumulator is module-level and simply
-// read (never reset mid-tick) at publish time; resetTickEvents() exists for
-// tests and for any harness that reuses the engine across ticks.
-
-var _tickEvents = { selfHeals: 0, phantomHolders: [], alarms: [] };
-
-/**
- * Record one phantom self-heal (the githubSource query-time reconciliation
- * calls this when a live label-layer re-read diverges from the cached
- * holder set). label = the mutex label name; holders = phantom PR numbers.
- */
-function recordPhantomHeal(label, holders, repoInfo, nowMs) {
-    _tickEvents.selfHeals++;
-    (_tickEvents.alarms || []).push({
+    var alarm = {
         type: 'phantom_mutex_holder',
-        label: String(label || ''),
-        holders: (holders || []).slice(),
-        repo: repoInfo ? (repoInfo.owner + '/' + repoInfo.repo) : null,
-        at: iso(nowMs || Date.now())
-    });
-    (holders || []).forEach(function (h) {
-        _tickEvents.phantomHolders.push(normalizeHolder(h));
-    });
-}
-
-function currentTickEvents() {
+        label: 'ai_validating',
+        repo: (liveSnapshot && liveSnapshot.repo) || (cachedSnapshot && cachedSnapshot.repo) || null,
+        holders: { cached: cached, live: live },
+        at: (liveSnapshot && liveSnapshot.at) || null
+    };
     return {
-        selfHeals: _tickEvents.selfHeals,
-        phantomHolders: _tickEvents.phantomHolders.slice(),
-        alarms: _tickEvents.alarms.slice()
+        selfHealed: true,
+        holders: live,
+        alarm: alarm,
+        mutexSelfHeals: 1,
+        phantomHolderTicks: 1,
+        consecutivePhantomTicks: 1
     };
 }
 
-function resetTickEvents() {
-    _tickEvents = { selfHeals: 0, phantomHolders: [], alarms: [] };
+// ── Per-tick events + factory-state carry (second tier) ─────────────────────
+
+function emptyTickEvents() {
+    return { mutexSelfHeals: 0, phantomHolderTicks: 0, consecutivePhantomTicks: 0, alarm: null };
 }
 
 /**
- * Merge this tick's events over the previously published factory-state
- * mutex block → the block published THIS tick.
- *   mutexSelfHeals     — cumulative across snapshots.
- *   phantomHolderTicks — the consecutive-tick phantom count: events in
- *                        this tick → prev + 1; a clean tick → 0.
- *   alarms             — rolling tail, capped at MAX_ALARMS.
- * prev may be null/absent (pre-gh-1000 snapshots).
+ * Record one self-heal event for the current tick. Alarm records cap at
+ * PHANTOM_ALARM_CAP per holder signature (a flapping registry must not
+ * grow state unbounded).
  */
-function mergeSnapshot(prev, events, nowMs) {
-    var p = (prev && typeof prev === 'object') ? prev : {};
-    var e = events || { selfHeals: 0, alarms: [] };
-    var alarms = (Array.isArray(p.alarms) ? p.alarms.slice() : [])
-        .concat(e.alarms || []);
-    if (alarms.length > MAX_ALARMS) alarms = alarms.slice(-MAX_ALARMS);
+function recordPhantomHeal(state, label, cachedHolders, liveHolders, atIso) {
+    var s = state || defaultState();
+    var sig = uniquePositive(cachedHolders).join(',');
+    var alarms = (s.alarms || []).filter(function (a) {
+        return !((a.holders && String(a.holders.cached || '') === sig));
+    });
+    alarms.push({
+        type: 'phantom_mutex_holder',
+        label: str(label) || 'ai_validating',
+        holders: { cached: uniquePositive(cachedHolders), live: uniquePositive(liveHolders) },
+        at: str(atIso)
+    });
+    while (alarms.length > MAX_ALARMS) alarms.shift();
     return {
-        mutexSelfHeals: (Math.floor(Number(p.mutexSelfHeals)) || 0) +
-            (Math.floor(Number(e.selfHeals)) || 0),
-        phantomHolderTicks: (Math.floor(Number(e.selfHeals)) || 0) > 0
-            ? (Math.floor(Number(p.phantomHolderTicks)) || 0) + 1
-            : 0,
+        mutexSelfHeals: num(s.mutexSelfHeals) + 1,
+        phantomHolderTicks: num(s.phantomHolderTicks) + 1,
+        consecutivePhantomTicks: num(s.consecutivePhantomTicks) + 1,
         alarms: alarms
     };
+}
+
+/**
+ * Merge per-tick events into the published factory-state mutex block.
+ * Counter keys never carry negative or NaN values; absent both sides the
+ * snapshot stays absent (additive only).
+ */
+function mergeSnapshot(prev, events) {
+    var p = (prev && typeof prev === 'object') ? prev : {};
+    var e = (events && typeof events === 'object') ? events : {};
+    var out = {
+        mutexSelfHeals: num(p.mutexSelfHeals) + num(e.mutexSelfHeals),
+        phantomHolderTicks: num(p.phantomHolderTicks) + num(e.phantomHolderTicks),
+        consecutivePhantomTicks: num(p.consecutivePhantomTicks) + num(e.consecutivePhantomTicks),
+        alarms: []
+    };
+    var seen = {};
+    (p.alarms || []).concat(e.alarm ? [e.alarm] : []).forEach(function (a) {
+        if (!a) return;
+        var key = str(a.type) + '|' + String(a.holders && a.holders.cached) + '|' + str(a.at);
+        if (seen[key]) return;
+        seen[key] = true;
+        out.alarms.push(a);
+    });
+    while (out.alarms.length > MAX_ALARMS) out.alarms.shift();
+    return out;
 }
 
 // ── AC3/I3 — run-conclusion mapping: CANCELLED carries no verdict ───────────
 
 /**
- * The conclusion semantics the card asserts (UT-2):
- *   success    → { verdict: 'green', redispatch: false } (latch, unarm)
- *   failure    → { verdict: 'red',   redispatch: false } (fail path)
- *   cancelled  → { verdict: null,    redispatch: true  } (NO verdict —
- *   canceled      the record returns to not-dispatched and re-dispatches,
- *   timed_out     same head, gh-748 dedupe; timed_out: same as cancelled)
- *   anything else / absent → null (caller keeps its fail-open path).
+ * Map a run conclusion to the card's verdict vocabulary. CANCELLED /
+ * TIMED_OUT deliberately carry NO verdict (gh-755 parity): the run died
+ * without a signal, the arm must re-dispatch, nothing may read the
+ * conclusion as red (fail-validation owns red).
  */
 function conclusionMapping(conclusion) {
-    var c = String(conclusion == null ? '' : conclusion).toLowerCase();
-    if (c === 'success') return { verdict: 'green', redispatch: false };
-    if (c === 'failure') return { verdict: 'red', redispatch: false };
-    if (c === 'cancelled' || c === 'canceled') return { verdict: null, redispatch: true };
-    if (c === 'timed_out') return { verdict: null, redispatch: true };
-    return null;
+    switch (String(conclusion || '').toLowerCase()) {
+        case 'success': return { verdict: 'success', reDispatch: false };
+        case 'failure': return { verdict: 'failure', reDispatch: false };
+        case 'cancelled':
+        case 'canceled':
+        case 'timed_out': return { verdict: null, reDispatch: true };
+        default: return null; // null/unknown — caller keeps waiting
+    }
 }
+
+var ACTIVE_STATUSES = ['queued', 'in_progress', 'waiting', 'pending', 'requested'];
 
 /**
- * The rerun_cancelled_checks ghost predicate (AC3): the check-rollup found
- * ZERO CANCELED contexts, but the newest DISPATCHED VALIDATION run on the
- * head completed cancelled/timed_out with nothing active on the head — the
- * run died pre-materialization (gh-748 ghost class), so no context exists
- * to `gh run rerun`; the machine must re-dispatch fresh CI on the same
- * head instead of answering "nothing to rerun".
- *   probe.active === true → the fresh-cancel visibility grace (gh-755) or
- *   an in-flight run owns the head → NOT a ghost here.
- * Degenerate probes fail CLOSED (false) — the caller keeps its skip path.
+ * The rerun_cancelled_checks ghost-cancel predicate (AC3): the newest
+ * dispatched run on the head concluded cancelled/timed_out AND nothing is
+ * active on the head AND the newest terminal conclusion is not still
+ * inside its fresh-cancel visibility grace (gh-755). Runs are newest-
+ * first; a failed probe (null) reads as no ghost — fail closed.
  */
-function isGhostCancelProbe(probe) {
-    if (!probe || probe.active === true) return false;
-    var newest = probe.newest;
-    if (!newest || newest.status !== 'completed') return false;
-    var m = conclusionMapping(newest.conclusion);
-    return !!(m && m.redispatch === true);
+function isGhostCancelProbe(runs, nowMs) {
+    var list = (runs || []).filter(function (r) { return r && typeof r === 'object'; });
+    var terminal = list.filter(function (r) { return ACTIVE_STATUSES.indexOf(String(r.status || '')) === -1; });
+    if (!terminal.length) return { isGhostCancel: false, reason: 'no-terminal-run' };
+    var newest = terminal[0];
+    var map = conclusionMapping(newest.conclusion);
+    var canceled = map && map.reDispatch === true;
+    if (!canceled) return { isGhostCancel: false, reason: 'newest-not-cancelled', conclusion: newest.conclusion };
+    var active = list.some(function (r) { return ACTIVE_STATUSES.indexOf(String(r.status || '')) !== -1; });
+    if (active) return { isGhostCancel: false, reason: 'active-run-on-head' };
+    var updatedAt = Date.parse(newest.updatedAt || newest.updated_at || '') || 0;
+    var now = (nowMs === null || nowMs === undefined) ? Date.now() : nowMs;
+    if (updatedAt && (now - updatedAt) < FRESH_CANCEL_GRACE_MS) {
+        return { isGhostCancel: false, reason: 'within-fresh-cancel-grace', updatedAt: updatedAt };
+    }
+    return {
+        isGhostCancel: true,
+        runId: newest.id || null,
+        runNumber: newest.runNumber || newest.run_number || null,
+        conclusion: newest.conclusion,
+        updatedAt: updatedAt || null
+    };
 }
 
+// The derive() run-state conjunct placeholder for call sites without a
+// run-state source: the gh-821 liveness sweep owns run state (AC1 note).
+
+function noCompletedRuns() { return false; }
+
 module.exports = {
+    MAX_ALARMS: MAX_ALARMS,
+    PHANTOM_ALARM_CAP: PHANTOM_ALARM_CAP,
+    FRESH_CANCEL_GRACE_MS: FRESH_CANCEL_GRACE_MS,
     derive: derive,
     reconcile: reconcile,
-    initialState: initialState,
     recordPhantomHeal: recordPhantomHeal,
-    currentTickEvents: currentTickEvents,
-    resetTickEvents: resetTickEvents,
     mergeSnapshot: mergeSnapshot,
     conclusionMapping: conclusionMapping,
     isGhostCancelProbe: isGhostCancelProbe,
-    MAX_ALARMS: MAX_ALARMS
+    noCompletedRuns: noCompletedRuns
 };
