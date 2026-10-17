@@ -290,6 +290,53 @@ suite('workflowFailureReporter.processFailedRun', function() {
     });
 });
 
+// ── checkRunDedup / createBugTicket (stub tracker) ────────────────────────────
+
+suite('workflowFailureReporter.checkRunDedup and createBugTicket', function() {
+    function run(extra) {
+        return Object.assign({ id: 9, name: 'ci', run_number: 3, html_url: 'u' }, extra || {});
+    }
+
+    test('checkRunDedup returns the detected ticket key when nothing is found', function() {
+        var seen = [];
+        var t = { searchIssues: function(q, opts) { seen.push(q); return []; } };
+        var mod = loadReporter();
+        assert.deepEqual(mod.checkRunDedup(run({ name: 'ci : PROJ-1' }), t, 'PROJ'), { ticketKey: 'PROJ-1' });
+        assert.equal(seen.length, 2, 'ci-run and ci-ticket searches both ran');
+    });
+
+    test('checkRunDedup stops after the ci-run search when no ticket key is detected', function() {
+        var seen = [];
+        var t = { searchIssues: function(q) { seen.push(q); return []; } };
+        var mod = loadReporter();
+        assert.deepEqual(mod.checkRunDedup(run(), t, 'PROJ'), { ticketKey: null });
+        assert.equal(seen.length, 1);
+    });
+
+    test('createBugTicket reports create_failed when the tracker throws', function() {
+        var t = { createTicket: function() { throw new Error('denied'); } };
+        var mod = loadReporter();
+        var r = mod.createBugTicket(t, 'PROJ', run(), null, null);
+        assert.equal(r.status, 'create_failed');
+    });
+
+    test('createBugTicket passes the built summary and description to the tracker', function() {
+        var captured;
+        var t = {
+            createTicket: function(p, type, summary, description) {
+                captured = { project: p, type: type, summary: summary, description: description };
+                return { key: 'PROJ-50' };
+            }
+        };
+        var mod = loadReporter();
+        var r = mod.createBugTicket(t, 'PROJ', run({ name: 'ci : PROJ-1' }), 'ci.yml', 'PROJ-1');
+        assert.equal(r.status, 'created');
+        assert.equal(r.key, 'PROJ-50');
+        assert.equal(captured.summary, 'Failed CI: ci : PROJ-1 #3 [ci.yml]');
+        assert.contains(captured.description, '*Ticket:* [PROJ-1]');
+    });
+});
+
 // ── action (jira path) ────────────────────────────────────────────────────────
 
 suite('workflowFailureReporter.action', function() {

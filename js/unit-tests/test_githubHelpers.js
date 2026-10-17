@@ -1546,7 +1546,7 @@ suite('githubHelpers.detectFailedChecks — pure log helpers (gh-1012)', functio
         var md = gh.buildCiFailuresHeader([{ name: 'a' }, { name: 'b' }], 'abc123def');
         assert.contains(md, '# ⚠️ Failed CI Checks — Fix Before Completing Rework');
         assert.contains(md, 'ci_failures_full.log');
-        assert.contains(md, '2 check(s) failed on commit `abc123def`');
+        assert.contains(md, '2 check(s) failed on commit `abc123de`');
 
         var resolution = gh.buildCiFailuresResolutionSection();
         assert.contains(resolution, '## Resolution');
@@ -1570,6 +1570,7 @@ suite('githubHelpers.detectFailedChecks — scm mode and GitHub job logs (gh-101
     test('scm mode fetches check runs and job logs through the scm object', function() {
         var writes = [];
         var scm = {
+            listPrs: function() { return []; },
             getCommitCheckRuns: function(sha) {
                 return { check_runs: [{
                     name: 'PR Build', conclusion: 'failure',
@@ -1591,7 +1592,7 @@ suite('githubHelpers.detectFailedChecks — scm mode and GitHub job logs (gh-101
     });
 
     test('scm getCommitCheckRuns returning null yields an empty result', function() {
-        var scm = { getCommitCheckRuns: function() { return null; }, getJobLogs: function() {} };
+        var scm = { listPrs: function() { return []; }, getCommitCheckRuns: function() { return null; }, getJobLogs: function() {} };
         var gh = makeGh({ file_write: function() {} });
         assert.deepEqual(gh.detectFailedChecks(scm, 'abc123def', '/tmp/input'), []);
     });

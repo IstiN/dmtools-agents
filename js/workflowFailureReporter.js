@@ -94,6 +94,74 @@ function extractCreatedTicketKey(result) {
     return null;
 }
 
+/** Run a bug search and tolerate JQL errors (warn + empty result). */
+function searchBugsOrEmpty(tracker, jql, fields, warnPrefix) {
+    try {
+        return tracker.searchIssues(jql, { fields: fields }) || [];
+    } catch (e) {
+        console.warn(warnPrefix + (e.message || e));
+        return [];
+    }
+}
+
+/**
+ * Dedup gate for one run: skip when a ci-run-labeled bug exists, detect the
+ * ticket key from the run name and skip when an open ci-ticket bug exists.
+ * Returns { status: 'skipped_existing' | 'skipped_open_bug' } to skip, or
+ * { ticketKey } to proceed.
+ */
+function checkRunDedup(run, tracker, jiraProject) {
+    var runId = run.id;
+    var label = 'ci-run-' + runId;
+
+    var existing = searchBugsOrEmpty(tracker,
+        'project = ' + jiraProject + ' AND issuetype = Bug AND labels = "' + label + '"',
+        ['key'], '  ⚠️  JQL search failed for run ' + runId + ': ');
+
+    if (existing.length > 0) {
+        console.log('  ⏭️  Run ' + runId + ' — bug already exists (' + existing[0].key + '), skipping');
+        return { status: 'skipped_existing' };
+    }
+
+    var ticketKey = detectTicketKey(run.name);
+    if (!ticketKey) return { ticketKey: null };
+
+    console.log('  🎫 Detected ticket: ' + ticketKey);
+
+    var ticketLabel = 'ci-ticket-' + ticketKey;
+    var openBug = searchBugsOrEmpty(tracker,
+        'project = ' + jiraProject + ' AND issuetype = Bug AND labels = "' + ticketLabel + '" AND statusCategory != Done',
+        ['key', 'status'], '  ⚠️  JQL search for open ticket bug failed: ');
+
+    if (openBug.length > 0) {
+        console.log('  ⏭️  ' + ticketKey + ' — open bug already exists (' + openBug[0].key + '), skipping run ' + runId);
+        return { status: 'skipped_open_bug' };
+    }
+    return { ticketKey: ticketKey };
+}
+
+/** Create the bug ticket for a run and extract its key from any result shape. */
+function createBugTicket(tracker, jiraProject, run, workflowId, ticketKey) {
+    var runWorkflow = (run.name || workflowId || 'unknown');
+    var summary = buildBugSummary(run, workflowId);
+    var description = buildBugDescription(run, runWorkflow, ticketKey);
+
+    var result, newKey;
+    try {
+        result = tracker.createTicket(jiraProject, 'Bug', summary, description);
+        newKey = extractCreatedTicketKey(result);
+    } catch (e) {
+        console.error('  ❌ Failed to create bug for run ' + run.id + ': ' + (e.message || e));
+        return { status: 'create_failed' };
+    }
+
+    if (!newKey) {
+        console.warn('  ⚠️  Bug created but no key returned for run ' + run.id + ' (result: ' + result + ')');
+        return { status: 'created_keyless' };
+    }
+    return { status: 'created', key: newKey };
+}
+
 /** Link the created bug to the detected ticket and add the ci-ticket dedup label. */
 function linkCreatedBug(tracker, newKey, ticketKey, label) {
     try {
@@ -120,69 +188,24 @@ function processFailedRun(run, ctx) {
     var jiraProject = ctx.jiraProject;
     var workflowId = ctx.workflowId;
     var runId = run.id;
-    var label = 'ci-run-' + runId;
 
-    // Check if bug already exists by label
-    var existing = [];
-    try {
-        existing = tracker.searchIssues('project = ' + jiraProject + ' AND issuetype = Bug AND labels = "' + label + '"', { fields: ['key'] }) || [];
-    } catch (e) {
-        console.warn('  ⚠️  JQL search failed for run ' + runId + ': ' + (e.message || e));
-    }
+    var dedup = checkRunDedup(run, tracker, jiraProject);
+    if (dedup.status) return dedup;
 
-    if (existing.length > 0) {
-        console.log('  ⏭️  Run ' + runId + ' — bug already exists (' + existing[0].key + '), skipping');
-        return { status: 'skipped_existing' };
-    }
-
-    var ticketKey = detectTicketKey(run.name);
-    if (ticketKey) {
-        console.log('  🎫 Detected ticket: ' + ticketKey);
-    }
-
-    // If ticket detected — skip if open bug already exists for this ticket
-    if (ticketKey) {
-        var ticketLabel = 'ci-ticket-' + ticketKey;
-        var openBug = [];
-        try {
-            openBug = tracker.searchIssues('project = ' + jiraProject + ' AND issuetype = Bug AND labels = "' + ticketLabel + '" AND statusCategory != Done', { fields: ['key', 'status'] }) || [];
-        } catch (e) {
-            console.warn('  ⚠️  JQL search for open ticket bug failed: ' + (e.message || e));
-        }
-        if (openBug.length > 0) {
-            console.log('  ⏭️  ' + ticketKey + ' — open bug already exists (' + openBug[0].key + '), skipping run ' + runId);
-            return { status: 'skipped_open_bug' };
-        }
-    }
-
-    var runWorkflow = (run.name || workflowId || 'unknown');
-    var summary = buildBugSummary(run, workflowId);
-    var description = buildBugDescription(run, runWorkflow, ticketKey);
-
-    var result, newKey;
-    try {
-        result = tracker.createTicket(jiraProject, 'Bug', summary, description);
-        newKey = extractCreatedTicketKey(result);
-    } catch (e) {
-        console.error('  ❌ Failed to create bug for run ' + runId + ': ' + (e.message || e));
-        return { status: 'create_failed' };
-    }
-
-    if (!newKey) {
-        console.warn('  ⚠️  Bug created but no key returned for run ' + runId + ' (result: ' + result + ')');
-        return { status: 'created_keyless' };
-    }
+    var created = createBugTicket(tracker, jiraProject, run, workflowId, dedup.ticketKey);
+    if (created.status !== 'created') return created;
+    var newKey = created.key;
 
     // Add idempotency label
     try {
-        tracker.addLabel(newKey, label);
+        tracker.addLabel(newKey, 'ci-run-' + runId);
     } catch (e) {
-        console.warn('  ⚠️  Failed to add label ' + label + ' to ' + newKey + ': ' + (e.message || e));
+        console.warn('  ⚠️  Failed to add label ci-run-' + runId + ' to ' + newKey + ': ' + (e.message || e));
     }
 
     // Link bug to ticket if detected + add ci-ticket label for dedup
-    if (ticketKey) {
-        linkCreatedBug(tracker, newKey, ticketKey, label);
+    if (dedup.ticketKey) {
+        linkCreatedBug(tracker, newKey, dedup.ticketKey);
     }
 
     console.log('  ✅ Created ' + newKey + ' for run ' + runId);
@@ -266,6 +289,9 @@ if (typeof module !== 'undefined' && module.exports) {
         buildBugDescription: buildBugDescription,
         extractKeyFromString: extractKeyFromString,
         extractCreatedTicketKey: extractCreatedTicketKey,
+        searchBugsOrEmpty: searchBugsOrEmpty,
+        checkRunDedup: checkRunDedup,
+        createBugTicket: createBugTicket,
         processFailedRun: processFailedRun,
         linkCreatedBug: linkCreatedBug
     };
