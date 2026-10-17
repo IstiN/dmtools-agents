@@ -1,0 +1,8 @@
+remote: error: GH013: Repository rule violations found for refs/heads/main.        
+remote: Review all repository rules at https://github.com/IstiN/dmtools-agents/rules?ref=refs%2Fheads%2Fmain        
+remote: 
+remote: - Required status check "crap" is expected.        
+remote: 
+To https://github.com/IstiN/dmtools-agents.git
+ ! [remote rejected]   main -> main (push declined due to repository rule violations)
+error: failed to push some refs to 'https://github.com/IstiN/dmtools-agents.git'

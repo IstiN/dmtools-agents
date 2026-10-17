@@ -1,0 +1,54 @@
+## Deploy (any static host)
+
+1. Copy this folder.
+2. Edit `config.js` — factories[] (stateUrl, accent), lanes,
+   backlogColumns, badgeLabels.
+3. Style: only `:root` variables in `styles.css` (+ `data-theme="light"`
+   overrides). Design tokens mirror `site/index.html` (slate palette,
+   JetBrains Mono — embedded, no CDN). Embeddable via `?theme=light|dark`.
+
+## Enable publishing for a factory (OPT-IN)
+
+The machine workflow passes `state-publish` (JSON string) to factory-sm.yml:
+
+```yaml
+      state-publish: '{"channel":"release","tag":"factory-data","asset":"fa-state.json"}'
+```
+
+- `channel: 'release'` — the only channel today; anything else = off.
+- `repo` — target repo (default: the tick's repo).
+- `tag` — the data branch name (default `factory-data`; all three factories
+  use it — the board URLs share the shape).
+- `asset` — one asset per factory (`fa-state.json`, `dart-state.json`,
+  `agents-state.json`).
+
+## State schema (v2)
+
+```json
+{
+  "schema": 2,
+  "factory": "flutter_agent_harness",
+  "repo": "IstiN/flutter_agent_harness",
+=====
+  before.
+- **Stale snapshot guard** — a snapshot older than `config.staleAfterMs`
+  (default 30m) turns the tick pill red with `STALE` and the age: a
+  stalled SM tick can no longer masquerade as repo reality.
+- **Value-stream strip** (`flowHtml`) — under the lanes: `next up !N`
+  (the approved-queue head), per-phase `N cards · Σ · avg`, Σ rework,
+  Σ tokens per legs, lead avg/max. PR-pipeline lanes only — backlog twins
+  share one history with their lane cards and would double-count.
+
+## Visual-check fixtures
+
+`visual-check/` holds the deterministic PNG fixtures + the bundled sample
+snapshot they were captured from:
+
+```
+bash site/factory/visual-check/capture.sh   # needs a headless chromium
+```
+
+The board pins "now" to the fixture's tick in `?fixture=` mode, so frames
+are reproducible; `fixture.json` exercises every surface (all six lanes,
+all four backlog buckets, a token-reporting PR and a non-reporting one).
+The drawer frame is captured open via the `?drawer=` deep link.
