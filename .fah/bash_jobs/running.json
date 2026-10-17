@@ -1,1 +1,1 @@
-[]
+[{"id":"sh-3-hnb26pje1m133beyz","command":"tail -40 js/unit-tests/node_testRunner.js","pid":"3704","startedAtMs":1792271556656},{"id":"sh-5-hnb26vl1dswk6q1z","command":"ls node_modules/.bin/ 2>/dev/null | grep -i crap; npx --no-install crap4js --help 2>&1 | head -5; ls /home/runner/.dmtools 2>/dev/null; find / -name \"crap4js*\" -type f 2>/dev/null | grep -v proc | head","pid":"3743","pidStart":"Sat Oct 17 21:12:46 2026\n","startedAtMs":1792271566465}]
