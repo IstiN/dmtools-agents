@@ -10,24 +10,23 @@ function makeTaRecorder() {
     return { calls: [] };
 }
 
-function loadTaModule(mocks) {
-    var rec = mocks.rec;
-    var trackerApi = mocks.trackerApi || {};
-    var trackers = {
+function makeTaTracker(rec, trackerApi) {
+    var api = trackerApi || {};
+    return {
         createTracker: function(config, customParams) {
             rec.calls.push({ op: 'createTracker', config: config, customParams: customParams });
             return {
                 getIssue: function(key) {
                     rec.calls.push({ op: 'getIssue', key: key });
-                    return trackerApi.getIssue ? trackerApi.getIssue(key) : null;
+                    return api.getIssue ? api.getIssue(key) : null;
                 },
                 searchIssues: function(jql, opts) {
                     rec.calls.push({ op: 'searchIssues', jql: jql, opts: opts });
-                    return trackerApi.searchIssues ? trackerApi.searchIssues(jql, opts) : [];
+                    return api.searchIssues ? api.searchIssues(jql, opts) : [];
                 },
                 postComment: function(key, comment) {
                     rec.calls.push({ op: 'postComment', key: key, comment: comment });
-                    if (trackerApi.postComment) return trackerApi.postComment(key, comment);
+                    if (api.postComment) return api.postComment(key, comment);
                 },
                 moveToStatusOrMark: function(key, status, stage) {
                     rec.calls.push({ op: 'moveToStatusOrMark', key: key, status: status, stage: stage });
@@ -35,12 +34,15 @@ function loadTaModule(mocks) {
                 },
                 removeLabel: function(key, label) {
                     rec.calls.push({ op: 'removeLabel', key: key, label: label });
-                    if (trackerApi.removeLabel) return trackerApi.removeLabel(key, label);
+                    if (api.removeLabel) return api.removeLabel(key, label);
                 }
             };
         }
     };
-    var configLoader = {
+}
+
+function makeTaConfigLoader(rec, mocks) {
+    return {
         loadProjectConfig: function(params) {
             rec.calls.push({ op: 'loadProjectConfig' });
             if (mocks.loadProjectConfigThrows) throw mocks.loadProjectConfigThrows;
@@ -56,6 +58,9 @@ function loadTaModule(mocks) {
             };
         }
     };
+}
+
+function makeTaGlobals(rec, mocks) {
     var globals = {};
     globals.bitrise_list_builds = function(args) {
         rec.calls.push({ op: 'bitrise_list_builds', args: args });
@@ -72,11 +77,15 @@ function loadTaModule(mocks) {
         if (mocks.bitriseAbortBuild) return mocks.bitriseAbortBuild(args);
         return {};
     };
+    return globals;
+}
+
+function loadTaModule(mocks) {
     return loadModule('js/triggerBitriseTestAutomation.js', makeRequire({
-        './configLoader.js': configLoader,
+        './configLoader.js': makeTaConfigLoader(mocks.rec, mocks),
         './config.js': configModule,
-        './common/trackers.js': trackers
-    }), globals);
+        './common/trackers.js': makeTaTracker(mocks.rec, mocks.trackerApi)
+    }), makeTaGlobals(mocks.rec, mocks));
 }
 
 function taCalls(rec, op) {
