@@ -2105,6 +2105,10 @@ suite('developTicketAndCreatePR > performGitOperations helpers (gh-1003)', funct
         if (opts.pushError) {
             pushOutput = opts.pushError;
         }
+        var mergeBaseFailure = null;
+        if (opts.mergeBaseThrows) {
+            mergeBaseFailure = new Error('no merge base');
+        }
         if (opts.branchOnRemote === false) {
             branchRefLine = '';
         }
@@ -2119,7 +2123,7 @@ suite('developTicketAndCreatePR > performGitOperations helpers (gh-1003)', funct
             { match: 'git rev-list --count', respond: function () { return '0'; } },
             { match: 'git fetch', respond: function () { return ''; } },
             { match: 'git rev-parse origin/', respond: function () { return 'basesha123'; } },
-            { match: 'git merge-base', respond: function () { return 'basesha123'; } },
+            { match: 'git merge-base', respond: throwOrReturn(mergeBaseFailure, 'basesha123') },
             { match: 'git push', respond: throwOrReturn(pushFailure, pushOutput) },
             { match: 'git ls-remote --heads origin main', respond: function () { return 'sha9\trefs/heads/main'; } },
             { match: 'git ls-remote --heads origin ' + branchName, respond: function () { return branchRefLine; } },
@@ -2196,18 +2200,7 @@ suite('developTicketAndCreatePR > performGitOperations helpers (gh-1003)', funct
         // failing (even after the deepen fetches) → isMergeSyncFailure.
         var movedTo = [];
         var loaded = loadForPrTail({
-            cli_execute_command: function (args) {
-                var command = args.command;
-                if (command.indexOf('gh pr list --head ai/TS-41') === 0) return '';
-                if (command === 'git branch --show-current') return 'ai/TS-41';
-                if (command.indexOf('git ls-files -- ') === 0) return '';
-                if (command.indexOf('git check-ignore') === 0) throw new Error('Command execution failed (exit code 1)');
-                if (command.indexOf('git add . --') === 0) return '';
-                if (command.indexOf('git diff --cached --stat') === 0) return ' js/foo.js | 1 +\n 1 file changed\n';
-                if (command.indexOf('git rev-parse origin/main') === 0) return 'basesha123';
-                if (command.indexOf('git merge-base') === 0) throw new Error('no merge base');
-                return '';
-            },
+            cli_execute_command: gh1003CommitPathMock('ai/TS-41', '', { mergeBaseThrows: true }),
             jira_post_comment: function () { },
             jira_move_to_status: function (args) { movedTo.push(args.statusName); },
             jira_remove_label: function () { }
