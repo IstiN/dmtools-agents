@@ -1025,3 +1025,402 @@ suite('smProvider — gh-828 post-APPROVE thread primitives', function () {
         assert.contains(comments[0].text, 'ack');
     });
 });
+
+suite('smProvider — gh-1009 CRAP characterization (paths touched by the provider split)', function () {
+
+    var MOD = 'js/common/smProvider.js';
+
+    function rvMod() {
+        return loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+    }
+
+    function loadMod(mocks) {
+        return loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvMod() }, mocks || {}), mocks || {});
+    }
+
+    function loadProvider(provider, mocks) {
+        return loadMod(mocks).createSmProvider({
+            scm: { provider: provider },
+            repository: { owner: 'mygroup', repo: 'my-repo' }
+        });
+    }
+
+    function captureWarn(fn) {
+        var original = console.warn;
+        var warnings = [];
+        console.warn = function (m) { warnings.push(String(m)); };
+        try { fn(); } finally { console.warn = original; }
+        return warnings;
+    }
+
+    // ── ecosystem parsing helpers ────────────────────────────────────────
+
+    test('parseMcp: an invalid JSON string parses to null and the open list reads empty (characterization)', function () {
+        var p = loadProvider('github', {
+            github_list_prs: function (args) {
+                if (args.state === 'open') return '{not json';
+                return [];
+            }
+        });
+        // open list unparseable → no open match, no merged match → null
+        assert.equal(p.findPr(3, 'ai/gh-'), null);
+    });
+
+    test('asList: pullRequests/issues envelopes and the no-list-envelope fallback (characterization)', function () {
+        var p = loadProvider('github', {
+            github_list_prs: function (args) {
+                if (args.state === 'open') {
+                    return { pullRequests: [{ number: 3, head: { label: 'mygroup:ai/gh-3' }, body: '' }] };
+                }
+                return { unrelated: true }; // no list envelope → []
+            }
+        });
+        assert.deepEqual(p.findPr(3, 'ai/gh-'), { number: 3, state: 'OPEN', branch: 'ai/gh-3' });
+        assert.equal(p.findPr(4, 'ai/gh-'), null);
+    });
+
+    // ── ioCache ──────────────────────────────────────────────────────────
+
+    test('ioCacheCollect: TTL-expired prStatus entries are dropped from snapshot() (characterization)', function () {
+        var mod = loadMod({
+            github_get_pr: function () { return { state: 'open' }; }
+        });
+        var p = mod.createSmProvider({ scm: { provider: 'github' },
+            repository: { owner: 'g', repo: 'r' } });
+        p.prStatus(42); // seeds the prStatus cache leg
+        var key = 'g/r:prStatus:42';
+        assert.ok(mod._cache.entries[key], 'precondition: memo entry exists');
+        mod._cache.entries[key].at = Date.now() - 120000; // age past the 60s TTL
+        var snap = p.snapshot(['prStatus']);
+        assert.deepEqual(snap.prStatus, {});
+    });
+
+    test('createSmProvider: the preseed prStatus leg hydrates the memo (no refetch)', function () {
+        var mod = loadMod({
+            github_get_pr: function () { throw new Error('github_get_pr must not be called on a preseed hit'); }
+        });
+        var status = { number: 77, state: 'OPEN', checkConclusion: 'green' };
+        var p = mod.createSmProvider({
+            scm: { provider: 'github' },
+            repository: { owner: 'g', repo: 'r' },
+            preseed: { prStatus: { '77': status } }
+        });
+        assert.deepEqual(p.prStatus(77), status);
+    });
+
+    test('branchHead: the #639 single-branch probe result is cached (second read hits, no second gh call)', function () {
+        var ghCalls = 0;
+        var p = loadProvider('github', {
+            github_list_branches: function () { return []; }, // page 1 misses 'main'
+            cli_execute_command: function () {
+                ghCalls++;
+                return { output: '"' + 'a'.repeat(40) + '"' };
+            }
+        });
+        assert.equal(p.branchExists('main'), true);
+        assert.equal(p.branchExists('main'), true);
+        assert.equal(ghCalls, 1, 'the probed sha is cached per tick');
+    });
+
+    // ── github provider methods ──────────────────────────────────────────
+
+    test('github: findPr — open head-label match, body-ref fallback, merged match, null (characterization)', function () {
+        var listCalls = { open: 0, merged: 0 };
+        var p = loadProvider('github', {
+            github_list_prs: function (args) {
+                if (args.state === 'open') {
+                    listCalls.open++;
+                    return [
+                        { number: 10, head: { label: 'mygroup:ai/gh-10', ref: 'ai/gh-10' }, body: 'plain' },
+                        { number: 11, head: { label: 'other:zz', ref: 'zz' }, body: 'Fixes #11 for good' }
+                    ];
+                }
+                listCalls.merged++;
+                return [{ number: 5, head: { label: 'mygroup:ai/gh-5' } }];
+            }
+        });
+        assert.deepEqual(p.findPr(10, 'ai/gh-'), { number: 10, state: 'OPEN', branch: 'ai/gh-10' });
+        assert.deepEqual(p.findPr(11, 'ai/gh-'), { number: 11, state: 'OPEN', branch: 'zz' });
+        assert.deepEqual(p.findPr(5, 'ai/gh-'), { number: 5, state: 'MERGED', branch: 'ai/gh-5' });
+        assert.equal(p.findPr(999, 'ai/gh-'), null);
+        assert.equal(listCalls.open, 1, 'open list rides the per-tick cache');
+        assert.equal(listCalls.merged, 1, 'merged list rides the per-tick cache');
+    });
+
+    test('github: findPr — a body reference does not match a bare substring of a longer number', function () {
+        var p = loadProvider('github', {
+            github_list_prs: function (args) {
+                if (args.state === 'open') {
+                    return [{ number: 110, head: { label: 'x:y' }, body: 'refs #1100' }];
+                }
+                return [];
+            }
+        });
+        assert.equal(p.findPr(110, 'ai/gh-'), null);
+        // …but the same PR IS the linked PR of #1100 (its body refs #1100)
+        assert.equal(p.findPr(1100, 'ai/gh-').number, 110);
+    });
+
+    test('github: listMachineIssues — the limit early-exit line never skips later label searches (characterization)', function () {
+        var queries = [];
+        var p = loadProvider('github', {
+            github_search_issues: function (args) {
+                queries.push(args.query);
+                if (args.query.indexOf('label:"one"') !== -1) {
+                    return { items: [
+                        { number: 1, title: 'a', labels: [{ name: 'one' }], assignees: [] },
+                        { number: 2, title: 'b', labels: [{ name: 'one' }], assignees: [] }
+                    ] };
+                }
+                if (args.query.indexOf('label:"two"') !== -1) {
+                    return { items: [{ number: 2, title: 'b2', labels: [{ name: 'two' }], assignees: [] }] };
+                }
+                if (args.query.indexOf('assignee:') !== -1) {
+                    return { items: [{ number: 3, title: 'c', labels: [], assignees: [{ login: 'bot' }] }] };
+                }
+                return { items: [] };
+            }
+        });
+        var issues = p.listMachineIssues(['one', 'two'], 'bot', 2);
+        assert.equal(issues.length, 2);
+        assert.equal(issues[0].number, 1);
+        assert.equal(issues[1].number, 2);
+        // the `return` inside forEach continues with the NEXT label: all three
+        // searches still fire even though label "one" already filled the limit.
+        assert.equal(queries.length, 3);
+    });
+
+    test('github: prStatus maps string-form PR labels and resolves the author via user/author fallbacks', function () {
+        var prs = {
+            31: { state: 'open', mergeable: true, mergeStateStatus: 'CLEAN',
+                  labels: ['ai_pr_reviewed', { name: 'agent:review' }], author: { login: 'graphbot' } },
+            32: { state: 'open', mergeable: true, mergeStateStatus: 'CLEAN',
+                  labels: [], author: { name: 'Named Author' } },
+            33: { state: 'open', mergeable: true, mergeStateStatus: 'CLEAN' }
+        };
+        var p = loadProvider('github', {
+            github_get_pr: function (args) { return prs[args.pullRequestId]; }
+        });
+        var st31 = p.prStatus(31);
+        assert.deepEqual(st31.labels, ['ai_pr_reviewed', 'agent:review']);
+        assert.equal(st31.author, 'graphbot');
+        assert.equal(p.prStatus(32).author, 'Named Author');
+        assert.equal(p.prStatus(33).author, '');
+    });
+
+    test('github: closeIssue — comment then close; a failing comment still closes; no comment skips the note', function () {
+        var calls = [];
+        var p = loadProvider('github', {
+            github_create_comment: function (a) { calls.push(['comment', a]); return 'ok'; },
+            github_close_issue: function (a) { calls.push(['close', a]); return 'closed'; }
+        });
+        assert.equal(p.closeIssue(7, 'done'), 'closed');
+        assert.equal(p.closeIssue(8, null), 'closed');
+        assert.deepEqual(calls, [
+            ['comment', { workspace: 'mygroup', repository: 'my-repo', number: 7, body: 'done' }],
+            ['close', { workspace: 'mygroup', repository: 'my-repo', number: 7 }],
+            ['close', { workspace: 'mygroup', repository: 'my-repo', number: 8 }]
+        ]);
+        var p2 = loadProvider('github', {
+            github_create_comment: function () { throw new Error('boom'); },
+            github_close_issue: function (a) { calls.push(['close', a]); return 'closed'; }
+        });
+        var warnings = captureWarn(function () {
+            assert.equal(p2.closeIssue(9, 'x'), 'closed');
+        });
+        assert.equal(warnings.length, 1);
+        assert.contains(warnings[0], 'close-issue comment failed');
+        assert.deepEqual(calls[calls.length - 1],
+            ['close', { workspace: 'mygroup', repository: 'my-repo', number: 9 }]);
+    });
+
+    test('github: addIssueLabel/addPrLabel ride github_add_labels with a single-label array', function () {
+        var calls = [];
+        var p = loadProvider('github', {
+            github_add_labels: function (a) { calls.push(a); return 'ok'; }
+        });
+        p.addIssueLabel(4, 'agent:dev');
+        p.addPrLabel(5, 'ai_pr_reviewed');
+        assert.deepEqual(calls, [
+            { workspace: 'mygroup', repository: 'my-repo', number: 4, labels: ['agent:dev'] },
+            { workspace: 'mygroup', repository: 'my-repo', number: 5, labels: ['ai_pr_reviewed'] }
+        ]);
+    });
+
+    test('github: removePrLabel — idempotent no-op on a 404 (warns, returns null)', function () {
+        var calls = [];
+        var p = loadProvider('github', {
+            github_remove_label: function (a) { calls.push(a); throw new Error('HTTP 404'); }
+        });
+        var warnings = captureWarn(function () {
+            assert.equal(p.removePrLabel(12, 'ai_validating'), null);
+        });
+        assert.equal(warnings.length, 1);
+        assert.contains(warnings[0], 'remove "ai_validating" from PR #12');
+        assert.deepEqual(calls, [{ workspace: 'mygroup', repository: 'my-repo',
+                                   number: 12, label: 'ai_validating' }]);
+        var p2 = loadProvider('github', {
+            github_remove_label: function (a) { return 'removed'; }
+        });
+        assert.equal(p2.removePrLabel(12, 'ai_validating'), 'removed');
+    });
+
+    test('github: dispatchPrLeg posts issue:"" + pr inputs; dispatchLeg posts the issue number', function () {
+        var calls = [];
+        var p = loadProvider('github', {
+            github_trigger_workflow: function (a) { calls.push(a); return 'fired'; }
+        });
+        p.dispatchPrLeg(15, 'review', 'because', 'factory.yml');
+        p.dispatchLeg(16, 'dev', null, 'factory.yml');
+        assert.deepEqual(calls, [
+            { workflowId: 'factory.yml', ref: 'main',
+              inputs: JSON.stringify({ issue: '', leg: 'review', reason: 'because', pr: '15' }) },
+            { workflowId: 'factory.yml', ref: 'main',
+              inputs: JSON.stringify({ issue: '16', leg: 'dev', reason: '' }) }
+        ]);
+    });
+
+    test('github: silentUpdateBranch — plain, silent+restore, silent-only token shapes', function () {
+        var calls = [];
+        var p = loadProvider('github', {
+            cli_execute_command: function (a) { calls.push(['gh', a.command]); return 'ok'; },
+            set_env_variable: function (k, v) { calls.push(['env', k, v]); }
+        });
+        p.silentUpdateBranch(3);
+        p.silentUpdateBranch(4, 'SILENT', 'RESTORE');
+        p.silentUpdateBranch(5, 'SILENT2');
+        assert.deepEqual(calls, [
+            ['gh', 'gh pr update-branch 3 --repo mygroup/my-repo'],
+            ['env', 'GH_TOKEN', 'SILENT'],
+            ['gh', 'gh pr update-branch 4 --repo mygroup/my-repo'],
+            ['env', 'GH_TOKEN', 'RESTORE'],
+            ['env', 'GH_TOKEN', 'SILENT2'],
+            ['gh', 'gh pr update-branch 5 --repo mygroup/my-repo'],
+            ['env', 'GH_TOKEN', 'SILENT2']
+        ]);
+    });
+
+    test('github: reviewThreadList skips null nodes (characterization)', function () {
+        var p = loadProvider('github', {
+            github_get_pr_review_threads: function () {
+                return { data: { repository: { pullRequest: { reviewThreads: { nodes: [
+                    null,
+                    { id: 't1', isResolved: true, path: 'a.js', line: 7,
+                      comments: { nodes: [{ databaseId: 5, author: { login: 'ann' }, body: 'pls fix' }] } }
+                ] } } } } };
+            }
+        });
+        assert.deepEqual(p.reviewThreadList(9), [
+            { threadId: 't1', rootCommentId: 5, resolved: true, author: 'ann',
+              body: 'pls fix', path: 'a.js', line: 7 }
+        ]);
+    });
+
+    // ── gitlab provider methods ──────────────────────────────────────────
+
+    test('gitlab: findPr — opened by source_branch, opened by description ref, merged, null (characterization)', function () {
+        var listCalls = { opened: 0, merged: 0 };
+        var p = loadProvider('gitlab', {
+            gitlab_list_mrs: function (args) {
+                if (args.state === 'opened') {
+                    listCalls.opened++;
+                    return [
+                        { iid: 10, source_branch: 'ai/gh-10', description: 'x' },
+                        { iid: 11, source_branch: 'zz', description: 'Fixes #11 for good' }
+                    ];
+                }
+                listCalls.merged++;
+                return [{ iid: 5, source_branch: 'ai/gh-5' }];
+            }
+        });
+        assert.deepEqual(p.findPr(10, 'ai/gh-'), { number: 10, state: 'OPEN', branch: 'ai/gh-10' });
+        assert.deepEqual(p.findPr(11, 'ai/gh-'), { number: 11, state: 'OPEN', branch: 'zz' });
+        assert.deepEqual(p.findPr(5, 'ai/gh-'), { number: 5, state: 'MERGED', branch: 'ai/gh-5' });
+        assert.equal(p.findPr(999, 'ai/gh-'), null);
+        // gitlab has no per-tick list cache: every findPr re-fetches
+        assert.equal(listCalls.opened, 4);
+        assert.equal(listCalls.merged, 2);
+    });
+
+    test('gitlab: listMachineIssues — an issue matching neither assignee nor labels is excluded', function () {
+        var p = loadProvider('gitlab', {
+            gitlab_list_issues: function () {
+                return { issues: [
+                    { iid: 1, title: 'mine', labels: ['agent:dev'], assignees: [] },
+                    { iid: 2, title: 'other', labels: ['trivial'], assignees: [{ username: 'human' }] }
+                ] };
+            }
+        });
+        var issues = p.listMachineIssues(['agent:dev'], 'bot', 50);
+        assert.equal(issues.length, 1);
+        assert.equal(issues[0].number, 1);
+        assert.equal(issues[0].title, 'mine');
+    });
+
+    test('gitlab: prStatus — checking reads UNKNOWN; conflicts read BEHIND even when can_be_merged; empty pipelines read none', function () {
+        var mr = { state: 'opened', merge_status: 'checking', has_conflicts: false,
+                   author: { username: 'bot' } };
+        var p = loadProvider('gitlab', {
+            gitlab_get_mr: function () { return mr; },
+            gitlab_get_mr_pipelines: function () { return { pipelines: [] }; }
+        });
+        var st = p.prStatus(6);
+        assert.equal(st.mergeState, 'UNKNOWN');
+        assert.equal(st.checkConclusion, 'none');
+        assert.equal(st.author, 'bot');
+        mr = { state: 'opened', merge_status: 'can_be_merged', has_conflicts: true };
+        var st2 = p.prStatus(7);
+        assert.equal(st2.mergeState, 'BEHIND');
+        assert.equal(st2.mergeable, false);
+    });
+
+    test('gitlab: pipeline status map — running/pending/created/waiting_for_resource read pending (characterization)', function () {
+        var pipelines = [{ status: 'running' }, { status: 'success' }];
+        var p = loadProvider('gitlab', {
+            gitlab_get_mr: function () { return { state: 'opened', merge_status: 'checking' }; },
+            gitlab_get_mr_pipelines: function () { return { pipelines: pipelines }; }
+        });
+        assert.equal(p.prStatus(8).checkConclusion, 'pending');
+        pipelines = [{ status: 'waiting_for_resource' }];
+        assert.equal(p.prStatus(9).checkConclusion, 'pending');
+    });
+
+    test('gitlab: merge/updateBranch/addIssueLabel tool shapes (characterization)', function () {
+        var calls = [];
+        var p = loadProvider('gitlab', {
+            gitlab_merge_mr: function (a) { calls.push(['merge', a]); return 'merged'; },
+            gitlab_rebase_mr: function (a) { calls.push(['rebase', a]); return 'rebased'; },
+            gitlab_add_mr_label: function (a) { calls.push(['label', a]); return 'ok'; }
+        });
+        p.merge(21);
+        p.updateBranch(22);
+        p.addIssueLabel(23, 'machine');
+        assert.deepEqual(calls, [
+            ['merge', { workspace: 'mygroup', repository: 'my-repo', pullRequestId: '21' }],
+            ['rebase', { workspace: 'mygroup', repository: 'my-repo', pullRequestId: '22' }],
+            ['label', { workspace: 'mygroup', repository: 'my-repo', pullRequestId: '23', label: 'machine' }]
+        ]);
+    });
+
+    test('gitlab: closeIssue warns, posts the note when a comment is given, stays non-fatal on note failure', function () {
+        var notes = [];
+        var p = loadProvider('gitlab', {
+            gitlab_create_mr_note: function (a) { notes.push(a); return 'ok'; }
+        });
+        var warnings = captureWarn(function () {
+            assert.equal(p.closeIssue(4, 'bye'), null);
+        });
+        assert.equal(warnings.length, 1);
+        assert.contains(warnings[0], 'gitlab close-issue tool not available');
+        assert.deepEqual(notes, [{ workspace: 'mygroup', repository: 'my-repo',
+                                  pullRequestId: '4', text: 'bye' }]);
+        var p2 = loadProvider('gitlab', {
+            gitlab_create_mr_note: function () { throw new Error('boom'); }
+        });
+        warnings = captureWarn(function () {
+            assert.equal(p2.closeIssue(5, 'x'), null);
+        });
+        assert.equal(warnings.length, 2);
+        assert.contains(warnings[1], 'close-issue comment failed');
+    });
+});
