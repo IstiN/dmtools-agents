@@ -1474,3 +1474,235 @@ suite('scm.getDiffText', function() {
         assert.ok(provider.getDiffText(7) === null);
     });
 });
+
+suite('githubHelpers.detectFailedChecks — pure log helpers (gh-1012)', function() {
+
+    function makeGh(mocks) {
+        return loadGithubHelpers(mocks || {});
+    }
+
+    test('parseCheckRunsResult normalizes every accepted payload shape', function() {
+        var gh = makeGh();
+        var check = { name: 'x', conclusion: 'failure' };
+
+        assert.deepEqual(gh.parseCheckRunsResult(null), []);
+        assert.deepEqual(gh.parseCheckRunsResult('oops'), [], 'unparseable string yields no checks');
+        assert.deepEqual(gh.parseCheckRunsResult({}), [], 'object without check_runs yields no checks');
+        assert.deepEqual(gh.parseCheckRunsResult([check]), [check], 'array passes through');
+        assert.deepEqual(gh.parseCheckRunsResult({ check_runs: [check] }), [check]);
+        assert.deepEqual(gh.parseCheckRunsResult(JSON.stringify({ check_runs: [check] })), [check],
+            'JSON string payload is parsed');
+    });
+
+    test('unwrapLogResult unwraps JSON {result} payloads and passes everything else through', function() {
+        var gh = makeGh();
+        assert.equal(gh.unwrapLogResult(JSON.stringify({ result: 'the log' })), 'the log');
+        assert.equal(gh.unwrapLogResult('plain log'), 'plain log');
+        assert.equal(gh.unwrapLogResult('{"other":1}'), '{"other":1}', 'JSON without result stays as-is');
+        assert.equal(gh.unwrapLogResult(null), null);
+        assert.deepEqual(gh.unwrapLogResult({ raw: 1 }), { raw: 1 });
+    });
+
+    test('extractJenkinsBuildTarget resolves the job path and build number', function() {
+        var gh = makeGh();
+        var t = gh.extractJenkinsBuildTarget(
+            'https://jenkins.example.com/job/example-org/job/example.repo/job/PR-123/45/',
+            'https://jenkins.example.com/');
+        assert.deepEqual(t, { jobPath: 'job/example-org/job/example.repo/job/PR-123', buildNumber: 45 });
+    });
+
+    test('extractJenkinsBuildTarget rejects foreign hosts, missing numbers and empty job paths', function() {
+        var gh = makeGh();
+        assert.equal(gh.extractJenkinsBuildTarget('https://other.example.com/job/x/1/', 'https://jenkins.example.com/'), null);
+        assert.equal(gh.extractJenkinsBuildTarget('https://jenkins.example.com/job/x/y/', 'https://jenkins.example.com/'), null,
+            'no numeric build segment');
+        assert.equal(gh.extractJenkinsBuildTarget('https://jenkins.example.com/45/', 'https://jenkins.example.com/'), null,
+            'build number without a job path');
+        assert.equal(gh.extractJenkinsBuildTarget(null, 'https://jenkins.example.com/'), null);
+        assert.equal(gh.extractJenkinsBuildTarget('https://jenkins.example.com/job/x/1/', null), null);
+    });
+
+    test('buildLogSections builds the md snippet and full-log block, truncating to the last 500 lines', function() {
+        var gh = makeGh();
+        var lines = [];
+        for (var i = 1; i <= 600; i++) lines.push('line ' + i);
+        var sections = gh.buildLogSections(
+            { name: 'Build', details_url: 'https://ci/job/1' }, lines.join('\n'), 'Error log');
+
+        assert.ok(sections, 'sections should be returned for non-empty logs');
+        assert.contains(sections.md, '**Error log (last 500 lines)**');
+        assert.contains(sections.md, 'line 600');
+        assert.notContains(sections.md, 'line 1\n', 'md snippet must only hold the last 500 lines');
+        assert.contains(sections.md, 'line 101', 'the 500-line window starts at line 101');
+        assert.contains(sections.full, '=== Error log for: Build ===');
+        assert.contains(sections.full, 'URL: https://ci/job/1');
+        assert.contains(sections.full, 'line 1');
+        assert.equal(gh.buildLogSections({ name: 'B' }, '', 'Error log'), null, 'empty logs yield no sections');
+        assert.equal(gh.buildLogSections({ name: 'B' }, null, 'Error log'), null);
+    });
+
+    test('buildCiFailuresHeader and resolution section shape the report', function() {
+        var gh = makeGh();
+        var md = gh.buildCiFailuresHeader([{ name: 'a' }, { name: 'b' }], 'abc123def');
+        assert.contains(md, '# ⚠️ Failed CI Checks — Fix Before Completing Rework');
+        assert.contains(md, 'ci_failures_full.log');
+        assert.contains(md, '2 check(s) failed on commit `abc123def`');
+
+        var resolution = gh.buildCiFailuresResolutionSection();
+        assert.contains(resolution, '## Resolution');
+        assert.contains(resolution, 'CI will re-run automatically');
+    });
+});
+
+suite('githubHelpers.detectFailedChecks — scm mode and GitHub job logs (gh-1012)', function() {
+
+    function makeGh(mocks) {
+        return loadGithubHelpers(mocks || {});
+    }
+
+    function findWrite(writes, path) {
+        for (var i = 0; i < writes.length; i++) {
+            if (writes[i].path === path) return writes[i];
+        }
+        return null;
+    }
+
+    test('scm mode fetches check runs and job logs through the scm object', function() {
+        var writes = [];
+        var scm = {
+            getCommitCheckRuns: function(sha) {
+                return { check_runs: [{
+                    name: 'PR Build', conclusion: 'failure',
+                    details_url: 'https://ci.example.com/jobs/12345'
+                }] };
+            },
+            getJobLogs: function(jobId) { return 'scm log for ' + jobId; }
+        };
+
+        var gh = makeGh({ file_write: function(args) { writes.push(args); } });
+        var failed = gh.detectFailedChecks(scm, 'abc123def', '/tmp/input');
+
+        assert.equal(failed.length, 1);
+        assert.equal(failed[0].name, 'PR Build');
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.ok(mdWrite);
+        assert.contains(mdWrite.content, '**Error log (last 500 lines)**');
+        assert.contains(mdWrite.content, 'scm log for 12345');
+    });
+
+    test('scm getCommitCheckRuns returning null yields an empty result', function() {
+        var scm = { getCommitCheckRuns: function() { return null; }, getJobLogs: function() {} };
+        var gh = makeGh({ file_write: function() {} });
+        assert.deepEqual(gh.detectFailedChecks(scm, 'abc123def', '/tmp/input'), []);
+    });
+
+    test('github mode fetches job logs for /jobs/{id} urls and unwraps JSON-wrapped logs', function() {
+        var writes = [];
+        var logCalls = [];
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return { check_runs: [{
+                    name: 'Build',
+                    conclusion: 'timed_out',
+                    details_url: 'https://github.com/o/r/checks?check_run_id=1/jobs/777'
+                }] };
+            },
+            github_get_job_logs: function(args) {
+                logCalls.push(args);
+                return JSON.stringify({ result: 'boom from json' });
+            },
+            file_write: function(args) { writes.push(args); }
+        });
+
+        var failed = gh.detectFailedChecks('o', 'r', 'abc123def', '/tmp/input');
+
+        assert.equal(failed.length, 1, 'timed_out counts as failed');
+        assert.equal(failed[0].conclusion, 'timed_out');
+        assert.deepEqual(logCalls, [{ workspace: 'o', repository: 'r', jobId: '777' }]);
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.contains(mdWrite.content, 'boom from json');
+    });
+
+    test('a job-log fetch failure is tolerated and the report is still written', function() {
+        var writes = [];
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return { check_runs: [{
+                    name: 'Build', conclusion: 'failure', details_url: 'https://ci/jobs/1'
+                }] };
+            },
+            github_get_job_logs: function() { throw new Error('logs down'); },
+            file_write: function(args) { writes.push(args); }
+        });
+
+        var failed = gh.detectFailedChecks('o', 'r', 'abc123def', '/tmp/input');
+
+        assert.equal(failed.length, 1);
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.ok(mdWrite, 'report should still be written without logs');
+        assert.notContains(mdWrite.content, 'Error log (last 500 lines)');
+    });
+
+    test('passing checks produce no report files', function() {
+        var writes = [];
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return { check_runs: [{ name: 'Build', conclusion: 'success' }] };
+            },
+            file_write: function(args) { writes.push(args); }
+        });
+        assert.deepEqual(gh.detectFailedChecks('o', 'r', 'abc123def', '/tmp/input'), []);
+        assert.equal(writes.length, 0);
+    });
+
+    test('an empty check-run list produces no report files', function() {
+        var writes = [];
+        var gh = makeGh({
+            github_get_commit_check_runs: function() { return { check_runs: [] }; },
+            file_write: function(args) { writes.push(args); }
+        });
+        assert.deepEqual(gh.detectFailedChecks('o', 'r', 'abc123def', '/tmp/input'), []);
+        assert.equal(writes.length, 0);
+    });
+
+    test('a missing headSha short-circuits before any fetch', function() {
+        var gh = makeGh({
+            github_get_commit_check_runs: function() { throw new Error('must not be called'); }
+        });
+        assert.deepEqual(gh.detectFailedChecks('o', 'r', null, '/tmp/input'), []);
+    });
+
+    test('a report-write failure is non-fatal and returns an empty list', function() {
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return { check_runs: [{ name: 'Build', conclusion: 'failure' }] };
+            },
+            file_write: function() { throw new Error('disk full'); }
+        });
+        assert.doesNotThrow(function() {
+            assert.deepEqual(gh.detectFailedChecks('o', 'r', 'abc123def', '/tmp/input'), []);
+        });
+    });
+
+    test('a Jenkins url without a resolvable build target is ignored', function() {
+        var writes = [];
+        var jenkinsCalls = 0;
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return { check_runs: [{
+                    name: 'Jenkins Build', conclusion: 'failure',
+                    details_url: 'https://jenkins.example.com/45/'
+                }] };
+            },
+            jenkins_get_job_info: function() { jenkinsCalls++; },
+            jenkins_get_build_log: function() { jenkinsCalls++; },
+            file_write: function(args) { writes.push(args); }
+        });
+
+        var failed = gh.detectFailedChecks('o', 'r', 'abc123def', '/tmp/input', 'https://jenkins.example.com/');
+
+        assert.equal(failed.length, 1);
+        assert.equal(jenkinsCalls, 0, 'no Jenkins calls for a bare build number');
+        assert.ok(findWrite(writes, '/tmp/input/ci_failures.md'));
+    });
+});
