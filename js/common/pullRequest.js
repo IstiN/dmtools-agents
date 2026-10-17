@@ -395,41 +395,43 @@ function parseConflictedFiles(statusRaw) {
         .filter(Boolean);
 }
 
-// Pure decision: which side of a conflict to keep. 'ours' is the branch being
-// synced (HEAD — it changed the file), 'theirs' is origin/<baseBranch>.
-function decideConflictSide(branchChanged) {
-    return branchChanged ? 'ours' : 'theirs';
+// Pure decision for one conflicted file: which side of the conflict to keep
+// ('ours' = the branch being synced / HEAD, 'theirs' = origin/<baseBranch>)
+// and the matching log prefix. Submodule conflicts and files the branch never
+// changed both adopt the origin/<baseBranch> version.
+function decideConflictResolution(isSubmodule, branchChanged, baseBranch) {
+    if (isSubmodule) {
+        return { side: 'theirs', logPrefix: '  Submodule conflict — adopting origin/' + baseBranch + ' version for' };
+    }
+    if (branchChanged) {
+        return { side: 'ours', logPrefix: '  Keeping branch version for' };
+    }
+    return { side: 'theirs', logPrefix: '  Keeping origin/' + baseBranch + ' version for' };
 }
 
-// Resolves one conflicted file in place: submodule conflicts adopt the
-// origin/<baseBranch> version; otherwise the branch keeps its own change when
-// it touched the file and takes origin/<baseBranch> when it did not.
+// True when the branch being synced changed `file` since the merge base with
+// origin/<baseBranch> — i.e. the conflict is the branch's own edit. False when
+// there is no merge base to compare against or the diff probe fails.
+function branchChangedSinceMergeBase(runCommand, workingDir, file, mergeBase) {
+    if (!mergeBase) return false;
+    try {
+        var diff = cleanCommandOutput(runCommand('git diff ' + mergeBase + ' HEAD -- "' + file + '"', workingDir) || '');
+        return !!diff.trim();
+    } catch (diffError) {
+        console.warn('Could not determine change side for', file, ':', diffError.message || diffError);
+        return false;
+    }
+}
+
+// Resolves one conflicted file in place by checking out the chosen side and
+// staging it; failures are logged and left for the caller to report.
 function resolveOneConflictedFile(runCommand, workingDir, file, mergeBase, baseBranch) {
     try {
-        if (isSubmodulePath(runCommand, workingDir, file)) {
-            console.log('  Submodule conflict — adopting origin/' + baseBranch + ' version for', file);
-            runCommand('git checkout --theirs -- "' + file + '"', workingDir);
-            runCommand('git add -- "' + file + '"', workingDir);
-            return;
-        }
-
-        var branchChanged = false;
-        if (mergeBase) {
-            try {
-                var diff = cleanCommandOutput(runCommand('git diff ' + mergeBase + ' HEAD -- "' + file + '"', workingDir) || '');
-                branchChanged = !!diff.trim();
-            } catch (diffError) {
-                console.warn('Could not determine change side for', file, ':', diffError.message || diffError);
-            }
-        }
-
-        var side = decideConflictSide(branchChanged);
-        if (side === 'ours') {
-            console.log('  Keeping branch version for', file);
-        } else {
-            console.log('  Keeping origin/' + baseBranch + ' version for', file);
-        }
-        runCommand('git checkout --' + side + ' -- "' + file + '"', workingDir);
+        var submodule = isSubmodulePath(runCommand, workingDir, file);
+        var branchChanged = submodule ? false : branchChangedSinceMergeBase(runCommand, workingDir, file, mergeBase);
+        var plan = decideConflictResolution(submodule, branchChanged, baseBranch);
+        console.log(plan.logPrefix, file);
+        runCommand('git checkout --' + plan.side + ' -- "' + file + '"', workingDir);
         runCommand('git add -- "' + file + '"', workingDir);
     } catch (resolveError) {
         console.warn('Could not auto-resolve', file, ':', resolveError.message || resolveError);

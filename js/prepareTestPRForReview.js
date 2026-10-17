@@ -97,12 +97,18 @@ function clearStaleReviewOutputs() {
     }
 }
 
+// gh-965: ticket summary for the PR title — falls back to the ticket key when
+// the tracker issue or its summary is unavailable.
+function prTitleSummary(ticket, ticketKey) {
+    return ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
+}
+
 // gh-965: creates the review PR for an existing test branch and re-fetches it
 // so downstream code gets a consistent PR shape from the SCM. Throws on failure.
 function createReviewPrForBranch(scm, ticketKey, branchName, config) {
     const ticket = getTracker().getIssue(ticketKey);
-    const summary = ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
-    const prTitle = configLoader.formatTemplate(config.formats.prTitle.testAutomation, {ticketKey: ticketKey, ticketSummary: summary});
+    const prTitle = configLoader.formatTemplate(config.formats.prTitle.testAutomation,
+        {ticketKey: ticketKey, ticketSummary: prTitleSummary(ticket, ticketKey)});
 
     const prResult = prHelper.createPullRequest({
         scm: scm,

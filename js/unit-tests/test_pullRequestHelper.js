@@ -796,8 +796,32 @@ suite('pullRequest helper — syncBranchWithBase conflict auto-resolution (gh-96
         assert.contains(s.result.error, 'nothing to commit');
     });
 
-    test('unreadable conflict status surfaces the status error and aborts', function() {
+    test('unresolvable merge base keeps origin/main version (--theirs) without a diff probe', function() {
         var s = scriptedSync({
+            replies: [
+                { match: 'git rev-parse --quiet --verify MERGE_HEAD', output: '' },
+                { match: 'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main', output: '' },
+                { match: 'git rev-parse origin/main', output: 'base-sha' },
+                { match: 'git merge-base origin/main HEAD', output: 'old-sha' },
+                { match: 'git merge-base origin/main HEAD', output: 'old-sha' },
+                { match: 'git status --porcelain --ignore-submodules=dirty', output: '' },
+                { match: 'git merge --no-edit origin/main', throwError: 'merge conflict' },
+                { match: 'git status --short', output: 'UU src/app.js\n' },
+                { match: 'git merge-base origin/main HEAD', throwError: 'fatal: no merge base' },
+                { match: 'git ls-files --stage -- "src/app.js"', output: '100644 abc123 1\tsrc/app.js' },
+                { match: 'git diff --name-only --diff-filter=U', output: '' },
+                { match: 'git commit', output: 'ok' }
+            ]
+        });
+
+        assert.equal(s.result.success, true);
+        assert.equal(s.result.autoResolved, true);
+        assert.deepEqual(s.commands.filter(function(c) {
+            return c.command.indexOf('git checkout') === 0;
+        }).map(function(c) { return c.command; }), ['git checkout --theirs -- "src/app.js"']);
+    });
+
+    test('unreadable conflict status surfaces the status error and aborts', function() {        var s = scriptedSync({
             replies: [
                 { match: 'git rev-parse --quiet --verify MERGE_HEAD', output: '' },
                 { match: 'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main', output: '' },
