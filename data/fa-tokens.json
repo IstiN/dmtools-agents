@@ -1460,6 +1460,15 @@
       "total": 202626,
       "cacheRead": 7772224,
       "model": "glm-5.3-flash"
+    },
+    {
+      "leg": "review",
+      "at": "2026-10-17T10:20:46Z",
+      "prompt": 71386,
+      "completion": 14993,
+      "total": 86379,
+      "cacheRead": 1504768,
+      "model": "kimi-for-coding"
     }
   ],
   "issue-926": [
