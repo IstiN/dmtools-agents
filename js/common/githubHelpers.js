@@ -421,6 +421,104 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
  * In SCM mode an optional jenkinsBasePath can be passed to fetch Jenkins console logs
  * for failed checks whose details_url points at the configured Jenkins instance.
  */
+// ─── Pure helpers extracted from detectFailedChecks (gh-1012) ────────────────
+
+/** Normalize a check-runs payload (object or JSON string) into a check-runs array. */
+function parseCheckRunsResult(rawResult) {
+    var parsed = rawResult;
+    if (typeof parsed === 'string') {
+        try { parsed = JSON.parse(parsed); } catch (e) {}
+    }
+    return Array.isArray(parsed) ? parsed
+        : (parsed && parsed.check_runs ? parsed.check_runs : []);
+}
+
+/** Unwrap a JSON { result: ... } tool response, passing everything else through. */
+function unwrapLogResult(rawLogs) {
+    var logs = rawLogs;
+    if (typeof rawLogs === 'string') {
+        try {
+            var parsedLogs = JSON.parse(rawLogs);
+            if (parsedLogs && parsedLogs.result) logs = parsedLogs.result;
+        } catch (e) { /* keep the raw string */ }
+    }
+    return logs;
+}
+
+/** Resolve a Jenkins details_url to { jobPath, buildNumber } under jenkinsBasePath, or null. */
+function extractJenkinsBuildTarget(detailsUrl, jenkinsBasePath) {
+    if (!jenkinsBasePath || !detailsUrl || detailsUrl.indexOf(jenkinsBasePath) !== 0) return null;
+    var relativePath = detailsUrl.substring(jenkinsBasePath.length).replace(/^[\/]+/, '');
+    var pathParts = relativePath.split('/').filter(function(p) { return p.length > 0; });
+    var buildNumber = null;
+    var jobPathParts = [];
+    for (var i = 0; i < pathParts.length; i++) {
+        if (/^\d+$/.test(pathParts[i])) {
+            buildNumber = parseInt(pathParts[i], 10);
+            break;
+        }
+        jobPathParts.push(pathParts[i]);
+    }
+    if (!buildNumber || jobPathParts.length === 0) return null;
+    return { jobPath: jobPathParts.join('/'), buildNumber: buildNumber };
+}
+
+/** Build the md snippet + full-log block for one failed check, or null when there are no logs. */
+function buildLogSections(check, logs, label) {
+    if (!logs) return null;
+    var lines = logs.split('\n');
+    var snippet = lines.slice(-500).join('\n');
+    return {
+        md: '**' + label + ' (last 500 lines)**:\n\n```\n' + snippet + '\n```\n\n',
+        full: '=== ' + label + ' for: ' + check.name + ' ===\n' +
+              'URL: ' + (check.details_url || 'N/A') + '\n' +
+              logs + '\n\n'
+    };
+}
+
+/** Fetch the raw GitHub job log for a check whose details_url contains /jobs/{id}. */
+function fetchGithubCheckLogs(check, scm, owner, repo) {
+    var jobIdMatch = check.details_url && check.details_url.match(/\/jobs?\/(\d+)/);
+    if (!jobIdMatch) return null;
+    try {
+        var rawLogs = scm ? scm.getJobLogs(jobIdMatch[1]) : github_get_job_logs({
+            workspace: owner, repository: repo, jobId: jobIdMatch[1]
+        });
+        return unwrapLogResult(rawLogs);
+    } catch (e) {
+        console.warn('Could not fetch logs for job', jobIdMatch[1], ':', e.message || e);
+        return null;
+    }
+}
+
+/** Fetch the raw Jenkins build log for a check whose details_url resolves to a build target. */
+function fetchJenkinsCheckLogs(check, jenkinsBasePath) {
+    var target = extractJenkinsBuildTarget(check.details_url, jenkinsBasePath);
+    if (!target) return null;
+    try {
+        jenkins_get_job_info({ jobPath: target.jobPath, buildNumber: target.buildNumber });
+        return unwrapLogResult(jenkins_get_build_log({ jobPath: target.jobPath, buildNumber: target.buildNumber }));
+    } catch (e) {
+        console.warn('Could not fetch Jenkins logs for', check.details_url, ':', e.message || e);
+        return null;
+    }
+}
+
+function buildCiFailuresHeader(failedChecks, headSha) {
+    var md = '# ⚠️ Failed CI Checks — Fix Before Completing Rework\n\n';
+    md += 'Full (untruncated) logs are available in `ci_failures_full.log`.\n\n';
+    md += failedChecks.length + ' check(s) failed on commit `' + headSha.substring(0, 8) + '`:\n\n';
+    return md;
+}
+
+function buildCiFailuresResolutionSection() {
+    return '---\n\n## Resolution\n\n' +
+           '1. Read the error log(s) above to identify the root cause\n' +
+           '2. For more context, open `ci_failures_full.log` with the complete logs\n' +
+           '3. Fix the underlying code issue(s)\n' +
+           '4. CI will re-run automatically after the push — all checks must pass\n';
+}
+
 function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt) {
     var scm = null;
     var owner, repo, headSha, inputFolder, jenkinsBasePath;

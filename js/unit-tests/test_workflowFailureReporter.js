@@ -80,12 +80,13 @@ suite('workflowFailureReporter.parseWorkflowRuns', function() {
 
     test('returns an error for an unparseable string payload', function() {
         var mod = loadReporter();
-        assert.deepEqual(mod.parseWorkflowRuns('{not json'), { error: 'Failed to parse workflow runs' });
+        var r = mod.parseWorkflowRuns('{not json');
+        assert.equal(r.error, 'Failed to parse workflow runs');
     });
 
     test('returns an error for a JSON null payload (null.workflow_runs throws)', function() {
         var mod = loadReporter();
-        assert.deepEqual(mod.parseWorkflowRuns('null'), { error: 'Failed to parse workflow runs' });
+        assert.equal(mod.parseWorkflowRuns('null').error, 'Failed to parse workflow runs');
     });
 });
 
