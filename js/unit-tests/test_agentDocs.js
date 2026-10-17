@@ -116,6 +116,115 @@ suite('agentDocGenerator', function() {
         assert.contains(written.content, 'agents/snapshots/pr_review.md');
     });
 
+    test('follows local relative requires when collecting customParams usage', function() {
+        // gh-961 rework: postTestAutomationResults.js moved its
+        // customParams.removeLabel access into postTestAutomationResultsHelpers.js.
+        // The generator must follow local relative requires so the generated
+        // doc keeps listing removeLabel (docs-freshness CI job).
+        var agent = JSON.stringify({
+            name: 'Teammate',
+            params: {
+                postJSAction: 'agents/js/doThing.js'
+            }
+        }, null, 2);
+
+        var mock = makeMockFs({
+            'agents/js/agentDocGenerator.js': '// probe',
+            'agents/my_agent.json': agent,
+            'agents/js/doThing.js':
+                "var helpers = require('./doThingHelpers.js');\n" +
+                'function action(params) { return helpers.decide(params); }',
+            'agents/js/doThingHelpers.js':
+                'function decide(params) { return params.jobParams.customParams.removeLabel; }'
+        });
+
+        var generator = loadModule(
+            'js/agentDocGenerator.js',
+            makeRequire({
+                'fs': mock.fs,
+                'path': makeMockPath()
+            }),
+            {}
+        );
+
+        var result = generator.generate();
+        assert.equal(result.success, true);
+        assert.contains(mock.calls.write[0].content, '`removeLabel`');
+    });
+
+    test('follows transitive local relative requires without double-counting', function() {
+        var agent = JSON.stringify({
+            name: 'Teammate',
+            params: {
+                postJSAction: 'agents/js/doThing.js'
+            }
+        }, null, 2);
+
+        var mock = makeMockFs({
+            'agents/js/agentDocGenerator.js': '// probe',
+            'agents/my_agent.json': agent,
+            'agents/js/doThing.js':
+                "var mid = require('./mid.js');\n" +
+                'function action(params) { return mid.go(params); }',
+            'agents/js/mid.js':
+                "var leaf = require('./leaf.js');\n" +
+                "var cyc = require('./doThing.js');\n" + // cycle back to the action file
+                'function go(params) { return [leaf.decide(params), cyc]; }',
+            'agents/js/leaf.js':
+                'function decide(params) { return params.jobParams.customParams.removeLabel; }'
+        });
+
+        var generator = loadModule(
+            'js/agentDocGenerator.js',
+            makeRequire({
+                'fs': mock.fs,
+                'path': makeMockPath()
+            }),
+            {}
+        );
+
+        var result = generator.generate();
+        assert.equal(result.success, true);
+        var content = mock.calls.write[0].content;
+        // single occurrence inside the Actions section (the merged
+        // "## Custom params" section legitimately repeats it)
+        var actionsSection = content.split('## LLM step')[0];
+        assert.contains(actionsSection, '`removeLabel`');
+        var occurrences = actionsSection.split('`removeLabel`').length - 1;
+        assert.equal(occurrences, 1);
+    });
+
+    test('ignores local relative requires that cannot be resolved', function() {
+        var agent = JSON.stringify({
+            name: 'Teammate',
+            params: {
+                postJSAction: 'agents/js/doThing.js'
+            }
+        }, null, 2);
+
+        var mock = makeMockFs({
+            'agents/js/agentDocGenerator.js': '// probe',
+            'agents/my_agent.json': agent,
+            'agents/js/doThing.js':
+                "var missing = require('./notThere.js');\n" +
+                'function action(params) { return params.jobParams.customParams.keepMe; }'
+        });
+
+        var generator = loadModule(
+            'js/agentDocGenerator.js',
+            makeRequire({
+                'fs': mock.fs,
+                'path': makeMockPath()
+            }),
+            {}
+        );
+
+        var result = generator.generate();
+        assert.equal(result.success, true);
+        var content = mock.calls.write[0].content;
+        assert.contains(content, '`keepMe`');
+    });
+
     test('ignores sm.json, sm_merge.json and run_ files', function() {
         var mock = makeMockFs({
             'agents/js/agentDocGenerator.js': '// probe',

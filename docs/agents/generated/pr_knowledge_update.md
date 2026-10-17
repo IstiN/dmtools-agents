@@ -39,12 +39,20 @@ _Pre-CLI Knowledge Update Setup Action (preCliJSAction for pr_knowledge_update a
 
 - Source: `agents/js/preCliKnowledgeUpdateSetup.js`
 - Parameters (customParams):
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
+  - `configPath`
+  - `customStatuses`
   - `diffText`
   - `discussionsMarkdown`
+  - `featureBranchEnabled`
   - `knowledgeDir`
   - `prNumber`
+  - `prSearchFnPath`
   - `prTitle`
   - `prUrl`
+  - `scmProvider`
+  - `targetRepository`
   - `ticket`
 
 
@@ -57,8 +65,16 @@ _Push Knowledge Update Post-Action (postJSAction for pr_knowledge_update agent)_
   - git push
   - git checkout
 - Parameters (customParams):
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
+  - `configPath`
+  - `customStatuses`
+  - `featureBranchEnabled`
   - `knowledgeDir`
   - `prNumber`
+  - `prSearchFnPath`
+  - `scmProvider`
+  - `targetRepository`
 
 
 ## LLM step
@@ -68,12 +84,20 @@ _Push Knowledge Update Post-Action (postJSAction for pr_knowledge_update agent)_
 
 ## Custom params
 
+- `branchCreateFnPath` _(used by JS action)_
+- `branchNamingFnPath` _(used by JS action)_
+- `configPath` _(used by JS action)_
+- `customStatuses` _(used by JS action)_
 - `diffText` _(used by JS action)_
 - `discussionsMarkdown` _(used by JS action)_
+- `featureBranchEnabled` _(used by JS action)_
 - `knowledgeDir` _(used by JS action)_
 - `prNumber` _(used by JS action)_
+- `prSearchFnPath` _(used by JS action)_
 - `prTitle` _(used by JS action)_
 - `prUrl` _(used by JS action)_
+- `scmProvider` _(used by JS action)_
+- `targetRepository` _(used by JS action)_
 - `ticket` _(used by JS action)_
 
 ---
