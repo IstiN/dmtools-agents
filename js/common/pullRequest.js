@@ -386,14 +386,60 @@ function isSubmodulePath(runCommand, workingDir, path) {
     }
 }
 
+// Pure: extracts conflicted file paths from `git status --short` output —
+// lines whose first two columns carry an unmerged marker (UU/AA/DD/AU/UA/DU/UD).
+function parseConflictedFiles(statusRaw) {
+    return (statusRaw || '').split('\n')
+        .filter(function(line) { return /^(UU|AA|DD|AU|UA|DU|UD) /.test(line.trim()); })
+        .map(function(line) { return line.trim().substring(3).trim(); })
+        .filter(Boolean);
+}
+
+// Pure decision: which side of a conflict to keep. 'ours' is the branch being
+// synced (HEAD — it changed the file), 'theirs' is origin/<baseBranch>.
+function decideConflictSide(branchChanged) {
+    return branchChanged ? 'ours' : 'theirs';
+}
+
+// Resolves one conflicted file in place: submodule conflicts adopt the
+// origin/<baseBranch> version; otherwise the branch keeps its own change when
+// it touched the file and takes origin/<baseBranch> when it did not.
+function resolveOneConflictedFile(runCommand, workingDir, file, mergeBase, baseBranch) {
+    try {
+        if (isSubmodulePath(runCommand, workingDir, file)) {
+            console.log('  Submodule conflict — adopting origin/' + baseBranch + ' version for', file);
+            runCommand('git checkout --theirs -- "' + file + '"', workingDir);
+            runCommand('git add -- "' + file + '"', workingDir);
+            return;
+        }
+
+        var branchChanged = false;
+        if (mergeBase) {
+            try {
+                var diff = cleanCommandOutput(runCommand('git diff ' + mergeBase + ' HEAD -- "' + file + '"', workingDir) || '');
+                branchChanged = !!diff.trim();
+            } catch (diffError) {
+                console.warn('Could not determine change side for', file, ':', diffError.message || diffError);
+            }
+        }
+
+        var side = decideConflictSide(branchChanged);
+        if (side === 'ours') {
+            console.log('  Keeping branch version for', file);
+        } else {
+            console.log('  Keeping origin/' + baseBranch + ' version for', file);
+        }
+        runCommand('git checkout --' + side + ' -- "' + file + '"', workingDir);
+        runCommand('git add -- "' + file + '"', workingDir);
+    } catch (resolveError) {
+        console.warn('Could not auto-resolve', file, ':', resolveError.message || resolveError);
+    }
+}
+
 function resolveMergeConflicts(runCommand, workingDir, baseBranch, branchName) {
     var conflictFiles = [];
     try {
-        var statusRaw = cleanCommandOutput(runCommand('git status --short', workingDir) || '');
-        conflictFiles = statusRaw.split('\n')
-            .filter(function(line) { return /^(UU|AA|DD|AU|UA|DU|UD) /.test(line.trim()); })
-            .map(function(line) { return line.trim().substring(3).trim(); })
-            .filter(Boolean);
+        conflictFiles = parseConflictedFiles(cleanCommandOutput(runCommand('git status --short', workingDir) || ''));
     } catch (statusError) {
         return { resolved: false, error: 'Could not read conflict status' };
     }
@@ -410,35 +456,7 @@ function resolveMergeConflicts(runCommand, workingDir, baseBranch, branchName) {
     }
 
     conflictFiles.forEach(function(file) {
-        try {
-            if (isSubmodulePath(runCommand, workingDir, file)) {
-                console.log('  Submodule conflict — adopting origin/' + baseBranch + ' version for', file);
-                runCommand('git checkout --theirs -- "' + file + '"', workingDir);
-                runCommand('git add -- "' + file + '"', workingDir);
-                return;
-            }
-
-            var branchChanged = false;
-            if (mergeBase) {
-                try {
-                    var diff = cleanCommandOutput(runCommand('git diff ' + mergeBase + ' HEAD -- "' + file + '"', workingDir) || '');
-                    branchChanged = !!diff.trim();
-                } catch (diffError) {
-                    console.warn('Could not determine change side for', file, ':', diffError.message || diffError);
-                }
-            }
-
-            if (branchChanged) {
-                console.log('  Keeping branch version for', file);
-                runCommand('git checkout --ours -- "' + file + '"', workingDir);
-            } else {
-                console.log('  Keeping origin/' + baseBranch + ' version for', file);
-                runCommand('git checkout --theirs -- "' + file + '"', workingDir);
-            }
-            runCommand('git add -- "' + file + '"', workingDir);
-        } catch (resolveError) {
-            console.warn('Could not auto-resolve', file, ':', resolveError.message || resolveError);
-        }
+        resolveOneConflictedFile(runCommand, workingDir, file, mergeBase, baseBranch);
     });
 
     var stillUnmerged = cleanCommandOutput(
