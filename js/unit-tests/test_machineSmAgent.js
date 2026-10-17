@@ -555,13 +555,19 @@ suite('machineSm action branches (gh-980 characterization)', function () {
         return { agent: agent, holder: holder };
     }
 
+    // opts-key defaulting without per-use ternaries (CRAP: this helper is
+    // measured by the quality gate like any other function).
+    function def(opts, key, dflt) {
+        return opts[key] !== undefined ? opts[key] : dflt;
+    }
+
     function providerWith(opts) {
         opts = opts || {};
         var calls = [];
         return {
             calls: calls,
-            activeMachineRuns: function () { return opts.activeIssues || []; },
-            listMachineIssues: function () { return opts.issues || []; },
+            activeMachineRuns: function () { return def(opts, 'activeIssues', []); },
+            listMachineIssues: function () { return def(opts, 'issues', []); },
             findPr: function (n) {
                 if (opts.findPrError) { throw opts.findPrError; }
                 return (opts.prs && opts.prs[n]) || null;

@@ -240,30 +240,40 @@ suite('retryMergePR: action branch characterization (gh-980)', function() {
         head: { ref: 'ai/TS-125' }
     };
 
-    function load(opts) {
-        opts = opts || {};
-        var calls = [];
-        function rec(name) {
-            return function(args) { calls.push({ tool: name, args: args }); };
-        }
+    // opts-key defaulting without per-use ternaries (CRAP: this helper is
+    // measured by the quality gate like any other function).
+    function def(opts, key, dflt) {
+        return opts[key] !== undefined ? opts[key] : dflt;
+    }
+
+    function gh980Scm(opts, calls) {
         var scm = {
-            getRemoteRepoInfo: function() {
-                return opts.repoInfo === undefined ? { owner: 'IstiN', repo: 'trackstate' } : opts.repoInfo;
-            },
-            listPrs: function() { return opts.prs === undefined ? [PR] : opts.prs; },
+            getRemoteRepoInfo: function() { return def(opts, 'repoInfo', { owner: 'IstiN', repo: 'trackstate' }); },
+            listPrs: function() { return def(opts, 'prs', [PR]); },
             getPr: function() {
                 if (opts.getPrError !== undefined) { throw opts.getPrError; }
-                return opts.prDetail === undefined ? { mergeable: false, mergeable_state: 'dirty' } : opts.prDetail;
+                return def(opts, 'prDetail', { mergeable: false, mergeable_state: 'dirty' });
             },
             mergePr: function(n, mode) {
                 calls.push({ tool: 'scm_mergePr', args: { number: n, mode: mode } });
                 if (opts.mergeError !== undefined) { throw opts.mergeError; }
             },
             removeLabel: function(n, label) { calls.push({ tool: 'scm_removeLabel', args: { number: n, label: label } }); },
-            updateBranch: opts.hasUpdateBranch === false ? undefined : function(n, owner, repo) {
+            updateBranch: function(n, owner, repo) {
                 calls.push({ tool: 'scm_updateBranch', args: { number: n, owner: owner, repo: repo } });
             }
         };
+        if (opts.hasUpdateBranch === false) { scm.updateBranch = undefined; }
+        return scm;
+    }
+
+    function load(opts) {
+        opts = opts || {};
+        var calls = [];
+        function rec(name) {
+            return function(args) { calls.push({ tool: name, args: args }); };
+        }
+        var scm = gh980Scm(opts, calls);
         var tokenCalls = [];
         var mod = loadModule(
             'js/retryMergePR.js',
