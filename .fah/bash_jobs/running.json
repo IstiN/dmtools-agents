@@ -1,1 +1,1 @@
-[{"id":"sh-2-hnazj0st5225zl5q","command":"cat input/gh-1007/ticket.md","pid":"3287","startedAtMs":1792265770488},{"id":"sh-3-hnazj292ss19ocls3","command":"cat input/gh-1007/ticket.json | head -100; ls input/gh-1007/","pid":"3292","startedAtMs":1792265772928}]
+[]
