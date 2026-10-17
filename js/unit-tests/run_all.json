@@ -103,6 +103,7 @@
         "js/unit-tests/test_postMobileTestAutomationResults.js",
         "js/unit-tests/test_writeSolutionAndDiagrams.js",
         "js/unit-tests/test_createPlannedStoriesFromOutput.js",
+        "js/unit-tests/test_createBugFixBatchEpic.js",
         "js/unit-tests/test_releaseArtefacts.js",
         "js/unit-tests/test_timerAutoCommitAndSave.js",
         "js/unit-tests/test_storyTestAutomationRework.js",
