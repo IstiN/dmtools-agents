@@ -50,6 +50,11 @@ function loadPostCli(mocks) {
         makeRequire({}),
         allMocks
     );
+    var mobileHelpers = loadModule(
+        'js/postMobileTestAutomationResultsHelpers.js',
+        makeRequire({}),
+        {}
+    );
 
     return loadModule(
         'js/postMobileTestAutomationResults.js',
@@ -57,6 +62,7 @@ function loadPostCli(mocks) {
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
             './common/pullRequest.js': prHelper,
+            './postMobileTestAutomationResultsHelpers.js': mobileHelpers,
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
                 '../config.js': configModule,
                 './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
@@ -516,4 +522,164 @@ suite('postMobileTestAutomationResults: tracker layer (ADO)', function() {
         assert.ok(calls.every(function(c) { return String(c.args.id) === '77'; }));
         assert.deepEqual(tools, ['ado_add_work_item_comment']);
     });
+});
+
+// ── Suite: blocked_by_human path (gh-979 characterization) ────────────────────
+
+var BLOCKED_RESULT = JSON.stringify({
+    status: 'blocked_by_human',
+    summary: 'Simulator unavailable',
+    blocked_reason: 'No iOS simulator on the runner',
+    missing: [
+        { name: 'APP_PATH', description: 'Path to the built .app' },
+        { name: 'MAESTRO_DEVICE' }
+    ],
+    results: []
+});
+
+suite('postMobileTestAutomationResults — blocked_by_human', function() {
+
+    test('posts blocked comment, moves to Blocked and returns blocked status', function() {
+        var jiraComments = [], statusMoves = [];
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') return BLOCKED_RESULT;
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            jira_post_comment: function(opts) { jiraComments.push(opts); },
+            jira_move_to_status: function(opts) { statusMoves.push(opts); },
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
+        });
+
+        var result = m.action(makeParams('PROJ-6618'));
+
+        assert.equal(result.success, true, 'blocked run still succeeds');
+        assert.equal(result.status, 'blocked_by_human', 'should report blocked status');
+        var blocked = jiraComments.filter(function(c) {
+            return c.comment.indexOf('Awaiting Human Setup') !== -1;
+        });
+        assert.equal(blocked.length, 1, 'should post exactly one blocked comment');
+        assert.ok(blocked[0].comment.indexOf('No iOS simulator on the runner') !== -1,
+            'should include blocked_reason');
+        assert.ok(blocked[0].comment.indexOf('*APP_PATH*: Path to the built .app') !== -1,
+            'should include missing item with description');
+        assert.ok(blocked[0].comment.indexOf('*MAESTRO_DEVICE*\n') !== -1,
+            'should include missing item without description');
+        assert.ok(statusMoves.some(function(s) { return s.statusName === 'Blocked'; }),
+            'should move Jira to Blocked');
+    });
+
+    test('skips feature PR label/comment updates when blocked', function() {
+        var added = [], prComments = [];
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') return BLOCKED_RESULT;
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            github_list_prs: function() {
+                return JSON.stringify({ data: [{ number: 963, title: 'PROJ-6618', head: { ref: 'story/PROJ-6618' } }]});
+            },
+            github_add_pr_label: function(opts) { added.push(opts); },
+            github_remove_pr_label: function() {},
+            github_add_pr_comment: function(opts) { prComments.push(opts); },
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
+        });
+
+        m.action(makeParams('PROJ-6618'));
+
+        assert.equal(added.length, 0, 'should not add pass/fail labels when blocked');
+        assert.equal(prComments.length, 0, 'should not post feature PR comment when blocked');
+    });
+
+});
+
+// ── Suite: a11y warnings path (gh-979 characterization) ───────────────────────
+
+var A11Y_WARNED_RESULT = JSON.stringify({
+    status: 'passed',
+    summary: '2 flows passed with a11y warnings',
+    results: [
+        { ticket: 'PROJ-TC-1', title: 'VoiceOver modal', status: 'passed', a11y_warnings: ['button has no label'] },
+        { ticket: 'PROJ-TC-2', title: 'Close button label', status: 'passed' }
+    ]
+});
+
+var TOP_LEVEL_A11Y_RESULT = JSON.stringify({
+    status: 'passed',
+    summary: '1 flow passed',
+    a11y_warnings: ['contrast too low'],
+    results: [
+        { ticket: 'PROJ-TC-1', title: 'VoiceOver modal', status: 'passed' }
+    ]
+});
+
+suite('postMobileTestAutomationResults — a11y warnings', function() {
+
+    test('keeps passed status with per-TC a11y warnings (informational only)', function() {
+        var added = [], statusMoves = [];
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') return A11Y_WARNED_RESULT;
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            github_list_prs: function() {
+                return JSON.stringify({ data: [{ number: 963, title: 'PROJ-6618', head: { ref: 'story/PROJ-6618' } }]});
+            },
+            github_add_pr_label: function(opts) { added.push(opts.label); },
+            github_remove_pr_label: function() {},
+            jira_move_to_status: function(opts) { statusMoves.push(opts); },
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
+        });
+
+        var result = m.action(makeParams('PROJ-6618'));
+
+        assert.equal(result.status, 'passed', 'a11y warnings must not override passed status');
+        assert.ok(added.indexOf('tests_passed') !== -1, 'should still add tests_passed label');
+        assert.ok(statusMoves.some(function(s) { return s.statusName === 'Passed'; }),
+            'should still move Jira to Passed');
+    });
+
+    test('detects top-level a11y_warnings array without results-level warnings', function() {
+        var added = [];
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') return TOP_LEVEL_A11Y_RESULT;
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            github_list_prs: function() {
+                return JSON.stringify({ data: [{ number: 963, title: 'PROJ-6618', head: { ref: 'story/PROJ-6618' } }]});
+            },
+            github_add_pr_label: function(opts) { added.push(opts.label); },
+            github_remove_pr_label: function() {},
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
+        });
+
+        var result = m.action(makeParams('PROJ-6618'));
+
+        assert.equal(result.status, 'passed', 'top-level a11y warnings must not override passed status');
+        assert.ok(added.indexOf('tests_passed') !== -1, 'should still add tests_passed label');
+    });
+
+});
+
+// ── Suite: outer catch (gh-979 characterization) ─────────────────────────────
+
+suite('postMobileTestAutomationResults — error handling', function() {
+
+    test('outer catch returns success false when ticket is missing', function() {
+        var m = loadPostCli({
+            file_read: function() { return null; },
+            cli_execute_command: function() { return ''; }
+        });
+
+        var result = m.action({ ticket: null, jobParams: { customParams: {} } });
+
+        assert.equal(result.success, false, 'should report failure');
+        assert.ok(result.error, 'should include the error message');
+    });
+
 });

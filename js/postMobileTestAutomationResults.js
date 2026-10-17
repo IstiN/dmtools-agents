@@ -410,29 +410,17 @@ function buildFeatureVerdictSummary(result) {
 }
 
 function updateFeaturePRBody(owner, repo, prNumber, workingDir, result, ticketKey) {
-    var summaryFile = readOutputFile('pr_feature_update.md', workingDir, ticketKey);
-    if (!summaryFile) {
-        // Fallback: use pr_body.md (automation PR description) which has the same test results
-        summaryFile = readOutputFile('pr_body.md', workingDir, ticketKey);
-        if (summaryFile) {
-            console.log('No outputs/pr_feature_update.md — falling back to outputs/pr_body.md');
-        }
-    }
-    if (!summaryFile) {
+    var summary = mobileHelpers.resolveFeatureSummary(function(path) {
+        return readOutputFile(path, workingDir, ticketKey);
+    });
+    if (!summary) {
         console.log('No outputs/pr_feature_update.md or pr_body.md — skipping feature PR comment');
         return;
     }
-
-    if (result) {
-        var lower = summaryFile.toLowerCase();
-        var hasVerdict = lower.indexOf('verdict') !== -1 ||
-            lower.indexOf('test results') !== -1 ||
-            lower.indexOf('passed') !== -1 ||
-            lower.indexOf('failed') !== -1;
-        if (!hasVerdict) {
-            summaryFile = buildFeatureVerdictSummary(result) + summaryFile;
-        }
+    if (summary.fallback) {
+        console.log('No outputs/pr_feature_update.md — falling back to outputs/pr_body.md');
     }
+    var summaryFile = mobileHelpers.prependVerdictIfNeeded(summary.content, result, buildFeatureVerdictSummary);
 
     try {
         github_add_pr_comment({
@@ -448,28 +436,17 @@ function updateFeaturePRBody(owner, repo, prNumber, workingDir, result, ticketKe
 }
 
 function updateFeaturePRBodyWithScm(scm, prNumber, workingDir, result, ticketKey) {
-    var summaryFile = readOutputFile('pr_feature_update.md', workingDir, ticketKey);
-    if (!summaryFile) {
-        summaryFile = readOutputFile('pr_body.md', workingDir, ticketKey);
-        if (summaryFile) {
-            console.log('No outputs/pr_feature_update.md — falling back to outputs/pr_body.md');
-        }
-    }
-    if (!summaryFile) {
+    var summary = mobileHelpers.resolveFeatureSummary(function(path) {
+        return readOutputFile(path, workingDir, ticketKey);
+    });
+    if (!summary) {
         console.log('No outputs/pr_feature_update.md or pr_body.md — skipping feature PR/MR comment');
         return;
     }
-
-    if (result) {
-        var lower = summaryFile.toLowerCase();
-        var hasVerdict = lower.indexOf('verdict') !== -1 ||
-            lower.indexOf('test results') !== -1 ||
-            lower.indexOf('passed') !== -1 ||
-            lower.indexOf('failed') !== -1;
-        if (!hasVerdict) {
-            summaryFile = buildFeatureVerdictSummary(result) + summaryFile;
-        }
+    if (summary.fallback) {
+        console.log('No outputs/pr_feature_update.md — falling back to outputs/pr_body.md');
     }
+    var summaryFile = mobileHelpers.prependVerdictIfNeeded(summary.content, result, buildFeatureVerdictSummary);
 
     try {
         scm.addComment(prNumber, summaryFile);
@@ -525,6 +502,122 @@ function removeSMTriggerLabel(params, ticketKey) {
     }
 }
 
+/** SCM client for the automation repo (config repository or GitHub globals fallback). */
+function createAutomationScm(config) {
+    return createScmCompat(config, config.repository && config.repository.owner, config.repository && config.repository.repo);
+}
+
+/** Step 1: Configure git author in automation repo. */
+function configureGitAuthor(config, workingDir) {
+    if (!workingDir) {
+        return;
+    }
+    try {
+        runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
+        runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
+    } catch (e) {
+        console.warn('Failed to configure git author:', e);
+    }
+}
+
+/** Step 2: Get current branch in automation repo (null without workingDir). */
+function resolveBranchName(workingDir) {
+    if (!workingDir) {
+        return null;
+    }
+    var rawBranch = runInRepo('git branch --show-current', workingDir) || '';
+    var branchName = cleanCommandOutput(rawBranch);
+    console.log('Automation repo branch:', JSON.stringify(branchName));
+    return branchName;
+}
+
+/** Step 3: Commit + push test files and create/find the automation PR. Returns PR URL or null. */
+function commitAndCreateAutomationPR(ticketKey, ticketSummary, branchName, workingDir, testFilesPath, baseBranch, scm) {
+    var automationPrUrl = null;
+    if (branchName && workingDir) {
+        var commitMessage = sanitizeForShell(ticketKey + ' test: automate ' + ticketSummary);
+        var gitResult = performGitOperations(branchName, commitMessage, workingDir, testFilesPath);
+
+        if (gitResult.success) {
+            var prTitle = sanitizeForShell(ticketKey + ' ' + ticketSummary);
+            var prResult = createAutomationPR(prTitle, branchName, baseBranch, workingDir, scm, ticketKey);
+            automationPrUrl = prResult.prUrl;
+        } else {
+            console.warn('Git operations failed:', gitResult.error);
+        }
+    }
+    return automationPrUrl;
+}
+
+/** Step 5: Find the feature PR and update label, automation-PR link and summary comment. */
+function updateFeaturePR(featureScm, ticketKey, featureOwner, featureRepo, passed, labelPassed, labelFailed, workingDir, automationPrUrl, result) {
+    var featurePR = findFeaturePR(ticketKey, featureScm, featureOwner, featureRepo);
+    if (!featurePR) {
+        return;
+    }
+    updateFeaturePRLabelWithScm(featureScm, featurePR.number, passed, labelPassed, labelFailed);
+    // Inject automation PR URL into feature update markdown if present
+    if (automationPrUrl) {
+        try {
+            var featureUpdateContent = readOutputFile('pr_feature_update.md', workingDir, ticketKey) || '';
+            if (featureUpdateContent && featureUpdateContent.indexOf(automationPrUrl) === -1) {
+                file_write('outputs/pr_feature_update.md',
+                    featureUpdateContent + '\n> Automation PR: ' + automationPrUrl + '\n');
+            }
+        } catch (_) {}
+    }
+    updateFeaturePRBodyWithScm(featureScm, featurePR.number, workingDir, result, ticketKey);
+}
+
+/** Step 6: Post the per-TC Jira comment (or the caller-supplied response text). */
+function postJiraResultComment(ticketKey, jiraComment, result, automationPrUrl) {
+    try {
+        var comment = jiraComment || buildJiraComment(result, automationPrUrl);
+        if (automationPrUrl && comment.indexOf(automationPrUrl) === -1) {
+            comment += '\n\n*Automation PR*: ' + automationPrUrl;
+        }
+        tracker.postComment(ticketKey, comment);
+        console.log('✅ Posted Jira comment');
+    } catch (e) {
+        console.warn('Failed to post Jira comment:', e);
+    }
+}
+
+/** Step 7: blocked_by_human — comment, move to Blocked, clean up labels. */
+function handleBlockedByHuman(params, ticketKey, result, jiraConfig) {
+    try { tracker.postComment(ticketKey, mobileHelpers.buildBlockedComment(result)); } catch (e) {}
+    try { tracker.moveToStatus(ticketKey, jiraConfig.statuses.BLOCKED); } catch (e) {}
+
+    removeWipLabel(params, ticketKey);
+    removeSMTriggerLabel(params, ticketKey);
+    return { success: true, status: 'blocked_by_human', ticketKey: ticketKey };
+}
+
+/** Steps 8-9: Move ticket status (stage-label fallback), add AI label, clean up labels. */
+function finalizeTicketStatus(params, ticketKey, passed, jiraConfig) {
+    try {
+        var stageKey = passed ? 'PASSED' : 'FAILED';
+        var targetStatus = passed ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
+        // gh-916: Passed/Failed can be tag-only (restricted ADO workflows) — stage-label fallback.
+        var moveResult = tracker.moveToStatusOrMark(ticketKey, targetStatus, stageKey);
+        if (moveResult.moved || moveResult.marked) {
+            console.log('✅ Moved', ticketKey, 'to', targetStatus);
+        }
+    } catch (e) {
+        console.warn('Failed to move ticket status:', e);
+    }
+
+    // Step 9: Add AI label
+    try {
+        tracker.addLabel(ticketKey, LABELS.AI_TEST_AUTOMATION);
+    } catch (e) {
+        console.warn('Failed to add AI label:', e);
+    }
+
+    removeWipLabel(params, ticketKey);
+    removeSMTriggerLabel(params, ticketKey);
+}
+
 function action(params) {
     // Early tracker so the catch-path can still comment if config loading fails
     tracker = trackersModule.createTracker(null, (params.jobParams || params).customParams || {});
@@ -535,39 +628,27 @@ function action(params) {
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         tracker = trackersModule.createTracker(config, (params.jobParams || params).customParams || {});
         var jiraConfig = config.jira;
-        var automationScm = createScmCompat(config, config.repository && config.repository.owner, config.repository && config.repository.repo);
+        var automationScm = createAutomationScm(config);
         var workingDir = config.workingDir;
 
         var customParams = (params.jobParams || params).customParams || {};
-        var featurePRConfig = customParams.featurePR || {};
-        var featureOwner = featurePRConfig.owner || '';
-        var featureRepo = featurePRConfig.repo || '';
+        var featureTarget = mobileHelpers.decideFeatureTarget(customParams);
+        var featureOwner = featureTarget.owner;
+        var featureRepo = featureTarget.repo;
         var featureScm = (featureOwner && featureRepo) ? createScmCompat(config, featureOwner, featureRepo) : null;
 
-        var labelsConfig = customParams.labels || {};
-        var labelPassed = labelsConfig.testsPassed || 'tests_passed';
-        var labelFailed = labelsConfig.testsFailed || 'tests_failed';
-        var testFilesPath = customParams.testFilesGlob || 'src/tests/';
+        var labels = mobileHelpers.decideLabels(customParams);
+        var labelPassed = labels.labelPassed;
+        var labelFailed = labels.labelFailed;
+        var testFilesPath = labels.testFilesPath;
 
         console.log('=== Processing mobile test automation results for', ticketKey, '===');
 
         // Step 1: Configure git author in automation repo
-        if (workingDir) {
-            try {
-                runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
-                runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
-            } catch (e) {
-                console.warn('Failed to configure git author:', e);
-            }
-        }
+        configureGitAuthor(config, workingDir);
 
         // Step 2: Get current branch in automation repo
-        var branchName = null;
-        if (workingDir) {
-            var rawBranch = runInRepo('git branch --show-current', workingDir) || '';
-            branchName = cleanCommandOutput(rawBranch);
-            console.log('Automation repo branch:', JSON.stringify(branchName));
-        }
+        var branchName = resolveBranchName(workingDir);
 
         // Step 2b: If mandatory outputs are missing, attempt one resume run before committing.
         // This handles the case where the agent ran out of context or was interrupted
@@ -578,134 +659,47 @@ function action(params) {
         }
 
         // Step 3: Commit + push + create automation PR (ALWAYS — don't lose agent's work)
-        var automationPrUrl = null;
-        if (branchName && workingDir) {
-            var commitMessage = sanitizeForShell(ticketKey + ' test: automate ' + ticketSummary);
-            var gitResult = performGitOperations(branchName, commitMessage, workingDir, testFilesPath);
-
-            if (gitResult.success) {
-                var prTitle = sanitizeForShell(ticketKey + ' ' + ticketSummary);
-                var prResult = createAutomationPR(prTitle, branchName, config.git.baseBranch, workingDir, automationScm, ticketKey);
-                automationPrUrl = prResult.prUrl;
-            } else {
-                console.warn('Git operations failed:', gitResult.error);
-            }
-        }
+        var automationPrUrl = commitAndCreateAutomationPR(
+            ticketKey, ticketSummary, branchName, workingDir, testFilesPath, config.git.baseBranch, automationScm);
 
         // Step 4: Read structured result (fallback: workspace root → automation repo outputs)
         var result = readResultJson(workingDir, ticketKey);
         if (!result) {
             console.warn('No test_automation_result.json found — posting error to Jira but keeping git work');
             try {
-                var errMsg = 'h3. ⚠️ Test Automation Error\n\nFlows may have been written but output JSON is missing. Check workflow logs.' +
-                    (resumed ? '\n\n_Resume was attempted but also did not produce output files._' : '');
-                if (automationPrUrl) errMsg += '\n\n*Automation PR*: ' + automationPrUrl;
-                tracker.postComment(ticketKey, errMsg);
+                tracker.postComment(ticketKey, mobileHelpers.buildMissingResultComment(resumed, automationPrUrl));
             } catch (e) { console.warn('Failed to post error Jira comment:', e); }
             return { success: false, error: 'No test result JSON found', automationPrUrl: automationPrUrl };
         }
 
-        var status = (result.status || '').toLowerCase();
-        var blockedByHuman = status === 'blocked_by_human';
+        var outcome = mobileHelpers.parseOutcome(result);
+        var blockedByHuman = outcome.blockedByHuman;
 
         // Check for a11y structural warnings — log but do NOT override test status.
         // A11y warnings are informational; Maestro tests that pass → tests_passed label.
-        var hasA11yWarnings = false;
-        if (result.results && Array.isArray(result.results)) {
-            for (var i = 0; i < result.results.length; i++) {
-                var tc = result.results[i];
-                if (tc.a11y_warnings && Array.isArray(tc.a11y_warnings) && tc.a11y_warnings.length > 0) {
-                    hasA11yWarnings = true;
-                    break;
-                }
-            }
-        }
-        // Top-level a11y_warnings array
-        if (!hasA11yWarnings && result.a11y_warnings && Array.isArray(result.a11y_warnings) && result.a11y_warnings.length > 0) {
-            hasA11yWarnings = true;
-        }
-
-        var passed = status === 'passed';
-        if (hasA11yWarnings && status === 'passed') {
+        var a11yWarnings = mobileHelpers.hasA11yWarnings(result);
+        if (a11yWarnings && outcome.passed) {
             console.log('⚠️ Maestro tests passed with a11y structural warnings (informational — not overriding status)');
         }
 
         // Step 5: Find feature PR and update it
         if (featureScm && !blockedByHuman) {
-            var featurePR = findFeaturePR(ticketKey, featureScm, featureOwner, featureRepo);
-            if (featurePR) {
-                updateFeaturePRLabelWithScm(featureScm, featurePR.number, passed, labelPassed, labelFailed);
-                // Inject automation PR URL into feature update markdown if present
-                if (automationPrUrl) {
-                    try {
-                        var featureUpdateContent = readOutputFile('pr_feature_update.md', workingDir, ticketKey) || '';
-                        if (featureUpdateContent && featureUpdateContent.indexOf(automationPrUrl) === -1) {
-                            file_write('outputs/pr_feature_update.md',
-                                featureUpdateContent + '\n> Automation PR: ' + automationPrUrl + '\n');
-                        }
-                    } catch (_) {}
-                }
-                updateFeaturePRBodyWithScm(featureScm, featurePR.number, workingDir, result, ticketKey);
-            }
+            updateFeaturePR(featureScm, ticketKey, featureOwner, featureRepo, outcome.passed,
+                labelPassed, labelFailed, workingDir, automationPrUrl, result);
         }
 
         // Step 6: Post Jira comment
-        try {
-            var comment = jiraComment || buildJiraComment(result, automationPrUrl);
-            if (automationPrUrl && comment.indexOf(automationPrUrl) === -1) {
-                comment += '\n\n*Automation PR*: ' + automationPrUrl;
-            }
-            tracker.postComment(ticketKey, comment);
-            console.log('✅ Posted Jira comment');
-        } catch (e) {
-            console.warn('Failed to post Jira comment:', e);
-        }
+        postJiraResultComment(ticketKey, jiraComment, result, automationPrUrl);
 
         // Step 7: Handle blocked_by_human
         if (blockedByHuman) {
-            var blockedComment = 'h3. 🚫 Test Automation Blocked — Awaiting Human Setup\n\n';
-            if (result.blocked_reason) blockedComment += result.blocked_reason + '\n\n';
-            if (result.missing && result.missing.length > 0) {
-                blockedComment += 'h4. Required setup:\n\n';
-                result.missing.forEach(function(item) {
-                    blockedComment += '* *' + (item.name || '?') + '*';
-                    if (item.description) blockedComment += ': ' + item.description;
-                    blockedComment += '\n';
-                });
-            }
-            blockedComment += '\nOnce setup is complete, move this ticket back to *Backlog* to trigger re-run.';
-            try { tracker.postComment(ticketKey, blockedComment); } catch (e) {}
-            try { tracker.moveToStatus(ticketKey, jiraConfig.statuses.BLOCKED); } catch (e) {}
-
-            removeWipLabel(params, ticketKey);
-            removeSMTriggerLabel(params, ticketKey);
-            return { success: true, status: 'blocked_by_human', ticketKey: ticketKey };
+            return handleBlockedByHuman(params, ticketKey, result, jiraConfig);
         }
 
-        // Step 8: Move ticket status
-        try {
-            var stageKey = passed ? 'PASSED' : 'FAILED';
-            var targetStatus = passed ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
-            // gh-916: Passed/Failed can be tag-only (restricted ADO workflows) — stage-label fallback.
-            var moveResult = tracker.moveToStatusOrMark(ticketKey, targetStatus, stageKey);
-            if (moveResult.moved || moveResult.marked) {
-                console.log('✅ Moved', ticketKey, 'to', targetStatus);
-            }
-        } catch (e) {
-            console.warn('Failed to move ticket status:', e);
-        }
+        // Steps 8-9: Move ticket status, add AI label, clean up labels
+        finalizeTicketStatus(params, ticketKey, outcome.passed, jiraConfig);
 
-        // Step 9: Add AI label
-        try {
-            tracker.addLabel(ticketKey, LABELS.AI_TEST_AUTOMATION);
-        } catch (e) {
-            console.warn('Failed to add AI label:', e);
-        }
-
-        removeWipLabel(params, ticketKey);
-        removeSMTriggerLabel(params, ticketKey);
-
-        console.log('✅ Mobile test automation workflow complete:', passed ? 'PASSED' : 'FAILED');
+        console.log('✅ Mobile test automation workflow complete:', outcome.passed ? 'PASSED' : 'FAILED');
 
         return {
             success: true,
@@ -717,7 +711,7 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in postMobileTestAutomationResults:', error);
         try {
-            tracker.postComment(params.ticket.key, 'h3. ❌ Test Automation Error\n\n{code}' + error.toString() + '{code}');
+            tracker.postComment(params.ticket.key, mobileHelpers.buildErrorComment(error));
         } catch (e) {}
         removeSMTriggerLabel(params, params.ticket && params.ticket.key);
         return { success: false, error: error.toString() };

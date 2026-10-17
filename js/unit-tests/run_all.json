@@ -100,6 +100,7 @@
         "js/unit-tests/test_notifyBugMerged.js",
         "js/unit-tests/test_reworkCustomParams.js",
         "js/unit-tests/test_preCliMobileTestAutomationSetup.js",
+        "js/unit-tests/test_postMobileTestAutomationResultsHelpers.js",
         "js/unit-tests/test_postMobileTestAutomationResults.js",
         "js/unit-tests/test_writeSolutionAndDiagrams.js",
         "js/unit-tests/test_createPlannedStoriesFromOutput.js",
