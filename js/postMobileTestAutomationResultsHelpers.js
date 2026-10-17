@@ -18,19 +18,22 @@ function parseOutcome(result) {
     };
 }
 
+/** True when value is a non-empty array. */
+function hasWarningsArray(value) {
+    return Array.isArray(value) && value.length > 0;
+}
+
 /** Per-TC or top-level a11y warnings — informational, never override status. */
 function hasA11yWarnings(result) {
     var results = result && result.results;
     if (Array.isArray(results)) {
         for (var i = 0; i < results.length; i++) {
-            var tc = results[i] || {};
-            if (tc.a11y_warnings && Array.isArray(tc.a11y_warnings) && tc.a11y_warnings.length > 0) {
+            if (hasWarningsArray(results[i].a11y_warnings)) {
                 return true;
             }
         }
     }
-    var top = result && result.a11y_warnings;
-    return !!(top && Array.isArray(top) && top.length > 0);
+    return hasWarningsArray(result && result.a11y_warnings);
 }
 
 /** Label names and test-files glob from customParams (with defaults). */

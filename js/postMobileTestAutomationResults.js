@@ -549,6 +549,20 @@ function commitAndCreateAutomationPR(ticketKey, ticketSummary, branchName, worki
     return automationPrUrl;
 }
 
+/** Inject automation PR URL into feature update markdown if present and not already linked. */
+function injectAutomationPrLink(workingDir, ticketKey, automationPrUrl) {
+    if (!automationPrUrl) {
+        return;
+    }
+    try {
+        var featureUpdateContent = readOutputFile('pr_feature_update.md', workingDir, ticketKey) || '';
+        if (featureUpdateContent && featureUpdateContent.indexOf(automationPrUrl) === -1) {
+            file_write('outputs/pr_feature_update.md',
+                featureUpdateContent + '\n> Automation PR: ' + automationPrUrl + '\n');
+        }
+    } catch (_) {}
+}
+
 /** Step 5: Find the feature PR and update label, automation-PR link and summary comment. */
 function updateFeaturePR(featureScm, ticketKey, featureOwner, featureRepo, passed, labelPassed, labelFailed, workingDir, automationPrUrl, result) {
     var featurePR = findFeaturePR(ticketKey, featureScm, featureOwner, featureRepo);
@@ -557,15 +571,7 @@ function updateFeaturePR(featureScm, ticketKey, featureOwner, featureRepo, passe
     }
     updateFeaturePRLabelWithScm(featureScm, featurePR.number, passed, labelPassed, labelFailed);
     // Inject automation PR URL into feature update markdown if present
-    if (automationPrUrl) {
-        try {
-            var featureUpdateContent = readOutputFile('pr_feature_update.md', workingDir, ticketKey) || '';
-            if (featureUpdateContent && featureUpdateContent.indexOf(automationPrUrl) === -1) {
-                file_write('outputs/pr_feature_update.md',
-                    featureUpdateContent + '\n> Automation PR: ' + automationPrUrl + '\n');
-            }
-        } catch (_) {}
-    }
+    injectAutomationPrLink(workingDir, ticketKey, automationPrUrl);
     updateFeaturePRBodyWithScm(featureScm, featurePR.number, workingDir, result, ticketKey);
 }
 

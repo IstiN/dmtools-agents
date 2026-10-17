@@ -683,3 +683,53 @@ suite('postMobileTestAutomationResults — error handling', function() {
     });
 
 });
+
+// ── Suite: automation PR link injection (gh-979 characterization) ────────────
+
+suite('postMobileTestAutomationResults — automation PR link injection', function() {
+
+    test('appends automation PR URL to pr_feature_update.md when feature PR found', function() {
+        var writes = {};
+        var jiraComments = [];
+        var AUTOMATION_PR_URL = 'https://github.com/org/example-mobile-app-automation/pull/7';
+
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') return PASSED_RESULT;
+                if (opts.path === 'outputs/pr_feature_update.md') return '## Test Results\n\nAll passed ✅';
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            file_write: function(path, content) {
+                writes[path] = content;
+            },
+            github_list_prs: function(opts) {
+                // First call: feature-repo PR listing; later calls: automation-repo PR lookup
+                return JSON.stringify({ data: [{ number: 963, title: 'PROJ-6618', head: { ref: 'story/PROJ-6618' } }]});
+            },
+            github_add_pr_label: function() {},
+            github_remove_pr_label: function() {},
+            github_add_pr_comment: function() {},
+            jira_post_comment: function(opts) { jiraComments.push(opts); },
+            cli_execute_command: function(opts) {
+                var cmd = opts.command || '';
+                if (cmd.indexOf('branch --show-current') !== -1) return 'test/PROJ-6618';
+                if (cmd.indexOf('gh pr list --head') !== -1) return AUTOMATION_PR_URL;
+                return '';
+            }
+        });
+
+        var result = m.action(makeParams('PROJ-6618', { targetRepository: { workingDir: 'dependencies/automation' } }));
+
+        assert.equal(result.success, true);
+        var updated = writes['outputs/pr_feature_update.md'];
+        assert.ok(updated, 'should rewrite outputs/pr_feature_update.md');
+        assert.ok(updated.indexOf('All passed') !== -1, 'should keep original content');
+        assert.ok(updated.indexOf('> Automation PR: ' + AUTOMATION_PR_URL) !== -1,
+            'should append the automation PR link');
+        assert.ok(jiraComments.some(function(c) {
+            return c.comment.indexOf('*Automation PR*: ' + AUTOMATION_PR_URL) !== -1;
+        }), 'Jira comment should reference the automation PR');
+    });
+
+});
