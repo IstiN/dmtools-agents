@@ -3050,6 +3050,15 @@
       "total": 153058,
       "cacheRead": 0,
       "model": "kimi-for-coding"
+    },
+    {
+      "leg": "dev",
+      "at": "2026-10-17T20:46:00Z",
+      "prompt": 158916,
+      "completion": 0,
+      "total": 158916,
+      "cacheRead": 0,
+      "model": "kimi-for-coding"
     }
   ],
   "issue-1006": [
