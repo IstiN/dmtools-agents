@@ -523,3 +523,286 @@ suite('mergeStoryTestAutomationPR: pure merge-decision helpers (gh-964)', functi
         assert.deepEqual(m.resolveCustomParams({ jobParams: {} }), {});
     });
 });
+
+// ── gh-964: characterization tests for the CI gate and merge-decision paths ──
+
+suite('mergeStoryTestAutomationPR: attemptMerge CI and merge-decision paths (gh-964)', function() {
+
+    var PR = { number: 42, head: { ref: 'test/TS-40' }, html_url: 'https://github.com/IstiN/trackstate/pull/42' };
+
+    function ciHarness(mocks) {
+        return loadMergeStoryTestAutomationPR(Object.assign({
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git config --get remote.origin.url') {
+                    return 'https://github.com/IstiN/trackstate.git';
+                }
+                return '';
+            },
+            github_list_prs: function() { return [PR]; },
+            github_merge_pr: function() {},
+            github_remove_pr_label: function() {},
+            jira_search_by_jql: function() { return []; },
+            jira_move_to_status: function() {},
+            jira_remove_label: function() {},
+            jira_add_label: function() {},
+            jira_post_comment: function() {}
+        }, mocks));
+    }
+
+    function attemptParams() {
+        return { ticket: { key: 'TS-40' }, jobParams: { customParams: {} } };
+    }
+
+    test('undetermined state + failing check run → ci_failed with failedNames', function() {
+        var m = ciHarness({
+            github_get_pr: function() { return { mergeable: null, mergeable_state: 'unknown', head: { sha: 'abc123' } }; },
+            github_get_commit_check_runs: function() {
+                return [{ name: 'build', status: 'completed', conclusion: 'failure' }];
+            }
+        });
+
+        var r = m.attemptMerge(attemptParams());
+
+        assert.equal(r.success, false);
+        assert.equal(r.reason, 'ci_failed');
+        assert.equal(r.prNumber, 42);
+        assert.deepEqual(r.failedNames, ['build']);
+    });
+
+    test('undetermined state + in-progress check run → ci_running', function() {
+        var m = ciHarness({
+            github_get_pr: function() { return { mergeable: null, mergeable_state: 'checking', head: { sha: 'abc123' } }; },
+            github_get_commit_check_runs: function() {
+                return [
+                    { name: 'unit', status: 'completed', conclusion: 'success' },
+                    { name: 'e2e', status: 'in_progress', conclusion: '' }
+                ];
+            }
+        });
+
+        var r = m.attemptMerge(attemptParams());
+
+        assert.equal(r.success, false);
+        assert.equal(r.reason, 'ci_running');
+    });
+
+    test('undetermined state + zero check runs → ci_running', function() {
+        var m = ciHarness({
+            github_get_pr: function() { return { mergeable: null, mergeable_state: 'blocked', head: { sha: 'abc123' } }; },
+            github_get_commit_check_runs: function() { return []; }
+        });
+
+        var r = m.attemptMerge(attemptParams());
+
+        assert.equal(r.success, false);
+        assert.equal(r.reason, 'ci_running');
+    });
+
+    test('undetermined state + all checks passed → not_ready', function() {
+        var m = ciHarness({
+            github_get_pr: function() { return { mergeable: null, mergeable_state: 'ci_still_running', head: { sha: 'abc123' } }; },
+            github_get_commit_check_runs: function() {
+                return [{ name: 'unit', status: 'completed', conclusion: 'success' }];
+            }
+        });
+
+        var r = m.attemptMerge(attemptParams());
+
+        assert.equal(r.success, false);
+        assert.equal(r.reason, 'not_ready');
+    });
+
+    test('check runs may arrive as a JSON string (wrapped or bare array)', function() {
+        var m = ciHarness({
+            github_get_pr: function() { return { mergeable: null, mergeable_state: 'unstable', head: { sha: 'abc123' } }; },
+            github_get_commit_check_runs: function() {
+                return JSON.stringify({ check_runs: [{ name: 'lint', status: 'completed', conclusion: 'failure' }] });
+            }
+        });
+
+        var r = m.attemptMerge(attemptParams());
+
+        assert.equal(r.reason, 'ci_failed');
+        assert.deepEqual(r.failedNames, ['lint']);
+    });
+
+    test('undetermined state without a headSha still gates (no check-run call possible)', function() {
+        var checkRunsCalled = false;
+        var m = ciHarness({
+            github_get_pr: function() { return { mergeable: null, mergeable_state: 'preparing' }; },
+            github_get_commit_check_runs: function() { checkRunsCalled = true; return []; }
+        });
+
+        var r = m.attemptMerge(attemptParams());
+
+        assert.equal(r.success, false);
+        assert.equal(r.reason, 'ci_running');
+        assert.equal(checkRunsCalled, false, 'guard short-circuits before the SCM call without a sha');
+    });
+
+    test('behind state requests a branch update and reports behind', function() {
+        var updates = [];
+        var m = ciHarness({
+            github_get_pr: function() { return { mergeable: true, mergeable_state: 'behind', head: { sha: 'abc123' } }; },
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git config --get remote.origin.url') {
+                    return 'https://github.com/IstiN/trackstate.git';
+                }
+                updates.push(opts.command);
+                return '';
+            }
+        });
+
+        var r = m.attemptMerge(attemptParams());
+
+        assert.equal(r.success, false);
+        assert.equal(r.reason, 'behind');
+        assert.equal(updates.length, 1);
+        assert.contains(updates[0], 'pulls/42/update-branch');
+    });
+
+    test('behind state on a provider without updateBranch still reports behind', function() {
+        var m = loadMergeStoryTestAutomationPR({
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git config --get remote.origin.url') {
+                    return 'https://github.com/IstiN/trackstate.git';
+                }
+                return '';
+            },
+            github_list_prs: function() { return [PR]; },
+            github_get_pr: function() { return { mergeable: true, mergeable_state: 'behind', head: { sha: 'abc123' } }; },
+            ado_search_by_wiql: function() { return []; },
+            ado_move_to_state: function() {},
+            ado_remove_work_item_label: function() {},
+            ado_add_work_item_label: function() {},
+            ado_add_work_item_comment: function() {},
+            jira_search_by_jql: function() { return []; },
+            jira_move_to_status: function() {},
+            jira_remove_label: function() {},
+            jira_add_label: function() {},
+            jira_post_comment: function() {}
+        });
+
+        var r = m.attemptMerge({
+            ticket: { key: 'TS-40' },
+            jobParams: { customParams: { trackerProvider: 'ado' } }
+        });
+
+        assert.equal(r.success, false);
+        assert.equal(r.reason, 'behind');
+    });
+
+    test('merge error containing "conflict" → conflict without re-checking CI', function() {
+        var checkRunsCalled = false;
+        var m = ciHarness({
+            github_get_pr: function() { return { mergeable: true, mergeable_state: 'clean', head: { sha: 'abc123' } }; },
+            github_merge_pr: function() { throw new Error('Merge conflict detected'); },
+            github_get_commit_check_runs: function() { checkRunsCalled = true; return []; }
+        });
+
+        var r = m.attemptMerge(attemptParams());
+
+        assert.equal(r.success, false);
+        assert.equal(r.reason, 'conflict');
+        assert.equal(checkRunsCalled, false, 'a conflict never triggers a CI re-check');
+    });
+
+    test('CI-blocking merge error + failing checks → ci_failed', function() {
+        var m = ciHarness({
+            github_get_pr: function() { return { mergeable: true, mergeable_state: 'clean', head: { sha: 'abc123' } }; },
+            github_merge_pr: function() { throw new Error('Resource blocked by required checks'); },
+            github_get_commit_check_runs: function() {
+                return [{ name: 'e2e', status: 'completed', conclusion: 'timed_out' }];
+            }
+        });
+
+        var r = m.attemptMerge(attemptParams());
+
+        assert.equal(r.success, false);
+        assert.equal(r.reason, 'ci_failed');
+        assert.deepEqual(r.failedNames, ['e2e']);
+    });
+
+    test('CI-blocking merge error + in-progress checks → ci_running', function() {
+        var m = ciHarness({
+            github_get_pr: function() { return { mergeable: true, mergeable_state: 'clean', head: { sha: 'abc123' } }; },
+            github_merge_pr: function() { throw new Error('HTTP 422'); },
+            github_get_commit_check_runs: function() {
+                return [{ name: 'unit', status: 'queued', conclusion: '' }];
+            }
+        });
+
+        var r = m.attemptMerge(attemptParams());
+
+        assert.equal(r.success, false);
+        assert.equal(r.reason, 'ci_running');
+    });
+
+    test('CI-blocking merge error + all checks green → merge_failed', function() {
+        var m = ciHarness({
+            github_get_pr: function() { return { mergeable: true, mergeable_state: 'clean', head: { sha: 'abc123' } }; },
+            github_merge_pr: function() { throw new Error('blocked'); },
+            github_get_commit_check_runs: function() {
+                return [{ name: 'unit', status: 'completed', conclusion: 'success' }];
+            }
+        });
+
+        var r = m.attemptMerge(attemptParams());
+
+        assert.equal(r.success, false);
+        assert.equal(r.reason, 'merge_failed');
+        assert.equal(r.error, 'Error: blocked');
+    });
+
+    test('plain merge error → merge_failed without a CI re-check', function() {
+        var checkRunsCalled = false;
+        var m = ciHarness({
+            github_get_pr: function() { return { mergeable: true, mergeable_state: 'clean', head: { sha: 'abc123' } }; },
+            github_merge_pr: function() { throw new Error('network timeout'); },
+            github_get_commit_check_runs: function() { checkRunsCalled = true; return []; }
+        });
+
+        var r = m.attemptMerge(attemptParams());
+
+        assert.equal(r.success, false);
+        assert.equal(r.reason, 'merge_failed');
+        assert.equal(checkRunsCalled, false);
+    });
+
+    test('getPr failure is tolerated — mergeable stays unknown and the CI gate decides', function() {
+        var merges = [];
+        var m = ciHarness({
+            github_get_pr: function() { throw new Error('boom'); },
+            github_merge_pr: function(args) { merges.push(args); }
+        });
+
+        var r = m.attemptMerge(attemptParams());
+
+        assert.equal(r.success, false, 'an unread PR detail is treated as an undetermined merge state');
+        assert.equal(r.reason, 'ci_running', 'no headSha and no check runs means still running');
+        assert.deepEqual(merges, [], 'the merge is not attempted while the state is undetermined');
+    });
+
+    test('action: ci_failed moves the ticket to In Rework and lists the failed checks', function() {
+        var statusMoves = [];
+        var comments = [];
+        var m = ciHarness({
+            github_get_pr: function() { return { mergeable: null, mergeable_state: 'unknown', head: { sha: 'abc123' } }; },
+            github_get_commit_check_runs: function() {
+                return [{ name: 'unit', status: 'completed', conclusion: 'failure' }];
+            },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_post_comment: function(args) { comments.push(args.comment); }
+        });
+
+        var r = m.action({
+            ticket: { key: 'TS-40' },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_merge_triggered' } }
+        });
+
+        assert.equal(r, true);
+        assert.deepEqual(statusMoves, [{ key: 'TS-40', statusName: 'In Rework' }]);
+        assert.ok(comments[0].indexOf('MERGE FAILED') !== -1);
+        assert.ok(comments[0].indexOf('required checks failed: unit') !== -1);
+    });
+});
