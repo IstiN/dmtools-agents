@@ -253,25 +253,36 @@ function renderFieldsMarkdown(fields, configFields, fieldLabels) {
 }
 
 /**
- * Render Jira comment field as a readable markdown section.
+ * Extract the comment list from a Jira comment field.
  * Handles both {total, comments:[]} shape and plain arrays.
  */
+function extractComments(commentField) {
+    if (Array.isArray(commentField)) return commentField;
+    if (commentField && Array.isArray(commentField.comments)) return commentField.comments;
+    return [];
+}
+
+/**
+ * Render one comment as a blockquote line: author, date, body.
+ */
+function renderCommentLine(c) {
+    var author = (c.author && (c.author.displayName || c.author.emailAddress)) || 'Unknown';
+    var date = c.created ? c.created.substring(0, 10) : '';
+    var body = c.body || '';
+    return '> **' + author + '** (' + date + '):\n>\n> ' + body.replace(/\n/g, '\n> ');
+}
+
+/**
+ * Render Jira comment field as a readable markdown section.
+ * Returns '' when there are no comments.
+ */
 function renderCommentsMarkdown(commentField) {
-    var comments = [];
-    if (Array.isArray(commentField)) {
-        comments = commentField;
-    } else if (commentField && Array.isArray(commentField.comments)) {
-        comments = commentField.comments;
-    }
+    var comments = extractComments(commentField);
     if (comments.length === 0) return '';
 
     var lines = ['**Comments:**\n'];
     for (var i = 0; i < comments.length; i++) {
-        var c = comments[i];
-        var author = (c.author && (c.author.displayName || c.author.emailAddress)) || 'Unknown';
-        var date = c.created ? c.created.substring(0, 10) : '';
-        var body = c.body || '';
-        lines.push('> **' + author + '** (' + date + '):\n>\n> ' + body.replace(/\n/g, '\n> '));
+        lines.push(renderCommentLine(comments[i]));
     }
     return lines.join('\n\n');
 }

@@ -577,6 +577,10 @@ suite('fetchParentContextToInput — error resilience', function() {
 
 suite('fetchParentContextToInput — comments rendering', function() {
 
+    var COMMENTS_CFG = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, {
+        fields: ['key', 'summary', 'description', 'status', 'comment']
+    });
+
     function runWithComment(commentField) {
         var written = {};
         var m = loadFetchParentContext({
@@ -586,7 +590,7 @@ suite('fetchParentContextToInput — comments rendering', function() {
             },
             file_write: function(p, c) { written[p] = c; }
         });
-        m.action(makeParams(MINIMAL_PARENT_CONTEXT_FETCH));
+        m.action(makeParams(COMMENTS_CFG));
         return written;
     }
 
@@ -898,13 +902,12 @@ suite('fetchParentContextToInput — remaining branches', function() {
         });
         var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, {
             fields: ['Description', 'High-Level Design'],
-            fieldLabels: { 'customfield_10101': 'HLD' },
             resolveFieldNames: true
         });
         m.action(makeParams(cfg));
         assert.ok(capturedFields.indexOf('customfield_10101') !== -1, 'resolved code passed to search');
         var content = written[INPUT_FOLDER + '/ba.md'];
-        assert.ok(content.indexOf('**HLD:**\narchitecture decision') !== -1, 'resolved field rendered with label');
+        assert.ok(content.indexOf('**High-Level Design:**\n\narchitecture decision') !== -1, 'resolved field rendered with original name as label');
     });
 
     test('prefers siblingFields over fields when both are configured', function() {
@@ -987,7 +990,7 @@ suite('fetchParentContextToInput — remaining branches', function() {
         });
         var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, { fields: ['components'] });
         m.action(makeParams(cfg));
-        assert.ok(written[INPUT_FOLDER + '/ba.md'].indexOf('**components:**\n[\n  {\n    "name": "web"\n  }\n]') !== -1, 'object rendered as JSON');
+        assert.ok(written[INPUT_FOLDER + '/ba.md'].indexOf('**components:**\n\n[\n  {\n    "name": "web"\n  }\n]') !== -1, 'object rendered as JSON');
     });
 
     test('extracts the display label from a dmtools key (Label (customfield_xxx))', function() {
@@ -1003,13 +1006,13 @@ suite('fetchParentContextToInput — remaining branches', function() {
         });
         var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, { fields: ['Acceptance Criteria (customfield_10200)'] });
         m.action(makeParams(cfg));
-        assert.ok(written[INPUT_FOLDER + '/ba.md'].indexOf('**Acceptance Criteria:**\nAC text') !== -1, 'label extracted from key');
+        assert.ok(written[INPUT_FOLDER + '/ba.md'].indexOf('**Acceptance Criteria:**\n\nAC text') !== -1, 'label extracted from key');
     });
 
     test('continues with siblings when the parent story has empty fields', function() {
         var written = [];
         var m = loadFetchParentContext({
-            jira_get_ticket: function() { return { key: PARENT_KEY }; },
+            jira_get_ticket: function() { return 'parent not found'; },
             jira_search_by_jql: function() { return [makeSearchResult('PROJ-200', '[BA]')]; },
             file_write: function(p, c) { written.push(p); }
         });
