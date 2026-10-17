@@ -1337,6 +1337,265 @@ suite('githubHelpers.detectFailedChecks — Jenkins failed checks', function() {
     });
 });
 
+suite('githubHelpers.detectFailedChecks — run-level details_url (/actions/runs/N)', function() {
+
+    function makeGh(mocks) {
+        return loadGithubHelpers(mocks || {});
+    }
+
+    function findWrite(writes, path) {
+        for (var i = 0; i < writes.length; i++) {
+            if (writes[i].path === path) return writes[i];
+        }
+        return null;
+    }
+
+    var RUN_JOBS = {
+        total_count: 3,
+        jobs: [
+            { id: 111, name: 'build', conclusion: 'success', status: 'completed' },
+            { id: 222, name: 'unit-tests', conclusion: 'failure', status: 'completed' },
+            { id: 333, name: 'lint', conclusion: 'failure', status: 'completed' }
+        ]
+    };
+
+    test('fetches run jobs and per-job logs for /runs/N-shaped details_url (owner/repo mode)', function() {
+        var writes = [];
+        var runJobsCalls = [];
+        var jobLogCalls = [];
+
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [{
+                        name: 'CI',
+                        conclusion: 'failure',
+                        details_url: 'https://github.com/acme/widgets/actions/runs/123456789'
+                    }]
+                };
+            },
+            github_get_workflow_run_jobs: function(args) {
+                runJobsCalls.push(args);
+                return JSON.stringify(RUN_JOBS);
+            },
+            github_get_job_logs: function(args) {
+                jobLogCalls.push(args);
+                return 'log for job ' + args.jobId;
+            },
+            file_write: function(args) {
+                writes.push(args);
+            }
+        });
+
+        var failed = gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input');
+
+        assert.equal(failed.length, 1, 'one failed check should be reported');
+        assert.equal(runJobsCalls.length, 1, 'run jobs should be fetched once for the run-level URL');
+        assert.equal(runJobsCalls[0].workspace, 'acme');
+        assert.equal(runJobsCalls[0].repository, 'widgets');
+        assert.equal(runJobsCalls[0].runId, '123456789');
+
+        assert.equal(jobLogCalls.length, 2, 'logs fetched only for the 2 failed jobs');
+        assert.equal(jobLogCalls[0].jobId, '222');
+        assert.equal(jobLogCalls[1].jobId, '333');
+
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.ok(mdWrite, 'ci_failures.md should be written');
+        assert.contains(mdWrite.content, 'unit-tests');
+        assert.contains(mdWrite.content, 'lint');
+        assert.notContains(mdWrite.content, 'build');
+
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(fullLogWrite, 'ci_failures_full.log should be written');
+        assert.contains(fullLogWrite.content, 'log for job 222');
+        assert.contains(fullLogWrite.content, 'log for job 333');
+    });
+
+    test('prefers the job id from /runs/N/job/M URLs and does not fetch run jobs', function() {
+        var runJobsCalls = [];
+        var jobLogCalls = [];
+        var writes = [];
+
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [{
+                        name: 'CI',
+                        conclusion: 'failure',
+                        details_url: 'https://github.com/acme/widgets/actions/runs/123456789/job/987654'
+                    }]
+                };
+            },
+            github_get_workflow_run_jobs: function(args) {
+                runJobsCalls.push(args);
+                return JSON.stringify(RUN_JOBS);
+            },
+            github_get_job_logs: function(args) {
+                jobLogCalls.push(args);
+                return 'direct job log';
+            },
+            file_write: function(args) {
+                writes.push(args);
+            }
+        });
+
+        gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input');
+
+        assert.equal(runJobsCalls.length, 0, 'run jobs must not be fetched when a job id is present in the URL');
+        assert.equal(jobLogCalls.length, 1, 'one direct job log fetch');
+        assert.equal(jobLogCalls[0].jobId, '987654');
+    });
+
+    test('uses scm.getWorkflowRunJobs in SCM mode for run-level URLs', function() {
+        var writes = [];
+        var runJobsCalls = [];
+        var jobLogCalls = [];
+
+        var scm = {
+            listPrs: function() { return []; },
+            getCommitCheckRuns: function() {
+                return {
+                    check_runs: [{
+                        name: 'CI',
+                        conclusion: 'failure',
+                        details_url: 'https://github.com/acme/widgets/actions/runs/123456789'
+                    }]
+                };
+            },
+            getWorkflowRunJobs: function(runId) {
+                runJobsCalls.push(runId);
+                return RUN_JOBS;
+            },
+            getJobLogs: function(jobId) {
+                jobLogCalls.push(jobId);
+                return 'scm log for ' + jobId;
+            }
+        };
+
+        var gh = makeGh({
+            github_get_workflow_run_jobs: function() {
+                throw new Error('github_get_workflow_run_jobs must not be called in SCM mode');
+            },
+            github_get_job_logs: function() {
+                throw new Error('github_get_job_logs must not be called in SCM mode');
+            },
+            file_write: function(args) {
+                writes.push(args);
+            }
+        });
+
+        var failed = gh.detectFailedChecks(scm, 'abc123def', '/tmp/input');
+
+        assert.equal(failed.length, 1);
+        assert.equal(runJobsCalls.length, 1, 'scm.getWorkflowRunJobs should be called once');
+        assert.equal(runJobsCalls[0], '123456789');
+        assert.equal(jobLogCalls.length, 2);
+        assert.equal(jobLogCalls[0], '222');
+        assert.equal(jobLogCalls[1], '333');
+
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(fullLogWrite, 'ci_failures_full.log should be written');
+        assert.contains(fullLogWrite.content, 'scm log for 222');
+    });
+
+    test('skips log fetching when the run has no failed jobs', function() {
+        var writes = [];
+        var jobLogCalls = [];
+
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [{
+                        name: 'CI',
+                        conclusion: 'failure',
+                        details_url: 'https://github.com/acme/widgets/actions/runs/123456789'
+                    }]
+                };
+            },
+            github_get_workflow_run_jobs: function() {
+                return JSON.stringify({
+                    total_count: 1,
+                    jobs: [{ id: 111, name: 'build', conclusion: 'success', status: 'completed' }]
+                });
+            },
+            github_get_job_logs: function(args) {
+                jobLogCalls.push(args);
+                return 'log';
+            },
+            file_write: function(args) {
+                writes.push(args);
+            }
+        });
+
+        var failed = gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input');
+
+        assert.equal(failed.length, 1, 'check is still reported as failed');
+        assert.equal(jobLogCalls.length, 0, 'no job logs fetched when the run has no failed jobs');
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.ok(mdWrite, 'ci_failures.md should still be written');
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(!fullLogWrite, 'ci_failures_full.log should not be written when no logs were fetched');
+    });
+
+    test('supports a bare array workflow-run-jobs response', function() {
+        var jobLogCalls = [];
+        var writes = [];
+
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [{
+                        name: 'CI',
+                        conclusion: 'timed_out',
+                        details_url: 'https://github.com/acme/widgets/actions/runs/555'
+                    }]
+                };
+            },
+            github_get_workflow_run_jobs: function() {
+                return JSON.stringify([{ id: 777, name: 'e2e', conclusion: 'timed_out' }]);
+            },
+            github_get_job_logs: function(args) {
+                jobLogCalls.push(args);
+                return 'timed-out log';
+            },
+            file_write: function(args) {
+                writes.push(args);
+            }
+        });
+
+        var failed = gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input');
+
+        assert.equal(failed.length, 1);
+        assert.equal(failed[0].conclusion, 'timed_out');
+        assert.equal(jobLogCalls.length, 1);
+        assert.equal(jobLogCalls[0].jobId, '777');
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(fullLogWrite, 'ci_failures_full.log should be written');
+        assert.contains(fullLogWrite.content, 'timed-out log');
+    });
+});
+
+suite('scm GitHub provider getWorkflowRunJobs', function() {
+
+    test('forwards runId to github_get_workflow_run_jobs with workspace/repository', function() {
+        var calls = [];
+        var scmModule = loadScm({
+            github_get_workflow_run_jobs: function(args) {
+                calls.push(args);
+                return JSON.stringify({ total_count: 0, jobs: [] });
+            }
+        });
+
+        var provider = scmModule._createGithubProvider('acme', 'widgets');
+        var result = provider.getWorkflowRunJobs('123456789');
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].workspace, 'acme');
+        assert.equal(calls[0].repository, 'widgets');
+        assert.equal(calls[0].runId, '123456789');
+    });
+});
+
 suite('githubHelpers.findMergedPRForTicket', function() {
 
     function scmWithClosedPrs(prs) {
