@@ -17,6 +17,7 @@
  *   - validateInputJql gate          → isGitHubKeyShape(key)
  *   - validateInputJql extraction    → shapeSources() alternation
  *   - trackers.js githubIssueNumber  → githubIssueNumberIn(key)
+ *   - pushReworkChanges input folder → inputFolderNameFor(key)
  *
  * Adding a shape is a one-line change here; the derivation is pinned by
  * js/unit-tests/test_ticketKeyShapes.js plus per-consumer derivation tests.
@@ -91,11 +92,30 @@ function shapeSources() {
     return out;
 }
 
+/**
+ * Name of the input/ subfolder dmtools creates for a ticket's run — the JS twin
+ * of the runtime's CliExecutionHelper.toInputFolderName. A composite GitHub key
+ * (acme/widgets#12) becomes the router key gh-12; any other key keeps its
+ * letters, digits, '.', '_' and '-' and has every other character replaced by
+ * '-'. Pre-CLI actions receive the real folder as params.inputFolderPath, but
+ * post-actions do not, so a post-action that reads input/<ticketKey>/ looks in
+ * a folder that does not exist for a GitHub ticket.
+ * @param {string} ticketKey
+ * @returns {string}
+ */
+function inputFolderNameFor(ticketKey) {
+    var k = String(ticketKey == null ? '' : ticketKey);
+    var composite = /^[\w.-]+\/[\w.-]+#(\d+)$/.exec(k);
+    if (composite) return 'gh-' + composite[1];
+    return k.replace(/[^A-Za-z0-9._-]/g, '-');
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         GITHUB_KEY_SHAPES: GITHUB_KEY_SHAPES,
         isGitHubKeyShape: isGitHubKeyShape,
         githubIssueNumberIn: githubIssueNumberIn,
-        shapeSources: shapeSources
+        shapeSources: shapeSources,
+        inputFolderNameFor: inputFolderNameFor
     };
 }

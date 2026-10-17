@@ -94,3 +94,19 @@ suite('ticketKeyShapes: shapeSources', function () {
     });
 
 });
+
+suite('ticketKeyShapes.inputFolderNameFor — twin of the runtime input folder name', function () {
+    var shapes = loadModule('js/common/ticketKeyShapes.js');
+
+    test('a composite GitHub key becomes the router key', function () {
+        assert.equal(shapes.inputFolderNameFor('acme/widgets#12'), 'gh-12');
+        assert.equal(shapes.inputFolderNameFor('my.org/my-repo_2#7'), 'gh-7');
+    });
+
+    test('other keys keep letters, digits, dot, underscore and dash; anything else becomes a dash', function () {
+        assert.equal(shapes.inputFolderNameFor('PROJ-123'), 'PROJ-123');
+        assert.equal(shapes.inputFolderNameFor('gh-5'), 'gh-5');
+        assert.equal(shapes.inputFolderNameFor('#12'), '-12');
+        assert.equal(shapes.inputFolderNameFor('a b/c'), 'a-b-c');
+    });
+});

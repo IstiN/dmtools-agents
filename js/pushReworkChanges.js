@@ -22,6 +22,7 @@ var gitStaging = require('./common/gitStaging.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 var cacheToReleases = require('./cacheToReleases.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var ticketKeyShapes = require('./common/ticketKeyShapes.js');
 // gh-957: the no-op loop guard's lap markers — the post-action stamps one
 // per leg close ({head, pushed, resolved}) so the SM arm actions can bound
 // consecutive empty laps on one head.
@@ -97,10 +98,10 @@ function postLapMarker(scm, prNumber, headSha, pushed, resolved) {
 // The input folder dmtools created for this run. It is not always input/<ticketKey>: on a
 // GitHub-tracker deployment the folder carries the router key (input/gh-5) while the ticket key is
 // owner/repo#5, so reading input/<ticketKey>/pr_info.md found nothing and the finished rework was
-// never pushed. dmtools hands the post-action the real folder as params.inputFolderPath (the
-// pre-CLI setup writes pr_info.md there, and postPRReviewComments.js reads it the same way); use its
-// folder name, relative to the job root like every other read here, and fall back to the ticket key
-// for runtimes that do not pass it. Set once per action() run.
+// never pushed. When the runtime passes the real folder (params.inputFolderPath) use its name;
+// the Java runtime passes it to pre-CLI actions only, so otherwise derive the name from the ticket
+// key the way the runtime does (ticketKeyShapes.inputFolderNameFor). Paths stay relative to the job
+// root like every other read here. Set once per action() run.
 var currentInputFolderName = null;
 
 function inputFolderNameOf(inputFolderPath) {
@@ -109,7 +110,7 @@ function inputFolderNameOf(inputFolderPath) {
 }
 
 function inputFolderFor(ticketKey) {
-    return 'input/' + (currentInputFolderName || ticketKey);
+    return 'input/' + (currentInputFolderName || ticketKeyShapes.inputFolderNameFor(ticketKey));
 }
 
 /**

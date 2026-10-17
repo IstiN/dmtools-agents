@@ -3,6 +3,7 @@
  */
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+var ticketKeyShapesModule = loadModule('js/common/ticketKeyShapes.js');
 var gitStagingModule = loadModule('js/common/gitStaging.js');
 // gh-957: githubHelpers + pushReworkChanges now require the no-op loop guard.
 var reworkLoopGuardModule = loadModule('js/common/reworkLoopGuard.js');
@@ -81,6 +82,7 @@ function loadPushReworkChanges() {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './cacheToReleases.js': {}
         ,
+            './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
             './common/reworkLoopGuard.js': reworkLoopGuardModule
         }),
@@ -165,6 +167,7 @@ function loadPushReworkChangesForAction(mocks) {
             './common/trackers.js': makeTrackersModule(toolMocks),
             './cacheToReleases.js': { action: function() {} }
         ,
+            './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
             './common/reworkLoopGuard.js': reworkLoopGuardModule
         }),
@@ -184,6 +187,7 @@ function loadPostTestReworkResults() {
             './common/pullRequest.js': PR_HELPER_REAL,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
+            './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
             './common/trackers.js': makeTrackersModule({}),
             './mergeState.js': loadModule('js/common/mergeState.js'),

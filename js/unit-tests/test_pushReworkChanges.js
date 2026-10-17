@@ -18,6 +18,7 @@
 // leaking the same sloppy-mode global, but breaking isolated per-file runs).
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+var ticketKeyShapesModule = loadModule('js/common/ticketKeyShapes.js');
 var gitStagingModule = loadModule('js/common/gitStaging.js');
 
 // Real githubHelpers (only its own deps stubbed) — pushReworkChanges requires
@@ -47,6 +48,7 @@ var githubHelpersModule = loadModule(
 
 function makeOutputFiles(fileMap) {
     return loadModule('js/common/outputFiles.js', makeRequire({
+            './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
             './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }), {
@@ -128,6 +130,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
             './cacheToReleases.js': { cacheSessionLog: noop },
             './common/tokenUsageComment.js': { postTokenUsageComments: noop }
         ,
+            './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
             './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }),
@@ -535,6 +538,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
             './cacheToReleases.js': {},
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
+            './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
             './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }),
@@ -862,6 +866,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './cacheToReleases.js': { action: function() {} },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
+            './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
             './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }),
@@ -975,7 +980,25 @@ suite('pushReworkChanges.action — input folder from params.inputFolderPath', f
         );
     });
 
-    test('falls back to input/<ticketKey> when the runtime passes no inputFolderPath', function() {
+    test('derives input/gh-N from a GitHub key when the runtime passes no inputFolderPath', function() {
+        // The Java runtime passes inputFolderPath to pre-CLI actions only; the post-action must
+        // find the folder the runtime named after the router key on its own.
+        var loaded = loadPushReworkChangesForAction({ file_read: strictFileRead('input/gh-5') });
+
+        loaded.mod.action({
+            ticket: { key: 'acme/widgets#5', fields: { labels: [] } },
+            response: 'Conflicts resolved.'
+        });
+
+        // The PR-lookup that follows the push needs a PR fixture for this key; what this test
+        // pins is that the PR branch was read from input/gh-5 and the rework was pushed.
+        assert.ok(
+            loaded.cliCommands.filter(function(c) { return c.indexOf('git push -u origin bug/PROJ-123') !== -1; }).length >= 1,
+            'the rework is pushed to the PR branch read from input/gh-5/pr_info.md'
+        );
+    });
+
+    test('falls back to input/<ticketKey> for a non-GitHub key when the runtime passes no inputFolderPath', function() {
         var loaded = loadPushReworkChangesForAction({ file_read: strictFileRead('input/PROJ-123') });
 
         var result = loaded.mod.action({
@@ -1085,6 +1108,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
             './cacheToReleases.js': { action: function() {} },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
+            './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
             './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }),
