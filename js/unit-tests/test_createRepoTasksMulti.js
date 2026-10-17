@@ -322,3 +322,344 @@ suite('createRepoTasksMulti — action', function() {
         assert.equal(hasGuard, true, 'module.exports must be inside typeof module guard');
     });
 });
+
+// ---------------------------------------------------------------------------
+// action — branch coverage (gh-1004)
+// ---------------------------------------------------------------------------
+
+suite('createRepoTasksMulti — action branch coverage', function() {
+    var reposJson = JSON.stringify([
+        {
+            name: 'backend-service',
+            reason: 'Schema + processor',
+            tasks: [
+                { id: 'schema', title: 'Add schema migration', reason: 'Flyway migration' },
+                { id: 'processor', title: 'Implement processor', reason: 'Consumes schema', depends_on: ['schema'] }
+            ]
+        }
+    ]);
+    var description = 'Solution\n\n{code:json|title=affected_repos}\n' + reposJson + '\n{code}\n\n----';
+
+    function makeHappyModule(overrides) {
+        var base = {
+            jira_get_ticket: function(opts) {
+                if (opts.key === 'PROJ-100') {
+                    return { fields: { description: description, parent: { key: 'PROJ-50' } } };
+                }
+                return { fields: { summary: 'Build example feature' } };
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_create_ticket_with_parent: function() { return '{"key":"PROJ-201"}'; },
+            jira_link_issues: function() {},
+            jira_move_to_status: function() {},
+            jira_post_comment: function() {}
+        };
+        for (var k in (overrides || {})) { base[k] = overrides[k]; }
+        return makeModule(base);
+    }
+
+    test('returns error when params carry no ticket key', function() {
+        var mod = makeHappyModule();
+        var result = mod.action({});
+        assert.equal(result.success, false, 'fails without ticket key');
+        assert.equal(result.error, 'No ticket key in params', 'error message');
+    });
+
+    test('outer catch returns failure when the tracker call throws', function() {
+        var mod = makeHappyModule({
+            jira_get_ticket: function() { throw new Error('tracker down'); }
+        });
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
+        assert.equal(result.success, false, 'fails when tracker throws');
+        assert.equal(result.error.indexOf('tracker down') !== -1, true, 'underlying error preserved');
+    });
+
+    test('searchIssues failure is tolerated and tasks are still created', function() {
+        var created = [];
+        var mod = makeHappyModule({
+            jira_search_by_jql: function() { throw new Error('search broken'); },
+            jira_create_ticket_with_parent: function(opts) { created.push(opts); return '{"key":"PROJ-201"}'; }
+        });
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
+        assert.equal(result.success, true, 'succeeds without dedupe');
+        assert.equal(created.length, 2, 'both tasks created');
+    });
+
+    test('non-array searchIssues result is treated as no existing sub-tasks', function() {
+        var created = [];
+        var mod = makeHappyModule({
+            jira_search_by_jql: function() { return 42; },
+            jira_create_ticket_with_parent: function(opts) { created.push(opts); return '{"key":"PROJ-201"}'; }
+        });
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
+        assert.equal(result.success, true, 'succeeds');
+        assert.equal(created.length, 2, 'both tasks created');
+    });
+
+    test('a failing create does not stop the remaining tasks', function() {
+        var created = [];
+        var mod = makeHappyModule({
+            jira_create_ticket_with_parent: function(opts) {
+                if (opts.summary.indexOf('schema') !== -1) { throw new Error('create failed'); }
+                created.push(opts);
+                return '{"key":"PROJ-202"}';
+            }
+        });
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
+        assert.equal(result.success, true, 'succeeds');
+        assert.equal(created.length, 1, 'only processor created');
+        assert.equal(result.created, 1, 'error entry not counted as created');
+    });
+
+    test('an empty create result leaves no key for dependency wiring', function() {
+        var links = [];
+        var mod = makeHappyModule({
+            jira_create_ticket_with_parent: function() { return ''; },
+            jira_link_issues: function(opts) { links.push(opts); }
+        });
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
+        assert.equal(result.success, true, 'succeeds');
+        assert.equal(links.length, 0, 'no links without resolvable keys');
+    });
+
+    test('dependency on a task that failed to create is skipped without failing', function() {
+        var links = [];
+        var mod = makeHappyModule({
+            jira_create_ticket_with_parent: function(opts) {
+                if (opts.summary.indexOf('schema') !== -1) { throw new Error('create failed'); }
+                return '{"key":"PROJ-202"}';
+            },
+            jira_link_issues: function(opts) { links.push(opts); }
+        });
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
+        assert.equal(result.success, true, 'succeeds');
+        assert.equal(links.length, 0, 'no link when blocker task was not created');
+    });
+
+    test('no move to Blocked when every link attempt fails', function() {
+        var moved = [];
+        var mod = makeHappyModule({
+            jira_link_issues: function() { throw new Error('link failed'); },
+            jira_move_to_status: function(opts) { moved.push(opts); }
+        });
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
+        assert.equal(result.success, true, 'succeeds');
+        assert.equal(moved.length, 0, 'dependent not moved when no link succeeded');
+    });
+
+    test('moveToStatus failure is swallowed', function() {
+        var mod = makeHappyModule({
+            jira_move_to_status: function() { throw new Error('move failed'); }
+        });
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
+        assert.equal(result.success, true, 'succeeds');
+    });
+
+    test('postComment failure is swallowed', function() {
+        var mod = makeHappyModule({
+            jira_post_comment: function() { throw new Error('comment failed'); }
+        });
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
+        assert.equal(result.success, true, 'succeeds');
+    });
+
+    test('posts the sub-task summary comment with error and ok lines', function() {
+        var comments = [];
+        var mod = makeHappyModule({
+            jira_create_ticket_with_parent: function(opts) {
+                if (opts.summary.indexOf('schema') !== -1) { throw new Error('boom'); }
+                return '{"key":"PROJ-302"}';
+            },
+            jira_post_comment: function(opts) { comments.push(opts); }
+        });
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
+        assert.equal(result.success, true, 'succeeds');
+        assert.equal(result.created, 1, 'failed task not counted');
+        assert.equal(comments.length, 1, 'one comment posted');
+        assert.equal(comments[0].key, 'PROJ-100', 'comment goes to the SA ticket');
+        var lines = comments[0].comment.split('\n');
+        assert.equal(lines[0], 'h3. Development Sub-tasks', 'Jira wiki header');
+        assert.equal(lines[2].indexOf('❌') !== -1, true, 'error line marker');
+        assert.equal(lines[2].indexOf('Add schema migration') !== -1, true, 'error line uses the summary');
+        assert.equal(lines[2].indexOf('boom') !== -1, true, 'error line carries the error');
+        assert.equal(lines[3], '* ✅ [PROJ-302|https://jira.example.com/browse/PROJ-302] — [backend-service] Implement processor', 'ok line uses the summary');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// extracted helpers (gh-1004)
+// ---------------------------------------------------------------------------
+
+suite('createRepoTasksMulti — extracted helpers', function() {
+    function throwsIf(behavior, flag) {
+        if (behavior && behavior[flag]) {
+            throw new Error(flag.replace(/Error$/, '') + ' failed');
+        }
+    }
+
+    function resultFor(behavior, key, fallback) {
+        return behavior && typeof behavior[key] !== 'undefined' ? behavior[key] : fallback;
+    }
+
+    function fakeTracker(behavior) {
+        var calls = { create: [], link: [], move: [], comment: [], search: [] };
+        return {
+            calls: calls,
+            createTicketWithParent: function(project, type, title, desc, parentKey, extra) {
+                calls.create.push({ project: project, issueType: type, summary: title, description: desc, parentKey: parentKey, labels: extra && extra.labels });
+                throwsIf(behavior, 'createError');
+                return resultFor(behavior, 'createResult', 'PROJ-9');
+            },
+            linkIssues: function(sourceKey, anotherKey, relationship) {
+                calls.link.push({ sourceKey: sourceKey, anotherKey: anotherKey, relationship: relationship });
+                throwsIf(behavior, 'linkError');
+            },
+            moveToStatus: function(key, statusName) {
+                calls.move.push({ key: key, statusName: statusName });
+                throwsIf(behavior, 'moveError');
+            },
+            postComment: function(key, comment) { calls.comment.push({ key: key, comment: comment }); },
+            searchIssues: function(jql, opts) {
+                calls.search.push({ jql: jql, opts: opts });
+                throwsIf(behavior, 'searchError');
+                return resultFor(behavior, 'searchResult', []);
+            }
+        };
+    }
+
+    test('buildTaskPlan flattens and topologically sorts repo tasks', function() {
+        var mod = makeModule();
+        var plan = mod.buildTaskPlan([{
+            name: 'backend-service',
+            tasks: [
+                { id: 'processor', title: 'Processor', depends_on: ['schema'] },
+                { id: 'schema', title: 'Schema' }
+            ]
+        }]);
+        assert.equal(plan.length, 2, 'two tasks');
+        assert.equal(plan[0].key, 'backend-service:schema', 'dependency first');
+        assert.equal(plan[1].key, 'backend-service:processor', 'dependent second');
+    });
+
+    test('buildTaskSummary prefixes repo tag and truncates at 255 chars', function() {
+        var mod = makeModule();
+        assert.equal(mod.buildTaskSummary('repo-a', 'Do it'), '[repo-a] Do it', 'prefixed summary');
+        var long = mod.buildTaskSummary('repo-a', 'A'.repeat(300));
+        assert.equal(long.length, 255, 'truncated to Jira limit');
+        assert.equal(long.slice(-3), '...', 'ends with ellipsis');
+    });
+
+    test('buildTaskDescription includes reason, SA link and parent link', function() {
+        var mod = makeModule();
+        var withReason = mod.buildTaskDescription('repo-a', 'because', 'PROJ-100', 'PROJ-50', 'https://jira.example.com');
+        assert.equal(withReason.indexOf('because\n\n') === 0, true, 'reason leads');
+        assert.equal(withReason.indexOf('*repo-a*') !== -1, true, 'repo emphasized');
+        assert.equal(withReason.indexOf('[PROJ-100|https://jira.example.com/browse/PROJ-100]') !== -1, true, 'SA link');
+        var noReason = mod.buildTaskDescription('repo-a', '', 'PROJ-100', 'PROJ-50', 'https://j');
+        assert.equal(noReason.indexOf('\n\n') === 0, false, 'no reason preamble when empty');
+        assert.equal(noReason.indexOf('Your scope') === 0, true, 'scope leads when no reason');
+    });
+
+    test('decideDuplicate matches the exact summary', function() {
+        var mod = makeModule();
+        assert.equal(mod.decideDuplicate(['[repo-a] Do it'], '[repo-a] Do it'), true, 'exact match');
+        assert.equal(mod.decideDuplicate(['[repo-a] Do other'], '[repo-a] Do it'), false, 'no substring match');
+        assert.equal(mod.decideDuplicate([], '[repo-a] Do it'), false, 'empty list');
+    });
+
+    test('extractCreatedKey passes strings through and reads key/id from objects', function() {
+        var mod = makeModule();
+        assert.equal(mod.extractCreatedKey('PROJ-7'), 'PROJ-7', 'plain key string');
+        assert.equal(mod.extractCreatedKey(''), null, 'empty string yields null');
+        assert.equal(mod.extractCreatedKey({ key: 'PROJ-8' }), 'PROJ-8', 'object with key');
+        assert.equal(mod.extractCreatedKey({ id: 'PROJ-9' }), 'PROJ-9', 'object with id');
+        assert.equal(mod.extractCreatedKey(null), null, 'null');
+        var hostile = {};
+        Object.defineProperty(hostile, 'key', { get: function() { throw new Error('nope'); } });
+        assert.equal(mod.extractCreatedKey(hostile), null, 'throwing accessor yields null');
+    });
+
+    test('buildSummaryComment lists ok and error lines plus skips', function() {
+        var mod = makeModule();
+        var comment = mod.buildSummaryComment(
+            [{ summary: '[backend-service] Implement processor', key: 'PROJ-302' }, { summary: '[backend-service] Add schema migration', key: null, error: 'Error: boom' }],
+            ['[backend-service] Add schema migration'],
+            'https://jira.example.com'
+        );
+        var lines = comment.split('\n');
+        assert.equal(lines[0], 'h3. Development Sub-tasks', 'header');
+        assert.equal(lines[2], '* ✅ [PROJ-302|https://jira.example.com/browse/PROJ-302] — [backend-service] Implement processor', 'ok line');
+        assert.equal(lines[3].indexOf('❌') !== -1 && lines[3].indexOf('boom') !== -1, true, 'error line');
+        assert.equal(lines[5], '_Skipped (already exist): [backend-service] Add schema migration_', 'skipped footer');
+        var none = mod.buildSummaryComment([], [], 'https://jira.example.com');
+        assert.equal(none, 'h3. Development Sub-tasks\n\n', 'no entries, no skips');
+    });
+
+    test('loadExistingSummaries maps issue summaries and tolerates failures', function() {
+        var mod = makeModule();
+        var t = fakeTracker({ searchResult: [{ fields: { summary: '[a] S' } }] });
+        assert.deepEqual(mod.loadExistingSummaries(t, 'PROJ-50'), ['[a] S'], 'summaries mapped');
+        assert.equal(t.calls.search[0].jql, 'parent = PROJ-50 AND issuetype = Sub-task', 'JQL scoped to parent');
+        var failing = fakeTracker({ searchError: true });
+        assert.deepEqual(mod.loadExistingSummaries(failing, 'PROJ-50'), [], 'search failure yields empty list');
+        var garbage = fakeTracker({ searchResult: {} });
+        assert.deepEqual(mod.loadExistingSummaries(garbage, 'PROJ-50'), [], 'non-array yields empty list');
+    });
+
+    test('createSubTasks creates one ticket per flat task, skipping exact duplicates', function() {
+        var mod = makeModule();
+        var t = fakeTracker();
+        var tasks = [
+            { key: 'r:one', repo: 'r', title: 'One', depends_on: ['r:two'] },
+            { key: 'r:two', repo: 'r', title: 'Two', depends_on: [] }
+        ];
+        var out = mod.createSubTasks(t, tasks, 'PROJ', 'PROJ-50', 'PROJ-100', 'https://jira.example.com', ['development'], ['[r] Two']);
+        assert.equal(t.calls.create.length, 1, 'duplicate skipped');
+        assert.equal(out.created.length, 1, 'one created entry');
+        assert.deepEqual(out.skipped, ['[r] Two'], 'skipped summary recorded');
+        assert.deepEqual(out.taskKeyMap, { 'r:one': 'PROJ-9' }, 'key map by task key');
+        assert.equal(out.created[0].depends_on.length, 1, 'deps kept for wiring');
+        var failing = fakeTracker({ createError: true });
+        var out2 = mod.createSubTasks(failing, tasks, 'PROJ', 'PROJ-50', 'PROJ-100', 'https://j', ['development'], []);
+        assert.equal(out2.created.length, 2, 'error entries recorded');
+        assert.equal(out2.created[0].error.indexOf('create failed') !== -1, true, 'error captured');
+        assert.deepEqual(out2.taskKeyMap, {}, 'no key on failure');
+    });
+
+    test('wireDependencies links blockers, moves dependents once per dependent', function() {
+        var mod = makeModule();
+        var t = fakeTracker();
+        mod.wireDependencies(
+            t,
+            [{ taskKey: 'r:two', key: 'PROJ-202', depends_on: ['r:one'] }],
+            { 'r:one': 'PROJ-201' },
+            'Blocks', 'Blocked'
+        );
+        assert.equal(t.calls.link.length, 1, 'one link for resolvable dep');
+        assert.equal(t.calls.link[0].sourceKey, 'PROJ-201', 'blocker is the source');
+        assert.equal(t.calls.link[0].anotherKey, 'PROJ-202', 'dependent is the target');
+        assert.equal(t.calls.move.length, 1, 'one move');
+        assert.equal(t.calls.move[0].statusName, 'Blocked', 'blocked status');
+        var t2 = fakeTracker();
+        mod.wireDependencies(t2, [{ taskKey: 'r:two', key: 'PROJ-202', depends_on: ['ghost'] }], {}, 'Blocks', 'Blocked');
+        assert.equal(t2.calls.link.length, 0, 'missing blocker produces no link');
+        var t3 = fakeTracker({ linkError: true });
+        mod.wireDependencies(t3, [{ taskKey: 'r:two', key: 'PROJ-202', depends_on: ['r:one'] }], { 'r:one': 'PROJ-201' }, 'Blocks', 'Blocked');
+        assert.equal(t3.calls.move.length, 0, 'no move when the only link fails');
+        var t4 = fakeTracker({ moveError: true });
+        mod.wireDependencies(t4, [{ taskKey: 'r:two', key: 'PROJ-202', depends_on: ['r:one'] }], { 'r:one': 'PROJ-201' }, 'Blocks', 'Blocked');
+        assert.equal(t4.calls.link.length, 1, 'link attempted when move fails');
+        assert.equal(t4.calls.move.length, 1, 'move attempted');
+    });
+
+    test('postSummaryComment posts and swallows failures', function() {
+        var mod = makeModule();
+        var t = fakeTracker();
+        mod.postSummaryComment(t, 'PROJ-100', 'body');
+        assert.equal(t.calls.comment.length, 1, 'comment posted');
+        assert.equal(t.calls.comment[0].key, 'PROJ-100', 'to the SA ticket');
+        var t2 = fakeTracker({});
+        t2.postComment = function() { throw new Error('comment failed'); };
+        mod.postSummaryComment(t2, 'PROJ-100', 'body');
+    });
+});
