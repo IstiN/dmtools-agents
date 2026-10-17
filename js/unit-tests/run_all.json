@@ -6,6 +6,9 @@
       "testFiles": [
         "js/unit-tests/test_commentMarkup.js",
         "js/unit-tests/test_scmGitlabReview.js",
+        "js/unit-tests/test_scmGitlabDiscussions.js",
+        "js/unit-tests/test_scmAdoProvider.js",
+        "js/unit-tests/test_scmAdoDiscussions.js",
         "js/unit-tests/test_checkWipLabel.js",
         "js/unit-tests/test_baseBranchMarker.js",
         "js/unit-tests/test_configLoader.js",

@@ -577,6 +577,93 @@ function _normalizeGitLabCommitStatus(status) {
     };
 }
 
+// ── GitLab MR discussion helpers (gh-925) ────────────────────────────────────
+// Pure mappers/renderers extracted from _createGitLabProvider().fetchDiscussions
+// (CRAP 648.7 in the baseline). Behaviour-preserving — pinned by
+// test_scmGitlabDiscussions.js.
+// NOTE: _gitlabRenderThreadSection reproduces the original renderer
+// byte-for-byte, including the '\n\n' (blank line) after the body, reply and
+// placeholder lines and before the '---' rule. Do NOT "tighten" these to a
+// single '\n': the blank line is what keeps the rule a horizontal rule (a
+// single '\n' turns 'body\n---' into a setext H2 heading).
+
+function _gitlabThreadPosition(pos) {
+    return {
+        path: (pos && (pos.new_path || pos.old_path)) || null,
+        line: (pos && (pos.new_line || pos.old_line)) || null
+    };
+}
+
+function _gitlabMapDiscussionThread(thread, index) {
+    var notes = thread.notes || [];
+    var root = notes[0] || {};
+    var position = _gitlabThreadPosition(root.position);
+    return {
+        index: index,
+        rootCommentId: thread.id,
+        threadId: thread.id,
+        discussionId: thread.id,
+        path: position.path,
+        line: position.line,
+        resolved: thread.resolved === true || root.resolved === true,
+        body: (root.body || '').trim()
+    };
+}
+
+function _gitlabThreadAuthor(author) {
+    return author ? (author.username || author.name) : 'unknown';
+}
+
+function _gitlabThreadDate(comment) {
+    return (comment && comment.created_at) ? comment.created_at.substring(0, 10) : '';
+}
+
+function _gitlabRenderThreadSection(mapped, root, replies) {
+    var section = '### Thread ' + mapped.index;
+    if (mapped.path) {
+        section += ' — `' + mapped.path + '`';
+        if (mapped.line) section += ' line ' + mapped.line;
+    }
+    section += '\n\n';
+    section += mapped.body
+        ? ('**' + _gitlabThreadAuthor(root.author) + '** (' + _gitlabThreadDate(root) + '):\n' + mapped.body + '\n\n')
+        : '_[No comment body]_\n\n';
+    var replyNotes = replies || [];
+    for (var i = 0; i < replyNotes.length; i++) {
+        var reply = replyNotes[i] || {};
+        section += '> **' + _gitlabThreadAuthor(reply.author) + '** (' + _gitlabThreadDate(reply) + '): ' + (reply.body || '').trim() + '\n\n';
+    }
+    section += '---\n\n';
+    return section;
+}
+
+function _gitlabFetchDiscussions(workspace, repository, prId) {
+    var discussions = _toArray(gitlab_get_mr_discussions({
+        workspace: workspace, repository: repository, pullRequestId: String(prId)
+    }));
+    var sections = [];
+    var rawThreads = [];
+    var section = '## Review Threads\n\n';
+    var hasContent = false;
+
+    discussions.forEach(function(thread) {
+        var notes = thread.notes || [];
+        var mapped = _gitlabMapDiscussionThread(thread, rawThreads.length + 1);
+        rawThreads.push(mapped);
+        if (mapped.resolved) return;
+        hasContent = true;
+        section += _gitlabRenderThreadSection(mapped, notes[0] || {}, notes.slice(1));
+    });
+
+    if (hasContent) sections.push(section);
+    return {
+        markdown: sections.length > 0
+            ? '# PR Discussion History\n\n_Previous review discussions for MR #' + prId + '._\n\n' + sections.join('\n')
+            : null,
+        rawThreads: rawThreads.length > 0 ? { threads: rawThreads } : null
+    };
+}
+
 function _createGitLabProvider(workspace, repository) {
     return {
         listPrs: function(state) {
@@ -799,66 +886,118 @@ function _createGitLabProvider(workspace, repository) {
             });
         },
         fetchDiscussions: function(prId) {
-            var discussions = _toArray(gitlab_get_mr_discussions({
-                workspace: workspace, repository: repository, pullRequestId: String(prId)
-            }));
-            var sections = [];
-            var rawThreads = [];
-            var section = '## Review Threads\n\n';
-            var hasContent = false;
-
-            discussions.forEach(function(thread) {
-                var notes = thread.notes || [];
-                var root = notes[0] || {};
-                var body = (root.body || '').trim();
-                var pos = root.position || {};
-                var resolved = thread.resolved === true || root.resolved === true;
-                var path = pos.new_path || pos.old_path || null;
-                var line = pos.new_line || pos.old_line || null;
-
-                rawThreads.push({
-                    index: rawThreads.length + 1,
-                    rootCommentId: thread.id,
-                    threadId: thread.id,
-                    discussionId: thread.id,
-                    path: path,
-                    line: line,
-                    resolved: resolved,
-                    body: body
-                });
-
-                if (resolved) return;
-                hasContent = true;
-                section += '### Thread ' + rawThreads.length;
-                if (path) {
-                    section += ' — `' + path + '`';
-                    if (line) section += ' line ' + line;
-                }
-                section += '\n\n';
-                var author = root.author ? (root.author.username || root.author.name) : 'unknown';
-                var date = root.created_at ? root.created_at.substring(0, 10) : '';
-                section += body ? ('**' + author + '** (' + date + '):\n' + body + '\n\n') : '_[No comment body]_\n\n';
-                for (var i = 1; i < notes.length; i++) {
-                    var reply = notes[i] || {};
-                    var rAuthor = reply.author ? (reply.author.username || reply.author.name) : 'unknown';
-                    var rDate = reply.created_at ? reply.created_at.substring(0, 10) : '';
-                    section += '> **' + rAuthor + '** (' + rDate + '): ' + (reply.body || '').trim() + '\n\n';
-                }
-                section += '---\n\n';
-            });
-
-            if (hasContent) sections.push(section);
-            return {
-                markdown: sections.length > 0
-                    ? '# PR Discussion History\n\n_Previous review discussions for MR #' + prId + '._\n\n' + sections.join('\n')
-                    : null,
-                rawThreads: rawThreads.length > 0 ? { threads: rawThreads } : null
-            };
+            return _gitlabFetchDiscussions(workspace, repository, prId);
         },
         getRemoteRepoInfo: function() {
             return _detectRepoFromGitRemote('gitlab');
         }
     };
+}
+
+// ── ADO pure helpers (gh-925) ────────────────────────────────────────────────
+// Extraction of the former 233-line _createAdoProvider closure (CRAP 4475,
+// worst in the repo) into module-level pure functions. Behaviour-preserving —
+// pinned by test_scmAdoProvider.js / test_scmAdoDiscussions.js.
+
+// NOTE: this is the ONLY unwrapper that tolerates non-envelope payloads —
+// bare arrays pass through and a bare object is returned as-is (`parsed || []`).
+// listPrs/getPrComments are pinned on that passthrough; do not "unify" it with
+// the stricter _adoParseRunList/_adoParsePipelines/_adoParseDiscussionThreads.
+function _adoUnwrapList(raw) {
+    var parsed = _parseJson(raw);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && parsed.value) return parsed.value;
+    return parsed || [];
+}
+
+function _adoListPrsStatus(state) {
+    return state === 'open' ? 'active' : state;
+}
+
+function _adoBuildInlineCommentOpts(repository, prId, filePath, line, text, startLine, side) {
+    var opts = {
+        repository: repository, pullRequestId: String(prId),
+        filePath: filePath, line: String(line), text: text
+    };
+    if (startLine) opts.startLine = String(startLine);
+    if (side) opts.side = side;
+    return opts;
+}
+
+function _adoBuildJobLogsOpts(jobId, tailLines) {
+    var opts = { buildId: parseInt(String(jobId), 10) };
+    if (tailLines) opts.tailLines = parseInt(String(tailLines), 10);
+    return opts;
+}
+
+// NOTE: unlike _adoUnwrapList, a bare object is NOT a valid run list — {value}
+// envelope first, bare arrays tolerated (Java-list compat), everything else → []
+// (pinned: a bare object yields []).
+function _adoParseRunList(raw) {
+    var parsed = _parseJson(raw);
+    var rawRuns = (parsed && parsed.value) ? parsed.value : (Array.isArray(parsed) ? parsed : []);
+    // Convert Java list to native JS array for filter/map compat
+    var runs = [];
+    for (var i = 0; i < rawRuns.length; i++) { runs.push(rawRuns[i]); }
+    return runs;
+}
+
+function _adoRunResultForStatus(status) {
+    var filterStatus = status.toLowerCase();
+    if (filterStatus === 'failure' || filterStatus === 'failed') return 'failed';
+    if (filterStatus === 'success' || filterStatus === 'succeeded') return 'succeeded';
+    return null;
+}
+
+function _adoRunStateForStatus(status) {
+    var filterStatus = status.toLowerCase();
+    if (filterStatus === 'in_progress') return 'inprogress';
+    if (filterStatus === 'completed') return 'completed';
+    return null;
+}
+
+function _adoRunMatchesStatusFilter(run, status) {
+    // ADO run state: 'inProgress', 'completed', 'canceling', 'unknown'
+    // ADO run result: 'succeeded', 'failed', 'canceled', 'unknown'
+    var state = ((run && run.state) || '').toLowerCase();
+    var result = ((run && run.result) || '').toLowerCase();
+    var mappedResult = _adoRunResultForStatus(status);
+    if (mappedResult) return result === mappedResult;
+    var mappedState = _adoRunStateForStatus(status);
+    if (mappedState) return state === mappedState;
+    var filterStatus = status.toLowerCase();
+    return state === filterStatus || result === filterStatus;
+}
+
+function _adoBuildPipelineRunsOpts(pipelineId, limit) {
+    var opts = { pipelineId: parseInt(String(pipelineId), 10) };
+    if (limit) opts.top = parseInt(String(limit), 10);
+    return opts;
+}
+
+function _adoBuildTriggerOpts(pipelineId, ref, payload) {
+    var opts = { pipelineId: parseInt(String(pipelineId), 10) };
+    if (ref) opts.branch = ref;
+    if (payload && typeof payload === 'object' && Object.keys(payload).length > 0) {
+        opts.variables = JSON.stringify(payload);
+    }
+    return opts;
+}
+
+// NOTE: same contract as _adoParseRunList — {value} envelope first, bare
+// arrays tolerated, everything else → [] (pinned; do not merge with
+// _adoUnwrapList's looser passthrough).
+function _adoParsePipelines(raw) {
+    var parsed = _parseJson(raw);
+    return (parsed && parsed.value) ? parsed.value : (Array.isArray(parsed) ? parsed : []);
+}
+
+function _adoFindPipelineByName(pipelines, name) {
+    var wanted = String(name).toLowerCase();
+    var match = pipelines.find(function(p) {
+        return p.name && p.name.toLowerCase() === wanted;
+    });
+    return match ? match.id : null;
 }
 
 function _adoResolvePipelineId(workflowIdentifier) {
@@ -867,35 +1006,171 @@ function _adoResolvePipelineId(workflowIdentifier) {
     if (!isNaN(asNum) && asNum > 0) return asNum;
     // Lookup by name via ado_list_pipelines
     try {
-        var raw = ado_list_pipelines({});
-        var parsed = _parseJson(raw);
-        var pipelines = (parsed && parsed.value) ? parsed.value : (Array.isArray(parsed) ? parsed : []);
-        var name = String(workflowIdentifier).toLowerCase();
-        var match = pipelines.find(function(p) {
-            return p.name && p.name.toLowerCase() === name;
-        });
-        return match ? match.id : null;
+        var pipelines = _adoParsePipelines(ado_list_pipelines({}));
+        return _adoFindPipelineByName(pipelines, workflowIdentifier);
     } catch (e) {
         console.warn('SCM ADO: _adoResolvePipelineId failed: ' + e);
         return null;
     }
 }
 
+function _adoReplyToThread(repository, prId, thread, text) {
+    if (thread.threadId) {
+        return ado_reply_to_pr_thread({
+            repository: repository, pullRequestId: String(prId),
+            threadId: String(thread.threadId), text: text
+        });
+    }
+    return ado_add_pr_comment({ repository: repository, pullRequestId: String(prId), text: text });
+}
+
+function _adoResolveThread(repository, prId, thread) {
+    if (thread.threadId) {
+        return ado_resolve_pr_thread({
+            repository: repository, pullRequestId: String(prId), threadId: String(thread.threadId)
+        });
+    }
+    console.warn('SCM ADO: No threadId to resolve for ADO thread');
+}
+
+function _adoRemoveLabel(repository, prId, label, labelId) {
+    return ado_remove_pr_label({ repository: repository, pullRequestId: String(prId), labelId: labelId || label });
+}
+
+function _adoGetRemoteRepoInfo() {
+    try {
+        var rawUrl = cli_execute_command({ command: 'git config --get remote.origin.url' }) || '';
+        var lines = rawUrl.split('\n').filter(function(l) { return l.trim(); });
+        var remoteUrl = lines.join('').trim();
+        var match = remoteUrl.match(/dev\.azure\.com[/:]([^/]+)\/([^/]+)\/_git\/([^/]+)/);
+        if (match) return { owner: match[1], repo: match[3] };
+        match = remoteUrl.match(/ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+)/);
+        if (match) return { owner: match[1], repo: match[3] };
+        return null;
+    } catch (e) { return null; }
+}
+
+// ── ADO discussion helpers (gh-925) ──────────────────────────────────────────
+// Extraction of the former _createAdoProvider().fetchDiscussions closure
+// (CRAP 808.5 in the baseline).
+
+// NOTE: unlike _adoUnwrapList, bare arrays are NOT valid threads — {value}
+// envelopes only, everything else → [] (pinned: a bare array yields [] for
+// fetchDiscussions but passes through for listPrs).
+function _adoParseDiscussionThreads(raw) {
+    var parsed = _parseJson(raw);
+    return (parsed && parsed.value) ? parsed.value : [];
+}
+
+function _adoIsResolvedThreadStatus(status) {
+    return status === 'fixed' || status === 'closed' ||
+           status === 'resolved' || status === 'wontFix' ||
+           status === 'byDesign';
+}
+
+function _adoThreadContextField(context, field) {
+    return (context && context[field]) || null;
+}
+
+function _adoThreadLine(context) {
+    return (context && context.rightFileStart && context.rightFileStart.line) || null;
+}
+
+function _adoThreadRawBody(comment) {
+    return (comment && comment.content) || '';
+}
+
+function _adoThreadBody(comment) {
+    return _adoThreadRawBody(comment).trim();
+}
+
+function _adoThreadAuthor(comment) {
+    return (comment && comment.author && comment.author.displayName) || 'unknown';
+}
+
+function _adoThreadDate(comment) {
+    return (comment && comment.publishedDate) ? comment.publishedDate.substring(0, 10) : '';
+}
+
+function _adoMapDiscussionThread(thread, index) {
+    if (thread.isDeleted === true) return null;
+    var rootComment = thread.comments && thread.comments[0];
+    var threadId = String(thread.id);
+    return {
+        index: index,
+        rootCommentId: threadId,
+        threadId: threadId,
+        path: _adoThreadContextField(thread.threadContext, 'filePath'),
+        line: _adoThreadLine(thread.threadContext),
+        resolved: _adoIsResolvedThreadStatus(thread.status),
+        body: _adoThreadBody(rootComment)
+    };
+}
+
+function _adoRenderThreadSection(mapped, rootComment) {
+    var section = '### Thread ' + mapped.index;
+    if (mapped.path) {
+        section += ' — `' + mapped.path + '`';
+        if (mapped.line) section += ' line ' + mapped.line;
+    }
+    section += '\n\n';
+    // Raw-body truthiness (not the trimmed value) decides the placeholder branch —
+    // a whitespace-only comment still renders its author line.
+    if (_adoThreadRawBody(rootComment)) {
+        section += '**' + _adoThreadAuthor(rootComment) + '** (' + _adoThreadDate(rootComment) + '):\n' + mapped.body + '\n\n';
+    } else {
+        section += '_[No comment body]_\n\n';
+    }
+    section += '---\n\n';
+    return section;
+}
+
+function _adoApplyResolvedHeader(section, rawThreads) {
+    var resolvedCount = rawThreads.filter(function(t) { return t.resolved; }).length;
+    if (resolvedCount > 0) {
+        return '> ℹ️ **' + resolvedCount + ' thread(s) already resolved and excluded from this review.**\n\n' + section;
+    }
+    return section;
+}
+
+function _adoFetchDiscussions(repository, prId) {
+    var result = ado_get_pr_comments({ repository: repository, pullRequestId: String(prId) });
+    var threads = _adoParseDiscussionThreads(result);
+    var rawThreads = [];
+    var sections = [];
+    var section = '## Review Threads\n\n';
+    var hasContent = false;
+
+    threads.forEach(function(thread) {
+        var mapped = _adoMapDiscussionThread(thread, rawThreads.length + 1);
+        if (!mapped) return;
+        rawThreads.push(mapped);
+        if (!mapped.resolved) {
+            hasContent = true;
+            section += _adoRenderThreadSection(mapped, thread.comments && thread.comments[0]);
+        }
+    });
+
+    if (hasContent) {
+        section = _adoApplyResolvedHeader(section, rawThreads);
+        sections.push(section);
+    }
+    var markdown = sections.length > 0
+        ? '# PR Discussion History\n\n_Previous review discussions for PR #' + prId + '._\n\n' + sections.join('\n')
+        : null;
+    return { markdown: markdown, rawThreads: rawThreads.length > 0 ? { threads: rawThreads } : null };
+}
+
 function _createAdoProvider(repository) {
     return {
         listPrs: function(state) {
-            var result = ado_list_prs({ repository: repository, status: state === 'open' ? 'active' : state });
-            var parsed = _parseJson(result);
-            if (Array.isArray(parsed)) return parsed;
-            if (parsed && parsed.value) return parsed.value;
-            return parsed || [];
+            return _adoUnwrapList(ado_list_prs({ repository: repository, status: _adoListPrsStatus(state) }));
         },
         getPr: function(prId) {
             return _parseJson(ado_get_pr({ repository: repository, pullRequestId: String(prId) }));
         },
         getPrComments: function(prId) {
-            var parsed = _parseJson(ado_get_pr_comments({ repository: repository, pullRequestId: String(prId) }));
-            return (parsed && parsed.value) ? parsed.value : (parsed || []);
+            return _adoUnwrapList(ado_get_pr_comments({ repository: repository, pullRequestId: String(prId) }));
         },
         // ADO has no raw-unified-diff-text API (only file-level change stats via
         // ado_get_pr_diff) — return null so callers fall back to a file list.
@@ -906,30 +1181,14 @@ function _createAdoProvider(repository) {
             return ado_add_pr_comment({ repository: repository, pullRequestId: String(prId), text: text });
         },
         replyToThread: function(prId, thread, text) {
-            if (thread.threadId) {
-                return ado_reply_to_pr_thread({
-                    repository: repository, pullRequestId: String(prId),
-                    threadId: String(thread.threadId), text: text
-                });
-            }
-            return ado_add_pr_comment({ repository: repository, pullRequestId: String(prId), text: text });
+            return _adoReplyToThread(repository, prId, thread, text);
         },
         resolveThread: function(prId, thread) {
-            if (thread.threadId) {
-                return ado_resolve_pr_thread({
-                    repository: repository, pullRequestId: String(prId), threadId: String(thread.threadId)
-                });
-            }
-            console.warn('SCM ADO: No threadId to resolve for ADO thread');
+            return _adoResolveThread(repository, prId, thread);
         },
         addInlineComment: function(prId, filePath, line, text, startLine, side) {
-            var opts = {
-                repository: repository, pullRequestId: String(prId),
-                filePath: filePath, line: String(line), text: text
-            };
-            if (startLine) opts.startLine = String(startLine);
-            if (side) opts.side = side;
-            return ado_add_inline_comment(opts);
+            return ado_add_inline_comment(
+                _adoBuildInlineCommentOpts(repository, prId, filePath, line, text, startLine, side));
         },
         mergePr: function(prId, mergeMethod, commitTitle, commitMessage) {
             return ado_merge_pr({ repository: repository, pullRequestId: String(prId) });
@@ -938,7 +1197,7 @@ function _createAdoProvider(repository) {
             return ado_add_pr_label({ repository: repository, pullRequestId: String(prId), label: label });
         },
         removeLabel: function(prId, label, labelId) {
-            return ado_remove_pr_label({ repository: repository, pullRequestId: String(prId), labelId: labelId || label });
+            return _adoRemoveLabel(repository, prId, label, labelId);
         },
         getPrDiff: function(prId) {
             return ado_get_pr_diff({ repository: repository, pullRequestId: String(prId) });
@@ -948,9 +1207,7 @@ function _createAdoProvider(repository) {
             return null;
         },
         getJobLogs: function(jobId, tailLines) {
-            var opts = { buildId: parseInt(String(jobId), 10) };
-            if (tailLines) opts.tailLines = parseInt(String(tailLines), 10);
-            return ado_get_pipeline_logs(opts);
+            return ado_get_pipeline_logs(_adoBuildJobLogsOpts(jobId, tailLines));
         },
         listWorkflowRuns: function(status, workflowId, limit) {
             var pipelineId = _adoResolvePipelineId(workflowId);
@@ -958,26 +1215,10 @@ function _createAdoProvider(repository) {
                 console.warn('SCM ADO: listWorkflowRuns — could not resolve pipeline for: ' + workflowId);
                 return null;
             }
-            var opts = { pipelineId: parseInt(String(pipelineId), 10) };
-            if (limit) opts.top = parseInt(String(limit), 10);
-            var raw = ado_list_pipeline_runs(opts);
-            var parsed = _parseJson(raw);
-            var rawRuns = (parsed && parsed.value) ? parsed.value : (Array.isArray(parsed) ? parsed : []);
-            // Convert Java list to native JS array for filter/map compat
-            var runs = [];
-            for (var i = 0; i < rawRuns.length; i++) { runs.push(rawRuns[i]); }
+            var runs = _adoParseRunList(ado_list_pipeline_runs(_adoBuildPipelineRunsOpts(pipelineId, limit)));
             if (status) {
-                // ADO run state: 'inProgress', 'completed', 'canceling', 'unknown'
-                // ADO run result: 'succeeded', 'failed', 'canceled', 'unknown'
-                var filterStatus = status.toLowerCase();
                 runs = runs.filter(function(r) {
-                    var state = (r.state || '').toLowerCase();
-                    var result = (r.result || '').toLowerCase();
-                    if (filterStatus === 'failure' || filterStatus === 'failed') return result === 'failed';
-                    if (filterStatus === 'success' || filterStatus === 'succeeded') return result === 'succeeded';
-                    if (filterStatus === 'in_progress') return state === 'inprogress';
-                    if (filterStatus === 'completed') return state === 'completed';
-                    return state === filterStatus || result === filterStatus;
+                    return _adoRunMatchesStatusFilter(r, status);
                 });
             }
             return JSON.stringify({ workflow_runs: runs });
@@ -988,86 +1229,13 @@ function _createAdoProvider(repository) {
                 console.warn('SCM ADO: triggerWorkflow — could not resolve pipeline for: ' + workflowFile);
                 return null;
             }
-            var opts = { pipelineId: parseInt(String(pipelineId), 10) };
-            if (ref) opts.branch = ref;
-            if (payload && typeof payload === 'object' && Object.keys(payload).length > 0) {
-                opts.variables = JSON.stringify(payload);
-            }
-            return ado_trigger_pipeline(opts);
+            return ado_trigger_pipeline(_adoBuildTriggerOpts(pipelineId, ref, payload));
         },
         fetchDiscussions: function(prId) {
-            var result = ado_get_pr_comments({ repository: repository, pullRequestId: String(prId) });
-            var parsed = _parseJson(result);
-            var threads = (parsed && parsed.value) ? parsed.value : [];
-            var rawThreads = [];
-            var sections = [];
-            var section = '## Review Threads\n\n';
-            var hasContent = false;
-
-            threads.forEach(function(thread) {
-                if (thread.isDeleted === true) return;
-                var resolved = thread.status === 'fixed' || thread.status === 'closed' ||
-                               thread.status === 'resolved' || thread.status === 'wontFix' ||
-                               thread.status === 'byDesign';
-                var path = (thread.threadContext && thread.threadContext.filePath) || null;
-                var line = (thread.threadContext && thread.threadContext.rightFileStart &&
-                            thread.threadContext.rightFileStart.line) || null;
-                var rootComment = thread.comments && thread.comments[0];
-                var body = (rootComment && rootComment.content) || '';
-                var threadId = String(thread.id);
-
-                rawThreads.push({
-                    index: rawThreads.length + 1,
-                    rootCommentId: threadId,
-                    threadId: threadId,
-                    path: path,
-                    line: line,
-                    resolved: resolved,
-                    body: body.trim()
-                });
-
-                if (!resolved) {
-                    hasContent = true;
-                    section += '### Thread ' + rawThreads.length;
-                    if (path) {
-                        section += ' — `' + path + '`';
-                        if (line) section += ' line ' + line;
-                    }
-                    section += '\n\n';
-                    var author = (rootComment && rootComment.author && rootComment.author.displayName) || 'unknown';
-                    var date = (rootComment && rootComment.publishedDate) ? rootComment.publishedDate.substring(0, 10) : '';
-                    if (body) {
-                        section += '**' + author + '** (' + date + '):\n' + body.trim() + '\n\n';
-                    } else {
-                        section += '_[No comment body]_\n\n';
-                    }
-                    section += '---\n\n';
-                }
-            });
-
-            if (hasContent) {
-                var resolvedCount = rawThreads.filter(function(t) { return t.resolved; }).length;
-                if (resolvedCount > 0) {
-                    section = '> ℹ️ **' + resolvedCount + ' thread(s) already resolved and excluded from this review.**\n\n' + section;
-                }
-                sections.push(section);
-            }
-            var markdown = sections.length > 0
-                ? '# PR Discussion History\n\n_Previous review discussions for PR #' + prId + '._\n\n' + sections.join('\n')
-                : null;
-            return { markdown: markdown, rawThreads: rawThreads.length > 0 ? { threads: rawThreads } : null };
+            return _adoFetchDiscussions(repository, prId);
         },
         getRemoteRepoInfo: function() {
-            try {
-                var rawUrl = cli_execute_command({ command: 'git config --get remote.origin.url' }) || '';
-                var lines = rawUrl.split('\n').filter(function(l) { return l.trim(); });
-                var remoteUrl = lines.join('').trim();
-                var match = remoteUrl.match(/dev\.azure\.com[/:]([^/]+)\/([^/]+)\/_git\/([^/]+)/);
-                if (match) return { owner: match[1], repo: match[3] };
-                match = remoteUrl.match(/ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+)/);
-                if (match) return { owner: match[1], repo: match[3] };
-                return null;
-            } catch (e) { return null; }
+            return _adoGetRemoteRepoInfo();
         }
     };
 }
@@ -1134,5 +1302,41 @@ module.exports = {
     _normalizeGitLabCommitStatus: _normalizeGitLabCommitStatus,
     _normalizeGithubCommitStatus: _normalizeGithubCommitStatus,
     _getLegacyGithubCommitStatuses: _getLegacyGithubCommitStatuses,
-    _unwrapGithubCheckRuns: _unwrapGithubCheckRuns
+    _unwrapGithubCheckRuns: _unwrapGithubCheckRuns,
+    // gh-925: ADO/GitLab provider internals exposed as testable pure helpers
+    _gitlabThreadPosition: _gitlabThreadPosition,
+    _gitlabMapDiscussionThread: _gitlabMapDiscussionThread,
+    _gitlabThreadAuthor: _gitlabThreadAuthor,
+    _gitlabThreadDate: _gitlabThreadDate,
+    _gitlabRenderThreadSection: _gitlabRenderThreadSection,
+    _gitlabFetchDiscussions: _gitlabFetchDiscussions,
+    _adoUnwrapList: _adoUnwrapList,
+    _adoListPrsStatus: _adoListPrsStatus,
+    _adoBuildInlineCommentOpts: _adoBuildInlineCommentOpts,
+    _adoBuildJobLogsOpts: _adoBuildJobLogsOpts,
+    _adoParseRunList: _adoParseRunList,
+    _adoRunResultForStatus: _adoRunResultForStatus,
+    _adoRunStateForStatus: _adoRunStateForStatus,
+    _adoRunMatchesStatusFilter: _adoRunMatchesStatusFilter,
+    _adoBuildPipelineRunsOpts: _adoBuildPipelineRunsOpts,
+    _adoBuildTriggerOpts: _adoBuildTriggerOpts,
+    _adoParsePipelines: _adoParsePipelines,
+    _adoFindPipelineByName: _adoFindPipelineByName,
+    _adoResolvePipelineId: _adoResolvePipelineId,
+    _adoReplyToThread: _adoReplyToThread,
+    _adoResolveThread: _adoResolveThread,
+    _adoRemoveLabel: _adoRemoveLabel,
+    _adoGetRemoteRepoInfo: _adoGetRemoteRepoInfo,
+    _adoParseDiscussionThreads: _adoParseDiscussionThreads,
+    _adoIsResolvedThreadStatus: _adoIsResolvedThreadStatus,
+    _adoThreadContextField: _adoThreadContextField,
+    _adoThreadLine: _adoThreadLine,
+    _adoThreadRawBody: _adoThreadRawBody,
+    _adoThreadBody: _adoThreadBody,
+    _adoThreadAuthor: _adoThreadAuthor,
+    _adoThreadDate: _adoThreadDate,
+    _adoMapDiscussionThread: _adoMapDiscussionThread,
+    _adoRenderThreadSection: _adoRenderThreadSection,
+    _adoApplyResolvedHeader: _adoApplyResolvedHeader,
+    _adoFetchDiscussions: _adoFetchDiscussions
 };
