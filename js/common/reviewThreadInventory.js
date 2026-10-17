@@ -185,7 +185,7 @@ function buildFromConversations(conversations, nodes) {
         var author = root.user ? (root.user.login || '') :
             (root.author ? (root.author.login || '') : '');
         var graphqlResolved = rootId !== null && rootId !== undefined
-            ? resolvedByCommentId[String(rootId)] : false;
+            ? resolvedByCommentId[String(rootId)] === true : false;
         enriched.push({
             rootCommentId: rootId,
             threadId: rootId !== null && rootId !== undefined

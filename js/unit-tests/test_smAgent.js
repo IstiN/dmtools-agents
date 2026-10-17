@@ -989,6 +989,132 @@ suite('smAgent: arm_rework red-gate max attempts (gh-917 first validation)', fun
     });
 });
 
+suite('smAgent: arm_rework no-op loop guard (gh-957)', function () {
+
+    // gh-957 (epam/dmtools-agents 2026-10-19): the threads-rule arm re-armed
+    // a dev leg that ran a no-op rework sweep — the leg saw 2 review threads
+    // while the sweep's GraphQL reviewThreads inventory counted 64 (the
+    // legacy review_comments fallback included human top-levels, so the
+    // rework arm's completion gate never passed). Holding the pre-PR-review
+    // resume marker, the SM re-armed every ~10 min while threads stayed
+    // "open". The no-op loop guard arms the SWEEP side with an empty-lap
+    // budget (reworkLoopGuard.js — recorded by pushReworkChanges when the
+    // sweep resolved nothing) and withholds the SM's re-arm at noopLapMax
+    // (default 2) empty laps on the UNCHANGED head: escalation marker ONCE
+    // per head, arm resumes after a real fix push (new head = fresh budget).
+
+    var guard = loadModule('js/common/reworkLoopGuard.js', makeRequire({}), {});
+
+    var RULE = {
+        description: 'unresolved review threads on a machine-authored reviewed PR -> arm agent:rework',
+        source: 'github',
+        query: { type: 'pr', labels: ['ai_pr_reviewed'],
+                 notLabels: ['agent:rework', 'agent:review', 'ai_validating', 'validation_failed'],
+                 prMachineAuthor: true, threadsResolved: false, draft: false },
+        localAction: 'arm_rework',
+        limit: 5,
+        id: 'rework-unresolved-threads'
+    };
+
+    function devItem(n, head) {
+        return { key: 'pr-' + n, labels: ['ai_pr_reviewed'], issueNumber: null,
+                 prNumber: n, draft: false, headSha: head,
+                 pr: { number: n, state: 'OPEN', checks: 'green',
+                       mergeState: 'BLOCKED', mergeable: false } };
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function lapComment(head, n, max) {
+        return { user: { login: 'ai-teammate' },
+                 body: guard.noopLapMarkerPrefix(head) + ' lap ' + n + '/' + max +
+                     ' resolved 0/0 unaddressed threads on the unchanged head (gh-957)' };
+    }
+
+    var HEAD = 'c957c957c957c957c957c957c957c957c957c957';
+
+    test('at noopLapMax empty laps on the unchanged head the re-arm is WITHHELD + escalated ONCE', function () {
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-agents'), {
+            github: {
+                items: [devItem(1364, HEAD)],
+                pr: { number: 1364, body: 'Closes #1363', head: { sha: HEAD } },
+                prComments: [lapComment(HEAD, 1, 2), lapComment(HEAD, 2, 2)]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-agents', noopLapMax: 2,
+            machineAuthor: 'ai-teammate', rules: [RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'exactly one label action lands');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['rework-loop-escalated'],
+            'the escalation label — never agent:rework at the empty-lap cap');
+        assert.equal(sm.capturedPrComments.length, 1, 'one escalation comment');
+        var body = sm.capturedPrComments[0].body;
+        assert.contains(body, '\uD83D\uDED1 rework arm withheld on head ' + HEAD,
+            'the once-per-head escalation marker (machine-parseable for the dedup)');
+        assert.contains(body, '2/2', 'the escalation names the spent no-op budget');
+        assert.contains(body, 'gh-957', 'the comment names the coverage');
+        assert.equal(sm.capturedTriggers.length, 0, 'the guard never dispatches a rework leg');
+    });
+
+    test('the escalation posts ONCE per head — repeated ticks stay quiet (no comment spam)', function () {
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-agents'), {
+            github: {
+                items: [devItem(1364, HEAD)],
+                pr: { number: 1364, body: 'Closes #1363', head: { sha: HEAD } },
+                prComments: [
+                    lapComment(HEAD, 1, 2), lapComment(HEAD, 2, 2),
+                    { user: { login: 'ai-teammate' },
+                      body: guard.escalationMarkerPrefix(HEAD) +
+                          ' \u2014 2/2 no-op rework laps left the head unchanged (gh-957)' }
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-agents', noopLapMax: 2,
+            machineAuthor: 'ai-teammate', rules: [RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'the escalation label already stands');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'the marker is head-keyed — a withheld PR must not spam every tick');
+    });
+
+    test('below the cap the arm fires as before (one recorded empty lap)', function () {
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-agents'), {
+            github: {
+                items: [devItem(1364, HEAD)],
+                pr: { number: 1364, body: 'Closes #1363', head: { sha: HEAD } },
+                prComments: [lapComment(HEAD, 1, 2)]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'epam', 'repo': 'dmtools-agents', noopLapMax: 2,
+            machineAuthor: 'ai-teammate', rules: [RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'below the cap the re-arm still fires');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.notContains(sm.capturedPrComments[0].body, 'rework arm withheld',
+            'no escalation below the cap');
+    });
+
+    test('a real fix push moves the head — the guard releases and the arm fires', function () {
+        var NEWHEAD = 'd958d958d958d958d958d958d958d958d958d958';
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-agents'), {
+            github: {
+                items: [devItem(1364, NEWHEAD)],
+                pr: { number: 1364, body: 'Closes #1363', head: { sha: NEWHEAD } },
+                prComments: [lapComment(HEAD, 1, 2), lapComment(HEAD, 2, 2)]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-agents', noopLapMax: 2,
+            machineAuthor: 'ai-teammate', rules: [RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1,
+            'the lap markers are head-keyed — a fix push restarts the budget on the NEW head');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+    });
+});
+
 suite('smAgent: sm_github.json rule hygiene', function () {
 
     test('every deployed github rule passes the validator (source + query + dispatch shape)', function () {

@@ -5081,7 +5081,9 @@ function restoreReworkArm(key, ticket, rule, repoInfo, effectiveConfig) {
     // the gh-840 stale-grace sweep re-arms past an exhausted no-op budget
     // 30 minutes later and the loop resumes. Same decision as the
     // arm_rework action; the comments fetch above is reused (one read).
-    if (head) {
+    // The machineAuthor doctrine: no configured machine identity → no
+    // trusted markers → the guard stays inert (restore as before).
+    if (head && machineLogins.length) {
         var noopDecision = reworkLoopGuardModule.shouldWithholdArm({
             markers: reworkLoopGuardModule.parseLapMarkers(comments, allow),
             escalationMarkers: reworkLoopGuardModule.parseEscalationMarkers(comments, allow),
