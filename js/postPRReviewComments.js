@@ -421,81 +421,117 @@ function parseDiffLineInfo(diffText, filePath, targetLine) {
     var lineNumber = parseInt(targetLine, 10);
     if (!lineNumber) return { present: true, side: null };
 
-    var currentFile = null;
-    var oldFile = null;
-    var oldLine = null;
-    var newLine = null;
-    var lines = String(diffText).split(/\r?\n/);
+    return scanDiffForLine(diffLines(diffText), filePath, lineNumber);
+}
+
+function newParseScanState() {
+    return { currentFile: null, oldFile: null, oldLine: null, newLine: null, pendingLeftMatch: null };
+}
+
+/**
+ * One line of the diff scan: header bookkeeping (file switches, hunk
+ * counters) or content matching. Returns a match object to stop the scan,
+ * or null to continue.
+ */
+function scanDiffLine(st, filePath, lineNumber, line) {
+    if (parseTrackHeaderLine(st, line)) return null;
+    if (st.currentFile !== filePath) return null;
+    return consumeParsedContentLine(st, line, lineNumber);
+}
+
+function scanDiffForLine(lines, filePath, lineNumber) {
+    var st = newParseScanState();
+    for (var i = 0; i < lines.length; i++) {
+        var match = scanDiffLine(st, filePath, lineNumber, lines[i]);
+        if (match) return match;
+    }
     // Deferred LEFT match: a removed line ('-') at the target line number.
     // We don't return immediately on a LEFT match because a same-numbered
     // added line ('+') can appear later in the same replace block (the
     // common "-old\n+new" single-line replacement pattern) and RIGHT should
     // win — the finding is about the current/new code, not the removed one.
-    var pendingLeftMatch = null;
-
-    for (var i = 0; i < lines.length; i++) {
-        var line = lines[i];
-
-        if (line.indexOf('diff --git ') === 0) {
-            currentFile = null;
-            oldFile = null;
-            oldLine = null;
-            newLine = null;
-            pendingLeftMatch = null;
-            continue;
-        }
-
-        if (line.indexOf('--- a/') === 0) {
-            oldFile = line.substring('--- a/'.length);
-            if (oldFile === '/dev/null') oldFile = null;
-            continue;
-        }
-
-        if (line.indexOf('+++ b/') === 0) {
-            currentFile = line.substring('+++ b/'.length);
-            continue;
-        }
-        if (line.indexOf('+++ /dev/null') === 0) {
-            // Deleted files have +++ /dev/null; use the old path so comments can be anchored.
-            currentFile = oldFile;
-            continue;
-        }
-
-        if (currentFile !== filePath) continue;
-
-        var hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-        if (hunk) {
-            oldLine = parseInt(hunk[1], 10);
-            newLine = parseInt(hunk[2], 10);
-            continue;
-        }
-
-        if (oldLine === null || newLine === null) continue;
-
-        if (line.indexOf('+') === 0) {
-            if (newLine === lineNumber) return { present: true, side: 'RIGHT' };
-            newLine++;
-        } else if (line.indexOf('-') === 0) {
-            if (oldLine === lineNumber && !pendingLeftMatch) {
-                pendingLeftMatch = { present: true, side: 'LEFT' };
-            }
-            oldLine++;
-        } else if (line.indexOf(' ') === 0) {
-            // Context lines exist on both sides; prefer RIGHT (new version).
-            if (newLine === lineNumber) return { present: true, side: 'RIGHT' };
-            if (oldLine === lineNumber) return { present: true, side: 'LEFT' };
-            oldLine++;
-            newLine++;
-        } else if (line === '\\ No newline at end of file') {
-            continue;
-        } else {
-            oldLine++;
-            newLine++;
-        }
-    }
-
-    if (pendingLeftMatch) return pendingLeftMatch;
+    if (st.pendingLeftMatch) return st.pendingLeftMatch;
     return { present: false, side: null };
+}
+
+function parseTrackHeaderLine(st, line) {
+    if (line.indexOf('--- a/') === 0) {
+        st.oldFile = oldFilePathOf(line);
+        return true;
+    }
+    if (line.indexOf('+++') === 0) {
+        parseTrackNewFile(st, line);
+        return true;
+    }
+    if (line.indexOf('diff --git ') === 0) {
+        st.currentFile = null;
+        st.oldFile = null;
+        st.oldLine = null;
+        st.newLine = null;
+        st.pendingLeftMatch = null;
+        return true;
+    }
+    return false;
+}
+
+function parseTrackNewFile(st, line) {
+    if (line.indexOf('+++ /dev/null') === 0) {
+        // Deleted files have +++ /dev/null; use the old path so comments can be anchored.
+        st.currentFile = st.oldFile;
+        return;
+    }
+    st.currentFile = line.substring('+++ b/'.length);
+}
+
+function consumeParsedContentLine(st, line, lineNumber) {
+    if (applyHunkHeader(st, line)) return null;
+    if (st.oldLine === null || st.newLine === null) return null;
+    return dispatchParsedLine(st, line, lineNumber);
+}
+
+function applyHunkHeader(st, line) {
+    var hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (!hunk) return false;
+    st.oldLine = parseInt(hunk[1], 10);
+    st.newLine = parseInt(hunk[2], 10);
+    return true;
+}
+
+function dispatchParsedLine(st, line, lineNumber) {
+    if (line.indexOf('+') === 0) return matchAddedLine(st, lineNumber);
+    if (line.indexOf('-') === 0) return matchRemovedLine(st, lineNumber);
+    return dispatchSpaceOrOtherLine(st, line, lineNumber);
+}
+
+function dispatchSpaceOrOtherLine(st, line, lineNumber) {
+    if (line.indexOf(' ') === 0) return matchContextLine(st, lineNumber);
+    if (line === '\\ No newline at end of file') return null;
+    st.oldLine++;
+    st.newLine++;
+    return null;
+}
+
+function matchAddedLine(st, lineNumber) {
+    if (st.newLine === lineNumber) return { present: true, side: 'RIGHT' };
+    st.newLine++;
+    return null;
+}
+
+function matchRemovedLine(st, lineNumber) {
+    if (st.oldLine === lineNumber && !st.pendingLeftMatch) {
+        st.pendingLeftMatch = { present: true, side: 'LEFT' };
+    }
+    st.oldLine++;
+    return null;
+}
+
+function matchContextLine(st, lineNumber) {
+    // Context lines exist on both sides; prefer RIGHT (new version).
+    if (st.newLine === lineNumber) return { present: true, side: 'RIGHT' };
+    if (st.oldLine === lineNumber) return { present: true, side: 'LEFT' };
+    st.oldLine++;
+    st.newLine++;
+    return null;
 }
 
 function diffLines(diffText) {
@@ -521,13 +557,8 @@ function trackDiffFileState(state, line) {
         state.oldFile = oldFilePathOf(line);
         return state;
     }
-    if (line.indexOf('+++ b/') === 0) {
-        state.currentFile = line.substring('+++ b/'.length);
-        return state;
-    }
-    if (line.indexOf('+++ /dev/null') === 0) {
-        state.currentFile = state.oldFile;
-        return state;
+    if (line.indexOf('+++') === 0) {
+        return trackNewFileMarker(state, line);
     }
     if (line.indexOf('diff --git ') === 0) {
         // "deleted file mode" precedes the ---/+++ lines in a deletion
@@ -536,6 +567,16 @@ function trackDiffFileState(state, line) {
         state.currentFile = segPath;
         state.oldFile = segPath;
     }
+    return state;
+}
+
+function trackNewFileMarker(state, line) {
+    if (line.indexOf('+++ /dev/null') === 0) {
+        // Deleted files have +++ /dev/null; the current path is the old one.
+        state.currentFile = state.oldFile;
+        return state;
+    }
+    state.currentFile = line.substring('+++ b/'.length);
     return state;
 }
 

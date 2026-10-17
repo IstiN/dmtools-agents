@@ -1844,6 +1844,43 @@ suite('postPRReviewComments — gh-926 inline-comment fallbacks', function() {
 
 suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', function() {
 
+    test('parseDiffLineInfo: no-newline markers, non-numeric lines, deleted files and metadata lines', function() {
+        var mod = loadPostPRReviewComments();
+
+        // Missing/blank inputs are treated as "not verifiable — present"
+        assert.deepEqual(mod.parseDiffLineInfo(null, 'a.js', 3), { present: true, side: null });
+        assert.deepEqual(mod.parseDiffLineInfo('', 'a.js', 3), { present: true, side: null });
+        assert.deepEqual(mod.parseDiffLineInfo('x', null, 3), { present: true, side: null });
+        assert.deepEqual(mod.parseDiffLineInfo('x', 'a.js', null), { present: true, side: null });
+        assert.deepEqual(mod.parseDiffLineInfo('x', 'a.js', 'not-a-number'), { present: true, side: null });
+
+        // '\ No newline at end of file' is skipped, not counted as a line
+        var nnl = 'diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1,2 +1,2 @@\n-old tail\n+new tail\n\\ No newline at end of file\n';
+        assert.deepEqual(mod.parseDiffLineInfo(nnl, 'a.js', 1), { present: true, side: 'RIGHT' });
+        assert.deepEqual(mod.parseDiffLineInfo(nnl, 'a.js', 2), { present: false, side: null });
+
+        // File metadata lines between the +++ header and the first hunk are
+        // skipped without crashing (oldLine/newLine still null).
+        var withMeta = 'diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\nindex aaa..bbb 100644\n@@ -1 +1 @@\n-x\n+y\n';
+        assert.deepEqual(mod.parseDiffLineInfo(withMeta, 'a.js', 1), { present: true, side: 'RIGHT' });
+
+        // Deleted file (+++ /dev/null): lines resolve on the old path, LEFT side
+        var deleted = 'diff --git a/gone.js b/gone.js\n--- a/gone.js\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n';
+        assert.deepEqual(mod.parseDiffLineInfo(deleted, 'gone.js', 1), { present: true, side: 'LEFT' });
+
+        // Context lines match on either side; RIGHT wins for shared numbers
+        var ctx = 'diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1,2 +1,2 @@\n shared\n+added\n';
+        assert.deepEqual(mod.parseDiffLineInfo(ctx, 'a.js', 1), { present: true, side: 'RIGHT' });
+
+        // A line outside every hunk is absent
+        assert.deepEqual(mod.parseDiffLineInfo(ctx, 'a.js', 99), { present: false, side: null });
+
+        // Rename-style header (--- a/old +++ b/new): the new path anchors lines
+        var renamed = 'diff --git a/old.js b/new.js\n--- a/old.js\n+++ b/new.js\n@@ -1 +1 @@\n-x\n+y\n';
+        assert.deepEqual(mod.parseDiffLineInfo(renamed, 'new.js', 1), { present: true, side: 'RIGHT' });
+        assert.deepEqual(mod.parseDiffLineInfo(renamed, 'old.js', 1), { present: false, side: null });
+    });
+
     test('deriveProjectKey: projectKey wins; configPath basename; config.js → empty', function() {
         var mod = loadPostPRReviewComments();
 
