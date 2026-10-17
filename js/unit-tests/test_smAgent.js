@@ -5622,12 +5622,18 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
     //     RED checks gets the validation_failed label (idempotent, the head
     //     sha noted in a one-time comment).
     //  2. validate-armed's query excludes the label (sm_github.json).
-    //  3. RESET (owner 2026-09-30, live fa pr-1094): the park clears only
-    //     on a HUMAN push NEWER than the park event — the head commit's
-    //     GitHub login must not be the machineAuthor (the agent legs' WIP
-    //     auto-saves land as ai-teammate) and its committer must not be
-    //     'sm-silent-update'; machine movement NEVER clears the label.
-    //     Machine-authored PRs never get the label (fa pushes their heads).
+    //  3. RESET (gh-994 first position, owner reframe 2026-10-17): when the
+    //     park comment records the punished head sha and the current head
+    //     DIFFERS, the label is removed UNCONDITIONALLY — no actor/park-
+    //     time/verdict probes; any head-mutation source (kicker, rework
+    //     leg, operator, silent main-merge) resets the park, guests and
+    //     machine PRs alike. Parks with NO recorded sha keep the legacy
+    //     probes: the park clears only on a HUMAN push NEWER than the
+    //     park event — the head commit's GitHub login must not be the
+    //     machineAuthor (the agent legs' WIP auto-saves land as
+    //     ai-teammate) and its committer must not be 'sm-silent-update';
+    //     machine movement NEVER clears a legacy label. Machine-authored
+    //     PRs never get the label set (fa pushes their heads).
     //  4. validate_pr refuses to dispatch ANY validation CI while the
     //     label is set (backstops validate-fresh too).
 
@@ -5692,8 +5698,10 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
         assert.equal(sm.capturedPrComments.length, 1, 'one park comment');
         assert.ok(sm.capturedPrComments[0].body.indexOf('validation_failed') !== -1, 'marker');
         assert.ok(sm.capturedPrComments[0].body.indexOf('ee55ff66aa') !== -1, 'head sha noted');
-        assert.ok(sm.capturedPrComments[0].body.indexOf('HUMAN push') !== -1,
-            'the comment states the human-push requirement');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('head-change reset') !== -1,
+            'the comment states the head-change reset contract (gh-994)');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('ANY push') !== -1,
+            'any head-mutation source clears the park, not only a human push');
         assert.ok(vfRefreshed(sm.capturedCliCommands), 'the silent refresh itself still runs');
     });
 
@@ -6042,7 +6050,13 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
     var OLD_HEAD = 'aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00';
     var NEW_HEAD = '99887766554433221100ffeeddccbbaa99887766';
 
-    test('silent-update: head changed since the park with NO own verdict — park clears (rebase medicine)', function () {
+    test('silent-update: head changed since the park — park clears unconditionally (rebase medicine, gh-994)', function () {
+        // gh-994 makes the reset a pure function of the current head: the
+        // recorded parked-head sha differing from the current head is
+        // SUFFICIENT — even the HARDEST case clears: the new head was
+        // pushed by the machine itself (sm-silent-update committer,
+        // machine actor login, STALE date — neither human nor fresh). The
+        // sha change is the verdict.
         var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
             github: {
                 items: [vfItem(206, { labels: ['validation_failed'], headSha: NEW_HEAD })],
@@ -6067,7 +6081,8 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
                     if (m && m[1] === NEW_HEAD) return '"sm-silent-update"';
                     return base(cmd);
                 };
-            })()
+            })(),
+            captureConsole: true
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
                                  rules: [RULES_VF.refresh] } });
@@ -6075,13 +6090,24 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
         assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
             return r.label === 'validation_failed'; }),
             'the park does not survive its own sha');
-        assert.ok(sm.capturedPrComments.some(function (c) {
-            return c.body.indexOf('no red verdict of its own') !== -1; }),
-            'the un-park comment explains the sha-change rationale');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'gh-994 Q2 default: machine-log audit only, no PR comment on automated housekeeping');
+        assert.ok(sm.capturedLogs.some(function (l) {
+            return l.indexOf('park-reset:') !== -1 &&
+                l.indexOf(OLD_HEAD) !== -1 && l.indexOf(NEW_HEAD) !== -1;
+        }), 'the park-reset machine-log line names both full shas');
         assert.ok(vfRefreshed(sm.capturedCliCommands), 'the silent refresh itself still runs');
     });
 
-    test('silent-update: head changed BUT carries its OWN red verdict — park holds', function () {
+    test('silent-update: head changed BUT carries its OWN red verdict — park resets anyway (gh-994 retracts the verdict re-check)', function () {
+        // gh-994 I1: label removal is UNCONDITIONAL on head change — the
+        // reset never re-checks old state, and the new head's verdict is
+        // not old state to hide behind. The fresh red re-justifies a park
+        // on a LATER pass (the SET path re-parks a still-red head one
+        // cycle later) — it never keeps the STALE park alive on the new
+        // head. Live shape: fa #156 — the kicker pushed, the new head
+        // re-validated red, and the old #633 verdict guard held the stale
+        // park for 20+ min.
         var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
             github: {
                 items: [vfItem(207, { labels: ['validation_failed'], headSha: NEW_HEAD })],
@@ -6089,7 +6115,7 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
                 prStatus: { checkConclusion: 'red' }
             },
             onCliExecute: function (cmd) {
-                // The dispatched-verdict probe answers for the NEW head.
+                // The dispatched-verdict probe answers FAILURE for the NEW head.
                 if (cmd.command.indexOf('/runs?head_sha=' + NEW_HEAD) !== -1) {
                     return JSON.stringify({ workflow_runs: [
                         { head_sha: NEW_HEAD, status: 'completed', conclusion: 'failure',
@@ -6102,8 +6128,12 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
         sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
                                  rules: [RULES_VF.refresh] } });
 
-        assert.equal(sm.capturedPrLabelRemoves.length, 0,
-            'a fresh red verdict on the new head re-justifies the park');
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.label === 'validation_failed'; }),
+            'the head changed — the park resets on the sha difference alone');
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('validation_failed') !== -1; }),
+            'no same-pass re-add — the fresh red re-parks on a LATER pass via the SET path');
     });
 
     test('silent-update: same head as the park — holds (the park sha still matches)', function () {
@@ -6315,18 +6345,22 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
             'the park-reset route (mergeable, not behind) clears a green machine park');
     });
 
-    test('gh-750: the moved-head self-clear fires ONE dispatched-verdict probe per tick (shared #633/gh-750 probe)', function () {
-        // Review (pr-752 rework, thread 1): with a park comment present, the
-        // #633 head-change path and the gh-750 machine moved-head path each
-        // probed the SAME dispatched verdict for the SAME head with the SAME
-        // args — two identical `gh api .../runs?head_sha=` calls in one
-        // tick. One shared memoized probe serves both consumers.
+    test('gh-750: the moved-head self-clear fires ONE dispatched-verdict probe per tick (shared legacy-ladder probe)', function () {
+        // Review (pr-752 rework, thread 1): on the LEGACY ladder (parks
+        // with no recorded sha, or a recorded sha matching the current
+        // head), the gh-750 machine moved-head path probes the dispatched
+        // verdict for the head — one shared memoized probe per tick, not
+        // once per consumer. (gh-994 note: sha-keyed parks with a moved
+        // head reset in first position without any verdict probe at all.)
         var verdictProbeCalls = 0;
         var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
             github: {
                 items: [vfItem(228, { author: 'ai-teammate', labels: ['validation_failed'],
                                       headSha: MACHINE_HEAD_750 })],
-                prComments: [{ body: '🛑 parked-head: ' + OLD_HEAD }],
+                // The recorded sha matches the CURRENT head — no head
+                // change, so the legacy gh-750 rung (the probe consumer)
+                // owns the clear.
+                prComments: [{ body: '🛑 parked-head: ' + MACHINE_HEAD_750 }],
                 prStatus: { checkConclusion: 'none' }
             },
             onCliExecute: function (cmd) {
@@ -12757,7 +12791,7 @@ suite('smAgent: targetStatus stage-label fallback (gh-916)', function() {
         assert.deepEqual(added, [{ key: 'T-12', label: 'stage_ready_for_testing' }]);
     });
 });
-suite('smAgent: stale validation_failed label cleanup (gh-952)', function () {
+suite('smAgent: stale validation_failed label cleanup (gh-952, superseded by gh-994)', function () {
     // Live fa 2026-10-17 (gh-952): the approved queue head (#1563,
     // machine-authored) carried a STALE validation_failed label from an
     // OLDER head. The park's red verdict belonged to a sha that no longer
@@ -12769,13 +12803,15 @@ suite('smAgent: stale validation_failed label cleanup (gh-952)', function () {
     // ladder's null-guard fail-closed HOLD each tick, so the park was
     // permanent and validate-armed's notLabels excluded the queue head
     // forever — the whole approved FIFO starved for 3+h.
-    // gh-952 rung: when the probes fail, a MACHINE-authored PR whose
-    // park comment names a parked-head sha that differs from the current
-    // head still clears — the comment sha names the punished head, so the
-    // difference alone proves the head moved, and the memoized
-    // dispatched-verdict probe (fail-open by #633 design) guards the
-    // fresh head. Guests keep their contracts in full: none of this
-    // evaluates for them (fa#923/#681/#1249 pins).
+    // gh-994 (owner reframe, same live day — fa #156 kicker + fa #1563
+    // operator pushes, 4 manual interventions) GENERALIZED the gh-952
+    // exemption into the FIRST-POSITION head-change reset: when the park
+    // comment names a parked-head sha that differs from the current
+    // head, the label clears UNCONDITIONALLY — no probes at all (not even
+    // the verdict probe), guests and machine PRs alike, no PR comment
+    // (machine-log 'park-reset:' line only). The gh-952 rung itself is
+    // gone (strictly dominated); these tests pin the gh-994 contract on
+    // the exact gh-952 live shapes.
 
     var PARK_RESET = { source: 'github', query: { type: 'pr',
         labels: ['validation_failed'], notLabels: ['ai_validating', 'blocked'], draft: false },
@@ -12830,18 +12866,22 @@ suite('smAgent: stale validation_failed label cleanup (gh-952)', function () {
                 pr: { number: 1563, head: { sha: HEAD, ref: 'ai/gh-1563' } },
                 prComments: STALE_PARK_COMMENT
             },
-            onCliExecute: outageCli(null)
+            onCliExecute: outageCli(null),
+            captureConsole: true
         }));
         gh952Action(sm);
 
         assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
             return r.label === 'validation_failed';
         }), 'the stale park clears during the outage: ' + JSON.stringify(sm.capturedPrLabelRemoves));
-        assert.ok(sm.capturedPrComments.some(function (c) {
-            return c.body.indexOf('🅿️→▶') !== -1 && c.body.indexOf('gh-952') !== -1 &&
-                c.body.indexOf(OLD_PARKED_HEAD) !== -1 && c.body.indexOf(HEAD) !== -1;
-        }), 'the clear comment names both shas and the rung: ' +
-            JSON.stringify(sm.capturedPrComments.map(function (c) { return c.body; })));
+        assert.equal(sm.capturedPrComments.length, 0,
+            'gh-994 Q2 default: machine-log audit only, no PR comment on automated housekeeping');
+        assert.ok(sm.capturedLogs.some(function (l) {
+            return l.indexOf('park-reset:') !== -1 &&
+                l.indexOf(OLD_PARKED_HEAD) !== -1 && l.indexOf(HEAD) !== -1;
+        }), 'the park-reset machine-log line names both full shas: ' +
+            JSON.stringify(sm.capturedLogs.filter(function (l) {
+                return l.indexOf('park-reset:') !== -1; })));
         assert.ok(sm.capturedIoCacheDrops.some(function (d) {
             return d.kind === 'openPrs' && d.owner === 'a' && d.repo === 'b';
         }), 'the open-PR cache drops so validate-armed re-queries the same tick (same-tick slot yield)');
@@ -12867,11 +12907,15 @@ suite('smAgent: stale validation_failed label cleanup (gh-952)', function () {
         assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
     });
 
-    test('gh-952: a red verdict ON the fresh head keeps the park (the verdict re-justifies itself)', function () {
-        // Only the dispatched-verdict probe survives the outage and it
-        // reports FAILURE for the current head — genuinely red, the park
-        // stands (the verdict probe is the one fail-open input by #633
-        // design; a real red answer is load-bearing).
+    test('gh-952/gh-994: a red verdict ON the fresh head does NOT keep the stale park — the reset is unconditional, the fresh red re-parks on a LATER pass', function () {
+        // gh-994 I1 retracts the #633/gh-952 verdict re-check: only the
+        // dispatched-verdict probe survives the outage and it reports
+        // FAILURE for the current head — the label STILL clears on the
+        // sha difference alone. The fresh red is a NEW park's business
+        // (the SET path re-parks a still-red head one cycle later), never
+        // a reason to hold the stale park on the new head. Live shape:
+        // fa #156 — kicker push, new head re-validated red, label stuck
+        // 20+ min under the old verdict guard.
         var sm = makeSmAgent(Object.assign(gh952Config('a', 'b'), {
             github: {
                 items: [parkedItem(1565, { headSha: undefined })],
@@ -12881,14 +12925,20 @@ suite('smAgent: stale validation_failed label cleanup (gh-952)', function () {
             onCliExecute: outageCli(JSON.stringify({ workflow_runs: [RED_RUN] }))
         }));
         gh952Action(sm);
-        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'a red fresh head stays parked');
-        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.label === 'validation_failed';
+        }), 'the stale park clears on the sha change alone — the fresh red re-parks later');
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('validation_failed') !== -1;
+        }), 'no same-pass re-add');
     });
 
-    test('gh-952: a GUEST parked PR keeps the sticky park during a probe outage (owner contracts in full)', function () {
-        // The gh-952 rung is machine-scoped: fa#923/#681/#1249 pin that
-        // machine movement NEVER speaks for a guest — not even when the
-        // probes die. The human-push RESET is their only exit.
+    test('gh-952/gh-994: a GUEST parked PR resets on head change during a probe outage too (the rung is actor-agnostic)', function () {
+        // gh-994 retracts the machine-scoping: the park is a pure
+        // function of the CURRENT HEAD for guests and machine PRs alike
+        // (I2) — fa #1563 was exactly a guest/operator shape needing a
+        // human deletion 3× in one day. The recorded-sha difference alone
+        // clears the label; no probe, no actor check.
         var sm = makeSmAgent(Object.assign(gh952Config('a', 'b'), {
             github: {
                 items: [parkedItem(1566, { headSha: undefined, author: 'vendor-human' })],
@@ -12898,9 +12948,11 @@ suite('smAgent: stale validation_failed label cleanup (gh-952)', function () {
             onCliExecute: outageCli(null)
         }));
         gh952Action(sm);
-        assert.equal(sm.capturedPrLabelRemoves.length, 0,
-            'guests keep the sticky park — the human-push RESET is their only exit');
-        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.label === 'validation_failed';
+        }), 'guests reset on head change too — the rung never checks the actor');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no PR comment on automated housekeeping (Q2 default)');
     });
 });
 
@@ -13090,33 +13142,29 @@ suite('smAgent: validation_failed park reset on head change (gh-994)', function 
             return a.labels.indexOf('validation_failed') !== -1; }), 'never a re-add');
     });
 
-    test('gh-994 (legacy guard): a park with NO recorded sha keeps the legacy ladder (machine push holds, probes intact)', function () {
+    test('gh-994 (legacy guard): a park with NO recorded sha abstains from the new rung — dead probes keep it (fail closed)', function () {
         // I1 keys on the RECORDED head; parks predating the parked-head
-        // comment (legacy residue) fall through to the human-push /
-        // gh-750 rungs exactly as before — a machine push with an
-        // unchanged head does not clear them through the new rung.
+        // comment (legacy residue, manual labels) have no sha to compare
+        // — the new rung must NOT fire for them (no spurious 'park-reset:'
+        // log line either) and the legacy ladder keeps its fail-closed
+        // hold when the probes are dead. (A live-probe legacy park whose
+        // head demonstrably moved still self-clears through the gh-750
+        // rung — that contract is pinned by the gh-750 suite above.)
         var sm = makeSmAgent(Object.assign(gh994Config('a', 'b'), {
             github: {
                 items: [gh994Item(1566, { headSha: HEAD_994 })],
                 prComments: [], // no park comment — nothing to key on
                 prStatus: { checkConclusion: 'none' }
             },
-            onCliExecute: function (cmd) {
-                var c = cmd.command || '';
-                if (c.indexOf('/commits/' + HEAD_994) !== -1) {
-                    return JSON.stringify({ login: 'ai-teammate', date: '2026-10-17T18:09:00Z',
-                        committer: 'sm-kicker', sha: HEAD_994, parents: [] });
-                }
-                if (c.indexOf('/events?per_page=100') !== -1) {
-                    return '"2026-10-17T17:55:00Z"';
-                }
-                return '';
-            }
+            onCliExecute: function () { return ''; }, // full probe outage
+            captureConsole: true
         }));
         gh994Action(sm);
 
         assert.equal(sm.capturedPrLabelRemoves.length, 0,
-            'no recorded sha — the new rung abstains; the legacy machine-hold stands');
+            'no recorded sha — the new rung abstains; dead probes keep the park (fail closed)');
         assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+        assert.ok(!sm.capturedLogs.some(function (l) { return l.indexOf('park-reset:') !== -1; }),
+            'no park-reset audit line without a recorded-sha head change');
     });
 });
