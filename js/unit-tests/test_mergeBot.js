@@ -726,6 +726,49 @@ suite('mergeBot: externally-merged slot holder releases the merge window (gh-952
         }), 'every list call is repo-scoped');
     });
 
+    test('a WRAPPED merged-list payload ({ pullRequests: [...] }) still releases the slot (action() shape parity)', function () {
+        // The bridge has returned both bare arrays and wrapped objects
+        // ({ pullRequests / items }) from these list tools; action()
+        // normalizes with Array.isArray + the pullRequests/items fallback.
+        // mergedSlotHolder must normalize the same way — otherwise
+        // merged.length is undefined, the release loop never runs, and
+        // the gh-952 starvation reproduces with zero log evidence.
+        var calls = { merges: [], cli: [] };
+        var validatedLabels = ['pr_approved', 'ai_validated'].map(function (n) { return { name: n }; });
+        var mods = {
+            github_list_workflow_runs: function () {
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_list_prs: function (a) {
+                if (a && a.state === 'merged') {
+                    return JSON.stringify({ pullRequests: [mergedHolder(1)] });
+                }
+                return JSON.stringify([{ number: 1563, labels: validatedLabels, head: { sha: 'sha1563' } }]);
+            },
+            github_get_pr: function () {
+                return JSON.stringify({ number: 1563, state: 'OPEN', draft: false, mergeable: true,
+                    mergeable_state: 'clean', head: { sha: 'sha1563' }, labels: validatedLabels });
+            },
+            github_get_commit_check_runs: function () {
+                return JSON.stringify({ check_runs: GREEN });
+            },
+            github_merge_pr: function (m) { calls.merges.push(m); return JSON.stringify({ merged: true }); },
+            github_add_labels: function () { return '{}'; },
+            github_remove_label: function () { return '{}'; },
+            cli_execute_command: function (c) { calls.cli.push(c); return ''; }
+        };
+        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        var result = bot.action({ jobParams: { repo: 'o/r' } });
+
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('pr-1661') !== -1 && l.indexOf('slot released') !== -1;
+        }), 'the release fires with the wrapped payload: ' + JSON.stringify(result.log));
+        assert.equal(calls.merges.length, 1,
+            'the validated candidate advances — the wrapped shape did not silently disable the release');
+        assert.equal(calls.merges[0].pullRequestId, 1563);
+        assert.equal(result.acted, 1);
+    });
+
     test('a live validated candidate advances past the released slot on existing evidence (gh-766 parity)', function () {
         var fx = slotFixture([
             { number: 1563, labels: ['pr_approved', 'ai_validated'], headSha: 'sha1563', checkRuns: GREEN },
