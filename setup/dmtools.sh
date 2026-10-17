@@ -19,6 +19,17 @@ DMTOOLS_INSTALL_REPO="${DMTOOLS_INSTALL_REPO:-epam/dm.ai}"
 DMTOOLS_HOME="${HOME}/.dmtools"
 DMTOOLS_BIN="${DMTOOLS_HOME}/bin"
 
+# "latest" resolves to the newest epam/dm.ai release tag (redirect of /releases/latest).
+if [ "${DMTOOLS_VERSION}" = "latest" ]; then
+  RESOLVED="$(curl -fsSIL -o /dev/null -w '%{url_effective}' "https://github.com/${DMTOOLS_INSTALL_REPO}/releases/latest" 2>/dev/null || true)"
+  RESOLVED="${RESOLVED##*/}"
+  if [ -z "${RESOLVED}" ] || [ "${RESOLVED}" = "latest" ]; then
+    echo "❌ Could not resolve the latest DMtools release of ${DMTOOLS_INSTALL_REPO}" >&2
+    exit 1
+  fi
+  DMTOOLS_VERSION="${RESOLVED}"
+fi
+
 echo "🛠  DMtools ${DMTOOLS_VERSION}"
 
 # ── Already installed? ────────────────────────────────────────────────────────
@@ -47,8 +58,18 @@ fi
 
 # ── Install ───────────────────────────────────────────────────────────────────
 echo "📥 Installing DMtools ${DMTOOLS_VERSION}..."
-curl -fsSL "https://raw.githubusercontent.com/${DMTOOLS_INSTALL_REPO}/${DMTOOLS_VERSION}/install.sh" \
-  | DMTOOLS_VERSION="${DMTOOLS_VERSION}" bash -s -- "${DMTOOLS_VERSION}"
+# pipefail scoped to this pipeline: a failed download (bad version, 404, network) must fail the step
+# instead of feeding an empty script to bash, which exits 0.
+if ! ( set -o pipefail; curl -fsSL "https://raw.githubusercontent.com/${DMTOOLS_INSTALL_REPO}/${DMTOOLS_VERSION}/install.sh" \
+  | DMTOOLS_VERSION="${DMTOOLS_VERSION}" bash -s -- "${DMTOOLS_VERSION}" ); then
+  echo "❌ DMtools ${DMTOOLS_VERSION} download/install failed (bad version, missing release or network error)" >&2
+  exit 1
+fi
+
+if [ ! -x "${DMTOOLS_BIN}/dmtools" ]; then
+  echo "❌ DMtools ${DMTOOLS_VERSION}: installer finished but ${DMTOOLS_BIN}/dmtools is missing" >&2
+  exit 1
+fi
 
 register_path "${DMTOOLS_BIN}"
 export_var "DMTOOLS_HOME" "${DMTOOLS_HOME}"
