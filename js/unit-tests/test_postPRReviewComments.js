@@ -2017,8 +2017,8 @@ function makeResumeHarness(opts) {
                 return null;
             },
             cli_execute_command: function(args) {
-                if (opts.cliError) throw new Error(opts.cliError);
                 calls.cli.push(args && args.command);
+                if (opts.cliError) throw new Error(opts.cliError);
                 return opts.remoteUrl !== undefined ? opts.remoteUrl : 'resume output';
             }
         }

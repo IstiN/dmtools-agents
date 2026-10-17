@@ -9,7 +9,7 @@
  * 6. Adds labels to indicate review completion
  *
  * gh-926: action() is a thin executor over a pipeline of named steps.
- * Pure decisions live in parse*/normalize*/decide*/build*/resolve* helpers
+ * Pure decisions live in parse/normalize/decide/build/resolve helpers
  * (unit-tested directly); side-effecting steps live in single-purpose
  * functions invoked by action() in the same order as before the flattening.
  */
@@ -530,10 +530,20 @@ function trackDiffFileState(state, line) {
         return state;
     }
     if (line.indexOf('diff --git ') === 0) {
-        state.currentFile = null;
-        state.oldFile = null;
+        // "deleted file mode" precedes the ---/+++ lines in a deletion
+        // header, so key the segment off the diff --git a/<p> b/<p> path.
+        var segPath = headerPathOf(line);
+        state.currentFile = segPath;
+        state.oldFile = segPath;
     }
     return state;
+}
+
+function headerPathOf(line) {
+    var rest = line.substring('diff --git a/'.length);
+    var sep = rest.indexOf(' b/');
+    if (sep === -1) return rest;
+    return rest.substring(0, sep);
 }
 
 function oldFilePathOf(line) {
@@ -1303,12 +1313,12 @@ function repoInfoFromConfig(repository) {
 }
 
 function repoOwnerOf(repository) {
-    if (!repository) return null;
+    if (!repository) return undefined;
     return repository.owner;
 }
 
 function repoNameOf(repository) {
-    if (!repository) return null;
+    if (!repository) return undefined;
     return repository.repo;
 }
 
@@ -1954,7 +1964,7 @@ function buildReviewContext(params) {
  * Posts review results to GitHub and Jira, updates ticket
  *
  * Thin executor over the gh-926 pipeline: every decision lives in a pure
- * parse*/decide*/build* helper, every side effect in a named step, and this
+ * parse/decide/build helper, every side effect in a named step, and this
  * function only sequences them — in the same order as before the split.
  *
  * @param {Object} params - Parameters from Teammate job
