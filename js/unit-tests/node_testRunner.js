@@ -96,9 +96,6 @@ var assert = {
             throw new Error(msg || 'expected function to throw but it did not');
         }
     },
-
-    // mirror parity with testRunner.js (GraalJS harness) — suites using
-    // assert.doesNotThrow must run under the degraded node harness too.
     doesNotThrow: function(fn, msg) {
         try {
             fn();
@@ -111,19 +108,46 @@ var assert = {
     }
 };
 
+// The pack root is derived from this file (js/unit-tests/ -> repo root), so the harness works from
+// any cwd and without an `agents/` symlink: a path is tried as given, against the pack root, and
+// with a consumer-layout `agents/` prefix stripped.
+var PACK_ROOT = path.resolve(__dirname, '..', '..');
+
+function resolveExisting(p, accept) {
+    var rel = path.isAbsolute(String(p)) ? String(p) : String(p).replace(/^\.\//, '');
+    var stripped = rel.indexOf('agents/') === 0 ? rel.substring('agents/'.length) : rel;
+    // Relative paths are pack-root relative first (as the dmtools runner, which runs from the repo
+    // root, treats '.'); the caller's cwd is only a fallback.
+    var candidates = [
+        path.resolve(PACK_ROOT, rel),
+        path.resolve(PACK_ROOT, stripped),
+        path.resolve(process.cwd(), p),
+        path.resolve(process.cwd(), 'agents', rel)
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+        try {
+            if (accept(fs.statSync(candidates[i]))) return candidates[i];
+        } catch (e) { /* try the next candidate */ }
+    }
+    return null;
+}
+
 function file_read(args) {
     var p = args && args.path ? args.path : args;
-    var resolved = path.resolve(process.cwd(), p);
-    if (!fs.existsSync(resolved) && p.indexOf('js/') === 0) {
-        resolved = path.resolve(process.cwd(), 'agents', p);
-    }
-    if (!fs.existsSync(resolved) && p.indexOf('agents/') !== 0) {
-        resolved = path.resolve(process.cwd(), 'agents', p);
-    }
-    if (!fs.existsSync(resolved)) {
+    var resolved = resolveExisting(p, function(st) { return st.isFile(); });
+    if (!resolved) {
         throw new Error('file_read: file not found: ' + p);
     }
     return fs.readFileSync(resolved, 'utf8');
+}
+
+// Java FileTools / dmtools-dart parity: JSON {"entries": [absolute paths, sorted]} for a readable
+// directory, null otherwise. Same 'agents/' fallback as file_read.
+function file_list(args) {
+    var p = args && args.path ? args.path : args;
+    var dir = resolveExisting(p, function(st) { return st.isDirectory(); });
+    if (!dir) return null;
+    return JSON.stringify({ entries: fs.readdirSync(dir).map(function(n) { return path.join(dir, n); }).sort() });
 }
 
 function loadModule(modulePath, requireFn, mocks) {
@@ -188,6 +212,34 @@ global.loadModule = loadModule;
 global.makeRequire = makeRequire;
 global.trackersMock = trackersMock;
 global.file_read = file_read;
+global.file_list = file_list;
+// Host-bridge parity: file_exists returns {exists: bool} (same 'agents/' fallback as file_read).
+global.file_exists = function(args) {
+    var p = args && args.path ? args.path : args;
+    return { exists: resolveExisting(p, function() { return true; }) !== null };
+};
+
+// cli_*: real command execution in the pack root, like the dmtools runner (tests mock it via loadModule
+// when they need to). Returns stdout (stderr merged on failure), '' for a failed command.
+global.cli_execute_command = function(args) {
+    var cmd = args && args.command ? args.command : args;
+    try {
+        return require('child_process').execSync(String(cmd), { cwd: PACK_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) {
+        return String((e.stdout || '') + (e.stderr || ''));
+    }
+};
+
+// Network guard, same contract as installNetworkGuard_ in testRunner.js: an unmocked network-backed
+// integration tool throws a recognisable error instead of a ReferenceError / a real request.
+['github_list_prs', 'github_get_pr', 'github_add_pr_comment', 'confluence_content_by_id',
+ 'confluence_content_by_title', 'jira_get_ticket', 'jira_post_comment', 'jira_search_by_jql',
+ 'ado_get_work_item', 'ado_add_work_item_comment', 'tracker_get_ticket', 'tracker_post_comment'
+].forEach(function(name) {
+    global[name] = function() {
+        throw new Error('unit-test network guard: ' + name + '() is not mocked — unit tests must not call real services');
+    };
+});
 
 global.java = { lang: { System: { getenv: function() { return null; } } } };
 
@@ -266,35 +318,34 @@ function makeDefaultConfigLoaderMock(extraConfig) {
 global.makeDefaultJiraConfig = makeDefaultJiraConfig;
 global.makeDefaultConfigLoaderMock = makeDefaultConfigLoaderMock;
 
-function main() {
-    var testFiles = process.argv.slice(2);
-    console.log('═══════════════════════════════════════════');
-    console.log('  DMTools Agent Unit Tests (Node harness)');
-    console.log('═══════════════════════════════════════════');
-
-    for (var i = 0; i < testFiles.length; i++) {
-        var filePath = testFiles[i];
-        console.log('\n📂 ' + filePath);
-        try {
-            var testCode = file_read(filePath);
-            eval(testCode);
-        } catch (e) {
-            _results_.failed++;
-            console.log('  ❌ Error in test file: ' + (e.message || e));
-        }
+function runTestFile(filePath) {
+    console.log('\n📂 ' + filePath);
+    try {
+        eval(file_read(filePath));
+    } catch (e) {
+        _results_.failed++;
+        console.log('  ❌ Error in test file: ' + (e.message || e));
     }
+}
 
+function printSummary() {
     console.log('\n═══════════════════════════════════════════');
     var status = _results_.failed === 0 ? '✅ PASS' : '❌ FAIL';
     console.log('  ' + status + '  —  ' + _results_.passed + ' passed, ' + _results_.failed + ' failed');
-    if (_results_.errors.length > 0) {
-        console.log('\n  Failed:');
-        for (var j = 0; j < _results_.errors.length; j++) {
-            console.log('    ❌ ' + _results_.errors[j].name);
-            console.log('       ' + _results_.errors[j].error);
-        }
-    }
+    if (_results_.errors.length === 0) return;
+    console.log('\n  Failed:');
+    _results_.errors.forEach(function(err) {
+        console.log('    ❌ ' + err.name);
+        console.log('       ' + err.error);
+    });
+}
 
+function main() {
+    console.log('═══════════════════════════════════════════');
+    console.log('  DMTools Agent Unit Tests (Node harness)');
+    console.log('═══════════════════════════════════════════');
+    process.argv.slice(2).forEach(runTestFile);
+    printSummary();
     process.exit(_results_.failed === 0 ? 0 : 1);
 }
 
