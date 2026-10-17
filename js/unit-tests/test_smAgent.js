@@ -991,7 +991,7 @@ suite('smAgent: arm_rework red-gate max attempts (gh-917 first validation)', fun
 
 suite('smAgent: arm_rework no-op loop guard (gh-957)', function () {
 
-    // gh-957 (epam/dmtools-agents 2026-10-19): the threads-rule arm re-armed
+    // gh-957 (epam/dmtools-agents 2026-10-17): the threads-rule arm re-armed
     // a dev leg that ran a no-op rework sweep — the leg saw 2 review threads
     // while the sweep's GraphQL reviewThreads inventory counted 64 (the
     // legacy review_comments fallback included human top-levels, so the
@@ -1032,7 +1032,7 @@ suite('smAgent: arm_rework no-op loop guard (gh-957)', function () {
         // a real leg-close marker: zero pushes, zero resolutions
         return { user: { login: 'ai-teammate' },
                  body: guard.buildLapMarker(head, 0, 0, null,
-                     '2026-10-19T0' + n + ':00:00.000Z') };
+                     '2026-10-17T0' + n + ':00:00.000Z') };
     }
 
     var HEAD = 'c957c957c957c957c957c957c957c957c957c957';
@@ -1069,7 +1069,7 @@ suite('smAgent: arm_rework no-op loop guard (gh-957)', function () {
                     lapComment(HEAD, 1), lapComment(HEAD, 2),
                     { user: { login: 'ai-teammate' },
                       body: guard.buildEscalationComment(HEAD, 2, 2,
-                          '2026-10-19T03:00:00.000Z') }
+                          '2026-10-17T03:00:00.000Z') }
                 ]
             }
         }));

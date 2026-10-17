@@ -992,6 +992,132 @@ function resolveRemainingAddressedThreads(scm, pullRequestId, addressed) {
 }
 
 /**
+ * gh-957: the audit line appended to every reply when the leg changed no
+ * code (audit-resolve) — resolution without a code change is allowed ONLY
+ * with this per-thread explanation (rework run URL when known).
+ */
+function buildAuditResolveLine(auditNoCodeChange, runUrl) {
+    if (!auditNoCodeChange) return null;
+    return '\n\n— Audit (gh-957): no code change required — this thread is already addressed on the current head' +
+        (runUrl ? (' or an invalid finding. Resolved by rework run ' + runUrl + '.') : '. (rework run URL unavailable on this runner)');
+}
+
+/**
+ * One untargeted reply's combined top-level fallback text: a single item
+ * posts as-is; several are numbered into ONE comment (anti-spam).
+ */
+function buildCombinedUntargetedComment(untargeted) {
+    if (untargeted.length === 1) return untargeted[0].text;
+    const lines = untargeted.map(function(u, i) {
+        return (i + 1) + '. ' + u.text + (u.threadId ? ' (thread ' + u.threadId + ')' : '');
+    });
+    return '✅ Addressed ' + untargeted.length + ' review comment(s) without a specific inline target:\n\n' + lines.join('\n');
+}
+
+/**
+ * The reply anchor id from whichever field the agent wrote
+ * (inReplyToId first, rootCommentId as the input-schema fallback).
+ */
+function firstPresentId(item) {
+    if (item.inReplyToId) return item.inReplyToId;
+    return item.rootCommentId || null;
+}
+
+/**
+ * The root comment id the setup-time snapshot holds for a threadId — null
+ * when the snapshot lacks the thread or its root id.
+ */
+function threadRootIdOrNull(lookup, threadId) {
+    var t = threadId ? lookup.byThread[String(threadId)] : null;
+    if (!t || t.rootCommentId === null || t.rootCommentId === undefined) return null;
+    return t.rootCommentId;
+}
+
+/**
+ * The threadId the snapshot holds for a root comment id — null when unknown.
+ */
+function fillThreadIdFromRoot(lookup, inReplyToId) {
+    if (!inReplyToId) return null;
+    var byRoot = lookup.byRoot[String(inReplyToId)];
+    return (byRoot && byRoot.threadId) ? byRoot.threadId : null;
+}
+
+/**
+ * gh-692 id enrichment: fill a missing inReplyToId from the setup-time
+ * snapshot (matched by threadId) and a missing threadId from the snapshot
+ * (matched by root id) — either id makes the reply threaded AND its thread
+ * resolvable. Mutates item.threadId when fillable; returns the anchor id.
+ */
+function enrichReplyIds(item, lookup) {
+    var inReplyToId = firstPresentId(item);
+    if (!inReplyToId && item.threadId) {
+        inReplyToId = threadRootIdOrNull(lookup, item.threadId) || inReplyToId;
+    }
+    if (!item.threadId && inReplyToId) {
+        item.threadId = fillThreadIdFromRoot(lookup, inReplyToId);
+    }
+    return inReplyToId;
+}
+
+/**
+ * The reply text: a path reference resolves to the file content, anything
+ * else posts as-is; an empty/absent ref falls back to the generic marker.
+ */
+function resolveReplyText(replyRef, outputOptions) {
+    if (!replyRef) return '✅ Addressed.';
+    const looksLikePath = replyRef.indexOf('outputs/') === 0 ||
+        replyRef.indexOf('/') !== -1 ||
+        replyRef.indexOf('.md') !== -1;
+    if (looksLikePath) {
+        const fileContent = outputFiles.readOutputFile(replyRef, outputOptions);
+        if (fileContent && fileContent.trim()) {
+            return fileContent.trim();
+        }
+    }
+    return replyRef;
+}
+
+/**
+ * Resolve one reply's thread and count the resolution for the gh-957 lap
+ * marker. No-op when the reply carries no threadId.
+ */
+function resolveReplyThread(scm, pullRequestId, thread, item, resolutions) {
+    if (!item.threadId) return;
+    try {
+        scm.resolveThread(pullRequestId, thread);
+        console.log('✅ Resolved thread', item.threadId);
+        if (resolutions) resolutions.resolved = (resolutions.resolved || 0) + 1;
+    } catch (e) {
+        console.warn('Failed to resolve thread', item.threadId + ':', e.message || e);
+    }
+}
+
+/**
+ * Post one prepared reply: an inline threaded reply when an anchor id
+ * exists, else queue it for the combined top-level fallback (anti-spam —
+ * never one generic comment per item). Resolves the thread either way.
+ */
+function postReplyAndResolve(scm, pullRequestId, item, thread, replyText, state) {
+    if (thread.rootCommentId) {
+        // Normal case: post an inline threaded reply — this appears nested
+        // inside the review conversation, not as a new top-level PR comment.
+        try {
+            scm.replyToThread(pullRequestId, thread, replyText);
+            console.log('✅ Replied to comment #' + thread.rootCommentId);
+            state.posted++;
+        } catch (e) {
+            console.warn('Failed to post reply:', e.message || e);
+        }
+    } else {
+        // No comment id available at all — a threaded reply is not possible.
+        // Queue it instead of posting a separate top-level PR comment per
+        // item, which would spam the conversation with repeated generic text.
+        state.untargeted.push({ threadId: item.threadId || null, text: replyText });
+    }
+    resolveReplyThread(scm, pullRequestId, thread, item, state.resolutions);
+}
+
+/**
  * Post replies to each review thread and resolve them.
  * Reads outputs/review_replies.json produced by the cursor agent.
  *
@@ -1036,53 +1162,26 @@ function postThreadReplies(scm, pullRequestId, outputOptions) {
         console.log('No thread replies to post');
     }
 
-    function resolveReplyText(replyRef) {
-        if (!replyRef) return '✅ Addressed.';
-        const looksLikePath = replyRef.indexOf('outputs/') === 0 ||
-            replyRef.indexOf('/') !== -1 ||
-            replyRef.indexOf('.md') !== -1;
-        if (looksLikePath) {
-            const fileContent = outputFiles.readOutputFile(replyRef, outputOptions);
-            if (fileContent && fileContent.trim()) {
-                return fileContent.trim();
-            }
-        }
-        return replyRef;
-    }
-
     let posted = 0;
     const untargeted = [];
     const addressed = { threadIds: {}, rootIds: {} };
     // gh-957: lap-accounting counter — incremented on every successful
     // resolution so the leg close can stamp an accurate lap marker.
     const resolutions = outputOptions.resolutions || null;
+    const state = { posted: 0, untargeted: untargeted, resolutions: resolutions };
     // gh-957 audit-resolve: when the leg changed no code, every reply below
     // carries the audit line (rework run URL) — resolution without a code
     // change is allowed ONLY with this per-thread explanation.
-    const auditLine = outputOptions.auditNoCodeChange
-        ? ('\n\n— Audit (gh-957): no code change required — this thread is already addressed on the current head' +
-           (outputOptions.runUrl ? (' or an invalid finding. Resolved by rework run ' + outputOptions.runUrl + '.') : '. (rework run URL unavailable on this runner)'))
-        : null;
+    const auditLine = buildAuditResolveLine(outputOptions.auditNoCodeChange, outputOptions.runUrl);
+
     replies.forEach(function(item) {
         // Accept both the documented field names (inReplyToId/reply) and the
         // input-schema field names (rootCommentId/body) — the AI agent commonly
         // mirrors field names from input/<TICKET>/pr_discussions_raw.json
-        // (which uses rootCommentId/body) instead of renaming them for output.
-        let inReplyToId = item.inReplyToId || item.rootCommentId || null;
-
-        // gh-692: fill a missing id from the setup-time snapshot so the reply can
-        // be posted inline and the thread can be resolved.
-        if (!inReplyToId && item.threadId && lookup.byThread[String(item.threadId)] &&
-            lookup.byThread[String(item.threadId)].rootCommentId !== null &&
-            lookup.byThread[String(item.threadId)].rootCommentId !== undefined) {
-            inReplyToId = lookup.byThread[String(item.threadId)].rootCommentId;
-        }
-        if (!item.threadId && inReplyToId && lookup.byRoot[String(inReplyToId)] &&
-            lookup.byRoot[String(inReplyToId)].threadId) {
-            item.threadId = lookup.byRoot[String(inReplyToId)].threadId;
-        }
-
-        const replyText = resolveReplyText(item.reply || item.body) + (auditLine || '');
+        // instead of renaming them for output. gh-692 fills either missing id
+        // from the setup-time snapshot so the reply is threaded + resolvable.
+        const inReplyToId = enrichReplyIds(item, lookup);
+        const replyText = resolveReplyText(item.reply || item.body, outputOptions) + (auditLine || '');
         const thread = { rootCommentId: inReplyToId, threadId: item.threadId || null };
 
         // Track every id this rework claims as addressed — the closure sweep
@@ -1091,45 +1190,15 @@ function postThreadReplies(scm, pullRequestId, outputOptions) {
         if (item.threadId) addressed.threadIds[String(item.threadId)] = true;
         if (inReplyToId) addressed.rootIds[String(inReplyToId)] = true;
 
-        if (inReplyToId) {
-            // Normal case: post an inline threaded reply — this appears nested
-            // inside the review conversation, not as a new top-level PR comment.
-            try {
-                scm.replyToThread(pullRequestId, thread, replyText);
-                console.log('✅ Replied to comment #' + inReplyToId);
-                posted++;
-            } catch (e) {
-                console.warn('Failed to post reply:', e.message || e);
-            }
-        } else {
-            // No comment id available at all — a threaded reply is not possible.
-            // Queue it instead of posting a separate top-level PR comment per
-            // item, which would spam the conversation with repeated generic text.
-            untargeted.push({ threadId: item.threadId || null, text: replyText });
-        }
-
-        if (item.threadId) {
-            try {
-                scm.resolveThread(pullRequestId, thread);
-                console.log('✅ Resolved thread', item.threadId);
-                if (resolutions) resolutions.resolved = (resolutions.resolved || 0) + 1;
-            } catch (e) {
-                console.warn('Failed to resolve thread', item.threadId + ':', e.message || e);
-            }
-        }
+        postReplyAndResolve(scm, pullRequestId, item, thread, replyText, state);
     });
+    posted = state.posted;
 
     if (untargeted.length > 0) {
         // Post exactly one combined top-level comment for all untargeted replies
         // instead of one generic comment per item.
-        const lines = untargeted.map(function(u, i) {
-            return (i + 1) + '. ' + u.text + (u.threadId ? ' (thread ' + u.threadId + ')' : '');
-        });
-        const combinedText = untargeted.length === 1
-            ? untargeted[0].text
-            : '✅ Addressed ' + untargeted.length + ' review comment(s) without a specific inline target:\n\n' + lines.join('\n');
         try {
-            scm.addComment(pullRequestId, combinedText);
+            scm.addComment(pullRequestId, buildCombinedUntargetedComment(untargeted));
             console.log('✅ Posted 1 combined comment for ' + untargeted.length + ' untargeted repl' + (untargeted.length === 1 ? 'y' : 'ies'));
             posted++;
         } catch (e) {
@@ -1899,5 +1968,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker };
+    module.exports = { action, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker };
 }

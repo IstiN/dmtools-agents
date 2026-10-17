@@ -434,9 +434,9 @@ function _createGithubProvider(workspace, repository) {
                 : null;
             // gh-957: the census rides the rawThreads object (the SAME
             // GraphQL reviewThreads count the SM arm rule counts) so
-            // review_state.md can state it next to the actionable list.
-            // gitOps.writePRContext only serializes .threads — the census
-            // never leaks into pr_discussions_raw.json.
+            // review_state.md can state it next to the actionable list,
+            // and gitOps.writePRContext serializes it into
+            // pr_discussions_raw.json next to the threads (AC3).
             return {
                 markdown: markdown,
                 rawThreads: rawThreads.length > 0
