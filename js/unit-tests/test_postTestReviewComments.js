@@ -507,3 +507,44 @@ suite('postTestReviewComments: recommendation normalization and final status (gh
         assert.contains(result.error, 'key');
     });
 });
+
+suite('postTestReviewComments: outer-catch error comment (gh-1011)', function() {
+
+    test('an unwrapped mid-flow error posts the ❌ error comment and removes the SM trigger label', function() {
+        var comments = [];
+        var removedLabels = [];
+        var module = loadPostTestReviewComments({
+            file_read: function(opts) {
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify({ recommendation: 'APPROVE' });
+                }
+                return null;
+            },
+            github_list_prs: function() {
+                return [{ number: 42, html_url: 'https://github.com/org/repo/pull/42', head: { ref: 'test/DMC-8' } }];
+            },
+            cli_execute_command: function() { return 'https://github.com/IstiN/trackstate'; },
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            jira_remove_label: function(args) { removedLabels.push(args.label); }
+        }, {
+            autoStart: {
+                triggerConfiguredWorkflowForTicket: function() { return { success: true }; },
+                triggerSmIfIdle: function() { throw new Error('sm idle boom'); }
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-8', fields: { summary: 'Mid-flow error' } },
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'sm idle boom', 'the original error is surfaced');
+        assert.ok(removedLabels.indexOf('sm_test_review_triggered') !== -1,
+            'the SM trigger label is removed in the catch, got: ' + JSON.stringify(removedLabels));
+        assert.ok(comments.some(function(c) {
+            return c.indexOf('❌ Test Review Error') !== -1 && c.indexOf('sm idle boom') !== -1;
+        }), 'the error comment is posted to the ticket, got: ' + JSON.stringify(comments));
+    });
+});
