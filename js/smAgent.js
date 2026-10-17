@@ -168,6 +168,7 @@ var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
 // half lives in the module; recordDispatchFailure below wires transport.
 var triggerFailuresModule = require('./common/triggerFailures.js');
 var mutexRegistryModule = require('./common/mutexRegistry.js');
+var githubSourceModule = require('./sm/sources/githubSource.js');
 // gh-922 (same-tick dedup, review): PR numbers whose dispatch failure was
 // already recorded THIS tick. The already-parked guard in
 // recordDispatchFailure reads the query-time label snapshot — within one
@@ -4103,17 +4104,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         return cli_execute_command(a);
                     });
                 // gh-1000: drain this tick's mutex events accumulated by
-                // the github-source phantom-heal scan. The require is
-                // lazy + guarded: unit tests load smAgent under
-                // makeRequire without the source module chain mapped,
-                // and a miss simply means no mutex block this tick.
-                var ghSrcForMutex = null;
-                try {
-                    ghSrcForMutex = require('./sm/sources/githubSource.js');
-                } catch (eGhSrc) { ghSrcForMutex = null; }
-                spMutex = (ghSrcForMutex &&
-                    typeof ghSrcForMutex.takeMutexTickSnapshot === 'function')
-                    ? ghSrcForMutex.takeMutexTickSnapshot() : null;
+                // the github-source phantom-heal scan (module channel —
+                // githubSource and smAgent do not share scope).
+                spMutex = (githubSourceModule &&
+                    typeof githubSourceModule.takeMutexTickSnapshot === 'function')
+                    ? githubSourceModule.takeMutexTickSnapshot() : null;
                 var spState = factoryStateModule.buildFactoryState({
                     repoInfo: spRepo,
                     prs: spPrList,

@@ -862,8 +862,13 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
                         repoInfo ? repoInfo.owner + '/' + repoInfo.repo : '', nowIso());
                     var divergent = mutexRegistryModule.reconcile(cachedSet, liveHolderSet);
                     if (divergent.selfHealed) {
-                        if (provider && typeof provider.ioCacheDrop === 'function') {
-                            try { provider.ioCacheDrop('openPrs'); } catch (e2) { /* probe-only */ }
+                        // The cache is module-level in smProvider (the
+                        // provider object is a facade) — drop via the
+                        // module, guarded for minimal test stubs.
+                        if (smProviderModule && typeof smProviderModule.ioCacheDrop === 'function') {
+                            try {
+                                smProviderModule.ioCacheDrop(repoInfo.owner, repoInfo.repo, 'openPrs', null);
+                            } catch (e2) { /* probe-only */ }
                         }
                         var alarm = divergent.alarm;
                         console.log('   ⚠️ ' + alarm.title + ' — ' + alarm.detail +
