@@ -14,10 +14,10 @@
  *   { "customParams": { "scmProvider": "gitlab", "targetRepository": { "owner": "MyOrg", "repo": "my-repo" } } }
  */
 
-// gh-808: marker-keyed classification of the machine's own arming/status
-// notices — the GitHub provider drops them from the collected discussions so
-// the rework input carries only genuine review threads.
-var machineNotice = require('./machineNotice.js');
+// gh-957: the review-thread inventory builder — GraphQL-first enumeration
+// (the SAME reviewThreads census the SM arm rule counts) enriched from the
+// conversations export, with the gh-808 machine-notice filter preserved.
+var reviewThreadInventory = require('./reviewThreadInventory.js');
 
 function _parseJson(raw) {
     if (typeof raw === 'string') {
@@ -366,124 +366,49 @@ function _createGithubProvider(workspace, repository) {
             var sections = [];
             var rawThreads = [];
 
+            // Review-thread inventory (gh-957): GraphQL-first — enumerated
+            // from the SAME reviewThreads census the SM arm rule counts,
+            // enriched per-thread from the conversations export. The
+            // conversations-first legacy path (inside the shared module) is
+            // the fallback when the GraphQL fetch fails or returns zero
+            // nodes. The block runs when EITHER source has data: a PR whose
+            // conversations export is empty/incomplete but whose GraphQL
+            // census carries open threads (the live dart #424 shape — 2
+            // conversations vs 64 GraphQL threads) must still produce the
+            // full inventory, otherwise the rework leg can never see what
+            // the armer counted and the no-op loop never converges.
+            var conversations = [];
             try {
-                var conversations = github_get_pr_conversations({
+                conversations = github_get_pr_conversations({
                     workspace: workspace, repository: repository, pullRequestId: prIdStr
-                });
-                if (conversations && conversations.length > 0) {
-                    var reviewThreadByCommentId = {};
-                    var reviewThreadResolvedById = {};
-                    try {
-                        var raw = github_get_pr_review_threads({
-                            workspace: workspace, repository: repository, pullRequestId: prIdStr
-                        });
-                        var nodes = [];
-                        if (typeof raw === 'string') {
-                            var parsed = JSON.parse(raw);
-                            nodes = (parsed.data && parsed.data.repository &&
-                                     parsed.data.repository.pullRequest &&
-                                     parsed.data.repository.pullRequest.reviewThreads &&
-                                     parsed.data.repository.pullRequest.reviewThreads.nodes) || [];
-                        } else if (Array.isArray(raw)) {
-                            nodes = raw;
-                        } else if (raw && raw.data) {
-                            nodes = (raw.data.repository && raw.data.repository.pullRequest &&
-                                     raw.data.repository.pullRequest.reviewThreads &&
-                                     raw.data.repository.pullRequest.reviewThreads.nodes) || [];
-                        }
-                        nodes.forEach(function(rt) {
-                            if (rt.id && rt.comments && rt.comments.nodes && rt.comments.nodes.length > 0) {
-                                var dbId = rt.comments.nodes[0].databaseId;
-                                if (dbId) {
-                                    reviewThreadByCommentId[dbId] = rt.id;
-                                    reviewThreadResolvedById[dbId] = rt.isResolved === true;
-                                }
-                            }
-                        });
-                        console.log('Got', nodes.length, 'review threads for GraphQL IDs');
-                    } catch (e) {
-                        console.warn('github_get_pr_review_threads failed (resolve IDs unavailable):', e.message || e);
-                    }
-
-                    var section = '## Review Threads (Inline Comments)\n\n';
-                    var noticeCount = 0;
-                    conversations.forEach(function(thread, idx) {
-                        var rootComment = thread.rootComment || thread;
-                        var replies = Array.isArray(thread.replies) ? thread.replies : [];
-                        var rootCommentId = rootComment.id || rootComment.databaseId || null;
-                        var graphqlThreadId = rootCommentId ? (reviewThreadByCommentId[rootCommentId] || null) : null;
-                        var isResolvedByGraphQL = rootCommentId ? (reviewThreadResolvedById[rootCommentId] === true) : false;
-                        var isResolved = thread.resolved === true || thread.isResolved === true || isResolvedByGraphQL;
-                        var body = (rootComment.body || '').trim();
-
-                        // gh-808: the machine's own arming/status notices are NOT review
-                        // feedback — drop them entirely (AC1: zero notice entries in
-                        // pr_discussions_raw.json) so the rework agent never spends a
-                        // reply on boilerplate. Marker-keyed (see ./machineNotice.js).
-                        if (machineNotice.isMachineNoticeBody(body)) {
-                            noticeCount++;
-                            return;
-                        }
-
-                        var threadAuthor = rootComment.user ? rootComment.user.login :
-                                           (rootComment.author ? rootComment.author.login : '');
-                        var isBot = machineNotice.isBotAuthor(threadAuthor);
-
-                        rawThreads.push({
-                            index: idx + 1,
-                            rootCommentId: thread.path ? rootCommentId : null,
-                            threadId: graphqlThreadId,
-                            path: thread.path || null,
-                            line: thread.line || thread.original_line || null,
-                            resolved: isResolved,
-                            bot: isBot,
-                            body: body
-                        });
-
-                        if (isResolved || isBot) return;
-
-                        section += '### Thread ' + (idx + 1);
-                        if (thread.path) {
-                            section += ' — `' + thread.path + '`';
-                            if (thread.line || thread.original_line) {
-                                section += ' line ' + (thread.line || thread.original_line);
-                            }
-                        }
-                        section += '\n\n';
-
-                        var author = rootComment.user ? rootComment.user.login :
-                                     (rootComment.author ? rootComment.author.login : 'unknown');
-                        var date = rootComment.created_at ? rootComment.created_at.substring(0, 10) : '';
-                        if (body) {
-                            section += '**' + author + '** (' + date + '):\n' + body + '\n\n';
-                        } else {
-                            section += '_[No comment body]_\n\n';
-                        }
-                        replies.forEach(function(reply) {
-                            var rAuthor = reply.user ? reply.user.login : 'unknown';
-                            var rDate = reply.created_at ? reply.created_at.substring(0, 10) : '';
-                            section += '> **' + rAuthor + '** (' + rDate + '): ' + (reply.body || '').trim() + '\n\n';
-                        });
-                        section += '---\n\n';
-                    });
-
-                    var resolvedCount = rawThreads.filter(function(t) { return t.resolved; }).length;
-                    var botCount = rawThreads.filter(function(t) { return !t.resolved && t.bot; }).length;
-                    var openCount = conversations.length - resolvedCount - botCount - noticeCount;
-                    var infoLines = [];
-                    if (resolvedCount > 0) infoLines.push(resolvedCount + ' resolved thread(s) excluded');
-                    if (botCount > 0) infoLines.push(botCount + ' bot-generated thread(s) excluded (informational only)');
-                    if (noticeCount > 0) infoLines.push(noticeCount + ' machine notice(s) excluded (arming/status boilerplate — never reply targets)');
-                    if (infoLines.length > 0) {
-                        section = '> ℹ️ **' + infoLines.join('; ') + '.**\n\n' + section;
-                    }
-                    sections.push(section);
-                    console.log('Discussions: ' + conversations.length + ' threads (' + openCount + ' open, ' + resolvedCount + ' resolved, ' + botCount + ' bot, ' + noticeCount + ' machine notices),',
-                        rawThreads.filter(function(t) { return t.rootCommentId; }).length + ' reply IDs,',
-                        rawThreads.filter(function(t) { return t.threadId; }).length + ' resolve IDs');
-                }
+                }) || [];
             } catch (e) {
                 console.warn('github_get_pr_conversations failed:', e.message || e);
+            }
+            var graphqlRaw = null;
+            try {
+                graphqlRaw = github_get_pr_review_threads({
+                    workspace: workspace, repository: repository, pullRequestId: prIdStr
+                });
+                console.log('Got', reviewThreadInventory.parseGraphQLNodes(graphqlRaw).length, 'review threads for GraphQL IDs');
+            } catch (e) {
+                console.warn('github_get_pr_review_threads failed (falling back to conversations-only inventory):', e.message || e);
+            }
+            try {
+                var inv = reviewThreadInventory.collectThreadInventory(conversations, graphqlRaw);
+                if (conversations.length > 0 || inv.threads.length > 0) {
+                    rawThreads = inv.threads;
+                    sections.push(inv.markdownSection);
+                    var c = inv.counts;
+                    console.log('Discussions: ' + c.total + ' threads (' + c.open + ' open, ' + c.resolved + ' resolved, ' + c.bot + ' bot, ' + c.notices + ' machine notices),',
+                        rawThreads.filter(function(t) { return t.rootCommentId; }).length + ' reply IDs,',
+                        rawThreads.filter(function(t) { return t.threadId; }).length + ' resolve IDs' +
+                        (inv.census.graphqlUnresolved !== null
+                            ? ' — GraphQL census: ' + inv.census.graphqlUnresolved + ' unresolved (arm-rule count)'
+                            : ''));
+                }
+            } catch (e) {
+                console.warn('review-thread inventory build failed:', e.message || e);
             }
 
             try {
@@ -507,7 +432,17 @@ function _createGithubProvider(workspace, repository) {
             var markdown = sections.length > 0
                 ? '# PR Discussion History\n\n_Previous review discussions for PR #' + prId + '._\n\n' + sections.join('\n')
                 : null;
-            return { markdown: markdown, rawThreads: rawThreads.length > 0 ? { threads: rawThreads } : null };
+            // gh-957: the census rides the rawThreads object (the SAME
+            // GraphQL reviewThreads count the SM arm rule counts) so
+            // review_state.md can state it next to the actionable list,
+            // and gitOps.writePRContext serializes it into
+            // pr_discussions_raw.json next to the threads (AC3).
+            return {
+                markdown: markdown,
+                rawThreads: rawThreads.length > 0
+                    ? { threads: rawThreads, census: inv ? inv.census : null }
+                    : null
+            };
         },
         getRemoteRepoInfo: function() {
             try {

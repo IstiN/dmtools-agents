@@ -316,8 +316,11 @@ function action(params) {
     try {
         configModule = loadModule('js/config.js');
         var machineNoticeModule = loadModule('js/common/machineNotice.js');
-        var scmModule = loadModule('js/common/scm.js',
+        var reviewThreadInventoryModule = loadModule('js/common/reviewThreadInventory.js',
             makeRequire({ './machineNotice.js': machineNoticeModule }));
+        var scmModule = loadModule('js/common/scm.js',
+            makeRequire({ './machineNotice.js': machineNoticeModule,
+                          './reviewThreadInventory.js': reviewThreadInventoryModule }));
         configLoaderModule = loadModule(
             'js/configLoader.js',
             makeRequire({

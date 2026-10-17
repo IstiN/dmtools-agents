@@ -58,3 +58,14 @@ flowchart TD
 ```
 
 Read PR files to understand WHAT changed. Read ticket files to understand WHY it changed and verify against requirements.
+
+## 2. Already-addressed / invalid threads (gh-957 audit-resolve)
+
+The thread list in `pr_discussions.md` / `pr_discussions_raw.json` comes from the SAME GraphQL reviewThreads census the SM armer counts (gh-957) — if it lists threads, they are really open on GitHub and each one needs exactly one reply entry in `outputs/review_replies.json`.
+
+A reply entry does NOT always imply a code commit:
+
+- **Already addressed** — verify against the current head; cite the commit/file/line that covers the finding.
+- **Invalid finding** — explain precisely why it does not apply to this code.
+
+When every open thread has a targeted reply and the pass pushed no commits, the post-action resolves the threads with an explanatory audit line (rework run URL) per thread — this is the ONLY permitted resolution-without-changes path. Partial coverage resolves NOTHING: the pass is reported blocked. Never leave an open thread without a reply entry.

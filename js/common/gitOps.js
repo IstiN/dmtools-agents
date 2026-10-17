@@ -461,6 +461,27 @@ function writeInputFile(path, content, label) {
  * @param {string|null} markdown     - discussions markdown (from githubHelpers.fetchDiscussionsAndRawData)
  * @param {Object|null} rawThreads   - raw threads with IDs (from githubHelpers.fetchDiscussionsAndRawData)
  */
+/**
+ * gh-806 AC4 + gh-957 AC3: serialize the open threads (already-resolved ones
+ * filtered out — a rework/review leg must not spend a duplicate reply pass on
+ * closed conversations) WITH the GraphQL census riding along (arm-rule
+ * unresolved count + trusted-author breakdown) — the rework leg's input and
+ * the SM arm's threads count stay the SAME source.
+ */
+function writeDiscussionsRawJson(inputFolder, rawThreads) {
+    var allThreads = (rawThreads.threads || []);
+    var openThreads = allThreads.filter(function(t) { return !!t && t.resolved !== true; });
+    if (openThreads.length !== allThreads.length) {
+        console.log('Filtered ' + (allThreads.length - openThreads.length) +
+            ' already-resolved thread(s) out of pr_discussions_raw.json (gh-806 AC4)');
+    }
+    writeInputFile(
+        inputFolder + '/pr_discussions_raw.json',
+        JSON.stringify({ threads: openThreads, census: rawThreads.census || null }, null, 2),
+        'pr_discussions_raw.json (' + openThreads.length + ' threads)'
+    );
+}
+
 function writePRContext(inputFolder, prDetails, diff, markdown, rawThreads) {
     // pr_info.md
     let prInfo = '# Pull Request Information\n\n';
@@ -492,20 +513,7 @@ function writePRContext(inputFolder, prDetails, diff, markdown, rawThreads) {
 
     // pr_discussions_raw.json
     if (rawThreads) {
-        // gh-806 AC4: threads already RESOLVED are filtered before the agent
-        // sees them — a rework/review leg reading this file must not spend a
-        // duplicate reply pass on closed conversations.
-        var allThreads = (rawThreads.threads || []);
-        var openThreads = allThreads.filter(function(t) { return !!t && t.resolved !== true; });
-        if (openThreads.length !== allThreads.length) {
-            console.log('Filtered ' + (allThreads.length - openThreads.length) +
-                ' already-resolved thread(s) out of pr_discussions_raw.json (gh-806 AC4)');
-        }
-        writeInputFile(
-            inputFolder + '/pr_discussions_raw.json',
-            JSON.stringify({ threads: openThreads }, null, 2),
-            'pr_discussions_raw.json (' + openThreads.length + ' threads)'
-        );
+        writeDiscussionsRawJson(inputFolder, rawThreads);
     }
 
     console.log('✅ PR context written to', inputFolder);
@@ -518,5 +526,6 @@ module.exports = {
     detectMergeConflicts: detectMergeConflicts,
     trimLargeTextForInput: trimLargeTextForInput,
     writeInputFile: writeInputFile,
+    writeDiscussionsRawJson: writeDiscussionsRawJson,
     writePRContext: writePRContext
 };

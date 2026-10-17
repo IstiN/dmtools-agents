@@ -399,6 +399,39 @@ suite('preCliReworkSetup.ensureInputContextContract — pinned input trio (gh-79
         assert.notContains(rs, 'requires changes', 'no blocking banner for an approved PR');
     });
 
+    test('review_state.md reviewer name resolves across export shapes (user.login / author.login / author.name / unnamed)', function() {
+        var h = makeContractHarness();
+        var scm = { listReviews: function() {
+            return [
+                { state: 'APPROVED', author: { login: 'ado-login' }, submitted_at: '2026-10-08T10:00:00Z', body: 'ok' },
+                { state: 'CHANGES_REQUESTED', author: { name: 'Ado Name' }, submitted_at: '2026-10-08T11:00:00Z', body: 'change' },
+                { state: 'APPROVED', submitted_at: '2026-10-08T12:00:00Z', body: 'fine' },
+                { state: 'CHANGES_REQUESTED', user: { login: 'gh-reviewer' }, submitted_at: '2026-10-08T13:00:00Z', body: 'final' }
+            ];
+        } };
+        h.mod.ensureInputContextContract('input/PROJ-123', scm, 7, {}, []);
+        var rs = h.files['input/PROJ-123/review_state.md'];
+        assert.contains(rs, 'gh-reviewer', 'user.login wins when present');
+        var h2 = makeContractHarness();
+        var scm2 = { listReviews: function() {
+            return [{ state: 'APPROVED', author: { login: 'ado-login' }, submitted_at: '2026-10-08T10:00:00Z', body: 'ok' }];
+        } };
+        h2.mod.ensureInputContextContract('input/PROJ-123', scm2, 7, {}, []);
+        assert.contains(h2.files['input/PROJ-123/review_state.md'], 'ado-login', 'author.login fallback');
+        var h3 = makeContractHarness();
+        var scm3 = { listReviews: function() {
+            return [{ state: 'APPROVED', author: { name: 'Ado Name' }, submitted_at: '2026-10-08T10:00:00Z', body: 'ok' }];
+        } };
+        h3.mod.ensureInputContextContract('input/PROJ-123', scm3, 7, {}, []);
+        assert.contains(h3.files['input/PROJ-123/review_state.md'], 'Ado Name', 'author.name fallback');
+        var h4 = makeContractHarness();
+        var scm4 = { listReviews: function() {
+            return [{ state: 'APPROVED', submitted_at: '2026-10-08T10:00:00Z', body: 'ok' }];
+        } };
+        h4.mod.ensureInputContextContract('input/PROJ-123', scm4, 7, {}, []);
+        assert.contains(h4.files['input/PROJ-123/review_state.md'], 'unknown', 'unnamed reviewer degrades honestly');
+    });
+
     test('SCM provider without listReviews → review_state.md still written (non-empty, verdict unavailable)', function() {
         var h = makeContractHarness();
         var written = h.mod.ensureInputContextContract('input/PROJ-123', { /* no listReviews */ }, 7, {}, []);

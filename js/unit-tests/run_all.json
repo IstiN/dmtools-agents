@@ -24,6 +24,8 @@
         "js/unit-tests/test_factoryReviewVerdict.js",
         "js/unit-tests/test_reworkLatch.js",
         "js/unit-tests/test_reworkConsumption.js",
+        "js/unit-tests/test_reviewThreadInventory.js",
+        "js/unit-tests/test_reworkLoopGuard.js",
         "js/unit-tests/test_validationLiveness.js",
         "js/unit-tests/test_checkRunZombies.js",
         "js/unit-tests/test_triggerFailures.js",

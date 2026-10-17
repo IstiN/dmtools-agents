@@ -39,7 +39,8 @@ function loadPostTestReviewComments(mocks, moduleMocks) {
                 makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
             './scm.js': { createScm: function() { return {}; } },
             './gitOps.js': {},
-            './machineNotice.js': loadModule('js/common/machineNotice.js')
+            './machineNotice.js': loadModule('js/common/machineNotice.js'),
+            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') }))
         }),
         allMocks
     );

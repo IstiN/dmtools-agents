@@ -12,6 +12,8 @@
 
 function loadGithubHelpers(mocks) {
     var machineNoticeModule = loadModule('js/common/machineNotice.js');
+    var reviewThreadInventoryModule = loadModule('js/common/reviewThreadInventory.js',
+        makeRequire({ './machineNotice.js': machineNoticeModule }));
     return loadModule(
         'js/common/githubHelpers.js',
         makeRequire({
@@ -21,7 +23,8 @@ function loadGithubHelpers(mocks) {
             // to it, so the canonical implementation must be in the map.
             './pullRequest.js': PR_HELPER_REAL_GH,
             './gitOps.js': gitOpsStub,
-            './machineNotice.js': machineNoticeModule
+            './machineNotice.js': machineNoticeModule,
+            './reviewThreadInventory.js': reviewThreadInventoryModule
         }),
         mocks || {}
     );
@@ -45,7 +48,8 @@ var gitOpsStub = {
 function loadScm(mocks) {
     return loadModule(
         'js/common/scm.js',
-        makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') }),
+        makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js'),
+            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })) }),
         mocks || {}
     );
 }

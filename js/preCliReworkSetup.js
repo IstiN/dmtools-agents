@@ -181,6 +181,87 @@ function latestConcludedReview(reviews) {
 }
 
 /**
+ * gh-957 context parity: state the SAME GraphQL reviewThreads census the
+ * SM arm rule counts (the inventory is GraphQL-sourced now, so the two can
+ * never silently disagree again). When the census differs from the
+ * actionable list, the delta is exclusion accounting — say so. Returns null
+ * when no census is available.
+ */
+function buildCensusNote(census, openCount) {
+    if (!census || typeof census.graphqlUnresolved !== 'number') return null;
+    if (census.graphqlUnresolved === openCount) {
+        return '> ℹ️ Arm-rule census: the SM armer counts the SAME ' + census.graphqlUnresolved +
+            ' unresolved review thread(s) via GraphQL reviewThreads (gh-957 — one source of truth).';
+    }
+    return '> ℹ️ Arm-rule census (gh-957): the SM armer counts ' + census.graphqlUnresolved +
+        ' unresolved review thread(s) via GraphQL reviewThreads; the actionable list below is ' +
+        openCount + ' — the delta is machine-notice/bot threads (excluded above, never reply targets).';
+}
+
+/**
+ * The reviewer login of a concluded review: user.login (GitHub export) or
+ * author.login/name (other exports) — 'unknown' when unnamed.
+ */
+function reviewAuthorOf(latest) {
+    if (latest.user && latest.user.login) return latest.user.login;
+    if (latest.author && (latest.author.login || latest.author.name)) {
+        return latest.author.login || latest.author.name;
+    }
+    return 'unknown';
+}
+
+/**
+ * The reviewer-verdict lines: the latest concluded decision (state, reviewer,
+ * submission date, first-line summary) or the honest 'no concluded review'
+ * note. Returns [] when the provider exposes no review support at all.
+ */
+function renderVerdictLines(reviews) {
+    if (reviews === null) {
+        return ['> Review verdicts are not available from this SCM provider — rely on the open threads below.', ''];
+    }
+    var latest = latestConcludedReview(reviews);
+    var lines = ['**Review decision: `' + (latest ? latest.state : 'NONE') + '`**', ''];
+    if (!latest) {
+        lines.push('No concluded review (CHANGES_REQUESTED/APPROVED) exists yet.');
+        lines.push('');
+        return lines;
+    }
+    lines.push('Latest concluded review:');
+    lines.push('');
+    lines.push('- **State**: ' + latest.state);
+    lines.push('- **Reviewer**: ' + reviewAuthorOf(latest));
+    lines.push('- **Submitted**: ' + (latest.submitted_at || 'unknown'));
+    var summary = firstLineExcerpt(latest.body);
+    if (summary) lines.push('- **Summary**: ' + summary);
+    lines.push('');
+    return lines;
+}
+
+/**
+ * One actionable open-thread bullet: id (threadId, else comment#rootId,
+ * else no-id), the path:line location, and a bounded first-line excerpt.
+ */
+function renderOpenThreadLine(t) {
+    var id = t.threadId ||
+        (t.rootCommentId !== null && t.rootCommentId !== undefined ? 'comment#' + t.rootCommentId : 'no-id');
+    var loc = t.path ? (t.path + (t.line ? ':' + t.line : '')) : '';
+    var excerpt = firstLineExcerpt(t.body, 160);
+    return '- `' + id + '`' + (loc ? ' — `' + loc + '`' : '') + (excerpt ? ' — "' + excerpt + '"' : '');
+}
+
+/**
+ * The actionable open-thread bullet list — one line per thread.
+ */
+function renderOpenThreadLines(openThreads) {
+    var lines = ['Each open thread below is blocking reviewer feedback — fix it and reply via `outputs/review_replies.json`:', ''];
+    (openThreads || []).forEach(function(t) {
+        lines.push(renderOpenThreadLine(t));
+    });
+    lines.push('');
+    return lines;
+}
+
+/**
  * Builds review_state.md — the reviewer-verdict context for the rework agent:
  * the latest concluded review decision, who asked for what, and the open
  * thread inventory with ids. Providers without review support (no
@@ -205,47 +286,23 @@ function buildReviewStateMd(scm, prNumber, discussionData) {
         }
     }
 
-    if (reviews === null) {
-        lines.push('> Review verdicts are not available from this SCM provider — rely on the open threads below.');
-        lines.push('');
-    } else {
-        var latest = latestConcludedReview(reviews);
-        lines.push('**Review decision: `' + (latest ? latest.state : 'NONE') + '`**');
-        lines.push('');
-        if (latest) {
-            lines.push('Latest concluded review:');
-            lines.push('');
-            lines.push('- **State**: ' + latest.state);
-            var author = (latest.user && latest.user.login) ||
-                (latest.author && (latest.author.login || latest.author.name)) || 'unknown';
-            lines.push('- **Reviewer**: ' + author);
-            lines.push('- **Submitted**: ' + (latest.submitted_at || 'unknown'));
-            var summary = firstLineExcerpt(latest.body);
-            if (summary) lines.push('- **Summary**: ' + summary);
-            lines.push('');
-        } else {
-            lines.push('No concluded review (CHANGES_REQUESTED/APPROVED) exists yet.');
-            lines.push('');
-        }
-    }
+    renderVerdictLines(reviews).forEach(function(l) { lines.push(l); });
 
     var rawThreads = (discussionData && discussionData.rawThreads && discussionData.rawThreads.threads) || [];
+    var census = (discussionData && discussionData.rawThreads && discussionData.rawThreads.census) || null;
     var openThreads = rawThreads.filter(function(t) {
         return !!t && t.resolved !== true && t.bot !== true;
     });
     lines.push('**Open review threads at rework start: ' + openThreads.length + '**');
+    var censusNote = buildCensusNote(census, openThreads.length);
+    if (censusNote) {
+        lines.push('');
+        lines.push(censusNote);
+        lines.push('');
+    }
     lines.push('');
     if (openThreads.length > 0) {
-        lines.push('Each open thread below is blocking reviewer feedback — fix it and reply via `outputs/review_replies.json`:');
-        lines.push('');
-        openThreads.forEach(function(t) {
-            var id = t.threadId ||
-                (t.rootCommentId !== null && t.rootCommentId !== undefined ? 'comment#' + t.rootCommentId : 'no-id');
-            var loc = t.path ? (t.path + (t.line ? ':' + t.line : '')) : '';
-            var excerpt = firstLineExcerpt(t.body, 160);
-            lines.push('- `' + id + '`' + (loc ? ' — `' + loc + '`' : '') + (excerpt ? ' — "' + excerpt + '"' : ''));
-        });
-        lines.push('');
+        renderOpenThreadLines(openThreads).forEach(function(l) { lines.push(l); });
     }
     if (reviews !== null && latestConcludedReview(reviews) &&
         latestConcludedReview(reviews).state === 'CHANGES_REQUESTED') {
