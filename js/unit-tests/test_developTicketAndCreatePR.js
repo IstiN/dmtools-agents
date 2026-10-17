@@ -1785,6 +1785,27 @@ suite('developTicketAndCreatePR > leg outcome characterization (gh-930)', functi
         assert.equal(loaded.autoStartCalls.smIdle, 1);
     });
 
+    test('autoStartReview without a config file is not started — SM kicker runs instead', function () {
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-62', 'https://github.com/acme/widgets/pull/62')
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n'
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-62', fields: { summary: 'no review config', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: { autoStartReview: true },
+            response: 'ok'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, 'https://github.com/acme/widgets/pull/62');
+        assert.equal(loaded.autoStartCalls.review.length, 0,
+            'no config file — the review workflow must not be triggered');
+        assert.equal(loaded.autoStartCalls.smIdle, 1);
+    });
+
     test('autoStartReview with a failing stale-pr_approved cleanup is skipped — SM kicker runs', function () {
         var loaded = loadForOutcomePinning({
             cli_execute_command: committedWorkGitMock('ai/TS-59', 'https://github.com/acme/widgets/pull/59'),

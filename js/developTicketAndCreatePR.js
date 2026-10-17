@@ -1240,35 +1240,44 @@ function applyDevelopmentOutcomeLabels(ctx) {
     }
 }
 
+function autoStartReviewConfigFileOf(customParams) {
+    if (!customParams || !customParams.autoStartReview) return null;
+    return customParams.autoStartReviewConfigFile || null;
+}
+
+function autoStartReviewBlockedByPrApproved(ctx, prApprovedCleaned) {
+    if (!hasPrApprovedLabel(ctx.ticket) || prApprovedCleaned) return false;
+    console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
+    return true;
+}
+
+function triggerAutoStartReview(ctx, reviewConfigFile) {
+    try {
+        return autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: ctx.ticketKey,
+            customParams: ctx.customParams,
+            config: ctx.config,
+            configFile: reviewConfigFile,
+            label: 'pr_review',
+            scm: _scm,
+            stripKeys: [
+                'removeLabel',
+                'autoStartReview',
+                'autoStartReviewConfigFile'
+            ]
+        });
+    } catch (e) {
+        console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
+        return false;
+    }
+}
+
 function maybeAutoStartReview(ctx, prApprovedCleaned) {
     // Auto-start pr_review after PR is created and ticket moved to In Review (opt-in)
-    var autoStartReview = ctx.customParams && ctx.customParams.autoStartReview;
-    var reviewConfigFile = ctx.customParams && ctx.customParams.autoStartReviewConfigFile;
-    var reviewStarted = false;
-    if (autoStartReview && reviewConfigFile) {
-        if (hasPrApprovedLabel(ctx.ticket) && !prApprovedCleaned) {
-            console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
-        } else {
-            try {
-                reviewStarted = autoStart.triggerConfiguredWorkflowForTicket({
-                    ticketKey: ctx.ticketKey,
-                    customParams: ctx.customParams,
-                    config: ctx.config,
-                    configFile: reviewConfigFile,
-                    label: 'pr_review',
-                    scm: _scm,
-                    stripKeys: [
-                        'removeLabel',
-                        'autoStartReview',
-                        'autoStartReviewConfigFile'
-                    ]
-                });
-            } catch (e) {
-                console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
-            }
-        }
-    }
-    return reviewStarted;
+    var reviewConfigFile = autoStartReviewConfigFileOf(ctx.customParams);
+    if (!reviewConfigFile) return false;
+    if (autoStartReviewBlockedByPrApproved(ctx, prApprovedCleaned)) return false;
+    return triggerAutoStartReview(ctx, reviewConfigFile);
 }
 
 function postDevelopmentTelemetry(params, ctx) {
