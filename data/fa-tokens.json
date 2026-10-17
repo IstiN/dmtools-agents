@@ -2962,6 +2962,15 @@
       "total": 96337,
       "cacheRead": 0,
       "model": "kimi-for-coding"
+    },
+    {
+      "leg": "dev",
+      "at": "2026-10-17T20:24:44Z",
+      "prompt": 102195,
+      "completion": 0,
+      "total": 102195,
+      "cacheRead": 0,
+      "model": "kimi-for-coding"
     }
   ],
   "issue-1003": [
