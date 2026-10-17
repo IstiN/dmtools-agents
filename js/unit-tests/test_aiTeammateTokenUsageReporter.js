@@ -2,10 +2,10 @@
  * Unit tests for aiTeammateTokenUsageReporter.js
  */
 
-function loadReporter(overrides) {
+function loadReporter(overrides, projectConfig) {
     var configLoaderMock = {
         loadProjectConfig: function() {
-            return { repository: { owner: 'IstiN', repo: 'trackstate' } };
+            return projectConfig !== undefined ? projectConfig : { repository: { owner: 'IstiN', repo: 'trackstate' } };
         }
     };
     var globals = Object.assign({
@@ -695,5 +695,244 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
 
         assert.equal(usageNoRequests.requests, 0);
         assert.equal(usageNoRequests.attempts[0].requestTier, '');
+    });
+
+    test('renderOnly renders HTML from an existing token usage JSON', function() {
+        var writes = {};
+        var reporter = loadReporter({
+            file_read: function(args) {
+                if (args.path === 'outputs/token_usage/ai_teammate_token_usage.json') {
+                    return JSON.stringify({
+                        summary: reporter.buildSummary([], 0),
+                        rows: []
+                    });
+                }
+                return '';
+            },
+            file_write: function(args) { writes[args.path] = args.content; }
+        });
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {
+                    workspace: 'IstiN',
+                    repository: 'trackstate',
+                    outputDir: 'outputs/token_usage',
+                    renderOnly: true
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.renderOnly, true);
+        assert.equal(result.jsonPath, 'outputs/token_usage/ai_teammate_token_usage.json');
+        assert.equal(result.htmlPath, 'outputs/token_usage/ai_teammate_token_usage.html');
+        assert.contains(writes['outputs/token_usage/ai_teammate_token_usage.html'], 'Daily Token Trend');
+        assert.equal(writes['outputs/token_usage/ai_teammate_token_usage.csv'], undefined);
+    });
+
+    test('renderOnly fails when the token usage JSON is missing or invalid', function() {
+        var writes = {};
+        var reporter = loadReporter({
+            file_read: function() { return 'not json {'; },
+            file_write: function(args) { writes[args.path] = args.content; }
+        });
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {
+                    workspace: 'IstiN',
+                    repository: 'trackstate',
+                    outputDir: 'outputs/token_usage',
+                    renderOnly: true
+                }
+            }
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Cannot render HTML: invalid token usage JSON at outputs/token_usage/ai_teammate_token_usage.json');
+        assert.equal(writes['outputs/token_usage/ai_teammate_token_usage.html'], undefined);
+    });
+
+    test('fails when workspace and repository cannot be resolved', function() {
+        var reporter = loadReporter({}, {});
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {}
+            }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'customParams.workspace and customParams.repository are required');
+    });
+
+    test('continues past a run whose log download fails and caches the error', function() {
+        var writes = {};
+        var warnings = [];
+        var originalWarn = console.warn;
+        console.warn = function(msg) { warnings.push(String(msg)); };
+        var reporter = null;
+        try {
+            reporter = loadReporter({
+                file_read: function() {
+                    return JSON.stringify({ version: 1, entries: {} });
+                },
+                file_write: function(args) { writes[args.path] = args.content; },
+                github_list_workflow_runs: function() {
+                    return JSON.stringify({ workflow_runs: [
+                        { id: 1, status: 'completed', conclusion: 'failure', run_number: 10, created_at: '2026-06-01T00:00:00Z', run_started_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:01:00Z', display_title: 'agents/pr_review.json : TS-1 : TS-1', html_url: 'https://example.test/run/1' }
+                    ] });
+                },
+                github_get_workflow_run_logs: function() {
+                    throw new Error('logs exploded');
+                }
+            });
+
+            var result = reporter.action({
+                jobParams: {
+                    customParams: {
+                        workspace: 'IstiN',
+                        repository: 'trackstate',
+                        outputDir: 'outputs/token_usage',
+                        maxPages: 1
+                    }
+                }
+            });
+
+            assert.equal(result.success, true);
+            assert.equal(result.summary.runsWithTokens, 0);
+            assert.equal(warnings.length, 1);
+            assert.contains(warnings[0], 'failed to process run 1');
+            assert.contains(warnings[0], 'logs exploded');
+            assert.contains(writes['outputs/token_usage/ai_teammate_token_usage_cache.json'], '"error": "logs exploded"');
+        } finally {
+            console.warn = originalWarn;
+        }
+    });
+
+    test('caches noUsage for runs without a token summary', function() {
+        var writes = {};
+        var logs = [];
+        var originalLog = console.log;
+        console.log = function(msg) { logs.push(String(msg)); };
+        var reporter = null;
+        try {
+            reporter = loadReporter({
+                file_read: function() {
+                    return JSON.stringify({ version: 1, entries: {} });
+                },
+                file_write: function(args) { writes[args.path] = args.content; },
+                github_list_workflow_runs: function() {
+                    return JSON.stringify({ workflow_runs: [
+                        { id: 7, status: 'completed', conclusion: 'success', run_number: 70, created_at: '2026-06-01T00:00:00Z', run_started_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:01:00Z', display_title: 'agents/pr_review.json : TS-7 : TS-7', html_url: 'https://example.test/run/7' }
+                    ] });
+                },
+                github_get_workflow_run_logs: function() {
+                    return 'just a plain log line without any token summary';
+                }
+            });
+
+            var result = reporter.action({
+                jobParams: {
+                    customParams: {
+                        workspace: 'IstiN',
+                        repository: 'trackstate',
+                        outputDir: 'outputs/token_usage',
+                        maxPages: 1,
+                        verbose: true
+                    }
+                }
+            });
+
+            assert.equal(result.success, true);
+            assert.equal(result.summary.runsWithTokens, 0);
+            assert.contains(writes['outputs/token_usage/ai_teammate_token_usage_cache.json'], '"noUsage": true');
+            assert.contains(logs.join('\n'), 'no token summary found');
+        } finally {
+            console.log = originalLog;
+        }
+    });
+
+    test('maxLogDownloads stops downloading mid-loop but keeps cached rows', function() {
+        var logDownloads = [];
+        var reporter = loadReporter({
+            file_read: function() {
+                return JSON.stringify({ version: 1, entries: {
+                    '1': { noUsage: true }
+                } });
+            },
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [
+                    { id: 1, status: 'completed', conclusion: 'success', run_number: 10, created_at: '2026-06-01T00:00:00Z', run_started_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:01:00Z', display_title: 'agents/pr_review.json : TS-1 : TS-1', html_url: 'https://example.test/run/1' },
+                    { id: 2, status: 'completed', conclusion: 'success', run_number: 11, created_at: '2026-06-01T00:02:00Z', run_started_at: '2026-06-01T00:02:00Z', updated_at: '2026-06-01T00:03:00Z', display_title: 'agents/pr_rework.json : TS-2 : TS-2', html_url: 'https://example.test/run/2' },
+                    { id: 3, status: 'completed', conclusion: 'success', run_number: 12, created_at: '2026-06-01T00:04:00Z', run_started_at: '2026-06-01T00:04:00Z', updated_at: '2026-06-01T00:05:00Z', display_title: 'agents/pr_rework.json : TS-3 : TS-3', html_url: 'https://example.test/run/3' }
+                ] });
+            },
+            github_get_workflow_run_logs: function(args) {
+                logDownloads.push(args.runId);
+                return '[INFO] CommandLineUtils - Tokens    ↑ 2k • ↓ 20 • 1k (cached) • 3 (reasoning)';
+            }
+        });
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {
+                    workspace: 'IstiN',
+                    repository: 'trackstate',
+                    outputDir: 'outputs/token_usage',
+                    maxPages: 1,
+                    maxLogDownloads: 1
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(logDownloads.length, 1);
+        assert.equal(result.summary.cache.logDownloads, 1);
+        assert.equal(result.summary.cache.stoppedByDownloadLimit, true);
+        assert.equal(result.summary.cache.hits, 1);
+        assert.equal(result.summary.runsWithTokens, 1);
+    });
+
+    test('useCache false never reads or writes the usage cache', function() {
+        var cacheReads = 0;
+        var cacheWrites = 0;
+        var reporter = loadReporter({
+            file_read: function(args) {
+                if (args.path === 'outputs/token_usage/ai_teammate_token_usage_cache.json') cacheReads += 1;
+                return '';
+            },
+            file_write: function(args) {
+                if (args.path === 'outputs/token_usage/ai_teammate_token_usage_cache.json') cacheWrites += 1;
+            },
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [
+                    { id: 2, status: 'completed', conclusion: 'success', run_number: 11, created_at: '2026-06-01T00:02:00Z', run_started_at: '2026-06-01T00:02:00Z', updated_at: '2026-06-01T00:03:00Z', display_title: 'agents/pr_rework.json : TS-2 : TS-2', html_url: 'https://example.test/run/2' }
+                ] });
+            },
+            github_get_workflow_run_logs: function() {
+                return '[INFO] CommandLineUtils - Tokens    ↑ 2k • ↓ 20 • 1k (cached) • 3 (reasoning)';
+            }
+        });
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {
+                    workspace: 'IstiN',
+                    repository: 'trackstate',
+                    outputDir: 'outputs/token_usage',
+                    maxPages: 1,
+                    useCache: false
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(cacheReads, 0);
+        assert.equal(cacheWrites, 0);
+        assert.equal(result.summary.cache.enabled, false);
+        assert.equal(result.summary.cache.path, '');
+        assert.equal(result.summary.runsWithTokens, 1);
     });
 });
