@@ -944,6 +944,50 @@ suite('pushReworkChanges.action — rework_setup_failed.md guard (#310)', functi
     });
 });
 
+suite('pushReworkChanges.action — input folder from params.inputFolderPath', function() {
+
+    // On a GitHub-tracker deployment dmtools names the input folder after the router key
+    // (input/gh-5) while the ticket key is owner/repo#5. Reading input/<ticketKey>/pr_info.md
+    // found nothing, so a finished rework was refused at push time and lost.
+    function strictFileRead(folder) {
+        return function(args) {
+            var p = args && (args.path || args);
+            if (p === folder + '/rework_setup_failed.md') throw new Error('File does not exist');
+            if (p === folder + '/pr_info.md') return '**Branch**: `bug/PROJ-123` → `develop`';
+            return null;
+        };
+    }
+
+    test('reads pr_info.md from the folder dmtools created, not from input/<ticketKey>', function() {
+        var loaded = loadPushReworkChangesForAction({ file_read: strictFileRead('input/gh-123') });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            inputFolderPath: '/home/runner/work/repo/repo/input/gh-123',
+            response: 'Conflicts resolved.'
+        });
+
+        assert.equal(result.success, true, result.error);
+        assert.equal(result.branchName, 'bug/PROJ-123');
+        assert.ok(
+            loaded.cliCommands.filter(function(c) { return c.indexOf('git push -u origin bug/PROJ-123') !== -1; }).length >= 1,
+            'the rework is pushed to the PR branch'
+        );
+    });
+
+    test('falls back to input/<ticketKey> when the runtime passes no inputFolderPath', function() {
+        var loaded = loadPushReworkChangesForAction({ file_read: strictFileRead('input/PROJ-123') });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Conflicts resolved.'
+        });
+
+        assert.equal(result.success, true, result.error);
+        assert.equal(result.branchName, 'bug/PROJ-123');
+    });
+});
+
 suite('pushReworkChanges.action — tracker provider dispatch (#414)', function() {
 
     test('github provider: ticket operations dispatch to github_* tools, jira_* stay untouched', function() {

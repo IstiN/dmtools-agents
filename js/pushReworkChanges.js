@@ -94,6 +94,24 @@ function postLapMarker(scm, prNumber, headSha, pushed, resolved) {
     }
 }
 
+// The input folder dmtools created for this run. It is not always input/<ticketKey>: on a
+// GitHub-tracker deployment the folder carries the router key (input/gh-5) while the ticket key is
+// owner/repo#5, so reading input/<ticketKey>/pr_info.md found nothing and the finished rework was
+// never pushed. dmtools hands the post-action the real folder as params.inputFolderPath (the
+// pre-CLI setup writes pr_info.md there, and postPRReviewComments.js reads it the same way); use its
+// folder name, relative to the job root like every other read here, and fall back to the ticket key
+// for runtimes that do not pass it. Set once per action() run.
+var currentInputFolderName = null;
+
+function inputFolderNameOf(inputFolderPath) {
+    var segments = String(inputFolderPath || '').replace(/[\\/]+$/, '').split(/[\\/]/);
+    return segments[segments.length - 1] || null;
+}
+
+function inputFolderFor(ticketKey) {
+    return 'input/' + (currentInputFolderName || ticketKey);
+}
+
 /**
  * Wraps feedbackLoop.resumeAgent() so an unexpected failure inside it (e.g. its own
  * mkdir/bash/run-agent.sh --continue self-invocation being blocked by a
@@ -285,7 +303,7 @@ function stripCiSkipTokens(message) {
 function hasRealCodeChanges(ticketKey, config) {
     var base = null;
     try {
-        base = String(file_read({ path: 'input/' + ticketKey + '/rework_base_head.txt' }) || '').trim();
+        base = String(file_read({ path: inputFolderFor(ticketKey) + '/rework_base_head.txt' }) || '').trim();
     } catch (e) { return null; }
     if (!/^[0-9a-f]{7,40}$/i.test(base)) return null;
     var workingDir = config && config.workingDir || null;
@@ -311,15 +329,15 @@ function commitAndPush(ticketKey, config, customParams) {
     // Do NOT trust git branch --show-current — the CLI agent may have switched branches.
     var expectedBranch = null;
     try {
-        var prInfoPath = 'input/' + ticketKey + '/pr_info.md';
+        var prInfoPath = inputFolderFor(ticketKey) + '/pr_info.md';
         var prInfo = file_read({ path: prInfoPath }) || '';
         var branchMatch = prInfo.match(/\*\*Branch\*\*:\s*`([^`]+)`/);
         if (branchMatch) expectedBranch = branchMatch[1].trim();
     } catch (e) {
-        throw new Error('Missing PR context file input/' + ticketKey + '/pr_info.md. Rework setup did not find or checkout a PR; refusing to commit or push.');
+        throw new Error('Missing PR context file ' + inputFolderFor(ticketKey) + '/pr_info.md. Rework setup did not find or checkout a PR; refusing to commit or push.');
     }
     if (!expectedBranch) {
-        throw new Error('Could not determine expected PR branch from input/' + ticketKey + '/pr_info.md; refusing to commit or push.');
+        throw new Error('Could not determine expected PR branch from ' + inputFolderFor(ticketKey) + '/pr_info.md; refusing to commit or push.');
     }
     var baseBranch = (config.git && config.git.baseBranch) || 'main';
     try {
@@ -457,7 +475,7 @@ function commitAndPush(ticketKey, config, customParams) {
  */
 function squashReworkWipCommits(cmd, ticketKey, config, workingDir) {
     try {
-        var base = String(file_read({ path: 'input/' + ticketKey + '/rework_base_head.txt' }) || '').trim();
+        var base = String(file_read({ path: inputFolderFor(ticketKey) + '/rework_base_head.txt' }) || '').trim();
         if (!/^[0-9a-f]{7,40}$/i.test(base)) return false;
         var range = base + '..HEAD';
         var merges = cleanCommandOutput(cmd('git rev-list --merges ' + range) || '').trim();
@@ -503,9 +521,9 @@ function extractCitedThreadIds(text) {
  */
 function readInputRawThreads(ticketKey, outputOptions) {
     if (!ticketKey) return [];
-    var candidates = ['input/' + ticketKey + '/pr_discussions_raw.json'];
+    var candidates = [inputFolderFor(ticketKey) + '/pr_discussions_raw.json'];
     if (outputOptions && outputOptions.workingDir) {
-        candidates.push(outputOptions.workingDir + '/input/' + ticketKey + '/pr_discussions_raw.json');
+        candidates.push(outputOptions.workingDir + '/' + inputFolderFor(ticketKey) + '/pr_discussions_raw.json');
     }
     for (var i = 0; i < candidates.length; i++) {
         try {
@@ -1411,7 +1429,7 @@ function handleFailedReworkCli(tracker, ticketKey, branchName, customParams, sta
  */
 function readReworkSetupFailure(ticketKey) {
     try {
-        var content = file_read({ path: 'input/' + ticketKey + '/rework_setup_failed.md' });
+        var content = file_read({ path: inputFolderFor(ticketKey) + '/rework_setup_failed.md' });
         return (content && content.trim()) ? content : null;
     } catch (e) {
         return null;
@@ -1437,7 +1455,7 @@ function handleReworkSetupAlreadyFailed(tracker, ticketKey, customParams, failur
         if (failureContent) {
             comment += m.code(failureContent.trim());
         } else {
-            comment += 'See ' + m.inline('input/' + ticketKey + '/rework_setup_failed.md') + ' for details.';
+            comment += 'See ' + m.inline(inputFolderFor(ticketKey) + '/rework_setup_failed.md') + ' for details.';
         }
         tracker.postComment(ticketKey, comment);
         console.log('✅ Posted rework-setup-already-failed comment to ticket:', ticketKey);
@@ -2277,6 +2295,8 @@ function action(params) {
     try {
         const actualParams = params.ticket ? params : (params.jobParams || params);
         const ticketKey = actualParams.ticket.key;
+        currentInputFolderName = inputFolderNameOf(params.inputFolderPath || actualParams.inputFolderPath ||
+            (params.jobParams && params.jobParams.inputFolderPath));
         const fixSummary = actualParams.response || '_(No fix summary generated)_';
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = scmModule.createScm(config);
