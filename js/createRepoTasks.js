@@ -10,6 +10,10 @@
  *                   [SA link] and parent acceptance criteria [parent link]
  *
  * Duplicate-safe: skips repos that already have a matching Sub-task under the parent.
+ *
+ * gh-1004: action was one 200+ line function (CRAP 180.9). The pure decisions
+ * and payload builders are extracted below so action only orchestrates; every
+ * helper is covered directly by js/unit-tests/test_createRepoTasks.js.
  */
 
 var configModule = require('./config.js');
@@ -52,6 +56,164 @@ function parseAffectedRepos(description) {
     } catch (e) {
         console.warn('Failed to parse affected_repos JSON:', e);
         return [];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pure helpers (gh-1004) — no tracker calls, unit-tested directly
+// ---------------------------------------------------------------------------
+
+function decideDuplicate(existingSummaries, repoName) {
+    return existingSummaries.some(function(s) {
+        return s.indexOf('[' + repoName + ']') !== -1;
+    });
+}
+
+function buildRepoSummary(repoName, parentSummary) {
+    // Parent summary is Jira-controlled and usually short, but a "[repo] "
+    // prefix plus a long parent summary could still exceed the 255-char
+    // hard limit — truncate defensively (see createRepoTasksMulti.js).
+    return truncateSummary('[' + repoName + '] ' + parentSummary, JIRA_SUMMARY_MAX_LENGTH);
+}
+
+function buildScopeDescription(repoName, saKey, parentKey, baseUrl) {
+    var saRef  = baseUrl ? jiraLink(saKey, baseUrl)    : saKey;
+    var parRef = baseUrl ? jiraLink(parentKey, baseUrl) : parentKey;
+    return 'Your scope only development for *' + repoName +
+           '* based on solution in ' + saRef +
+           ' and parent acceptance criteria ' + parRef;
+}
+
+function extractCreatedKey(result) {
+    try {
+        var parsed = typeof result === 'string' ? (/^[A-Za-z0-9_-]+$/.test(result) ? { key: result } : JSON.parse(result)) : result;
+        return parsed && (parsed.key || parsed.id) ? (parsed.key || parsed.id) : null;
+    } catch (e) {
+        // key extraction failed — non-critical
+        return null;
+    }
+}
+
+function buildSummaryComment(created, skipped, baseUrl) {
+    var comment = 'h3. Development Sub-tasks\n\n';
+    created.forEach(function(c) {
+        if (c.error) {
+            comment += '* ❌ ' + c.repo + ': ' + c.error + '\n';
+        } else {
+            var ref = c.key && baseUrl ? jiraLink(c.key, baseUrl) : (c.key || c.summary);
+            comment += '* ✅ ' + ref + ' — ' + c.repo + '\n';
+        }
+    });
+    if (skipped.length > 0) {
+        comment += '\n_Skipped (already exist): ' + skipped.join(', ') + '_\n';
+    }
+    return comment;
+}
+
+// ---------------------------------------------------------------------------
+// Tracker-backed helpers (gh-1004) — each failure mode is non-fatal by design
+// ---------------------------------------------------------------------------
+
+function loadExistingSummaries(tracker, parentKey) {
+    var existingSummaries = [];
+    try {
+        var existing = tracker.searchIssues(
+            // JQL text: provider-specific query (WIQL on ado)
+            'parent = ' + parentKey + ' AND issuetype = Sub-task', {
+            fields: ['summary']
+        });
+        if (Array.isArray(existing)) {
+            existing.forEach(function(t) {
+                var s = t.fields && t.fields.summary ? t.fields.summary : (t.summary || '');
+                existingSummaries.push(s);
+            });
+        }
+    } catch (e) {
+        console.warn('Could not fetch existing Sub-tasks (will create without dedup check):', e);
+    }
+    return existingSummaries;
+}
+
+function createSubTasks(tracker, repos, projectKey, parentKey, parentSummary, saKey, baseUrl, ticketLabels, existingSummaries) {
+    var created = [];
+    var skipped = [];
+    // repoName → created Jira key (for dependency linking)
+    var repoKeyMap = {};
+
+    repos.forEach(function(repo) {
+        var repoName = typeof repo === 'string' ? repo : repo.name;
+        if (!repoName) return;
+
+        var summary = buildRepoSummary(repoName, parentSummary);
+
+        // Skip if a sub-task with this repo tag already exists
+        if (decideDuplicate(existingSummaries, repoName)) {
+            console.log('Skipping ' + repoName + ' — sub-task already exists');
+            skipped.push(repoName);
+            return;
+        }
+
+        var desc = buildScopeDescription(repoName, saKey, parentKey, baseUrl);
+
+        try {
+            var result = tracker.createTicketWithParent(projectKey, 'Sub-task', summary, desc, parentKey, { labels: ticketLabels });
+
+            var createdKey = extractCreatedKey(result);
+
+            console.log('Created Sub-task ' + (createdKey || '(key unavailable)') + ': ' + summary);
+            created.push({ repo: repoName, key: createdKey, summary: summary, depends_on: repo.depends_on || [] });
+            if (createdKey) repoKeyMap[repoName] = createdKey;
+
+        } catch (e) {
+            console.error('Failed to create Sub-task for ' + repoName + ':', e);
+            created.push({ repo: repoName, key: null, error: e.toString(), depends_on: [] });
+        }
+    });
+
+    return { created: created, skipped: skipped, repoKeyMap: repoKeyMap };
+}
+
+function linkDependency(tracker, blockerKey, dependentKey, blocksRelationship) {
+    try {
+        tracker.linkIssues(blockerKey, dependentKey, blocksRelationship);
+        console.log(blockerKey + ' ' + blocksRelationship + ' ' + dependentKey);
+        return true;
+    } catch (e) {
+        console.warn('Failed to link ' + blockerKey + ' ' + blocksRelationship + ' ' + dependentKey + ':', e);
+        return false;
+    }
+}
+
+function moveToBlocked(tracker, key, blockedStatus) {
+    try {
+        tracker.moveToStatus(key, blockedStatus);
+        console.log('Moved ' + key + ' to ' + blockedStatus);
+    } catch (e) {
+        console.warn('Failed to move ' + key + ' to ' + blockedStatus + ':', e);
+    }
+}
+
+function wireDependencies(tracker, created, repoKeyMap, blocksRelationship, blockedStatus) {
+    created.forEach(function(c) {
+        if (!c.key || !Array.isArray(c.depends_on) || c.depends_on.length === 0) return;
+        var anyLinked = false;
+        c.depends_on.forEach(function(depRepo) {
+            var blockerKey = repoKeyMap[depRepo];
+            if (!blockerKey) {
+                console.warn('Cannot resolve depends_on "' + depRepo + '" for ' + c.key + ' — skipping link');
+                return;
+            }
+            if (linkDependency(tracker, blockerKey, c.key, blocksRelationship)) anyLinked = true;
+        });
+        if (anyLinked) moveToBlocked(tracker, c.key, blockedStatus);
+    });
+}
+
+function postSummaryComment(tracker, saKey, comment) {
+    try {
+        tracker.postComment(saKey, comment);
+    } catch (e) {
+        console.warn('Failed to post summary comment on ' + saKey + ':', e);
     }
 }
 
@@ -100,127 +262,24 @@ function action(params) {
         var projectKey = parentKey.split('-')[0];
 
         // Load existing Sub-tasks under the parent to avoid duplicates
-        var existingSummaries = [];
-        try {
-            var existing = tracker.searchIssues(
-                // JQL text: provider-specific query (WIQL on ado)
-                'parent = ' + parentKey + ' AND issuetype = Sub-task', {
-                fields: ['summary']
-            });
-            if (Array.isArray(existing)) {
-                existing.forEach(function(t) {
-                    var s = t.fields && t.fields.summary ? t.fields.summary : (t.summary || '');
-                    existingSummaries.push(s);
-                });
-            }
-        } catch (e) {
-            console.warn('Could not fetch existing Sub-tasks (will create without dedup check):', e);
-        }
+        var existingSummaries = loadExistingSummaries(tracker, parentKey);
 
-        var created = [];
-        var skipped = [];
-        // repoName → created Jira key (for dependency linking)
-        var repoKeyMap = {};
-
-        repos.forEach(function(repo) {
-            var repoName = typeof repo === 'string' ? repo : repo.name;
-            if (!repoName) return;
-
-            // Parent summary is Jira-controlled and usually short, but a "[repo] "
-            // prefix plus a long parent summary could still exceed the 255-char
-            // hard limit — truncate defensively (see createRepoTasksMulti.js).
-            var summary = truncateSummary('[' + repoName + '] ' + parentSummary, JIRA_SUMMARY_MAX_LENGTH);
-
-            // Skip if a sub-task with this repo tag already exists
-            var duplicate = existingSummaries.some(function(s) {
-                return s.indexOf('[' + repoName + ']') !== -1;
-            });
-            if (duplicate) {
-                console.log('Skipping ' + repoName + ' — sub-task already exists');
-                skipped.push(repoName);
-                return;
-            }
-
-            var saRef  = baseUrl ? jiraLink(saKey, baseUrl)     : saKey;
-            var parRef = baseUrl ? jiraLink(parentKey, baseUrl)  : parentKey;
-            var desc = 'Your scope only development for *' + repoName +
-                       '* based on solution in ' + saRef +
-                       ' and parent acceptance criteria ' + parRef;
-
-            try {
-                var result = tracker.createTicketWithParent(projectKey, 'Sub-task', summary, desc, parentKey, { labels: ticketLabels });
-
-                var createdKey = null;
-                try {
-                    var parsed = typeof result === 'string' ? (/^[A-Za-z0-9_-]+$/.test(result) ? { key: result } : JSON.parse(result)) : result;
-                    createdKey = parsed && (parsed.key || parsed.id) ? (parsed.key || parsed.id) : null;
-                } catch (e) { /* key extraction failed — non-critical */ }
-
-                console.log('Created Sub-task ' + (createdKey || '(key unavailable)') + ': ' + summary);
-                created.push({ repo: repoName, key: createdKey, summary: summary, depends_on: repo.depends_on || [] });
-                if (createdKey) repoKeyMap[repoName] = createdKey;
-
-            } catch (e) {
-                console.error('Failed to create Sub-task for ' + repoName + ':', e);
-                created.push({ repo: repoName, key: null, error: e.toString(), depends_on: [] });
-            }
-        });
+        var outcome = createSubTasks(tracker, repos, projectKey, parentKey, parentSummary, saKey, baseUrl, ticketLabels, existingSummaries);
 
         // Wire dependencies: blocker Blocks dependent + move dependent to Blocked status
-        created.forEach(function(c) {
-            if (!c.key || !Array.isArray(c.depends_on) || c.depends_on.length === 0) return;
-            var anyLinked = false;
-            c.depends_on.forEach(function(depRepo) {
-                var blockerKey = repoKeyMap[depRepo];
-                if (!blockerKey) {
-                    console.warn('Cannot resolve depends_on "' + depRepo + '" for ' + c.key + ' — skipping link');
-                    return;
-                }
-                try {
-                    tracker.linkIssues(blockerKey, c.key, blocksRelationship);
-                    console.log(blockerKey + ' ' + blocksRelationship + ' ' + c.key);
-                    anyLinked = true;
-                } catch (e) {
-                    console.warn('Failed to link ' + blockerKey + ' ' + blocksRelationship + ' ' + c.key + ':', e);
-                }
-            });
-            if (anyLinked) {
-                try {
-                    tracker.moveToStatus(c.key, blockedStatus);
-                    console.log('Moved ' + c.key + ' to ' + blockedStatus);
-                } catch (e) {
-                    console.warn('Failed to move ' + c.key + ' to ' + blockedStatus + ':', e);
-                }
-            }
-        });
+        wireDependencies(tracker, outcome.created, outcome.repoKeyMap, blocksRelationship, blockedStatus);
 
         // Post summary comment on the SA ticket
-        if (created.length > 0 || skipped.length > 0) {
-            try {
-                var comment = 'h3. Development Sub-tasks\n\n';
-                created.forEach(function(c) {
-                    if (c.error) {
-                        comment += '* ❌ ' + c.repo + ': ' + c.error + '\n';
-                    } else {
-                        var ref = c.key && baseUrl ? jiraLink(c.key, baseUrl) : (c.key || c.summary);
-                        comment += '* ✅ ' + ref + ' — ' + c.repo + '\n';
-                    }
-                });
-                if (skipped.length > 0) {
-                    comment += '\n_Skipped (already exist): ' + skipped.join(', ') + '_\n';
-                }
-                tracker.postComment(saKey, comment);
-            } catch (e) {
-                console.warn('Failed to post summary comment on ' + saKey + ':', e);
-            }
+        if (outcome.created.length > 0 || outcome.skipped.length > 0) {
+            postSummaryComment(tracker, saKey, buildSummaryComment(outcome.created, outcome.skipped, baseUrl));
         }
 
-        var successCount = created.filter(function(c) { return !c.error; }).length;
+        var successCount = outcome.created.filter(function(c) { return !c.error; }).length;
         return {
             success: true,
-            message: 'Created ' + successCount + ' Sub-task(s) under ' + parentKey + ', skipped ' + skipped.length,
+            message: 'Created ' + successCount + ' Sub-task(s) under ' + parentKey + ', skipped ' + outcome.skipped.length,
             created: successCount,
-            skipped: skipped.length
+            skipped: outcome.skipped.length
         };
 
     } catch (error) {
@@ -230,5 +289,17 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action: action, parseAffectedRepos: parseAffectedRepos };
+    module.exports = {
+        action: action,
+        parseAffectedRepos: parseAffectedRepos,
+        decideDuplicate: decideDuplicate,
+        buildRepoSummary: buildRepoSummary,
+        buildScopeDescription: buildScopeDescription,
+        extractCreatedKey: extractCreatedKey,
+        buildSummaryComment: buildSummaryComment,
+        loadExistingSummaries: loadExistingSummaries,
+        createSubTasks: createSubTasks,
+        wireDependencies: wireDependencies,
+        postSummaryComment: postSummaryComment
+    };
 }
