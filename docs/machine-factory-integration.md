@@ -243,6 +243,16 @@ inputs).
   red / pending) are guard-filtered and never starve the queue.
 - **In-flight dedup**: before dispatching, the engine lists workflow runs
   matching `<configFile> : <ticketKey>`; a running leg is never double-fired.
+  The stub-anchor tokens include the factory run-title shapes — `· <key>`
+  and the event-echo `#<issue>` (gh-944).
+- **Dev re-derive (gh-944)**: the `dev-on-assignment` rule is the safety net
+  for the event-driven derive — an `issues.assigned` factory run whose guard
+  derives `run=false` (a burst, a race, a lost event) would otherwise starve
+  the item. The rule matches OPEN issues assigned to the machine
+  (`assignee: '{machineAuthor}'`, no loop labels, no OPEN linked PR) and
+  dispatches `leg=dev`, limit-bounded per tick; the in-flight dedup and the
+  label guards keep it idempotent. Disable per deployment with
+  `smRuleOverrides['dev-on-assignment'].enabled = false`.
 - **Stale local locks**: `localExecution` failures recover automatically
   on the next tick (the trigger-label guard is reset).
 - **Budget**: `workflowBudget.maxWorkflows` caps concurrent dispatched
