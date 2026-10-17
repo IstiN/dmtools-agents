@@ -170,6 +170,8 @@ jobs:
           NOTES="Rolling per-function CRAP baseline used by the Quality workflow. Updated after every merge to main; not a product release. Measured at main@${GITHUB_SHA}"
           OUT="$RUNNER_TEMP/baseline-out/$BASELINE_ASSET"
           mkdir -p "$(dirname "$OUT")"
+          # Full report (every function) for the README badges; ratchet steps keep their own outputs.
+          "$CRAP" . --coverage "$RUNNER_TEMP/cov/coverage-final.json" --threshold 99999 > "$RUNNER_TEMP/crap-all.txt" || true
           if [ "${{ steps.baseline.outputs.present }}" = "true" ]; then
             cp "$RUNNER_TEMP/base/$BASELINE_ASSET" "$OUT"
             "$CRAP" . --coverage "$RUNNER_TEMP/cov/coverage-final.json" --threshold "$CRAP_THRESHOLD" \
@@ -195,6 +197,47 @@ jobs:
           # Marker the 'gate' job reads to skip runs when the baseline already covers main's HEAD.
           gh release edit "$BASELINE_TAG" --repo "$GITHUB_REPOSITORY" --notes "$NOTES"
           echo "baseline released: $(node -e "const b=require('$OUT');console.log(Object.keys(b.functions).length+' functions, max '+b.maxCrap)")" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish README badges (main only — data lives on the 'badges' branch)
+        # Dynamic shields.io endpoint badges: the numbers come from this run, the JSON lives on an
+        # orphan 'badges' branch, so nothing in the code tree changes (no PR conflicts, no bot
+        # commits on main). Cosmetic — never fails the pipeline.
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (steps.ratchet.outcome == 'success' || steps.baseline.outputs.present != 'true')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          node - <<'JS'
+          const fs = require('fs'), path = require('path');
+          const tmp = process.env.RUNNER_TEMP, thr = Number(process.env.CRAP_THRESHOLD);
+          const cov = JSON.parse(fs.readFileSync(path.join(tmp, 'cov/coverage-final.json'), 'utf8'));
+          let t = 0, h = 0;
+          for (const [f, e] of Object.entries(cov)) {
+            if (/\/(unit-tests|test)\//.test(f)) continue;       // product code only
+            for (const k in e.s) { t++; if (e.s[k] > 0) h++; }
+          }
+          const report = fs.readFileSync(path.join(tmp, 'crap-all.txt'), 'utf8');
+          const rows = report.split('\n').map((l) => l.trim().split(/\s+/)).filter((c) => c.length >= 5 && /\.(js|mjs|cjs)$/.test(c[1]) && !/\/(unit-tests|test)\//.test(c[1]) && !isNaN(parseFloat(c[c.length - 1])));
+          const scores = rows.map((c) => parseFloat(c[c.length - 1]));
+          const max = Math.max(0, ...scores), over = scores.filter((x) => x > thr).length;
+          const pct = t ? Math.round((1000 * h) / t) / 10 : 0;
+          const colorMax = max <= 12 ? 'brightgreen' : max <= 30 ? 'yellow' : max <= 200 ? 'orange' : 'red';
+          const colorOver = over === 0 ? 'brightgreen' : over <= 25 ? 'yellow' : over <= 150 ? 'orange' : 'red';
+          const colorCov = pct >= 90 ? 'brightgreen' : pct >= 80 ? 'green' : pct >= 70 ? 'yellowgreen' : pct >= 50 ? 'yellow' : 'orange';
+          const out = path.join(tmp, 'badges');
+          fs.mkdirSync(out, { recursive: true });
+          const w = (n, label, message, color) => fs.writeFileSync(path.join(out, n), JSON.stringify({ schemaVersion: 1, label, message, color }) + '\n');
+          w('crap-max.json', 'CRAP max', String(Math.round(max * 10) / 10), colorMax);
+          w('crap-over.json', `CRAP > ${thr}`, `${over} fns`, colorOver);
+          w('coverage.json', 'coverage', `${pct}%`, colorCov);
+          console.log(`badges: max=${max} over=${over} coverage=${pct}%`);
+          JS
+          cd "$RUNNER_TEMP/badges"
+          git init -q && git checkout -q -b badges
+          git config user.name 'github-actions[bot]'; git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add -A && git commit -q -m "badges: main@${GITHUB_SHA}"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
 
       - name: Label PR (crap:regression / crap:improved)
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository

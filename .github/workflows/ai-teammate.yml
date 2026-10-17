@@ -79,4 +79,11 @@ jobs:
       leg: ${{ github.event.inputs.leg || '' }}
       reason: ${{ github.event.inputs.reason || github.event_name }}
       flutter-version: ''  # JS/configs repo — dmtools & fa CLIs are prebuilt; no Flutter toolchain needed
+      # 2026-10-17 incident: GitHub's ubuntu-slim SKU started force-cancelling
+      # teammate jobs at exactly ~15m24s (6/6 legs tonight, 15:20–15:26;
+      # "The operation was canceled" from the control plane, conclusion=cancelled).
+      # Yesterday the same SKU ran legs for 24 min fine. dmtools-dart legs on
+      # ubuntu-24.04 are unaffected. Owner decision: CI checks stay on slim,
+      # ai-teammate legs move to ubuntu-latest until slim is healthy again.
+      runner: 'ubuntu-latest'
     secrets: inherit

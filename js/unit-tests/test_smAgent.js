@@ -3469,6 +3469,79 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         return it;
     }
 
+    // gh-944: the factory event-echo run titles carry "#<issue>" — the
+    // stub's own run-name shape ("teammate: issues #925", SM dispatches
+    // "teammate: workflow_dispatch #925 dev"). The stub-title token matcher
+    // knew only 'gh-<key>' anchors, so an in-flight event run (or SM leg)
+    // never suppressed a dev-on-assignment dispatch: every 10-min tick
+    // re-dispatched the leg behind the concurrency group for as long as the
+    // assignment matched.
+    var DEV_ON_ASSIGNMENT_RULE = { source: 'github',
+        query: { type: 'issue', assignee: '{machineAuthor}', noOpenPr: true },
+        workflowFile: 'ai-teammate.yml',
+        inputs: { issue: '{issueNumber}', leg: 'dev',
+                  reason: 'sm: assigned issue never picked up a dev leg (derive gap)' },
+        limit: 3, id: 'dev-on-assignment' };
+
+    test('dev-on-assignment (gh-944): the event-echo run in flight suppresses the SM dispatch', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [issueItem(925, { labels: [], prNumber: null })]
+            },
+            workflowRuns: { in_progress: [
+                // the issues-event echo of the assignment, still running:
+                { name: 'teammate: issues #925', id: 31,
+                  updated_at: new Date().toISOString() }
+            ] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [DEV_ON_ASSIGNMENT_RULE] } });
+
+        assert.equal(sm.capturedTriggers.length, 0,
+            'the "#<n>" run-title token must suppress — one dev leg per anchor, no per-tick duplicates');
+    });
+
+    test('dev-on-assignment (gh-944): an SM leg for the same anchor also suppresses (dispatch title)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [issueItem(925, { labels: [], prNumber: null })]
+            },
+            workflowRuns: { in_progress: [
+                { name: 'teammate: workflow_dispatch #925 dev', id: 32,
+                  updated_at: new Date().toISOString() }
+            ] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [DEV_ON_ASSIGNMENT_RULE] } });
+
+        assert.equal(sm.capturedTriggers.length, 0,
+            'the previously dispatched SM leg (same anchor, any leg suffix) suppresses the re-dispatch');
+    });
+
+    test('dev-on-assignment (gh-944): a neighbor key extension never suppresses (whole-token rule holds)', function () {
+        // gh-744 boundary discipline: '#925' inside '#9251' (a DIFFERENT
+        // issue) must not suppress — the token's trailing char is a key char.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [issueItem(925, { labels: [], prNumber: null })]
+            },
+            workflowRuns: { in_progress: [
+                { name: 'teammate: issues #9251', id: 33,
+                  updated_at: new Date().toISOString() },
+                { name: 'teammate: issues #1259', id: 34,
+                  updated_at: new Date().toISOString() }
+            ] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [DEV_ON_ASSIGNMENT_RULE] } });
+
+        assert.equal(sm.capturedTriggers.length, 1,
+            'neighbor numbers (#9251 / #1259) are different anchors — the dispatch fires');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.leg, 'dev');
+        assert.equal(inputs.issue, '925');
+    });
+
     var REVIEW_AFTER_DEV_RULE = { source: 'github',
         query: { type: 'issue', labels: ['ai_developed'], notLabels: ['agent:rework'],
                  notPrLabels: ['ai_pr_reviewed', 'pr_approved'], prLabels: ['ai_validated'] },

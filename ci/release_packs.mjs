@@ -113,7 +113,17 @@ function setupTouched() {
       // Engine-side factory scripts ship in the factory-setup asset too —
       // a change to any of them must re-cut the asset (awf flip depends on
       // the pack landing first).
-      f === 'scripts/apply-review-verdict.sh',
+      f === 'scripts/apply-review-verdict.sh' ||
+      f === 'scripts/close-review-cycle.sh' ||
+      f === 'scripts/close-rework-cycle.sh' ||
+      f === 'scripts/hand-issue-to-reviewer.sh' ||
+      f === 'scripts/publish-token-usage.sh' ||
+      f === 'scripts/quarantine-fa-session.sh' ||
+      f === 'scripts/restore-fa-session.sh' ||
+      f === 'scripts/persist-fa-session.sh' ||
+      f === 'scripts/persist-fa-memory.sh' ||
+      f === 'scripts/collect-fa-crash-log.sh' ||
+      f === 'scripts/fa-trace-watchdog.sh',
   );
 }
 
@@ -130,7 +140,20 @@ function buildFactorySetup() {
     // Engine-side factory scripts (awf de-bloat 2026-10-16): these carry SM
     // cycle logic, not factory-bootstrap glue — they belong to the engine
     // pack. Keep this list in sync with awf's call sites.
-    for (const engineScript of ['git-push-guard.sh', 'apply-review-verdict.sh']) {
+    for (const engineScript of [
+      'git-push-guard.sh',
+      'apply-review-verdict.sh',
+      'close-review-cycle.sh',
+      'close-rework-cycle.sh',
+      'hand-issue-to-reviewer.sh',
+      'publish-token-usage.sh',
+      'quarantine-fa-session.sh',
+      'restore-fa-session.sh',
+      'persist-fa-session.sh',
+      'persist-fa-memory.sh',
+      'collect-fa-crash-log.sh',
+      'fa-trace-watchdog.sh',
+    ]) {
       copyFileSync(join(ROOT, 'scripts', engineScript), join(staging, 'scripts', engineScript));
     }
     for (const leg of FACTORY_SETUP_LEGS) {

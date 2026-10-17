@@ -265,6 +265,15 @@ function benchDeadHeadParks(list, provider) {
     return live.length === list.length ? list : live;
 }
 
+// gh-944 dev-on-assignment guard predicate: TRUE when the query demands no
+// OPEN linked PR (`noOpenPr`) and the item still carries one — the issue is
+// post-dev and the PR lifecycle rules own it. Excluding only OPEN keeps the
+// recovery shapes eligible: a MERGED-PR issue a human reopened and a PR-less
+// issue are fresh dev handoffs.
+function hasOpenLinkedPr(q, item) {
+    return !!(q.noOpenPr && item.pr && item.pr.state === 'OPEN');
+}
+
 // `owner` (repoInfo.owner) rides through for the release-bump form of the
 // machine-authorship gate (#1104): chore/release-v* | chore(release): from
 // the repo owner counts as machine — see common/machineAuthor.js.
@@ -274,6 +283,11 @@ function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
     if (q.notLabels && q.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) {
         return false;
     }
+    // gh-944 dev-on-assignment: an issue whose linked PR is OPEN is
+    // post-dev — the PR lifecycle rules own it (validate-fresh,
+    // rework-on-red-gate-unlatched, develop-done). hasOpenLinkedPr carries
+    // the eligibility detail (MERGED-PR / PR-less stay fresh dev handoffs).
+    if (hasOpenLinkedPr(q, item)) return false;
     // 'blocked' = human hold (fa #939): the machine skips the item
     // ENTIRELY — all rules, all legs (no dispatch, no merge, no review, no
     // branch updates) — until a human removes the label. Engine-level, not
@@ -290,23 +304,29 @@ function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
     // PENDING check run on every fresh head, so "no CI yet" is either
     // 'none' or 'pending' — validate-fresh matches both.
     var rollup = function (pr) { return pr ? (pr.checkConclusion || pr.checks) : undefined; };
-    var rollupWant = function (want) {
+    // Shared string-or-list normalizer (string|string[] → string[]|null).
+    // gh-944 CI: matchesGuards is baseline-locked by the CRAP ratchet
+    // (Quality workflow) — every added guard decision must be offset. The
+    // mergeState/notMergeState sites below inlined this exact expression;
+    // routing them through the helper keeps the added noOpenPr guard
+    // complexity-neutral (baseline 93.5 → measured below it).
+    var wantList = function (want) {
         return Array.isArray(want) ? want : (want ? [want] : null);
     };
-    if (q.prChecks && rollupWant(q.prChecks).indexOf(rollup(item.pr)) === -1) return false;
+    if (q.prChecks && wantList(q.prChecks).indexOf(rollup(item.pr)) === -1) return false;
     if (q.prMergeState && (!item.pr || item.pr.mergeState !== q.prMergeState)) return false;
-    var msWant = Array.isArray(q.mergeState) ? q.mergeState : (q.mergeState ? [q.mergeState] : null);
+    var msWant = wantList(q.mergeState);
     if (msWant && (!item.pr || msWant.indexOf(item.pr.mergeState) === -1)) return false;
     // PR-carrier guards (issue #687 lifecycle rules): `checks` reads the
     // provider's check rollup (green/red/pending/none); `notMergeState`
     // excludes one state (e.g. BEHIND while a silent update lands).
-    if (q.checks && rollupWant(q.checks).indexOf(rollup(item.pr)) === -1) return false;
+    if (q.checks && wantList(q.checks).indexOf(rollup(item.pr)) === -1) return false;
     // Array form (owner FIFO rule 2026-09-22): exclude PRs in ANY of the
     // listed states — validate-armed must skip BEHIND (refresh first) AND
     // DIRTY (conflict-rework owns the oldest; a newer approved proceeds
     // while the conflicted one reworks — no wasted validation on a head
     // that can never merge).
-    var nmsWant = Array.isArray(q.notMergeState) ? q.notMergeState : (q.notMergeState ? [q.notMergeState] : null);
+    var nmsWant = wantList(q.notMergeState);
     if (nmsWant && (!item.pr || nmsWant.indexOf(item.pr.mergeState) !== -1)) return false;
     // gh-829 mergeState latch: a listed merge state matches ONLY when the
     // PR's linked issue carries the latch label(s). The gh-759
@@ -466,6 +486,26 @@ function query(rule, ctx) {
     return queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAuthor, owner);
 }
 
+// gh-944: the assignee may carry the {machineAuthor} deployment knob —
+// the dev-on-assignment rule re-derives dev legs for issues assigned to
+// THE MACHINE without hardcoding any login in the generic rule pack.
+// Resolves against the same knob every machine-keyed guard uses
+// (jobParams.machineAuthor at factory setup, config.machineAuthor per
+// repo); a comma-separated list searches its FIRST login (the harness
+// bot — the CI-bot twin never receives assignments). Fail-closed: an
+// unresolvable placeholder (no machineAuthor configured, or a knob that
+// itself carries the literal placeholder) returns null — never search
+// for a literal '{machineAuthor}'.
+function resolveAssigneeQuery(assignee, machineAuthor) {
+    if (!assignee) return null;
+    var expandedAssignee = String(assignee).replace(
+        /\{machineAuthor\}/g,
+        (machineAuthor === null || machineAuthor === undefined) ? '' : String(machineAuthor));
+    if (expandedAssignee.indexOf('{machineAuthor}') !== -1 || expandedAssignee === '') return null;
+    var assigneeLogins = machineAuthorModule.machineAuthorLogins(expandedAssignee);
+    return assigneeLogins.length > 0 ? assigneeLogins[0] : null;
+}
+
 function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAuthor, owner) {
     var q = rule.query || {};
     var full = repoInfo.owner + '/' + repoInfo.repo;
@@ -483,11 +523,15 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
     var descriptors = (q.labels || []).map(function (ml) {
         return { kind: 'label', label: ml };
     });
-    if (q.assignee) descriptors.push({ kind: 'assignee' });
+    // gh-944: the assignee may carry the {machineAuthor} deployment knob —
+    // the dev-on-assignment rule re-derives dev legs for issues assigned to
+    // THE MACHINE (resolveAssigneeQuery; fail-closed when unresolvable).
+    var assigneeQuery = resolveAssigneeQuery(q.assignee, machineAuthor);
+    if (assigneeQuery) descriptors.push({ kind: 'assignee' });
 
     var searchOne = function (d) {
         var queryStr = 'repo:' + full + ' is:issue is:open ' +
-            (d.kind === 'label' ? 'label:"' + d.label + '"' : 'assignee:' + q.assignee);
+            (d.kind === 'label' ? 'label:"' + d.label + '"' : 'assignee:' + assigneeQuery);
         var res = parseMcp(github_search_issues({ query: queryStr }));
         return { descriptor: d, items: asList(res) };
     };
@@ -495,7 +539,7 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
     var searchResults;
     if (descriptors.length > 1) {
         searchResults = smAsyncModule.map(descriptors, ISSUE_SEARCH_WORKER_SOURCE, function (d) {
-            return { repo: repoInfo, descriptor: d, assignee: q.assignee };
+            return { repo: repoInfo, descriptor: d, assignee: assigneeQuery };
         });
     } else {
         searchResults = descriptors.map(searchOne);
