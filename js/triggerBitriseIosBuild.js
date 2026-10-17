@@ -128,6 +128,16 @@ function findFeaturePrWithBranch(prs, ticketKey, defaultBranch) {
     return null;
 }
 
+function applyIosFeaturePr(result, pr) {
+    if (!pr || !pr.url) {
+        console.log('ℹ️ No open feature PR found — triggering on develop');
+    }
+    if (pr) {
+        result.branch = pr.branch || result.branch;
+        result.url = pr.url;
+    }
+}
+
 function resolveIosFeatureBranch(projectConfig, jobParams, ticketKey) {
     var featureConfig = resolveFeaturePrConfig(jobParams);
     var result = { branch: 'develop', url: '' };
@@ -137,14 +147,7 @@ function resolveIosFeatureBranch(projectConfig, jobParams, ticketKey) {
             scm: projectConfig.scm,
             repository: { owner: featureConfig.owner, repo: featureConfig.repo }
         });
-        var pr = findFeaturePrWithBranch(featureScm.listPrs('open'), ticketKey, result.branch);
-        if (!pr || !pr.url) {
-            console.log('ℹ️ No open feature PR found — triggering on develop');
-        }
-        if (pr) {
-            result.branch = pr.branch || result.branch;
-            result.url = pr.url;
-        }
+        applyIosFeaturePr(result, findFeaturePrWithBranch(featureScm.listPrs('open'), ticketKey, result.branch));
     } catch (e) {
         console.warn('⚠️ Could not search PRs:', e.message || e);
     }
@@ -265,6 +268,7 @@ if (typeof module !== 'undefined' && module.exports) {
         prViewUrl: prViewUrl,
         prMatchesTicket: prMatchesTicket,
         findFeaturePrWithBranch: findFeaturePrWithBranch,
+        applyIosFeaturePr: applyIosFeaturePr,
         resolveIosFeatureBranch: resolveIosFeatureBranch,
         buildIosEnvVars: buildIosEnvVars,
         resolveIosBuildUrl: resolveIosBuildUrl,

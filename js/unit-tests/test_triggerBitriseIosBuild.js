@@ -418,6 +418,28 @@ suite('triggerBitriseIosBuild — extracted helpers', function() {
         assert.equal(iosCalls(rec, 'createScm').length, 1);
     });
 
+    test('applyIosFeaturePr: matched PR without url keeps PR branch, logs no-PR', function() {
+        var mod = loadIosModule({ rec: makeIosRecorder() });
+        var result = { branch: 'develop', url: '' };
+        mod.applyIosFeaturePr(result, null);
+        assert.deepEqual(result, { branch: 'develop', url: '' });
+        mod.applyIosFeaturePr(result, { branch: 'ai/x', url: '' });
+        assert.deepEqual(result, { branch: 'ai/x', url: '' });
+        mod.applyIosFeaturePr(result, { branch: 'ai/y', url: 'u' });
+        assert.deepEqual(result, { branch: 'ai/y', url: 'u' });
+    });
+
+    test('resolveIosFeatureBranch: PR matched without url still carries its branch', function() {
+        var rec = makeIosRecorder();
+        var mod = loadIosModule({
+            rec: rec,
+            listPrs: function() { return [{ number: 9, title: 'IOS-90', head: { ref: 'ai/i90' } }]; }
+        });
+        assert.deepEqual(
+            mod.resolveIosFeatureBranch({}, { featurePR: { owner: 'o', repo: 'r' } }, 'IOS-90'),
+            { branch: 'ai/i90', url: '' });
+    });
+
     test('buildIosEnvVars optional PR url entry', function() {
         var mod = loadIosModule({ rec: makeIosRecorder() });
         assert.deepEqual(mod.buildIosEnvVars('K', 'br', ''), [
