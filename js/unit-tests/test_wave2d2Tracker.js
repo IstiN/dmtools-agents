@@ -237,8 +237,10 @@ suite('wave2d2 ado — postStoryTestAutomationResults', function() {
         var prHelper = loadModule('js/common/pullRequest.js', makeRequire({
             './mergeState.js': loadModule('js/common/mergeState.js'), './common/mergeState.js': loadModule('js/common/mergeState.js')
         }), rec.mocks);
+        var sharedModule = loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), rec.mocks);
         var mod = loadModule('js/postStoryTestAutomationResults.js', makeRequire({
             './configLoader.js': cfgLoader, './config.js': configModule, './common/pullRequest.js': prHelper,
+            './postStoryTestAutomationShared.js': sharedModule,
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; }, triggerSmIfIdle: function() { return { success: true }; } },
             './common/outputFiles.js': outputFiles,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
