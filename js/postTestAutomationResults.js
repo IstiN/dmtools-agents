@@ -17,6 +17,7 @@ const { GIT_CONFIG, LABELS } = require('./config.js');
 var outputFiles = require('./common/outputFiles.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var trackersModule = require('./common/trackers.js');
+var postHelpers = require('./postTestAutomationResultsHelpers.js');
 // Tracker-agnostic ticket ops; (re)created inside action() so no tracker exists at module load.
 var tracker = null;
 
@@ -308,14 +309,11 @@ function getPrMergeability(prUrl, workingDir) {
 
 function removeAutomationLabels(ticketKey, params) {
     try {
-        const wipLabel = params.metadata && params.metadata.contextId
-            ? params.metadata.contextId + '_wip'
-            : 'test_case_automation_wip';
-        tracker.removeLabel(ticketKey, wipLabel);
+        tracker.removeLabel(ticketKey, postHelpers.decideWipLabel(params.metadata));
     } catch (e) {}
 
     try {
-        const smTriggerLabel = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.removeLabel;
+        const smTriggerLabel = postHelpers.decideSmTriggerLabel(params);
         if (smTriggerLabel) {
             tracker.removeLabel(ticketKey, smTriggerLabel);
             console.log('✅ Removed SM trigger label:', smTriggerLabel);
@@ -380,10 +378,12 @@ function action(params) {
                 if (branchMissing) {
                     runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
                     runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
-                    var partialCommitMsg = configLoader.formatTemplate(
-                        config.formats.commitMessage.testAutomation,
-                        {ticketKey: ticketKey, ticketSummary: ticketSummary}
-                    ) + ' (partial — CLI interrupted)';
+                    var partialCommitMsg = postHelpers.buildPartialCommitMessage(
+                        configLoader.formatTemplate(
+                            config.formats.commitMessage.testAutomation,
+                            {ticketKey: ticketKey, ticketSummary: ticketSummary}
+                        )
+                    );
                     var gitResult = performGitOperations(branchMissing, partialCommitMsg, workingDir, testFilesPath);
                     if (gitResult.success && !gitResult.noNewCommit) {
                         partialPushed = true;
@@ -394,13 +394,7 @@ function action(params) {
                 console.warn('Could not push partial work:', e);
             }
 
-            var commentMsg = 'h3. ⚠️ Test Automation Error\n\nCLI exited without producing result JSON (likely hit rate limit or crashed).\n';
-            if (partialPushed) {
-                commentMsg += 'Partial code was pushed to the branch — next retry will continue from there.\n';
-            }
-            commentMsg += 'Ticket moved back to *Backlog* so SM can retry.';
-
-            tracker.postComment(ticketKey, commentMsg);
+            tracker.postComment(ticketKey, postHelpers.buildMissingResultComment(partialPushed));
             try {
                 tracker.moveToStatus(ticketKey, jiraConfig.statuses.BACKLOG);
                 console.log('✅ Missing result — moved', ticketKey, 'to', jiraConfig.statuses.BACKLOG);
@@ -408,7 +402,7 @@ function action(params) {
                 console.warn('Failed to move missing-result ticket to Backlog:', e);
             }
             try {
-                const smTriggerLabel = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.removeLabel;
+                const smTriggerLabel = postHelpers.decideSmTriggerLabel(params);
                 if (smTriggerLabel) {
                     tracker.removeLabel(ticketKey, smTriggerLabel);
                     console.log('✅ Removed SM trigger label after missing result:', smTriggerLabel);
@@ -417,19 +411,16 @@ function action(params) {
                 console.warn('Failed to remove SM trigger label after missing result:', e);
             }
             try {
-                const wipLabelMissingResult = params.metadata && params.metadata.contextId
-                    ? params.metadata.contextId + '_wip'
-                    : 'test_case_automation_wip';
-                tracker.removeLabel(ticketKey, wipLabelMissingResult);
+                tracker.removeLabel(ticketKey, postHelpers.decideWipLabel(params.metadata));
             } catch (e) {
                 console.warn('Failed to remove WIP label after missing result:', e);
             }
             return { success: false, error: 'No test result JSON found', partialPushed: partialPushed };
         }
 
-        const status = (result.status || '').toLowerCase();
-        const passed = status === 'passed';
-        const blockedByHuman = status === 'blocked_by_human';
+        const outcome = postHelpers.parseOutcome(result);
+        const passed = outcome.passed;
+        const blockedByHuman = outcome.blockedByHuman;
 
         // Step 2: Configure git author
         try {
@@ -463,11 +454,11 @@ function action(params) {
                     // PR creation failed — branch has code but no PR; post comment and reset to Backlog for retry
                     console.error('PR creation failed — resetting ticket to Backlog for retry');
                     try {
-                        tracker.postComment(ticketKey, 'h3. ⚠️ PR Creation Failed\n\nTest code was pushed to branch {code}' + branchName + '{code} but the Pull Request could not be created.\n\nTicket moved back to *Backlog* — will be re-processed automatically. The next run will detect the existing branch and create the PR.\n\nError: ' + (prResult.error || 'unknown'));
+                        tracker.postComment(ticketKey, postHelpers.buildPrFailureComment(branchName, prResult.error));
                         tracker.moveToStatus(ticketKey, jiraConfig.statuses.BACKLOG);
                     } catch (e) { console.warn('Could not reset to Backlog:', e); }
                     try {
-                        const smTriggerLabel = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.removeLabel;
+                        const smTriggerLabel = postHelpers.decideSmTriggerLabel(params);
                         if (smTriggerLabel) {
                             tracker.removeLabel(ticketKey, smTriggerLabel);
                             console.log('✅ Removed SM trigger label on PR failure:', smTriggerLabel);
@@ -480,13 +471,7 @@ function action(params) {
                     var mergeable = getPrMergeability(prUrl, workingDir);
                     console.log('PR mergeability after branch conflict guidance:', mergeable || '(unknown)');
                     if (mergeable === 'CONFLICTING') {
-                        var conflictComment = 'h3. 🚫 Test Automation Blocked — PR Conflicts With Main\n\n' +
-                            'The test automation branch {code}' + branchName + '{code} still conflicts with {code}' + config.git.baseBranch + '{code} after the agent run.\n\n' +
-                            '*Pull Request:* ' + prUrl + '\n\n' +
-                            'A {code}merge_conflicts.md{code} guidance file was present for this run, which means the existing test branch could not be safely auto-aligned with {code}origin/' + config.git.baseBranch + '{code}. ' +
-                            'Do not send this PR into automated review until the branch is deliberately synced with main and only ticket-specific test automation changes remain.\n\n' +
-                            'Ticket moved to *Blocked* for human conflict resolution.';
-                        try { tracker.postComment(ticketKey, conflictComment); } catch (e) {}
+                        try { tracker.postComment(ticketKey, postHelpers.buildConflictComment(branchName, config.git.baseBranch, prUrl)); } catch (e) {}
                         try {
                             tracker.moveToStatus(ticketKey, jiraConfig.statuses.BLOCKED);
                             console.log('✅ Conflicting PR — moved', ticketKey, 'to', jiraConfig.statuses.BLOCKED);
@@ -510,7 +495,7 @@ function action(params) {
                 // Git operations failed — reset to Backlog for retry
                 console.warn('Git operations failed:', gitResult.error);
                 try {
-                    tracker.postComment(ticketKey, 'h3. ⚠️ Git Operations Failed\n\nFailed to commit/push test code: ' + gitResult.error + '\n\nTicket moved back to *Backlog* — will be re-processed automatically.');
+                    tracker.postComment(ticketKey, postHelpers.buildGitFailureComment(gitResult.error));
                     tracker.moveToStatus(ticketKey, jiraConfig.statuses.BACKLOG);
                 } catch (e) { console.warn('Could not reset to Backlog:', e); }
                 try {
@@ -522,13 +507,7 @@ function action(params) {
 
         // Step 5: Post Jira comment
         try {
-            let comment = jiraComment || '';
-            if (prUrl) {
-                comment += '\n\n*Test Branch PR*: ' + prUrl;
-            }
-            if (noCodeChanges) {
-                comment += '\n\nℹ️ _Test code unchanged from previous run — PR review step skipped._';
-            }
+            let comment = postHelpers.buildFinalComment(jiraComment, prUrl, noCodeChanges);
             if (comment) {
                 tracker.postComment(ticketKey, comment);
                 console.log('✅ Posted test result comment to Jira');
@@ -541,29 +520,8 @@ function action(params) {
         // When no code changes, skip "In Review" and move directly to final status
         // (test code was already reviewed in a previous run)
         if (blockedByHuman) {
-            // Build blocked comment
-            var blockedComment = 'h3. 🚫 Test Automation Blocked — Awaiting Human Setup\n\n';
-            if (result.blocked_reason) {
-                blockedComment += result.blocked_reason + '\n\n';
-            }
-            if (result.missing && result.missing.length > 0) {
-                blockedComment += 'h4. Required setup:\n\n';
-                result.missing.forEach(function(item) {
-                    blockedComment += '* *' + (item.name || '?') + '*';
-                    if (item.description) blockedComment += ': ' + item.description;
-                    blockedComment += '\n';
-                    if (item.how_to_add) {
-                        blockedComment += '{code:bash}' + item.how_to_add + '{code}\n';
-                    }
-                });
-            }
-            if (prUrl) {
-                blockedComment += '\n*Test Branch PR* (test code is ready, skips without credentials): ' + prUrl;
-            }
-            blockedComment += '\n\nOnce setup is complete, move this ticket back to *Backlog* to trigger re-run.';
-
             try {
-                tracker.postComment(ticketKey, blockedComment);
+                tracker.postComment(ticketKey, postHelpers.buildBlockedComment(result, prUrl));
                 console.log('✅ Posted blocked comment to Jira');
             } catch (e) {
                 console.warn('Failed to post blocked comment:', e);
@@ -577,13 +535,10 @@ function action(params) {
             }
 
             // Remove WIP label
-            const wipLabelBlocked = params.metadata && params.metadata.contextId
-                ? params.metadata.contextId + '_wip'
-                : 'test_case_automation_wip';
-            try { tracker.removeLabel(ticketKey, wipLabelBlocked); } catch (e) {}
+            try { tracker.removeLabel(ticketKey, postHelpers.decideWipLabel(params.metadata)); } catch (e) {}
 
             // Remove SM trigger label so the ticket is re-processed after human fixes the issue
-            const smTriggerLabel = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.removeLabel;
+            const smTriggerLabel = postHelpers.decideSmTriggerLabel(params);
             if (smTriggerLabel) {
                 try {
                     tracker.removeLabel(ticketKey, smTriggerLabel);
@@ -597,12 +552,11 @@ function action(params) {
 
         if (passed) {
             try {
-                var passedStage = noCodeChanges ? 'PASSED' : 'IN_REVIEW_PASSED';
-                var passedStatus = noCodeChanges ? jiraConfig.statuses.PASSED : jiraConfig.statuses.IN_REVIEW_PASSED;
                 // gh-916: Passed / In Review - Passed can be tag-only (restricted ADO workflows) — stage-label fallback.
-                var passMove = tracker.moveToStatusOrMark(ticketKey, passedStatus, passedStage);
+                var passTarget = postHelpers.decideTargetStatus(true, noCodeChanges, jiraConfig.statuses);
+                var passMove = tracker.moveToStatusOrMark(ticketKey, passTarget.statusName, passTarget.stage);
                 if (passMove.moved || passMove.marked) {
-                    console.log('✅ Passed — moved', ticketKey, 'to', passedStatus);
+                    console.log('✅ Passed — moved', ticketKey, 'to', passTarget.statusName);
                 }
             } catch (e) {
                 console.warn('Failed to move to Passed:', e);
@@ -610,12 +564,11 @@ function action(params) {
         } else {
             // Bug creation is handled by the bug_creation agent when TC reaches Failed status
             try {
-                var failedStage = noCodeChanges ? 'FAILED' : 'IN_REVIEW_FAILED';
-                var failedStatus = noCodeChanges ? jiraConfig.statuses.FAILED : jiraConfig.statuses.IN_REVIEW_FAILED;
                 // gh-916: Failed / In Review - Failed can be tag-only (restricted ADO workflows) — stage-label fallback.
-                var failMove = tracker.moveToStatusOrMark(ticketKey, failedStatus, failedStage);
+                var failTarget = postHelpers.decideTargetStatus(false, noCodeChanges, jiraConfig.statuses);
+                var failMove = tracker.moveToStatusOrMark(ticketKey, failTarget.statusName, failTarget.stage);
                 if (failMove.moved || failMove.marked) {
-                    console.log('✅ Failed — moved', ticketKey, 'to', failedStatus);
+                    console.log('✅ Failed — moved', ticketKey, 'to', failTarget.statusName);
                 }
             } catch (e) {
                 console.warn('Failed to move to Failed:', e);
@@ -636,18 +589,15 @@ function action(params) {
         }
 
         // Step 8: Remove WIP label
-        const wipLabel = params.metadata && params.metadata.contextId
-            ? params.metadata.contextId + '_wip'
-            : 'test_case_automation_wip';
         try {
-            tracker.removeLabel(ticketKey, wipLabel);
+            tracker.removeLabel(ticketKey, postHelpers.decideWipLabel(params.metadata));
         } catch (e) {
             console.warn('Failed to remove WIP label:', e);
         }
 
         // Step 9: Always remove SM trigger label so the TC can be re-triggered
         // by adding the label again (re-run after pass, re-run after fix, etc.)
-        const smTriggerLabel = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.removeLabel;
+        const smTriggerLabel = postHelpers.decideSmTriggerLabel(params);
         if (smTriggerLabel) {
             try {
                 tracker.removeLabel(ticketKey, smTriggerLabel);
@@ -675,10 +625,10 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in postTestAutomationResults:', error);
         try {
-            tracker.postComment(params.ticket.key, 'h3. ❌ Test Automation Error\n\n{code}' + error.toString() + '{code}');
+            tracker.postComment(params.ticket.key, postHelpers.buildErrorComment(error));
         } catch (e) {}
         try {
-            const smTriggerLabel = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.removeLabel;
+            const smTriggerLabel = postHelpers.decideSmTriggerLabel(params);
             if (smTriggerLabel) {
                 tracker.removeLabel(params.ticket.key, smTriggerLabel);
                 console.log('✅ Removed SM trigger label on error:', smTriggerLabel);

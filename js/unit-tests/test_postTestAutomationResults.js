@@ -392,3 +392,421 @@ suite('postTestAutomationResults: tracker layer (ADO)', function() {
         assert.ok(tools.indexOf('ado_add_work_item_comment') >= 0);
     });
 });
+
+suite('postTestAutomationResults: PR creation failure', function() {
+
+    test('resets ticket to Backlog when PR creation fails after a successful push', function() {
+        var comments = [];
+        var statuses = [];
+        var removedLabels = [];
+        var module = loadPostTestAutomation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') {
+                    return JSON.stringify({ status: 'passed', summary: 'Tests written' });
+                }
+                if (opts.path === 'outputs/pr_body.md') return 'PR body';
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            jira_post_comment: function(args) {
+                comments.push(args.comment);
+            },
+            jira_move_to_status: function(args) {
+                statuses.push(args.statusName);
+            },
+            jira_remove_label: function(args) {
+                removedLabels.push(args.label);
+            },
+            cli_execute_command: function(opts) {
+                var command = opts.command;
+                if (command === 'git branch --show-current') return 'test/DMC-910';
+                if (command === 'git status --short -- testing') return '?? testing/tests/DMC-910/test_dmc_910.py';
+                if (command === 'git diff --cached --stat') return ' testing/tests/DMC-910/test_dmc_910.py | 1 +';
+                if (command.indexOf('git ls-remote --heads origin test/DMC-910') === 0) {
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/DMC-910';
+                }
+                if (command.indexOf('gh pr list --head test/DMC-910') === 0) return '';
+                if (command.indexOf('gh pr create') === 0) throw new Error('gh: repository not found');
+                return '';
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-910', fields: { summary: 'Automate test case' } },
+            jobParams: { customParams: { removeLabel: 'sm_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'PR creation failed');
+        assert.ok(statuses.indexOf('Backlog') !== -1, 'moved back to Backlog for retry');
+        assert.ok(removedLabels.indexOf('sm_test_automation_triggered') !== -1, 'removed SM trigger label');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0], '⚠️ PR Creation Failed');
+        assert.contains(comments[0], '{code}test/DMC-910{code}');
+        assert.contains(comments[0], 'Error: Error: gh: repository not found');
+    });
+
+});
+
+suite('postTestAutomationResults: git operations failure', function() {
+
+    test('resets ticket to Backlog and removes trigger label when git add fails', function() {
+        var comments = [];
+        var statuses = [];
+        var removedLabels = [];
+        var module = loadPostTestAutomation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') {
+                    return JSON.stringify({ status: 'passed', summary: 'Tests written' });
+                }
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            jira_post_comment: function(args) {
+                comments.push(args.comment);
+            },
+            jira_move_to_status: function(args) {
+                statuses.push(args.statusName);
+            },
+            jira_remove_label: function(args) {
+                removedLabels.push(args.label);
+            },
+            cli_execute_command: function(opts) {
+                var command = opts.command;
+                if (command === 'git branch --show-current') return 'test/DMC-911';
+                if (command === 'git status --short -- testing') return '?? testing/tests/DMC-911/test.py';
+                if (command.indexOf('git add ') === 0) throw new Error('index.lock present');
+                return '';
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-911', fields: { summary: 'Automate test case' } },
+            jobParams: { customParams: { removeLabel: 'sm_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Git operations failed');
+        assert.ok(statuses.indexOf('Backlog') !== -1, 'moved back to Backlog for retry');
+        assert.ok(removedLabels.indexOf('sm_test_automation_triggered') !== -1, 'removed hardcoded SM trigger label');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0], '⚠️ Git Operations Failed');
+        assert.contains(comments[0], 'index.lock present');
+    });
+
+});
+
+suite('postTestAutomationResults: blocked_by_human outcome', function() {
+
+    test('posts setup requirements, moves to Blocked and removes labels (no code changes)', function() {
+        var comments = [];
+        var statuses = [];
+        var removedLabels = [];
+        var module = loadPostTestAutomation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') {
+                    return JSON.stringify({
+                        status: 'blocked_by_human',
+                        blocked_reason: 'BrowserStack credentials expired',
+                        missing: [
+                            { name: 'BROWSERSTACK_USER', description: 'Account user', how_to_add: 'echo export BROWSERSTACK_USER=...' },
+                            { name: 'BROWSERSTACK_KEY' }
+                        ]
+                    });
+                }
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            jira_post_comment: function(args) {
+                comments.push(args.comment);
+            },
+            jira_move_to_status: function(args) {
+                statuses.push(args.statusName);
+            },
+            jira_remove_label: function(args) {
+                removedLabels.push(args.label);
+            },
+            cli_execute_command: function(opts) {
+                var command = opts.command;
+                if (command === 'git branch --show-current') return 'test/DMC-912';
+                if (command === 'git status --short -- testing') return '';
+                if (command === 'git diff --cached --stat') return '';
+                if (command.indexOf('git ls-remote --heads origin test/DMC-912') === 0) {
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/DMC-912';
+                }
+                return '';
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-912', fields: { summary: 'Automate test case' } },
+            metadata: { contextId: 'test_case_automation' },
+            jobParams: { customParams: { removeLabel: 'sm_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.status, 'blocked_by_human');
+        assert.equal(result.prUrl, null);
+        assert.ok(statuses.indexOf('Blocked') !== -1, 'moved to Blocked');
+        assert.ok(removedLabels.indexOf('test_case_automation_wip') !== -1, 'removed WIP label');
+        assert.ok(removedLabels.indexOf('sm_test_automation_triggered') !== -1, 'removed SM trigger label');
+        assert.equal(comments.length, 2, 'step-5 status comment plus the blocked comment');
+        assert.contains(comments[0], 'Test code unchanged from previous run');
+        assert.contains(comments[1], '🚫 Test Automation Blocked — Awaiting Human Setup');
+        assert.contains(comments[1], 'BrowserStack credentials expired');
+        assert.contains(comments[1], 'h4. Required setup:');
+        assert.contains(comments[1], '* *BROWSERSTACK_USER*: Account user');
+        assert.contains(comments[1], '{code:bash}echo export BROWSERSTACK_USER=...{code}');
+        assert.contains(comments[1], '* *BROWSERSTACK_KEY*');
+        assert.contains(comments[1], 'move this ticket back to *Backlog* to trigger re-run');
+        assert.notContains(comments[1], 'Test Branch PR');
+    });
+
+});
+
+suite('postTestAutomationResults: passed first run with review autostart', function() {
+
+    test('moves to In Review - Passed and triggers the configured review workflow', function() {
+        var comments = [];
+        var statuses = [];
+        var addedLabels = [];
+        var reviewTriggers = [];
+        var smIdleTriggers = [];
+        var module = loadPostTestAutomation({
+            _autoStart: {
+                triggerConfiguredWorkflowForTicket: function(options) {
+                    reviewTriggers.push(options);
+                    return true;
+                },
+                triggerSmIfIdle: function() {
+                    smIdleTriggers.push(1);
+                    return { success: true };
+                }
+            },
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') {
+                    return JSON.stringify({ status: 'passed', summary: 'All green' });
+                }
+                if (opts.path === 'outputs/jira_comment.md') return 'h3. Result\n\n*Status:* PASSED';
+                if (opts.path === 'outputs/pr_body.md') return 'PR body';
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            jira_post_comment: function(args) {
+                comments.push(args.comment);
+            },
+            jira_move_to_status: function(args) {
+                statuses.push(args.statusName);
+            },
+            jira_add_label: function(args) {
+                addedLabels.push(args.label);
+            },
+            cli_execute_command: function(opts) {
+                var command = opts.command;
+                if (command === 'git branch --show-current') return 'test/DMC-913';
+                if (command === 'git status --short -- testing') return '?? testing/tests/DMC-913/test.py';
+                if (command === 'git diff --cached --stat') return ' testing/tests/DMC-913/test.py | 1 +';
+                if (command.indexOf('git ls-remote --heads origin test/DMC-913') === 0) {
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/DMC-913';
+                }
+                if (command.indexOf('gh pr list --head test/DMC-913') === 0) return '';
+                if (command.indexOf('gh pr create') === 0) return 'https://github.com/example-org/example.repo/pull/913';
+                return '';
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-913', fields: { summary: 'Automate test case' } },
+            metadata: { contextId: 'test_case_automation' },
+            jobParams: {
+                customParams: {
+                    removeLabel: 'sm_test_automation_triggered',
+                    autoStartReview: true,
+                    autoStartReviewConfigFile: 'pr_test_automation_review.json'
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, 'https://github.com/example-org/example.repo/pull/913');
+        assert.ok(statuses.indexOf('In Review - Passed') !== -1, 'moved to In Review - Passed on first run');
+        assert.equal(reviewTriggers.length, 1, 'review workflow triggered exactly once');
+        assert.equal(reviewTriggers[0].label, 'pr_test_automation_review');
+        assert.equal(reviewTriggers[0].configFile, 'pr_test_automation_review.json');
+        assert.equal(reviewTriggers[0].ticketKey, 'DMC-913');
+        assert.equal(smIdleTriggers.length, 0, 'SM idle trigger skipped when review started');
+        assert.ok(addedLabels.indexOf('ai_test_automation') !== -1, 'added AI test automation label');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0], '*Test Branch PR*: https://github.com/example-org/example.repo/pull/913');
+        assert.notContains(comments[0], 'Test code unchanged from previous run');
+    });
+
+});
+
+suite('postTestAutomationResults: missing result edge cases', function() {
+
+    test('pushes partial work when result JSON is missing but the branch has staged changes', function() {
+        var comments = [];
+        var statuses = [];
+        var commands = [];
+        var module = loadPostTestAutomation({
+            file_read: function(opts) {
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            jira_post_comment: function(args) {
+                comments.push(args.comment);
+            },
+            jira_move_to_status: function(args) {
+                statuses.push(args.statusName);
+            },
+            cli_execute_command: function(opts) {
+                var command = opts.command;
+                commands.push(command);
+                if (command === 'git branch --show-current') return 'test/DMC-914';
+                if (command === 'git status --short -- testing') return '?? testing/tests/DMC-914/test.py';
+                if (command === 'git diff --cached --stat') return ' testing/tests/DMC-914/test.py | 1 +';
+                if (command.indexOf('git ls-remote --heads origin test/DMC-914') === 0) {
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/DMC-914';
+                }
+                return '';
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-914', fields: { summary: 'CLI crashed mid-run' } },
+            jobParams: { customParams: { removeLabel: 'sm_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'No test result JSON found');
+        assert.equal(result.partialPushed, true, 'partial work was pushed');
+        assert.ok(commands.some(function(command) { return command.indexOf('git commit') === 0; }), 'partial work committed');
+        assert.ok(statuses.indexOf('Backlog') !== -1, 'moved to Backlog for retry');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0], 'Partial code was pushed to the branch');
+    });
+
+    test('treats a result JSON belonging to another ticket as stale and retries', function() {
+        var comments = [];
+        var statuses = [];
+        var module = loadPostTestAutomation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') {
+                    return JSON.stringify({ status: 'passed', ticketKey: 'DMC-000' });
+                }
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            jira_post_comment: function(args) {
+                comments.push(args.comment);
+            },
+            jira_move_to_status: function(args) {
+                statuses.push(args.statusName);
+            },
+            cli_execute_command: function() { return ''; }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-915', fields: { summary: 'Stale result file' } },
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'No test result JSON found');
+        assert.ok(statuses.indexOf('Backlog') !== -1, 'stale result treated as missing — moved to Backlog');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0], 'Ticket moved back to *Backlog*');
+    });
+
+    test('treats an unparseable result JSON as missing and retries', function() {
+        var statuses = [];
+        var module = loadPostTestAutomation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') return 'not-json{{{';
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            jira_move_to_status: function(args) {
+                statuses.push(args.statusName);
+            },
+            cli_execute_command: function() { return ''; }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-916', fields: { summary: 'Corrupt result file' } },
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'No test result JSON found');
+        assert.ok(statuses.indexOf('Backlog') !== -1, 'corrupt result treated as missing — moved to Backlog');
+    });
+
+});
+
+suite('postTestAutomationResults: error catch path', function() {
+
+    test('returns failure and posts error comment when in-try tracker creation fails', function() {
+        var postComments = [];
+        var removedLabels = [];
+        var createCalls = 0;
+        var module = loadPostTestAutomation({
+            _trackers: {
+                createTracker: function() {
+                    createCalls++;
+                    if (createCalls === 1) {
+                        return {
+                            postComment: function(key, comment) {
+                                postComments.push({ key: key, comment: comment });
+                            },
+                            removeLabel: function(key, label) {
+                                removedLabels.push(label);
+                            }
+                        };
+                    }
+                    throw new Error('config tracker blew up');
+                }
+            },
+            file_read: function() { return null; },
+            cli_execute_command: function() { return ''; }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-917', fields: { summary: 'Config broken' } },
+            jobParams: { customParams: { removeLabel: 'sm_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'config tracker blew up');
+        assert.equal(postComments.length, 1, 'error comment posted via the early tracker');
+        assert.equal(postComments[0].key, 'DMC-917');
+        assert.contains(postComments[0].comment, '❌ Test Automation Error');
+        assert.contains(postComments[0].comment, 'config tracker blew up');
+    });
+
+    test('lets the entry tracker creation error propagate (early tracker is outside the try)', function() {
+        var module = loadPostTestAutomation({
+            _trackers: {
+                createTracker: function() {
+                    throw new Error('no tracker provider configured');
+                }
+            },
+            file_read: function() { return null; },
+            cli_execute_command: function() { return ''; }
+        });
+
+        var threw = false;
+        try {
+            module.action({
+                ticket: { key: 'DMC-917', fields: { summary: 'Config broken' } },
+                jobParams: { customParams: {} }
+            });
+        } catch (e) {
+            threw = true;
+            assert.contains(String(e), 'no tracker provider configured');
+        }
+        assert.ok(threw, 'action propagates the entry tracker creation error');
+    });
+
+});
