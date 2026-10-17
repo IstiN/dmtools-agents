@@ -1179,6 +1179,54 @@ suite('factoryState — reworkInFlight (gh-806 latch persistence)', function () 
   });
 });
 
+// ── gh-998: zombiesSwept — the leak-rate counter rides the snapshot (I5) ────
+// Live fa #1563 (head f3d58647): a leaked in_progress placeholder pinned the
+// gate 40+ min with 58 green siblings. The sweper heals such zombies
+// (js/common/checkRunZombies.js + js/smAgent.js); the counter must be
+// visible in the factory-state payload so operators see the leak rate, not
+// just the fix.
+
+suite('factoryState — zombiesSwept (gh-998 leak-rate metric)', function () {
+  var T0 = '2026-10-17T19:00:00.000Z';
+
+  function baseInput(extra) {
+    var input = {
+      repoInfo: { owner: 'acme', repo: 'factory' },
+      prs: [], mergedPrs: [], issues: [], runs: [],
+      now: T0
+    };
+    if (extra) {
+      Object.keys(extra).forEach(function (k) { input[k] = extra[k]; });
+    }
+    return input;
+  }
+
+  test('stable shape: 0 when the sweeper never fired and no prev carries', function () {
+    var state = fsModule.buildFactoryState(baseInput({}));
+    assert.equal(state.zombiesSwept, 0);
+  });
+
+  test('this tick\u2019s sweep count lands in the payload', function () {
+    var state = fsModule.buildFactoryState(baseInput({ zombiesSwept: 2 }));
+    assert.equal(state.zombiesSwept, 2);
+  });
+
+  test('the counter is CUMULATIVE across snapshots (prev + this tick)', function () {
+    var prev = { lanes: {}, zombiesSwept: 5 };
+    var state = fsModule.buildFactoryState(baseInput({ prev: prev, zombiesSwept: 3 }));
+    assert.equal(state.zombiesSwept, 8, 'operators see the leak rate, not just the last tick');
+  });
+
+  test('a malformed carry restarts at this tick\u2019s count (no NaN poisoning)', function () {
+    var prev = { lanes: {}, zombiesSwept: 'bogus' };
+    var state = fsModule.buildFactoryState(baseInput({ prev: prev, zombiesSwept: 1 }));
+    assert.equal(state.zombiesSwept, 1);
+    var prevNaN = { lanes: {}, zombiesSwept: NaN };
+    var stateNaN = fsModule.buildFactoryState(baseInput({ prev: prevNaN }));
+    assert.equal(stateNaN.zombiesSwept, 0);
+  });
+});
+
 // ── gh-816 — merge-lane citation integrity ───────────────────────────────────
 // The lane cite is the discharge evidence watchers and audits read. Two
 // integrity rules (gh-816):

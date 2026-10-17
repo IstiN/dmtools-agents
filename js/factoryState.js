@@ -960,6 +960,16 @@ function buildFactoryState(input) {
             workflowFile: input.legWorkflow
         }).map;
 
+    // gh-998 (I5): the zombie-swept leak counter — cumulative across
+    // snapshots so operators see the leak rate, not just the fix. Always
+    // present (0 when the sweeper never fired or the carry is absent) so
+    // snapshots keep a stable shape; a malformed carry restarts at this
+    // tick's count rather than NaN-poisoning the payload.
+    var prevSwept = (input.prev && typeof input.prev.zombiesSwept === 'number' &&
+                     !isNaN(input.prev.zombiesSwept)) ? input.prev.zombiesSwept : 0;
+    var tickSwept = (typeof input.zombiesSwept === 'number' && !isNaN(input.zombiesSwept))
+        ? input.zombiesSwept : 0;
+
     var state = {
         schema: 2,
         factory: input.factory || (input.repoInfo && input.repoInfo.repo) || 'unknown',
@@ -971,6 +981,7 @@ function buildFactoryState(input) {
         },
         checks: checkNames,
         reworkInFlight: reworkInFlight,
+        zombiesSwept: prevSwept + tickSwept,
         lanes: lanes,
         counts: LANE_ORDER.reduce(function (m, l) {
             m[l] = (lanes[l] || []).length; return m;
