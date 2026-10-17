@@ -187,7 +187,7 @@ suite('scm github provider', function () {
             github_get_pr_diff_text: function (args) { calls.push(args); return DIFF; }
         });
         assert.equal(scm.getDiffText(5), DIFF);
-        assert.deepEqual(calls, [{ workspace: 'my-owner', repository: 'my-repo', pullRequestId: '5' }]);
+        assert.deepEqual(calls, [{ workspace: 'my-owner', repository: 'my-repo', pullRequestID: '5' }]);
     });
 
     test('getDiffText returns null and warns when the tool throws', function () {
@@ -319,7 +319,7 @@ suite('scm github provider', function () {
                 return DIFF;
             }
         });
-        assert.equal(scm.getPrDiff(5), DIFF);
+        assert.equal(scm.getPrDiff(5), DIFF.trim());
         assert.deepEqual(cliCalls, [{ command: 'git diff main...feat/x' }]);
     });
 

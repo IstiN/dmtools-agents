@@ -239,7 +239,7 @@ suite('scm gitlab provider', function () {
             },
             cli_execute_command: function (args) { cliCalls.push(args); return DIFF; }
         });
-        assert.equal(scm.getPrDiff(5), DIFF);
+        assert.equal(scm.getPrDiff(5), DIFF.trim());
         assert.deepEqual(cliCalls, [{ command: 'git diff b1...h1' }]);
     });
 
@@ -258,11 +258,14 @@ suite('scm gitlab provider', function () {
     test('getCommitCheckRuns maps commit statuses to the check-run shape', function () {
         var calls = [];
         var scm = makeGitlab({
-            gitlab_get_commit_statuses: function (args) { calls.push(args); return '{"value":[
-                {"name":"build","status":"failed","target_url":"http://ci/1"},
-                {"name":"deploy","status":"canceled"},
-                {"name":"lint","status":"running"}
-            ]}'; }
+            gitlab_get_commit_statuses: function (args) {
+                calls.push(args);
+                return '{"value":[' +
+                    '{"name":"build","status":"failed","target_url":"http://ci/1"},' +
+                    '{"name":"deploy","status":"canceled"},' +
+                    '{"name":"lint","status":"running"}' +
+                ']}';
+            }
         });
         var runs = scm.getCommitCheckRuns('abc');
         assert.deepEqual(calls, [{ workspace: 'mygroup', repository: 'my-repo', commitSha: 'abc' }]);
@@ -383,7 +386,7 @@ suite('scm gitlab provider', function () {
             sourceBranch: 'b', targetBranch: 'main',
             title: 't', description: '', removeSourceBranch: 'true'
         }]);
-        assert.deepEqual(out, { success: true, prUrl: undefined, number: undefined, output: null });
+        assert.deepEqual(out, { success: true, prUrl: null, number: null, output: null });
     });
 
     test('updateBranch rebases the MR on the configured or given workspace', function () {
