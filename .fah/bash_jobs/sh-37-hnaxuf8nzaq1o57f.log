@@ -1,0 +1,29 @@
+js/unit-tests/run_all.json:22:        "js/unit-tests/test_factoryState.js",
+js/unit-tests/run_all.json:23:        "js/unit-tests/test_factoryTokenUsage.js",
+js/unit-tests/run_all.json:24:        "js/unit-tests/test_factoryTokenUsageIssue889.js",
+js/unit-tests/run_all.json:25:        "js/unit-tests/test_factoryMarkJobDone.js",
+js/unit-tests/run_all.json:26:        "js/unit-tests/test_factoryReviewVerdict.js",
+js/unit-tests/run_all.json:35:        "js/unit-tests/test_factoryBoardSteps.js",
+js/unit-tests/run_all.json:36:        "js/unit-tests/test_factoryFlow.js",
+js/unit-tests/run_all.json:37:        "js/unit-tests/test_factoryBoardApp.js",
+js/unit-tests/run_factoryBoardApp.json:7:        "js/unit-tests/test_factoryBoardApp.js"
+js/unit-tests/run_factoryBoardSteps.json:7:        "js/unit-tests/test_factoryBoardSteps.js"
+---
+parity_factoryMarkJobDone.js
+parity_factoryReviewVerdict.js
+run_factoryBoardApp.json
+run_factoryBoardSteps.json
+run_factoryFlow.json
+run_factoryMarkJobDone.json
+run_factoryReviewVerdict.json
+run_factoryState.json
+run_factoryTokenUsage.json
+run_factoryTokenUsageIssue889.json
+test_factoryBoardApp.js
+test_factoryBoardSteps.js
+test_factoryFlow.js
+test_factoryMarkJobDone.js
+test_factoryReviewVerdict.js
+test_factoryState.js
+test_factoryTokenUsage.js
+test_factoryTokenUsageIssue889.js

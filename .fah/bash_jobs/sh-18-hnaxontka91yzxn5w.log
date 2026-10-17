@@ -1,0 +1,4 @@
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.

@@ -1,0 +1,5 @@
+225:        // Match by basename (e.g. './config.js' → 'config.js' → 'config')
+251: * Default jira section for configLoader mocks — mirrors config.js STATUSES/ISSUE_TYPES.
+317:        configModule = loadModule('js/config.js');
+327:                './config.js': configModule, 'config': configModule,
+333:        console.log('  ❌ Failed to load base modules: ' + (e.message || e));

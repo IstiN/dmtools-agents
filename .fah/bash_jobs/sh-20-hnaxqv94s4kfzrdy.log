@@ -1,0 +1,34 @@
+interactive rebase in progress; onto d888eee6
+Last command done (1 command done):
+   pick 622d0241 # fix(sm): recognize dmtools-factory-bot as a machine author (app-migration fall-out)
+Next commands to do (2 remaining commands):
+   pick 599c245b # fix(sm): config fallback matches the stub input exactly (add github-actions[bot])
+   pick 7bbda248 # chore(site): move factory board to the dmtools-factory repo
+  (use "git rebase --edit-todo" to view and edit)
+You are currently rebasing branch 'main' on 'd888eee6'.
+  (fix conflicts and then run "git rebase --continue")
+  (use "git rebase --skip" to skip this patch)
+  (use "git rebase --abort" to check out the original branch)
+
+Unmerged paths:
+  (use "git restore --staged <file>..." to unstage)
+  (use "git add <file>..." to mark resolution)
+	both modified:   .dmtools/config.js
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	.fah/bash_jobs/
+
+no changes added to commit (use "git add" and/or "git commit -a")
+---
+d888eee6 gh-990 rework-loop-escalated false-positive jams the whole queue's validate-armed pointer (2nd live instance) (#993)
+be374aa8 fix(sm): recognize dmtools-factory-bot as a machine author (#988)
+7e052d72 gh-980 [CRAP] retryMergePR.action (190) + machineSmAgent.action (117): merge-retry and SM entry points (#989)
+85379554 gh-979 [CRAP] postMobileTestAutomationResults: action (265) + updateFeaturePRBody (110) (#987)
+cc67c313 gh-981 [CRAP] scm.js providers: _createGithubProvider (185) + _createGitLabProvider (180) + postTestReworkResults.stageUnmergedPaths (175) (#986)
+cab0c4b1 gh-978 [CRAP] writeSolutionAndDiagrams.action (266): split solution write-out and diagram handling (#985)
+988e9398 gh-977 [CRAP] aiTeammateTokenUsageReporter.action (285): split usage collection, formatting and posting (#984)
+7b68eb03 test(runner): node harness parity with dmtools, cwd-independent; hermetic dart test; blocking harness in quality.yml (#968)
+---
+stash@{0}: WIP on main: 7bbda248 chore(site): move factory board to the dmtools-factory repo
+stash@{1}: WIP on main: c2b150b5 Merge pull request #797 from IstiN/fix/ado-tools-now-exist

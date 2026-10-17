@@ -1,0 +1,8 @@
+/Users/uladzimir_klyshevich/.dmtools/bin/dmtools
+═══════════════════════════════════════════
+  DMTools Agent Unit Tests
+═══════════════════════════════════════════
+  Network guard: 382 integration tools stubbed
+Calling tool file_read with args: {"path":"js/config.js"}
+  ❌ Failed to load base modules: loadModule: cannot read file: js/config.js
+{"success":false}

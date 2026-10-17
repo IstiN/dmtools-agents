@@ -1,0 +1,21 @@
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0118825Z [36;1m"$RUNNER_TEMP/tools/node_modules/.bin/nyc" instrument --cwd . . \[0m
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0119037Z [36;1m  "$RUNNER_TEMP/inst"[0m
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0119256Z [36;1m# nyc instrument copies only .js — add the json/md/sh payloads the[0m
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0119509Z [36;1m# suite reads (configs, instructions, prompts, fixtures).[0m
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0119756Z [36;1mrsync -a --exclude '*.js' --exclude '.git' ./ "$RUNNER_TEMP/inst/"[0m
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0120054Z [36;1m# Source-level guards read site/ browser scripts as TEXT (they are never executed by the[0m
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0120387Z [36;1m# suite): restore the pristine app.js so the counters nyc injected do not break them.[0m
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0120684Z [36;1mcp site/factory/app.js "$RUNNER_TEMP/inst/site/factory/app.js"[0m
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0120959Z [36;1m# Tests call `git ls-files` (agentDocsCoverage): give the copied tree a throwaway[0m
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0121268Z [36;1m# index of the same tracked files, without the real history.[0m
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0121525Z [36;1m(cd "$RUNNER_TEMP/inst" && git init -q && git add -A -f . >/dev/null 2>&1 || true)[0m
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0176591Z shell: /usr/bin/bash -e {0}
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0176750Z env:
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0176865Z   CRAP_THRESHOLD: 8
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0176987Z   CRAP4JS_REPO: IstiN/crap4js
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0177149Z   CRAP4JS_REF: 83ee6201e554a91d51c298f045c5c4cb47317b6d
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0177325Z   BASELINE_TAG: crap-baseline
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0177585Z   BASELINE_ASSET: crap-baseline.json
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:26.0177733Z ##[endgroup]
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:33.7657056Z cp: cannot stat 'site/factory/app.js': No such file or directory
+crap	Instrument the tree (harness eval-loads bypass nyc's hook)	2026-10-17T18:33:33.7681982Z ##[error]Process completed with exit code 1.
