@@ -466,16 +466,24 @@ function _prStateGuardFail(q, item) {
     return false;
 }
 
+function _prSideBlockedLabel(prLs) {
+    // 'blocked' on the PR side of an issue-carrier item freezes it too.
+    return prLs.indexOf('blocked') !== -1;
+}
+
+function _prLabelMatchGuardsFail(q, prLs) {
+    if (q.prLabels && !_labelListMatch(q.prLabels, prLs)) return true;
+    if (q.notPrLabels && _labelListMatch(q.notPrLabels, prLs)) return true;
+    return false;
+}
+
 function _prLabelGuardsFail(q, item) {
     // PR-side label guards (issue-anchored rules): the machine loop pins
     // ai_pr_reviewed and agent:review on the PR while the rule's type is
     // issue — match/not-match reads the linked PR's labels.
     var prLs = (item.pr && item.pr.labels) || [];
-    // 'blocked' on the PR side of an issue-carrier item freezes it too.
-    if (prLs.indexOf('blocked') !== -1) return true;
-    if (q.prLabels && !_labelListMatch(q.prLabels, prLs)) return true;
-    if (q.notPrLabels && _labelListMatch(q.notPrLabels, prLs)) return true;
-    return false;
+    if (_prSideBlockedLabel(prLs)) return true;
+    return _prLabelMatchGuardsFail(q, prLs);
 }
 
 function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
@@ -926,7 +934,10 @@ function _sortAndSlicePrCandidates(matched, limit, priorityLabels, repoInfo) {
         matched.sort(_priorityRankCompare);
         _logPriorityPremption(matched, limit);
     } else {
-        matched.sort(_fifoCompare);
+        // Single-candidate lists stay FIFO by PR number (the anonymous
+        // comparator form matches the pre-split code — a named helper here
+        // would be a never-invoked function under the CRAP ratchet).
+        matched.sort(function (a, b) { return (a.prNumber || 0) - (b.prNumber || 0); });
     }
     // gh-922 (fail-open dispatch): return the limit slots PLUS a small
     // fallthrough reserve. The engine loop gives failed candidates no
