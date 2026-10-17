@@ -1607,5 +1607,16 @@
       "cacheRead": 4316416,
       "model": "kimi-for-coding"
     }
+  ],
+  "pr-956": [
+    {
+      "leg": "rework",
+      "at": "2026-10-17T10:19:20Z",
+      "prompt": 93713,
+      "completion": 32214,
+      "total": 125927,
+      "cacheRead": 5500160,
+      "model": "kimi-for-coding"
+    }
   ]
 }
