@@ -2586,3 +2586,167 @@ suite('sm github source: trigger fail-open overfetch (gh-922)', function () {
             'no branch-existence oracle → no benching (a blind tick never strands a candidate)');
     });
 });
+
+suite('sm github source: dev-on-assignment re-derive (gh-944)', function () {
+    // gh-944 (night operation 2026-10-17): six issues assigned in one burst
+    // → six `issues`-event factory runs, all derived run=false within a
+    // minute — and the SM rule pack had NO dev re-derive rule, so the items
+    // starved for 3.5 h until an operator explicit-dispatched leg=dev
+    // (00:52Z tick: processed: 0). The derive itself lives in the factory
+    // gate (awf repo); the engine-side safety net is an SM rule that
+    // re-derives dev legs for assigned-but-never-started issues (ticket
+    // acceptance (b): "documented one-per-tick draining with SM re-derive").
+    // The machine login is a deployment knob, never a pack constant: the
+    // rule carries the {machineAuthor} placeholder and the source resolves
+    // it against the same resolveMachineAuthor knob every other
+    // machine-keyed guard uses.
+
+    var devStub = {
+        findPr: function (n) { return devStub._prs[n] || null; },
+        prStatus: function (n) { return devStub._status[n] || null; },
+        _prs: {},
+        _status: {}
+    };
+
+    function devLoad(tools, prs, statuses) {
+        devStub._prs = prs || {};
+        devStub._status = statuses || {};
+        var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
+            './common/smProvider.js': {
+                createSmProvider: function () { return devStub; }
+            }
+        }), tools || {});
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': {
+                createSmProvider: function () { return devStub; }
+            },
+            '../../common/smAsync.js': smAsyncMod
+        }), tools);
+    }
+
+    test('{machineAuthor} placeholder in query.assignee resolves to the deployment knob', function () {
+        var queries = [];
+        var srcMod = devLoad({
+            github_search_issues: function (args) {
+                queries.push(args.query);
+                if (args.query.indexOf('assignee:ai-teammate') !== -1) {
+                    return { items: [{ number: 925, labels: [] }] };
+                }
+                return { items: [] };
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'issue', assignee: '{machineAuthor}' }
+        }, { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: 'ai-teammate' });
+
+        assert.equal(queries.length, 1, 'one assignee search descriptor');
+        assert.equal(queries[0].indexOf('assignee:ai-teammate') !== -1, true,
+            'the placeholder expanded to the resolved machine login, not the literal {machineAuthor}');
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['gh-925']);
+    });
+
+    test('a comma-separated machineAuthor list searches its FIRST login', function () {
+        var queries = [];
+        var srcMod = devLoad({
+            github_search_issues: function (args) {
+                queries.push(args.query);
+                return { items: [] };
+            }
+        });
+        srcMod.query({
+            query: { type: 'issue', assignee: '{machineAuthor}' }
+        }, { repoInfo: { owner: 'a', repo: 'b' },
+             machineAuthor: 'ai-teammate,github-actions[bot]' });
+
+        assert.equal(queries[0].indexOf('assignee:ai-teammate') !== -1, true,
+            'the primary (harness) login drives the search — the CI-bot twin never receives assignments');
+    });
+
+    test('fail-closed: no machineAuthor configured → the assignee scan never runs', function () {
+        var queries = [];
+        var srcMod = devLoad({
+            github_search_issues: function (args) {
+                queries.push(args.query);
+                return { items: [{ number: 925, labels: [] }] };
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'issue', assignee: '{machineAuthor}' }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+
+        assert.equal(queries.length, 0,
+            'an unresolvable placeholder must not search for a literal "{machineAuthor}" assignee');
+        assert.equal(items.length, 0, 'the rule matches nothing (fail-closed, like prMachineAuthor)');
+    });
+
+    test('fail-closed: a machineAuthor that IS the literal placeholder never searches for it', function () {
+        // Edge of the resolution contract (pr-945 rework): a misconfigured
+        // knob ('{machineAuthor}' as the literal login) must survive the
+        // expansion WITHOUT re-introducing the placeholder — the descriptor
+        // is dropped, the search never runs for a literal '{machineAuthor}'.
+        var queries = [];
+        var srcMod = devLoad({
+            github_search_issues: function (args) {
+                queries.push(args.query);
+                return { items: [] };
+            }
+        });
+        srcMod.query({
+            query: { type: 'issue', assignee: '{machineAuthor}' }
+        }, { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: '{machineAuthor}' });
+
+        assert.equal(queries.length, 0,
+            'a placeholder-valued knob must not produce an assignee search descriptor');
+    });
+
+    test('noOpenPr guard: an issue with an OPEN linked PR is post-dev and never re-derived (2+ PR states)', function () {
+        // A dev leg already produced PRs for these issues: OPEN must exclude
+        // (the loop owns the item via the PR lifecycle rules), while MERGED
+        // (issue reopened) and no-PR stay eligible — a merged-PR issue that
+        // a human reopened is exactly a fresh dev handoff.
+        var srcMod = devLoad({
+            github_search_issues: function () {
+                return { items: [
+                    { number: 401, labels: [] },
+                    { number: 402, labels: [] },
+                    { number: 403, labels: [] }
+                ] };
+            }
+        }, {
+            401: { number: 500, state: 'OPEN' },
+            402: { number: 501, state: 'MERGED' }
+        }, {
+            500: { number: 500, state: 'OPEN', checks: 'green', mergeState: 'CLEAN' }
+        });
+        var items = srcMod.query({
+            query: { type: 'issue', assignee: 'ai-teammate', noOpenPr: true }
+        }, { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: 'ai-teammate' });
+
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['gh-402', 'gh-403'],
+            'OPEN linked PR excluded; MERGED-PR and PR-less issues stay eligible');
+    });
+
+    test('dev-on-assignment rule exists in sm_github.json (the SM safety net)', function () {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.rules || (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules)) || [];
+        var r = rules.filter(function (x) { return x.id === 'dev-on-assignment'; })[0];
+        assert.ok(r, 'dev-on-assignment present');
+        assert.equal(r.source, 'github', 'github carrier');
+        assert.equal(r.query.type, 'issue', 'issue-carrier query');
+        assert.equal(r.query.assignee, '{machineAuthor}',
+            'the machine login is a deployment knob (resolved by the source), never a pack constant');
+        assert.equal(r.query.noOpenPr, true,
+            'issues the dev leg already produced a PR for stay with the PR lifecycle rules');
+        ['ai_developed', 'ai_pr_reviewed', 'pr_approved', 'agent:rework', 'agent:review', 'agent:skip']
+            .forEach(function (label) {
+                assert.ok((r.query.notLabels || []).indexOf(label) !== -1,
+                    'notLabels must exclude the loop marker "' + label + '" — a live loop item is never re-derived');
+            });
+        assert.equal(r.inputs.issue, '{issueNumber}', 'issue-anchored dispatch');
+        assert.equal(r.inputs.leg, 'dev', 'the re-derived leg is dev');
+        assert.equal(r.workflowFile, 'ai-teammate.yml', 'dispatches the factory workflow');
+        assert.ok(r.limit >= 1 && r.limit <= 5,
+            'bounded per tick — a burst drains over consecutive ticks (workflow budget caps concurrency)');
+    });
+});
