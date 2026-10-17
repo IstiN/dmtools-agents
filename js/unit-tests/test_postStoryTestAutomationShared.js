@@ -460,19 +460,17 @@ suite('postStoryTestAutomationShared: git ops', function() {
     test('performGitOperations: normal push failure escalates to force-with-lease then force', function() {
         var calls = [];
         var shared = loadShared({
-            cli_execute_command: function(args) {
-                calls.push(args.command);
-                if (args.command === 'git status --short -- testing') return '?? testing/tests/TS-1/test.py\n';
-                if (args.command === 'git add testing/') return '';
-                if (args.command === 'git diff --cached --stat') return ' f | 1 +\n';
-                if (args.command === 'git commit -m "msg"') return '';
-                if (args.command === 'git fetch origin test/TS-1') return '';
-                if (args.command === 'git push -u origin test/TS-1') throw new Error('rejected');
-                if (args.command === 'git push -u origin test/TS-1 --force-with-lease') throw new Error('rejected');
-                if (args.command === 'git push -u origin test/TS-1 --force') return '';
-                if (args.command.indexOf('git ls-remote --heads origin test/TS-1') === 0) return 'aaa\trefs/heads/test/TS-1\n';
-                throw new Error('unexpected command: ' + args.command);
-            }
+            cli_execute_command: cliMock({
+                'git status --short -- testing': '?? testing/tests/TS-1/test.py\n',
+                'git add testing/': '',
+                'git diff --cached --stat': ' f | 1 +\n',
+                'git commit -m "msg"': '',
+                'git fetch origin test/TS-1': '',
+                'git push -u origin test/TS-1': function() { throw new Error('rejected'); },
+                'git push -u origin test/TS-1 --force-with-lease': function() { throw new Error('rejected'); },
+                'git push -u origin test/TS-1 --force': '',
+                'git ls-remote --heads origin test/TS-1': 'aaa\trefs/heads/test/TS-1\n'
+            }, calls)
         });
         var result = shared.createGitOps(fakePrHelper())
             .performGitOperations('test/TS-1', 'msg', null, 'testing/');
@@ -500,17 +498,15 @@ suite('postStoryTestAutomationShared: git ops', function() {
     test('performGitOperations: a failing git status log does not stop staging', function() {
         var calls = [];
         var shared = loadShared({
-            cli_execute_command: function(args) {
-                calls.push(args.command);
-                if (args.command === 'git status --short -- testing') throw new Error('status exploded');
-                if (args.command === 'git add testing/') return '';
-                if (args.command === 'git diff --cached --stat') return ' f | 1 +\n';
-                if (args.command === 'git commit -m "msg"') return '';
-                if (args.command === 'git fetch origin test/TS-1') throw new Error('offline');
-                if (args.command === 'git push -u origin test/TS-1') return '';
-                if (args.command.indexOf('git ls-remote --heads origin test/TS-1') === 0) return 'aaa\trefs/heads/test/TS-1\n';
-                throw new Error('unexpected command: ' + args.command);
-            }
+            cli_execute_command: cliMock({
+                'git status --short -- testing': function() { throw new Error('status exploded'); },
+                'git add testing/': '',
+                'git diff --cached --stat': ' f | 1 +\n',
+                'git commit -m "msg"': '',
+                'git fetch origin test/TS-1': function() { throw new Error('offline'); },
+                'git push -u origin test/TS-1': '',
+                'git ls-remote --heads origin test/TS-1': 'aaa\trefs/heads/test/TS-1\n'
+            }, calls)
         });
         var result = shared.createGitOps(fakePrHelper())
             .performGitOperations('test/TS-1', 'msg', null, 'testing/');
