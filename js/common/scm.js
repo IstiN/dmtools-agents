@@ -581,6 +581,11 @@ function _normalizeGitLabCommitStatus(status) {
 // Pure mappers/renderers extracted from _createGitLabProvider().fetchDiscussions
 // (CRAP 648.7 in the baseline). Behaviour-preserving — pinned by
 // test_scmGitlabDiscussions.js.
+// NOTE: _gitlabRenderThreadSection reproduces the original renderer
+// byte-for-byte, including the '\n\n' (blank line) after the body, reply and
+// placeholder lines and before the '---' rule. Do NOT "tighten" these to a
+// single '\n': the blank line is what keeps the rule a horizontal rule (a
+// single '\n' turns 'body\n---' into a setext H2 heading).
 
 function _gitlabThreadPosition(pos) {
     return {
@@ -613,20 +618,20 @@ function _gitlabThreadDate(comment) {
     return (comment && comment.created_at) ? comment.created_at.substring(0, 10) : '';
 }
 
-function _gitlabRenderThreadSection(mapped, notes) {
+function _gitlabRenderThreadSection(mapped, root, replies) {
     var section = '### Thread ' + mapped.index;
     if (mapped.path) {
         section += ' — `' + mapped.path + '`';
         if (mapped.line) section += ' line ' + mapped.line;
     }
     section += '\n\n';
-    var root = notes[0] || {};
     section += mapped.body
-        ? ('**' + _gitlabThreadAuthor(root.author) + '** (' + _gitlabThreadDate(root) + '):\n' + mapped.body + '\n')
-        : '_[No comment body]_\n';
-    for (var i = 1; i < notes.length; i++) {
-        var reply = notes[i] || {};
-        section += '> **' + _gitlabThreadAuthor(reply.author) + '** (' + _gitlabThreadDate(reply) + '): ' + (reply.body || '').trim() + '\n';
+        ? ('**' + _gitlabThreadAuthor(root.author) + '** (' + _gitlabThreadDate(root) + '):\n' + mapped.body + '\n\n')
+        : '_[No comment body]_\n\n';
+    var replyNotes = replies || [];
+    for (var i = 0; i < replyNotes.length; i++) {
+        var reply = replyNotes[i] || {};
+        section += '> **' + _gitlabThreadAuthor(reply.author) + '** (' + _gitlabThreadDate(reply) + '): ' + (reply.body || '').trim() + '\n\n';
     }
     section += '---\n\n';
     return section;
@@ -642,11 +647,12 @@ function _gitlabFetchDiscussions(workspace, repository, prId) {
     var hasContent = false;
 
     discussions.forEach(function(thread) {
+        var notes = thread.notes || [];
         var mapped = _gitlabMapDiscussionThread(thread, rawThreads.length + 1);
         rawThreads.push(mapped);
         if (mapped.resolved) return;
         hasContent = true;
-        section += _gitlabRenderThreadSection(mapped, thread.notes || []);
+        section += _gitlabRenderThreadSection(mapped, notes[0] || {}, notes.slice(1));
     });
 
     if (hasContent) sections.push(section);
@@ -893,6 +899,10 @@ function _createGitLabProvider(workspace, repository) {
 // worst in the repo) into module-level pure functions. Behaviour-preserving —
 // pinned by test_scmAdoProvider.js / test_scmAdoDiscussions.js.
 
+// NOTE: this is the ONLY unwrapper that tolerates non-envelope payloads —
+// bare arrays pass through and a bare object is returned as-is (`parsed || []`).
+// listPrs/getPrComments are pinned on that passthrough; do not "unify" it with
+// the stricter _adoParseRunList/_adoParsePipelines/_adoParseDiscussionThreads.
 function _adoUnwrapList(raw) {
     var parsed = _parseJson(raw);
     if (Array.isArray(parsed)) return parsed;
@@ -920,6 +930,9 @@ function _adoBuildJobLogsOpts(jobId, tailLines) {
     return opts;
 }
 
+// NOTE: unlike _adoUnwrapList, a bare object is NOT a valid run list — {value}
+// envelope first, bare arrays tolerated (Java-list compat), everything else → []
+// (pinned: a bare object yields []).
 function _adoParseRunList(raw) {
     var parsed = _parseJson(raw);
     var rawRuns = (parsed && parsed.value) ? parsed.value : (Array.isArray(parsed) ? parsed : []);
@@ -971,6 +984,9 @@ function _adoBuildTriggerOpts(pipelineId, ref, payload) {
     return opts;
 }
 
+// NOTE: same contract as _adoParseRunList — {value} envelope first, bare
+// arrays tolerated, everything else → [] (pinned; do not merge with
+// _adoUnwrapList's looser passthrough).
 function _adoParsePipelines(raw) {
     var parsed = _parseJson(raw);
     return (parsed && parsed.value) ? parsed.value : (Array.isArray(parsed) ? parsed : []);
@@ -1038,6 +1054,9 @@ function _adoGetRemoteRepoInfo() {
 // Extraction of the former _createAdoProvider().fetchDiscussions closure
 // (CRAP 808.5 in the baseline).
 
+// NOTE: unlike _adoUnwrapList, bare arrays are NOT valid threads — {value}
+// envelopes only, everything else → [] (pinned: a bare array yields [] for
+// fetchDiscussions but passes through for listPrs).
 function _adoParseDiscussionThreads(raw) {
     var parsed = _parseJson(raw);
     return (parsed && parsed.value) ? parsed.value : [];
