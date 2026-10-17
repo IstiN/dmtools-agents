@@ -123,6 +123,14 @@ function inferRequestedSide(diffText, effectivePath, lineInfo, inlineComment, pr
     return null;
 }
 
+/** Side for a submodule-pointer anchor: RIGHT when the pointer moved. */
+function submoduleAnchorSide(diffText, effectivePath, lineInfo, prReviewComments) {
+    if (lineInfo.side === 'LEFT' && prReviewComments.submoduleHasNewPointer(diffText, effectivePath)) {
+        return 'RIGHT';
+    }
+    return lineInfo.side || 'RIGHT';
+}
+
 /**
  * Resolves where an inline comment can be anchored: the direct file/line, or
  * the submodule pointer change when the target lives inside a submodule.
@@ -146,16 +154,9 @@ function resolveInlineAnchor(diffText, inlineComment, prReviewComments) {
         }
     }
 
-    var requestedSide;
-    if (mappedFromSubmodule) {
-        // Submodule anchors always take the pointer-change side: RIGHT when the
-        // pointer moved, otherwise whatever side the diff reports.
-        requestedSide = (lineInfo.side === 'LEFT' && prReviewComments.submoduleHasNewPointer(diffText, effectivePath))
-            ? 'RIGHT'
-            : (lineInfo.side || 'RIGHT');
-    } else {
-        requestedSide = inferRequestedSide(diffText, effectivePath, lineInfo, inlineComment, prReviewComments);
-    }
+    var requestedSide = mappedFromSubmodule
+        ? submoduleAnchorSide(diffText, effectivePath, lineInfo, prReviewComments)
+        : inferRequestedSide(diffText, effectivePath, lineInfo, inlineComment, prReviewComments);
 
     return {
         filePath: filePath,
@@ -168,9 +169,33 @@ function resolveInlineAnchor(diffText, inlineComment, prReviewComments) {
     };
 }
 
+/** Prefixes the original file/line location on a submodule-mapped comment. */
+function filePathOf(inlineComment) {
+    return inlineComment.path || inlineComment.file;
+}
+
+function prefixSubmoduleLocation(text, anchor, inlineComment) {
+    if (!anchor.mappedFromSubmodule) return text;
+    if (anchor.effectivePath === filePathOf(inlineComment) && inlineComment.line == 1) {
+        return text;
+    }
+    return '📍 **`' + filePathOf(inlineComment) + ':' + inlineComment.line + '`** (submodule content line)\n\n' + text;
+}
+
+function logPostedInlineComment(anchor, filePath, inlineComment) {
+    var mapped = anchor.effectivePath !== filePath || anchor.effectiveLine !== inlineComment.line;
+    console.log('✅ Posted inline comment on ' + anchor.effectivePath + ':' + anchor.effectiveLine +
+        (mapped ? ' (mapped from ' + filePath + ':' + inlineComment.line + ')' : ''));
+}
+
+/** Inline text of the comment: the body, or the referenced comment file. */
+function resolveCommentText(inlineComment, readFile) {
+    return inlineComment.body || readFile(inlineComment.comment);
+}
+
 function postInlineComment(scm, prNumber, inlineComment, storyKey, readFile, prReviewComments) {
-    const filePath = inlineComment.path || inlineComment.file;
-    const commentText = inlineComment.body || readFile(inlineComment.comment);
+    const filePath = filePathOf(inlineComment);
+    const commentText = resolveCommentText(inlineComment, readFile);
 
     try {
         if (!commentText) {
@@ -186,11 +211,7 @@ function postInlineComment(scm, prNumber, inlineComment, storyKey, readFile, prR
 
         var diffText = scm.getPrDiff(prNumber);
         var anchor = resolveInlineAnchor(diffText, inlineComment, prReviewComments);
-
-        var text = commentText;
-        if (anchor.mappedFromSubmodule && (anchor.effectivePath !== filePath || inlineComment.line != 1)) {
-            text = '📍 **`' + filePath + ':' + inlineComment.line + '`** (submodule content line)\n\n' + text;
-        }
+        var text = prefixSubmoduleLocation(commentText, anchor, inlineComment);
 
         if (!anchor.lineInfo.present) {
             console.warn('Inline comment line is not present in PR diff; skipping ' + filePath + ':' + inlineComment.line);
@@ -202,9 +223,7 @@ function postInlineComment(scm, prNumber, inlineComment, storyKey, readFile, prR
             anchor.startLine, anchor.requestedSide
         );
 
-        console.log('✅ Posted inline comment on ' + anchor.effectivePath + ':' + anchor.effectiveLine +
-            (anchor.effectivePath !== filePath || anchor.effectiveLine !== inlineComment.line ?
-                ' (mapped from ' + filePath + ':' + inlineComment.line + ')' : ''));
+        logPostedInlineComment(anchor, filePath, inlineComment);
         return true;
     } catch (error) {
         console.warn('Inline comment failed for ' + filePath + ':' + inlineComment.line, error.message || error);
@@ -246,15 +265,23 @@ function resolveStaleReviewThreads(scm, prNumber, threads) {
     });
 }
 
+function hasRepoContext(repoInfo, prNumber) {
+    return !!(repoInfo && repoInfo.owner && repoInfo.repo && prNumber);
+}
+
+/** Unresolved threads carrying a threadId — the stale ones to resolve. */
+function collectStaleThreads(discussions) {
+    if (!discussions || !discussions.rawThreads || !discussions.rawThreads.threads) return [];
+    return discussions.rawThreads.threads.filter(function(t) {
+        return t.threadId && !t.resolved;
+    });
+}
+
 function resolveExistingAgentReviewThreads(scm, prNumber, repoInfo, fetchDiscussionsAndRawData) {
-    if (!repoInfo || !repoInfo.owner || !repoInfo.repo || !prNumber) return;
+    if (!hasRepoContext(repoInfo, prNumber)) return;
     try {
         var discussions = fetchDiscussionsAndRawData(repoInfo.owner, repoInfo.repo, prNumber);
-        if (!discussions || !discussions.rawThreads || !discussions.rawThreads.threads) return;
-
-        var staleThreads = discussions.rawThreads.threads.filter(function(t) {
-            return t.threadId && !t.resolved;
-        });
+        var staleThreads = collectStaleThreads(discussions);
         if (staleThreads.length === 0) return;
 
         console.log('Resolving ' + staleThreads.length + ' stale review thread(s) before posting new feedback...');
@@ -294,18 +321,23 @@ function applyVerdictLabels(scm, prNumber, storyKey, isApproved, getTracker, LAB
     }
 }
 
+/** Body of a feedback entry: the inline body, or the referenced comment file. */
+function resolveEntryBody(ic, readFile) {
+    var body = ic.body;
+    if (!body && ic.comment) {
+        try { body = readFile(ic.comment); } catch (e) {}
+    }
+    return (body || '').trim();
+}
+
 /** Numbered per-comment section of the rework feedback comment. */
 function buildInlineFeedbackEntries(inlineComments, readFile) {
     var entries = '';
     inlineComments.forEach(function(ic, idx) {
+        var body = resolveEntryBody(ic, readFile);
+        if (!body) return;
         var path = ic.path || ic.file || '(file unknown)';
         var line = ic.line ? ':' + ic.line : '';
-        var body = ic.body;
-        if (!body && ic.comment) {
-            try { body = readFile(ic.comment); } catch (e) {}
-        }
-        body = (body || '').trim();
-        if (!body) return;
         entries += '#' + (idx + 1) + '. *' + path + line + '*\n';
         entries += '{code}' + body + '{code}\n\n';
     });

@@ -121,14 +121,26 @@ function createGitOps(prHelper) {
         }
     }
 
+    function sameHead(localSha, remoteSha) {
+        return !!(localSha && remoteSha && localSha === remoteSha);
+    }
+
+    function isAheadOfRemote(mergeBase, remoteSha, localSha) {
+        return !!(mergeBase && mergeBase === remoteSha && mergeBase !== localSha);
+    }
+
+    function isBehindRemote(mergeBase, remoteSha, localSha) {
+        return !!(mergeBase && mergeBase === localSha && mergeBase !== remoteSha);
+    }
+
     /**
      * Pure sync decision for a branch whose local/remote shas are known:
      * 'identical' | 'ahead' (fast-forward) | 'behind' (adopt remote) | 'diverged'.
      */
     function syncDecision(localSha, remoteSha, mergeBase) {
-        if (localSha && remoteSha && localSha === remoteSha) return 'identical';
-        if (mergeBase && mergeBase === remoteSha && mergeBase !== localSha) return 'ahead';
-        if (mergeBase && mergeBase === localSha && mergeBase !== remoteSha) return 'behind';
+        if (sameHead(localSha, remoteSha)) return 'identical';
+        if (isAheadOfRemote(mergeBase, remoteSha, localSha)) return 'ahead';
+        if (isBehindRemote(mergeBase, remoteSha, localSha)) return 'behind';
         return 'diverged';
     }
 

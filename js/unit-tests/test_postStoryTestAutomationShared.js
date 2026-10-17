@@ -293,10 +293,12 @@ suite('postStoryTestAutomationShared: git ops', function() {
                 if (args.command === 'git merge-base HEAD origin/test/TS-2') return 'aaa\n';
                 if (args.command === 'git push -u origin test/TS-2') {
                     pushAttempts++;
-                    if (pushAttempts === 1) throw new Error('rejected');
+                    throw new Error('rejected');
+                }
+                if (args.command === 'git push -u origin test/TS-2 --force-with-lease') {
+                    assert.equal(pushAttempts, 2, 'fast-forward push retried, then the lease push ran');
                     return '';
                 }
-                if (args.command === 'git push -u origin test/TS-2 --force-with-lease') return '';
                 throw new Error('unexpected command: ' + args.command);
             }
         });

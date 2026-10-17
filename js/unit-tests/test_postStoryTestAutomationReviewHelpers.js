@@ -264,6 +264,15 @@ suite('postStoryTestAutomationReviewHelpers: postInlineComment', function() {
         assert.equal(scm.calls.addInlineComment.length, 0);
     });
 
+    test('returns false without posting when there is no file path', function() {
+        var helpers = loadReviewHelpers();
+        var scm = scmRecorder();
+        scm.diffs[42] = SIMPLE_DIFF;
+        var ok = helpers.postInlineComment(scm, 42, { body: 'Orphan body' }, 'TS-300', function() { return null; }, loadPrReviewComments());
+        assert.equal(ok, false);
+        assert.equal(scm.calls.addInlineComment.length, 0);
+    });
+
     test('an SCM failure is swallowed and reported as false', function() {
         var helpers = loadReviewHelpers();
         var scm = scmRecorder();
@@ -271,6 +280,87 @@ suite('postStoryTestAutomationReviewHelpers: postInlineComment', function() {
         var ok = helpers.postInlineComment(scm, 42, { path: 'a.ts', line: 1, body: 'x' }, 'TS-1', function() { return null; }, loadPrReviewComments());
         assert.equal(ok, false);
         assert.equal(scm.calls.addInlineComment.length, 0);
+    });
+
+    test('posts a submodule-anchored comment with a location prefix', function() {
+        var helpers = loadReviewHelpers();
+        var scm = scmRecorder();
+        scm.diffs[42] = 'diff --git a/mobile-app b/mobile-app\n' +
+            'index 1111111..2222222 160000\n' +
+            '--- a/mobile-app\n' +
+            '+++ b/mobile-app\n' +
+            '@@ -1 +1 @@\n' +
+            '-Subproject commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' +
+            '+Subproject commit bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n';
+        var ok = helpers.postInlineComment(
+            scm, 42,
+            { path: 'mobile-app/lib/foo.ts', line: 5, body: 'Fix the widget' },
+            'TS-300',
+            function() { return null; },
+            loadPrReviewComments()
+        );
+        assert.equal(ok, true);
+        assert.equal(scm.calls.addInlineComment.length, 1);
+        assert.equal(scm.calls.addInlineComment[0].filePath, 'mobile-app');
+        assert.equal(scm.calls.addInlineComment[0].line, 1);
+        assert.equal(scm.calls.addInlineComment[0].side, 'RIGHT');
+        assert.contains(scm.calls.addInlineComment[0].text, '📍 **`mobile-app/lib/foo.ts:5`** (submodule content line)');
+        assert.contains(scm.calls.addInlineComment[0].text, 'Fix the widget');
+    });
+
+});
+
+suite('postStoryTestAutomationReviewHelpers: resolveExistingAgentReviewThreads', function() {
+
+    test('resolves only the stale (unresolved) threads', function() {
+        var helpers = loadReviewHelpers();
+        var scm = scmRecorder();
+        var fetch = function(owner, repo, prNumber) {
+            return {
+                rawThreads: {
+                    threads: [
+                        { threadId: 't1', resolved: false },
+                        { threadId: 't2', resolved: true },
+                        { resolved: false }
+                    ]
+                }
+            };
+        };
+        helpers.resolveExistingAgentReviewThreads(scm, 42, { owner: 'IstiN', repo: 'trackstate' }, fetch);
+        assert.deepEqual(scm.calls.resolveThread, [{ prId: 42, thread: { threadId: 't1' } }]);
+    });
+
+    test('a failing resolve on one thread does not stop the others', function() {
+        var helpers = loadReviewHelpers();
+        var scm = scmRecorder();
+        scm.resolveThread = function(prId, thread) {
+            if (thread.threadId === 't1') throw new Error('gone');
+            scm.calls.resolveThread.push({ prId: prId, thread: thread });
+        };
+        var fetch = function() {
+            return { rawThreads: { threads: [{ threadId: 't1', resolved: false }, { threadId: 't2', resolved: false }] } };
+        };
+        helpers.resolveExistingAgentReviewThreads(scm, 42, { owner: 'IstiN', repo: 'trackstate' }, fetch);
+        assert.deepEqual(scm.calls.resolveThread, [{ prId: 42, thread: { threadId: 't2' } }]);
+    });
+
+    test('missing repo info or PR number is a no-op', function() {
+        var helpers = loadReviewHelpers();
+        var scm = scmRecorder();
+        var fetchCalled = false;
+        var fetch = function() { fetchCalled = true; return null; };
+        helpers.resolveExistingAgentReviewThreads(scm, 42, null, fetch);
+        helpers.resolveExistingAgentReviewThreads(scm, null, { owner: 'o', repo: 'r' }, fetch);
+        assert.equal(fetchCalled, false);
+        assert.equal(scm.calls.resolveThread.length, 0);
+    });
+
+    test('a failing discussions fetch is swallowed', function() {
+        var helpers = loadReviewHelpers();
+        var scm = scmRecorder();
+        var fetch = function() { throw new Error('api down'); };
+        helpers.resolveExistingAgentReviewThreads(scm, 42, { owner: 'IstiN', repo: 'trackstate' }, fetch);
+        assert.equal(scm.calls.resolveThread.length, 0);
     });
 
 });
