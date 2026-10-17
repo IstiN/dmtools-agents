@@ -23,6 +23,8 @@ var MANIFEST_NAME = 'token_usage_files.json';
 // ./trackers.js"); load-time requires resolve file-relative and dmtools
 // compile discovers them for the pack closure.
 var trackersModule = require('./trackers.js');
+var configLoader = null;
+try { configLoader = require('../configLoader.js'); } catch (e) { /* unit tests inject their own */ }
 
 function readTextFile(filePath) {
     if (!filePath) {
@@ -165,6 +167,25 @@ function customParamsOf(params) {
 }
 
 /**
+ * The project config used to pick the tracker provider: the caller's options.config when given;
+ * otherwise, only when the provider is not already pinned by customParams.trackerProvider, the
+ * project config (config.tracker.provider) loaded best-effort, so a run that sets the provider only
+ * there does not fall through to the Jira default (agents#942). Fail-open: null on any problem.
+ * @param {Object} options postTokenUsageComments options
+ * @returns {Object|null}
+ */
+function resolveConfig(options) {
+    if (options.config) return options.config;
+    var cp = options.customParams || {};
+    if (cp.trackerProvider || !configLoader || typeof configLoader.loadProjectConfig !== 'function') return null;
+    try {
+        return configLoader.loadProjectConfig({ customParams: cp }) || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
  * Post token usage comments for the given ticket.
  *
  * @param {string} ticketKey - Jira ticket key to comment on.
@@ -200,7 +221,7 @@ function postTokenUsageComments(ticketKey, options) {
         }
 
         try {
-            if (!tracker) tracker = trackersModule.createTracker(options.config || null, options.customParams || {});
+            if (!tracker) tracker = trackersModule.createTracker(resolveConfig(options), options.customParams || {});
             var comment = formatUsageComment(filePath, data, initiator,
                 typeof tracker.provider === 'function' ? tracker.provider() : null);
             tracker.postComment(ticketKey, comment);
