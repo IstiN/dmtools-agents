@@ -173,6 +173,51 @@ suite('reworkLoopGuard.shouldWithholdArm', function() {
     });
 });
 
+suite('reworkLoopGuard.escalationIsFalsePositive (gh-990)', function() {
+
+    // gh-990 (2nd live instance, dart #424 ~16:37Z / #419 ~17:2xZ,
+    // 2026-10-17): the no-op loop guard fired rework-loop-escalated on legs
+    // that no-op'd CORRECTLY — the operator had already pushed the fix and
+    // the GraphQL census read 0 unresolved threads — and the escalated label
+    // then jammed the whole queue's validate-armed pointer. The refinement:
+    // when the census is EMPTY and the head carries NO red validation, the
+    // escalation is a false positive — validation re-flow owns the PR, not a
+    // human park. Suppression requires POSITIVE evidence of both sides.
+
+    test('0 unresolved threads + no red validation → suppression (the false-positive shape)', function() {
+        var g = loadGuard();
+        assert.equal(g.escalationIsFalsePositive({ unresolvedThreads: 0, headRed: false }), true);
+    });
+
+    test('open threads (1 or many) keep the legacy escalation', function() {
+        var g = loadGuard();
+        assert.equal(g.escalationIsFalsePositive({ unresolvedThreads: 1, headRed: false }), false);
+        assert.equal(g.escalationIsFalsePositive({ unresolvedThreads: 22, headRed: false }), false,
+            'multi-thread census — the #419 live shape (18/22 threads open)');
+    });
+
+    test('a red head keeps the legacy escalation', function() {
+        var g = loadGuard();
+        assert.equal(g.escalationIsFalsePositive({ unresolvedThreads: 0, headRed: true }), false);
+    });
+
+    test('unknown census (-1) keeps the legacy escalation — no positive empty evidence', function() {
+        var g = loadGuard();
+        assert.equal(g.escalationIsFalsePositive({ unresolvedThreads: -1, headRed: false }), false);
+    });
+
+    test('unknown red probe (null) keeps the legacy escalation — no positive no-red evidence', function() {
+        var g = loadGuard();
+        assert.equal(g.escalationIsFalsePositive({ unresolvedThreads: 0, headRed: null }), false);
+    });
+
+    test('missing state fails closed to the legacy escalation', function() {
+        var g = loadGuard();
+        assert.equal(g.escalationIsFalsePositive(null), false);
+        assert.equal(g.escalationIsFalsePositive({}), false);
+    });
+});
+
 suite('reworkLoopGuard.buildEscalationComment', function() {
 
     test('carries the hidden marker, the label and the lap budget', function() {
