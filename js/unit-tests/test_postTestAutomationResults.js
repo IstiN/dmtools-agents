@@ -66,7 +66,12 @@ function loadPostTestAutomation(mocks) {
             './common/autoStart.js': autoStartMock,
             './common/trackers.js': trackersMockModule,
             './common/outputFiles.js': outputFiles,
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './postTestAutomationResultsHelpers.js': loadModule(
+                'js/postTestAutomationResultsHelpers.js',
+                makeRequire({}),
+                {}
+            )
         }),
         allMocks
     );
