@@ -122,6 +122,21 @@ function baseParams() {
     return { inputFolderPath: 'input/PROJ-12', jobParams: { customParams: {} } };
 }
 
+// Realistic `git ls-remote --heads origin test/PROJ-12` output for a branch that
+// exists on the remote (SHA + TAB + full ref). Commands that do not probe the
+// remote branch return '' like a quiet git.
+var LS_REMOTE_LINE = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0\trefs/heads/test/PROJ-12\n';
+
+function recordingCliMock(commands) {
+    return function(args) {
+        commands.push(args.command);
+        if (args.command === 'git ls-remote --heads origin test/PROJ-12') {
+            return LS_REMOTE_LINE;
+        }
+        return '';
+    };
+}
+
 suite('preCliTestReworkSetup.action — characterization (gh-928)', function() {
 
     test('happy path: open test PR → checkout, context, questions, bugs, tracker comment, success shape', function() {
@@ -215,6 +230,7 @@ suite('preCliTestReworkSetup.action — characterization (gh-928)', function() {
 
     test('no open PR + remote branch exists + createPr succeeds → PR auto-created and flow continues', function() {
         var createdPrs = [];
+        var cliCalls = [];
         var ctx = loadPreCliTestReworkSetup({
             scm: makeScmMock({
                 openPrs: [],
@@ -223,6 +239,7 @@ suite('preCliTestReworkSetup.action — characterization (gh-928)', function() {
                     return { success: true, number: 15, prUrl: 'https://github.com/acme/widgets/pull/15' };
                 }
             }),
+            cli: function(args) { return recordingCliMock(cliCalls)(args); },
             gh: {
                 buildOriginFetchCommand: function(refspec) { return 'git fetch origin ' + refspec; },
                 getPRDetails: function(scm, prNumber) {
@@ -242,6 +259,8 @@ suite('preCliTestReworkSetup.action — characterization (gh-928)', function() {
 
         assert.equal(result.success, true, 'auto-created PR path still completes the setup');
         assert.equal(result.prNumber, 15);
+        assert.ok(cliCalls.some(function(c) { return c === 'git ls-remote --heads origin test/PROJ-12'; }),
+            'remote branch probed with ls-remote before auto-create');
         assert.equal(createdPrs.length, 1, 'exactly one createPr call');
         assert.deepEqual(createdPrs[0], {
             title: 'PROJ-12 Fix flaky login test',
@@ -258,6 +277,7 @@ suite('preCliTestReworkSetup.action — characterization (gh-928)', function() {
                 openPrs: [],
                 createPr: function() { return { success: true, number: 15, prUrl: 'https://github.com/acme/widgets/pull/15' }; }
             }),
+            cli: function(args) { return recordingCliMock([])(args); },
             prHelper: {
                 ensureClosesLine: function(body, key) {
                     closesCalls.push({ body: body, key: key });
@@ -289,7 +309,7 @@ suite('preCliTestReworkSetup.action — characterization (gh-928)', function() {
                 openPrs: [],
                 createPr: function() { return { success: false, error: 'validation failed' }; }
             }),
-            cli: function(args) { cliCalls.push(args.command); return ''; },
+            cli: function(args) { return recordingCliMock(cliCalls)(args); },
             gitOps: {
                 writePRContext: function(inputFolder, prDetails, diff, note, threads) {
                     contextCalls.push([inputFolder, prDetails, diff, note, threads]);
@@ -324,15 +344,20 @@ suite('preCliTestReworkSetup.action — characterization (gh-928)', function() {
 
     test('auto-create path: checkout failure falls back to fetch+checkout (same commands, order preserved)', function() {
         var cliCalls = [];
-        var checkedOut = [];
+        var checkoutCalls = [];
         var ctx = loadPreCliTestReworkSetup({
             scm: makeScmMock({
                 openPrs: [],
                 createPr: function() { return { success: true, number: 15, prUrl: 'https://github.com/acme/widgets/pull/15' }; }
             }),
-            cli: function(args) { cliCalls.push(args.command); return ''; },
+            cli: function(args) { return recordingCliMock(cliCalls)(args); },
             gitOps: {
-                checkoutPRBranch: function() { throw new Error('checkout boom'); }
+                // First checkout (no-PR path) fails; the Step-4 checkout after the
+                // auto-create succeeds — matching a stale local branch rescued by fetch.
+                checkoutPRBranch: function(branch, workingDir, baseBranch) {
+                    checkoutCalls.push(branch);
+                    if (checkoutCalls.length === 1) throw new Error('checkout boom');
+                }
             },
             gh: {
                 buildOriginFetchCommand: function(refspec) { return 'git fetch origin ' + refspec; },
@@ -346,11 +371,12 @@ suite('preCliTestReworkSetup.action — characterization (gh-928)', function() {
         var result = ctx.module.action(baseParams());
 
         assert.equal(result.success, true, 'fetch+checkout fallback rescues the auto-create path');
+        assert.deepEqual(checkoutCalls, ['test/PROJ-12', 'test/PROJ-12'],
+            'checkout attempted twice: no-PR path, then the post-PR-details step');
         assert.ok(cliCalls.some(function(c) { return c === 'git fetch origin test/PROJ-12:test/PROJ-12'; }),
             'fallback fetch uses buildOriginFetchCommand refspec');
         assert.ok(cliCalls.some(function(c) { return c === 'git checkout test/PROJ-12'; }),
             'fallback plain checkout on the test branch');
-        assert.equal(checkedOut.length, 0);
     });
 
     test('getPRDetails failure → { success:false, error } mentioning the PR number', function() {
