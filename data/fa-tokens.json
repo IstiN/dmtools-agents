@@ -1793,6 +1793,15 @@
       "total": 165289,
       "cacheRead": 5602816,
       "model": "kimi-for-coding"
+    },
+    {
+      "leg": "dev",
+      "at": "2026-10-17T13:31:30Z",
+      "prompt": 154121,
+      "completion": 21198,
+      "total": 175319,
+      "cacheRead": 5903360,
+      "model": "kimi-for-coding"
     }
   ],
   "issue-963": [
