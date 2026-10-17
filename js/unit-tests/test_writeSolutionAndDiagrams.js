@@ -5,16 +5,18 @@
 // Shared full-fidelity loader for the gh-978 characterization suites: wires the
 // module against jira globals with per-test failure switches, and exposes the
 // call log so tests can assert side-effect order and partial-failure behaviour.
-function wd3LoadFull(opts) {
-    opts = opts || {};
-    var jiraUpdates = [];
-    var calls = {
-        autoStartConfigured: [],
-        smIdle: 0,
-        tokenUsage: 0,
-        postComments: []
+
+// Per-test failure switch: returns a stub that throws when opts[key] is set.
+function wd3Guard(opts, key) {
+    return function() {
+        if (opts[key]) { throw new Error(key + ' boom'); }
     };
-    var globals = {
+}
+
+// jira_* global stubs. jiraUpdates records every field write; calls collects the
+// side-effect log assertions read.
+function wd3JiraGlobals(opts, jiraUpdates, calls) {
+    return {
         jira_update_field: function(args) {
             if (opts.failUpdateField === args.field) {
                 throw new Error('updateField boom: ' + args.field);
@@ -31,17 +33,9 @@ function wd3LoadFull(opts) {
             }
             return { key: 'PROJ-1', fields: fields };
         },
-        jira_assign_ticket_to: function() {
-            if (opts.failAssign) { throw new Error('assign boom'); }
-            calls.assigned = true;
-        },
-        jira_move_to_status: function() {
-            if (opts.failMove) { throw new Error('move boom'); }
-            calls.moved = true;
-        },
-        jira_add_label: function() {
-            if (opts.failAddLabel) { throw new Error('addLabel boom'); }
-        },
+        jira_assign_ticket_to: wd3Guard(opts, 'failAssign'),
+        jira_move_to_status: wd3Guard(opts, 'failMove'),
+        jira_add_label: wd3Guard(opts, 'failAddLabel'),
         jira_remove_label: function() {
             if (opts.failRemoveLabel) { throw new Error('removeLabel boom'); }
             calls.removedLabels = (calls.removedLabels || 0) + 1;
@@ -49,7 +43,13 @@ function wd3LoadFull(opts) {
         jira_post_comment: function(args) {
             if (opts.failPostComment) { throw new Error('postComment boom'); }
             calls.postComments.push(args);
-        },
+        }
+    };
+}
+
+// confluence_* / file_* global stubs for the publish path.
+function wd3ConfluenceGlobals(opts) {
+    return {
         confluence_get_children_by_id: function() { return []; },
         confluence_create_page: function(args) {
             if (opts.failConfluenceCreate) { throw new Error('confluence boom'); }
@@ -61,6 +61,24 @@ function wd3LoadFull(opts) {
             throw new Error('not found: ' + (o && (o.path || o)));
         }
     };
+}
+
+function wd3LoadFull(opts) {
+    opts = opts || {};
+    var jiraUpdates = [];
+    var calls = {
+        autoStartConfigured: [],
+        smIdle: 0,
+        tokenUsage: 0,
+        postComments: []
+    };
+    var globals = wd3JiraGlobals(opts, jiraUpdates, calls);
+    var confGlobals = wd3ConfluenceGlobals(opts);
+    for (var key in confGlobals) {
+        if (Object.prototype.hasOwnProperty.call(confGlobals, key)) {
+            globals[key] = confGlobals[key];
+        }
+    }
     var autoStartMock = {
         triggerConfiguredWorkflowForTicket: function(a) {
             calls.autoStartConfigured.push(a);
@@ -75,14 +93,13 @@ function wd3LoadFull(opts) {
             if (opts.tokenUsageThrows) { throw new Error('tokenUsage boom'); }
         }
     };
+    var outputs = {
+        'response.md': 'Solution body',
+        'diagram.md': 'graph TD\nA --> B'
+    };
     var outputFilesMock = {
         readOutputFile: function(name) {
-            if (name === 'response.md') return opts.responseMd || 'Solution body';
-            if (name === 'diagram.md') {
-                return (opts.diagramMd !== undefined) ? opts.diagramMd : 'graph TD\nA --> B';
-            }
-            if (name === 'affected_repos.json') return opts.affectedRepos || null;
-            return null;
+            return outputs[name] === undefined ? null : outputs[name];
         }
     };
     var configLoaderMock = {

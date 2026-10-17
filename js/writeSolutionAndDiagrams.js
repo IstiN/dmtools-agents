@@ -199,15 +199,20 @@ function writeSolutionToTrackerField(dependencies) {
     }
 
     // 5. Write to diagram field if configured and diagram exists
-    if (dependencies.diagram && dependencies.diagramField) {
-        try {
-            tracker.updateField(ticketKey, dependencies.diagramField, dependencies.diagram);
-            console.log('Updated "' + dependencies.diagramField + '" field for ' + ticketKey);
-        } catch (e) {
-            console.warn('Failed to update diagram field "' + dependencies.diagramField + '":', e);
-        }
-    }
+    writeDiagramFieldQuietly(tracker, ticketKey, dependencies.diagramField, dependencies.diagram);
     return null;
+}
+
+function writeDiagramFieldQuietly(tracker, ticketKey, diagramField, diagram) {
+    if (!diagram || !diagramField) {
+        return;
+    }
+    try {
+        tracker.updateField(ticketKey, diagramField, diagram);
+        console.log('Updated "' + diagramField + '" field for ' + ticketKey);
+    } catch (e) {
+        console.warn('Failed to update diagram field "' + diagramField + '":', e);
+    }
 }
 
 // Post replies to inline comments BEFORE the page body is replaced — while the
@@ -279,11 +284,10 @@ function publishSolutionToConfluence(dependencies) {
             pageContent = tryAppendAffectedRepositories(pageContent, dependencies.readOutput);
         }
 
-        var published = contentOutput.publishPage(outputCfg, ticketKey, ticketSummary, pageContent);
+        var published = publishConfluencePage(outputCfg, ticketKey, ticketSummary, pageContent);
         var pageUrl = published.url;
-        console.log('Published solution to Confluence page ' + (published.page && published.page.id) + ' (' + (pageUrl || 'url unknown') + ')');
 
-        if (outputCfg.target === 'confluence' && outputCfg.updateTrackerField !== false) {
+        if (shouldWriteConfluenceLink(outputCfg)) {
             writeConfluenceLinkToField(tracker, ticketKey, dependencies.solutionField, pageUrl, published);
         }
 
@@ -293,6 +297,18 @@ function publishSolutionToConfluence(dependencies) {
         return { success: false, error: 'Confluence publish failed: ' + confError.toString() };
     }
     return null;
+}
+
+function publishConfluencePage(outputCfg, ticketKey, ticketSummary, pageContent) {
+    var published = contentOutput.publishPage(outputCfg, ticketKey, ticketSummary, pageContent);
+    console.log('Published solution to Confluence page ' + (published.page && published.page.id) + ' (' + (published.url || 'url unknown') + ')');
+    return published;
+}
+
+// The tracker field gets the page link for the confluence-only target unless the
+// config explicitly disables it.
+function shouldWriteConfluenceLink(outputCfg) {
+    return outputCfg.target === 'confluence' && outputCfg.updateTrackerField !== false;
 }
 
 // ── Finalization steps 6–10 (assign, move, labels) — each failure is non-fatal ──
@@ -527,11 +543,14 @@ if (typeof module !== 'undefined' && module.exports) {
         buildConfluenceCommentText: buildConfluenceCommentText,
         readExistingSolutionValue: readExistingSolutionValue,
         writeSolutionToTrackerField: writeSolutionToTrackerField,
+        writeDiagramFieldQuietly: writeDiagramFieldQuietly,
         publishConfluenceCommentReplies: publishConfluenceCommentReplies,
         tryAppendAffectedRepositories: tryAppendAffectedRepositories,
         writeConfluenceLinkToField: writeConfluenceLinkToField,
         postConfluenceLinkComment: postConfluenceLinkComment,
         publishSolutionToConfluence: publishSolutionToConfluence,
+        publishConfluencePage: publishConfluencePage,
+        shouldWriteConfluenceLink: shouldWriteConfluenceLink,
         assignToInitiator: assignToInitiator,
         moveToReadyForDevelopment: moveToReadyForDevelopment,
         addAiGeneratedLabel: addAiGeneratedLabel,
