@@ -418,3 +418,253 @@ suite('gitOps._switchToBranch — warning-only ls-remote captures (gh-912)', fun
     });
 
 });
+
+// ── gh-962: getPRDiff characterization ───────────────────────────────────────
+// CRAP-506 monolith split into small helpers. These tests pin the CURRENT
+// behaviour before/with the refactor: the exact git command sequence, the
+// fallback order (three-dot → origin/ prefix → merge-base), the per-strategy
+// log lines and the '' return on total failure. Pure refactor — every
+// expectation here passes identically before and after the split.
+
+suite('gitOps.getPRDiff — characterization (gh-962)', function() {
+
+    var EXPLICIT_FETCH_MAIN = 'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main';
+
+    // responses: exact command string -> capture string, or function(args).
+    // Unlisted commands get a bare exit-0 capture.
+    function makeHarness(responses) {
+        var h = { commands: [], logs: [], warns: [], errors: [] };
+        var origLog = console.log, origWarn = console.warn, origError = console.error;
+        console.log = function() { h.logs.push(Array.prototype.slice.call(arguments).join(' ')); };
+        console.warn = function() { h.warns.push(Array.prototype.slice.call(arguments).join(' ')); };
+        console.error = function() { h.errors.push(Array.prototype.slice.call(arguments).join(' ')); };
+        h.gitOps = loadGitOps({
+            cli_execute_command: function(args) {
+                h.commands.push(args);
+                var r = responses[args.command];
+                if (typeof r === 'function') return r(args);
+                if (r !== undefined) return r;
+                return 'COMMAND_EXIT_CODE=0';
+            }
+        });
+        h.commandStrings = function() {
+            return h.commands.map(function(a) { return a.command; });
+        };
+        h.restore = function() {
+            console.log = origLog; console.warn = origWarn; console.error = origError;
+        };
+        return h;
+    }
+
+    function run(h, base, head, wd) {
+        try {
+            return h.gitOps.getPRDiff(base, head, wd);
+        } finally {
+            h.restore();
+        }
+    }
+
+    test('happy path: three-dot diff succeeds — command order and return shape pinned', function() {
+        var h = makeHarness({
+            'git rev-parse --is-shallow-repository': 'false\nCOMMAND_EXIT_CODE=0',
+            'git diff main...feature/x': '+added line\nCOMMAND_EXIT_CODE=0'
+        });
+
+        var diff = run(h, 'main', 'feature/x', '/work/dir');
+
+        assert.equal(diff, '+added line');
+        assert.deepEqual(h.commandStrings(), [
+            EXPLICIT_FETCH_MAIN,
+            'git rev-parse --is-shallow-repository',
+            'git diff main...feature/x'
+        ], 'ensure-ref fetch → shallow probe → three-dot diff, in this exact order');
+        h.commands.forEach(function(a) {
+            assert.equal(a.workingDirectory, '/work/dir', 'workingDir must reach cli_execute_command');
+        });
+        var joined = h.logs.join('\n');
+        assert.contains(joined, 'Generating diff between main and feature/x (in /work/dir)');
+        assert.contains(joined, 'Repository is already complete (not shallow), skipping unshallow');
+        assert.contains(joined, 'Diff size: 31 chars');
+        assert.equal(h.warns.length, 0, 'happy path is silent on warn — got: ' + JSON.stringify(h.warns));
+        assert.equal(h.errors.length, 0);
+    });
+
+    test('no workingDir: cli_execute_command args carry no workingDirectory key', function() {
+        var h = makeHarness({
+            'git rev-parse --is-shallow-repository': 'false\nCOMMAND_EXIT_CODE=0',
+            'git diff main...feature/x': 'ok'
+        });
+
+        run(h, 'main', 'feature/x');
+
+        h.commands.forEach(function(a) {
+            assert.equal(a.workingDirectory, undefined, 'no workingDirectory key expected, got: ' + JSON.stringify(a));
+        });
+        assert.contains(h.logs.join('\n'), 'Generating diff between main and feature/x ');
+        assert.ok(h.logs.join('\n').indexOf('(in') === -1, 'no "(in <dir>)" suffix without workingDir');
+    });
+
+    test('shallow repository: git fetch --unshallow is issued before the diff', function() {
+        var h = makeHarness({
+            'git rev-parse --is-shallow-repository': 'true\nCOMMAND_EXIT_CODE=0',
+            'git diff main...feature/x': 'ok'
+        });
+
+        run(h, 'main', 'feature/x');
+
+        var cmds = h.commandStrings();
+        assert.ok(cmds.indexOf('git fetch --unshallow') !== -1, 'unshallow must run, got: ' + JSON.stringify(cmds));
+        assert.ok(cmds.indexOf('git fetch --unshallow') < cmds.indexOf('git diff main...feature/x'),
+            'unshallow must precede the diff');
+        assert.contains(h.logs.join('\n'), 'Unshallowed repository for full merge base detection');
+    });
+
+    test('shallow probe failure is swallowed and the diff still runs', function() {
+        var h = makeHarness({
+            'git rev-parse --is-shallow-repository': function() { throw new Error('rev-parse exploded'); },
+            'git diff main...feature/x': 'ok'
+        });
+
+        var diff = run(h, 'main', 'feature/x');
+
+        assert.equal(diff, 'ok', 'a failing shallow probe must not abort the diff');
+        assert.ok(h.commandStrings().indexOf('git fetch --unshallow') === -1);
+    });
+
+    test('three-dot failure falls back to the origin/ prefix — exact commands and warns', function() {
+        var h = makeHarness({
+            'git rev-parse --is-shallow-repository': 'false\nCOMMAND_EXIT_CODE=0',
+            'git diff main...feature/x': function() { throw new Error('no merge base'); },
+            'git diff origin/main...feature/x': 'fallback diff\nCOMMAND_EXIT_CODE=0'
+        });
+
+        var diff = run(h, 'main', 'feature/x');
+
+        assert.equal(diff, 'fallback diff');
+        assert.deepEqual(h.commandStrings(), [
+            EXPLICIT_FETCH_MAIN,
+            'git rev-parse --is-shallow-repository',
+            'git diff main...feature/x',
+            'git diff origin/main...feature/x'
+        ]);
+        assert.contains(h.warns.join('\n'),
+            'Three-dot diff failed (likely no merge base), trying with origin/ prefix: no merge base');
+        assert.contains(h.logs.join('\n'), 'Diff size (origin fallback): 33 chars');
+    });
+
+    test('base branch already origin/-prefixed: no double prefix anywhere', function() {
+        var h = makeHarness({
+            'git rev-parse --is-shallow-repository': 'false\nCOMMAND_EXIT_CODE=0',
+            'git diff origin/main...feature/x': 'ok'
+        });
+
+        var diff = run(h, 'origin/main', 'feature/x');
+
+        assert.equal(diff, 'ok');
+        assert.contains(h.commandStrings()[0],
+            'fetch origin +refs/heads/main:refs/remotes/origin/main',
+            'ensure-ref fetch uses the STRIPPED branch name');
+        assert.ok(h.commandStrings().indexOf('git diff origin/origin/main...feature/x') === -1,
+            'origin/ prefix must never be doubled');
+        assert.ok(h.commandStrings().indexOf('git diff origin/main...feature/x') !== -1);
+    });
+
+    test('origin fallback failure falls back to merge-base — exact commands', function() {
+        var h = makeHarness({
+            'git rev-parse --is-shallow-repository': 'false\nCOMMAND_EXIT_CODE=0',
+            'git diff main...feature/x': function() { throw new Error('fail 1'); },
+            'git diff origin/main...feature/x': function() { throw new Error('fail 2'); },
+            'git merge-base origin/main feature/x': 'abc123def\nCOMMAND_EXIT_CODE=0',
+            'git diff abc123def...feature/x': 'mb diff\nCOMMAND_EXIT_CODE=0'
+        });
+
+        var diff = run(h, 'main', 'feature/x');
+
+        assert.equal(diff, 'mb diff');
+        assert.deepEqual(h.commandStrings(), [
+            EXPLICIT_FETCH_MAIN,
+            'git rev-parse --is-shallow-repository',
+            'git diff main...feature/x',
+            'git diff origin/main...feature/x',
+            'git merge-base origin/main feature/x',
+            'git diff abc123def...feature/x'
+        ], 'full fallback chain, in this exact order');
+        assert.contains(h.warns.join('\n'), 'Origin-prefix diff also failed, trying merge-base approach: fail 2');
+        assert.contains(h.logs.join('\n'), 'Diff size (merge-base fallback): 27 chars');
+    });
+
+    test('empty merge-base: silent fall-through to the all-failed log, returns empty string', function() {
+        var h = makeHarness({
+            'git rev-parse --is-shallow-repository': 'false\nCOMMAND_EXIT_CODE=0',
+            'git diff main...feature/x': function() { throw new Error('fail 1'); },
+            'git diff origin/main...feature/x': function() { throw new Error('fail 2'); },
+            'git merge-base origin/main feature/x': '\nCOMMAND_EXIT_CODE=0'
+        });
+
+        var diff = run(h, 'main', 'feature/x');
+
+        assert.equal(diff, '');
+        assert.ok(h.warns.join('\n').indexOf('Merge-base diff also failed') === -1,
+            'an EMPTY merge-base must not warn (only command failures do) — got: ' + JSON.stringify(h.warns));
+        assert.contains(h.errors.join('\n'), 'All diff strategies failed for main ... feature/x');
+    });
+
+    test('merge-base probe failure warns and returns empty string', function() {
+        var h = makeHarness({
+            'git rev-parse --is-shallow-repository': 'false\nCOMMAND_EXIT_CODE=0',
+            'git diff main...feature/x': function() { throw new Error('fail 1'); },
+            'git diff origin/main...feature/x': function() { throw new Error('fail 2'); },
+            'git merge-base origin/main feature/x': function() { throw new Error('mb gone'); }
+        });
+
+        var diff = run(h, 'main', 'feature/x');
+
+        assert.equal(diff, '');
+        assert.contains(h.warns.join('\n'), 'Merge-base diff also failed: mb gone');
+        assert.contains(h.errors.join('\n'), 'All diff strategies failed for main ... feature/x');
+    });
+
+    test('merge-base found but the diff from it fails: warns, returns empty string, no diff command reuses a stale base', function() {
+        var h = makeHarness({
+            'git rev-parse --is-shallow-repository': 'false\nCOMMAND_EXIT_CODE=0',
+            'git diff main...feature/x': function() { throw new Error('fail 1'); },
+            'git diff origin/main...feature/x': function() { throw new Error('fail 2'); },
+            'git merge-base origin/main feature/x': 'abc123def\nCOMMAND_EXIT_CODE=0',
+            'git diff abc123def...feature/x': function() { throw new Error('inner fail'); }
+        });
+
+        var diff = run(h, 'main', 'feature/x');
+
+        assert.equal(diff, '');
+        assert.contains(h.warns.join('\n'), 'Merge-base diff also failed: inner fail');
+        assert.contains(h.errors.join('\n'), 'All diff strategies failed for main ... feature/x');
+        assert.ok(h.commandStrings().indexOf('git diff \n...feature/x') === -1,
+            'an empty merge base must never reach the diff command');
+    });
+
+    test('outer catch: a non-string base branch returns empty string instead of throwing', function() {
+        var h = makeHarness({});
+
+        var diff = run(h, null, 'feature/x');
+
+        assert.equal(diff, '');
+        assert.equal(h.commands.length, 0, 'no git command may run when the base branch is unusable');
+        assert.contains(h.errors.join('\n'), 'Failed to get PR diff:');
+    });
+
+    test('a falsy (null) command throw surfaces in the outer catch — fallbacks are NOT attempted', function() {
+        var h = makeHarness({
+            'git rev-parse --is-shallow-repository': 'false\nCOMMAND_EXIT_CODE=0',
+            'git diff main...feature/x': function() { throw null; }
+        });
+
+        var diff = run(h, 'main', 'feature/x');
+
+        assert.equal(diff, '');
+        assert.contains(h.errors.join('\n'), 'Failed to get PR diff:');
+        assert.ok(h.commandStrings().indexOf('git diff origin/main...feature/x') === -1,
+            'null-ish throws must not be silently converted into a fallback attempt');
+    });
+
+});
+
