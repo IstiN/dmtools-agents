@@ -125,6 +125,16 @@ suite('scm gitlab discussion helpers', function () {
             mocks || {});
     }
 
+    test('_gitlabThreadPosition: new_* preferred, old_* fallback, null-safe', function () {
+        var mod = loadGitlabMod({});
+        assert.deepEqual(mod._gitlabThreadPosition({ new_path: '/n.js', new_line: 4, old_path: '/o.js', old_line: 2 }),
+            { path: '/n.js', line: 4 });
+        assert.deepEqual(mod._gitlabThreadPosition({ old_path: '/o.js', old_line: 2 }),
+            { path: '/o.js', line: 2 });
+        assert.deepEqual(mod._gitlabThreadPosition({}), { path: null, line: null });
+        assert.deepEqual(mod._gitlabThreadPosition(undefined), { path: null, line: null });
+    });
+
     test('_gitlabMapDiscussionThread: exact rawThreads entry shape', function () {
         var mod = loadGitlabMod({});
         assert.deepEqual(mod._gitlabMapDiscussionThread({

@@ -582,17 +582,24 @@ function _normalizeGitLabCommitStatus(status) {
 // (CRAP 648.7 in the baseline). Behaviour-preserving — pinned by
 // test_scmGitlabDiscussions.js.
 
+function _gitlabThreadPosition(pos) {
+    return {
+        path: (pos && (pos.new_path || pos.old_path)) || null,
+        line: (pos && (pos.new_line || pos.old_line)) || null
+    };
+}
+
 function _gitlabMapDiscussionThread(thread, index) {
     var notes = thread.notes || [];
     var root = notes[0] || {};
-    var pos = root.position || {};
+    var position = _gitlabThreadPosition(root.position);
     return {
         index: index,
         rootCommentId: thread.id,
         threadId: thread.id,
         discussionId: thread.id,
-        path: pos.new_path || pos.old_path || null,
-        line: pos.new_line || pos.old_line || null,
+        path: position.path,
+        line: position.line,
         resolved: thread.resolved === true || root.resolved === true,
         body: (root.body || '').trim()
     };
@@ -1278,6 +1285,7 @@ module.exports = {
     _getLegacyGithubCommitStatuses: _getLegacyGithubCommitStatuses,
     _unwrapGithubCheckRuns: _unwrapGithubCheckRuns,
     // gh-925: ADO/GitLab provider internals exposed as testable pure helpers
+    _gitlabThreadPosition: _gitlabThreadPosition,
     _gitlabMapDiscussionThread: _gitlabMapDiscussionThread,
     _gitlabThreadAuthor: _gitlabThreadAuthor,
     _gitlabThreadDate: _gitlabThreadDate,
