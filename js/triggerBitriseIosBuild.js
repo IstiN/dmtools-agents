@@ -31,58 +31,187 @@ function getTracker() {
     return _trackerInst;
 }
 
+// ── Pure param/matrix builders (extracted from action, gh-929) ───────────────
+
+function resolveJql(params, jobParams) {
+    return params.inputJql || jobParams.inputJql || '';
+}
+
+function parseJqlTicketKey(jql) {
+    var keyMatch = jql.match(/key\s*=\s*([A-Z]+-\d+)/i);
+    return keyMatch ? keyMatch[1].toUpperCase() : '';
+}
+
+function parseIssueList(results) {
+    var parsed = (typeof results === 'string') ? JSON.parse(results) : results;
+    return (parsed && parsed.issues) ? parsed.issues : (Array.isArray(parsed) ? parsed : []);
+}
+
+function ticketSummaryOf(ticket, fallbackKey) {
+    return (ticket && ticket.fields && ticket.fields.summary) || fallbackKey;
+}
+
+function fetchByKeySummary(key) {
+    try {
+        var ticket = getTracker().getIssue(key);
+        var summary = ticketSummaryOf(ticket, key);
+        console.log('✅ Ticket fetched:', key, '—', summary);
+        return { key: key, summary: summary };
+    } catch (e) {
+        console.warn('⚠️ Could not fetch ticket details:', e.message || e);
+        return { key: key, summary: '' };
+    }
+}
+
+function searchForTicket(jql) {
+    console.log('Fetching ticket by JQL:', jql);
+    try {
+        var issues = parseIssueList(getTracker().searchIssues(jql, { maxResults: 1 }));
+        if (issues.length > 0) {
+            return { key: issues[0].key, summary: ticketSummaryOf(issues[0], issues[0].key) };
+        }
+        return { key: '', summary: '' };
+    } catch (e) {
+        console.warn('⚠️ jira_search_by_jql failed:', e.message || e);
+        return { key: '', summary: '' };
+    }
+}
+
+function resolveIosTicket(inputJql) {
+    if (!inputJql) return { key: '', summary: '' };
+    // Extract ticket key directly from JQL (e.g. "key = PROJ-6815")
+    var key = parseJqlTicketKey(inputJql);
+    if (key) return fetchByKeySummary(key);
+    // Fallback: jira_search_by_jql
+    return searchForTicket(inputJql);
+}
+
+function resolveIosBitriseConfig(jobParams) {
+    var bb = jobParams.bitriseBuild || {};
+    return {
+        appSlug: bb.appSlug,
+        workflowId: bb.workflowId || 'build_ios_simulator',
+        triggerBranch: bb.triggerBranch || ''
+    };
+}
+
+function resolveFeaturePrConfig(jobParams) {
+    var featurePRConfig = jobParams.featurePR || {};
+    return {
+        owner: featurePRConfig.owner || '',
+        repo: featurePRConfig.repo || ''
+    };
+}
+
+function prHeadRef(pr) {
+    return (pr.head && pr.head.ref) || '';
+}
+
+function prViewUrl(pr) {
+    return pr.html_url || pr.url || '';
+}
+
+function prMatchesTicket(pr, ticketKey) {
+    var prBranch = prHeadRef(pr);
+    return (pr.title || '').indexOf(ticketKey) !== -1 || prBranch.indexOf(ticketKey) !== -1;
+}
+
+function findFeaturePrWithBranch(prs, ticketKey, defaultBranch) {
+    for (var i = 0; i < (prs || []).length; i++) {
+        var pr = prs[i];
+        if (prMatchesTicket(pr, ticketKey)) {
+            var branch = prHeadRef(pr) || defaultBranch;
+            console.log('✅ Found feature PR #' + pr.number + ' → branch: ' + branch);
+            return { branch: branch, url: prViewUrl(pr) };
+        }
+    }
+    return null;
+}
+
+function resolveIosFeatureBranch(projectConfig, jobParams, ticketKey) {
+    var featureConfig = resolveFeaturePrConfig(jobParams);
+    var result = { branch: 'develop', url: '' };
+    if (!(featureConfig.owner && featureConfig.repo)) return result;
+    try {
+        var featureScm = configLoader.createScm({
+            scm: projectConfig.scm,
+            repository: { owner: featureConfig.owner, repo: featureConfig.repo }
+        });
+        var pr = findFeaturePrWithBranch(featureScm.listPrs('open'), ticketKey, result.branch);
+        if (!pr || !pr.url) {
+            console.log('ℹ️ No open feature PR found — triggering on develop');
+        }
+        if (pr) {
+            result.branch = pr.branch || result.branch;
+            result.url = pr.url;
+        }
+    } catch (e) {
+        console.warn('⚠️ Could not search PRs:', e.message || e);
+    }
+    return result;
+}
+
+function buildIosEnvVars(ticketKey, branch, featurePrUrl) {
+    var envVars = [
+        { mapped_to: 'TICKET_KEY', value: ticketKey, is_expand: false },
+        { mapped_to: 'MOBILE_BRANCH', value: branch, is_expand: false }
+    ];
+    if (featurePrUrl) {
+        envVars.push({ mapped_to: 'FEATURE_PR_URL', value: featurePrUrl, is_expand: false });
+    }
+    return envVars;
+}
+
+function resolveIosBuildUrl(data) {
+    var fromResults = data.results && data.results[0] && data.results[0].build_url;
+    return data.build_url ||
+        (data.build_slug ? 'https://app.bitrise.io/build/' + data.build_slug : '') ||
+        fromResults || '';
+}
+
+function parseTriggerResult(buildResult) {
+    // bitrise_trigger_build may return a JSON string — parse it
+    var buildData = (typeof buildResult === 'string') ? JSON.parse(buildResult) : buildResult;
+    console.log('✅ Bitrise build triggered: build #' + (buildData.build_number || '?'));
+    return { buildUrl: resolveIosBuildUrl(buildData) };
+}
+
+function buildIosComment(ticketKey, workflowId, branch, buildUrl, featurePrUrl) {
+    var comment = 'h3. 🏗️ iOS Build Triggered\n\n' +
+        'Bitrise *' + workflowId + '* triggered manually for *' + ticketKey + '*.\n\n' +
+        '| Field | Value |\n|-------|-------|\n' +
+        '| Workflow | ' + workflowId + ' |\n' +
+        '| Branch | ' + branch + ' |';
+    if (buildUrl) comment += '\n| Build | [View on Bitrise|' + buildUrl + '] |';
+    if (featurePrUrl) comment += '\n| Feature PR | ' + featurePrUrl + ' |';
+    return comment;
+}
+
+function safeIosPostComment(ticketKey, comment) {
+    try {
+        getTracker().postComment(ticketKey, comment);
+        console.log('✅ Posted Jira comment');
+    } catch (e) {
+        console.warn('⚠️ Could not post Jira comment:', e.message || e);
+    }
+}
+
 function action(params) {
     try {
         var jobParams = params.jobParams || {};
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         initTracker(projectConfig, jobParams.customParams || {});
-        // params.inputJql (from Jira encoded_config) takes priority over jobParams default
-        var inputJql = params.inputJql || jobParams.inputJql || '';
-        var bb = jobParams.bitriseBuild || {};
-        var appSlug = bb.appSlug;
-        var workflowId = bb.workflowId || 'build_ios_simulator';
-        var triggerBranch = bb.triggerBranch || '';
-        var featurePRConfig = jobParams.featurePR || {};
-        var featureOwner = featurePRConfig.owner || '';
-        var featureRepo = featurePRConfig.repo || '';
+        var cfg = resolveIosBitriseConfig(jobParams);
 
-        if (!appSlug) {
+        if (!cfg.appSlug) {
             console.error('❌ jobParams.bitriseBuild.appSlug is required');
             return { success: false, error: 'Missing bitriseBuild.appSlug' };
         }
 
         // ── 1. Fetch ticket by JQL ────────────────────────────────────────────
-        var ticketKey = '';
-        var ticketSummary = '';
-        if (inputJql) {
-            // Extract ticket key directly from JQL (e.g. "key = PROJ-6815")
-            var keyMatch = inputJql.match(/key\s*=\s*([A-Z]+-\d+)/i);
-            if (keyMatch) {
-                ticketKey = keyMatch[1].toUpperCase();
-                try {
-                    var ticket = getTracker().getIssue(ticketKey);
-                    ticketSummary = (ticket && ticket.fields && ticket.fields.summary) || ticketKey;
-                    console.log('✅ Ticket fetched:', ticketKey, '—', ticketSummary);
-                } catch (e) {
-                    console.warn('⚠️ Could not fetch ticket details:', e.message || e);
-                }
-            } else {
-                // Fallback: jira_search_by_jql
-                console.log('Fetching ticket by JQL:', inputJql);
-                try {
-                    var results = getTracker().searchIssues(inputJql, { maxResults: 1 });
-                    var parsed = (typeof results === 'string') ? JSON.parse(results) : results;
-                    var issues = (parsed && parsed.issues) ? parsed.issues : (Array.isArray(parsed) ? parsed : []);
-                    if (issues.length > 0) {
-                        ticketKey = issues[0].key;
-                        ticketSummary = (issues[0].fields && issues[0].fields.summary) || ticketKey;
-                    }
-                } catch (e) {
-                    console.warn('⚠️ jira_search_by_jql failed:', e.message || e);
-                }
-            }
-        }
-        if (!ticketKey) {
+        var inputJql = resolveJql(params, jobParams);
+        var ticket = resolveIosTicket(inputJql);
+        if (!ticket.key) {
             console.error('❌ No ticket found for JQL:', inputJql);
             return { success: false, error: 'No ticket found for: ' + inputJql };
         }
@@ -90,84 +219,29 @@ function action(params) {
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('🏗️  Bitrise iOS Build Trigger');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('Ticket:', ticketKey, '—', ticketSummary);
+        console.log('Ticket:', ticket.key, '—', ticket.summary);
 
         // ── 2. Find open feature PR → get head branch ─────────────────────────
-        var branch = 'develop';
-        var featurePrUrl = '';
-        if (featureOwner && featureRepo) {
-            try {
-                var featureScm = configLoader.createScm({
-                    scm: projectConfig.scm,
-                    repository: { owner: featureOwner, repo: featureRepo }
-                });
-                var prs = featureScm.listPrs('open');
-                if (prs && prs.length > 0) {
-                    for (var i = 0; i < prs.length; i++) {
-                        var pr = prs[i];
-                        var prTitle = pr.title || '';
-                        var prBranch = (pr.head && pr.head.ref) || '';
-                        if (prTitle.indexOf(ticketKey) !== -1 || prBranch.indexOf(ticketKey) !== -1) {
-                            branch = prBranch || branch;
-                            featurePrUrl = pr.html_url || pr.url || '';
-                            console.log('✅ Found feature PR #' + pr.number + ' → branch: ' + branch);
-                            break;
-                        }
-                    }
-                }
-                if (!featurePrUrl) {
-                    console.log('ℹ️ No open feature PR found — triggering on develop');
-                }
-            } catch (e) {
-                console.warn('⚠️ Could not search PRs:', e.message || e);
-            }
-        }
+        var pr = resolveIosFeatureBranch(projectConfig, jobParams, ticket.key);
 
         // ── 3. Trigger Bitrise build ─────────────────────────────────────────
         // triggerBranch (e.g. "main") = branch for Bitrise to fetch the YAML from.
         // MOBILE_BRANCH env var = the actual mobileApp branch to clone/build.
-        var effectiveBranch = triggerBranch || branch;
-        var envVars = [
-            { mapped_to: 'TICKET_KEY', value: ticketKey, is_expand: false },
-            { mapped_to: 'MOBILE_BRANCH', value: branch, is_expand: false }
-        ];
-        if (featurePrUrl) {
-            envVars.push({ mapped_to: 'FEATURE_PR_URL', value: featurePrUrl, is_expand: false });
-        }
-
+        var effectiveBranch = cfg.triggerBranch || pr.branch;
         var buildResult = bitrise_trigger_build({
-            appSlug:       appSlug,
-            workflowId:    workflowId,
+            appSlug:       cfg.appSlug,
+            workflowId:    cfg.workflowId,
             branch:        effectiveBranch,
-            commitMessage: ticketKey + ' — iOS build for ' + branch,
-            envVars:       JSON.stringify(envVars)
+            commitMessage: ticket.key + ' — iOS build for ' + pr.branch,
+            envVars:       JSON.stringify(buildIosEnvVars(ticket.key, pr.branch, pr.url))
         });
 
-        // bitrise_trigger_build may return a JSON string — parse it
-        var buildData = (typeof buildResult === 'string') ? JSON.parse(buildResult) : buildResult;
-        console.log('✅ Bitrise build triggered: build #' + (buildData.build_number || '?'));
-
-        var buildUrl = buildData.build_url ||
-            (buildData.build_slug ? 'https://app.bitrise.io/build/' + buildData.build_slug : '') ||
-            (buildData.results && buildData.results[0] && buildData.results[0].build_url) || '';
+        var build = parseTriggerResult(buildResult);
 
         // ── 4. Post Jira comment ─────────────────────────────────────────────
-        var comment = 'h3. 🏗️ iOS Build Triggered\n\n' +
-            'Bitrise *' + workflowId + '* triggered manually for *' + ticketKey + '*.\n\n' +
-            '| Field | Value |\n|-------|-------|\n' +
-            '| Workflow | ' + workflowId + ' |\n' +
-            '| Branch | ' + branch + ' |';
-        if (buildUrl) comment += '\n| Build | [View on Bitrise|' + buildUrl + '] |';
-        if (featurePrUrl) comment += '\n| Feature PR | ' + featurePrUrl + ' |';
+        safeIosPostComment(ticket.key, buildIosComment(ticket.key, cfg.workflowId, pr.branch, build.buildUrl, pr.url));
 
-        try {
-            getTracker().postComment(ticketKey, comment);
-            console.log('✅ Posted Jira comment');
-        } catch (e) {
-            console.warn('⚠️ Could not post Jira comment:', e.message || e);
-        }
-
-        return { success: true, buildUrl: buildUrl, branch: branch, workflowId: workflowId };
+        return { success: true, buildUrl: build.buildUrl, branch: pr.branch, workflowId: cfg.workflowId };
 
     } catch (error) {
         console.error('❌ Error in triggerBitriseIosBuild:', error);
@@ -176,5 +250,26 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action: action,
+        resolveJql: resolveJql,
+        parseJqlTicketKey: parseJqlTicketKey,
+        parseIssueList: parseIssueList,
+        ticketSummaryOf: ticketSummaryOf,
+        fetchByKeySummary: fetchByKeySummary,
+        searchForTicket: searchForTicket,
+        resolveIosTicket: resolveIosTicket,
+        resolveIosBitriseConfig: resolveIosBitriseConfig,
+        resolveFeaturePrConfig: resolveFeaturePrConfig,
+        prHeadRef: prHeadRef,
+        prViewUrl: prViewUrl,
+        prMatchesTicket: prMatchesTicket,
+        findFeaturePrWithBranch: findFeaturePrWithBranch,
+        resolveIosFeatureBranch: resolveIosFeatureBranch,
+        buildIosEnvVars: buildIosEnvVars,
+        resolveIosBuildUrl: resolveIosBuildUrl,
+        parseTriggerResult: parseTriggerResult,
+        buildIosComment: buildIosComment,
+        safeIosPostComment: safeIosPostComment
+    };
 }
