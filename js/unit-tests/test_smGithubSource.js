@@ -607,8 +607,11 @@ suite('sm github source', function () {
         assert.deepEqual(r.query.mutexAmong, ['pr_approved']);
         assert.equal(r.query.mutexExcludeSelf, undefined,
             'global form — the candidate is not yet armed, self never appears');
-        assert.deepEqual((r.query.notLabels || []), ['ai_validating', 'validation_failed'],
-            'un-armed + not validation_failed — parked guests (owner 2026-09-27, fa#923) stay out of the arm queue');
+        assert.deepEqual((r.query.notLabels || []),
+            ['ai_validating', 'validation_failed', 'rework-loop-escalated'],
+            'un-armed + not validation_failed + not rework-loop-escalated — parked guests (owner 2026-09-27,' +
+            ' fa#923) and gh-957 human-handoff PRs (gh-990: an armed human-owned PR would hold the mutex' +
+            ' hostage behind a label only a human clears) stay out of the arm queue');
     });
 
     // ── gh-837: mutexMax — parallel validations in the merge window ──
