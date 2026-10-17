@@ -1889,10 +1889,11 @@ suite('developTicketAndCreatePR > leg outcome characterization (gh-930)', functi
         var prUrl = 'https://github.com/acme/widgets/pull/71';
         var commands = [];
         var written = [];
+        var git = pushRejectedGitMock('ai/TS-70', prUrl);
         var loaded = loadForOutcomePinning({
             cli_execute_command: function (args) {
                 commands.push(args.command);
-                return pushRejectedGitMock('ai/TS-70', prUrl)(args);
+                return git(args);
             },
             file_write: function (args) { written.push(args.path); }
         }, {
@@ -1907,7 +1908,9 @@ suite('developTicketAndCreatePR > leg outcome characterization (gh-930)', functi
         });
 
         assert.equal(result.success, true);
-        assert.equal(result.prUrl, prUrl);
+        assert.equal(result.prUrl, prUrl,
+            'the leg must reach PR creation after the force-push fix — result: ' + JSON.stringify(result) +
+            '; forces: ' + JSON.stringify(commands.filter(function (c) { return c.indexOf('git push') === 0; })));
         assert.ok(commands.some(function (c) { return c.indexOf('git push -u origin ai/TS-70 --force') === 0; }),
             'the force-push retry must run — commands: ' + JSON.stringify(commands));
         assert.ok(written.indexOf('input/TS-70/push_error.md') !== -1,
