@@ -277,184 +277,224 @@ function hasOpenLinkedPr(q, item) {
 // `owner` (repoInfo.owner) rides through for the release-bump form of the
 // machine-authorship gate (#1104): chore/release-v* | chore(release): from
 // the repo owner counts as machine — see common/machineAuthor.js.
-function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
-    var q = rule.query || {};
-    var labels = item.labels || [];
-    if (q.notLabels && q.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) {
-        return false;
-    }
+// ── Guard helpers (gh-1009) ─────────────────────────────────────────────────
+// matchesGuards is an orchestration shell; each guard decision group lives in
+// one module-level helper below so the per-function complexity stays under
+// the CRAP ratchet. Behaviour byte-identical: same guard order, same
+// fail-open/fail-closed shapes, same lazy provider reads (the side-effecting
+// probes — lastReview / latestVerdictRecord / reviewThreads /
+// cachedIssueLabels — keep their relative order).
+
+// Shared string-or-list normalizer (string|string[] → string[]|null).
+// gh-944 CI: every guard decision routed through the helpers keeps the
+// noOpenPr-era complexity neutral (baseline-locked by the CRAP ratchet).
+function wantList(want) {
+    return Array.isArray(want) ? want : (want ? [want] : null);
+}
+
+// The live provider reports `checkConclusion`; older stubs (and the
+// issue-path placeholder) use `checks`. Accept both everywhere.
+function _checkRollup(pr) {
+    return pr ? (pr.checkConclusion || pr.checks) : undefined;
+}
+
+function _labelListMatch(anyOf, prLs) {
+    return anyOf.some(function (l) { return prLs.indexOf(l) !== -1; });
+}
+
+function _issueCarrierGuardsFail(q, labels, item) {
+    if (q.notLabels && _labelListMatch(q.notLabels, labels)) return true;
     // gh-944 dev-on-assignment: an issue whose linked PR is OPEN is
-    // post-dev — the PR lifecycle rules own it (validate-fresh,
-    // rework-on-red-gate-unlatched, develop-done). hasOpenLinkedPr carries
-    // the eligibility detail (MERGED-PR / PR-less stay fresh dev handoffs).
-    if (hasOpenLinkedPr(q, item)) return false;
+    // post-dev — the PR lifecycle rules own it (hasOpenLinkedPr carries
+    // the eligibility detail: MERGED-PR / PR-less stay fresh dev handoffs).
+    if (hasOpenLinkedPr(q, item)) return true;
     // 'blocked' = human hold (fa #939): the machine skips the item
-    // ENTIRELY — all rules, all legs (no dispatch, no merge, no review, no
-    // branch updates) — until a human removes the label. Engine-level, not
-    // per-rule: applies to every rule incl. future ones. Both carriers:
-    // the issue's own labels AND the linked PR's labels freeze an
-    // issue-carrier item (an issue whose PR a human parked must not keep
-    // receiving review/rework dispatches).
-    if (labels.indexOf('blocked') !== -1) {
-        return false;
-    }
-    // The live provider reports `checkConclusion`; older stubs (and the
-    // issue-path placeholder) use `checks`. Accept both everywhere.
+    // ENTIRELY — all rules, all legs — until a human removes the label.
+    if (labels.indexOf('blocked') !== -1) return true;
+    return false;
+}
+
+function _prChecksGuardsFail(q, item) {
     // Array form (like mergeState): the dispatch-CI bridge reports a
     // PENDING check run on every fresh head, so "no CI yet" is either
     // 'none' or 'pending' — validate-fresh matches both.
-    var rollup = function (pr) { return pr ? (pr.checkConclusion || pr.checks) : undefined; };
-    // Shared string-or-list normalizer (string|string[] → string[]|null).
-    // gh-944 CI: matchesGuards is baseline-locked by the CRAP ratchet
-    // (Quality workflow) — every added guard decision must be offset. The
-    // mergeState/notMergeState sites below inlined this exact expression;
-    // routing them through the helper keeps the added noOpenPr guard
-    // complexity-neutral (baseline 93.5 → measured below it).
-    var wantList = function (want) {
-        return Array.isArray(want) ? want : (want ? [want] : null);
-    };
-    if (q.prChecks && wantList(q.prChecks).indexOf(rollup(item.pr)) === -1) return false;
-    if (q.prMergeState && (!item.pr || item.pr.mergeState !== q.prMergeState)) return false;
+    if (q.prChecks && wantList(q.prChecks).indexOf(_checkRollup(item.pr)) === -1) return true;
+    if (q.checks && wantList(q.checks).indexOf(_checkRollup(item.pr)) === -1) return true;
+    return false;
+}
+
+function _prMergeStateGuardFail(q, item) {
+    if (q.prMergeState && (!item.pr || item.pr.mergeState !== q.prMergeState)) return true;
+    return false;
+}
+
+function _mergeStateListGuardFail(q, item) {
     var msWant = wantList(q.mergeState);
-    if (msWant && (!item.pr || msWant.indexOf(item.pr.mergeState) === -1)) return false;
-    // PR-carrier guards (issue #687 lifecycle rules): `checks` reads the
-    // provider's check rollup (green/red/pending/none); `notMergeState`
-    // excludes one state (e.g. BEHIND while a silent update lands).
-    if (q.checks && wantList(q.checks).indexOf(rollup(item.pr)) === -1) return false;
+    if (msWant && (!item.pr || msWant.indexOf(item.pr.mergeState) === -1)) return true;
+    return false;
+}
+
+function _notMergeStateListGuardFail(q, item) {
     // Array form (owner FIFO rule 2026-09-22): exclude PRs in ANY of the
-    // listed states — validate-armed must skip BEHIND (refresh first) AND
-    // DIRTY (conflict-rework owns the oldest; a newer approved proceeds
-    // while the conflicted one reworks — no wasted validation on a head
-    // that can never merge).
+    // listed states — validate-armed skips BEHIND (refresh first) AND
+    // DIRTY (conflict-rework owns the oldest).
     var nmsWant = wantList(q.notMergeState);
-    if (nmsWant && (!item.pr || nmsWant.indexOf(item.pr.mergeState) !== -1)) return false;
-    // gh-829 mergeState latch: a listed merge state matches ONLY when the
-    // PR's linked issue carries the latch label(s). The gh-759
-    // masked-green rule excluded CLEAN ('merge-validated owns CLEAN') —
-    // but merge-validated needs pr_approved, which a ZERO-label PR can
-    // never reach without first being validated: a fresh machine PR whose
-    // head is CLEAN + green with zero labels rotted for hours (live #826,
-    // issue latch ai_developed present, no ai_validating, no review). The
-    // latch narrows the exclusion instead of dropping it: green + CLEAN +
-    // zero lifecycle labels + the issue's ai_developed latch (the dev
-    // leg's done-marker — machine-work gating, guests stay unarmed) arms
-    // validation exactly like the BLOCKED branch; WITHOUT the latch the
-    // old exclusion effectively stands (merge-validated owns CLEAN).
-    // States not listed in the latch are inert — BEHIND/DIRTY stay
-    // excluded via notMergeState. Fails CLOSED: no linked issue, fetch
-    // failure, or a missing label excludes the state, never matches it.
-    // The per-tick TTL cache (cachedIssueLabels) keeps the per-rule
-    // re-query cheap.
-    if (q.mergeStateLatch) {
-        // Fail closed standalone: an item with NO merge-state observation
-        // (pr-less issue carrier, pr carrier whose status never resolved)
-        // must not sail through a latch over a listed state — an unknown
-        // merge state is not CLEAN.
-        if (!item.pr) return false;
-        var latchState = item.pr.mergeState;
-        var latchWant = latchState ? q.mergeStateLatch[latchState] : null;
-        // Normalize string | string[] exactly like notMergeState /
-        // mergeState / checks above — a bare string iterated as an array
-        // would index CHARACTERS and silently disable the arm.
-        if (typeof latchWant === 'string') latchWant = [latchWant];
-        if (latchWant) {
-            var latchIssue = (item.issueNumber && repoInfo)
-                ? cachedIssueLabels(repoInfo, item.issueNumber) : null;
-            if (!latchIssue) return false;
-            for (var li = 0; li < latchWant.length; li++) {
-                if (latchIssue.indexOf(latchWant[li]) === -1) return false;
-            }
-        }
-    }
-    // Stale review verdict (PR #690): CHANGES_REQUESTED pinned to an older
-    // commit while fixes landed on a newer green head — a re-review is
-    // owed. Lazily resolved via provider.lastReview; without a provider
-    // (defensive stubs) the guard never matches.
-    if (q.reviewStale) {
-        var lr = (provider && provider.lastReview)
-            ? provider.lastReview(item.prNumber) : null;
-        var stale = !!(lr && lr.state === 'CHANGES_REQUESTED' && item.pr &&
-                       item.pr.headSha && lr.commitId &&
-                       lr.commitId !== item.pr.headSha);
-        if (!stale) return false;
-    }
-    // ANY verdict (not just CHANGES_REQUESTED) rendered on an older commit
-    // — pairs with threadsResolved so a re-review fires once per head
-    // change and never loops (the re-review's verdict lands on the
-    // current head, clearing the staleness).
-    if (q.staleVerdict) {
-        var lv = (provider && provider.lastReview)
-            ? provider.lastReview(item.prNumber) : null;
-        if (!(lv && lv.commitId && item.pr && item.pr.headSha &&
-              lv.commitId !== item.pr.headSha)) return false;
-    }
-    // gh-807 verdict reconciliation: the NEWEST machine verdict record
-    // (js/common/reviewVerdicts.js marker on a PR comment) for the CURRENT
-    // head gates the pr_approved lanes. `notLatestVerdict` excludes the item
-    // when the newest record for the head is one of the listed verdicts
-    // (merge-validated/validate-armed block while a REQUEST_CHANGES stands
-    // — "blocks pr_approved-gated paths until re-review"); `latestVerdict`
-    // matches only when it IS one of the listed verdicts (the
-    // conflict-shaped reconcile-* rules fire on exactly the contradictory
-    // carrier+verdict shapes). Both fail-open: no records (pre-gh-807 PRs),
-    // no head sha, or a provider without the probe → guard inert → legacy
-    // behavior. The record read pins the gh-728 machine-author allowlist
-    // (gh-828 review round 2, forge hardening): the marker format is
-    // public, so only machine-authored markers count — a forged
-    // APPROVE/REQUEST_CHANGES from any comment-capable identity is
-    // invisible, and with no machineAuthor configured the guards degrade
-    // to exactly this inert fail-open shape.
-    if (q.notLatestVerdict || q.latestVerdict) {
-        var lvRec = (provider && typeof provider.latestVerdictRecord === 'function')
-            ? provider.latestVerdictRecord(item.prNumber,
-                item.pr && item.pr.headSha,
-                { authorLogins: machineAuthorModule.machineAuthorLogins(machineAuthor) }) : null;
-        var lvVerdict = lvRec && lvRec.record ? lvRec.record.verdict : null;
-        if (q.notLatestVerdict && lvVerdict &&
-            q.notLatestVerdict.indexOf(lvVerdict) !== -1) return false;
-        if (q.latestVerdict && (!lvVerdict ||
-            q.latestVerdict.indexOf(lvVerdict) === -1)) return false;
-    }
+    if (nmsWant && (!item.pr || nmsWant.indexOf(item.pr.mergeState) !== -1)) return true;
+    return false;
+}
+
+function _latchWantedLabels(q, item) {
+    var latchState = item.pr.mergeState;
+    var latchWant = latchState ? q.mergeStateLatch[latchState] : null;
+    // Normalize string | string[] exactly like notMergeState / mergeState /
+    // checks — a bare string iterated as an array would index CHARACTERS
+    // and silently disable the arm.
+    if (typeof latchWant === 'string') latchWant = [latchWant];
+    return latchWant || null;
+}
+
+// gh-829 mergeState latch: a listed merge state matches ONLY when the PR's
+// linked issue carries the latch label(s). Fails CLOSED: no linked issue,
+// fetch failure, or a missing label excludes the state, never matches it.
+function _mergeStateLatchGuardFail(q, item, repoInfo) {
+    // Fail closed standalone: an item with NO merge-state observation must
+    // not sail through a latch over a listed state — unknown is not CLEAN.
+    if (!item.pr) return true;
+    var latchWant = _latchWantedLabels(q, item);
+    if (!latchWant) return false;
+    var latchIssue = (item.issueNumber && repoInfo)
+        ? cachedIssueLabels(repoInfo, item.issueNumber) : null;
+    if (!latchIssue) return true;
+    return latchWant.some(function (l) { return latchIssue.indexOf(l) === -1; });
+}
+
+function _lastReviewFor(provider, prNumber) {
+    return (provider && provider.lastReview) ? provider.lastReview(prNumber) : null;
+}
+
+// Stale review verdict (PR #690): CHANGES_REQUESTED pinned to an older
+// commit while fixes landed on a newer green head — a re-review is owed.
+function _isStaleChangesRequested(lr, item) {
+    return !!(lr && lr.state === 'CHANGES_REQUESTED' && item.pr &&
+              item.pr.headSha && lr.commitId &&
+              lr.commitId !== item.pr.headSha);
+}
+
+function _reviewStaleGuardFail(q, item, provider) {
+    if (!q.reviewStale) return false;
+    return !_isStaleChangesRequested(_lastReviewFor(provider, item.prNumber), item);
+}
+
+// ANY verdict (not just CHANGES_REQUESTED) rendered on an older commit —
+// pairs with threadsResolved so a re-review fires once per head change.
+function _verdictOnOlderHead(lv, item) {
+    return !!(lv && lv.commitId && item.pr && item.pr.headSha &&
+              lv.commitId !== item.pr.headSha);
+}
+
+function _staleVerdictGuardFail(q, item, provider) {
+    if (!q.staleVerdict) return false;
+    return !_verdictOnOlderHead(_lastReviewFor(provider, item.prNumber), item);
+}
+
+function _latestVerdictRec(provider, prNumber, headSha, machineAuthor) {
+    // gh-807: pins the gh-728 machine-author allowlist (gh-828 review
+    // round 2) — the marker format is public, so only machine-authored
+    // markers count. Fail-open: no probe → null → guards inert.
+    var probe = (provider && typeof provider.latestVerdictRecord === 'function')
+        ? provider.latestVerdictRecord : null;
+    if (!probe) return null;
+    return probe(prNumber, headSha,
+        { authorLogins: machineAuthorModule.machineAuthorLogins(machineAuthor) });
+}
+
+function _notLatestVerdictHit(q, lvVerdict) {
+    return !!(q.notLatestVerdict && lvVerdict &&
+              q.notLatestVerdict.indexOf(lvVerdict) !== -1);
+}
+
+function _latestVerdictMiss(q, lvVerdict) {
+    return !!(q.latestVerdict &&
+              (!lvVerdict || q.latestVerdict.indexOf(lvVerdict) === -1));
+}
+
+function _verdictRecordGuardsFail(q, item, provider, machineAuthor) {
+    if (!q.notLatestVerdict && !q.latestVerdict) return false;
+    var lvRec = _latestVerdictRec(provider, item.prNumber,
+        item.pr && item.pr.headSha, machineAuthor);
+    var lvVerdict = lvRec && lvRec.record ? lvRec.record.verdict : null;
+    if (_notLatestVerdictHit(q, lvVerdict)) return true;
+    if (_latestVerdictMiss(q, lvVerdict)) return true;
+    return false;
+}
+
+function _reviewThreadsFor(provider, prNumber) {
+    return (provider && provider.reviewThreads) ? provider.reviewThreads(prNumber) : null;
+}
+
+function _threadsGuardsFail(q, item, provider) {
     // All review threads resolved (at least one exists): the rework leg
-    // resolved the review's findings — a fresh verdict is owed.
-    // gh-683: the explicit FALSE direction — unresolved threads exist —
-    // arms rework on machine-authored PRs (the rework leg owns open
-    // threads; a fresh verdict with unresolved threads equally needs
-    // rework). total 0 matches neither direction: nothing to rework,
-    // nothing to re-review.
+    // resolved the review's findings — a fresh verdict is owed. gh-683:
+    // the explicit FALSE direction — unresolved threads exist — arms
+    // rework on machine-authored PRs. total 0 matches neither direction.
     if (q.threadsResolved === true) {
-        var th = (provider && provider.reviewThreads)
-            ? provider.reviewThreads(item.prNumber) : null;
-        if (!(th && th.total > 0 && th.unresolved === 0)) return false;
-    } else if (q.threadsResolved === false) {
-        var tho = (provider && provider.reviewThreads)
-            ? provider.reviewThreads(item.prNumber) : null;
-        if (!(tho && tho.unresolved > 0)) return false;
+        var th = _reviewThreadsFor(provider, item.prNumber);
+        return !(th && th.total > 0 && th.unresolved === 0);
     }
-    // Machine-author gate (owner rule): auto legs (rework, review, …) only
-    // fire on machine-authored PRs — the deployment's machine login, or a
-    // release-bump PR authored by the repo owner (#1104: auto_release.sh
-    // runs on the owner's RELEASE_PAT, so GitHub records the owner as the
-    // PR author; the machine login never matches those). Fail-closed: no
-    // machineAuthor configured AND not a release bump → matches nothing.
-    // PR-carrier items carry `author` from the list call (free);
-    // issue-carrier items read it from the enriched prStatus.
-    if (q.prMachineAuthor) {
-        if (!machineAuthorModule.isMachineAuthored(item, machineAuthor, owner)) {
-            return false;
-        }
+    if (q.threadsResolved === false) {
+        var tho = _reviewThreadsFor(provider, item.prNumber);
+        return !(tho && tho.unresolved > 0);
     }
-    if (q.mergeable === true && (!item.pr || item.pr.mergeable !== true)) return false;
-    if (q.prState && (!item.pr || item.pr.state !== q.prState)) return false;
+    return false;
+}
+
+function _machineAuthorGuardFail(q, item, machineAuthor, owner) {
+    // Machine-author gate (owner rule): auto legs only fire on
+    // machine-authored PRs — the deployment's machine login, or a
+    // release-bump PR authored by the repo owner (#1104). Fail-closed.
+    if (!q.prMachineAuthor) return false;
+    return !machineAuthorModule.isMachineAuthored(item, machineAuthor, owner);
+}
+
+function _mergeableGuardFail(q, item) {
+    if (q.mergeable === true && (!item.pr || item.pr.mergeable !== true)) return true;
+    return false;
+}
+
+function _prStateGuardFail(q, item) {
+    if (q.prState && (!item.pr || item.pr.state !== q.prState)) return true;
+    return false;
+}
+
+function _prLabelGuardsFail(q, item) {
     // PR-side label guards (issue-anchored rules): the machine loop pins
     // ai_pr_reviewed and agent:review on the PR while the rule's type is
-    // issue — match/not-match must read the linked PR's labels.
+    // issue — match/not-match reads the linked PR's labels.
     var prLs = (item.pr && item.pr.labels) || [];
-    // 'blocked' on the PR side of an issue-carrier item freezes it too —
-    // see the item-labels check at the top of this guard.
-    if (prLs.indexOf('blocked') !== -1) return false;
-    if (q.prLabels && !q.prLabels.some(function (l) { return prLs.indexOf(l) !== -1; })) return false;
-    if (q.notPrLabels && q.notPrLabels.some(function (l) { return prLs.indexOf(l) !== -1; })) return false;
+    // 'blocked' on the PR side of an issue-carrier item freezes it too.
+    if (prLs.indexOf('blocked') !== -1) return true;
+    if (q.prLabels && !_labelListMatch(q.prLabels, prLs)) return true;
+    if (q.notPrLabels && _labelListMatch(q.notPrLabels, prLs)) return true;
+    return false;
+}
+
+function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
+    var q = rule.query || {};
+    var labels = item.labels || [];
+    if (_issueCarrierGuardsFail(q, labels, item)) return false;
+    if (_prChecksGuardsFail(q, item)) return false;
+    if (_prMergeStateGuardFail(q, item)) return false;
+    if (_mergeStateListGuardFail(q, item)) return false;
+    if (_notMergeStateListGuardFail(q, item)) return false;
+    if (q.mergeStateLatch && _mergeStateLatchGuardFail(q, item, repoInfo)) return false;
+    if (_reviewStaleGuardFail(q, item, provider)) return false;
+    if (_staleVerdictGuardFail(q, item, provider)) return false;
+    if (_verdictRecordGuardsFail(q, item, provider, machineAuthor)) return false;
+    if (_threadsGuardsFail(q, item, provider)) return false;
+    if (_machineAuthorGuardFail(q, item, machineAuthor, owner)) return false;
+    if (_mergeableGuardFail(q, item)) return false;
+    if (_prStateGuardFail(q, item)) return false;
+    if (_prLabelGuardsFail(q, item)) return false;
     return true;
 }
 
@@ -661,34 +701,243 @@ function linkedIssueNumber(body) {
     return m ? parseInt(m[2], 10) : null;
 }
 
-function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {    var q = rule.query || {};
+// ── queryPrs helpers (gh-1009) ──────────────────────────────────────────────
+// Same split as the guards: queryPrs keeps the orchestration (list → block
+// filter → mutex → lazy status → guard filter → bench → tier sort → slice);
+// every decision group is a module-level helper below, behaviour-identical.
+
+function _openPrList(provider, repoInfo) {
     // The open-PR list rides the provider's per-tick ioCache — this site
     // fired github_list_prs once PER RULE (measured: 18 calls, one idle
     // tick, all the same payload). Providers without the cache contract
     // (gitlab stub returns null) keep the direct fetch.
-    var prs = (provider && typeof provider.listOpenPrs === 'function'
+    return (provider && typeof provider.listOpenPrs === 'function'
         ? provider.listOpenPrs() : null) ||
         asList(parseMcp(github_list_prs({
             workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open'
         })));
+}
 
-    var items = prs.map(function (p) {
-        return {
-            key: 'pr-' + p.number,
-            labels: prLabels(p),
-            pr: null,
-            issueNumber: linkedIssueNumber(p.body),
-            prNumber: p.number,
-            draft: !!p.draft,
-            branch: (p.head && p.head.ref) || p.headRefName || '',
-            title: p.title || '',
-            // REST /pulls carries the creator under `user` (no `author`
-            // key at all — live-verified); GraphQL and the unit fixtures
-            // use `author`. Read both.
-            author: (p.user && p.user.login) ||
-                (p.author && (p.author.login || p.author.name)) || ''
-        };
+function _prListBranch(p) {
+    return (p.head && p.head.ref) || p.headRefName || '';
+}
+
+function _prListAuthor(p) {
+    // REST /pulls carries the creator under `user` (no `author` key at
+    // all — live-verified); GraphQL and the unit fixtures use `author`.
+    if (p.user && p.user.login) return p.user.login;
+    if (p.author && p.author.login) return p.author.login;
+    if (p.author && p.author.name) return p.author.name;
+    return '';
+}
+
+function _prItemFromPr(p) {
+    return {
+        key: 'pr-' + p.number,
+        labels: prLabels(p),
+        pr: null,
+        issueNumber: linkedIssueNumber(p.body),
+        prNumber: p.number,
+        draft: !!p.draft,
+        branch: _prListBranch(p),
+        title: p.title || '',
+        author: _prListAuthor(p)
+    };
+}
+
+function _buildPrItems(prs) {
+    var items = [];
+    for (var i = 0; i < prs.length; i++) items.push(_prItemFromPr(prs[i]));
+    return items;
+}
+
+function _mutexMaxOf(q) {
+    // gh-837 (merge cadence): q.mutexMax (default 1) — how many arms the
+    // mutex admits CONCURRENTLY when the validationConcurrency knob is up.
+    return (typeof q.mutexMax === 'number' && isFinite(q.mutexMax))
+        ? Math.max(1, Math.floor(q.mutexMax)) : 1;
+}
+
+function _holdsMutex(it, mutexLabel, among) {
+    if (it.labels.indexOf(mutexLabel) === -1) return false;
+    if (!among) return true;
+    // q.mutexAmong = [labels]: only holders that ALSO carry one of these
+    // count — the dev lane is non-blocking by design (owner priority rule
+    // 2026-09-22, live fa #801).
+    return among.some(function (l) { return it.labels.indexOf(l) !== -1; });
+}
+
+function _mutexHolders(items, q) {
+    return items.filter(function (it) { return _holdsMutex(it, q.mutex, q.mutexAmong); });
+}
+
+function _otherHolderCount(holders, candidate) {
+    var n = 0;
+    for (var hi = 0; hi < holders.length; hi++) {
+        if (holders[hi] !== candidate && holders[hi].prNumber !== candidate.prNumber) n++;
+    }
+    return n;
+}
+
+function _applyExcludeSelfMutex(q, items, holders, mutexMax) {
+    // q.mutexExcludeSelf = true (recovery-rule form): a candidate defers
+    // only while ANOTHER PR holds the arm AND the candidate itself does
+    // not (#577: a self-holding candidate occupies its own serialization
+    // slot, so a leaked stack drains oldest-first instead of deadlocking).
+    return items.filter(function (candidate) {
+        var selfHolds = _holdsMutex(candidate, q.mutex, q.mutexAmong);
+        var otherHolders = _otherHolderCount(holders, candidate);
+        var blocked = !selfHolds && otherHolders >= mutexMax;
+        if (blocked) {
+            console.log('   🔒 mutex "' + q.mutex + '" slots ' + otherHolders + '/' + mutexMax +
+                ' taken — candidate pr-' + candidate.prNumber +
+                ' defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ', exclude-self)');
+        }
+        return !blocked;
     });
+}
+
+// Returns the filtered item list, or NULL when the rule defers entirely
+// (the global mutex form at cap) — the caller turns that into [].
+function _applyMutexFilter(q, items) {
+    if (!q.mutex) return items;
+    // Mutex (q.mutex = label): if ANY open PR holds the label, this rule
+    // defers entirely. Serializes one-dispatch stages — validate-armed /
+    // validate-fresh both arm ai_validating + dispatch CI; without the
+    // mutex N merges = N×N validation runs (owner rule 2026-09-22).
+    var mutexMax = _mutexMaxOf(q);
+    var holders = _mutexHolders(items, q);
+    if (q.mutexExcludeSelf) {
+        return _applyExcludeSelfMutex(q, items, holders, mutexMax);
+    }
+    // Only the global (non-exclude-self) form arms; it defers once the
+    // slot count reaches mutexMax holders within mutexAmong.
+    if (holders.length >= mutexMax) {
+        console.log('   🔒 mutex "' + q.mutex + '" slots ' + holders.length + '/' + mutexMax +
+            ' taken — rule defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ')');
+        return null;
+    }
+    return items;
+}
+
+function _prStatusFetchNeeded(q) {
+    // gh-807: the verdict guards read item.pr.headSha — they need the
+    // status fetch too, or item.pr stays null and the guard never resolves.
+    return q.checks || q.mergeState || q.notMergeState ||
+        q.mergeable !== undefined || q.prChecks ||
+        q.latestVerdict || q.notLatestVerdict;
+}
+
+function _fetchPrStatusSnapshot(provider) {
+    return (typeof runAsync === 'function' && provider &&
+        typeof provider.snapshot === 'function')
+        ? provider.snapshot(['openPrs', 'branchHeads', 'prStatus']) : null;
+}
+
+function _absorbPrStatuses(items, provider, prStatuses) {
+    items.forEach(function (item, i) {
+        item.pr = prStatuses[i];
+        // Workers cannot write back to the main isolate's cache —
+        // absorb each computed status so the NEXT batch's snapshot
+        // preseed hits instead of re-fetching the same PR per rule.
+        if (provider && typeof provider.memoPrStatus === 'function') {
+            provider.memoPrStatus(item.prNumber, prStatuses[i]);
+        }
+    });
+}
+
+function _enrichPrItemsWithStatus(items, provider, repoInfo) {
+    // Multi-PR batches fan out through smAsync with ONE cache snapshot
+    // shipped to every worker via args.preseed; single-PR lists keep the
+    // sequential path with NO snapshot fetch (avoids the extra
+    // github_list_branches call for the common single-PR rule).
+    if (items.length <= 1) {
+        return items.map(function (item) {
+            item.pr = provider.prStatus(item.prNumber);
+            return item;
+        });
+    }
+    // PR-rule batch: only the open-PR list + branch heads are needed by
+    // the prStatus worker — skip the merged-PR leg (was ~1.8s on a busy
+    // repo, zero uses in this path).
+    var prSnapshot = _fetchPrStatusSnapshot(provider);
+    var prStatuses = smAsyncModule.map(items, PR_STATUS_WORKER_SOURCE, function (item) {
+        return { repo: repoInfo, n: item.prNumber, preseed: prSnapshot };
+    });
+    return _absorbPrStatuses(items, provider, prStatuses);
+}
+
+function _prListAuthorGuardsFail(item, q2, machineAuthor, owner) {
+    // Author guards: `notAuthors` excludes listed logins (the external
+    // one-time review rule) or vice versa.
+    if (q2.notAuthors && q2.notAuthors.indexOf(item.author) !== -1) return true;
+    // `notMachine` excludes machine-authored PRs without naming the
+    // login — the deployment knob (machineAuthor) or a release-bump PR
+    // authored by the repo owner (#1104). No machineAuthor configured
+    // and no owner → inert (every green PR is reviewable).
+    if (q2.notMachine &&
+        machineAuthorModule.isMachineAuthored(item, machineAuthor, owner)) return true;
+    if (q2.authors && q2.authors.indexOf(item.author) === -1) return true;
+    return false;
+}
+
+function _assignPriorityRanks(matched, pl, repoInfo) {
+    matched.forEach(function (item) {
+        item.priorityTier = priorityTier(item, pl, repoInfo);
+        voidParkedBlockerTier(item); // gh-922: a parked blocker waits in plain FIFO order
+        item.priorityRank = PRIORITY_RANKS[item.priorityTier];
+    });
+}
+
+function _priorityRankCompare(a, b) {
+    if (a.priorityRank !== b.priorityRank) return a.priorityRank - b.priorityRank;
+    return (a.prNumber || 0) - (b.prNumber || 0);
+}
+
+function _fifoCompare(a, b) {
+    return (a.prNumber || 0) - (b.prNumber || 0);
+}
+
+function _logPriorityPremption(matched, limit) {
+    // Preemption marker (grep-able in tick logs): a blocker took a slot
+    // a non-blocker would have held under plain FIFO. Fires only when the
+    // limit actually CUT a non-blocker while keeping the blocker.
+    var keptCount = Math.min(limit, matched.length);
+    if (keptCount >= matched.length) return;
+    var cutTiers = matched.slice(keptCount).map(function (it) { return it.priorityTier; });
+    matched.slice(0, keptCount).forEach(function (it) {
+        if (it.priorityTier === 'blocker' &&
+            cutTiers.some(function (t) { return t !== 'blocker'; })) {
+            console.log('   🥇 priority blocker pr-' + it.prNumber +
+                ' preempts the FIFO queue — ' + (matched.length - keptCount) +
+                ' non-blocker PR(s) yield the slot (owner rule 2026-10-08)');
+        }
+    });
+}
+
+function _sortAndSlicePrCandidates(matched, limit, priorityLabels, repoInfo) {
+    if (matched.length > 1) {
+        // PRIORITY TIERS (owner directive 2026-10-08) amend the FIFO rule
+        // 2026-09-22: FIFO WITHIN a tier — primary key = tier rank
+        // (blocker 0, medium 1, low 2), secondary = the age/FIFO key.
+        var pl = resolvePriorityLabels(priorityLabels);
+        _assignPriorityRanks(matched, pl, repoInfo);
+        matched.sort(_priorityRankCompare);
+        _logPriorityPremption(matched, limit);
+    } else {
+        matched.sort(_fifoCompare);
+    }
+    // gh-922 (fail-open dispatch): return the limit slots PLUS a small
+    // fallthrough reserve. The engine loop gives failed candidates no
+    // slot credit (processedKeys only grows on success), so a failed
+    // trigger (422 no-ref) lets the NEXT candidate take the slot in the
+    // SAME tick; otherwise processedKeys still bounds dispatches at limit.
+    return matched.slice(0, limit + TRIGGER_FALLTHROUGH_RESERVE);
+}
+
+function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {
+    var q = rule.query || {};
+    var items = _buildPrItems(_openPrList(provider, repoInfo));
 
     // 'blocked' = human hold (fa #939 — documented in matchesGuards): the
     // item is invisible to EVERY rule, so it must not even act as a mutex
@@ -697,142 +946,13 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
     // the matchesGuards check remains the engine-level guard.
     items = items.filter(function (it) { return it.labels.indexOf('blocked') === -1; });
 
-    // Mutex (q.mutex = label): if ANY open PR holds the label, this rule
-    // defers entirely. Serializes one-dispatch stages — validate-armed/
-    // validate-fresh both arm ai_validating + dispatch CI; without the
-    // mutex multiple approved PRs validate in parallel and every merge
-    // (base move) re-invalidates the others: N merges = N×N validation
-    // runs. One at a time, oldest-first (FIFO sort below) = each head
-    // validates exactly once. Owner rule 2026-09-22 (live: fa #778/#779
-    // both ai_validating while older #762 waited).
-    //
-    // q.mutexAmong = [labels]: scope the mutex to holders that ALSO carry
-    // one of these labels. Owner priority rule 2026-09-22 (live: fa #801
-    // pr_approved+ai_validated starved behind dev-lane ai_validating arms
-    // on #831/#832/#834 — validate-armed deferred every tick while the
-    // parallel dev wave re-occupied the label): the dev lane is
-    // non-blocking by design, so its arms must NOT block the approved
-    // merge window. Only approved-PR arms serialize the merge window
-    // (the N×N re-validation invariant is a merge-window property).
-    // q.mutexExcludeSelf = true (recovery-rule form): the rule's own target
-    // carries the mutex label by definition (it re-dispatches CI on an
-    // ALREADY armed PR), so the global scan would self-block it 100% of the
-    // time — which is exactly why the recovery rules shipped with NO mutex
-    // and leaked (live multi-arm, fa 2026-09-26: 7 approved PRs held
-    // ai_validating at once, +1 arm per tick, while their descriptions
-    // claimed validate-armed's mutex made the arm a singleton — false once
-    // heads move: silent-update / BEHIND unarm races / guest pushes keep
-    // feeding checks=none states). With exclude-self the mutex is evaluated
-    // PER CANDIDATE (#577): a candidate defers only while ANOTHER PR holds
-    // the arm AND the candidate itself does not (mutexAmong still scopes
-    // the holders). One armed approved PR = the candidate itself = fires;
-    // with several arms the self-holding candidates drain the stack
-    // oldest-first (a stack can also freeze the drain rules themselves —
-    // live: fa #1068+#1088 2026-09-30, both heads green-with-missing-CI +
-    // BLOCKED, so merge-validated/fail-validation/unarm-stale matched
-    // nothing and the old all-defer form deadlocked the queue ~40 min).
-    // Arming stays serialized: only the global (non-exclude-self) form
-    // adds the label, and it defers on ANY holder within mutexAmong.
-    // gh-837 (merge cadence): q.mutexMax (default 1) — how many arms the
-    // mutex admits CONCURRENTLY. The SM engine patches this onto the
-    // ai_validating/pr_approved merge-window rules when the
-    // validationConcurrency knob (repo var, default 1 = today's behavior)
-    // is raised AND the approved queue depth is at/above the watermark —
-    // N=2-3 parallel validations drain the approved FIFO at ~1 merge per
-    // validation cycle instead of one. The candidate/holder accounting is
-    // unchanged: mutexAmong still scopes WHO counts as a holder, 'blocked'
-    // holders are invisible, and mutexExcludeSelf still lets a self-holding
-    // recovery candidate drain a leaked stack — only the defer threshold
-    // moves from '>=1 other holder' to '>= mutexMax other holders'.
-    if (q.mutex) {
-        var among = q.mutexAmong;
-        var holdsMutex = function (it) {
-            if (it.labels.indexOf(q.mutex) === -1) return false;
-            if (!among) return true;
-            return among.some(function (l) { return it.labels.indexOf(l) !== -1; });
-        };
-        var mutexMax = (typeof q.mutexMax === 'number' && isFinite(q.mutexMax))
-            ? Math.max(1, Math.floor(q.mutexMax)) : 1;
-        var holders = items.filter(holdsMutex);
-        if (q.mutexExcludeSelf) {
-            items = items.filter(function (candidate) {
-                // #577 (fa 2026-09-30, live #1068+#1088): a candidate that
-                // itself holds the mutex occupies its own serialization slot.
-                // The old 'another holder exists' test made two armed PRs
-                // block each other forever whenever every drain rule was
-                // inapplicable (both heads green-with-missing-CI + BLOCKED +
-                // not BEHIND: revalidate-armed and dead-zone each deferred on
-                // the other, while merge-validated / fail-validation /
-                // unarm-stale could not complete the stack — the whole queue
-                // froze ~40 min until a manual unarm). Defer only when the
-                // candidate does NOT hold the mutex itself; recovery-rule
-                // candidates always self-hold (their query carries the arm
-                // label), so a leaked stack drains oldest-first instead of
-                // deadlocking. New arms still cannot leak: only the global
-                // (non-exclude-self) form arms, and it still defers once the
-                // slot count reaches mutexMax holders within mutexAmong.
-                var selfHolds = holdsMutex(candidate);
-                var otherHolders = 0;
-                for (var hi = 0; hi < holders.length; hi++) {
-                    if (holders[hi] !== candidate && holders[hi].prNumber !== candidate.prNumber) {
-                        otherHolders++;
-                    }
-                }
-                var blocked = !selfHolds && otherHolders >= mutexMax;
-                if (blocked) {
-                    console.log('   🔒 mutex "' + q.mutex + '" slots ' + otherHolders + '/' + mutexMax +
-                        ' taken — candidate pr-' + candidate.prNumber +
-                        ' defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ', exclude-self)');
-                }
-                return !blocked;
-            });
-        } else {
-            if (holders.length >= mutexMax) {
-                console.log('   🔒 mutex "' + q.mutex + '" slots ' + holders.length + '/' + mutexMax +
-                    ' taken — rule defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ')');
-                return [];
-            }
-        }
-    }
+    items = _applyMutexFilter(q, items);
+    if (items === null) return [];
 
     // PR guards that need per-PR facts (checks/merge state) resolve lazily:
-    // only when the rule actually filters on them. Multi-PR batches fan
-    // out through smAsync with ONE cache snapshot fetched up front and
-    // shipped to every worker via args.preseed; single-PR lists keep
-    // today's sequential path with NO snapshot fetch (avoids the extra
-    // github_list_branches call for the common single-PR rule).
-    // gh-807: the verdict guards read item.pr.headSha — they need the
-    // status fetch too, or item.pr stays null and the guard can never
-    // resolve a head.
-    var needsStatus = q.checks || q.mergeState || q.notMergeState ||
-        q.mergeable !== undefined || q.prChecks ||
-        q.latestVerdict || q.notLatestVerdict;
-    if (needsStatus) {
-        if (items.length > 1) {
-            // PR-rule batch: only the open-PR list + branch heads are
-            // needed by the prStatus worker — skip the merged-PR leg (was
-            // ~1.8s on a busy repo, zero uses in this path).
-            var prSnapshot = (typeof runAsync === 'function' && provider &&
-                typeof provider.snapshot === 'function')
-                ? provider.snapshot(['openPrs', 'branchHeads', 'prStatus']) : null;
-            var prStatuses = smAsyncModule.map(items, PR_STATUS_WORKER_SOURCE, function (item) {
-                return { repo: repoInfo, n: item.prNumber, preseed: prSnapshot };
-            });
-            items.forEach(function (item, i) {
-                item.pr = prStatuses[i];
-                // Workers cannot write back to the main isolate's cache —
-                // absorb each computed status so the NEXT batch's snapshot
-                // preseed hits instead of re-fetching the same PR per rule.
-                if (provider && typeof provider.memoPrStatus === 'function') {
-                    provider.memoPrStatus(item.prNumber, prStatuses[i]);
-                }
-            });
-        } else {
-            items = items.map(function (item) {
-                item.pr = provider.prStatus(item.prNumber);
-                return item;
-            });
-        }
+    // only when the rule actually filters on them.
+    if (_prStatusFetchNeeded(q)) {
+        items = _enrichPrItemsWithStatus(items, provider, repoInfo);
     }
 
     var matched = items.filter(function (item) {
@@ -843,88 +963,20 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
         if (q2.notLabels && q2.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
         if (q2.draft === false && item.draft) return false;
         if (q2.branchPrefix && String(item.branch || '').indexOf(q2.branchPrefix) !== 0) return false;
-        // Author guards: `notAuthors` excludes machine-authored PRs (the
-        // external one-time review rule) or vice versa.
-        if (q2.notAuthors && q2.notAuthors.indexOf(item.author) !== -1) return false;
-        // `notMachine` excludes machine-authored PRs without naming the
-        // login — the deployment knob (machineAuthor) or a release-bump
-        // PR authored by the repo owner (#1104: the auto-release flow
-        // commits through the owner's RELEASE_PAT, so GitHub records the
-        // owner as the author — the review-external rules must not claim
-        // those; the prMachineAuthor rules own them). No machineAuthor
-        // configured and no owner → inert (every green PR is reviewable).
-        if (q2.notMachine &&
-            machineAuthorModule.isMachineAuthored(item, machineAuthor, owner)) return false;
-        if (q2.authors && q2.authors.indexOf(item.author) === -1) return false;
+        if (_prListAuthorGuardsFail(item, q2, machineAuthor, owner)) return false;
         return matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo);
     });
 
     // gh-922 (dead-head park bench): parked candidates whose head ref the
-    // provider cannot see never reach the dispatch loop — no burned
-    // trigger failures, no fallthrough-reserve slots, and the machine
-    // rework arm (rework-on-validation-failed) stops arming legs it can
-    // never dispatch. Red-parked PRs keep their lanes (branch live).
-    // Runs before the tier sort so the FIFO math below sees the benched list.
+    // provider cannot see never reach the dispatch loop. Runs before the
+    // tier sort so the FIFO math below sees the benched list.
     matched = benchDeadHeadParks(matched, provider);
 
-    // FIFO: oldest PR first. github_list_prs returns newest-first (API
-    // default), which would starve older approved PRs under limit:1 merge
-    // rules — the queue drains oldest-to-newest. Blocked candidates
-    // (conflicts, red/pending checks) never reach here: guards already
-    // filtered them, so the head of this list is the oldest mergeable PR.
-    //
-    // PRIORITY TIERS (owner directive 2026-10-08) amend the FIFO rule
-    // 2026-09-22: FIFO WITHIN a tier. Primary key = tier rank (blocker 0,
-    // medium 1, low 2), secondary = the age/FIFO key — a blocker jumps the
-    // queue (validation slot + merge priority ahead of older mediums), a
-    // low sinks below all mediums, and unlabeled PRs stay medium. Both
-    // limit:1 consumers (validate-armed's arm, merge-validated's merge)
-    // share this query, so one sort preempts both picks. Tiers resolve
-    // lazily — only when a tie exists to break (a single candidate's tier
-    // cannot change anything): a blocker label on the PR itself skips the
-    // linked-issue fetch entirely.
-    if (matched.length > 1) {
-        var pl = resolvePriorityLabels(priorityLabels);
-        matched.forEach(function (item) {
-            item.priorityTier = priorityTier(item, pl, repoInfo);
-            voidParkedBlockerTier(item); // gh-922: a parked blocker waits in plain FIFO order
-            item.priorityRank = PRIORITY_RANKS[item.priorityTier];
-        });
-        matched.sort(function (a, b) {
-            if (a.priorityRank !== b.priorityRank) return a.priorityRank - b.priorityRank;
-            return (a.prNumber || 0) - (b.prNumber || 0);
-        });
-        // Preemption marker (grep-able in tick logs): a blocker took a slot
-        // a non-blocker would have held under plain FIFO. Fires only when
-        // the limit actually CUT a non-blocker while keeping the blocker —
-        // with everything kept (wide refresh rules) nothing was preempted.
-        var keptCount = Math.min(limit, matched.length);
-        if (keptCount < matched.length) {
-            var cutTiers = matched.slice(keptCount).map(function (it) { return it.priorityTier; });
-            matched.slice(0, keptCount).forEach(function (it) {
-                if (it.priorityTier === 'blocker' &&
-                    cutTiers.some(function (t) { return t !== 'blocker'; })) {
-                    console.log('   🥇 priority blocker pr-' + it.prNumber +
-                        ' preempts the FIFO queue — ' + (matched.length - keptCount) +
-                        ' non-blocker PR(s) yield the slot (owner rule 2026-10-08)');
-                }
-            });
-        }
-    } else {
-        matched.sort(function (a, b) { return (a.prNumber || 0) - (b.prNumber || 0); });
-    }
-
-    // gh-922 (fail-open dispatch): return the limit slots PLUS a small
-    // fallthrough reserve. The engine loop gives failed candidates no
-    // slot credit (processedKeys only grows on success), so when a
-    // candidate's trigger fails (422 no-ref — deleted head ref, live fa
-    // pr-1615) the loop walks into the reserve and the NEXT candidate
-    // gets the slot in the SAME tick; when nothing fails, the loop's
-    // processedKeys cap still bounds successful dispatches at `limit`.
-    // Pre-fix the slice stopped at `limit`, so a limit:1 rule returned
-    // ONLY the dead head and the whole FIFO starved behind it.
-    return matched.slice(0, limit + TRIGGER_FALLTHROUGH_RESERVE);
+    // FIFO: oldest PR first (github_list_prs returns newest-first, which
+    // would starve older approved PRs under limit:1 merge rules).
+    return _sortAndSlicePrCandidates(matched, limit, priorityLabels, repoInfo);
 }
+
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { query: query, matchesGuards: matchesGuards };
