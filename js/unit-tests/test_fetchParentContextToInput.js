@@ -572,3 +572,455 @@ suite('fetchParentContextToInput — error resilience', function() {
     });
 
 });
+
+// ── Suite: comments rendering ─────────────────────────────────────────────────
+
+suite('fetchParentContextToInput — comments rendering', function() {
+
+    function runWithComment(commentField) {
+        var written = {};
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() { throw new Error('parent story unavailable'); },
+            jira_search_by_jql: function() {
+                return [makeSearchResult('PROJ-200', '[BA]', { comment: commentField })];
+            },
+            file_write: function(p, c) { written[p] = c; }
+        });
+        m.action(makeParams(MINIMAL_PARENT_CONTEXT_FETCH));
+        return written;
+    }
+
+    function contentOf(written) {
+        assert.ok(Object.prototype.hasOwnProperty.call(written, INPUT_FOLDER + '/ba.md'), 'ba.md written');
+        return written[INPUT_FOLDER + '/ba.md'];
+    }
+
+    test('renders Jira comment object shape with author displayName and date', function() {
+        var content = contentOf(runWithComment({
+            total: 1,
+            comments: [
+                { author: { displayName: 'Jane Doe' }, created: '2024-01-15T10:00:00.000+0000', body: 'Looks good' }
+            ]
+        }));
+        assert.ok(content.indexOf('**Comments:**') !== -1, 'comments section present');
+        assert.ok(content.indexOf('> **Jane Doe** (2024-01-15):') !== -1, 'author and date rendered');
+        assert.ok(content.indexOf('> Looks good') !== -1, 'body rendered as blockquote');
+    });
+
+    test('renders plain array comment shape', function() {
+        var content = contentOf(runWithComment([
+            { author: { displayName: 'Jane Doe' }, created: '2024-01-15T10:00:00.000+0000', body: 'Looks good' }
+        ]));
+        assert.ok(content.indexOf('> **Jane Doe** (2024-01-15):') !== -1, 'array shape rendered');
+    });
+
+    test('falls back to author emailAddress when displayName is missing', function() {
+        var content = contentOf(runWithComment({
+            total: 1,
+            comments: [
+                { author: { emailAddress: 'jane@example.com' }, created: '2024-02-01T00:00:00.000+0000', body: 'hi' }
+            ]
+        }));
+        assert.ok(content.indexOf('> **jane@example.com** (2024-02-01):') !== -1, 'email fallback rendered');
+    });
+
+    test("uses 'Unknown' when author is absent", function() {
+        var content = contentOf(runWithComment({
+            total: 1,
+            comments: [{ created: '2024-03-01T00:00:00.000+0000', body: 'anon' }]
+        }));
+        assert.ok(content.indexOf('> **Unknown** (2024-03-01):') !== -1, 'Unknown author rendered');
+    });
+
+    test('renders empty date parens when created is missing', function() {
+        var content = contentOf(runWithComment({
+            total: 1,
+            comments: [{ author: { displayName: 'Jane Doe' }, body: 'no date' }]
+        }));
+        assert.ok(content.indexOf('> **Jane Doe** ():') !== -1, 'empty date rendered');
+    });
+
+    test('prefixes every body line with a blockquote marker', function() {
+        var content = contentOf(runWithComment({
+            total: 1,
+            comments: [
+                { author: { displayName: 'Jane Doe' }, created: '2024-01-15T10:00:00.000+0000', body: 'line1\nline2' }
+            ]
+        }));
+        assert.ok(content.indexOf('> line1\n> line2') !== -1, 'multiline body blockquoted');
+    });
+
+    test('separates multiple comments with a blank line', function() {
+        var content = contentOf(runWithComment({
+            total: 2,
+            comments: [
+                { author: { displayName: 'A' }, created: '2024-01-15T10:00:00.000+0000', body: 'first' },
+                { author: { displayName: 'B' }, created: '2024-01-16T10:00:00.000+0000', body: 'second' }
+            ]
+        }));
+        assert.ok(content.indexOf('> first\n\n> **B**') !== -1, 'comments separated by blank line');
+    });
+
+    test('omits the comments section when the comments list is empty', function() {
+        var content = contentOf(runWithComment({ total: 0, comments: [] }));
+        assert.ok(content.indexOf('**Comments:**') === -1, 'empty comments omitted');
+    });
+
+    test('omits the comments section when comment field is absent', function() {
+        var content = contentOf(runWithComment(null));
+        assert.ok(content.indexOf('**Comments:**') === -1, 'missing comment field omitted');
+    });
+
+});
+
+// ── Suite: child questions ────────────────────────────────────────────────────
+
+suite('fetchParentContextToInput — child questions', function() {
+
+    var CHILD_QUESTIONS_CFG = {
+        jql: 'parent = {parentKey}',
+        fields: ['key', 'summary', 'description', 'status'],
+        contexts: [
+            { prefix: '[BA]', file: 'ba.md', label: 'Business Analysis', description: 'BA desc' }
+        ],
+        childQuestions: {}
+    };
+
+    function makeQuestionMocks(opts) {
+        opts = opts || {};
+        var files = {};
+        var readCalls = 0;
+        var searchCalls = [];
+        var mocks = {
+            jira_get_ticket: function() {
+                return { key: PARENT_KEY, fields: { summary: 'parent', status: { name: 'Done' } } };
+            },
+            jira_search_by_jql: function(q) {
+                searchCalls.push(q.jql);
+                if (q.jql.indexOf('PROJ-200') !== -1) {
+                    if (opts.questionsThrow) throw new Error('question search failed');
+                    return opts.questions || [];
+                }
+                return [makeSearchResult('PROJ-200', '[BA]')];
+            },
+            file_read: function(args) {
+                readCalls++;
+                if (opts.readThrows) throw new Error('read failed');
+                return files[args.path] || '';
+            },
+            file_write: function(p, c) {
+                if (opts.appendThrows && readCalls > 0) throw new Error('append failed');
+                files[p] = c;
+            }
+        };
+        return { mocks: mocks, files: files, searchCalls: searchCalls, readCount: function() { return readCalls; } };
+    }
+
+    function runChildQuestions(customQuestionsCfg, opts) {
+        var ctx = makeQuestionMocks(opts);
+        var cfg = Object.assign({}, CHILD_QUESTIONS_CFG, {
+            childQuestions: customQuestionsCfg === undefined ? {} : customQuestionsCfg
+        });
+        var m = loadFetchParentContext(ctx.mocks);
+        var threw = false;
+        try {
+            m.action(makeParams(cfg));
+        } catch (e) {
+            threw = true;
+        }
+        return { ctx: ctx, threw: threw };
+    }
+
+    test('appends a Questions & Answers section answered from the description', function() {
+        var r = runChildQuestions(undefined, {
+            questions: [
+                { key: 'PROJ-300', fields: { summary: 'Why this?', description: 'Because reasons.' } },
+                { key: 'PROJ-301', fields: { summary: 'And that?', description: 'Also reasons.' } }
+            ]
+        });
+        assert.ok(!r.threw, 'action completed');
+        var content = r.ctx.files[INPUT_FOLDER + '/ba.md'];
+        assert.ok(content.indexOf('## Questions & Answers (PROJ-200)') !== -1, 'Q&A section appended');
+        assert.ok(content.indexOf('**Q1: Why this?**') !== -1, 'first question numbered and titled');
+        assert.ok(content.indexOf('**Q2: And that?**') !== -1, 'second question numbered and titled');
+        assert.ok(content.indexOf('_Answer: Because reasons._') !== -1, 'first answer rendered');
+        assert.ok(content.indexOf('_Answer: Also reasons._') !== -1, 'second answer rendered');
+    });
+
+    test('uses the default child-questions JQL with {contextTicketKey} replaced', function() {
+        var r = runChildQuestions(undefined, {
+            questions: [{ key: 'PROJ-300', fields: { summary: 'Q', description: 'A' } }]
+        });
+        var seen = false;
+        for (var i = 0; i < r.ctx.searchCalls.length; i++) {
+            if (r.ctx.searchCalls[i].indexOf('labels = Q') !== -1) {
+                seen = true;
+                assert.ok(r.ctx.searchCalls[i].indexOf('parent = PROJ-200') !== -1, 'placeholder replaced: ' + r.ctx.searchCalls[i]);
+                assert.ok(r.ctx.searchCalls[i].indexOf('{contextTicketKey}') === -1, 'placeholder removed');
+            }
+        }
+        assert.ok(seen, 'default question JQL issued');
+    });
+
+    test('honours a custom question JQL and answerField', function() {
+        var r = runChildQuestions({
+            jql: 'parent = {contextTicketKey} AND labels = Question',
+            answerField: 'comment'
+        }, {
+            questions: [{ key: 'PROJ-300', fields: { summary: 'Q', comment: 'Resolved in chat' } }]
+        });
+        var content = r.ctx.files[INPUT_FOLDER + '/ba.md'];
+        assert.ok(content.indexOf('_Answer: Resolved in chat_') !== -1, 'custom answerField used');
+        var seen = false;
+        for (var i = 0; i < r.ctx.searchCalls.length; i++) {
+            if (r.ctx.searchCalls[i].indexOf('labels = Question') !== -1) {
+                seen = true;
+                assert.ok(r.ctx.searchCalls[i].indexOf('parent = PROJ-200') !== -1, 'custom JQL placeholder replaced');
+            }
+        }
+        assert.ok(seen, 'custom question JQL issued');
+    });
+
+    test('falls back to the lowercase answer field name', function() {
+        var r = runChildQuestions({ answerField: 'My Answer' }, {
+            questions: [{ key: 'PROJ-300', fields: { summary: 'Q', 'my answer': 'lowercase hit' } }]
+        });
+        var content = r.ctx.files[INPUT_FOLDER + '/ba.md'];
+        assert.ok(content.indexOf('_Answer: lowercase hit_') !== -1, 'lowercase fallback used');
+    });
+
+    test('marks unanswered questions explicitly', function() {
+        var r = runChildQuestions(undefined, {
+            questions: [{ key: 'PROJ-300', fields: { summary: 'Q' } }]
+        });
+        var content = r.ctx.files[INPUT_FOLDER + '/ba.md'];
+        assert.ok(content.indexOf('_Answer: (not yet answered)_') !== -1, 'unanswered marker rendered');
+    });
+
+    test('does not duplicate the description when it equals the answer', function() {
+        var r = runChildQuestions(undefined, {
+            questions: [{ key: 'PROJ-300', fields: { summary: 'Q', description: 'same text' } }]
+        });
+        var content = r.ctx.files[INPUT_FOLDER + '/ba.md'];
+        var first = content.indexOf('same text');
+        var last = content.lastIndexOf('same text');
+        assert.ok(first !== -1, 'answer present');
+        assert.equal(first, last, 'description not duplicated');
+    });
+
+    test('does not append anything when the question search returns no results', function() {
+        var r = runChildQuestions(undefined, { questions: [] });
+        assert.ok(!r.threw, 'action completed');
+        assert.equal(r.ctx.readCount(), 0, 'no file read without questions');
+        var content = r.ctx.files[INPUT_FOLDER + '/ba.md'];
+        assert.ok(content.indexOf('Questions & Answers') === -1, 'no Q&A section');
+    });
+
+    test('is non-fatal when the question search fails', function() {
+        var r = runChildQuestions(undefined, { questionsThrow: true });
+        assert.ok(!r.threw, 'question search failure is non-fatal');
+        var content = r.ctx.files[INPUT_FOLDER + '/ba.md'];
+        assert.ok(content.indexOf('**Ticket:** PROJ-200') !== -1, 'context file still written');
+    });
+
+    test('is non-fatal when appending to the context file fails', function() {
+        var r = runChildQuestions(undefined, {
+            appendThrows: true,
+            questions: [{ key: 'PROJ-300', fields: { summary: 'Q', description: 'A' } }]
+        });
+        assert.ok(!r.threw, 'append failure is non-fatal');
+    });
+
+});
+
+// ── Suite: remaining action branches ──────────────────────────────────────────
+
+suite('fetchParentContextToInput — remaining branches', function() {
+
+    test('skips the parent story file when includeParentStory is false', function() {
+        var written = [];
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() { throw new Error('parent story must not be fetched'); },
+            jira_search_by_jql: function() { return [makeSearchResult('PROJ-200', '[BA]')]; },
+            file_write: function(p, c) { written.push(p); }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, { includeParentStory: false });
+        m.action(makeParams(cfg));
+        assert.deepEqual(written, [INPUT_FOLDER + '/ba.md'], 'only the sibling file written');
+    });
+
+    test('derives the ticket key from the input folder when ticket is absent', function() {
+        var fetchedKeys = [];
+        var m = loadFetchParentContext({
+            jira_get_ticket: function(args) {
+                fetchedKeys.push(args.key);
+                if (args.key === TICKET_KEY) {
+                    return { key: TICKET_KEY, fields: { parent: { key: PARENT_KEY }, summary: '[SA] x', status: { name: 'Open' } } };
+                }
+                return { key: PARENT_KEY, fields: { summary: 'parent', status: { name: 'Done' } } };
+            },
+            jira_search_by_jql: function() { return []; },
+            file_write: function() {}
+        });
+        var params = {
+            inputFolderPath: INPUT_FOLDER,
+            jobParams: { customParams: MINIMAL_PARENT_CONTEXT_FETCH }
+        };
+        var threw = false;
+        try {
+            m.action(params);
+        } catch (e) {
+            threw = true;
+        }
+        assert.ok(!threw, 'action completed without an explicit ticket');
+        assert.deepEqual(fetchedKeys, [TICKET_KEY, PARENT_KEY], 'ticket then parent fetched by key');
+    });
+
+    test('resolves human field names to tracker codes when resolveFieldNames is set', function() {
+        var capturedFields = null;
+        var written = {};
+        var m = loadFetchParentContext({
+            jira_get_ticket: function(args) {
+                if (args.key === PARENT_KEY) {
+                    return { key: PARENT_KEY, fields: { summary: 'parent', status: { name: 'Done' } } };
+                }
+                return { key: 'PROJ-200', fields: { 'customfield_10101': 'architecture decision' } };
+            },
+            jira_get_field_custom_code: function(args) {
+                if (args.fieldName === 'High-Level Design') return 'customfield_10101';
+                return args.fieldName;
+            },
+            jira_search_by_jql: function(opts) {
+                capturedFields = opts.fields;
+                return [makeSearchResult('PROJ-200', '[BA]')];
+            },
+            file_write: function(p, c) { written[p] = c; }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, {
+            fields: ['Description', 'High-Level Design'],
+            fieldLabels: { 'customfield_10101': 'HLD' },
+            resolveFieldNames: true
+        });
+        m.action(makeParams(cfg));
+        assert.ok(capturedFields.indexOf('customfield_10101') !== -1, 'resolved code passed to search');
+        var content = written[INPUT_FOLDER + '/ba.md'];
+        assert.ok(content.indexOf('**HLD:**\narchitecture decision') !== -1, 'resolved field rendered with label');
+    });
+
+    test('prefers siblingFields over fields when both are configured', function() {
+        var capturedFields = null;
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() {
+                return { key: PARENT_KEY, fields: { summary: 'parent', status: { name: 'Done' } } };
+            },
+            jira_search_by_jql: function(opts) { capturedFields = opts.fields; return []; },
+            file_write: function() {}
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, {
+            fields: ['description'],
+            siblingFields: ['High-Level Solution']
+        });
+        m.action(makeParams(cfg));
+        assert.ok(capturedFields.indexOf('High-Level Solution') !== -1, 'siblingFields used');
+        assert.ok(capturedFields.indexOf('description') === -1, 'fields ignored when siblingFields present');
+    });
+
+    test('uses cfg.fieldLabels for field display names', function() {
+        var written = {};
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() {
+                return { key: PARENT_KEY, fields: { summary: 'parent', status: { name: 'Done' } } };
+            },
+            jira_search_by_jql: function() { return [makeSearchResult('PROJ-200', '[BA]')]; },
+            file_write: function(p, c) { written[p] = c; }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, { fieldLabels: { description: 'Details' } });
+        m.action(makeParams(cfg));
+        assert.ok(written[INPUT_FOLDER + '/ba.md'].indexOf('**Details:**') !== -1, 'custom label used');
+    });
+
+    test('does nothing when customParams.enabled is false', function() {
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() { throw new Error('should not be called'); },
+            jira_search_by_jql: function() { throw new Error('should not be called'); },
+            file_write: function() { throw new Error('should not be called'); }
+        });
+        var threw = false;
+        try {
+            m.action(makeParams({ enabled: false, parentContextFetch: MINIMAL_PARENT_CONTEXT_FETCH }));
+        } catch (e) {
+            threw = true;
+        }
+        assert.ok(!threw, 'enabled:false is a clean no-op');
+    });
+
+    test('keeps partial data when the full-ticket re-fetch fails', function() {
+        var written = {};
+        var getCalls = 0;
+        var m = loadFetchParentContext({
+            jira_get_ticket: function(args) {
+                getCalls++;
+                if (args.key === PARENT_KEY) {
+                    return { key: PARENT_KEY, fields: { summary: 'parent', status: { name: 'Done' } } };
+                }
+                throw new Error('re-fetch failed');
+            },
+            jira_search_by_jql: function() { return [makeSearchResult('PROJ-200', '[BA]')]; },
+            file_write: function(p, c) { written[p] = c; }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, { fields: ['High-Level Design'] });
+        m.action(makeParams(cfg));
+        assert.ok(getCalls > 1, 're-fetch was attempted');
+        assert.ok(written[INPUT_FOLDER + '/ba.md'].indexOf('**Ticket:** PROJ-200') !== -1, 'file written from partial data');
+    });
+
+    test('renders object-valued fields as pretty JSON', function() {
+        var written = {};
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() {
+                return { key: PARENT_KEY, fields: { summary: 'parent', status: { name: 'Done' } } };
+            },
+            jira_search_by_jql: function() {
+                return [makeSearchResult('PROJ-200', '[BA]', { components: [{ name: 'web' }] })];
+            },
+            file_write: function(p, c) { written[p] = c; }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, { fields: ['components'] });
+        m.action(makeParams(cfg));
+        assert.ok(written[INPUT_FOLDER + '/ba.md'].indexOf('**components:**\n[\n  {\n    "name": "web"\n  }\n]') !== -1, 'object rendered as JSON');
+    });
+
+    test('extracts the display label from a dmtools key (Label (customfield_xxx))', function() {
+        var written = {};
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() {
+                return { key: PARENT_KEY, fields: { summary: 'parent', status: { name: 'Done' } } };
+            },
+            jira_search_by_jql: function() {
+                return [makeSearchResult('PROJ-200', '[BA]', { 'Acceptance Criteria (customfield_10200)': 'AC text' })];
+            },
+            file_write: function(p, c) { written[p] = c; }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, { fields: ['Acceptance Criteria (customfield_10200)'] });
+        m.action(makeParams(cfg));
+        assert.ok(written[INPUT_FOLDER + '/ba.md'].indexOf('**Acceptance Criteria:**\nAC text') !== -1, 'label extracted from key');
+    });
+
+    test('continues with siblings when the parent story has empty fields', function() {
+        var written = [];
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() { return { key: PARENT_KEY }; },
+            jira_search_by_jql: function() { return [makeSearchResult('PROJ-200', '[BA]')]; },
+            file_write: function(p, c) { written.push(p); }
+        });
+        var threw = false;
+        try {
+            m.action(makeParams(MINIMAL_PARENT_CONTEXT_FETCH));
+        } catch (e) {
+            threw = true;
+        }
+        assert.ok(!threw, 'empty parent fields are non-fatal');
+        assert.deepEqual(written, [INPUT_FOLDER + '/ba.md'], 'sibling file written without parent story');
+    });
+
+});
