@@ -207,7 +207,15 @@ function releaseReworkLock(ticketKey, wipLabel, removeLabel) {
 /** PR body refresh + rework summary comment; failures are non-fatal warns. */
 function postReworkBodyAndComment(scm, pr, ticketKey, testStatus, passed, prBodyContent) {
     try {
-        updatePullRequestBody(scm, pr.number, ticketKey, testStatus, prBodyContent);
+        // gh-960: once the PR entered the merge queue (validation armed) or is
+        // merged/closed, the body is final — a rewrite there lands too late for
+        // GitHub to parse closing keywords (live #956/#952). The summary comment
+        // is unaffected and still posts.
+        if (prHelper.isPrBodyFrozen(pr)) {
+            console.warn('PR #' + (pr && pr.number) + ' body is final (merge queue entered or merged) — skipping body rewrite (gh-960)');
+        } else {
+            updatePullRequestBody(scm, pr.number, ticketKey, testStatus, prBodyContent);
+        }
         scm.addComment(pr.number, buildPRReworkComment(ticketKey, testStatus, passed, prBodyContent));
         console.log('✅ Posted rework summary to PR');
     } catch (e) {
@@ -260,9 +268,13 @@ function updatePullRequestBody(scm, prNumber, ticketKey, testStatus, bodyContent
     if (!bodyContent) return false;
 
     try {
-        const body = '## ' + ticketKey + ' Result: ' + testStatus.toUpperCase() + '\n\n' +
+        // gh-960: a pre-queue body refresh must never drop the canonical
+        // 'Closes #N' line — the merge bot links approved issues by it (gh-737)
+        // and GitHub parses it from the current body at any edit.
+        const refreshed = '## ' + ticketKey + ' Result: ' + testStatus.toUpperCase() + '\n\n' +
             '**Latest rework result:** `' + testStatus.toUpperCase() + '`\n\n' +
             '---\n\n' + bodyContent;
+        const body = prHelper.ensureClosesLine(refreshed, ticketKey);
         if (scm.updatePrBody) {
             scm.updatePrBody(prNumber, body);
             console.log('✅ Updated PR/MR body with latest test rework result');

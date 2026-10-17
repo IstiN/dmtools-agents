@@ -857,3 +857,48 @@ suite('pullRequest helper — syncBranchWithBase conflict auto-resolution (gh-96
     });
 
 });
+
+// gh-960: the PR body (including the canonical 'Closes #N' line) must be final
+// BEFORE the PR enters the merge queue. Live 2026-10-17: PR #956 merged with
+// 'Closes #952' added to the body at the merge moment (finalize-step rewrite
+// after validation armed) — GitHub never parsed the keyword and #952 stayed
+// OPEN. Once the validate→merge pipeline owns the PR (ai_validating armed) or
+// the PR is merged/closed, a body rewrite is too late and must not happen.
+suite('pullRequest helper > body freeze (gh-960)', function() {
+
+    test('isPrBodyFrozen is true once the PR is merged', function() {
+        var pr = loadPullRequestHelper();
+        assert.equal(pr.isPrBodyFrozen({ number: 956, merged: true }), true);
+        assert.equal(pr.isPrBodyFrozen({ number: 956, merged: true, state: 'closed' }), true);
+    });
+
+    test('isPrBodyFrozen is true when the PR state is closed or merged', function() {
+        var pr = loadPullRequestHelper();
+        assert.equal(pr.isPrBodyFrozen({ number: 956, state: 'closed' }), true);
+        assert.equal(pr.isPrBodyFrozen({ number: 956, state: 'merged' }), true);
+        assert.equal(pr.isPrBodyFrozen({ number: 956, state: 'open' }), false);
+    });
+
+    test('isPrBodyFrozen is true while validation is armed (ai_validating label)', function() {
+        var pr = loadPullRequestHelper();
+        // Label objects ({name}) — the GitHub REST shape.
+        assert.equal(pr.isPrBodyFrozen({ number: 956, state: 'open',
+            labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }] }), true,
+            'ai_validating among several labels still freezes the body');
+        // Plain-string labels — the shape other SCM adapters normalize to.
+        assert.equal(pr.isPrBodyFrozen({ number: 956, state: 'open',
+            labels: ['ai_validating'] }), true);
+    });
+
+    test('isPrBodyFrozen is false for an open PR outside the merge queue', function() {
+        var pr = loadPullRequestHelper();
+        assert.equal(pr.isPrBodyFrozen({ number: 956, state: 'open' }), false);
+        assert.equal(pr.isPrBodyFrozen({ number: 956, state: 'open',
+            labels: [{ name: 'pr_approved' }, { name: 'rework-on-red' }] }), false,
+            'labels other than ai_validating do not freeze the body');
+        assert.equal(pr.isPrBodyFrozen({ number: 956 }), false, 'minimal PR shape');
+        assert.equal(pr.isPrBodyFrozen(null), false);
+        assert.equal(pr.isPrBodyFrozen(undefined), false);
+    });
+
+});
