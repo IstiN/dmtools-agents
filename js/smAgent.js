@@ -182,6 +182,11 @@ var projectConfig = null;
 // paths, ridden into the published snapshot. Null until the first latch
 // touch; reset at the top of action().
 var tickReworkLatch = null;
+// gh-998: zombie-swept counter, one per tick — incremented by the neutral
+// sweeper for every terminal-owner placeholder force-completed in place;
+// ridden into the published factory-state snapshot (I5: operators see the
+// leak rate, not just the fix). Reset at the top of action().
+var tickZombiesSwept = 0;
 // Priority-tier label names (owner directive 2026-10-08), resolved once in
 // action() from config.smPriorityLabels — passed down to the source query
 // path (githubSource queryPrs' tier-aware FIFO sort).
@@ -6855,6 +6860,7 @@ function action(params) {
     var p     = params.jobParams || params;
     RUN_JOB_PARAMS = p;    DRY = p.dryRun === true;
     tickReworkLatch = null;
+    tickZombiesSwept = 0; // gh-998 (I5): fresh per-tick sweep counter
     tickParkedRecorded = {}; // gh-922: fresh same-tick dedup window (see recordDispatchFailure)
     if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
     var rules = p.rules;
