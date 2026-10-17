@@ -2,10 +2,10 @@
  * Unit tests for aiTeammateTokenUsageReporter.js
  */
 
-function loadReporter(overrides) {
+function loadReporter(overrides, projectConfig) {
     var configLoaderMock = {
         loadProjectConfig: function() {
-            return { repository: { owner: 'IstiN', repo: 'trackstate' } };
+            return projectConfig !== undefined ? projectConfig : { repository: { owner: 'IstiN', repo: 'trackstate' } };
         }
     };
     var globals = Object.assign({
@@ -695,5 +695,509 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
 
         assert.equal(usageNoRequests.requests, 0);
         assert.equal(usageNoRequests.attempts[0].requestTier, '');
+    });
+
+    test('renderOnly renders HTML from an existing token usage JSON', function() {
+        var writes = {};
+        var reporter = loadReporter({
+            file_read: function(args) {
+                if (args.path === 'outputs/token_usage/ai_teammate_token_usage.json') {
+                    return JSON.stringify({
+                        summary: reporter.buildSummary([], 0),
+                        rows: []
+                    });
+                }
+                return '';
+            },
+            file_write: function(args) { writes[args.path] = args.content; }
+        });
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {
+                    workspace: 'IstiN',
+                    repository: 'trackstate',
+                    outputDir: 'outputs/token_usage',
+                    renderOnly: true
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.renderOnly, true);
+        assert.equal(result.jsonPath, 'outputs/token_usage/ai_teammate_token_usage.json');
+        assert.equal(result.htmlPath, 'outputs/token_usage/ai_teammate_token_usage.html');
+        assert.contains(writes['outputs/token_usage/ai_teammate_token_usage.html'], 'Daily Token Trend');
+        assert.equal(writes['outputs/token_usage/ai_teammate_token_usage.csv'], undefined);
+    });
+
+    test('renderOnly fails when the token usage JSON is missing or invalid', function() {
+        var writes = {};
+        var reporter = loadReporter({
+            file_read: function() { return 'not json {'; },
+            file_write: function(args) { writes[args.path] = args.content; }
+        });
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {
+                    workspace: 'IstiN',
+                    repository: 'trackstate',
+                    outputDir: 'outputs/token_usage',
+                    renderOnly: true
+                }
+            }
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Cannot render HTML: invalid token usage JSON at outputs/token_usage/ai_teammate_token_usage.json');
+        assert.equal(writes['outputs/token_usage/ai_teammate_token_usage.html'], undefined);
+    });
+
+    test('fails when workspace and repository cannot be resolved', function() {
+        var reporter = loadReporter({}, {});
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {}
+            }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'customParams.workspace and customParams.repository are required');
+    });
+
+    test('continues past a run whose log download fails and caches the error', function() {
+        var writes = {};
+        var warnings = [];
+        var originalWarn = console.warn;
+        console.warn = function(msg) { warnings.push(String(msg)); };
+        var reporter = null;
+        try {
+            reporter = loadReporter({
+                file_read: function() {
+                    return JSON.stringify({ version: 1, entries: {} });
+                },
+                file_write: function(args) { writes[args.path] = args.content; },
+                github_list_workflow_runs: function() {
+                    return JSON.stringify({ workflow_runs: [
+                        { id: 1, status: 'completed', conclusion: 'failure', run_number: 10, created_at: '2026-06-01T00:00:00Z', run_started_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:01:00Z', display_title: 'agents/pr_review.json : TS-1 : TS-1', html_url: 'https://example.test/run/1' }
+                    ] });
+                },
+                github_get_workflow_run_logs: function() {
+                    throw new Error('logs exploded');
+                }
+            });
+
+            var result = reporter.action({
+                jobParams: {
+                    customParams: {
+                        workspace: 'IstiN',
+                        repository: 'trackstate',
+                        outputDir: 'outputs/token_usage',
+                        maxPages: 1
+                    }
+                }
+            });
+
+            assert.equal(result.success, true);
+            assert.equal(result.summary.runsWithTokens, 0);
+            assert.equal(warnings.length, 1);
+            assert.contains(warnings[0], 'failed to process run 1');
+            assert.contains(warnings[0], 'logs exploded');
+            assert.contains(writes['outputs/token_usage/ai_teammate_token_usage_cache.json'], '"error": "logs exploded"');
+        } finally {
+            console.warn = originalWarn;
+        }
+    });
+
+    test('caches noUsage for runs without a token summary', function() {
+        var writes = {};
+        var logs = [];
+        var originalLog = console.log;
+        console.log = function(msg) { logs.push(String(msg)); };
+        var reporter = null;
+        try {
+            reporter = loadReporter({
+                file_read: function() {
+                    return JSON.stringify({ version: 1, entries: {} });
+                },
+                file_write: function(args) { writes[args.path] = args.content; },
+                github_list_workflow_runs: function() {
+                    return JSON.stringify({ workflow_runs: [
+                        { id: 7, status: 'completed', conclusion: 'success', run_number: 70, created_at: '2026-06-01T00:00:00Z', run_started_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:01:00Z', display_title: 'agents/pr_review.json : TS-7 : TS-7', html_url: 'https://example.test/run/7' }
+                    ] });
+                },
+                github_get_workflow_run_logs: function() {
+                    return 'just a plain log line without any token summary';
+                }
+            });
+
+            var result = reporter.action({
+                jobParams: {
+                    customParams: {
+                        workspace: 'IstiN',
+                        repository: 'trackstate',
+                        outputDir: 'outputs/token_usage',
+                        maxPages: 1,
+                        verbose: true
+                    }
+                }
+            });
+
+            assert.equal(result.success, true);
+            assert.equal(result.summary.runsWithTokens, 0);
+            assert.contains(writes['outputs/token_usage/ai_teammate_token_usage_cache.json'], '"noUsage": true');
+            assert.contains(logs.join('\n'), 'no token summary found');
+        } finally {
+            console.log = originalLog;
+        }
+    });
+
+    test('maxLogDownloads stops downloading mid-loop but keeps cached rows', function() {
+        var logDownloads = [];
+        var reporter = loadReporter({
+            file_read: function() {
+                return JSON.stringify({ version: 1, entries: {
+                    '1': { noUsage: true }
+                } });
+            },
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [
+                    { id: 1, status: 'completed', conclusion: 'success', run_number: 10, created_at: '2026-06-01T00:00:00Z', run_started_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:01:00Z', display_title: 'agents/pr_review.json : TS-1 : TS-1', html_url: 'https://example.test/run/1' },
+                    { id: 2, status: 'completed', conclusion: 'success', run_number: 11, created_at: '2026-06-01T00:02:00Z', run_started_at: '2026-06-01T00:02:00Z', updated_at: '2026-06-01T00:03:00Z', display_title: 'agents/pr_rework.json : TS-2 : TS-2', html_url: 'https://example.test/run/2' },
+                    { id: 3, status: 'completed', conclusion: 'success', run_number: 12, created_at: '2026-06-01T00:04:00Z', run_started_at: '2026-06-01T00:04:00Z', updated_at: '2026-06-01T00:05:00Z', display_title: 'agents/pr_rework.json : TS-3 : TS-3', html_url: 'https://example.test/run/3' }
+                ] });
+            },
+            github_get_workflow_run_logs: function(args) {
+                logDownloads.push(args.runId);
+                return '[INFO] CommandLineUtils - Tokens    ↑ 2k • ↓ 20 • 1k (cached) • 3 (reasoning)';
+            }
+        });
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {
+                    workspace: 'IstiN',
+                    repository: 'trackstate',
+                    outputDir: 'outputs/token_usage',
+                    maxPages: 1,
+                    maxLogDownloads: 1
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(logDownloads.length, 1);
+        assert.equal(result.summary.cache.logDownloads, 1);
+        assert.equal(result.summary.cache.stoppedByDownloadLimit, true);
+        assert.equal(result.summary.cache.hits, 1);
+        assert.equal(result.summary.runsWithTokens, 1);
+    });
+
+    test('useCache false never reads or writes the usage cache', function() {
+        var cacheReads = 0;
+        var cacheWrites = 0;
+        var reporter = loadReporter({
+            file_read: function(args) {
+                if (args.path === 'outputs/token_usage/ai_teammate_token_usage_cache.json') cacheReads += 1;
+                return '';
+            },
+            file_write: function(args) {
+                if (args.path === 'outputs/token_usage/ai_teammate_token_usage_cache.json') cacheWrites += 1;
+            },
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [
+                    { id: 2, status: 'completed', conclusion: 'success', run_number: 11, created_at: '2026-06-01T00:02:00Z', run_started_at: '2026-06-01T00:02:00Z', updated_at: '2026-06-01T00:03:00Z', display_title: 'agents/pr_rework.json : TS-2 : TS-2', html_url: 'https://example.test/run/2' }
+                ] });
+            },
+            github_get_workflow_run_logs: function() {
+                return '[INFO] CommandLineUtils - Tokens    ↑ 2k • ↓ 20 • 1k (cached) • 3 (reasoning)';
+            }
+        });
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {
+                    workspace: 'IstiN',
+                    repository: 'trackstate',
+                    outputDir: 'outputs/token_usage',
+                    maxPages: 1,
+                    useCache: false
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(cacheReads, 0);
+        assert.equal(cacheWrites, 0);
+        assert.equal(result.summary.cache.enabled, false);
+        assert.equal(result.summary.cache.path, '');
+        assert.equal(result.summary.runsWithTokens, 1);
+    });
+});
+
+suite('aiTeammateTokenUsageReporter action helpers', function() {
+
+    test('firstDefined returns first truthy value or the fallback', function() {
+        var reporter = loadReporter();
+
+        assert.equal(reporter.firstDefined('a', 'b', 'x'), 'a');
+        assert.equal(reporter.firstDefined('', 'b', 'x'), 'b');
+        assert.equal(reporter.firstDefined(0, null, undefined, 'x'), 'x');
+        assert.equal(reporter.firstDefined('', 'x'), 'x');
+    });
+
+    test('resolveRepository resolves aliases and placeholder fallbacks', function() {
+        var reporter = loadReporter();
+
+        var custom = reporter.resolveRepository(
+            { owner: 'octo', repo: 'hello' },
+            { repository: { owner: 'cfg-owner', repo: 'cfg-repo' } }
+        );
+        assert.equal(custom.workspace, 'octo');
+        assert.equal(custom.repository, 'hello');
+        assert.equal(custom.workflowId, 'ai-teammate.yml');
+
+        var fromConfig = reporter.resolveRepository(
+            { workspace: '{workspace}', repository: '{repository}' },
+            { repository: { owner: 'cfg-owner', repo: 'cfg-repo' } }
+        );
+        assert.equal(fromConfig.workspace, 'cfg-owner');
+        assert.equal(fromConfig.repository, 'cfg-repo');
+
+        var keepsWorkflow = reporter.resolveRepository(
+            { workspace: 'w', repository: 'r', workflowId: 'custom.yml' },
+            {}
+        );
+        assert.equal(keepsWorkflow.workflowId, 'custom.yml');
+    });
+
+    test('resolveOutputPaths applies defaults and explicit overrides', function() {
+        var reporter = loadReporter();
+
+        var defaults = reporter.resolveOutputPaths({});
+        assert.equal(defaults.outputDir, 'outputs/token_usage');
+        assert.equal(defaults.csvPath, 'outputs/token_usage/ai_teammate_token_usage.csv');
+        assert.equal(defaults.attemptsCsvPath, 'outputs/token_usage/ai_teammate_token_usage_attempts.csv');
+        assert.equal(defaults.jsonPath, 'outputs/token_usage/ai_teammate_token_usage.json');
+        assert.equal(defaults.htmlPath, 'outputs/token_usage/ai_teammate_token_usage.html');
+        assert.equal(defaults.cachePath, 'outputs/token_usage/ai_teammate_token_usage_cache.json');
+
+        var overrides = reporter.resolveOutputPaths({
+            outputDir: 'out/dir',
+            csvPath: 'custom.csv',
+            cachePath: 'custom-cache.json'
+        });
+        assert.equal(overrides.outputDir, 'out/dir');
+        assert.equal(overrides.csvPath, 'custom.csv');
+        assert.equal(overrides.jsonPath, 'out/dir/ai_teammate_token_usage.json');
+        assert.equal(overrides.cachePath, 'custom-cache.json');
+    });
+
+    test('parseCacheOptions normalizes cache-related customParams', function() {
+        var reporter = loadReporter();
+
+        var defaults = reporter.parseCacheOptions({});
+        assert.equal(defaults.useCache, true);
+        assert.equal(defaults.cacheWriteEvery, 25);
+        assert.equal(defaults.logDownloadSleepMs, 0);
+        assert.equal(defaults.maxLogDownloads, null);
+
+        assert.equal(reporter.parseCacheOptions({ useCache: false }).useCache, false);
+        assert.equal(reporter.parseCacheOptions({ useCache: 'false' }).useCache, false);
+        assert.equal(reporter.parseCacheOptions({ cacheWriteEvery: '0' }).cacheWriteEvery, 25);
+        assert.equal(reporter.parseCacheOptions({ cacheWriteEvery: '10' }).cacheWriteEvery, 10);
+        assert.equal(reporter.parseCacheOptions({ logDownloadSleepMs: '250' }).logDownloadSleepMs, 250);
+
+        assert.equal(reporter.parseMaxLogDownloads({}), null);
+        assert.equal(reporter.parseMaxLogDownloads({ maxLogDownloads: '' }), null);
+        assert.equal(reporter.parseMaxLogDownloads({ maxLogDownloads: '5' }), 5);
+        assert.equal(reporter.parseMaxLogDownloads({ maxLogDownloads: 'abc' }), 0);
+        assert.equal(reporter.parseMaxLogDownloads({ maxLogDownloads: '-3' }), 0);
+    });
+
+    test('shouldLogRunProgress logs first, last and every logEvery-th run', function() {
+        var reporter = loadReporter();
+
+        assert.equal(reporter.shouldLogRunProgress(false, 0, 10, 50), true);
+        assert.equal(reporter.shouldLogRunProgress(false, 9, 10, 50), true);
+        assert.equal(reporter.shouldLogRunProgress(false, 49, 100, 50), true);
+        assert.equal(reporter.shouldLogRunProgress(false, 1, 100, 50), false);
+        assert.equal(reporter.shouldLogRunProgress(true, 3, 100, 50), true);
+    });
+
+    test('getCachedRunState classifies row, noUsage and error entries', function() {
+        var reporter = loadReporter();
+        var cache = {
+            version: 1,
+            entries: {
+                '1': { row: { runId: '1' }, attemptRows: [{ attemptIndex: 1 }] },
+                '2': { noUsage: true },
+                '3': { error: 'boom' }
+            }
+        };
+
+        var rowState = reporter.getCachedRunState(cache, '1', true);
+        assert.equal(rowState.kind, 'row');
+        assert.equal(rowState.row.runId, '1');
+        assert.equal(rowState.attemptRows.length, 1);
+
+        assert.equal(reporter.getCachedRunState(cache, '2', true).kind, 'noUsage');
+        assert.equal(reporter.getCachedRunState(cache, '3', true), null);
+        assert.equal(reporter.getCachedRunState(cache, '4', true), null);
+        assert.equal(reporter.getCachedRunState(cache, '1', false), null);
+    });
+
+    test('applyCachedRunState pushes cached rows and counts hits', function() {
+        var reporter = loadReporter();
+        var state = { rows: [], attemptRows: [], cacheHits: 0, verbose: false };
+
+        assert.equal(reporter.applyCachedRunState(state, null), false);
+        assert.equal(state.cacheHits, 0);
+
+        assert.equal(reporter.applyCachedRunState(state, { kind: 'row', row: { runId: '1' }, attemptRows: [{ a: 1 }] }), true);
+        assert.equal(state.rows.length, 1);
+        assert.equal(state.attemptRows.length, 1);
+        assert.equal(state.cacheHits, 1);
+
+        assert.equal(reporter.applyCachedRunState(state, { kind: 'noUsage' }), true);
+        assert.equal(state.rows.length, 1);
+        assert.equal(state.cacheHits, 2);
+    });
+
+    test('buildUsageRow maps run, meta and usage into the aggregate row shape', function() {
+        var reporter = loadReporter();
+        var run = {
+            id: 42,
+            run_number: 7,
+            created_at: '2026-06-01T00:00:00Z',
+            run_started_at: '2026-06-01T00:00:30Z',
+            updated_at: '2026-06-01T00:10:00Z',
+            conclusion: 'success',
+            html_url: 'https://example.test/run/42'
+        };
+        var meta = { title: 'agents/x.json : TS-1 : TS-1', configFile: 'agents/x.json', agent: 'x', ticketKey: 'TS-1' };
+        var usage = {
+            requests: 3,
+            requestTier: 'Premium',
+            requestDuration: '27m 2s',
+            readTokens: 100,
+            writeTokens: 10,
+            cachedTokens: 50,
+            reasoningTokens: 5,
+            samples: 2,
+            resumeDetected: true,
+            resumeStages: ['stage 1/2'],
+            feedbackLoopCount: 1,
+            rateLimitRetryCount: 2,
+            rateLimitDetected: true,
+            timeoutCount: 1,
+            source: 'reported'
+        };
+
+        var row = reporter.buildUsageRow(run, meta, 570, '9m 30s', usage);
+
+        assert.equal(row.runId, '42');
+        assert.equal(row.runNumber, 7);
+        assert.equal(row.createdAt, '2026-06-01T00:00:00Z');
+        assert.equal(row.startedAt, '2026-06-01T00:00:30Z');
+        assert.equal(row.updatedAt, '2026-06-01T00:10:00Z');
+        assert.equal(row.day, '2026-06-01');
+        assert.equal(row.conclusion, 'success');
+        assert.equal(row.agent, 'x');
+        assert.equal(row.ticketKey, 'TS-1');
+        assert.equal(row.durationSeconds, 570);
+        assert.equal(row.duration, '9m 30s');
+        assert.equal(row.requests, 3);
+        assert.equal(row.requestTier, 'Premium');
+        assert.equal(row.samples, 2);
+        assert.equal(row.resumeDetected, true);
+        assert.equal(row.resumeStages, 'stage 1/2');
+        assert.equal(row.rateLimitDetected, true);
+        assert.equal(row.source, 'reported');
+        assert.equal(row.url, 'https://example.test/run/42');
+
+        var camelRun = { databaseId: 43, runNumber: 8, createdAt: '2026-06-02T00:00:00Z', runStartedAt: '2026-06-02T00:00:00Z', updatedAt: '2026-06-02T00:01:00Z', htmlUrl: 'https://example.test/run/43' };
+        var camelRow = reporter.buildUsageRow(camelRun, meta, 60, '1m 0s', usage);
+        assert.equal(camelRow.runId, '43');
+        assert.equal(camelRow.runNumber, 8);
+        assert.equal(camelRow.day, '2026-06-02');
+        assert.equal(camelRow.url, 'https://example.test/run/43');
+    });
+
+    test('buildAttemptRow maps an attempt sample with run metadata', function() {
+        var reporter = loadReporter();
+        var run = {
+            id: 42,
+            run_number: 7,
+            created_at: '2026-06-01T00:00:00Z',
+            conclusion: 'success',
+            html_url: 'https://example.test/run/42'
+        };
+        var meta = { title: 'agents/x.json : TS-1 : TS-1', configFile: 'agents/x.json', agent: 'x', ticketKey: 'TS-1' };
+        var usage = {
+            resumeDetected: false,
+            feedbackLoopCount: 0,
+            rateLimitRetryCount: 0,
+            rateLimitDetected: false,
+            timeoutCount: 0
+        };
+        var attempt = {
+            attemptIndex: 2,
+            requests: 3,
+            requestTier: 'Premium',
+            requestDuration: '27m 2s',
+            readTokens: 100,
+            writeTokens: 10,
+            cachedTokens: 50,
+            reasoningTokens: 5,
+            rawTokensLine: 'Tokens ↑ 100',
+            source: 'reported'
+        };
+
+        var row = reporter.buildAttemptRow(run, meta, 570, '9m 30s', usage, attempt);
+
+        assert.equal(row.runId, '42');
+        assert.equal(row.runNumber, 7);
+        assert.equal(row.day, '2026-06-01');
+        assert.equal(row.agent, 'x');
+        assert.equal(row.attemptIndex, 2);
+        assert.equal(row.resumeDetected, false);
+        assert.equal(row.requests, 3);
+        assert.equal(row.rawTokensLine, 'Tokens ↑ 100');
+        assert.equal(row.source, 'reported');
+        assert.equal(row.url, 'https://example.test/run/42');
+    });
+
+    test('buildCacheSummaryInfo reflects useCache on/off', function() {
+        var reporter = loadReporter();
+        var state = {
+            cacheHits: 2,
+            downloadedLogs: 3,
+            stoppedByDownloadLimit: true
+        };
+
+        var enabled = reporter.buildCacheSummaryInfo(
+            { useCache: true, maxLogDownloads: 5, logDownloadSleepMs: 100 },
+            { cachePath: 'cache.json' },
+            state
+        );
+        assert.equal(enabled.enabled, true);
+        assert.equal(enabled.path, 'cache.json');
+        assert.equal(enabled.hits, 2);
+        assert.equal(enabled.logDownloads, 3);
+        assert.equal(enabled.maxLogDownloads, 5);
+        assert.equal(enabled.stoppedByDownloadLimit, true);
+        assert.equal(enabled.logDownloadSleepMs, 100);
+
+        var disabled = reporter.buildCacheSummaryInfo(
+            { useCache: false, maxLogDownloads: null, logDownloadSleepMs: 0 },
+            { cachePath: 'cache.json' },
+            state
+        );
+        assert.equal(disabled.enabled, false);
+        assert.equal(disabled.path, '');
+        assert.equal(disabled.maxLogDownloads, null);
     });
 });
