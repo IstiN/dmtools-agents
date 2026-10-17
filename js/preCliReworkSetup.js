@@ -383,6 +383,32 @@ function failSetup(tracker, ticketKey, inputFolder, message, customParams) {
 }
 
 /**
+ * Which params bag carries the input folder: the flat params when they have
+ * one, otherwise jobParams (the real Teammate execution path), otherwise the
+ * params as-is.
+ * (gh-1002) Pure parse* helper extracted from action().
+ */
+function resolveActualParams(params) {
+    return params.inputFolderPath ? params : (params.jobParams || params);
+}
+
+/**
+ * The PR anchor for this rework run: a `pr-N` input folder IS the anchor
+ * (#544), otherwise jobParams.prNumber / jobParams.pr when parseable.
+ * (gh-1002) Pure parse* helper extracted from action().
+ *
+ * @param {string} ticketKey - input folder basename (the context id)
+ * @param {Object} params    - workflow params
+ * @returns {(number|null)}
+ */
+function parsePrAnchor(ticketKey, params) {
+    var anchorMatch = /^pr-(\d+)$/.exec(String(ticketKey || ''));
+    var jp0 = params.jobParams || params;
+    return (anchorMatch ? parseInt(anchorMatch[1], 10) : null) ||
+        (parseInt(jp0.prNumber || jp0.pr || '', 10) || null);
+}
+
+/**
  * Parse the incoming params into the rework anchor context: which params bag
  * carries the input folder, the derived ticket key, and the PR anchor.
  * PR-anchored rework (#544): a `pr-N` contextId makes the PR itself the
@@ -397,14 +423,15 @@ function failSetup(tracker, ticketKey, inputFolder, message, customParams) {
  * @returns {{actualParams: Object, inputFolder: string, ticketKey: string, prAnchor: (number|null)}}
  */
 function parseReworkParams(params) {
-    var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
+    var actualParams = resolveActualParams(params);
     var inputFolder = actualParams.inputFolderPath;
     var ticketKey = inputFolder.split('/').pop();
-    var anchorMatch = /^pr-(\d+)$/.exec(String(ticketKey || ''));
-    var jp0 = params.jobParams || params;
-    var prAnchor = (anchorMatch ? parseInt(anchorMatch[1], 10) : null) ||
-        (parseInt(jp0.prNumber || jp0.pr || '', 10) || null);
-    return { actualParams: actualParams, inputFolder: inputFolder, ticketKey: ticketKey, prAnchor: prAnchor };
+    return {
+        actualParams: actualParams,
+        inputFolder: inputFolder,
+        ticketKey: ticketKey,
+        prAnchor: parsePrAnchor(ticketKey, params)
+    };
 }
 
 /**
@@ -611,50 +638,19 @@ function action(params) {
         console.log('=== Rework setup for:', ticketKey, '===');
 
         // Mark the ticket actively-worked with the ACTUAL rework-phase status
-        // (gh-802 AC3b): a rework leg used to write statuses.IN_DEVELOPMENT —
-        // the stale dev-phase status — so the board showed the card back in
-        // Development while rework (post-review fixes) was actually running.
-        // Opt-in (config.jira.markReworkInDevelopment) for projects whose
-        // rework bounce-back target is a "queued" status; the write is now the
-        // real transition target: statuses.IN_REWORK.
-        if (config.jira && config.jira.markReworkInDevelopment && !prAnchor) {
-            try {
-                tracker.moveToStatus(ticketKey, statuses.IN_REWORK);
-                console.log('Moved ' + ticketKey + ' to ' + statuses.IN_REWORK);
-            } catch (e) {
-                // Log the error CONTENT — the host console renders a raw Error
-                // object as "{}" (same log-hygiene rule as AC3c; matches the
-                // e.message || String(e) pattern used elsewhere in this file).
-                console.warn('Failed to move ticket to ' + statuses.IN_REWORK + ':', e && e.message ? e.message : String(e));
-            }
-        }
+        // (gh-802 AC3b) — see moveTicketToReworkStatus() for the full rationale.
+        moveTicketToReworkStatus(config, tracker, ticketKey, statuses, prAnchor);
 
         // Step 1: GitHub repo info — prefer targetRepository from config over git remote
-        var repoInfo = null;
-        if (config.repository && config.repository.owner && config.repository.repo) {
-            repoInfo = { owner: config.repository.owner, repo: config.repository.repo };
-            console.log('Using targetRepository from config:', repoInfo.owner + '/' + repoInfo.repo);
-        } else {
-            repoInfo = scm.getRemoteRepoInfo();
-        }
+        var repoInfo = resolveRepoInfo(config, scm);
         if (!repoInfo) {
             const err = 'Could not determine GitHub repository from git remote';
-            try {
-                var mRepoFail = commentMarkup.forTicket(ticketKey, customParams);
-                tracker.postComment(ticketKey, mRepoFail.h(3, '❌ Rework Setup Failed') + '\n\n' + err);
-            } catch (e) {}
+            postRepoResolutionFailure(tracker, ticketKey, customParams, err);
             return { success: false, error: err };
         }
 
         // Step 2: Find existing PR — PR-anchored (#544): the anchor IS the PR.
-        var pr;
-        if (prAnchor) {
-            console.log('PR-anchored rework: PR #' + prAnchor + ' (no ticket lookup, #544)');
-            pr = { number: prAnchor };
-        } else {
-            var prSearchOptions = config.prSearchFn ? { prSearchFn: config.prSearchFn } : {};
-            pr = gh.findPRForTicket(scm, ticketKey, prSearchOptions);
-        }
+        var pr = findPrForRework(prAnchor, scm, config, ticketKey);
         if (!pr) {
             failSetup(
                 tracker,
@@ -676,11 +672,7 @@ function action(params) {
         if (!branchName) {
             failSetup(tracker, ticketKey, inputFolder, 'Could not determine branch from PR details', customParams);
         }
-        try {
-            gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
-        } catch (e) {
-            failSetup(tracker, ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString(), customParams);
-        }
+        checkoutReworkBranch(branchName, config, inputFolder, tracker, ticketKey, customParams);
 
         const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
 
@@ -713,20 +705,7 @@ function action(params) {
 
         // Step 4.6: Run project-specific prerequisite/setup commands (e.g. install
         // JDK/Maven, verify build credentials) before the CLI agent starts fixing code.
-        try {
-            var setupResult = setupCommands.runSetupCommands(customParams, config.workingDir);
-            var setupWarnings = setupCommands.buildSetupWarningsMarkdown(setupResult);
-            if (setupWarnings) {
-                try {
-                    file_write({ path: inputFolder + '/setup_warnings.md', content: setupWarnings });
-                    console.log('⚠️ Wrote setup_warnings.md (non-fatal setup command failure(s))');
-                } catch (writeErr) {
-                    console.warn('Failed to write setup_warnings.md:', writeErr);
-                }
-            }
-        } catch (e) {
-            failSetup(tracker, ticketKey, inputFolder, 'Environment setup failed: ' + (e && e.toString ? e.toString() : String(e)), customParams);
-        }
+        runSetupCommandsStep(customParams, config, inputFolder, tracker, ticketKey);
 
         // Step 4.7: Detect failed CI checks — writes ci_failures.md if any failed
         const headSha = prDetails.head ? prDetails.head.sha : null;
@@ -743,11 +722,7 @@ function action(params) {
 
         // agents#827: remember the head this pass starts from, so pushReworkChanges can tell a real fix
         // from a pass that only left housekeeping (outputs/, WIP auto-saves) behind.
-        try {
-            if (headSha) file_write({ path: inputFolder + '/rework_base_head.txt', content: String(headSha) });
-        } catch (e) {
-            console.warn('Could not write rework_base_head.txt (no-fix guard stays off):', e.message || e);
-        }
+        writeReworkBaseHead(inputFolder, headSha);
 
         // gh-799: pinned input contract — whatever armed this leg, the input
         // folder now ALWAYS carries the complete open-item picture (threads
@@ -771,21 +746,14 @@ function action(params) {
         // from the post action instead).
         if (prAnchor) {
             console.log('PR-anchored rework: skipping tracker comment (no ticket, #544)');
-        } else try {
-            // Rendered in the flavor of the ticket's tracker (gh-770):
-            // Markdown on GitHub issues, wiki markup on Jira.
-            tracker.postComment(ticketKey, buildReworkStartedComment(
-                commentMarkup.forTicket(ticketKey, customParams),
-                {
-                    prNumber: prDetails.number,
-                    prUrl: prDetails.html_url,
-                    branchName: branchName,
-                    conflictFiles: conflictFiles,
-                    failedChecks: failedChecks
-                }
-            ));
-        } catch (e) {
-            console.warn('Failed to post tracker comment:', e);
+        } else {
+            postReworkStartedCommentStep(tracker, ticketKey, customParams, {
+                prNumber: prDetails.number,
+                prUrl: prDetails.html_url,
+                branchName: branchName,
+                conflictFiles: conflictFiles,
+                failedChecks: failedChecks
+            });
         }
 
         console.log('✅ Rework setup complete — branch:', branchName, '| PR #' + prDetails.number);
@@ -808,39 +776,30 @@ function action(params) {
 
     } catch (error) {
         console.error('❌ Error in preCliReworkSetup:', error);
-        try {
-            const ticketKey = (params.inputFolderPath ||
-                (params.jobParams && params.jobParams.inputFolderPath) || '').split('/').pop();
-            if (ticketKey) {
-                // Post the error to the ticket via the probed tracker provider
-                var errorTracker = (typeof tracker !== 'undefined' && tracker) ? tracker : null;
-                if (!errorTracker) {
-                    try {
-                        errorTracker = trackersModule.createTracker(
-                            configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params)),
-                            (params.jobParams && params.jobParams.customParams) || params.customParams);
-                    } catch (trackerError) {
-                        console.error('Failed to create tracker for error comment:', trackerError);
-                    }
-                }
-                if (errorTracker) {
-                    // Flavor follows the ticket's tracker (gh-770): Markdown
-                    // on GitHub issues, wiki markup on Jira.
-                    var errorCustomParams = (params.jobParams && params.jobParams.customParams) || params.customParams;
-                    var em = commentMarkup.forTicket(ticketKey, errorCustomParams);
-                    errorTracker.postComment(
-                        ticketKey,
-                        em.h(3, '❌ Rework Setup Error') + '\n\n' + em.code(truncateForComment(error.toString()))
-                    );
-                }
-            }
-        } catch (e) {
-            console.error('Failed to post rework setup error comment:', e && e.toString ? e.toString() : String(e));
-        }
+        reportActionError(params, tracker, error);
         return { success: false, error: error.toString() };
     }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, syncBaseBranchIfConfigured, truncateForComment, buildReworkStartedComment, buildReviewStateMd, ensureInputContextContract };
+    module.exports = {
+        action,
+        syncBaseBranchIfConfigured,
+        truncateForComment,
+        buildReworkStartedComment,
+        buildReviewStateMd,
+        ensureInputContextContract,
+        // gh-1002: helpers extracted from action() to bring its CRAP under the
+        // quality-gate threshold — exported for direct unit testing.
+        parseReworkParams,
+        resolveRepoInfo,
+        postRepoResolutionFailure,
+        findPrForRework,
+        moveTicketToReworkStatus,
+        checkoutReworkBranch,
+        runSetupCommandsStep,
+        writeReworkBaseHead,
+        postReworkStartedCommentStep,
+        reportActionError
+    };
 }
