@@ -178,7 +178,8 @@ suite('checkWipLabel — PR-anchored start gate (githubSource pr-N, fa #1212)', 
                     buildOriginFetchCommand: function() { return 'git fetch origin'; }
                 },
                 './gitOps.js': gitOpsStub,
-                './machineNotice.js': loadModule('js/common/machineNotice.js')
+                './machineNotice.js': loadModule('js/common/machineNotice.js'),
+                './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') }))
             }),
             {}
         );

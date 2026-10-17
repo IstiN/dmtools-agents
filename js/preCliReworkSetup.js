@@ -230,10 +230,27 @@ function buildReviewStateMd(scm, prNumber, discussionData) {
     }
 
     var rawThreads = (discussionData && discussionData.rawThreads && discussionData.rawThreads.threads) || [];
+    var census = (discussionData && discussionData.rawThreads && discussionData.rawThreads.census) || null;
     var openThreads = rawThreads.filter(function(t) {
         return !!t && t.resolved !== true && t.bot !== true;
     });
     lines.push('**Open review threads at rework start: ' + openThreads.length + '**');
+    // gh-957 context parity: state the SAME GraphQL reviewThreads census the
+    // SM arm rule counts (the inventory is GraphQL-sourced now, so the two
+    // can never silently disagree again). When the census differs from the
+    // actionable list below, the delta is exclusion accounting — say so.
+    if (census && typeof census.graphqlUnresolved === 'number') {
+        lines.push('');
+        if (census.graphqlUnresolved === openThreads.length) {
+            lines.push('> ℹ️ Arm-rule census: the SM armer counts the SAME ' + census.graphqlUnresolved +
+                ' unresolved review thread(s) via GraphQL reviewThreads (gh-957 — one source of truth).');
+        } else {
+            lines.push('> ℹ️ Arm-rule census (gh-957): the SM armer counts ' + census.graphqlUnresolved +
+                ' unresolved review thread(s) via GraphQL reviewThreads; the actionable list below is ' +
+                openThreads.length + ' — the delta is machine-notice/bot threads (excluded above, never reply targets).');
+        }
+        lines.push('');
+    }
     lines.push('');
     if (openThreads.length > 0) {
         lines.push('Each open thread below is blocking reviewer feedback — fix it and reply via `outputs/review_replies.json`:');

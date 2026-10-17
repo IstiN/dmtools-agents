@@ -184,8 +184,11 @@ var configModule = loadModule('agents/js/config.js');
 // resolves against js/unit-tests/ and cannot find it. Mirror testRunner.js:
 // inject machineNotice through makeRequire.
 var machineNoticeModule = loadModule('agents/js/common/machineNotice.js');
-var scmModule = loadModule('agents/js/common/scm.js',
+var reviewThreadInventoryModule = loadModule('agents/js/common/reviewThreadInventory.js',
     makeRequire({ './machineNotice.js': machineNoticeModule }));
+var scmModule = loadModule('agents/js/common/scm.js',
+    makeRequire({ './machineNotice.js': machineNoticeModule,
+                  './reviewThreadInventory.js': reviewThreadInventoryModule }));
 var configLoaderModule = loadModule(
     'agents/js/configLoader.js',
     makeRequire({

@@ -20,7 +20,8 @@ var githubHelpersModule = loadModule(
             trimLargeTextForInput: function() {},
             writePRContext: function() {}
         },
-        './machineNotice.js': loadModule('js/common/machineNotice.js')
+        './machineNotice.js': loadModule('js/common/machineNotice.js'),
+        './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') }))
     }),
     {}
 );

@@ -24,10 +24,17 @@ function loadMachineNotice() {
     return loadModule('js/common/machineNotice.js');
 }
 
+function loadReviewThreadInventory() {
+    return loadModule(
+        'js/common/reviewThreadInventory.js',
+        makeRequire({ './machineNotice.js': loadMachineNotice() })
+    );
+}
+
 function loadScm(mocks) {
     return loadModule(
         'js/common/scm.js',
-        makeRequire({ './machineNotice.js': loadMachineNotice() }),
+        makeRequire({ './machineNotice.js': loadMachineNotice(), './reviewThreadInventory.js': loadReviewThreadInventory() }),
         mocks || {}
     );
 }
@@ -56,7 +63,8 @@ function loadGithubHelpers(mocks) {
                 trimLargeTextForInput: function() {},
                 writePRContext: function() {}
             },
-            './machineNotice.js': loadMachineNotice()
+            './machineNotice.js': loadMachineNotice(),
+            './reviewThreadInventory.js': loadReviewThreadInventory()
         }),
         mocks || {}
     );
