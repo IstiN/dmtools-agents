@@ -243,7 +243,7 @@ Rules for author-side JS:
   script as a single command.
 
 Enforced in `js/common/setupCommands.js`, `js/preCliDevelopmentSetup.js`, and
-the dmtools global Copilot instructions. These rules must NOT be copied into
+`AGENTS.md` (dmtools global Copilot instructions). These rules must NOT be copied into
 teammate prompts (`prompts/`, `instructions/`) — teammate bash is the fa-harness
 persistent shell and follows only the fa-sandbox guidance in
 `prompts/bash_tools.md`.
