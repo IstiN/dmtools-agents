@@ -51,49 +51,68 @@ function makeScmMock(options) {
     };
 }
 
+/** {{var}} substitution — hoisted named declaration so its CC is its own entry. */
+function formatTemplateVars(template, vars) {
+    var result = template;
+    for (var key in vars) {
+        if (vars.hasOwnProperty(key)) {
+            var placeholder = '{' + key + '}';
+            while (result.indexOf(placeholder) !== -1) {
+                result = result.replace(placeholder, vars[key] || '');
+            }
+        }
+    }
+    return result;
+}
+
+/** defaults-object for the gh double — hoisted to keep the loader flat. */
+function defaultGhDouble() {
+    return {
+        buildOriginFetchCommand: function(refspec) { return 'git fetch origin ' + refspec; },
+        getPRDetails: function() { return PR12; },
+        fetchDiscussionsAndRawData: function() { return { markdown: '## Threads\n', rawThreads: [] }; }
+    };
+}
+
+/** defaults-object for the gitOps double. */
+function defaultGitOpsDouble() {
+    return {
+        checkoutPRBranch: function() {},
+        detectMergeConflicts: function() { return []; },
+        getPRDiff: function() { return 'diff --git a/testing/x b/testing/x'; },
+        writePRContext: function() {}
+    };
+}
+
+/** Per-key override merge: `overrides[key]` when declared, else the fallback. */
+function overrideOr(overrides, key, fallback) {
+    return overrides[key] !== undefined ? overrides[key] : fallback;
+}
+
 /**
  * Load the module under test with per-dependency overrides.
  * Every collaborator is a mock — no real services, no real git.
  */
 function loadPreCliTestReworkSetup(overrides) {
     overrides = overrides || {};
-    var configLoader = overrides.configLoader || {
+    var scm = overrideOr(overrides, 'scm', null);
+    var configLoader = overrideOr(overrides, 'configLoader', {
         loadProjectConfig: function() { return REWORK_SETUP_CONFIG; },
-        createScm: function() { return overrides.scm || makeScmMock(); },
-        formatTemplate: function(template, vars) {
-            var result = template;
-            for (var key in vars) {
-                if (vars.hasOwnProperty(key)) {
-                    var placeholder = '{' + key + '}';
-                    while (result.indexOf(placeholder) !== -1) {
-                        result = result.replace(placeholder, vars[key] || '');
-                    }
-                }
-            }
-            return result;
-        }
-    };
-    var gh = Object.assign({
-        buildOriginFetchCommand: function(refspec) { return 'git fetch origin ' + refspec; },
-        getPRDetails: function() { return PR12; },
-        fetchDiscussionsAndRawData: function() { return { markdown: '## Threads\n', rawThreads: [] }; }
-    }, overrides.gh || {});
-    var gitOps = Object.assign({
-        checkoutPRBranch: function() {},
-        detectMergeConflicts: function() { return []; },
-        getPRDiff: function() { return 'diff --git a/testing/x b/testing/x'; },
-        writePRContext: function() {}
-    }, overrides.gitOps || {});
-    var prHelper = overrides.prHelper || { ensureClosesLine: function(body, key) { return body; } };
-    var tracker = overrides.tracker || makeTrackerMock();
+        createScm: function() { return scm || makeScmMock(); },
+        formatTemplate: formatTemplateVars
+    });
+    var gh = Object.assign(defaultGhDouble(), overrideOr(overrides, 'gh', {}));
+    var gitOps = Object.assign(defaultGitOpsDouble(), overrideOr(overrides, 'gitOps', {}));
+    var prHelper = overrideOr(overrides, 'prHelper', { ensureClosesLine: function(body, key) { return body; } });
+    var tracker = overrideOr(overrides, 'tracker', null) || makeTrackerMock();
     var trackers = {
         createTracker: function(config, customParams) {
             trackers.createdWith = { config: config, customParams: customParams };
             return tracker;
         }
     };
-    var fetchQuestions = overrides.fetchQuestions || { action: function() {} };
-    var fetchBugs = overrides.fetchBugs || { action: function() {} };
+    var fetchQuestions = overrideOr(overrides, 'fetchQuestions', { action: function() {} });
+    var fetchBugs = overrideOr(overrides, 'fetchBugs', { action: function() {} });
 
     return {
         module: loadModule(
@@ -107,7 +126,7 @@ function loadPreCliTestReworkSetup(overrides) {
                 './fetchQuestionsToInput.js': fetchQuestions,
                 './fetchLinkedBugsToInput.js': fetchBugs
             }),
-            { cli_execute_command: overrides.cli || function() { return ''; } }
+            { cli_execute_command: overrideOr(overrides, 'cli', function() { return ''; }) }
         ),
         gh: gh,
         gitOps: gitOps,

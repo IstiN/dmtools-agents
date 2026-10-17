@@ -8,6 +8,14 @@
  * 5. If test passed  → moves to In Review - Passed
  * 6. If test failed  → moves to In Review - Failed (bug may have changed)
  * 7. Posts Jira comment, removes WIP label
+ *
+ * gh-928: the action orchestration was split into pure planners/parsers
+ * (normalizeTestStatus, buildResultErrorMessage, buildPRReworkComment,
+ * buildAutoPRTitle, prNumberFromUrl, buildFallbackPR, prMatchesBranch) and
+ * thin executors (runPublishGates, releaseReworkLock, postReworkBodyAndComment,
+ * handleReplyItem, triggerAutoStart, resumeOrReport). Side effects, call order,
+ * log lines and result shapes are unchanged — characterization-tested by
+ * js/unit-tests/test_postTestReworkResults.js.
  */
 
 var configLoader = require('./configLoader.js');
@@ -96,6 +104,150 @@ function findTestPRForTicket(scm, ticketKey) {
     } catch (e) {
         console.error('Failed to find PR:', e);
         return null;
+    }
+}
+
+// ── gh-928 pure planners/parsers ─────────────────────────────────────────────
+
+/**
+ * Normalize a raw test-result status into the canonical passed/failed token.
+ * Anything else is returned verbatim (the workflow treats it as not-passed).
+ */
+function normalizeTestStatus(rawStatus) {
+    return (rawStatus === 'pass' || rawStatus === 'passed') ? 'passed' :
+           (rawStatus === 'fail' || rawStatus === 'failed') ? 'failed' :
+           rawStatus;
+}
+
+/**
+ * The operator-facing message for an unreadable/invalid rework result JSON.
+ * Distinguishes "file missing or empty" from "present but no status field".
+ */
+function buildResultErrorMessage(result) {
+    return !result
+        ? 'Could not read outputs/test_automation_result.json — file missing or empty.'
+        : 'outputs/test_automation_result.json is missing required "status" field (got: ' + JSON.stringify(result) + '). The agent must write { "status": "passed" | "failed", ... }.';
+}
+
+/** The rework WIP label follows the workflow context when one is declared. */
+function resolveWipLabel(actualParams) {
+    return actualParams.metadata && actualParams.metadata.contextId
+        ? actualParams.metadata.contextId + '_wip'
+        : 'pr_test_automation_rework_wip';
+}
+
+/** Whether an open-PR list entry points at the given branch. */
+function prMatchesBranch(pr, branchName) {
+    return pr.head && pr.head.ref === branchName;
+}
+
+/** "KEY Summary" title for an auto-created rework PR, degrading to the key. */
+function buildAutoPRTitle(ticket, ticketKey) {
+    const summary = ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
+    return ticketKey + ' ' + summary;
+}
+
+/** Best-effort PR number from a GitHub compare URL; null when not parseable. */
+function prNumberFromUrl(prUrl) {
+    if (!prUrl) return null;
+    var m = prUrl.match(/\/pull\/(\d+)$/);
+    return m ? parseInt(m[1], 10) : null;
+}
+
+/** Minimal PR shape built from a createPullRequest result (SCM-shape fallback). */
+function buildFallbackPR(prResult, branchName) {
+    return {
+        number: prNumberFromUrl(prResult.prUrl),
+        html_url: prResult.prUrl,
+        head: { ref: branchName }
+    };
+}
+
+/** The "🔧 Test Rework Complete" PR comment (GitHub Markdown). */
+function buildPRReworkComment(ticketKey, testStatus, passed, prBodyContent) {
+    const statusEmoji = passed ? '✅' : '❌';
+    return '## 🔧 Test Rework Complete — ' + ticketKey + '\n\n' +
+        '**Re-run result**: ' + statusEmoji + ' ' + testStatus.toUpperCase() + '\n\n' +
+        '---\n\n' + prBodyContent;
+}
+
+// ── gh-928 thin executors (side effects, unchanged order) ────────────────────
+
+/** Quality + policy gates, in order; throws on the first failed gate. */
+function runPublishGates(ticketKey, customParams) {
+    var gateResult = feedbackLoop.runQualityGates({
+        ticketKey: ticketKey,
+        customParams: customParams,
+        section: 'qualityGates'
+    });
+    if (!gateResult.success) {
+        throw new Error('Quality gate failed before test rework publish: ' + gateResult.failedGate + '\n' + gateResult.error);
+    }
+    var policyResult = feedbackLoop.runPolicyGates({
+        ticketKey: ticketKey,
+        customParams: customParams,
+        section: 'policyGates'
+    });
+    if (!policyResult.success) {
+        throw new Error('Policy gate failed before test rework publish: ' + policyResult.failedGate + '\n' + policyResult.error);
+    }
+}
+
+/** Release the rework WIP label (and the custom SM label when configured). */
+function releaseReworkLock(ticketKey, wipLabel, removeLabel) {
+    try { getTracker().removeLabel(ticketKey, wipLabel); } catch (e) {}
+    if (removeLabel) {
+        try {
+            getTracker().removeLabel(ticketKey, removeLabel);
+            console.log('✅ Removed SM label:', removeLabel);
+        } catch (e) {}
+    }
+}
+
+/** PR body refresh + rework summary comment; failures are non-fatal warns. */
+function postReworkBodyAndComment(scm, pr, ticketKey, testStatus, passed, prBodyContent) {
+    try {
+        updatePullRequestBody(scm, pr.number, ticketKey, testStatus, prBodyContent);
+        scm.addComment(pr.number, buildPRReworkComment(ticketKey, testStatus, passed, prBodyContent));
+        console.log('✅ Posted rework summary to PR');
+    } catch (e) {
+        console.warn('Failed to post PR comment:', e);
+    }
+}
+
+/**
+ * One outputs/review_replies.json entry: post the explicit thread reply
+ * and/or resolve the thread. Mutates the tally; call order is list order.
+ */
+function handleReplyItem(scm, pullRequestId, item, tally) {
+    const thread = {
+        rootCommentId: item.inReplyToId,
+        threadId: item.threadId || item.discussionId
+    };
+    const replyText = item.reply ? String(item.reply).trim() : '';
+
+    // Only post a reply when the agent explicitly wrote one AND we have the
+    // identifiers needed to reply inside the existing review thread. Without
+    // rootCommentId GitHub's SCM fallback creates a generic issue comment,
+    // which is what produces the huge "✅ Addressed." comment floods.
+    if (replyText && item.inReplyToId) {
+        try {
+            scm.replyToThread(pullRequestId, thread, replyText);
+            tally.posted++;
+        } catch (e) {
+            console.warn('Failed to reply to comment #' + item.inReplyToId + ':', e);
+        }
+    } else if (replyText) {
+        console.log('Skipping reply for thread without rootCommentId — would become a generic issue comment');
+    }
+
+    if (item.threadId) {
+        try {
+            scm.resolveThread(pullRequestId, { threadId: item.threadId });
+            tally.resolved++;
+        } catch (e) {
+            console.warn('Failed to resolve thread', item.threadId + ':', e);
+        }
     }
 }
 
@@ -308,7 +460,7 @@ function createPRIfMissing(scm, branchName, ticketKey, config) {
     try {
         const openPRs = scm.listPrs('open') || [];
         const existing = openPRs.filter(function(pr) {
-            return pr.head && pr.head.ref === branchName;
+            return prMatchesBranch(pr, branchName);
         });
         if (existing.length > 0) {
             console.log('PR already exists: #' + existing[0].number);
@@ -318,8 +470,7 @@ function createPRIfMissing(scm, branchName, ticketKey, config) {
         console.log('No open PR/MR found — creating one...');
         var ticket;
         try { ticket = getTracker().getIssue(ticketKey); } catch (e) { ticket = null; }
-        const summary = ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
-        const prTitle = ticketKey + ' ' + summary;
+        const prTitle = buildAutoPRTitle(ticket, ticketKey);
 
         const prResult = prHelper.createPullRequest({
             scm: scm,
@@ -334,15 +485,14 @@ function createPRIfMissing(scm, branchName, ticketKey, config) {
         if (prResult && prResult.success) {
             console.log('✅ Created PR for', branchName, ':', prResult.prUrl || '(URL unknown)');
             // Re-fetch so downstream code gets a consistent PR shape from the SCM.
+            // CHARACTERIZED QUIRK (gh-928): findTestPRForTicket returns the PR
+            // object itself, so `refreshed.pr` is undefined — a successful
+            // re-fetch yields NO downstream PR today. Preserved as-is on
+            // purpose; see test_postTestReworkResults.js.
             const refreshed = findTestPRForTicket(scm, ticketKey);
             if (refreshed) return refreshed.pr;
             // Fallback: build minimal shape from URL if the SCM response differs.
-            var prNumber = null;
-            if (prResult.prUrl) {
-                var m = prResult.prUrl.match(/\/pull\/(\d+)$/);
-                if (m) prNumber = parseInt(m[1], 10);
-            }
-            return { number: prNumber, html_url: prResult.prUrl, head: { ref: branchName } };
+            return buildFallbackPR(prResult, branchName);
         }
         console.warn('Could not create PR/MR:', prResult && prResult.error);
         return null;
@@ -390,42 +540,64 @@ function postThreadReplies(scm, pullRequestId) {
     const replies = (data && data.replies) ? data.replies : [];
     if (replies.length === 0) return 0;
 
-    let posted = 0;
-    let resolved = 0;
+    const tally = { posted: 0, resolved: 0 };
     replies.forEach(function(item) {
-        const thread = {
-            rootCommentId: item.inReplyToId,
-            threadId: item.threadId || item.discussionId
-        };
-        const replyText = item.reply ? String(item.reply).trim() : '';
-
-        // Only post a reply when the agent explicitly wrote one AND we have the
-        // identifiers needed to reply inside the existing review thread. Without
-        // rootCommentId GitHub's SCM fallback creates a generic issue comment,
-        // which is what produces the huge "✅ Addressed." comment floods.
-        if (replyText && item.inReplyToId) {
-            try {
-                scm.replyToThread(pullRequestId, thread, replyText);
-                posted++;
-            } catch (e) {
-                console.warn('Failed to reply to comment #' + item.inReplyToId + ':', e);
-            }
-        } else if (replyText) {
-            console.log('Skipping reply for thread without rootCommentId — would become a generic issue comment');
-        }
-
-        if (item.threadId) {
-            try {
-                scm.resolveThread(pullRequestId, { threadId: item.threadId });
-                resolved++;
-            } catch (e) {
-                console.warn('Failed to resolve thread', item.threadId + ':', e);
-            }
-        }
+        handleReplyItem(scm, pullRequestId, item, tally);
     });
 
-    console.log('Resolved ' + resolved + '/' + replies.length + ' review thread(s); posted ' + posted + ' explicit reply(ies)');
-    return posted;
+    console.log('Resolved ' + tally.resolved + '/' + replies.length + ' review thread(s); posted ' + tally.posted + ' explicit reply(ies)');
+    return tally.posted;
+}
+
+/**
+ * Shared failure handling for the git-operations and outer catches: consult
+ * resumeAgent once; when no resume was attempted, post the flavored failure
+ * comment. Returns true when the caller must re-run action(params).
+ */
+function resumeOrReport(ticketKey, customParams, config, stage, title, error) {
+    var resume = feedbackLoop.resumeAgent({
+        ticketKey: ticketKey,
+        customParams: customParams,
+        section: 'postAction',
+        stage: stage,
+        error: error.toString()
+    });
+    if (resume.attempted) {
+        return true;
+    }
+    var em = commentMarkup.forTicket(ticketKey, customParams);
+    trackersModule.createTracker(config, customParams).postComment(
+        ticketKey,
+        em.h(3, title) + '\n\n' + em.code(error.toString())
+    );
+    return false;
+}
+
+/** autoStartReview configured-workflow trigger, falling back to the SM idle trigger. */
+function triggerAutoStart(ticketKey, customParams, config) {
+    var autoStarted = false;
+    if (customParams && customParams.autoStartReview && customParams.autoStartReviewConfigFile) {
+        try {
+            autoStarted = autoStart.triggerConfiguredWorkflowForTicket({
+                ticketKey: ticketKey,
+                customParams: customParams,
+                config: config,
+                configFile: customParams.autoStartReviewConfigFile,
+                label: 'pr_test_automation_review',
+                stripKeys: [
+                    'removeLabel',
+                    'autoStartReview',
+                    'autoStartReviewConfigFile'
+                ]
+            });
+        } catch (e) {
+            console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
+        }
+    }
+    if (!autoStarted) {
+        autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
+    }
+    return autoStarted;
 }
 
 function action(params) {
@@ -437,18 +609,10 @@ function action(params) {
     const customParams = resolveCustomParams(params, actualParams, config);
     initTracker(config, customParams);
     const removeLabel = customParams && customParams.removeLabel;
-    const wipLabel = actualParams.metadata && actualParams.metadata.contextId
-        ? actualParams.metadata.contextId + '_wip'
-        : 'pr_test_automation_rework_wip';
+    const wipLabel = resolveWipLabel(actualParams);
 
     function releaseLock() {
-        try { getTracker().removeLabel(ticketKey, wipLabel); } catch (e) {}
-        if (removeLabel) {
-            try {
-                getTracker().removeLabel(ticketKey, removeLabel);
-                console.log('✅ Removed SM label:', removeLabel);
-            } catch (e) {}
-        }
+        releaseReworkLock(ticketKey, wipLabel, removeLabel);
     }
 
     try {
@@ -458,9 +622,7 @@ function action(params) {
         // Step 1: Read new test result
         const result = readResultJson();
         if (!result || !result.status) {
-            const errMsg = !result
-                ? 'Could not read outputs/test_automation_result.json — file missing or empty.'
-                : 'outputs/test_automation_result.json is missing required "status" field (got: ' + JSON.stringify(result) + '). The agent must write { "status": "passed" | "failed", ... }.';
+            const errMsg = buildResultErrorMessage(result);
             console.error(errMsg);
             var tracker = trackersModule.createTracker(config, customParams);
             var mErr = commentMarkup.forTicket(ticketKey, customParams);
@@ -475,9 +637,7 @@ function action(params) {
         }
 
         const rawStatus = result.status.toLowerCase();
-        const testStatus = (rawStatus === 'pass' || rawStatus === 'passed') ? 'passed' :
-                           (rawStatus === 'fail' || rawStatus === 'failed') ? 'failed' :
-                           rawStatus;
+        const testStatus = normalizeTestStatus(rawStatus);
         const passed = testStatus === 'passed';
         console.log('Re-run result:', result.status, '→ normalized:', testStatus);
 
@@ -487,22 +647,7 @@ function action(params) {
             cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
         } catch (e) {}
 
-        var gateResult = feedbackLoop.runQualityGates({
-            ticketKey: ticketKey,
-            customParams: customParams,
-            section: 'qualityGates'
-        });
-        if (!gateResult.success) {
-            throw new Error('Quality gate failed before test rework publish: ' + gateResult.failedGate + '\n' + gateResult.error);
-        }
-        var policyResult = feedbackLoop.runPolicyGates({
-            ticketKey: ticketKey,
-            customParams: customParams,
-            section: 'policyGates'
-        });
-        if (!policyResult.success) {
-            throw new Error('Policy gate failed before test rework publish: ' + policyResult.failedGate + '\n' + policyResult.error);
-        }
+        runPublishGates(ticketKey, customParams);
 
         // Step 2.5: Determine whether the test PR is dirty so the git step can merge main.
         var pr = findTestPRForTicket(scm, ticketKey);
@@ -519,21 +664,9 @@ function action(params) {
             branchName = commitAndPush(ticketKey, passed, config, prIsDirty);
         } catch (e) {
             console.error('Git operations failed:', e);
-            var resume = feedbackLoop.resumeAgent({
-                ticketKey: ticketKey,
-                customParams: customParams,
-                section: 'postAction',
-                stage: 'test_rework_git_operations',
-                error: e.toString()
-            });
-            if (resume.attempted) {
+            if (resumeOrReport(ticketKey, customParams, config, 'test_rework_git_operations', '❌ Rework Push Failed', e)) {
                 return action(params);
             }
-            var mFail = commentMarkup.forTicket(ticketKey, customParams);
-            trackersModule.createTracker(config, customParams).postComment(
-                ticketKey,
-                mFail.h(3, '❌ Rework Push Failed') + '\n\n' + mFail.code(e.toString())
-            );
             releaseLock();
             return { success: false, error: e.toString() };
         }
@@ -547,18 +680,8 @@ function action(params) {
             postThreadReplies(scm, pr.number);
 
             // Post PR comment with fix summary + new test result (GitHub Markdown from pr_body.md)
-            try {
-                const statusEmoji = passed ? '✅' : '❌';
-                const prBodyContent = readFile('outputs/pr_body.md') || fixSummary;
-                updatePullRequestBody(scm, pr.number, ticketKey, testStatus, prBodyContent);
-                const prComment = '## 🔧 Test Rework Complete — ' + ticketKey + '\n\n' +
-                    '**Re-run result**: ' + statusEmoji + ' ' + testStatus.toUpperCase() + '\n\n' +
-                    '---\n\n' + prBodyContent;
-                scm.addComment(pr.number, prComment);
-                console.log('✅ Posted rework summary to PR');
-            } catch (e) {
-                console.warn('Failed to post PR comment:', e);
-            }
+            const prBodyContent = readFile('outputs/pr_body.md') || fixSummary;
+            postReworkBodyAndComment(scm, pr, ticketKey, testStatus, passed, prBodyContent);
         } else {
             console.warn('No PR/MR found — skipping source-control comment');
         }
@@ -600,28 +723,7 @@ function action(params) {
         // Step 7 & 8: Remove WIP label + SM idempotency label
         releaseLock();
 
-        var autoStarted = false;
-        if (customParams && customParams.autoStartReview && customParams.autoStartReviewConfigFile) {
-            try {
-                autoStarted = autoStart.triggerConfiguredWorkflowForTicket({
-                    ticketKey: ticketKey,
-                    customParams: customParams,
-                    config: config,
-                    configFile: customParams.autoStartReviewConfigFile,
-                    label: 'pr_test_automation_review',
-                    stripKeys: [
-                        'removeLabel',
-                        'autoStartReview',
-                        'autoStartReviewConfigFile'
-                    ]
-                });
-            } catch (e) {
-                console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
-            }
-        }
-        if (!autoStarted) {
-            autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
-        }
+        triggerAutoStart(ticketKey, customParams, config);
 
         console.log('✅ Test rework complete — re-run:', testStatus, '→', targetStatus);
 
@@ -645,24 +747,9 @@ function action(params) {
         try {
             const key = (params.ticket || (params.jobParams && params.jobParams.ticket) || {}).key;
             if (key) {
-                var resume = feedbackLoop.resumeAgent({
-                    ticketKey: key,
-                    customParams: customParams,
-                    section: 'postAction',
-                    stage: 'test_rework_post_action',
-                    error: error.toString()
-                });
-                if (resume.attempted) {
+                if (resumeOrReport(key, customParams, config, 'test_rework_post_action', '❌ Test Rework Error', error)) {
                     return action(params);
                 }
-                // Flavor follows the ticket's tracker (gh-770); customParams
-                // is declared before the guarded try, so it is always
-                // initialized by the time this catch runs.
-                var em = commentMarkup.forTicket(key, customParams);
-                trackersModule.createTracker(config, customParams).postComment(
-                    key,
-                    em.h(3, '❌ Test Rework Error') + '\n\n' + em.code(error.toString())
-                );
             }
         } catch (e) {}
         releaseLock();
@@ -676,6 +763,21 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveCustomParams,
         commitIfNeeded,
         commitAndPush,
-        buildTestReworkResultComment
+        buildTestReworkResultComment,
+        // gh-928 extracted planners/parsers and thin executors (test surface):
+        normalizeTestStatus,
+        buildResultErrorMessage,
+        resolveWipLabel,
+        prMatchesBranch,
+        buildAutoPRTitle,
+        prNumberFromUrl,
+        buildFallbackPR,
+        buildPRReworkComment,
+        runPublishGates,
+        releaseReworkLock,
+        postReworkBodyAndComment,
+        handleReplyItem,
+        resumeOrReport,
+        triggerAutoStart
     };
 }
