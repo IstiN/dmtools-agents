@@ -178,6 +178,304 @@ function _unwrapGithubCheckRuns(raw) {
     return parsed ? [parsed] : [];
 }
 
+// ── GitHub provider helpers (gh-981) ─────────────────────────────────────────
+// Extraction of the former _createGithubProvider method closures (provider at
+// CRAP 184.8 in the baseline) into module-level functions — same pattern as
+// the gh-925 ADO split. Behaviour-preserving: same tools, args, log lines and
+// fallback order — pinned by test_scmGithubProvider.js.
+
+function _githubGetDiffText(workspace, repository, prId) {
+    try {
+        // pullRequestID — the exact schema casing of the runtime tool.
+        // ⚠️ Casing asymmetry (do NOT "fix" to pullRequestId): the dmtools
+        // catalog declares pullRequestID (capital D) for BOTH diff tools
+        // (github_get_pr_diff_text, github_get_pr_diff) while all other
+        // github_* PR tools take pullRequestId. Verified live against the
+        // v1.7.256 schema: pullRequestId → "Required parameter
+        // 'pullRequestID' is missing". Same conclusion in repo history
+        // #193 (dc48d6b1) and #201 (92aea814).
+        return github_get_pr_diff_text({ workspace: workspace, repository: repository, pullRequestID: String(prId) });
+    } catch (e) {
+        console.warn('getDiffText (github) failed:', e && e.toString ? e.toString() : String(e));
+        return null;
+    }
+}
+
+function _githubReplyToThread(workspace, repository, prId, thread, text) {
+    if (thread.rootCommentId) {
+        return github_reply_to_pr_thread({
+            workspace: workspace, repository: repository,
+            pullRequestId: String(prId), inReplyToId: String(thread.rootCommentId), text: text
+        });
+    }
+    return github_add_pr_comment({ workspace: workspace, repository: repository, pullRequestId: String(prId), text: text });
+}
+
+function _githubResolveThread(workspace, repository, prId, thread) {
+    if (thread.threadId) {
+        return github_resolve_pr_thread({
+            workspace: workspace, repository: repository,
+            pullRequestId: String(prId), threadId: thread.threadId
+        });
+    }
+    console.warn('SCM GitHub: No threadId to resolve');
+}
+
+function _githubBuildInlineCommentOpts(workspace, repository, prId, filePath, line, text, startLine, side) {
+    var opts = {
+        workspace: workspace, repository: repository,
+        pullRequestId: String(prId), path: filePath,
+        line: String(line), text: text
+    };
+    if (startLine) opts.startLine = String(startLine);
+    if (side) opts.side = side;
+    return opts;
+}
+
+// Primary diff tier: DMTools v1.7.210+ exposes a tool that returns the raw
+// diff text (see the casing note on _githubGetDiffText). Returns the usable
+// diff or null so the caller falls back gracefully.
+function _githubTryPrDiffText(workspace, repository, prIdStr) {
+    if (typeof github_get_pr_diff_text !== 'undefined') {
+        try {
+            var textRaw = github_get_pr_diff_text({ workspace: workspace, repository: repository, pullRequestID: prIdStr });
+            var textDiff = _extractDiffFromToolResult(textRaw);
+            if (_isUsableDiff(textDiff)) {
+                return textDiff;
+            }
+        } catch (e) {
+            console.warn('github_get_pr_diff_text failed:', e.message || e);
+        }
+    }
+    return null;
+}
+
+// Legacy diff tier: the old tool returns diff statistics (an object) in most
+// builds. Returns { usable, raw } so the orchestrator can return raw as the
+// final last-resort value (pinned: getPrDiff returns raw when all tiers fail).
+function _githubTryPrDiffTool(workspace, repository, prIdStr) {
+    var raw = '';
+    try {
+        raw = github_get_pr_diff({ workspace: workspace, repository: repository, pullRequestID: prIdStr });
+    } catch (e) {
+        console.warn('github_get_pr_diff failed:', e.message || e);
+    }
+    var extracted = _extractDiffFromToolResult(raw);
+    return { usable: _isUsableDiff(extracted) ? extracted : null, raw: raw };
+}
+
+// Final diff tier: generate the diff locally from the checked-out branch.
+function _githubPrBaseHeadRefs(pr) {
+    var baseRef = pr.base && pr.base.ref ? pr.base.ref : null;
+    var headRef = pr.head && pr.head.ref ? pr.head.ref : null;
+    if (!baseRef || !headRef) throw new Error('PR missing base or head ref');
+    return { baseRef: baseRef, headRef: headRef };
+}
+
+function _githubLocalGitDiffFallback(workspace, repository, prIdStr, workingDir) {
+    try {
+        var pr = github_get_pr({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
+        if (!pr) throw new Error('github_get_pr returned empty PR details');
+        var refs = _githubPrBaseHeadRefs(pr);
+        return _runGitDiff(refs.baseRef, refs.headRef, workingDir);
+    } catch (e2) {
+        console.warn('Local git diff fallback failed:', e2.message || e2);
+        return '';
+    }
+}
+
+function _githubGetPrDiff(workspace, repository, prId, workingDir) {
+    var prIdStr = String(prId);
+
+    var textDiff = _githubTryPrDiffText(workspace, repository, prIdStr);
+    if (textDiff) {
+        return textDiff;
+    }
+
+    var legacy = _githubTryPrDiffTool(workspace, repository, prIdStr);
+    if (legacy.usable) {
+        return legacy.usable;
+    }
+
+    console.log('GitHub PR diff MCP returned no usable diff; falling back to local git diff');
+    var localDiff = _githubLocalGitDiffFallback(workspace, repository, prIdStr, workingDir);
+    if (_isUsableDiff(localDiff)) {
+        return localDiff;
+    }
+
+    return legacy.raw || '';
+}
+
+// Merge legacy commit statuses (by name) into the check-runs list so
+// detectFailedChecks() still sees external CI (e.g. Jenkins) results.
+function _githubMergeLegacyStatuses(checkRuns, legacyStatuses) {
+    if (!legacyStatuses.length) {
+        return checkRuns;
+    }
+    var existingNames = {};
+    checkRuns.forEach(function(c) { existingNames[c.name] = true; });
+    legacyStatuses.forEach(function(s) {
+        if (!existingNames[s.name]) checkRuns.push(s);
+    });
+    return checkRuns;
+}
+
+function _githubGetCommitCheckRuns(workspace, repository, sha) {
+    if (!sha) return null;
+    var checkRuns = [];
+    try {
+        var raw = github_get_commit_check_runs({ workspace: workspace, repository: repository, commitSha: sha });
+        checkRuns = _unwrapGithubCheckRuns(raw);
+    } catch (e) {
+        console.warn('SCM GitHub: failed to fetch check runs for', sha, ':', e.message || e);
+    }
+
+    // Some repos are wired to an external CI (e.g. Jenkins) that reports build
+    // results via the classic commit-status API instead of GitHub Check Runs, so
+    // checkRuns above can legitimately be empty even when CI actually ran and
+    // failed. Merge in legacy statuses (by name) so detectFailedChecks() still
+    // sees them.
+    var legacyStatuses = _getLegacyGithubCommitStatuses(workspace, repository, sha)
+        .map(_normalizeGithubCommitStatus);
+    return _githubMergeLegacyStatuses(checkRuns, legacyStatuses);
+}
+
+// The 'Discussions: …' census log line, verbatim from the former closure.
+function _githubLogInventoryCounts(inv, rawThreads) {
+    var c = inv.counts;
+    console.log('Discussions: ' + c.total + ' threads (' + c.open + ' open, ' + c.resolved + ' resolved, ' + c.bot + ' bot, ' + c.notices + ' machine notices),',
+        rawThreads.filter(function(t) { return t.rootCommentId; }).length + ' reply IDs,',
+        rawThreads.filter(function(t) { return t.threadId; }).length + ' resolve IDs' +
+        (inv.census.graphqlUnresolved !== null
+            ? ' — GraphQL census: ' + inv.census.graphqlUnresolved + ' unresolved (arm-rule count)'
+            : ''));
+}
+
+// Review-thread inventory (gh-957): GraphQL-first — enumerated from the SAME
+// reviewThreads census the SM arm rule counts, enriched per-thread from the
+// conversations export. The conversations-first legacy path (inside the
+// shared module) is the fallback when the GraphQL fetch fails or returns zero
+// nodes. Returns { rawThreads, section, census } or null when NEITHER source
+// has data (a PR whose conversations export is empty/incomplete but whose
+// GraphQL census carries open threads — the live dart #424 shape — must still
+// produce the full inventory, otherwise the rework leg can never see what the
+// armer counted and the no-op loop never converges).
+function _githubFetchReviewThreadInventory(workspace, repository, prIdStr) {
+    var conversations = [];
+    try {
+        conversations = github_get_pr_conversations({
+            workspace: workspace, repository: repository, pullRequestId: prIdStr
+        }) || [];
+    } catch (e) {
+        console.warn('github_get_pr_conversations failed:', e.message || e);
+    }
+    var graphqlRaw = null;
+    try {
+        graphqlRaw = github_get_pr_review_threads({
+            workspace: workspace, repository: repository, pullRequestId: prIdStr
+        });
+        console.log('Got', reviewThreadInventory.parseGraphQLNodes(graphqlRaw).length, 'review threads for GraphQL IDs');
+    } catch (e) {
+        console.warn('github_get_pr_review_threads failed (falling back to conversations-only inventory):', e.message || e);
+    }
+    var inv = _githubCollectThreadInventory(conversations, graphqlRaw);
+    if (!inv) return null;
+    var rawThreads = inv.threads;
+    _githubLogInventoryCounts(inv, rawThreads);
+    return { rawThreads: rawThreads, section: inv.markdownSection, census: inv.census };
+}
+
+// Runs the shared inventory builder; the block counts when EITHER source has
+// data: a PR whose conversations export is empty/incomplete but whose GraphQL
+// census carries open threads (the live dart #424 shape) must still produce
+// the full inventory, otherwise the rework leg can never see what the armer
+// counted and the no-op loop never converges.
+function _githubCollectThreadInventory(conversations, graphqlRaw) {
+    try {
+        var inv = reviewThreadInventory.collectThreadInventory(conversations, graphqlRaw);
+        if (conversations.length > 0 || inv.threads.length > 0) {
+            return inv;
+        }
+    } catch (e) {
+        console.warn('review-thread inventory build failed:', e.message || e);
+    }
+    return null;
+}
+
+// Pure renderer for the '## General PR Comments' section (verbatim shape).
+function _githubRenderCommentsSection(comments) {
+    var commentsSection = '## General PR Comments\n\n';
+    comments.forEach(function(comment) {
+        var author = (comment.user && comment.user.login) ? comment.user.login : 'unknown';
+        var date = comment.created_at ? comment.created_at.substring(0, 10) : '';
+        commentsSection += '**' + author + '** (' + date + '):\n\n';
+        commentsSection += (comment.body || '').trim() + '\n\n---\n\n';
+    });
+    return commentsSection;
+}
+
+function _githubFetchGeneralCommentsSection(workspace, repository, prIdStr) {
+    try {
+        var comments = github_get_pr_comments({
+            workspace: workspace, repository: repository, pullRequestId: prIdStr
+        });
+        if (comments && comments.length > 0) {
+            return _githubRenderCommentsSection(comments);
+        }
+    } catch (e) {
+        console.warn('github_get_pr_comments failed:', e.message || e);
+    }
+    return null;
+}
+
+function _githubBuildDiscussionsMarkdown(prId, sections) {
+    return sections.length > 0
+        ? '# PR Discussion History\n\n_Previous review discussions for PR #' + prId + '._\n\n' + sections.join('\n')
+        : null;
+}
+
+function _githubFetchDiscussions(workspace, repository, prId) {
+    var prIdStr = String(prId);
+    var sections = [];
+    var rawThreads = [];
+    var census = null;
+
+    var inv = _githubFetchReviewThreadInventory(workspace, repository, prIdStr);
+    if (inv) {
+        rawThreads = inv.rawThreads;
+        sections.push(inv.section);
+        census = inv.census;
+    }
+
+    var commentsSection = _githubFetchGeneralCommentsSection(workspace, repository, prIdStr);
+    if (commentsSection) {
+        sections.push(commentsSection);
+    }
+
+    // gh-957: the census rides the rawThreads object (the SAME GraphQL
+    // reviewThreads count the SM arm rule counts) so review_state.md can
+    // state it next to the actionable list, and gitOps.writePRContext
+    // serializes it into pr_discussions_raw.json next to the threads (AC3).
+    return {
+        markdown: _githubBuildDiscussionsMarkdown(prId, sections),
+        rawThreads: rawThreads.length > 0
+            ? { threads: rawThreads, census: census }
+            : null
+    };
+}
+
+function _githubGetRemoteRepoInfo() {
+    try {
+        var rawUrl = cli_execute_command({ command: 'git config --get remote.origin.url' }) || '';
+        var remoteUrl = rawUrl.split('\n')
+            .map(function(l) { return l.trim(); })
+            .filter(function(l) { return l.indexOf('github.com') !== -1 || l.indexOf('dev.azure.com') !== -1 || l.indexOf('ssh.dev.azure.com') !== -1; })[0] || '';
+        var match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/?#\s]+)/);
+        if (!match) return null;
+        return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
+    } catch (e) { return null; }
+}
+
 function _createGithubProvider(workspace, repository) {
     return {
         listPrs: function(state) {
@@ -194,51 +492,20 @@ function _createGithubProvider(workspace, repository) {
         // Requires IS_READ_PULL_REQUEST_DIFF to be enabled; returns null on failure so
         // callers can fall back gracefully.
         getDiffText: function(prId) {
-            try {
-                // pullRequestID — the exact schema casing of the runtime tool.
-                // ⚠️ Casing asymmetry (do NOT "fix" to pullRequestId): the dmtools
-                // catalog declares pullRequestID (capital D) for BOTH diff tools
-                // (github_get_pr_diff_text, github_get_pr_diff) while all other
-                // github_* PR tools take pullRequestId. Verified live against the
-                // v1.7.256 schema: pullRequestId → "Required parameter
-                // 'pullRequestID' is missing". Same conclusion in repo history
-                // #193 (dc48d6b1) and #201 (92aea814).
-                return github_get_pr_diff_text({ workspace: workspace, repository: repository, pullRequestID: String(prId) });
-            } catch (e) {
-                console.warn('getDiffText (github) failed:', e && e.toString ? e.toString() : String(e));
-                return null;
-            }
+            return _githubGetDiffText(workspace, repository, prId);
         },
         addComment: function(prId, text) {
             return github_add_pr_comment({ workspace: workspace, repository: repository, pullRequestId: String(prId), text: text });
         },
         replyToThread: function(prId, thread, text) {
-            if (thread.rootCommentId) {
-                return github_reply_to_pr_thread({
-                    workspace: workspace, repository: repository,
-                    pullRequestId: String(prId), inReplyToId: String(thread.rootCommentId), text: text
-                });
-            }
-            return github_add_pr_comment({ workspace: workspace, repository: repository, pullRequestId: String(prId), text: text });
+            return _githubReplyToThread(workspace, repository, prId, thread, text);
         },
         resolveThread: function(prId, thread) {
-            if (thread.threadId) {
-                return github_resolve_pr_thread({
-                    workspace: workspace, repository: repository,
-                    pullRequestId: String(prId), threadId: thread.threadId
-                });
-            }
-            console.warn('SCM GitHub: No threadId to resolve');
+            return _githubResolveThread(workspace, repository, prId, thread);
         },
         addInlineComment: function(prId, filePath, line, text, startLine, side) {
-            var opts = {
-                workspace: workspace, repository: repository,
-                pullRequestId: String(prId), path: filePath,
-                line: String(line), text: text
-            };
-            if (startLine) opts.startLine = String(startLine);
-            if (side) opts.side = side;
-            return github_add_inline_comment(opts);
+            return github_add_inline_comment(
+                _githubBuildInlineCommentOpts(workspace, repository, prId, filePath, line, text, startLine, side));
         },
         mergePr: function(prId, mergeMethod, commitTitle, commitMessage) {
             return github_merge_pr({
@@ -272,80 +539,10 @@ function _createGithubProvider(workspace, repository) {
             });
         },
         getPrDiff: function(prId, workingDir) {
-            var prIdStr = String(prId);
-
-            // Primary: DMTools v1.7.210+ exposes a tool that returns the raw diff text.
-            if (typeof github_get_pr_diff_text !== 'undefined') {
-                try {
-                    // pullRequestID — the exact schema casing of the runtime tool
-                    // (see the asymmetry note on getDiffText above: BOTH diff
-                    // tools take pullRequestID, unlike the other github_* PR tools).
-                    var textRaw = github_get_pr_diff_text({ workspace: workspace, repository: repository, pullRequestID: prIdStr });
-                    var textDiff = _extractDiffFromToolResult(textRaw);
-                    if (_isUsableDiff(textDiff)) {
-                        return textDiff;
-                    }
-                } catch (e) {
-                    console.warn('github_get_pr_diff_text failed:', e.message || e);
-                }
-            }
-
-            // Legacy fallback: the old tool returns diff statistics (an object) in most builds.
-            var raw = '';
-            try {
-                raw = github_get_pr_diff({ workspace: workspace, repository: repository, pullRequestID: prIdStr });
-            } catch (e) {
-                console.warn('github_get_pr_diff failed:', e.message || e);
-            }
-
-            var extracted = _extractDiffFromToolResult(raw);
-            if (_isUsableDiff(extracted)) {
-                return extracted;
-            }
-
-            // Final fallback: generate the diff locally from the checked-out branch.
-            console.log('GitHub PR diff MCP returned no usable diff; falling back to local git diff');
-            try {
-                var pr = github_get_pr({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
-                if (!pr) throw new Error('github_get_pr returned empty PR details');
-                var baseRef = pr.base && pr.base.ref ? pr.base.ref : null;
-                var headRef = pr.head && pr.head.ref ? pr.head.ref : null;
-                if (!baseRef || !headRef) throw new Error('PR missing base or head ref');
-                var localDiff = _runGitDiff(baseRef, headRef, workingDir);
-                if (_isUsableDiff(localDiff)) {
-                    return localDiff;
-                }
-            } catch (e2) {
-                console.warn('Local git diff fallback failed:', e2.message || e2);
-            }
-
-            return raw || '';
+            return _githubGetPrDiff(workspace, repository, prId, workingDir);
         },
         getCommitCheckRuns: function(sha) {
-            if (!sha) return null;
-            var checkRuns = [];
-            try {
-                var raw = github_get_commit_check_runs({ workspace: workspace, repository: repository, commitSha: sha });
-                checkRuns = _unwrapGithubCheckRuns(raw);
-            } catch (e) {
-                console.warn('SCM GitHub: failed to fetch check runs for', sha, ':', e.message || e);
-            }
-
-            // Some repos are wired to an external CI (e.g. Jenkins) that reports build
-            // results via the classic commit-status API instead of GitHub Check Runs, so
-            // checkRuns above can legitimately be empty even when CI actually ran and
-            // failed. Merge in legacy statuses (by name) so detectFailedChecks() still sees them.
-            var legacyStatuses = _getLegacyGithubCommitStatuses(workspace, repository, sha)
-                .map(_normalizeGithubCommitStatus);
-            if (!legacyStatuses.length) {
-                return checkRuns;
-            }
-            var existingNames = {};
-            checkRuns.forEach(function(c) { existingNames[c.name] = true; });
-            legacyStatuses.forEach(function(s) {
-                if (!existingNames[s.name]) checkRuns.push(s);
-            });
-            return checkRuns;
+            return _githubGetCommitCheckRuns(workspace, repository, sha);
         },
         getJobLogs: function(jobId) {
             return github_get_job_logs({ workspace: workspace, repository: repository, jobId: String(jobId) });
@@ -362,98 +559,10 @@ function _createGithubProvider(workspace, repository) {
             });
         },
         fetchDiscussions: function(prId) {
-            var prIdStr = String(prId);
-            var sections = [];
-            var rawThreads = [];
-
-            // Review-thread inventory (gh-957): GraphQL-first — enumerated
-            // from the SAME reviewThreads census the SM arm rule counts,
-            // enriched per-thread from the conversations export. The
-            // conversations-first legacy path (inside the shared module) is
-            // the fallback when the GraphQL fetch fails or returns zero
-            // nodes. The block runs when EITHER source has data: a PR whose
-            // conversations export is empty/incomplete but whose GraphQL
-            // census carries open threads (the live dart #424 shape — 2
-            // conversations vs 64 GraphQL threads) must still produce the
-            // full inventory, otherwise the rework leg can never see what
-            // the armer counted and the no-op loop never converges.
-            var conversations = [];
-            try {
-                conversations = github_get_pr_conversations({
-                    workspace: workspace, repository: repository, pullRequestId: prIdStr
-                }) || [];
-            } catch (e) {
-                console.warn('github_get_pr_conversations failed:', e.message || e);
-            }
-            var graphqlRaw = null;
-            try {
-                graphqlRaw = github_get_pr_review_threads({
-                    workspace: workspace, repository: repository, pullRequestId: prIdStr
-                });
-                console.log('Got', reviewThreadInventory.parseGraphQLNodes(graphqlRaw).length, 'review threads for GraphQL IDs');
-            } catch (e) {
-                console.warn('github_get_pr_review_threads failed (falling back to conversations-only inventory):', e.message || e);
-            }
-            try {
-                var inv = reviewThreadInventory.collectThreadInventory(conversations, graphqlRaw);
-                if (conversations.length > 0 || inv.threads.length > 0) {
-                    rawThreads = inv.threads;
-                    sections.push(inv.markdownSection);
-                    var c = inv.counts;
-                    console.log('Discussions: ' + c.total + ' threads (' + c.open + ' open, ' + c.resolved + ' resolved, ' + c.bot + ' bot, ' + c.notices + ' machine notices),',
-                        rawThreads.filter(function(t) { return t.rootCommentId; }).length + ' reply IDs,',
-                        rawThreads.filter(function(t) { return t.threadId; }).length + ' resolve IDs' +
-                        (inv.census.graphqlUnresolved !== null
-                            ? ' — GraphQL census: ' + inv.census.graphqlUnresolved + ' unresolved (arm-rule count)'
-                            : ''));
-                }
-            } catch (e) {
-                console.warn('review-thread inventory build failed:', e.message || e);
-            }
-
-            try {
-                var comments = github_get_pr_comments({
-                    workspace: workspace, repository: repository, pullRequestId: prIdStr
-                });
-                if (comments && comments.length > 0) {
-                    var commentsSection = '## General PR Comments\n\n';
-                    comments.forEach(function(comment) {
-                        var author = (comment.user && comment.user.login) ? comment.user.login : 'unknown';
-                        var date = comment.created_at ? comment.created_at.substring(0, 10) : '';
-                        commentsSection += '**' + author + '** (' + date + '):\n\n';
-                        commentsSection += (comment.body || '').trim() + '\n\n---\n\n';
-                    });
-                    sections.push(commentsSection);
-                }
-            } catch (e) {
-                console.warn('github_get_pr_comments failed:', e.message || e);
-            }
-
-            var markdown = sections.length > 0
-                ? '# PR Discussion History\n\n_Previous review discussions for PR #' + prId + '._\n\n' + sections.join('\n')
-                : null;
-            // gh-957: the census rides the rawThreads object (the SAME
-            // GraphQL reviewThreads count the SM arm rule counts) so
-            // review_state.md can state it next to the actionable list,
-            // and gitOps.writePRContext serializes it into
-            // pr_discussions_raw.json next to the threads (AC3).
-            return {
-                markdown: markdown,
-                rawThreads: rawThreads.length > 0
-                    ? { threads: rawThreads, census: inv ? inv.census : null }
-                    : null
-            };
+            return _githubFetchDiscussions(workspace, repository, prId);
         },
         getRemoteRepoInfo: function() {
-            try {
-                var rawUrl = cli_execute_command({ command: 'git config --get remote.origin.url' }) || '';
-                var remoteUrl = rawUrl.split('\n')
-                    .map(function(l) { return l.trim(); })
-                    .filter(function(l) { return l.indexOf('github.com') !== -1 || l.indexOf('dev.azure.com') !== -1 || l.indexOf('ssh.dev.azure.com') !== -1; })[0] || '';
-                var match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/?#\s]+)/);
-                if (!match) return null;
-                return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
-            } catch (e) { return null; }
+            return _githubGetRemoteRepoInfo();
         }
     };
 }
@@ -599,16 +708,238 @@ function _gitlabFetchDiscussions(workspace, repository, prId) {
     };
 }
 
+// ── GitLab provider helpers (gh-981) ─────────────────────────────────────────
+// Extraction of the remaining _createGitLabProvider method closures (provider
+// at CRAP 179.5 in the baseline) into module-level functions — same pattern
+// as the gh-925 ADO split and the gh-981 GitHub split. Behaviour-preserving:
+// same tools, args, log lines and fallback order — pinned by
+// test_scmGitlabProvider.js / test_scmGitlabReview.js.
+
+function _gitlabListPrs(workspace, repository, state) {
+    var requestedState = _normalizeGitLabState(state);
+    var raw = gitlab_list_mrs({ workspace: workspace, repository: repository, state: requestedState });
+    var prs = _toArray(raw).map(_normalizeGitLabMr);
+    if (state === 'closed') {
+        return prs.filter(function(pr) { return pr.state === 'closed' || pr.merged_at; });
+    }
+    return prs;
+}
+
+// See _createGithubProvider.getDiffText — same rationale (works post-merge).
+function _gitlabGetDiffText(workspace, repository, prId) {
+    try {
+        return gitlab_get_mr_diff_text({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
+    } catch (e) {
+        console.warn('getDiffText (gitlab) failed:', e && e.toString ? e.toString() : String(e));
+        return null;
+    }
+}
+
+// Formal review decision, provider-agnostic surface (see the github
+// provider's submitReview). GitLab has no REQUEST_CHANGES event: the
+// native mapping is APPROVE -> gitlab_approve_mr, REQUEST_CHANGES ->
+// revoke our approval (gitlab_unapprove_mr) with the explanation left
+// as a plain MR comment, COMMENT -> plain MR comment. GitLab (like
+// GitHub) refuses approvals from the MR author unless the instance
+// allows self-approval — callers must tolerate that error.
+// addComment is the provider's own addComment (passed in by the closure).
+function _gitlabSubmitReview(workspace, repository, prId, event, body, addComment) {
+    var normalized = String(event || '').toUpperCase();
+    if (normalized === 'APPROVE') {
+        return gitlab_approve_mr({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
+    }
+    if (normalized === 'REQUEST_CHANGES') {
+        var result = gitlab_unapprove_mr({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
+        addComment(prId, body || 'AI review requested changes on this merge request.');
+        return result;
+    }
+    return addComment(prId, body || '');
+}
+
+function _gitlabReplyToThread(workspace, repository, prId, thread, text) {
+    var threadId = thread.threadId || thread.rootCommentId || thread.discussionId;
+    if (threadId) {
+        return gitlab_reply_to_mr_thread({
+            workspace: workspace, repository: repository,
+            pullRequestId: String(prId), discussionId: String(threadId), text: text
+        });
+    }
+    return gitlab_add_mr_comment({ workspace: workspace, repository: repository, pullRequestId: String(prId), text: text });
+}
+
+function _gitlabResolveThread(workspace, repository, prId, thread) {
+    var threadId = thread.threadId || thread.discussionId;
+    if (threadId) {
+        return gitlab_resolve_mr_thread({
+            workspace: workspace, repository: repository,
+            pullRequestId: String(prId), discussionId: String(threadId)
+        });
+    }
+    console.warn('SCM GitLab: No discussion id to resolve');
+}
+
+// getPr is the provider's own getPr (passed in by the closure) — the inline
+// comment needs the MR's diff_refs.
+function _gitlabAddInlineComment(getPr, workspace, repository, prId, filePath, line, text, startLine, side) {
+    var mr = getPr(prId);
+    var refs = (mr && mr.diff_refs) || {};
+    if (!refs.base_sha || !refs.head_sha || !refs.start_sha) {
+        throw new Error('GitLab inline comments require MR diff_refs; gitlab_get_mr did not return them');
+    }
+    return gitlab_add_inline_mr_comment({
+        workspace: workspace, repository: repository,
+        pullRequestId: String(prId), filePath: filePath,
+        line: String(line), text: text,
+        baseSha: refs.base_sha, headSha: refs.head_sha, startSha: refs.start_sha
+    });
+}
+
+// Primary diff tier: dmtools v1.7.221+ exposes a tool that returns the raw
+// diff text directly. Returns the usable diff or null.
+function _gitlabTryMrDiffText(workspace, repository, prIdStr) {
+    if (typeof gitlab_get_mr_diff_text !== 'undefined') {
+        try {
+            var textRaw = gitlab_get_mr_diff_text({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
+            var textDiff = _extractDiffFromToolResult(textRaw);
+            if (_isUsableDiff(textDiff)) {
+                return textDiff;
+            }
+        } catch (e) {
+            console.warn('gitlab_get_mr_diff_text failed:', e.message || e);
+        }
+    }
+    return null;
+}
+
+// Final diff tier: generate the diff locally from the checked-out branch using
+// the MR's base/head commit SHAs (requires the repo to be checked out at
+// workingDir). getPr is the provider's own getPr.
+function _gitlabMrDiffLocalFallback(workspace, repository, prIdStr, workingDir, getPr) {
+    try {
+        var mr = getPr(prIdStr);
+        var refs = (mr && mr.diff_refs) || {};
+        if (!refs.base_sha || !refs.head_sha) {
+            throw new Error('MR missing diff_refs base_sha/head_sha');
+        }
+        return _runGitDiff(refs.base_sha, refs.head_sha, workingDir);
+    } catch (e2) {
+        console.warn('Local git diff fallback failed:', e2.message || e2);
+        return '';
+    }
+}
+
+function _gitlabGetPrDiff(workspace, repository, prId, workingDir, getPr) {
+    var prIdStr = String(prId);
+
+    var textDiff = _gitlabTryMrDiffText(workspace, repository, prIdStr);
+    if (textDiff) {
+        return textDiff;
+    }
+
+    // Legacy fallback: gitlab_get_mr_diff returns diff stats/metadata (IDiffStats) in
+    // most builds, which serializes to a broken Java object toString (e.g.
+    // "GitLab$4@abc123") instead of usable diff text through the MCP/JS bridge.
+    var raw = '';
+    try {
+        raw = gitlab_get_mr_diff({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
+    } catch (e) {
+        console.warn('gitlab_get_mr_diff failed:', e.message || e);
+    }
+
+    var extracted = _extractDiffFromToolResult(raw);
+    if (_isUsableDiff(extracted)) {
+        return extracted;
+    }
+
+    console.log('GitLab MR diff MCP returned no usable diff; falling back to local git diff');
+    var localDiff = _gitlabMrDiffLocalFallback(workspace, repository, prIdStr, workingDir, getPr);
+    if (_isUsableDiff(localDiff)) {
+        return localDiff;
+    }
+
+    return raw || '';
+}
+
+function _gitlabGetCommitCheckRuns(workspace, repository, sha) {
+    if (!sha) return null;
+    try {
+        var raw = gitlab_get_commit_statuses({ workspace: workspace, repository: repository, commitSha: sha });
+        var statuses = _toArray(raw);
+        if (!statuses.length) return null;
+        return statuses.map(_normalizeGitLabCommitStatus);
+    } catch (e) {
+        console.warn('SCM GitLab: failed to fetch commit statuses for', sha, ':', e.message || e);
+        return null;
+    }
+}
+
+// Map one GitLab pipeline run to the GitHub workflow-run shape.
+function _gitlabMapPipelineRun(run) {
+    return Object.assign({}, run, {
+        name: run.name || run.ref || '',
+        display_title: run.name || run.ref || '',
+        status: run.status === 'running' ? 'in_progress' : run.status,
+        run_number: run.id
+    });
+}
+
+function _gitlabListWorkflowRuns(workspace, repository, status, workflowId, limit, owner, repo) {
+    var runs = _toArray(gitlab_list_pipeline_runs({
+        workspace: owner || workspace,
+        repository: repo || repository,
+        status: _normalizeGitLabPipelineStatus(status),
+        ref: null,
+        limit: String(limit || 50)
+    }));
+    return JSON.stringify({ workflow_runs: runs.map(_gitlabMapPipelineRun) });
+}
+
+// Payload key/values become pipeline variables; workflow_file rides along.
+function _gitlabBuildPipelineVariables(workflowFile, payload) {
+    var variables = {};
+    var parsed = _parseJson(payload);
+    if (parsed && typeof parsed === 'object') {
+        Object.keys(parsed).forEach(function(key) {
+            variables[key] = parsed[key];
+        });
+    }
+    variables.workflow_file = workflowFile;
+    return variables;
+}
+
+function _gitlabTriggerPipeline(owner, repo, workspace, repository, workflowFile, payload, ref) {
+    return gitlab_trigger_pipeline({
+        workspace: owner || workspace,
+        repository: repo || repository,
+        ref: ref || 'main',
+        variablesJson: JSON.stringify(_gitlabBuildPipelineVariables(workflowFile, payload))
+    });
+}
+
+function _gitlabCreatePr(workspace, repository, options) {
+    options = options || {};
+    var raw = gitlab_create_mr({
+        workspace: workspace,
+        repository: repository,
+        sourceBranch: options.branchName,
+        targetBranch: options.baseBranch || 'main',
+        title: options.title,
+        description: options.body || '',
+        removeSourceBranch: options.removeSourceBranch === false ? 'false' : 'true'
+    });
+    var mr = _normalizeGitLabMr(_parseJson(raw));
+    return {
+        success: true,
+        prUrl: mr && mr.html_url,
+        number: mr && mr.number,
+        output: raw
+    };
+}
+
 function _createGitLabProvider(workspace, repository) {
     return {
         listPrs: function(state) {
-            var requestedState = _normalizeGitLabState(state);
-            var raw = gitlab_list_mrs({ workspace: workspace, repository: repository, state: requestedState });
-            var prs = _toArray(raw).map(_normalizeGitLabMr);
-            if (state === 'closed') {
-                return prs.filter(function(pr) { return pr.state === 'closed' || pr.merged_at; });
-            }
-            return prs;
+            return _gitlabListPrs(workspace, repository, state);
         },
         getPr: function(prId) {
             return _normalizeGitLabMr(_parseJson(gitlab_get_mr({
@@ -620,67 +951,28 @@ function _createGitLabProvider(workspace, repository) {
         },
         // See _createGithubProvider.getDiffText — same rationale (works post-merge).
         getDiffText: function(prId) {
-            try {
-                return gitlab_get_mr_diff_text({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
-            } catch (e) {
-                console.warn('getDiffText (gitlab) failed:', e && e.toString ? e.toString() : String(e));
-                return null;
-            }
+            return _gitlabGetDiffText(workspace, repository, prId);
         },
         addComment: function(prId, text) {
             return gitlab_add_mr_comment({ workspace: workspace, repository: repository, pullRequestId: String(prId), text: text });
         },
-        // Formal review decision, provider-agnostic surface (see the github
-        // provider's submitReview). GitLab has no REQUEST_CHANGES event: the
-        // native mapping is APPROVE -> gitlab_approve_mr, REQUEST_CHANGES ->
-        // revoke our approval (gitlab_unapprove_mr) with the explanation left
-        // as a plain MR comment, COMMENT -> plain MR comment. GitLab (like
-        // GitHub) refuses approvals from the MR author unless the instance
-        // allows self-approval — callers must tolerate that error.
+        // Formal review decision — see _gitlabSubmitReview for the event mapping.
         submitReview: function(prId, event, body) {
-            var normalized = String(event || '').toUpperCase();
-            if (normalized === 'APPROVE') {
-                return gitlab_approve_mr({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
-            }
-            if (normalized === 'REQUEST_CHANGES') {
-                var result = gitlab_unapprove_mr({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
-                this.addComment(prId, body || 'AI review requested changes on this merge request.');
-                return result;
-            }
-            return this.addComment(prId, body || '');
+            var self = this;
+            return _gitlabSubmitReview(workspace, repository, prId, event, body, function(p, t) {
+                return self.addComment(p, t);
+            });
         },
         replyToThread: function(prId, thread, text) {
-            var threadId = thread.threadId || thread.rootCommentId || thread.discussionId;
-            if (threadId) {
-                return gitlab_reply_to_mr_thread({
-                    workspace: workspace, repository: repository,
-                    pullRequestId: String(prId), discussionId: String(threadId), text: text
-                });
-            }
-            return gitlab_add_mr_comment({ workspace: workspace, repository: repository, pullRequestId: String(prId), text: text });
+            return _gitlabReplyToThread(workspace, repository, prId, thread, text);
         },
         resolveThread: function(prId, thread) {
-            var threadId = thread.threadId || thread.discussionId;
-            if (threadId) {
-                return gitlab_resolve_mr_thread({
-                    workspace: workspace, repository: repository,
-                    pullRequestId: String(prId), discussionId: String(threadId)
-                });
-            }
-            console.warn('SCM GitLab: No discussion id to resolve');
+            return _gitlabResolveThread(workspace, repository, prId, thread);
         },
         addInlineComment: function(prId, filePath, line, text, startLine, side) {
-            var mr = this.getPr(prId);
-            var refs = (mr && mr.diff_refs) || {};
-            if (!refs.base_sha || !refs.head_sha || !refs.start_sha) {
-                throw new Error('GitLab inline comments require MR diff_refs; gitlab_get_mr did not return them');
-            }
-            return gitlab_add_inline_mr_comment({
-                workspace: workspace, repository: repository,
-                pullRequestId: String(prId), filePath: filePath,
-                line: String(line), text: text,
-                baseSha: refs.base_sha, headSha: refs.head_sha, startSha: refs.start_sha
-            });
+            var self = this;
+            return _gitlabAddInlineComment(function(p) { return self.getPr(p); },
+                workspace, repository, prId, filePath, line, text, startLine, side);
         },
         mergePr: function(prId, mergeMethod, commitTitle, commitMessage) {
             return gitlab_merge_mr({
@@ -696,122 +988,25 @@ function _createGitLabProvider(workspace, repository) {
             return gitlab_remove_mr_label({ workspace: workspace, repository: repository, pullRequestId: String(prId), label: label });
         },
         getPrDiff: function(prId, workingDir) {
-            var prIdStr = String(prId);
-
-            // Primary: dmtools v1.7.221+ exposes a tool that returns the raw diff text directly.
-            if (typeof gitlab_get_mr_diff_text !== 'undefined') {
-                try {
-                    var textRaw = gitlab_get_mr_diff_text({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
-                    var textDiff = _extractDiffFromToolResult(textRaw);
-                    if (_isUsableDiff(textDiff)) {
-                        return textDiff;
-                    }
-                } catch (e) {
-                    console.warn('gitlab_get_mr_diff_text failed:', e.message || e);
-                }
-            }
-
-            // Legacy fallback: gitlab_get_mr_diff returns diff stats/metadata (IDiffStats) in
-            // most builds, which serializes to a broken Java object toString (e.g.
-            // "GitLab$4@abc123") instead of usable diff text through the MCP/JS bridge.
-            var raw = '';
-            try {
-                raw = gitlab_get_mr_diff({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
-            } catch (e) {
-                console.warn('gitlab_get_mr_diff failed:', e.message || e);
-            }
-
-            var extracted = _extractDiffFromToolResult(raw);
-            if (_isUsableDiff(extracted)) {
-                return extracted;
-            }
-
-            // Final fallback: generate the diff locally from the checked-out branch using the
-            // MR's base/head commit SHAs (requires the repo to be checked out at workingDir).
-            console.log('GitLab MR diff MCP returned no usable diff; falling back to local git diff');
-            try {
-                var mr = this.getPr(prIdStr);
-                var refs = (mr && mr.diff_refs) || {};
-                if (!refs.base_sha || !refs.head_sha) {
-                    throw new Error('MR missing diff_refs base_sha/head_sha');
-                }
-                var localDiff = _runGitDiff(refs.base_sha, refs.head_sha, workingDir);
-                if (_isUsableDiff(localDiff)) {
-                    return localDiff;
-                }
-            } catch (e2) {
-                console.warn('Local git diff fallback failed:', e2.message || e2);
-            }
-
-            return raw || '';
+            var self = this;
+            return _gitlabGetPrDiff(workspace, repository, prId, workingDir, function(p) {
+                return self.getPr(p);
+            });
         },
         getCommitCheckRuns: function(sha) {
-            if (!sha) return null;
-            try {
-                var raw = gitlab_get_commit_statuses({ workspace: workspace, repository: repository, commitSha: sha });
-                var statuses = _toArray(raw);
-                if (!statuses.length) return null;
-                return statuses.map(_normalizeGitLabCommitStatus);
-            } catch (e) {
-                console.warn('SCM GitLab: failed to fetch commit statuses for', sha, ':', e.message || e);
-                return null;
-            }
+            return _gitlabGetCommitCheckRuns(workspace, repository, sha);
         },
         getJobLogs: function(jobId) {
             return gitlab_get_job_logs({ workspace: workspace, repository: repository, jobId: String(jobId) });
         },
         listWorkflowRuns: function(status, workflowId, limit, owner, repo) {
-            var runs = _toArray(gitlab_list_pipeline_runs({
-                workspace: owner || workspace,
-                repository: repo || repository,
-                status: _normalizeGitLabPipelineStatus(status),
-                ref: null,
-                limit: String(limit || 50)
-            }));
-            var mapped = runs.map(function(run) {
-                return Object.assign({}, run, {
-                    name: run.name || run.ref || '',
-                    display_title: run.name || run.ref || '',
-                    status: run.status === 'running' ? 'in_progress' : run.status,
-                    run_number: run.id
-                });
-            });
-            return JSON.stringify({ workflow_runs: mapped });
+            return _gitlabListWorkflowRuns(workspace, repository, status, workflowId, limit, owner, repo);
         },
         triggerWorkflow: function(owner, repo, workflowFile, payload, ref) {
-            var variables = {};
-            var parsed = _parseJson(payload);
-            if (parsed && typeof parsed === 'object') {
-                Object.keys(parsed).forEach(function(key) {
-                    variables[key] = parsed[key];
-                });
-            }
-            variables.workflow_file = workflowFile;
-            return gitlab_trigger_pipeline({
-                workspace: owner || workspace,
-                repository: repo || repository,
-                ref: ref || 'main',
-                variablesJson: JSON.stringify(variables)
-            });
+            return _gitlabTriggerPipeline(owner, repo, workspace, repository, workflowFile, payload, ref);
         },
         createPr: function(options) {
-            options = options || {};
-            var raw = gitlab_create_mr({
-                workspace: workspace,
-                repository: repository,
-                sourceBranch: options.branchName,
-                targetBranch: options.baseBranch || 'main',
-                title: options.title,
-                description: options.body || '',
-                removeSourceBranch: options.removeSourceBranch === false ? 'false' : 'true'
-            });
-            var mr = _normalizeGitLabMr(_parseJson(raw));
-            return {
-                success: true,
-                prUrl: mr && mr.html_url,
-                number: mr && mr.number,
-                output: raw
-            };
+            return _gitlabCreatePr(workspace, repository, options);
         },
         updateBranch: function(prId, owner, repo) {
             return gitlab_rebase_mr({
@@ -1238,6 +1433,41 @@ module.exports = {
     _normalizeGithubCommitStatus: _normalizeGithubCommitStatus,
     _getLegacyGithubCommitStatuses: _getLegacyGithubCommitStatuses,
     _unwrapGithubCheckRuns: _unwrapGithubCheckRuns,
+    // gh-981: GitHub/GitLab provider internals exposed as testable pure helpers
+    _githubGetDiffText: _githubGetDiffText,
+    _githubReplyToThread: _githubReplyToThread,
+    _githubResolveThread: _githubResolveThread,
+    _githubBuildInlineCommentOpts: _githubBuildInlineCommentOpts,
+    _githubTryPrDiffText: _githubTryPrDiffText,
+    _githubTryPrDiffTool: _githubTryPrDiffTool,
+    _githubLocalGitDiffFallback: _githubLocalGitDiffFallback,
+    _githubPrBaseHeadRefs: _githubPrBaseHeadRefs,
+    _githubGetPrDiff: _githubGetPrDiff,
+    _githubMergeLegacyStatuses: _githubMergeLegacyStatuses,
+    _githubGetCommitCheckRuns: _githubGetCommitCheckRuns,
+    _githubLogInventoryCounts: _githubLogInventoryCounts,
+    _githubFetchReviewThreadInventory: _githubFetchReviewThreadInventory,
+    _githubCollectThreadInventory: _githubCollectThreadInventory,
+    _githubRenderCommentsSection: _githubRenderCommentsSection,
+    _githubFetchGeneralCommentsSection: _githubFetchGeneralCommentsSection,
+    _githubBuildDiscussionsMarkdown: _githubBuildDiscussionsMarkdown,
+    _githubFetchDiscussions: _githubFetchDiscussions,
+    _githubGetRemoteRepoInfo: _githubGetRemoteRepoInfo,
+    _gitlabListPrs: _gitlabListPrs,
+    _gitlabGetDiffText: _gitlabGetDiffText,
+    _gitlabSubmitReview: _gitlabSubmitReview,
+    _gitlabReplyToThread: _gitlabReplyToThread,
+    _gitlabResolveThread: _gitlabResolveThread,
+    _gitlabAddInlineComment: _gitlabAddInlineComment,
+    _gitlabTryMrDiffText: _gitlabTryMrDiffText,
+    _gitlabMrDiffLocalFallback: _gitlabMrDiffLocalFallback,
+    _gitlabGetPrDiff: _gitlabGetPrDiff,
+    _gitlabGetCommitCheckRuns: _gitlabGetCommitCheckRuns,
+    _gitlabMapPipelineRun: _gitlabMapPipelineRun,
+    _gitlabListWorkflowRuns: _gitlabListWorkflowRuns,
+    _gitlabBuildPipelineVariables: _gitlabBuildPipelineVariables,
+    _gitlabTriggerPipeline: _gitlabTriggerPipeline,
+    _gitlabCreatePr: _gitlabCreatePr,
     // gh-925: ADO/GitLab provider internals exposed as testable pure helpers
     _gitlabThreadPosition: _gitlabThreadPosition,
     _gitlabMapDiscussionThread: _gitlabMapDiscussionThread,

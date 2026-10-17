@@ -527,3 +527,238 @@ suite('machineSm: merged slot-holder releases the concurrency slot (gh-952)', fu
         assert.deepEqual(out.waitingFor, [2001], 'the gate waits on the LIVE run only — the orphan is invisible');
     });
 });
+
+suite('machineSm action branches (gh-980 characterization)', function () {
+    var rvReal = function () {
+        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        return rvReal.mod;
+    };
+    var maReal = function () {
+        if (!maReal.mod) maReal.mod = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+        return maReal.mod;
+    };
+
+    function loadAgent(projectConfig, opts) {
+        opts = opts || {};
+        var holder = { provider: null };
+        var smProviderMock = opts.providerError
+            ? { createSmProvider: function () { throw opts.providerError; } }
+            : { createSmProvider: function () { return holder.provider; } };
+        var agent = loadModule('js/machineSmAgent.js', makeRequire({
+            './configLoader.js': { loadProjectConfig: function () { return projectConfig; } },
+            './common/smProvider.js': smProviderMock,
+            './common/reviewVerdicts.js': rvReal(),
+            './common/machineAuthor.js': maReal()
+        }), {
+            cli_execute_command: function () { return '{}'; }
+        });
+        return { agent: agent, holder: holder };
+    }
+
+    // opts-key defaulting without per-use ternaries (CRAP: this helper is
+    // measured by the quality gate like any other function).
+    function def(opts, key, dflt) {
+        return opts[key] !== undefined ? opts[key] : dflt;
+    }
+
+    function providerWith(opts) {
+        opts = opts || {};
+        var calls = [];
+        return {
+            calls: calls,
+            activeMachineRuns: function () { return def(opts, 'activeIssues', []); },
+            listMachineIssues: function () { return def(opts, 'issues', []); },
+            findPr: function (n) {
+                if (opts.findPrError) { throw opts.findPrError; }
+                return (opts.prs && opts.prs[n]) || null;
+            },
+            prStatus: function (n) {
+                calls.push({ tool: 'prStatus', number: n });
+                return opts.prStatus ? opts.prStatus(n) : null;
+            },
+            dispatchLeg: function (issue, leg) {
+                calls.push({ tool: 'dispatchLeg', issue: issue, leg: leg });
+                if (opts.dispatchError) { throw opts.dispatchError; }
+            },
+            addIssueLabel: function (n, label) { calls.push({ tool: 'addIssueLabel', number: n, label: label }); },
+            updateBranch: function () { calls.push({ tool: 'updateBranch' }); },
+            merge: function (n) { calls.push({ tool: 'merge', number: n }); },
+            closeIssue: function (n) { calls.push({ tool: 'closeIssue', number: n }); }
+        };
+    }
+
+    function run(agent, jobParams) {
+        return agent.action({ jobParams: jobParams });
+    }
+
+    test('no repository configured → success:false, Missing repo', function () {
+        var loaded = loadAgent({});
+        var out = run(loaded.agent, { machineAuthor: 'ai-teammate' });
+        assert.equal(out.success, false);
+        assert.equal(out.error, 'Missing repo');
+    });
+
+    test('repository from jobParams.repo "owner/name" is accepted', function () {
+        var loaded = loadAgent({});
+        loaded.holder.provider = providerWith({ issues: [] });
+        var out = run(loaded.agent, { repo: 'o/r', machineAuthor: 'ai-teammate' });
+        assert.equal(out.success, true);
+        assert.deepEqual(out, { success: true, acted: 0, dispatched: 0, skipped: 0, failures: 0 });
+    });
+
+    test('projectConfig.repository wins over jobParams.repo', function () {
+        var loaded = loadAgent({ repository: { owner: 'cfg', repo: 'repo' } });
+        loaded.holder.provider = providerWith({ issues: [] });
+        var out = run(loaded.agent, { repo: 'o/r', machineAuthor: 'ai-teammate' });
+        assert.equal(out.success, true);
+    });
+
+    test('provider creation failure → success:false carrying the provider error', function () {
+        var loaded = loadAgent({}, { providerError: new Error('no forge') });
+        var out = run(loaded.agent, { repo: 'o/r' });
+        assert.equal(out.success, false);
+        assert.contains(out.error, 'no forge');
+    });
+
+    test('dryRun plans the action without executing any provider write', function () {
+        var loaded = loadAgent({});
+        var p = providerWith({ issues: [{ number: 5, title: 'gh-5', labels: ['agent:dev'], assignees: [] }] });
+        loaded.holder.provider = p;
+        var out = run(loaded.agent, { repo: 'o/r', dryRun: true });
+        assert.equal(out.acted, 1, 'the planned action counts as acted');
+        assert.equal(out.dispatched, 1);
+        assert.equal(p.calls.length, 0, 'dry run performs no provider writes');
+    });
+
+    test('a failing leg is counted as a failure and flips success', function () {
+        var loaded = loadAgent({});
+        var p = providerWith({
+            issues: [{ number: 5, title: 'gh-5', labels: ['agent:dev'], assignees: [] }],
+            dispatchError: new Error('boom')
+        });
+        loaded.holder.provider = p;
+        var out = run(loaded.agent, { repo: 'o/r' });
+        assert.equal(out.failures, 1);
+        assert.equal(out.success, false);
+    });
+
+    test('OPEN prRef gets a prStatus probe; a MERGED PR closes the issue without one', function () {
+        var loaded = loadAgent({});
+        var p = providerWith({
+            issues: [
+                { number: 5, title: 'gh-5', labels: ['ai_developed', 'ai_pr_reviewed', 'pr_approved'], assignees: [] },
+                { number: 9, title: 'gh-9', labels: ['ai_developed'], assignees: [] }
+            ],
+            prs: { 5: { number: 50, state: 'OPEN' }, 9: { number: 90, state: 'MERGED' } },
+            prStatus: function () {
+                return { number: 50, state: 'OPEN', checkConclusion: 'green',
+                         mergeState: 'CLEAN', mergeable: true, headSha: 'abc' };
+            }
+        });
+        loaded.holder.provider = p;
+        var out = run(loaded.agent, { repo: 'o/r' });
+        assert.equal(out.failures, 0);
+        assert.deepEqual(p.calls.filter(function (c) { return c.tool === 'merge'; }),
+            [{ tool: 'merge', number: 50 }]);
+        assert.deepEqual(p.calls.filter(function (c) { return c.tool === 'closeIssue'; }),
+            [{ tool: 'closeIssue', number: 9 }]);
+        assert.deepEqual(p.calls.filter(function (c) { return c.tool === 'prStatus'; }),
+            [{ tool: 'prStatus', number: 50 }], 'only the OPEN PR is probed');
+    });
+
+    test('orphan-slot probe failure keeps the run in the concurrency count (fail closed)', function () {
+        var loaded = loadAgent({});
+        loaded.holder.provider = providerWith({ activeIssues: [7], findPrError: new Error('probe down') });
+        var out = run(loaded.agent, { repo: 'o/r', machineAuthor: 'ai-teammate' });
+        assert.equal(out.idle, true, 'the probe error must not release the slot');
+        assert.deepEqual(out.waitingFor, [7]);
+    });
+});
+
+suite('machineSm pure helpers (gh-980)', function () {
+    var rvReal = function () {
+        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        return rvReal.mod;
+    };
+    var maReal = function () {
+        if (!maReal.mod) maReal.mod = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+        return maReal.mod;
+    };
+
+    var agent = loadModule('js/machineSmAgent.js', makeRequire({
+        './configLoader.js': { loadProjectConfig: function () { return {}; } },
+        './common/smProvider.js': { createSmProvider: function () { return {}; } },
+        './common/reviewVerdicts.js': rvReal(),
+        './common/machineAuthor.js': maReal()
+    }), {
+        cli_execute_command: function () { return '{}'; }
+    });
+
+    test('resolveMachineSmConfig applies the documented defaults', function () {
+        var cfg = agent.resolveMachineSmConfig({}, {});
+        assert.equal(cfg.dryRun, false);
+        assert.equal(cfg.maxConcurrentRuns, 1);
+        assert.equal(cfg.maxReworkRounds, 2);
+        assert.equal(cfg.workflowFile, 'ai-teammate.yml');
+        assert.equal(cfg.branchPrefix, 'ai/gh-');
+        assert.equal(cfg.agentHandle, 'ai-teammate');
+        assert.equal(cfg.issueLimit, 50);
+        assert.contains(cfg.closeComment, 'closing the loop');
+        assert.equal(cfg.maxResolveThreads, rvReal().DEFAULT_RESOLVE_THREADS_CAP);
+        assert.ok(Array.isArray(cfg.machineLogins), 'machine logins resolve to a list');
+    });
+
+    test('resolveMachineSmConfig: the project override wins over jobParams for every knob it sets', function () {
+        var cfg = agent.resolveMachineSmConfig(
+            { dryRun: false, maxConcurrentRuns: 3, workflowFile: 'job.yml',
+              issueLimit: 9, maxResolveThreads: 4, machineAuthor: 'job-login' },
+            { machineSm: { dryRun: true, maxConcurrentRuns: 2, workflowFile: 'ovr.yml',
+                           maxResolveThreads: 6, machineAuthor: 'ovr-login' } });
+        assert.equal(cfg.dryRun, true, 'override beats an explicit falsy jobParams value');
+        assert.equal(cfg.maxConcurrentRuns, 2);
+        assert.equal(cfg.workflowFile, 'ovr.yml');
+        assert.equal(cfg.maxResolveThreads, 6);
+        assert.equal(cfg.issueLimit, 9, 'jobParams fills knobs the override lacks');
+        // machineAuthor keeps its own documented chain: jobParams before config
+        assert.deepEqual(cfg.machineLogins, ['job-login']);
+    });
+
+    test('resolveRepoCfg precedence: project repository > jobParams.repository > jobParams.repo > null', function () {
+        assert.deepEqual(agent.resolveRepoCfg({ repository: { owner: 'a', repo: 'b' } }, { repo: 'c/d' }),
+            { owner: 'a', repo: 'b' });
+        assert.deepEqual(agent.resolveRepoCfg({}, { repository: { owner: 'e', repo: 'f' }, repo: 'c/d' }),
+            { owner: 'e', repo: 'f' });
+        assert.deepEqual(agent.resolveRepoCfg({}, { repo: 'c/d' }), { owner: 'c', repo: 'd' });
+        assert.equal(agent.resolveRepoCfg({}, {}), null);
+        assert.equal(agent.resolveRepoCfg({ repository: { owner: 'only-owner' } }, {}), null,
+            'a partial project repository does not count');
+    });
+
+    test('probeOrphanRun classifies unknown / merged / live / probe-error', function () {
+        var provider = {
+            findPr: function (n) {
+                if (n === 1) return { number: 11, state: 'MERGED' };
+                if (n === 2) return { number: 12, state: 'OPEN' };
+                if (n === 3) throw new Error('down');
+                return null;
+            }
+        };
+        assert.deepEqual(agent.probeOrphanRun(provider, 'unknown', 'ai/gh-'), { kind: 'unknown' });
+        assert.deepEqual(agent.probeOrphanRun(provider, 1, 'ai/gh-'), { kind: 'merged', prNumber: 11 });
+        assert.deepEqual(agent.probeOrphanRun(provider, 2, 'ai/gh-'), { kind: 'live' });
+        assert.deepEqual(agent.probeOrphanRun(provider, 4, 'ai/gh-'), { kind: 'live' }, 'no linked PR is a live run');
+        assert.deepEqual(agent.probeOrphanRun(provider, 3, 'ai/gh-'), { kind: 'error' });
+    });
+
+    test('filterLiveActiveIssues drops only merged orphans and keeps everything else', function () {
+        var provider = {
+            findPr: function (n) {
+                if (n === 1) return { number: 11, state: 'MERGED' };
+                if (n === 3) throw new Error('down');
+                return { number: 10 + n, state: 'OPEN' };
+            }
+        };
+        assert.deepEqual(agent.filterLiveActiveIssues(provider, ['unknown', 1, 2, 3], 'ai/gh-'),
+            ['unknown', 2, 3], 'orphan released; unknown, live and probe-error runs kept');
+    });
+});

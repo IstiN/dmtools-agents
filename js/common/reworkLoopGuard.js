@@ -218,6 +218,27 @@ function hasEscalationForHead(escalationMarkers, headSha) {
 }
 
 /**
+ * gh-990 (2nd live instance, dart #424 ~16:37Z / #419 ~17:2xZ, 2026-10-17):
+ * the FALSE-POSITIVE refinement of the escalation. When the no-op budget is
+ * exhausted on a head that has NOTHING to rework (unresolvedThreads === 0 —
+ * the operator already addressed every thread, which is exactly why the
+ * legs no-op'd) AND the head carries NO red validation (headRed === false —
+ * no validation_failed park, no failing head check), parking the PR (label
+ * + 🛑 comment) is a false positive: the escalated label wedged the whole
+ * queue's validate-armed pointer behind a human-owned PR while the correct
+ * move was to let validation re-flow. The arm stays WITHHELD (the gh-957
+ * bound is unchanged — only the human-handoff escalation is suppressed);
+ * validate-armed matches the approved PR independently of this guard.
+ *
+ * Suppression requires POSITIVE evidence of BOTH sides: an unknown census
+ * (-1) or an unknown red probe (null) keeps the legacy escalation.
+ */
+function escalationIsFalsePositive(state) {
+    var s = state || {};
+    return s.unresolvedThreads === 0 && s.headRed === false;
+}
+
+/**
  * The arm-side decision (pure). state:
  *   markers          — time-sorted lap markers (parseLapMarkers output)
  *   escalationMarkers— parsed escalation markers (same comments, dedup)
@@ -253,5 +274,6 @@ module.exports = {
     parseEscalationMarkers: parseEscalationMarkers,
     consecutiveNoopLaps: consecutiveNoopLaps,
     hasEscalationForHead: hasEscalationForHead,
+    escalationIsFalsePositive: escalationIsFalsePositive,
     shouldWithholdArm: shouldWithholdArm
 };

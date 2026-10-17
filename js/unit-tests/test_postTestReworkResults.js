@@ -1066,83 +1066,190 @@ suite('postTestReworkResults — extracted helpers (gh-928)', function() {
     });
 });
 
-// gh-960: the PR body (including the canonical 'Closes #N' line) must be final
-// BEFORE the PR enters the merge queue. The rework-publish body refresh must:
-//   - be skipped entirely once validation armed (ai_validating) or the PR
-//     merged — a post-merge body edit never auto-closes the issue (live
-//     2026-10-17: #956 merged with 'Closes #952' landing at the merge moment,
-//     #952 stayed OPEN);
-//   - preserve the canonical 'Closes #N' line when it does run, so a refresh
-//     can never drop the keyword the merge bot links by (gh-737).
-suite('postTestReworkResults > PR body finality (gh-960)', function() {
+// ── gh-981: stageUnmergedPaths characterization + pure path-classification helpers ──
+// stageUnmergedPaths was CRAP 174.6 (git staging in the rework leg). These tests
+// pin the CURRENT command sequence and side-effect order so the function can be
+// split into pure path classification (parse*/decide*) + thin git executors
+// without behaviour drift: same commands, same order, same log lines.
 
-    function makeRecordingScm(calls) {
-        return {
-            updatePrBody: function(n, b) { calls.push(['body', n, b]); },
-            addComment: function(n, c) { calls.push(['comment', n, c]); }
+suite('postTestReworkResults.stageUnmergedPaths — characterization (gh-981)', function () {
+
+    var STAGE_CONFIG = { git: { baseBranch: 'main' } };
+
+    /** Scripted cli double: commands must arrive in the exact scripted order. */
+    function makeScriptedCli(script) {
+        var idx = 0;
+        var calls = [];
+        var fn = function (args) {
+            var command = args.command;
+            calls.push(command);
+            if (idx >= script.length) throw new Error('unexpected command: ' + command);
+            var step = script[idx++];
+            if (step.cmd !== command) {
+                throw new Error('command mismatch at step ' + (idx - 1) + ': got "' + command + '", expected "' + step.cmd + '"');
+            }
+            if (step.fail) throw new Error(step.fail);
+            return step.out !== undefined ? step.out : '';
         };
+        fn.calls = calls;
+        fn.exhausted = function () { return idx === script.length; };
+        return fn;
     }
 
-    test('body rewrite is skipped when the PR is merged, but the summary comment still posts', function() {
-        var h = loadReworkActionHarness({ files: {} });
-        var calls = [];
-        h.module.postReworkBodyAndComment(makeRecordingScm(calls), { number: 956, merged: true, state: 'closed' },
-            'gh-952', 'passed', true, 'CONTENT');
-        assert.deepEqual(calls.map(function(c) { return c[0]; }), ['comment'],
-            'no body rewrite after merge — only the comment');
-        assert.contains(calls[0][2], 'CONTENT', 'comment still carries the rework summary');
+    function loadStageModule(cli) {
+        return loadReworkActionHarness({ files: {}, cliWrapper: function () { return cli; } }).module;
+    }
+
+    test('no unmerged paths → a single probe and nothing else', function () {
+        var cli = makeScriptedCli([
+            { cmd: 'git diff --name-only --diff-filter=U', out: '' }
+        ]);
+        loadStageModule(cli).stageUnmergedPaths(STAGE_CONFIG);
+        assert.ok(cli.exhausted(), 'exactly one command expected, got: ' + JSON.stringify(cli.calls));
     });
 
-    test('body rewrite is skipped while validation is armed (ai_validating), but the summary comment still posts', function() {
-        var h = loadReworkActionHarness({ files: {} });
-        var calls = [];
-        h.module.postReworkBodyAndComment(makeRecordingScm(calls),
-            { number: 956, state: 'open', labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }] },
-            'gh-952', 'passed', true, 'CONTENT');
-        assert.deepEqual(calls.map(function(c) { return c[0]; }), ['comment'],
-            'validation-armed PR body is final — no rewrite, comment still posts');
+    test('two unmerged paths are staged; clean tree afterwards stops there', function () {
+        var cli = makeScriptedCli([
+            { cmd: 'git diff --name-only --diff-filter=U', out: 'src/a.js\ntesting/b.js' },
+            { cmd: 'git add -- "src/a.js"' },
+            { cmd: 'git add -- "testing/b.js"' },
+            { cmd: 'git diff --cached --check', out: '' },
+            { cmd: 'git diff --name-only --diff-filter=U', out: '' },
+            { cmd: 'git diff --name-only --diff-filter=U', out: '' }
+        ]);
+        loadStageModule(cli).stageUnmergedPaths(STAGE_CONFIG);
+        assert.ok(cli.exhausted(), 'script must be consumed exactly: ' + JSON.stringify(cli.calls));
     });
 
-    test('body rewrite still runs for an open PR outside the merge queue', function() {
-        var h = loadReworkActionHarness({ files: {} });
-        var calls = [];
-        h.module.postReworkBodyAndComment(makeRecordingScm(calls),
-            { number: 956, state: 'open', labels: [{ name: 'pr_approved' }] },
-            'gh-952', 'passed', true, 'CONTENT');
-        assert.deepEqual(calls.map(function(c) { return c[0]; }), ['body', 'comment'],
-            'pre-queue refresh keeps both side effects');
+    test('conflict markers: testing/ keeps --ours, everything else keeps --theirs', function () {
+        var cli = makeScriptedCli([
+            { cmd: 'git diff --name-only --diff-filter=U', out: 'testing/x.js\nsrc/y.js' },
+            { cmd: 'git add -- "testing/x.js"' },
+            { cmd: 'git add -- "src/y.js"' },
+            { cmd: 'git diff --cached --check',
+              out: 'testing/x.js:2: conflict marker\nsrc/y.js:5: conflict marker' },
+            { cmd: 'git checkout --ours -- "testing/x.js"' },
+            { cmd: 'git add -- "testing/x.js"' },
+            { cmd: 'git checkout --theirs -- "src/y.js"' },
+            { cmd: 'git add -- "src/y.js"' },
+            { cmd: 'git diff --name-only --diff-filter=U', out: '' },
+            { cmd: 'git diff --name-only --diff-filter=U', out: '' }
+        ]);
+        loadStageModule(cli).stageUnmergedPaths(STAGE_CONFIG);
+        assert.ok(cli.exhausted(), 'script must be consumed exactly: ' + JSON.stringify(cli.calls));
     });
 
-    test('body rewrite preserves the canonical Closes line for GitHub router keys', function() {
-        var h = loadReworkActionHarness({ files: {} });
-        var calls = [];
-        // The refreshed content (outputs/pr_body.md) carries no Closes line of
-        // its own — the rewrite must not drop the one GitHub already parsed.
-        h.module.postReworkBodyAndComment(makeRecordingScm(calls), { number: 956 },
-            'gh-952', 'passed', true, '### Rework summary\n- Fixed the parser.\n');
-        assert.equal(calls[0][0], 'body');
-        assert.contains(calls[0][2], 'Closes #952',
-            'canonical line survives the refresh so the merge bot link never breaks');
-        assert.equal(calls[0][2].indexOf('Closes #952'), 0,
-            'canonical line stays first, as on creation');
-        assert.contains(calls[0][2], '### Rework summary', 'refreshed content preserved');
+    test('duplicate marker lines for the same file resolve it exactly once', function () {
+        var cli = makeScriptedCli([
+            { cmd: 'git diff --name-only --diff-filter=U', out: 'src/y.js' },
+            { cmd: 'git add -- "src/y.js"' },
+            { cmd: 'git diff --cached --check',
+              out: 'src/y.js:5: conflict marker\nsrc/y.js:9: conflict marker' },
+            { cmd: 'git checkout --theirs -- "src/y.js"' },
+            { cmd: 'git add -- "src/y.js"' },
+            { cmd: 'git diff --name-only --diff-filter=U', out: '' },
+            { cmd: 'git diff --name-only --diff-filter=U', out: '' }
+        ]);
+        loadStageModule(cli).stageUnmergedPaths(STAGE_CONFIG);
+        assert.ok(cli.exhausted(), 'script must be consumed exactly: ' + JSON.stringify(cli.calls));
     });
 
-    test('body rewrite is idempotent when the refreshed content already closes the issue', function() {
-        var h = loadReworkActionHarness({ files: {} });
-        var calls = [];
-        h.module.postReworkBodyAndComment(makeRecordingScm(calls), { number: 956 },
-            'gh-952', 'passed', true, 'Closes #952\n\n### Rework summary\n');
-        assert.equal(calls[0][2].split('Closes #952').length - 1, 1, 'exactly one Closes line after refresh');
+    test('submodule conflicts adopt the origin/main (--theirs) state', function () {
+        var cli = makeScriptedCli([
+            { cmd: 'git diff --name-only --diff-filter=U', out: 'vendor/lib' },
+            { cmd: 'git add -- "vendor/lib"' },
+            { cmd: 'git diff --cached --check', out: '' },
+            { cmd: 'git diff --name-only --diff-filter=U', out: 'vendor/lib' },
+            { cmd: 'git ls-files --stage -- "vendor/lib"', out: '160000 a4f9c1d 0\tvendor/lib' },
+            { cmd: 'git checkout --theirs -- "vendor/lib"' },
+            { cmd: 'git add -- "vendor/lib"' },
+            { cmd: 'git diff --name-only --diff-filter=U', out: '' }
+        ]);
+        loadStageModule(cli).stageUnmergedPaths(STAGE_CONFIG);
+        assert.ok(cli.exhausted(), 'script must be consumed exactly: ' + JSON.stringify(cli.calls));
     });
 
-    test('body rewrite leaves non-GitHub tracker keys untouched', function() {
-        var h = loadReworkActionHarness({ files: {} });
-        var calls = [];
-        h.module.postReworkBodyAndComment(makeRecordingScm(calls), { number: 5 },
-            'PROJ-1', 'passed', true, 'CONTENT');
-        assert.equal(calls[0][2], '## PROJ-1 Result: PASSED\n\n**Latest rework result:** `PASSED`\n\n---\n\nCONTENT',
-            'tracker keys must not gain a bogus Closes #N line (gh-737 behavior kept)');
+    test('a still-unmerged NON-submodule path is left alone (no forced checkout)', function () {
+        var cli = makeScriptedCli([
+            { cmd: 'git diff --name-only --diff-filter=U', out: 'src/z.js' },
+            { cmd: 'git add -- "src/z.js"' },
+            { cmd: 'git diff --cached --check', out: '' },
+            { cmd: 'git diff --name-only --diff-filter=U', out: 'src/z.js' },
+            { cmd: 'git ls-files --stage -- "src/z.js"', out: '100644 a4f9c1d 0\tsrc/z.js' },
+            { cmd: 'git diff --name-only --diff-filter=U', out: '' }
+        ]);
+        loadStageModule(cli).stageUnmergedPaths(STAGE_CONFIG);
+        assert.ok(cli.exhausted(), 'script must be consumed exactly: ' + JSON.stringify(cli.calls));
     });
 
+    test('isSubmodulePath tolerates a failing ls-files probe (treated as non-submodule)', function () {
+        var cli = makeScriptedCli([
+            { cmd: 'git diff --name-only --diff-filter=U', out: 'src/w.js' },
+            { cmd: 'git add -- "src/w.js"' },
+            { cmd: 'git diff --cached --check', out: '' },
+            { cmd: 'git diff --name-only --diff-filter=U', out: 'src/w.js' },
+            { cmd: 'git ls-files --stage -- "src/w.js"', fail: 'not a git repo' },
+            { cmd: 'git diff --name-only --diff-filter=U', out: '' }
+        ]);
+        loadStageModule(cli).stageUnmergedPaths(STAGE_CONFIG);
+        assert.ok(cli.exhausted(), 'script must be consumed exactly: ' + JSON.stringify(cli.calls));
+    });
+
+    test('still-unmerged paths after every resolver throw the pinned error', function () {
+        var cli = makeScriptedCli([
+            { cmd: 'git diff --name-only --diff-filter=U', out: 'left.js' },
+            { cmd: 'git add -- "left.js"' },
+            { cmd: 'git diff --cached --check', out: '' },
+            { cmd: 'git diff --name-only --diff-filter=U', out: '' },
+            { cmd: 'git diff --name-only --diff-filter=U', out: 'left.js' }
+        ]);
+        var err = null;
+        try {
+            loadStageModule(cli).stageUnmergedPaths(STAGE_CONFIG);
+        } catch (e) {
+            err = e;
+        }
+        assert.ok(err, 'must throw when conflicts remain');
+        assert.equal(err.message, 'Unable to resolve merge conflicts: left.js');
+        assert.ok(cli.exhausted(), 'script must be consumed exactly: ' + JSON.stringify(cli.calls));
+    });
+});
+
+suite('postTestReworkResults — path classification helpers (gh-981)', function () {
+
+    function helperModule() {
+        return loadReworkActionHarness({ files: {} }).module;
+    }
+
+    test('parsePathList splits, trims and drops empty lines', function () {
+        var m = helperModule();
+        assert.deepEqual(m.parsePathList(' a.js \n\t\nb.js\n'), ['a.js', 'b.js']);
+        assert.deepEqual(m.parsePathList(''), []);
+        assert.deepEqual(m.parsePathList(null), []);
+        assert.deepEqual(m.parsePathList(undefined), []);
+        assert.deepEqual(m.parsePathList('only.js'), ['only.js']);
+    });
+
+    test('parseConflictMarkerPaths extracts unique marker files in order', function () {
+        var m = helperModule();
+        assert.deepEqual(
+            m.parseConflictMarkerPaths(
+                'src/a.js:3: conflict marker\n' +
+                'src/b.js:7: conflict marker\n' +
+                'src/a.js:9: conflict marker\n' +
+                'unrelated output line\n'
+            ),
+            ['src/a.js', 'src/b.js']
+        );
+        assert.deepEqual(m.parseConflictMarkerPaths(''), []);
+        assert.deepEqual(m.parseConflictMarkerPaths(null), []);
+    });
+
+    test('decideConflictSide keeps testing/ on ours and everything else on theirs', function () {
+        var m = helperModule();
+        assert.equal(m.decideConflictSide('testing/x.js'), 'ours');
+        assert.equal(m.decideConflictSide('src/testing/x.js'), 'theirs', 'testing/ must be a PREFIX match');
+        assert.equal(m.decideConflictSide('testing'), 'theirs', 'bare "testing" is not under testing/');
+        assert.equal(m.decideConflictSide('src/y.js'), 'theirs');
+    });
 });

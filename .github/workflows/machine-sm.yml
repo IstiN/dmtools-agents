@@ -47,7 +47,7 @@ jobs:
       # contract. Comma-separated LIST: the agent harness bot AND the CI
       # bot — github-actions[bot] authors its own PRs (live fa PR #1249)
       # and must ride the machine path (owner directive 2026-10-05).
-      machine-author: 'ai-teammate,github-actions[bot]'
+      machine-author: 'ai-teammate,github-actions[bot],dmtools-factory-bot'
       # This repo dispatches no CI on PR heads (docs checks only) — the SM
       # leaves validation to the event-driven merge bot and labels.
       ci-workflow: ''

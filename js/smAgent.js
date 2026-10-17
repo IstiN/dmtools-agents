@@ -723,7 +723,8 @@ function recordDispatchFailure(repoInfo, ticketKey, item, err, expandedRef, fail
             var parkBody = '🅿️ validation_failed — dispatch dead-head park (gh-922).' +
                 ' The head branch `' + item.branch + '` no longer exists — every dispatch fails (' + msg + ').' +
                 ' The PR is parked: it cannot preempt the queue and no legs are dispatched against it.' +
-                ' Restore or re-push the branch — a new human push clears the park automatically.' +
+                ' Restore or re-push the branch — a fresh push clears the park automatically' +
+                ' (the head-change reset fires on the new sha; a human re-push also clears a legacy park).' +
                 '\n' + triggerFailuresModule.triggerFailMarkerLine(count, item.branch, cap, new Date().toISOString());
             if (headSha) parkBody += '\nparked-head: ' + headSha;
             tr.addLabel(item.prNumber, 'validation_failed');
@@ -1654,6 +1655,43 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     });
                     if (noopDecision.withhold) {
                         if (noopDecision.escalate) {
+                            // gh-990 (2nd live instance, dart #424/#419,
+                            // 2026-10-17): a budget exhausted on a head with
+                            // NOTHING to rework (unresolved-thread census 0 —
+                            // the operator already addressed the threads,
+                            // which is why the legs no-op'd) and NO red
+                            // validation on the head (no validation_failed
+                            // park, no failing check) is NOT a human-handoff
+                            // state: parking it (label + 🛑 comment) was a
+                            // false positive that wedged the whole queue's
+                            // validate-armed pointer behind a human-owned
+                            // PR. The probes run ONLY at this escalation
+                            // point — the common below-cap tick pays nothing
+                            // — and a probe failure fails closed to the
+                            // legacy escalation. The arm stays withheld (the
+                            // gh-957 bound is untouched); validate-armed
+                            // re-flows validation on the PR independently.
+                            var fpSuppress = false;
+                            try {
+                                var fpHeadRed = (ticket.labels || []).indexOf('validation_failed') !== -1 ||
+                                    noopGuardHeadIsRed(effectiveRepoInfo, noopHead);
+                                fpSuppress = reworkLoopGuardModule.escalationIsFalsePositive({
+                                    unresolvedThreads: unresolvedThreadCount(effectiveRepoInfo, ticket.prNumber),
+                                    headRed: fpHeadRed
+                                });
+                            } catch (eFp) {
+                                console.warn('  ⚠️ ' + key + ' gh-990 false-positive probe failed — legacy' +
+                                    ' escalation stands: ' + (eFp.message || eFp));
+                            }
+                            if (fpSuppress) {
+                                console.log('  ⏭️  ' + key + ' agent:rework stays withheld (gh-957 budget ' +
+                                    noopDecision.laps + '/' + noopDecision.maxLaps + ' on head ' +
+                                    String(noopHead).substring(0, 7) + ') — escalation SUPPRESSED (gh-990):' +
+                                    ' 0 unresolved threads and no red validation — validation re-flow owns' +
+                                    ' this PR, not a human park');
+                                processedKeys.push(key);
+                                continue;
+                            }
                             try {
                                 githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo)
                                     .addLabel(ticket.prNumber, reworkLoopGuardModule.ESCALATION_LABEL);
@@ -1874,19 +1912,28 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 //     validation CI for it. Machine PRs never get the
                 //     label (fa pushes their heads; they re-enter on a new
                 //     head as today).
-                //   RESET (first): the park clears only on a HUMAN push
-                //     NEWER than the validation_failed event — the label is
-                //     removed and the PR re-enters the queue. Machine
-                //     movement NEVER clears it: the SM's own silent-update
-                //     merges ('sm-silent-update' committer) and the agent
-                //     legs' pushes (machineAuthor login, e.g. the rework
-                //     WIP auto-saves on fa pr-1094) are not new work. A
-                //     machine merge ON TOP of a human push is not machine
-                //     work either (#681, live fa#1213: retrigger 7ecf11d7
-                //     22:56 buried by bot merge b3f9c6b5 before the next
-                //     tick) — the probe walks back past machine-authored
-                //     merges to the LAST SUBSTANTIVE commit and tests
-                //     THAT actor + date.
+                //   RESET (gh-994 first position, owner reframe 2026-10-17,
+                //     live fa #156/#1563): the park is a pure function of
+                //     the CURRENT head — when the park comment records the
+                //     punished sha and the current headRefOid DIFFERS, the
+                //     label is removed UNCONDITIONALLY (no actor, park-time
+                //     or verdict probe): kicker pushes, rework-leg pushes,
+                //     operator pushes and silent merge-main updates all
+                //     reset the park, guests and machine PRs alike. The
+                //     legacy ladder below keeps serving parks with NO
+                //     recorded sha: there the park still clears only on a
+                //     HUMAN push NEWER than the validation_failed event —
+                //     the label is removed and the PR re-enters the queue.
+                //     Machine movement NEVER clears a legacy park: the SM's
+                //     own silent-update merges ('sm-silent-update'
+                //     committer) and the agent legs' pushes (machineAuthor
+                //     login, e.g. the rework WIP auto-saves on fa pr-1094)
+                //     are not new work. A machine merge ON TOP of a human
+                //     push is not machine work either (#681, live fa#1213:
+                //     retrigger 7ecf11d7 22:56 buried by bot merge b3f9c6b5
+                //     before the next tick) — the probe walks back past
+                //     machine-authored merges to the LAST SUBSTANTIVE
+                //     commit and tests THAT actor + date.
                 var parkLabelVf = 'validation_failed';
                 var labelsVf = ticket.labels || [];
                 // gh-1394: rules whose queries carry no mergeState/checks
@@ -1898,193 +1945,191 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     ticket, prMachineAuthorU, effectiveRepoInfo.owner);
                 var unparkedThisPass = false;
                 if (labelsVf.indexOf(parkLabelVf) !== -1) {
-                    var actorVf = uHead ? parkResetCommit(effectiveRepoInfo, uHead, prMachineAuthorU) : null;
-                    var parkedAtVf = parkedSince(effectiveRepoInfo, ticket.prNumber);
-                    var actorLoginVf = ((actorVf && actorVf.login) || '').toLowerCase();
-                    var lastCommitter = actorVf ? String(actorVf.committer || '') : null;
-                    // gh-728: machine movement = a push by ANY machineAuthor
-                    // list entry (the knob is comma-separated now).
-                    var machinePushVf = isMachineParkPush(lastCommitter, actorLoginVf, prMachineAuthorU);
-                    var freshPushVf = !!(actorVf && actorVf.date && parkedAtVf &&
-                        Date.parse(actorVf.date) > Date.parse(parkedAtVf));
-                    // Head-change without its own red verdict (dmtools-
-                    // agents#633, live fa#1139 2026-10-02): the park's
-                    // verdict belongs to the sha in the park comment. A
-                    // silent rebase moves the head to a sha that has NEVER
-                    // been validated — the red the park punished is void
-                    // (the rebase literally merged main in: exactly the
-                    // medicine for a moved-base red, live fa#1114 —
-                    // parked red, re-validated green, merged). Clear the
-                    // park and let validate-armed give the NEW head its
-                    // first verdict; if it is genuinely content-red the
-                    // fail-validation path re-parks it one CI cycle later.
-                    // Guards: park comment sha must be known AND differ,
-                    // and the sha-keyed dispatched-verdict probe must NOT
-                    // report 'failure' for the current head (fail closed:
-                    // probe error keeps the park, same as parkedSince).
+                    // gh-994 FIRST POSITION (owner reframe 2026-10-17, live:
+                    // fa #156 kicker push + fa #1563 operator pushes — 4
+                    // manual label deletions in one day): the park is a
+                    // PURE FUNCTION OF THE CURRENT HEAD. The recorded
+                    // parked-head sha names the head the park punished; a
+                    // different current headRefOid voids the park BY
+                    // DEFINITION — the old verdict does not transfer
+                    // across sha changes, so the reset is UNCONDITIONAL
+                    // on the head change: no actor probe (kicker, rework-
+                    // leg, silent-update and operator pushes are all
+                    // equal), no park-time probe, no dispatched-verdict
+                    // probe (a fresh red re-justifies a park on a LATER
+                    // pass via the SET path — it never keeps a stale park
+                    // alive on a new head). Guests and machine PRs share
+                    // the rung (I2: every head-mutation source resets).
+                    // Full-SHA comparison, not prefixes or branch names;
+                    // a force-push and a fast-forward reset identically
+                    // (AC3). I3/idempotency: one removeLabel per tick and
+                    // unparkedThisPass gates the same-pass SET — N
+                    // concurrent head-change events yield ≤1 removal and
+                    // never a re-add. Audit (Q2 default): a machine-log
+                    // line `park-reset: <pr> head <old>→<new>` only — no
+                    // PR comment on automated housekeeping (the parked-PR
+                    // contract sentence already tells the pusher the push
+                    // clears the park). E4: a remove failure is caught and
+                    // retried next tick — the label survives at most one
+                    // extra turn, the SM turn does not crash.
                     var parkedHeadVf = parkedHeadSha(effectiveRepoInfo, ticket.prNumber);
-                    // One shared dispatched-verdict probe for the current
-                    // head (pr-752 rework): the #633 head-change path and
-                    // the gh-750 machine moved-head path ask the SAME
-                    // question with the SAME args — a memoized local fires
-                    // `gh api .../runs?head_sha=` at most ONCE per tick
-                    // instead of once per consumer. The probe FAILS OPEN
-                    // for the clear decision (probe error → null → 'no
-                    // red'), inherited #633 semantics — re-validation
-                    // re-discovers a genuinely red head one CI cycle later.
-                    var headVerdictVf = null;
-                    var headVerdictProbedVf = false;
-                    var probeHeadVerdictVf = function () {
-                        if (!headVerdictProbedVf) {
-                            headVerdictProbedVf = true;
-                            headVerdictVf = latestDispatchedVerdict(effectiveRepoInfo,
-                                rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
-                                uHead);
+                    var headChangeResetVf = !!(uHead && parkedHeadVf &&
+                        uHead !== parkedHeadVf);
+                    if (headChangeResetVf) {
+                        if (!DRY) {
+                            try {
+                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, parkLabelVf);
+                            } catch (eUnpark994) {
+                                console.warn('  ⚠️  un-park label failed: ' + (eUnpark994.message || eUnpark994));
+                            }
                         }
-                        return headVerdictVf;
-                    };
-                    var headChangedNoVerdictVf = !!uHead && parkedHeadVf !== null &&
-                        parkedHeadVf !== '' && uHead !== parkedHeadVf &&
-                        probeHeadVerdictVf() !== 'failure';
-                    // gh-750 (live fa#1227, owner directive 2026-10-05): a
-                    // MACHINE-authored parked PR has NO self-clear path at
-                    // all — the human-push RESET below never fires (fa pushes
-                    // their own heads, so the last substantive commit is
-                    // always machine work), the #633 comment-sha path needs
-                    // a park comment legacy parks predate, and the rework
-                    // armers list validation_failed as an in-flight blocker
-                    // so no rework leg fires either — the park is permanent
-                    // (fa#1227: pr_approved + ai_pr_reviewed + MERGEABLE,
-                    // parked since the CI-storm era). The SM clears the label
-                    // ITSELF when the park's verdict is void for the CURRENT
-                    // head: the check rollup is GREEN right now, or the head
-                    // moved after the park was set AND carries no red
-                    // dispatched verdict of its own (#633's rationale minus
-                    // the park-comment dependency — the red belongs to the
-                    // parked sha, not this one; a fresh red re-justifies the
-                    // park and the machine loop owns it via rework, never
-                    // this label again). Guests keep the 2026-09-27 sticky
-                    // behavior in full: none of this evaluates for them.
-                    // Probe failures keep the park (fail closed) — the branch
-                    // is gated on the same non-null probes the ladder below
-                    // demands; parkResetCommit/parkedSince are null-guarded
-                    // and validationRollupGreen/headCommitActor fail closed
-                    // (error → false/NaN). The dispatched-verdict probe is
-                    // the one FAIL-OPEN input (error → null → 'no red',
-                    // shared with #633 — re-validation re-discovers red).
-                    var machineUnparkVf = false;
-                    var machineUnparkWhyVf = '';
-                    if (isMachinePrU && uHead && actorVf !== null && parkedAtVf !== null) {
-                        var greenRollupVf = validationRollupGreen(effectiveRepoInfo, ticket.prNumber);
-                        var headMovedCleanVf = false;
-                        if (!greenRollupVf) {
-                            var headActorVf = headCommitActor(effectiveRepoInfo, uHead);
-                            var headTsVf = headActorVf ? Date.parse(headActorVf.date) : NaN;
-                            var parkedTsVf = Date.parse(parkedAtVf);
-                            headMovedCleanVf = !isNaN(headTsVf) && !isNaN(parkedTsVf) &&
-                                headTsVf > parkedTsVf &&
-                                probeHeadVerdictVf() !== 'failure';
+                        // Same-tick slot yield (gh-952 parity): the open-PR
+                        // cache drop lets validate-armed re-query the freed
+                        // label in THIS tick (park-reset runs before
+                        // validate-armed), so the fresh head arms without
+                        // waiting a full tick.
+                        dropOpenPrsCache(effectiveRepoInfo);
+                        console.log('  ▶ park-reset: ' + key + ' head ' +
+                            parkedHeadVf + '→' + uHead +
+                            ' — validation_failed tracked the old head only; the park resets on ANY head change (gh-994)');
+                        unparkedThisPass = true;
+                    } else {
+                        // LEGACY LADDER — parks with NO recorded parked-head
+                        // sha (pre-#633 comments, manually set labels): no
+                        // sha to compare, so the actor/park-time/verdict
+                        // probes below remain their only reset paths.
+                        var actorVf = uHead ? parkResetCommit(effectiveRepoInfo, uHead, prMachineAuthorU) : null;
+                        var parkedAtVf = parkedSince(effectiveRepoInfo, ticket.prNumber);
+                        var actorLoginVf = ((actorVf && actorVf.login) || '').toLowerCase();
+                        var lastCommitter = actorVf ? String(actorVf.committer || '') : null;
+                        // gh-728: machine movement = a push by ANY machineAuthor
+                        // list entry (the knob is comma-separated now).
+                        var machinePushVf = isMachineParkPush(lastCommitter, actorLoginVf, prMachineAuthorU);
+                        var freshPushVf = !!(actorVf && actorVf.date && parkedAtVf &&
+                            Date.parse(actorVf.date) > Date.parse(parkedAtVf));
+                        // One shared dispatched-verdict probe for the current
+                        // head (pr-752 rework): the gh-750 machine moved-head
+                        // path asks the sha-keyed question with fixed args —
+                        // a memoized local fires `gh api .../runs?head_sha=`
+                        // at most ONCE per tick. The probe FAILS OPEN for the
+                        // clear decision (probe error → null → 'no red') —
+                        // re-validation re-discovers a genuinely red head one
+                        // CI cycle later.
+                        var headVerdictVf = null;
+                        var headVerdictProbedVf = false;
+                        var probeHeadVerdictVf = function () {
+                            if (!headVerdictProbedVf) {
+                                headVerdictProbedVf = true;
+                                headVerdictVf = latestDispatchedVerdict(effectiveRepoInfo,
+                                    rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
+                                    uHead);
+                            }
+                            return headVerdictVf;
+                        };
+                        // gh-750 (live fa#1227, owner directive 2026-10-05): a
+                        // MACHINE-authored parked PR has NO self-clear path at
+                        // all — the human-push RESET below never fires (fa pushes
+                        // their own heads, so the last substantive commit is
+                        // always machine work), the sha-keyed path needs a park
+                        // comment legacy parks predate, and the rework
+                        // armers list validation_failed as an in-flight blocker
+                        // so no rework leg fires either — the park is permanent
+                        // (fa#1227: pr_approved + ai_pr_reviewed + MERGEABLE,
+                        // parked since the CI-storm era). The SM clears the label
+                        // ITSELF when the park's verdict is void for the CURRENT
+                        // head: the check rollup is GREEN right now, or the head
+                        // moved after the park was set AND carries no red
+                        // dispatched verdict of its own (#633's rationale minus
+                        // the park-comment dependency — the red belongs to the
+                        // parked sha, not this one; a fresh red re-justifies the
+                        // park and the machine loop owns it via rework, never
+                        // this label again). Guests keep the 2026-09-27 sticky
+                        // behavior in full: none of this evaluates for them.
+                        // Probe failures keep the park (fail closed) — the branch
+                        // is gated on the same non-null probes the ladder below
+                        // demands; parkResetCommit/parkedSince are null-guarded
+                        // and validationRollupGreen/headCommitActor fail closed
+                        // (error → false/NaN). The dispatched-verdict probe is
+                        // the one FAIL-OPEN input (error → null → 'no red',
+                        // shared with #633 — re-validation re-discovers red).
+                        var machineUnparkVf = false;
+                        var machineUnparkWhyVf = '';
+                        if (isMachinePrU && uHead && actorVf !== null && parkedAtVf !== null) {
+                            var greenRollupVf = validationRollupGreen(effectiveRepoInfo, ticket.prNumber);
+                            var headMovedCleanVf = false;
+                            if (!greenRollupVf) {
+                                var headActorVf = headCommitActor(effectiveRepoInfo, uHead);
+                                var headTsVf = headActorVf ? Date.parse(headActorVf.date) : NaN;
+                                var parkedTsVf = Date.parse(parkedAtVf);
+                                headMovedCleanVf = !isNaN(headTsVf) && !isNaN(parkedTsVf) &&
+                                    headTsVf > parkedTsVf &&
+                                    probeHeadVerdictVf() !== 'failure';
+                            }
+                            machineUnparkVf = greenRollupVf || headMovedCleanVf;
+                            // Audit evidence rides the reason (pr-752 rework):
+                            // the sibling clear comments cite their inputs
+                            // (gh-994 rung: both shas; human-push: actor + date)
+                            // — the moved-head branch cites head sha @ commit
+                            // date > park time so the clear is auditable from the
+                            // PR thread alone.
+                            machineUnparkWhyVf = greenRollupVf
+                                ? 'the current head checks are GREEN'
+                                : 'the head moved past the park carrying no red verdict of its ' +
+                                  'own (head `' + uHead.slice(0, 8) + '` @ ' +
+                                  (headActorVf && headActorVf.date ? headActorVf.date : 'unknown') +
+                                  ' > park ' + parkedAtVf + ')';
                         }
-                        machineUnparkVf = greenRollupVf || headMovedCleanVf;
-                        // Audit evidence rides the reason (pr-752 rework):
-                        // the sibling clear comments cite their inputs
-                        // (#633: both shas; human-push: actor + date) — the
-                        // moved-head branch cites head sha @ commit date >
-                        // park time so the clear is auditable from the PR
-                        // thread alone.
-                        machineUnparkWhyVf = greenRollupVf
-                            ? 'the current head checks are GREEN'
-                            : 'the head moved past the park carrying no red verdict of its ' +
-                              'own (head `' + uHead.slice(0, 8) + '` @ ' +
-                              (headActorVf && headActorVf.date ? headActorVf.date : 'unknown') +
-                              ' > park ' + parkedAtVf + ')';
-                    }
-                    if (actorVf === null || parkedAtVf === null) {
-                        // gh-952 (live fa 2026-10-17): PROBE-OUTAGE exemption
-                        // for MACHINE-authored PRs with a sha-keyed park
-                        // comment. Both self-clear rungs below sit behind the
-                        // substantive-commit/park-time probes — during the
-                        // CLI outage that froze fa's queue every probe came
-                        // back null and this branch fail-closed HOLD each
-                        // tick, so a machine park with a moved head was
-                        // permanent (gh-750's own comment: 'the park is
-                        // permanent'). The park comment's parked-head sha
-                        // needs NONE of those probes: it names the sha the
-                        // park punished, so any different current sha proves
-                        // the head moved, and the memoized dispatched-verdict
-                        // probe (fail-open by #633 design) guards the fresh
-                        // head. Guests keep their contracts in full — none
-                        // of this evaluates for them (fa#923/#681/#1249
-                        // pins): the guest pins below still hold.
-                        if (isMachinePrU && uHead && parkedHeadVf &&
-                                uHead !== parkedHeadVf &&
-                                probeHeadVerdictVf() !== 'failure') {
-                            clearStalePark952(effectiveRepoInfo, ticket, uHead,
-                                parkedHeadVf, key);
-                            unparkedThisPass = true;
-                        } else {
+                        if (actorVf === null || parkedAtVf === null) {
+                            // gh-994 note: sha-keyed parks never reach this
+                            // branch — the FIRST-POSITION head-change reset
+                            // fires on the recorded sha alone (even in a full
+                            // probe outage). Only sha-UNKNOWN legacy parks land
+                            // here: dead probes keep the park (fail closed);
+                            // the human-push/gh-750 rungs retry next tick.
                             console.warn('  ⚠️  ' + key + ' ' + parkLabelVf +
                                 ': park probe failed (substantive commit / park time) — keeping the park (fail closed)');
+                        } else if (machineUnparkVf) {
+                            if (!DRY) {
+                                try {
+                                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, parkLabelVf);
+                                } catch (eUnparkMv) {
+                                    console.warn('  ⚠️  un-park label failed: ' + (eUnparkMv.message || eUnparkMv));
+                                }
+                                try {
+                                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🅿️→▶ validation_failed cleared — this MACHINE-authored PR was ' + 'parked with no self-clear path (the machine pushes its own heads, so ' + 'the human-push reset can never fire): ' + machineUnparkWhyVf + '. ' + 'The parked red verdict is void for the current head — re-entering ' + 'validation (owner directive 2026-10-05).');
+                                } catch (eUnparkMvC) {
+                                    console.warn('  ⚠️  un-park comment failed: ' + (eUnparkMvC.message || eUnparkMvC));
+                                }
+                            }
+                            console.log('  ▶ ' + key + ' ' + parkLabelVf +
+                                ' cleared: machine-authored PR, ' + machineUnparkWhyVf +
+                                ' — re-validating (the park had no self-clear path, gh-750)');
+                            unparkedThisPass = true;
+                        } else if (machinePushVf) {
+                            console.log('  🅿️  ' + key + ' ' + parkLabelVf +
+                                ' holds — the last substantive commit is machine work (' +
+                                (lastCommitter === 'sm-silent-update' ? 'sm-silent-update' : actorLoginVf) +
+                                '); silent-updates, bot merges of main and agent auto-saves are not new work');
+                        } else if (!freshPushVf) {
+                            console.log('  🅿️  ' + key + ' ' + parkLabelVf +
+                                ' holds — the head predates the park event (no new push since)');
+                        } else {
+                            if (!DRY) {
+                                try {
+                                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, parkLabelVf);
+                                } catch (eUnparkVf) {
+                                    console.warn('  ⚠️  un-park label failed: ' + (eUnparkVf.message || eUnparkVf));
+                                }
+                                try {
+                                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🅿️→▶ validation_failed cleared — the last substantive commit `' + (actorVf.sha || uHead) + '` (head `' + uHead + '`) was pushed by `' + (actorLoginVf || lastCommitter || 'unknown') + '` (human, newer than the park event; machine merges of main walked past) — re-entering validation.');
+                                } catch (eUnparkVfC) {
+                                    console.warn('  ⚠️  un-park comment failed: ' + (eUnparkVfC.message || eUnparkVfC));
+                                }
+                            }
+                            console.log('  ▶ ' + key + ' ' + parkLabelVf +
+                                ' cleared: HUMAN push newer than the park — re-entering validation');
+                            unparkedThisPass = true;
                         }
-                    } else if (headChangedNoVerdictVf) {
-                        if (!DRY) {
-                            try {
-                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, parkLabelVf);
-                            } catch (eUnparkHc) {
-                                console.warn('  ⚠️  un-park label failed: ' + (eUnparkHc.message || eUnparkHc));
-                            }
-                            try {
-                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🅿️→▶ validation_failed cleared — the park was set on head `' + parkedHeadVf + '`, but the head is now `' + uHead + '` (silent refresh merged main in) and this head has no red ' + 'verdict of its own. The old verdict does not transfer across ' + 'sha changes — re-entering validation for a first verdict.');
-                            } catch (eUnparkHcC) {
-                                console.warn('  ⚠️  un-park comment failed: ' + (eUnparkHcC.message || eUnparkHcC));
-                            }
-                        }
-                        console.log('  ▶ ' + key + ' ' + parkLabelVf +
-                            ' cleared: head changed to ' + uHead.slice(0, 8) +
-                            ' since the park (' + parkedHeadVf.slice(0, 8) +
-                            ') and carries no red verdict — re-validating');
-                        unparkedThisPass = true;
-                    } else if (machineUnparkVf) {
-                        if (!DRY) {
-                            try {
-                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, parkLabelVf);
-                            } catch (eUnparkMv) {
-                                console.warn('  ⚠️  un-park label failed: ' + (eUnparkMv.message || eUnparkMv));
-                            }
-                            try {
-                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🅿️→▶ validation_failed cleared — this MACHINE-authored PR was ' + 'parked with no self-clear path (the machine pushes its own heads, so ' + 'the human-push reset can never fire): ' + machineUnparkWhyVf + '. ' + 'The parked red verdict is void for the current head — re-entering ' + 'validation (owner directive 2026-10-05).');
-                            } catch (eUnparkMvC) {
-                                console.warn('  ⚠️  un-park comment failed: ' + (eUnparkMvC.message || eUnparkMvC));
-                            }
-                        }
-                        console.log('  ▶ ' + key + ' ' + parkLabelVf +
-                            ' cleared: machine-authored PR, ' + machineUnparkWhyVf +
-                            ' — re-validating (the park had no self-clear path, gh-750)');
-                        unparkedThisPass = true;
-                    } else if (machinePushVf) {
-                        console.log('  🅿️  ' + key + ' ' + parkLabelVf +
-                            ' holds — the last substantive commit is machine work (' +
-                            (lastCommitter === 'sm-silent-update' ? 'sm-silent-update' : actorLoginVf) +
-                            '); silent-updates, bot merges of main and agent auto-saves are not new work');
-                    } else if (!freshPushVf) {
-                        console.log('  🅿️  ' + key + ' ' + parkLabelVf +
-                            ' holds — the head predates the park event (no new push since)');
-                    } else {
-                        if (!DRY) {
-                            try {
-                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, parkLabelVf);
-                            } catch (eUnparkVf) {
-                                console.warn('  ⚠️  un-park label failed: ' + (eUnparkVf.message || eUnparkVf));
-                            }
-                            try {
-                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🅿️→▶ validation_failed cleared — the last substantive commit `' + (actorVf.sha || uHead) + '` (head `' + uHead + '`) was pushed by `' + (actorLoginVf || lastCommitter || 'unknown') + '` (human, newer than the park event; machine merges of main walked past) — re-entering validation.');
-                            } catch (eUnparkVfC) {
-                                console.warn('  ⚠️  un-park comment failed: ' + (eUnparkVfC.message || eUnparkVfC));
-                            }
-                        }
-                        console.log('  ▶ ' + key + ' ' + parkLabelVf +
-                            ' cleared: HUMAN push newer than the park — re-entering validation');
-                        unparkedThisPass = true;
                     }
                 }
                 if (!unparkedThisPass && !isMachinePrU &&
@@ -2097,7 +2142,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             console.warn('  ⚠️  park label failed: ' + (eParkVf.message || eParkVf));
                         }
                         try {
-                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🛑 validation_failed — the current head `' + uHead + '` has failing checks. This GUEST PR is parked: no validation ' + 'CI is dispatched for it and the merge window skips it until a ' + 'HUMAN push newer than the park clears it (machine pushes — ' + 'silent-updates, agent auto-saves — never do). The failure itself ' + 'is reported separately. parked-head: ' + uHead);
+                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🛑 validation_failed — the current head `' + uHead + '` has failing checks. This GUEST PR is parked: no validation ' + 'CI is dispatched for it and the merge window skips it until the ' + 'head changes — ANY push that moves the head (yours, the kicker, a ' + 'silent main-merge) clears the park via the head-change reset; a ' + 'genuinely red new head is re-parked one validation cycle later. ' + 'The failure itself is reported separately. parked-head: ' + uHead);
                         } catch (eParkVfC) {
                             console.warn('  ⚠️  park comment failed: ' + (eParkVfC.message || eParkVfC));
                         }
@@ -3387,7 +3432,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             console.warn('  ⚠️  zombie park label failed: ' + (eZpark.message || eZpark));
                         }
                         try {
-                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🅿️ Validation parked — zombie crash-loop (' + zMarks.count + '/' + zCap + ' automatic re-dispatches on head `' + sHead + '` died cancelled or never started; the ai_validating arm kept holding' + ' the merge window with no live run behind it — gh-821). No further' + ' automatic re-dispatches: a new push (new head SHA) restarts validation.' + (sProbe && sProbe.green ? ' An older GREEN dispatched run exists on this head (gh-751/latch-skip ' + 'semantics) — worth a manual look before re-dispatching or pushing.' : ''));
+                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🅿️ Validation parked — zombie crash-loop (' + zMarks.count + '/' + zCap + ' automatic re-dispatches on head `' + sHead + '` died cancelled or never started; the ai_validating arm kept holding' + ' the merge window with no live run behind it — gh-821). No further' + ' automatic re-dispatches: a new push (new head SHA) restarts validation.' + (sHead ? '\nparked-head: ' + sHead : '') + (sProbe && sProbe.green ? ' An older GREEN dispatched run exists on this head (gh-751/latch-skip ' + 'semantics) — worth a manual look before re-dispatching or pushing.' : ''));
                         } catch (eZsay) {
                             console.warn('  ⚠️  zombie park comment failed: ' + (eZsay.message || eZsay));
                         }
@@ -3699,6 +3744,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     + (redLine ? '\n' + redLine : '')
                     + (emptyLapLine ? '\n' + emptyLapLine : '')
                     + (parkLine ? '\n' + parkLine : '')
+                    + (((convergencePark || !isMachinePr) && failHead)
+                        // gh-994: the park's recorded head — the head-change
+                        // reset (update_branch FIRST rung) keys on this
+                        // marker to reset the park on ANY later head move.
+                        ? '\nparked-head: ' + failHead
+                        : '')
                     + (failingJobsLine ? '\n' + failingJobsLine : '');
                 githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, report);
                 if (convergencePark) {
@@ -4973,6 +5024,64 @@ function auditReworkConsumption(repoInfo, ticket, label, path) {
             ') on PR #' + ticket.prNumber);
     } catch (eAudit) {
         console.warn('  ⚠️ gh-840: consumption audit comment failed (non-fatal): ' + (eAudit.message || eAudit));
+    }
+}
+
+// gh-990: ALL unresolved review threads on the PR — the census the
+// rework-unresolved-threads rule matches on (human and machine threads
+// alike), as opposed to unresolvedMachineThreadCount below (the gh-840
+// sweep's machine-only census). Returns a count >= 0, or -1 when the
+// threads tool is unavailable or the read fails — the no-op-guard
+// false-positive suppression requires POSITIVE evidence of an empty
+// census, so an unknown census keeps the legacy escalation.
+function unresolvedThreadCount(repoInfo, prNumber) {
+    if (typeof github_get_pr_review_threads !== 'function') return -1;
+    try {
+        var raw = github_get_pr_review_threads({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestId: String(prNumber)
+        });
+        var res = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+        var nodes = (res && res.data && res.data.repository &&
+            res.data.repository.pullRequest &&
+            res.data.repository.pullRequest.reviewThreads &&
+            res.data.repository.pullRequest.reviewThreads.nodes) || [];
+        var n = 0;
+        nodes.forEach(function (t) {
+            if (t && t.isResolved !== true) n++;
+        });
+        return n;
+    } catch (eCensus) {
+        console.warn('  ⚠️ gh-990: unresolved-thread census failed (fail closed): ' + (eCensus.message || eCensus));
+        return -1;
+    }
+}
+
+// gh-990: the red-validation side of the false-positive probe — TRUE when
+// some non-bookkeeping context's LATEST check run on the head concluded
+// FAILURE/TIMED_OUT (#628/#695 parity with headHasRealFailure's reader).
+// Deliberately NOT that helper itself: headHasRealFailure fails OPEN on an
+// EMPTY rollup (its callers matched a red query — an empty read there is a
+// degraded probe), while for this guard an empty rollup has NO failing
+// checks — a fresh head whose CI never ran belongs to validation re-flow,
+// not to a human park. An UNREADABLE rollup (null) still fails closed to
+// red: suppression demands positive no-red evidence.
+function noopGuardHeadIsRed(repoInfo, headSha) {
+    if (!headSha) return true;
+    try {
+        var rollup = headCheckRunsSafe(repoInfo, headSha);
+        if (rollup === null || rollup === undefined) return true;
+        var latest = latestCheckRunConclusions(rollup);
+        var names = Object.keys(latest);
+        for (var i = 0; i < names.length; i++) {
+            if (isBookkeepingCheckName(names[i])) continue;
+            var concl = latest[names[i]].concl;
+            if (concl === 'FAILURE' || concl === 'TIMED_OUT') return true;
+        }
+        return false;
+    } catch (eRed) {
+        console.warn('  ⚠️ gh-990: head red probe failed (fail closed): ' + (eRed.message || eRed));
+        return true;
     }
 }
 
@@ -6352,35 +6461,6 @@ function isMachineParkPush(lastCommitter, actorLogin, machineAuthorLogin) {
     // silent-update bot's committer identity (owner 2026-09-27).
     return lastCommitter === 'sm-silent-update' ||
         machineAuthorModule.isMachineLogin(actorLogin, machineAuthorLogin);
-}
-
-// gh-952 STALE-LABEL CLEANUP body (the probe-outage exemption in the
-// update_branch park ladder). Same side effects as every other park
-// clear (label off, auditable 🅿️→▶ comment naming both shas) plus the
-// same-tick slot yield: the open-PR cache drop lets validate-armed
-// re-query the freed label in THIS tick (rule 12 park-reset runs before
-// rule 13 validate-armed), so the fresh head arms without waiting a
-// full tick.
-function clearStalePark952(repoInfo, ticket, uHead, parkedHeadVf, key) {
-    if (!DRY) {
-        try {
-            githubTracker(repoInfo.owner, repoInfo.repo).removeLabel(ticket.prNumber, 'validation_failed');
-        } catch (eClr952) {
-            console.warn('  ⚠️  un-park label failed: ' + (eClr952.message || eClr952));
-        }
-        try {
-            githubTracker(repoInfo.owner, repoInfo.repo).postComment(ticket.prNumber,
-                '🅿️→▶ validation_failed cleared — the park was set on head `' + parkedHeadVf +
-                '`, but the head is now `' + uHead + '` and this head has no red verdict of ' +
-                'its own. The substantive-commit/park-time probes failed this tick, but the ' +
-                'park comment names the punished sha — the old verdict does not transfer ' +
-                'across sha changes — stale-label cleanup, re-entering validation (gh-952).');
-        } catch (eClrSay952) { /* the label clear is the load-bearing part */ }
-    }
-    dropOpenPrsCache(repoInfo);
-    console.log('  ▶ ' + key + ' validation_failed cleared: head `' + String(uHead).slice(0, 8) +
-        '` moved past the park-comment head `' + String(parkedHeadVf).slice(0, 8) +
-        '` with no red verdict of its own — stale-label cleanup (gh-952, probe-outage rung)');
 }
 
 function newestDispatchedRun(repoInfo, ciWorkflow, headSha) {

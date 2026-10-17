@@ -314,10 +314,74 @@ function isSubmodulePath(path) {
     }
 }
 
+// ── gh-981 pure path classification + thin git executors ─────────────────────
+// stageUnmergedPaths was CRAP 174.6. The path classification is pure
+// (parse*/decide*) and pinned directly; the git side effects stay in thin
+// executors called in the same order with the same commands/log lines.
+
+/** Split a command output into trimmed, non-empty lines (path list probe). */
+function parsePathList(output) {
+    return cleanCommandOutput(output || '')
+        .split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+}
+
+/**
+ * Extract the unique file paths still carrying conflict markers from
+ * `git diff --cached --check` output, in first-seen order. Lines are matched
+ * verbatim (no per-line trim) — the check output is machine-formatted.
+ */
+function parseConflictMarkerPaths(diffCheckOutput) {
+    const filesWithMarkers = [];
+    (diffCheckOutput || '').split('\n').forEach(function(line) {
+        const match = line.match(/^(.+?):\d+:\s+conflict marker/);
+        if (match) {
+            const path = match[1].trim();
+            if (filesWithMarkers.indexOf(path) === -1) filesWithMarkers.push(path);
+        }
+    });
+    return filesWithMarkers;
+}
+
+/** testing/ paths keep our (rework/test-branch) side; everything else takes main's. */
+function decideConflictSide(path) {
+    return path.indexOf('testing/') === 0 ? 'ours' : 'theirs';
+}
+
+/** Resolve files that still contain conflict markers by picking one side. */
+function stageConflictMarkerFiles(filesWithMarkers) {
+    if (filesWithMarkers.length === 0) return;
+    console.warn('⚠️ Conflict markers remain in ' + filesWithMarkers.length + ' file(s); auto-resolving');
+    filesWithMarkers.forEach(function(f) {
+        if (decideConflictSide(f) === 'ours') {
+            console.log('  Keeping test-branch version for', f);
+            cli_execute_command({ command: 'git checkout --ours -- "' + f + '"' });
+        } else {
+            console.log('  Keeping main version for', f);
+            cli_execute_command({ command: 'git checkout --theirs -- "' + f + '"' });
+        }
+        cli_execute_command({ command: 'git add -- "' + f + '"' });
+    });
+}
+
+/**
+ * Submodule conflicts cannot be resolved with `git add` or marker cleanup.
+ * For rework branches we always want the base-branch (origin/<base>) submodule
+ * state; feature work should not change submodules directly.
+ */
+function stageSubmoduleConflicts(config, stillUnmerged) {
+    const submoduleConflicts = stillUnmerged.filter(function(f) { return isSubmodulePath(f); });
+    if (submoduleConflicts.length === 0) return;
+    console.warn('⚠️ Submodule merge conflict(s); adopting origin/' + ((config.git && config.git.baseBranch) || 'main') + ' version:', submoduleConflicts.join(', '));
+    submoduleConflicts.forEach(function(f) {
+        cli_execute_command({ command: 'git checkout --theirs -- "' + f + '"' });
+        cli_execute_command({ command: 'git add -- "' + f + '"' });
+    });
+}
+
 function stageUnmergedPaths(config) {
-    const unmerged = cleanCommandOutput(
-        cli_execute_command({ command: 'git diff --name-only --diff-filter=U' }) || ''
-    ).split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+    const unmerged = parsePathList(
+        cli_execute_command({ command: 'git diff --name-only --diff-filter=U' })
+    );
 
     if (unmerged.length === 0) return;
 
@@ -326,52 +390,18 @@ function stageUnmergedPaths(config) {
         cli_execute_command({ command: 'git add -- "' + f + '"' });
     });
 
-    // If the agent left conflict markers in a resolved file, fall back to a deterministic side.
-    const diffCheck = cleanCommandOutput(
+    stageConflictMarkerFiles(parseConflictMarkerPaths(cleanCommandOutput(
         cli_execute_command({ command: 'git diff --cached --check' }) || ''
+    )));
+
+    const stillList = parsePathList(
+        cli_execute_command({ command: 'git diff --name-only --diff-filter=U' })
     );
-    const filesWithMarkers = [];
-    diffCheck.split('\n').forEach(function(line) {
-        const match = line.match(/^(.+?):\d+:\s+conflict marker/);
-        if (match) {
-            const path = match[1].trim();
-            if (filesWithMarkers.indexOf(path) === -1) filesWithMarkers.push(path);
-        }
-    });
-
-    if (filesWithMarkers.length > 0) {
-        console.warn('⚠️ Conflict markers remain in ' + filesWithMarkers.length + ' file(s); auto-resolving');
-        filesWithMarkers.forEach(function(f) {
-            if (f.indexOf('testing/') === 0) {
-                console.log('  Keeping test-branch version for', f);
-                cli_execute_command({ command: 'git checkout --ours -- "' + f + '"' });
-            } else {
-                console.log('  Keeping main version for', f);
-                cli_execute_command({ command: 'git checkout --theirs -- "' + f + '"' });
-            }
-            cli_execute_command({ command: 'git add -- "' + f + '"' });
-        });
+    if (stillList.length > 0) {
+        stageSubmoduleConflicts(config, stillList);
     }
 
-    var stillUnmerged = cleanCommandOutput(
-        cli_execute_command({ command: 'git diff --name-only --diff-filter=U' }) || ''
-    ).split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
-
-    if (stillUnmerged.length > 0) {
-        // Submodule conflicts cannot be resolved with `git add` or marker cleanup.
-        // For rework branches we always want the base-branch (origin/main) submodule
-        // state; feature work should not change submodules directly.
-        const submoduleConflicts = stillUnmerged.filter(function(f) { return isSubmodulePath(f); });
-        if (submoduleConflicts.length > 0) {
-            console.warn('⚠️ Submodule merge conflict(s); adopting origin/' + ((config.git && config.git.baseBranch) || 'main') + ' version:', submoduleConflicts.join(', '));
-            submoduleConflicts.forEach(function(f) {
-                cli_execute_command({ command: 'git checkout --theirs -- "' + f + '"' });
-                cli_execute_command({ command: 'git add -- "' + f + '"' });
-            });
-        }
-    }
-
-    stillUnmerged = cleanCommandOutput(
+    const stillUnmerged = cleanCommandOutput(
         cli_execute_command({ command: 'git diff --name-only --diff-filter=U' }) || ''
     ).trim();
     if (stillUnmerged) {
@@ -796,6 +826,13 @@ if (typeof module !== 'undefined' && module.exports) {
         replyThreadIdOf,
         handleReplyItem,
         resumeOrReport,
-        triggerAutoStart
+        triggerAutoStart,
+        // gh-981: stageUnmergedPaths split into pure path classification + git executors:
+        stageUnmergedPaths,
+        parsePathList,
+        parseConflictMarkerPaths,
+        decideConflictSide,
+        stageConflictMarkerFiles,
+        stageSubmoduleConflicts
     };
 }
