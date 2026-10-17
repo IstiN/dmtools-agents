@@ -504,6 +504,31 @@
           "id": "rework-arm-restore"
         },
         {
+          "id": "dev-on-assignment",
+          "description": "SM dev re-derive \u2014 the event-driven derive safety net (gh-944, night 2026-10-17: six issues assigned in one burst produced six issues-event factory runs that all derived run=false within a minute; with no SM rule re-deriving dev, the items starved 3.5h until an operator explicit-dispatched leg=dev and the 00:52Z tick processed: 0). Matches OPEN issues ASSIGNED to the machine (query.assignee carries the {machineAuthor} deployment knob \u2014 the source resolves it against jobParams/config machineAuthor, a comma-separated list searches its first login; unconfigured matches nothing, fail-closed) that carry NO loop marker labels (ai_developed / ai_pr_reviewed / pr_approved / agent:rework / agent:review / agent:skip; blocked is engine-level) and NO OPEN linked PR (query.noOpenPr \u2014 post-dev issues belong to the PR lifecycle rules: validate-fresh, rework-on-red-gate-unlatched, develop-done; a MERGED-PR issue a human reopened and a PR-less issue stay eligible). Dispatches workflow_dispatch leg=dev on ai-teammate.yml \u2014 the factory guard picks bug vs story from the title/label exactly like an event run. Idempotent by construction: the in-flight guard (stub-anchor tokens, including the factory's '#<n>' run-title shape) suppresses while ANY leg on the anchor runs, and the notLabels set excludes every item the loop has claimed. limit 3: a burst drains over consecutive ticks under the global workflow budget; smRuleOverrides can disable per deployment.",
+          "source": "github",
+          "query": {
+            "type": "issue",
+            "assignee": "{machineAuthor}",
+            "noOpenPr": true,
+            "notLabels": [
+              "ai_developed",
+              "ai_pr_reviewed",
+              "pr_approved",
+              "agent:rework",
+              "agent:review",
+              "agent:skip"
+            ]
+          },
+          "inputs": {
+            "issue": "{issueNumber}",
+            "leg": "dev",
+            "reason": "sm: assigned issue never picked up a dev leg (derive gap gh-944)"
+          },
+          "workflowFile": "ai-teammate.yml",
+          "limit": 3
+        },
+        {
           "id": "develop-done",
           "source": "github",
           "description": "Machine-loop completion backfill: an open issue with an open+green MACHINE-authored PR gets ai_developed, which arms review-after-dev. Machine-only (prMachineAuthor) so external PRs never enter the review loop through the backfill; no `in progress` requirement — issues whose dev leg predates the status-label convention (live: fa #503 / PR #676) must still be picked up. Idempotent: ai_developed in notLabels.",

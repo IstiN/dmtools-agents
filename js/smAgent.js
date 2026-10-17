@@ -265,14 +265,35 @@ function isAnchorKeyChar(ch) {
            (ch >= 'A' && ch <= 'Z') || ch === '-';
 }
 
+// gh-944: the factory's own run-name shape is "#<issue>" — the ai-teammate
+// stub names its runs "teammate: issues #925" (event echo) and
+// "teammate: workflow_dispatch #925 <leg>" (dispatches). The stub anchor
+// token alone never matched those, so an in-flight EVENT run (or a
+// previously dispatched SM leg) did not suppress a dev-on-assignment
+// dispatch and every tick re-fired the leg behind the per-issue concurrency
+// group. gh-<digits> keys therefore also match the '#<digits>' token under
+// the SAME whole-token boundaries (a trailing key char — '#9251' — never
+// matches). PR keys are unchanged: their run titles carry no number today,
+// and a PR number and an issue number are different entities — '#925' must
+// never key a 'pr-925' anchor.
+function anchorTokens(ticketKey) {
+    var tokens = ['· ' + ticketKey];
+    var m = /^gh-(\d+)$/.exec(String(ticketKey));
+    if (m) tokens.push('#' + m[1]);
+    return tokens;
+}
+
 function stubAnchorMatches(runName, ticketKey) {
-    var token = '· ' + ticketKey;
-    var from = 0;
-    while (from <= runName.length - token.length) {
-        var idx = runName.indexOf(token, from);
-        if (idx === -1) return false;
-        if (!isAnchorKeyChar(runName.charAt(idx + token.length))) return true;
-        from = idx + 1;
+    var tokens = anchorTokens(ticketKey);
+    for (var t = 0; t < tokens.length; t++) {
+        var token = tokens[t];
+        var from = 0;
+        while (from <= runName.length - token.length) {
+            var idx = runName.indexOf(token, from);
+            if (idx === -1) break;
+            if (!isAnchorKeyChar(runName.charAt(idx + token.length))) return true;
+            from = idx + 1;
+        }
     }
     return false;
 }
