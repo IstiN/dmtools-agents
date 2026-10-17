@@ -2,6 +2,26 @@
  * Unit tests for js/postTestAutomationResults.js
  */
 
+function resolveAutoStartMock(mocks) {
+    if (mocks._autoStart) return mocks._autoStart;
+    return {
+        triggerSmIfIdle: function() {
+            return { success: true };
+        },
+        triggerConfiguredWorkflowForTicket: function() {
+            return false;
+        }
+    };
+}
+
+function resolveTrackersMock(mocks, allMocks) {
+    if (mocks._trackers) return mocks._trackers;
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), allMocks);
+}
+
 function loadPostTestAutomation(mocks) {
     var fileReadMock = mocks.file_read || function(opts) {
         if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
@@ -44,18 +64,8 @@ function loadPostTestAutomation(mocks) {
 
     // Overridable via mocks._autoStart / mocks._trackers so characterization
     // tests can pin the autoStart-review and error-catch branches.
-    var autoStartMock = mocks._autoStart || {
-        triggerSmIfIdle: function() {
-            return { success: true };
-        },
-        triggerConfiguredWorkflowForTicket: function() {
-            return false;
-        }
-    };
-    var trackersMockModule = mocks._trackers || loadModule('js/common/trackers.js', makeRequire({
-        '../config.js': configModule,
-        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
-    }), allMocks);
+    var autoStartMock = resolveAutoStartMock(mocks);
+    var trackersMockModule = resolveTrackersMock(mocks, allMocks);
 
     return loadModule(
         'js/postTestAutomationResults.js',
