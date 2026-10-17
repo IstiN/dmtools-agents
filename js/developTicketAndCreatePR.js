@@ -872,6 +872,467 @@ function retryAfterPushFailure(ticketKey, branchName, pushError) {
     return { success: true };
 }
 
+// ── gh-930: decision helpers extracted from action() ────────────────────────
+// action() used to be a ~500-line CC-125 monolith (CRAP 973.8). Each helper
+// below owns ONE decision of the leg; the orchestration inside action() stays
+// linear and keeps the exact order of tracker/SCM calls and log lines. Every
+// helper is exercised by the leg outcome characterization suite
+// (js/unit-tests/test_developTicketAndCreatePR.js).
+
+var INITIAL_GIT_STAGES = {
+    resumeStage: 'development_git_push',
+    resetStage: 'Git Push (after retry)',
+    retryErrorPrefix: 'Git push failed even after retry: ',
+    genericResumeStage: 'development_git_operations',
+    genericResetStage: 'Git Operations',
+    noChanges: 'recover'
+};
+
+var GATE_FIX_GIT_STAGES = {
+    resumeStage: 'gate_fix_git_push',
+    resetStage: 'Gate Fix Git Push (after retry)',
+    retryErrorPrefix: 'Gate fix push failed even after retry: ',
+    genericResumeStage: 'gate_fix_git_operations',
+    genericResetStage: 'Gate Fix Git Operations',
+    // The feedback loop did not produce additional file changes; nothing to push.
+    noChanges: 'log'
+};
+
+function actualParamsOf(params) {
+    // Handle both Teammate workflow and standalone dmtools execution
+    // - Teammate workflow: params.ticket exists directly
+    // - Standalone dmtools (JSRunner): params.jobParams.ticket
+    return params.ticket ? params : (params.jobParams || params);
+}
+
+function customParamsOf(params, actualParams) {
+    return (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+}
+
+function ticketDescriptorOf(actualParams) {
+    return {
+        ticket: actualParams.ticket,
+        ticketKey: actualParams.ticket.key,
+        ticketSummary: actualParams.ticket.fields.summary,
+        ticketDescription: actualParams.ticket.fields.description || '',
+        developmentSummary: actualParams.response || '',
+        // Teammate's authoritative CLI-outcome signal — see isFatalCliEnvironmentError().
+        cliHasFatalError: actualParams.currentCliHasFatalError === true,
+        cliErrorMessage: actualParams.currentCliErrorMessage || null,
+        metadata: actualParams.metadata,
+        initiator: actualParams.initiator
+    };
+}
+
+function initDevelopmentContext(params) {
+    var actualParams = actualParamsOf(params);
+    // paramsForConfigLoad re-attaches params.ticket (sibling of jobParams in the
+    // real Teammate execution path) so baseBranchResolverFnPath can key off the
+    // ticket's fixVersion — see configLoader.js for details.
+    var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
+    _workingDir = config.workingDir || null;
+    _scm = configLoader.createScm(config);
+    var customParams = customParamsOf(params, actualParams);
+    initTracker(config, customParams);
+    var ctx = ticketDescriptorOf(actualParams);
+    // Resolve statuses — allows per-project overrides via customParams.customStatuses
+    ctx.customParams = customParams;
+    ctx.statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
+    ctx.config = config;
+    ctx.expectedBranch = configLoader.resolveBranchName(config, params.ticket || actualParams.ticket, 'development');
+    console.log('Processing development workflow for ticket:', ctx.ticketKey);
+    console.log('Ticket summary:', ctx.ticketSummary);
+    return ctx;
+}
+
+function findOpenPrForBranch(scm, branchName) {
+    var openPrs = scm.listPrs('open') || [];
+    return openPrs.filter(function (pr) {
+        return pr && pr.head && pr.head.ref === branchName;
+    })[0];
+}
+
+function reuseOpenPrResult(ctx, existingPr) {
+    var existingUrl = existingPr.html_url || existingPr.url || '';
+    console.log('⚠️  PR already open for', ctx.ticketKey, ':', existingUrl || ('#' + existingPr.number), '— skipping re-development');
+    var m = commentMarkup.forTicket(ctx.ticketKey);
+    try {
+        getTracker().postComment(ctx.ticketKey, m.h(3, 'ℹ️ PR Already Open') + '\n\n' +
+                'A pull/merge request already exists for this ticket: ' + (existingUrl || ('#' + existingPr.number)) + '\n\n' +
+                'Moved ticket to ' + m.bold('In Review') + ' for review.');
+    } catch (e) { }
+    try {
+        getTracker().moveToStatus(ctx.ticketKey, ctx.statuses.IN_REVIEW);
+        console.log('✅ Moved', ctx.ticketKey, 'to In Review');
+    } catch (e) { console.warn('Failed to move to In Review:', e); }
+    return { success: true, path: 'pr_already_open', ticketKey: ctx.ticketKey };
+}
+
+function reuseOpenPrOrLower(ctx) {
+    try {
+        var existingPr = findOpenPrForBranch(_scm, ctx.expectedBranch);
+        if (existingPr) return reuseOpenPrResult(ctx, existingPr);
+    } catch (prCheckErr) {
+        console.warn('Could not check existing PRs (non-fatal):', prCheckErr);
+    }
+    return null;
+}
+
+function cleanStalePrApprovedLabel(ctx) {
+    if (!hasPrApprovedLabel(ctx.ticket)) return false;
+    console.log('🧹 Removing stale pr_approved label from', ctx.ticketKey);
+    var cleaned = false;
+    try {
+        getTracker().removeLabel(ctx.ticketKey, LABELS.PR_APPROVED);
+        console.log('✅ Removed pr_approved from Jira ticket');
+        cleaned = true;
+    } catch (e) { console.warn('Could not remove pr_approved from Jira:', e); }
+    // Also try to remove from source-control PR/MR if branch already has one open
+    try {
+        var prForCleanup = findOpenPrForBranch(_scm, ctx.expectedBranch);
+        if (prForCleanup && prForCleanup.number) {
+            _scm.removeLabel(prForCleanup.number, LABELS.PR_APPROVED);
+            console.log('✅ Removed pr_approved from source-control PR/MR #' + prForCleanup.number);
+        }
+    } catch (e) { console.warn('Could not remove pr_approved from source-control PR/MR (non-fatal):', e); }
+    return cleaned;
+}
+
+function ensureExpectedBranchCheckedOut(expectedBranch) {
+    var rawBranchOutput = runCmd({ command: 'git branch --show-current' }) || '';
+    var currentBranch = cleanCommandOutput(rawBranchOutput);
+    console.log('Current branch in workingDir:', currentBranch);
+    if (currentBranch === expectedBranch) return null;
+    console.warn('⚠️  Branch mismatch: expected "' + expectedBranch + '" but found "' + currentBranch + '". Forcing checkout to expected branch.');
+    try {
+        // Try to checkout expected branch (should already exist from preCliJSAction)
+        runCmd({ command: 'git checkout ' + expectedBranch });
+        console.log('✅ Switched to expected branch:', expectedBranch);
+        return null;
+    } catch (checkoutErr) {
+        console.warn('Expected branch not found, creating it:', checkoutErr);
+        try {
+            runCmd({ command: 'git checkout -b ' + expectedBranch });
+            console.log('✅ Created and switched to branch:', expectedBranch);
+            return null;
+        } catch (createErr) {
+            return 'Could not checkout expected branch "' + expectedBranch + '": ' + createErr;
+        }
+    }
+}
+
+function isNoChangesError(errorMessage) {
+    return !!errorMessage && errorMessage.indexOf('No changes were made') !== -1;
+}
+
+function wipLabelFor(metadata) {
+    return metadata && metadata.contextId ? metadata.contextId + '_wip' : null;
+}
+
+function removeWipLabelQuietly(ticketKey, wipLabel) {
+    if (!wipLabel) return;
+    try { getTracker().removeLabel(ticketKey, wipLabel); } catch (e) { }
+}
+
+function recoverPushFailure(params, ctx, gitResult, stages) {
+    // Push was rejected — ask the agent to fix the commit, then retry
+    var retryResult = retryAfterPushFailure(ctx.ticketKey, ctx.branchName, gitResult.error);
+    if (retryResult.success) return null; // push succeeded after agent fix — continue
+    if (resumeDevelopmentAgent(params, ctx.ticketKey, ctx.customParams, stages.resumeStage, retryResult.error)) {
+        return { resume: true };
+    }
+    resetDevelopmentForRetry(ctx.ticketKey, ctx.statuses, ctx.customParams, ctx.metadata, stages.resetStage, retryResult.error);
+    return { result: { success: true, path: 'development-reset-for-retry', error: stages.retryErrorPrefix + retryResult.error } };
+}
+
+function noChangesResponse(ctx) {
+    var agentResponse = readResponseMd(ctx.ticketKey);
+    // gh-775: response.md missing/blank AND the session may still be resumable
+    // (a hung background verification job stalled the run after the real work
+    // was done). Fatal CLI/environment errors are checked FIRST — a resume
+    // can never fix them — then exactly ONE bounded resume attempt runs,
+    // before ANY tracker side effect in the paths below.
+    if (!agentResponse || !agentResponse.trim()) {
+        agentResponse = recoverMissingResponse(ctx.ticketKey, ctx.customParams, ctx.developmentSummary, ctx.cliHasFatalError, ctx.cliErrorMessage);
+    }
+    return (agentResponse && agentResponse.trim()) ? agentResponse : null;
+}
+
+function landingGuardResume(params, ctx, agentResponse) {
+    // gh-1164 landing guard: response.md claims work but the branch carries
+    // none → the changes never landed (dead autosave, wrong working dir,
+    // fresh-branch amnesia). Resume the agent to re-apply BEFORE declaring
+    // "no code changes needed"; only when the resume is not attempted
+    // (disabled/exhausted/non-recoverable) fall through to the honest
+    // no-changes comment path.
+    if (branchCarriesWork(ctx.prTarget) || !responseClaimsChanges(agentResponse)) return null;
+    console.warn('⚠️ Landing guard: response.md claims changes but the branch carries no work — resuming the agent to re-apply them.');
+    if (resumeDevelopmentAgent(params, ctx.ticketKey, ctx.customParams, LANDING_GUARD_STAGE, LANDING_GUARD_ERROR, LANDING_GUARD_PROMPT)) {
+        return { resume: true };
+    }
+    console.warn('Landing guard: resume not attempted (disabled/exhausted/non-recoverable) — falling back to the no-changes path.');
+    return null;
+}
+
+function finalizeNoChangesOutcome(ctx, agentResponse) {
+    // Case A: agent finished successfully, no code changes needed.
+    console.log('No git changes detected — agent completed successfully (response.md present). Treating as "no change needed".');
+    try {
+        getTracker().postComment(ctx.ticketKey, commentMarkup.forTicket(ctx.ticketKey).h(3, 'ℹ️ No Code Changes Needed') + '\n\nThe AI agent completed its analysis and determined no code changes are required (e.g. the fix is already present in the target branch, or the ticket was resolved by a previous change).\n\n' + commentMarkup.forTicket(ctx.ticketKey).bold('Agent analysis:') + '\n\n' + agentResponse);
+    } catch (e) {
+        console.warn('Failed to post agent analysis comment:', e);
+    }
+    try {
+        getTracker().moveToStatus(ctx.ticketKey, ctx.statuses.IN_REVIEW);
+        console.log('✅ Moved', ctx.ticketKey, 'to', ctx.statuses.IN_REVIEW, '(no code changes needed)');
+    } catch (e) {
+        console.warn('Failed to move ticket to ' + ctx.statuses.IN_REVIEW + ':', e);
+    }
+    removeWipLabelQuietly(ctx.ticketKey, wipLabelFor(ctx.metadata));
+    return { success: true, path: 'no-changes-needed', ticketKey: ctx.ticketKey };
+}
+
+function interruptedNoChangesComment(ticketKey) {
+    var m = commentMarkup.forTicket(ticketKey);
+    return m.h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to ' + m.bold('Ready For Development') + ' and will be automatically retried.';
+}
+
+function interruptedPartialWorkComment(ticketKey, branchName) {
+    var m = commentMarkup.forTicket(ticketKey);
+    return m.h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted before completing the implementation (partial work was pushed to branch ' + m.bold(branchName) + '). The ticket has been reset to ' + m.bold('Ready For Development') + ' and will be automatically retried.\n\nThe agent can resume from the existing branch.';
+}
+
+function resetInterruptedDevelopment(ctx, commentBody) {
+    try {
+        getTracker().postComment(ctx.ticketKey, commentBody);
+    } catch (e) { }
+    try {
+        getTracker().moveToStatus(ctx.ticketKey, ctx.statuses.READY_FOR_DEVELOPMENT);
+        console.log('✅ Moved', ctx.ticketKey, 'to Ready For Development for retry');
+    } catch (e) {
+        console.warn('Failed to move ticket to Ready For Development:', e);
+    }
+    removeWipLabelQuietly(ctx.ticketKey, wipLabelFor(ctx.metadata));
+    // gh-742: ticket is reset for retry — fail the RUN so the leg
+    // is a visible dead letter (not a green no-PR leg the wrapper
+    // reads as "dev done" and arms review on).
+    throwInterruptedReset(ctx.ticketKey);
+}
+
+function recoverNoChangesOutcome(params, ctx) {
+    var agentResponse = noChangesResponse(ctx);
+    if (agentResponse) {
+        var guard = landingGuardResume(params, ctx, agentResponse);
+        if (guard) return guard;
+        return { result: finalizeNoChangesOutcome(ctx, agentResponse) };
+    }
+    // Case B: agent was genuinely interrupted, OR the CLI/environment itself is
+    // broken (e.g. missing AI CLI binary, or a fatal provider/network error) —
+    // the latter can never self-resolve via retry. The fatal class was already
+    // diverted by recoverMissingResponse() above (gh-775 AC6: the resume never
+    // preempts it), so this block only runs for a genuinely interrupted agent
+    // whose one bounded resume attempt (if any) did not land the deliverable.
+    console.log('No git changes detected AND no response.md — CLI agent was interrupted. Resetting ticket for retry.');
+    resetInterruptedDevelopment(ctx, interruptedNoChangesComment(ctx.ticketKey));
+}
+
+function recoverGenericGitFailure(params, ctx, gitResult, stages) {
+    if (resumeDevelopmentAgent(params, ctx.ticketKey, ctx.customParams, stages.genericResumeStage, gitResult.error)) {
+        return { resume: true };
+    }
+    resetDevelopmentForRetry(ctx.ticketKey, ctx.statuses, ctx.customParams, ctx.metadata, stages.genericResetStage, gitResult.error);
+    // gh-683: ticket is reset for retry — fail the RUN so the SM
+    // sees a dead dev letter instead of a green no-PR leg.
+    throwGitOperationsFailure(stages.genericResetStage, gitResult.error);
+}
+
+function recoverGitOutcome(params, ctx, gitResult, stages) {
+    if (gitResult.success) return null;
+    if (gitResult.isPushFailure) return recoverPushFailure(params, ctx, gitResult, stages);
+    if (isNoChangesError(gitResult.error)) {
+        if (stages.noChanges === 'log') {
+            console.log('No additional changes after quality gate feedback loop — continuing to PR creation.');
+            return null;
+        }
+        return recoverNoChangesOutcome(params, ctx);
+    }
+    return recoverGenericGitFailure(params, ctx, gitResult, stages);
+}
+
+function gateResetResult(ctx, stage, error) {
+    resetDevelopmentForRetry(ctx.ticketKey, ctx.statuses, ctx.customParams, ctx.metadata, stage, error);
+    return { success: true, path: 'development-reset-for-retry', error: error };
+}
+
+function ensureResponseForPrBody(ctx) {
+    var responseContent = readResponseMd(ctx.ticketKey);
+    if (!responseContent || !responseContent.trim()) {
+        // gh-775: fatal CLI/environment errors are checked FIRST (a resume can
+        // never fix them — AC6), then exactly ONE bounded resume attempt: the
+        // session may still be alive with a hung background verification child,
+        // one step away from writing the deliverable (live fa gh-1341). The
+        // tracker side effects below fire only if the deliverable is still
+        // missing after the attempt resolves.
+        responseContent = recoverMissingResponse(ctx.ticketKey, ctx.customParams, ctx.developmentSummary, ctx.cliHasFatalError, ctx.cliErrorMessage) || responseContent;
+        if (!responseContent || !responseContent.trim()) {
+            // Agent was interrupted after committing partial work (e.g. outputs/rca.md) but
+            // before writing response.md. Reset ticket for retry rather than posting an error.
+            console.log('outputs/response.md missing after commit — CLI agent was interrupted mid-way. Resetting for retry.');
+            resetInterruptedDevelopment(ctx, interruptedPartialWorkComment(ctx.ticketKey, ctx.branchName));
+        }
+    }
+    return responseContent;
+}
+
+function recoverPrCreationFailure(params, ctx, prResult) {
+    // gh-729: the reason must be visible in the JOB LOG itself — the
+    // live gh-1197 leg had no error line at all between the staging
+    // probes and cleanup, so the failure class (nothing-to-push vs
+    // gh-error vs guard) was unknowable without re-running by hand.
+    console.error('❌ Pull Request creation failed — no PR exists for ' + ctx.ticketKey + ':', prResult.error);
+    if (resumeDevelopmentAgent(params, ctx.ticketKey, ctx.customParams, 'development_pr_creation', prResult.error)) {
+        return { resume: true };
+    }
+    resetDevelopmentForRetry(ctx.ticketKey, ctx.statuses, ctx.customParams, ctx.metadata, 'Pull Request Creation', prResult.error);
+    // gh-729: ticket is reset for retry — fail the RUN so a no-PR leg
+    // is a visible dead letter instead of a green silent success
+    // (same propagation mechanism as throwGitOperationsFailure).
+    throwPrCreationFailure('Pull Request Creation', prResult.error);
+}
+
+function assignAndMoveToReview(ctx) {
+    // Assign ticket to initiator
+    try {
+        if (ctx.initiator) {
+            getTracker().assignTo(ctx.ticketKey, ctx.initiator);
+            console.log('✅ Assigned ticket to initiator');
+        }
+    } catch (error) {
+        console.warn('Failed to assign ticket to initiator:', error);
+    }
+
+    // Move ticket to In Review status
+    try {
+        getTracker().moveToStatus(ctx.ticketKey, ctx.statuses.IN_REVIEW);
+        console.log('✅ Moved ' + ctx.ticketKey + ' to In Review');
+    } catch (error) {
+        console.warn('Failed to move ticket to In Review:', error);
+    }
+}
+
+function applyDevelopmentOutcomeLabels(ctx) {
+    // Add label to indicate AI development
+    try {
+        getTracker().addLabel(ctx.ticketKey, LABELS.AI_DEVELOPED);
+    } catch (error) {
+        console.warn('Failed to add ai_developed label:', error);
+    }
+
+    // Remove WIP label if configured (dynamically generated from contextId)
+    var wipLabel = wipLabelFor(ctx.metadata);
+    if (wipLabel) {
+        try {
+            getTracker().removeLabel(ctx.ticketKey, wipLabel);
+            console.log('Removed WIP label "' + wipLabel + '" from ' + ctx.ticketKey);
+        } catch (labelError) {
+            console.warn('Failed to remove WIP label "' + wipLabel + '":', labelError);
+        }
+    }
+}
+
+function autoStartReviewConfigFileOf(customParams) {
+    if (!customParams || !customParams.autoStartReview) return null;
+    return customParams.autoStartReviewConfigFile || null;
+}
+
+function autoStartReviewBlockedByPrApproved(ctx, prApprovedCleaned) {
+    if (!hasPrApprovedLabel(ctx.ticket) || prApprovedCleaned) return false;
+    console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
+    return true;
+}
+
+function triggerAutoStartReview(ctx, reviewConfigFile) {
+    try {
+        return autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: ctx.ticketKey,
+            customParams: ctx.customParams,
+            config: ctx.config,
+            configFile: reviewConfigFile,
+            label: 'pr_review',
+            scm: _scm,
+            stripKeys: [
+                'removeLabel',
+                'autoStartReview',
+                'autoStartReviewConfigFile'
+            ]
+        });
+    } catch (e) {
+        console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
+        return false;
+    }
+}
+
+function maybeAutoStartReview(ctx, prApprovedCleaned) {
+    // Auto-start pr_review after PR is created and ticket moved to In Review (opt-in)
+    var reviewConfigFile = autoStartReviewConfigFileOf(ctx.customParams);
+    if (!reviewConfigFile) return false;
+    if (autoStartReviewBlockedByPrApproved(ctx, prApprovedCleaned)) return false;
+    return triggerAutoStartReview(ctx, reviewConfigFile);
+}
+
+function postDevelopmentTelemetry(params, ctx) {
+    // Cache configured artefacts (e.g. cosmo test reports) to GitHub Release — non-fatal
+    try { cacheToReleases.action(params); } catch (e) { console.warn('⚠️ cacheToReleases failed (non-fatal):', e); }
+
+    // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
+    // wrote outputs/*_usage.json during the agent run.
+    try {
+        tokenUsageComment.postTokenUsageComments(ctx.ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
+function rethrownAsIs(error) {
+    // Marked failures already performed their tracker side effects before
+    // throwing — rethrow them so the run is RED and the dead leg stays
+    // visible (fatal CLI environment; gh-683 / gh-729 / gh-742 dead letters).
+    return !!(error && (error.fatalCliEnvironment || error.gitOperationsFailure ||
+        error.prCreationFailure || error.interruptedReset));
+}
+
+function recoverUnexpectedError(params, error) {
+    // Try to reset ticket for retry instead of leaving it stuck In Development.
+    try {
+        var actualParams = actualParamsOf(params);
+        if (actualParams && actualParams.ticket && actualParams.ticket.key) {
+            var customParams = customParamsOf(params, actualParams);
+            var errConfig = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
+            var statuses = resolveStatuses(customParams, errConfig.jira && errConfig.jira.statuses);
+            if (resumeDevelopmentAgent(
+                params,
+                actualParams.ticket.key,
+                customParams,
+                'development_post_action',
+                error.toString()
+            )) {
+                return { resume: true };
+            }
+            resetDevelopmentForRetry(
+                actualParams.ticket.key,
+                statuses,
+                customParams,
+                actualParams.metadata,
+                'Workflow Execution',
+                error.toString()
+            );
+        }
+    } catch (commentError) {
+        console.error('Failed to reset development ticket after error:', commentError);
+    }
+    return null;
+}
+
 /**
  * Main action function - orchestrates the entire workflow
  *
@@ -883,444 +1344,121 @@ function retryAfterPushFailure(ticketKey, branchName, pushError) {
  */
 function action(params) {
     try {
-        // Handle both Teammate workflow and standalone dmtools execution
-        // - Teammate workflow: params.ticket exists directly
-        // - Standalone dmtools (JSRunner): params.jobParams.ticket
-        const actualParams = params.ticket ? params : (params.jobParams || params);
-        // paramsForConfigLoad re-attaches params.ticket (sibling of jobParams in the
-        // real Teammate execution path) so baseBranchResolverFnPath can key off the
-        // ticket's fixVersion — see configLoader.js for details.
-        var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
-        _workingDir = config.workingDir || null;
-        _scm = configLoader.createScm(config);
-
-        const ticketKey = actualParams.ticket.key;
-        const ticketSummary = actualParams.ticket.fields.summary;
-        const ticketDescription = actualParams.ticket.fields.description || '';
-        const developmentSummary = actualParams.response || '';
-        // Teammate's authoritative CLI-outcome signal — see isFatalCliEnvironmentError() below.
-        const cliHasFatalError = actualParams.currentCliHasFatalError === true;
-        const cliErrorMessage = actualParams.currentCliErrorMessage || null;
-
-        // Resolve statuses — allows per-project overrides via customParams.customStatuses
-        const _customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
-        initTracker(config, _customParams);
-        const statuses = resolveStatuses(_customParams, config.jira && config.jira.statuses);
-
-        console.log('Processing development workflow for ticket:', ticketKey);
-        console.log('Ticket summary:', ticketSummary);
+        var ctx = initDevelopmentContext(params);
 
         // ── Early exit: PR already open for this branch ──────────────────────
         // If a PR already exists, a previous run created it but failed to move
         // the ticket to In Review. Move now and skip re-development.
-        const expectedBranch = configLoader.resolveBranchName(config, params.ticket || actualParams.ticket, 'development');
-        try {
-            var openPrs = _scm.listPrs('open') || [];
-            var existingPr = openPrs.filter(function (pr) {
-                return pr && pr.head && pr.head.ref === expectedBranch;
-            })[0];
-            if (existingPr) {
-                var existingUrl = existingPr.html_url || existingPr.url || '';
-                console.log('⚠️  PR already open for', ticketKey, ':', existingUrl || ('#' + existingPr.number), '— skipping re-development');
-                try {
-                    getTracker().postComment(ticketKey, commentMarkup.forTicket(ticketKey).h(3, 'ℹ️ PR Already Open') + '\n\n' +
-                            'A pull/merge request already exists for this ticket: ' + (existingUrl || ('#' + existingPr.number)) + '\n\n' +
-                            'Moved ticket to ' + commentMarkup.forTicket(ticketKey).bold('In Review') + ' for review.');
-                } catch (e) { }
-                try {
-                    getTracker().moveToStatus(ticketKey, statuses.IN_REVIEW);
-                    console.log('✅ Moved', ticketKey, 'to In Review');
-                } catch (e) { console.warn('Failed to move to In Review:', e); }
-                return { success: true, path: 'pr_already_open', ticketKey };
-            }
-        } catch (prCheckErr) {
-            console.warn('Could not check existing PRs (non-fatal):', prCheckErr);
-        }
+        var earlyResult = reuseOpenPrOrLower(ctx);
+        if (earlyResult) return earlyResult;
 
         // ── Clean up stale pr_approved labels from previous review cycle ────
         // When story/bug development is re-triggered (e.g. after rework or manual restart),
         // the pr_approved label from a prior review must be removed so the new review
         // cycle starts clean and onApproved triggers don't fire prematurely.
-        var prApprovedCleaned = false;
-        if (hasPrApprovedLabel(actualParams.ticket)) {
-            console.log('🧹 Removing stale pr_approved label from', ticketKey);
-            try {
-                getTracker().removeLabel(ticketKey, LABELS.PR_APPROVED);
-                console.log('✅ Removed pr_approved from Jira ticket');
-                prApprovedCleaned = true;
-            } catch (e) { console.warn('Could not remove pr_approved from Jira:', e); }
-            // Also try to remove from source-control PR/MR if branch already has one open
-            try {
-                var openPrsForCleanup = _scm.listPrs('open') || [];
-                var prForCleanup = openPrsForCleanup.filter(function (pr) {
-                    return pr && pr.head && pr.head.ref === expectedBranch;
-                })[0];
-                if (prForCleanup && prForCleanup.number) {
-                    _scm.removeLabel(prForCleanup.number, LABELS.PR_APPROVED);
-                    console.log('✅ Removed pr_approved from source-control PR/MR #' + prForCleanup.number);
-                }
-            } catch (e) { console.warn('Could not remove pr_approved from source-control PR/MR (non-fatal):', e); }
-        }
+        var prApprovedCleaned = cleanStalePrApprovedLabel(ctx);
 
         // Configure git author
-        if (!configureGitAuthor(config)) {
-            const error = 'Failed to configure git author';
-            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Configuration', error);
-            return {
-                success: true,
-                path: 'development-reset-for-retry',
-                error: error
-            };
+        if (!configureGitAuthor(ctx.config)) {
+            return gateResetResult(ctx, 'Git Configuration', 'Failed to configure git author');
         }
 
         // Always use the expected branch (ai/<ticketKey>), computed from ticket key.
         // Do NOT trust git branch --show-current — the CLI agent may have switched branches.
         // Force checkout to the expected branch before committing to prevent pushing to develop/main.
-        // Note: expectedBranch is already declared above for the early-exit PR check — reuse it here.
-
-        const rawBranchOutput = runCmd({ command: 'git branch --show-current' }) || '';
-        const currentBranch = cleanCommandOutput(rawBranchOutput);
-        console.log('Current branch in workingDir:', currentBranch);
-
-        var branchName = expectedBranch;
-        if (currentBranch !== expectedBranch) {
-            console.warn('⚠️  Branch mismatch: expected "' + expectedBranch + '" but found "' + currentBranch + '". Forcing checkout to expected branch.');
-            try {
-                // Try to checkout expected branch (should already exist from preCliJSAction)
-                runCmd({ command: 'git checkout ' + expectedBranch });
-                console.log('✅ Switched to expected branch:', expectedBranch);
-            } catch (checkoutErr) {
-                console.warn('Expected branch not found, creating it:', checkoutErr);
-                try {
-                    runCmd({ command: 'git checkout -b ' + expectedBranch });
-                    console.log('✅ Created and switched to branch:', expectedBranch);
-                } catch (createErr) {
-                    const error = 'Could not checkout expected branch "' + expectedBranch + '": ' + createErr;
-                    resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Branch Checkout', error);
-                    return { success: true, path: 'development-reset-for-retry', error: error };
-                }
-            }
+        var checkoutError = ensureExpectedBranchCheckedOut(ctx.expectedBranch);
+        if (checkoutError) {
+            return gateResetResult(ctx, 'Git Branch Checkout', checkoutError);
         }
+        var branchName = ctx.expectedBranch;
+        ctx.branchName = branchName;
         console.log('Using branch:', branchName);
 
         // Prepare commit message and PR target
-        const commitMessage = configLoader.formatTemplate(config.formats.commitMessage.development, { ticketKey: ticketKey, ticketSummary: ticketSummary });
-        const prTarget = configLoader.resolvePRTargetBranch(config, params.ticket || actualParams.ticket);
+        var commitMessage = configLoader.formatTemplate(ctx.config.formats.commitMessage.development, { ticketKey: ctx.ticketKey, ticketSummary: ctx.ticketSummary });
+        ctx.prTarget = configLoader.resolvePRTargetBranch(ctx.config, params.ticket || ctx.ticket);
 
         // Push the agent's work before running quality gates.
         // If the gate feedback loop fails and cannot resume, the branch is already on remote
         // and a retry can continue from the pushed state instead of losing all changes.
-        const initialGitResult = performGitOperations(branchName, commitMessage, prTarget, config, _customParams, ticketKey);
-        if (!initialGitResult.success) {
-            if (initialGitResult.isPushFailure) {
-                // Push was rejected — ask the agent to fix the commit, then retry
-                const retryResult = retryAfterPushFailure(ticketKey, branchName, initialGitResult.error);
-                if (!retryResult.success) {
-                    if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'development_git_push', retryResult.error)) {
-                        return action(params);
-                    }
-                    resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Push (after retry)', retryResult.error);
-                    return { success: true, path: 'development-reset-for-retry', error: 'Git push failed even after retry: ' + retryResult.error };
-                }
-                // Push succeeded after agent fix — continue to quality gates
-            } else if (initialGitResult.error && initialGitResult.error.indexOf('No changes were made') !== -1) {
-                // No git changes detected. Distinguish two cases:
-                //   (A) Agent completed successfully and determined no code changes are needed
-                //       (e.g. fix already merged via prior PR). outputs/response.md exists with content.
-                //       → Post the agent's analysis as a comment and move to IN_REVIEW. No retry.
-                //   (B) Agent was interrupted mid-analysis (e.g. rate limit, crash).
-                //       outputs/response.md is missing or empty.
-                //       → Reset to Ready For Development for automatic retry.
-                var agentResponse = readResponseMd(ticketKey);
-                // gh-775: response.md missing/blank AND the session may still be resumable
-                // (a hung background verification job stalled the run after the real work
-                // was done). Fatal CLI/environment errors are checked FIRST — a resume
-                // can never fix them — then exactly ONE bounded resume attempt runs,
-                // before ANY tracker side effect in the paths below.
-                if (!agentResponse || !agentResponse.trim()) {
-                    agentResponse = recoverMissingResponse(ticketKey, _customParams, developmentSummary, cliHasFatalError, cliErrorMessage);
-                }
-                var wipLabelIfNoChanges = actualParams.metadata && actualParams.metadata.contextId
-                    ? actualParams.metadata.contextId + '_wip' : null;
-
-                if (agentResponse && agentResponse.trim()) {
-                    // gh-1164 landing guard: response.md claims work but the
-                    // branch carries none → the changes never landed (dead
-                    // autosave, wrong working dir, fresh-branch amnesia).
-                    // Resume the agent to re-apply BEFORE declaring "no code
-                    // changes needed"; only when the resume is not attempted
-                    // (disabled/exhausted/non-recoverable) fall through to
-                    // the honest no-changes comment path.
-                    if (!branchCarriesWork(prTarget) && responseClaimsChanges(agentResponse)) {
-                        console.warn('⚠️ Landing guard: response.md claims changes but the branch carries no work — resuming the agent to re-apply them.');
-                        if (resumeDevelopmentAgent(params, ticketKey, _customParams, LANDING_GUARD_STAGE, LANDING_GUARD_ERROR, LANDING_GUARD_PROMPT)) {
-                            return action(params);
-                        }
-                        console.warn('Landing guard: resume not attempted (disabled/exhausted/non-recoverable) — falling back to the no-changes path.');
-                    }
-                    // Case A: agent finished successfully, no code changes needed.
-                    console.log('No git changes detected — agent completed successfully (response.md present). Treating as "no change needed".');
-                    try {
-                        getTracker().postComment(ticketKey, commentMarkup.forTicket(ticketKey).h(3, 'ℹ️ No Code Changes Needed') + '\n\nThe AI agent completed its analysis and determined no code changes are required (e.g. the fix is already present in the target branch, or the ticket was resolved by a previous change).\n\n' + commentMarkup.forTicket(ticketKey).bold('Agent analysis:') + '\n\n' + agentResponse);
-                    } catch (e) {
-                        console.warn('Failed to post agent analysis comment:', e);
-                    }
-                    try {
-                        getTracker().moveToStatus(ticketKey, statuses.IN_REVIEW);
-                        console.log('✅ Moved', ticketKey, 'to', statuses.IN_REVIEW, '(no code changes needed)');
-                    } catch (e) {
-                        console.warn('Failed to move ticket to ' + statuses.IN_REVIEW + ':', e);
-                    }
-                    if (wipLabelIfNoChanges) {
-                        try { getTracker().removeLabel(ticketKey, wipLabelIfNoChanges); } catch (e) { }
-                    }
-                    return { success: true, path: 'no-changes-needed', ticketKey: ticketKey };
-                }
-
-                // Case B: agent was genuinely interrupted, OR the CLI/environment itself is
-                // broken (e.g. missing AI CLI binary, or a fatal provider/network error) —
-                // the latter can never self-resolve via retry. The fatal class was already
-                // diverted by recoverMissingResponse() above (gh-775 AC6: the resume never
-                // preempts it), so this block only runs for a genuinely interrupted agent
-                // whose one bounded resume attempt (if any) did not land the deliverable.
-                console.log('No git changes detected AND no response.md — CLI agent was interrupted. Resetting ticket for retry.');
-                try {
-                    getTracker().postComment(ticketKey, commentMarkup.forTicket(ticketKey).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' and will be automatically retried.');
-                } catch (e) { }
-                try {
-                    getTracker().moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
-                    console.log('✅ Moved', ticketKey, 'to Ready For Development for retry');
-                } catch (e) {
-                    console.warn('Failed to move ticket to Ready For Development:', e);
-                }
-                if (wipLabelIfNoChanges) {
-                    try { getTracker().removeLabel(ticketKey, wipLabelIfNoChanges); } catch (e) { }
-                }
-                // gh-742: ticket is reset for retry — fail the RUN so the leg
-                // is a visible dead letter (not a green no-PR leg the wrapper
-                // reads as "dev done" and arms review on).
-                throwInterruptedReset(ticketKey);
-            } else {
-                if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'development_git_operations', initialGitResult.error)) {
-                    return action(params);
-                }
-                resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Operations', initialGitResult.error);
-                // gh-683: ticket is reset for retry — fail the RUN so the SM
-                // sees a dead dev letter instead of a green no-PR leg.
-                throwGitOperationsFailure('Git Operations', initialGitResult.error);
-            }
+        var initialOutcome = recoverGitOutcome(params, ctx,
+            performGitOperations(branchName, commitMessage, ctx.prTarget, ctx.config, ctx.customParams, ctx.ticketKey),
+            INITIAL_GIT_STAGES);
+        if (initialOutcome) {
+            if (initialOutcome.resume) return action(params);
+            return initialOutcome.result;
         }
 
         var gateResult = feedbackLoop.runQualityGates({
-            ticketKey: ticketKey,
-            customParams: _customParams,
+            ticketKey: ctx.ticketKey,
+            customParams: ctx.customParams,
             section: 'qualityGates'
         });
         if (!gateResult.success) {
-            const error = 'Quality gate failed before development publish: ' + gateResult.failedGate + '\n' + gateResult.error;
-            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Quality Gate', error);
-            return { success: true, path: 'development-reset-for-retry', error: error };
+            return gateResetResult(ctx, 'Quality Gate', 'Quality gate failed before development publish: ' + gateResult.failedGate + '\n' + gateResult.error);
         }
         var policyResult = feedbackLoop.runPolicyGates({
-            ticketKey: ticketKey,
-            customParams: _customParams,
+            ticketKey: ctx.ticketKey,
+            customParams: ctx.customParams,
             section: 'policyGates'
         });
         if (!policyResult.success) {
-            const error = 'Policy gate failed before development publish: ' + policyResult.failedGate + '\n' + policyResult.error;
-            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Policy Gate', error);
-            return { success: true, path: 'development-reset-for-retry', error: error };
+            return gateResetResult(ctx, 'Policy Gate', 'Policy gate failed before development publish: ' + policyResult.failedGate + '\n' + policyResult.error);
         }
 
         // Push any fixes the gate feedback loop applied to the working tree.
-        const gateFixGitResult = performGitOperations(branchName, commitMessage + ' (quality gate fixes)', prTarget, config, _customParams, ticketKey);
-        if (!gateFixGitResult.success) {
-            if (gateFixGitResult.isPushFailure) {
-                const retryResult = retryAfterPushFailure(ticketKey, branchName, gateFixGitResult.error);
-                if (!retryResult.success) {
-                    if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'gate_fix_git_push', retryResult.error)) {
-                        return action(params);
-                    }
-                    resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Gate Fix Git Push (after retry)', retryResult.error);
-                    return { success: true, path: 'development-reset-for-retry', error: 'Gate fix push failed even after retry: ' + retryResult.error };
-                }
-                // Push succeeded after agent fix — continue to PR creation
-            } else if (gateFixGitResult.error && gateFixGitResult.error.indexOf('No changes were made') !== -1) {
-                // The feedback loop did not produce additional file changes; nothing to push.
-                console.log('No additional changes after quality gate feedback loop — continuing to PR creation.');
-            } else {
-                if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'gate_fix_git_operations', gateFixGitResult.error)) {
-                    return action(params);
-                }
-                resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Gate Fix Git Operations', gateFixGitResult.error);
-                // gh-683: same dead-letter visibility as the initial Git
-                // Operations failure above.
-                throwGitOperationsFailure('Gate Fix Git Operations', gateFixGitResult.error);
-            }
+        var gateFixOutcome = recoverGitOutcome(params, ctx,
+            performGitOperations(branchName, commitMessage + ' (quality gate fixes)', ctx.prTarget, ctx.config, ctx.customParams, ctx.ticketKey),
+            GATE_FIX_GIT_STAGES);
+        if (gateFixOutcome) {
+            if (gateFixOutcome.resume) return action(params);
+            return gateFixOutcome.result;
         }
 
         var postPublishGateResult = feedbackLoop.runPostPublishGates({
-            ticketKey: ticketKey,
-            customParams: _customParams,
+            ticketKey: ctx.ticketKey,
+            customParams: ctx.customParams,
             section: 'postPublishGates',
             workingDir: _workingDir
         });
         if (!postPublishGateResult.success) {
-            const error = 'Post-publish quality gate failed: ' +
-                postPublishGateResult.failedGate + '\n' + postPublishGateResult.error;
             if (postPublishGateResult.resumeAttempted) {
                 return action(params);
             }
-            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Post-Publish Quality Gate', error);
-            return { success: true, path: 'development-reset-for-retry', error: error };
+            return gateResetResult(ctx, 'Post-Publish Quality Gate', 'Post-publish quality gate failed: ' +
+                postPublishGateResult.failedGate + '\n' + postPublishGateResult.error);
         }
 
-        // Verify outputs/response.md exists (must be created by cursor-agent or workflow)
-        let responseContent = readResponseMd(ticketKey);
-        if (!responseContent || !responseContent.trim()) {
-            // gh-775: fatal CLI/environment errors are checked FIRST (a resume can
-            // never fix them — AC6), then exactly ONE bounded resume attempt: the
-            // session may still be alive with a hung background verification child,
-            // one step away from writing the deliverable (live fa gh-1341). The
-            // tracker side effects below fire only if the deliverable is still
-            // missing after the attempt resolves.
-            responseContent = recoverMissingResponse(ticketKey, _customParams, developmentSummary, cliHasFatalError, cliErrorMessage) || responseContent;
-            if (!responseContent || !responseContent.trim()) {
-                // Agent was interrupted after committing partial work (e.g. outputs/rca.md) but
-                // before writing response.md. Reset ticket for retry rather than posting an error.
-                console.log('outputs/response.md missing after commit — CLI agent was interrupted mid-way. Resetting for retry.');
-                try {
-                    getTracker().postComment(ticketKey, commentMarkup.forTicket(ticketKey).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted before completing the implementation (partial work was pushed to branch ' + commentMarkup.forTicket(ticketKey).bold(branchName) + '). The ticket has been reset to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' and will be automatically retried.\n\nThe agent can resume from the existing branch.');
-                } catch (e) { }
-                try {
-                    getTracker().moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
-                    console.log('✅ Moved', ticketKey, 'to Ready For Development for retry');
-                } catch (e) {
-                    console.warn('Failed to move ticket to Ready For Development:', e);
-                }
-                const wipLabel2 = actualParams.metadata && actualParams.metadata.contextId
-                    ? actualParams.metadata.contextId + '_wip' : null;
-                if (wipLabel2) {
-                    try { getTracker().removeLabel(ticketKey, wipLabel2); } catch (e) { }
-                }
-                // gh-742: ticket is reset for retry — fail the RUN so this
-                // interrupted half-exit is a visible dead letter, not a green
-                // no-PR leg that arms review downstream.
-                throwInterruptedReset(ticketKey);
-            }
-        }
+        var responseContent = ensureResponseForPrBody(ctx);
         console.log('Using outputs/response.md as PR body (' + responseContent.length + ' characters)');
 
         // Create Pull Request
-        const prTitle = configLoader.formatTemplate(config.formats.prTitle.development, { ticketKey: ticketKey, ticketSummary: ticketSummary });
-        const prResult = createPullRequest(prTitle, branchName, prTarget, ticketKey);
+        var prTitle = configLoader.formatTemplate(ctx.config.formats.prTitle.development, { ticketKey: ctx.ticketKey, ticketSummary: ctx.ticketSummary });
+        var prResult = createPullRequest(prTitle, branchName, ctx.prTarget, ctx.ticketKey);
 
         if (!prResult.success) {
-            // gh-729: the reason must be visible in the JOB LOG itself — the
-            // live gh-1197 leg had no error line at all between the staging
-            // probes and cleanup, so the failure class (nothing-to-push vs
-            // gh-error vs guard) was unknowable without re-running by hand.
-            console.error('❌ Pull Request creation failed — no PR exists for ' + ticketKey + ':', prResult.error);
-            if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'development_pr_creation', prResult.error)) {
-                return action(params);
-            }
-            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Pull Request Creation', prResult.error);
-            // gh-729: ticket is reset for retry — fail the RUN so a no-PR leg
-            // is a visible dead letter instead of a green silent success
-            // (same propagation mechanism as throwGitOperationsFailure).
-            throwPrCreationFailure('Pull Request Creation', prResult.error);
+            var prOutcome = recoverPrCreationFailure(params, ctx, prResult);
+            if (prOutcome.resume) return action(params);
         }
 
-        // Assign ticket to initiator
-        try {
-            const initiatorId = actualParams.initiator;
-            if (initiatorId) {
-                getTracker().assignTo(ticketKey, initiatorId);
-                console.log('✅ Assigned ticket to initiator');
-            }
-        } catch (error) {
-            console.warn('Failed to assign ticket to initiator:', error);
-        }
-
-        // Move ticket to In Review status
-        try {
-            getTracker().moveToStatus(ticketKey, statuses.IN_REVIEW);
-            console.log('✅ Moved ' + ticketKey + ' to In Review');
-        } catch (error) {
-            console.warn('Failed to move ticket to In Review:', error);
-        }
+        assignAndMoveToReview(ctx);
 
         // Post comment with PR details
-        postPRCommentToJira(ticketKey, prResult.prUrl, branchName);
+        postPRCommentToJira(ctx.ticketKey, prResult.prUrl, branchName);
 
-        // Add label to indicate AI development
-        try {
-            getTracker().addLabel(ticketKey, LABELS.AI_DEVELOPED);
-        } catch (error) {
-            console.warn('Failed to add ai_developed label:', error);
-        }
-
-        // Remove WIP label if configured (dynamically generated from contextId)
-        const wipLabel = actualParams.metadata && actualParams.metadata.contextId
-            ? actualParams.metadata.contextId + '_wip'
-            : null;
-        if (wipLabel) {
-            try {
-                getTracker().removeLabel(ticketKey, wipLabel);
-                console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
-            } catch (labelError) {
-                console.warn('Failed to remove WIP label "' + wipLabel + '":', labelError);
-            }
-        }
+        applyDevelopmentOutcomeLabels(ctx);
 
         console.log('✅ Development workflow completed successfully — PR: ' + (prResult.prUrl || '(URL not captured — PR was created)'));
 
-        // Auto-start pr_review after PR is created and ticket moved to In Review (opt-in)
-        const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
-        const autoStartReview = customParams && customParams.autoStartReview;
-        const reviewConfigFile = customParams && customParams.autoStartReviewConfigFile;
-        var reviewStarted = false;
-        if (autoStartReview && reviewConfigFile) {
-            if (hasPrApprovedLabel(actualParams.ticket) && !prApprovedCleaned) {
-                console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
-            } else {
-                try {
-                    reviewStarted = autoStart.triggerConfiguredWorkflowForTicket({
-                        ticketKey: ticketKey,
-                        customParams: customParams,
-                        config: config,
-                        configFile: reviewConfigFile,
-                        label: 'pr_review',
-                        scm: _scm,
-                        stripKeys: [
-                            'removeLabel',
-                            'autoStartReview',
-                            'autoStartReviewConfigFile'
-                        ]
-                    });
-                } catch (e) {
-                    console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
-                }
-            }
-        }
-        if (!reviewStarted) {
-            autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
+        if (!maybeAutoStartReview(ctx, prApprovedCleaned)) {
+            autoStart.triggerSmIfIdle({ config: ctx.config, customParams: ctx.customParams });
         }
 
-        // Cache configured artefacts (e.g. cosmo test reports) to GitHub Release — non-fatal
-        try { cacheToReleases.action(params); } catch (e) { console.warn('⚠️ cacheToReleases failed (non-fatal):', e); }
-
-        // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-        // wrote outputs/*_usage.json during the agent run.
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
+        postDevelopmentTelemetry(params, ctx);
 
         return {
             success: true,
-            message: 'Ticket ' + ticketKey + ' developed, committed, and PR created',
+            message: 'Ticket ' + ctx.ticketKey + ' developed, committed, and PR created',
             branchName: branchName,
             prUrl: prResult.prUrl
         };
@@ -1328,62 +1466,13 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in development workflow:', error);
 
-        if (error && error.fatalCliEnvironment) {
-            // Retrying can never fix a broken CLI/tooling setup (missing binary, bad
-            // provider config, ...) — let the exception propagate so the job fails
-            // loudly and visibly instead of silently looping via resume/reset-for-retry.
+        if (rethrownAsIs(error)) {
             throw error;
         }
 
-        if (error && error.gitOperationsFailure) {
-            // gh-683: the ticket was already reset for retry (comment +
-            // Ready For Development) — rethrow so the run itself is a
-            // visible failure instead of a green silent no-PR leg.
-            throw error;
-        }
-
-        if (error && error.prCreationFailure) {
-            // gh-729: same dead-letter visibility as the Git-Operations
-            // failure above — a missing PR must fail the run, not read as
-            // plain success.
-            throw error;
-        }
-
-        if (error && error.interruptedReset) {
-            // gh-742: the interrupted comment + Ready For Development reset
-            // already happened inline before the throw — rethrow so the run
-            // is RED instead of a green no-PR leg the wrapper reads as
-            // "dev done" (and arms review on).
-            throw error;
-        }
-
-        // Try to reset ticket for retry instead of leaving it stuck In Development.
-        try {
-            const actualParams = params.ticket ? params : (params.jobParams || params);
-            if (actualParams && actualParams.ticket && actualParams.ticket.key) {
-                const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
-                const errConfig = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
-                const statuses = resolveStatuses(customParams, errConfig.jira && errConfig.jira.statuses);
-                if (resumeDevelopmentAgent(
-                    params,
-                    actualParams.ticket.key,
-                    customParams,
-                    'development_post_action',
-                    error.toString()
-                )) {
-                    return action(params);
-                }
-                resetDevelopmentForRetry(
-                    actualParams.ticket.key,
-                    statuses,
-                    customParams,
-                    actualParams.metadata,
-                    'Workflow Execution',
-                    error.toString()
-                );
-            }
-        } catch (commentError) {
-            console.error('Failed to reset development ticket after error:', commentError);
+        var recovery = recoverUnexpectedError(params, error);
+        if (recovery && recovery.resume) {
+            return action(params);
         }
 
         return {
