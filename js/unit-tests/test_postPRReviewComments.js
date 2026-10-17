@@ -1317,6 +1317,7 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
         assert.equal(result.githubCommentsPosted, true);
 
         assert.deepEqual(h.opNames(), [
+            'github_get_pr',             // verdict record head probe
             'scm.addComment',            // gh-807 machine verdict record
             'scm.addLabel',              // pr_approved on the PR
             'jira.postComment',          // ticket review summary
@@ -1359,6 +1360,7 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
         assert.contains(h.opsOf('scm.addComment')[0].body, '"verdict":"REQUEST_CHANGES"',
             'the record stamps what the leg DID, not the raw token');
         assert.deepEqual(h.opNames(), [
+            'github_get_pr',
             'scm.addComment',
             'jira.postComment',
             'jira.moveToStatus',
@@ -1710,7 +1712,9 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
         assert.ok(h.opsOf('scm.removeLabel').some(function(o) { return o.number === 42 && o.label === 'agent:review'; }),
             'the on-demand review trigger is consumed');
         assert.equal(h.opsOf('jira.postComment').length, 0, 'PR-anchored runs skip the ticket comment');
-        assert.equal(h.opsOf('github_get_pr').length, 0, 'external author → no linked-issue rework probe');
+        assert.equal(h.opsOf('github_get_pr').length, 1, 'only the verdict-record head probe runs');
+        assert.equal(h.opsOf('jira.addLabel').filter(function(o) { return o.label === 'agent:rework'; }).length, 0,
+            'external author → no linked-issue rework re-arm');
     });
 
     test('inline comments + resolved threads are posted on the PR before the verdict record', function() {
@@ -1721,20 +1725,22 @@ suite('postPRReviewComments — gh-926 action characterization', function() {
                 generalComment: 'outputs/pr_review_general.md',
                 inlineComments: [
                     { path: 'src/a.js', line: 3, body: 'inline text one' },
-                    { path: 'src/b.js', line: 4, body: 'inline text two' }
+                    { path: 'src/b.js', line: 2, body: 'inline text two' }
                 ],
                 resolvedThreadIds: [777, 888]
             },
             repoInfo: GH926_REPO,
             prInfoContent: GH926_PR_INFO_42,
-            diff: 'diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n@@ -1,2 +1,3 @@\n x\n+changed\n y\n'
+            outputFileContents: { 'outputs/pr_review_general.md': '## Automated Code Review — APPROVE\n\nAll good.' },
+            diff: 'diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n@@ -1,2 +1,3 @@\n x\n+changed\n y\n' +
+                'diff --git a/src/b.js b/src/b.js\n--- a/src/b.js\n+++ b/src/b.js\n@@ -1,2 +1,3 @@\n x\n+added here\n y\n'
         });
 
         h.mod.action(gh926ActionParams({}));
 
         var order = h.opNames();
         assert.ok(order.indexOf('scm.addInlineComment') < order.indexOf('scm.resolveThread'), 'inline comments precede thread resolves');
-        assert.ok(order.indexOf('scm.resolveThread') < order.indexOf('scm.addComment'), 'thread resolves precede the verdict record');
+        assert.ok(order.indexOf('scm.resolveThread') < order.lastIndexOf('scm.addComment'), 'thread resolves precede the verdict record');
         assert.equal(h.opsOf('scm.addInlineComment').length, 2, 'both inline comments posted');
         assert.deepEqual(
             h.opsOf('scm.resolveThread').map(function(o) { return o.threadId; }),
@@ -1775,14 +1781,15 @@ suite('postPRReviewComments — gh-926 inline-comment fallbacks', function() {
     });
 
     test('line present only on the opposite side falls back to a general PR comment', function() {
-        var diff = 'diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n@@ -1,2 +1,2 @@\n-x old\n+new\n';
+        // old 1..3, new 1..1: line 2 exists only on the LEFT side of this diff.
+        var diff = 'diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n@@ -1,3 +1,1 @@\n-a1\n-a2\n a3\n';
         var h = inlineHarness({ diff: diff });
         var mod = loadPostPRReviewComments();
 
-        var ok = mod.postInlineComment(h.scm, 9, { path: 'src/a.js', line: 1, body: 'note', side: 'RIGHT' }, 'PROJ-1', null);
+        var ok = mod.postInlineComment(h.scm, 9, { path: 'src/a.js', line: 2, body: 'note', side: 'RIGHT' }, 'PROJ-1', null);
 
         assert.equal(ok, true);
-        assert.equal(h.calls.inline.length, 0, 'line 1 only exists on the LEFT — RIGHT request falls back');
+        assert.equal(h.calls.inline.length, 0, 'line 2 only exists on the LEFT — RIGHT request falls back');
         assert.equal(h.calls.comments.length, 1);
     });
 
@@ -1940,13 +1947,14 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
     test('attemptResumeIfReviewOutputsMissing: writes marker + prompt, runs the resume CLI once', function() {
         var h = makeResumeHarness({});
         assert.equal(h.mod.attemptResumeIfReviewOutputsMissing('PROJ-1'), true);
-        assert.deepEqual(h.calls.writes, [
+        assert.deepEqual(h.calls.writes.map(function(w) { return w.path; }), [
             'outputs/.pr-review-missing-output-resume-attempted',
             'outputs/.pr-review-resume-prompt.md'
         ]);
+        assert.contains(h.calls.writes[1].content, 'PROJ-1', 'the resume prompt names the ticket');
+        assert.contains(h.calls.writes[1].content, 'outputs/pr_review.json');
         assert.equal(h.calls.cli.length, 1);
         assert.ok(h.calls.cli[0].indexOf('run-agent.sh --continue outputs/.pr-review-resume-prompt.md') !== -1);
-        assert.contains(h.mod.__resumePrompt, 'PROJ-1', 'the resume prompt names the ticket');
     });
 
     test('attemptResumeIfReviewOutputsMissing: resume CLI failure is reported as false', function() {
@@ -2011,12 +2019,10 @@ function makeResumeHarness(opts) {
             cli_execute_command: function(args) {
                 if (opts.cliError) throw new Error(opts.cliError);
                 calls.cli.push(args && args.command);
-                return 'resume output';
-            },
-            cli_execute_command_remote: function() { return ''; }
+                return opts.remoteUrl !== undefined ? opts.remoteUrl : 'resume output';
+            }
         }
     );
-    mod.__resumePrompt = null;
     return { mod: mod, calls: calls };
 }
 
