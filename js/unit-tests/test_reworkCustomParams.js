@@ -4,6 +4,8 @@
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var gitStagingModule = loadModule('js/common/gitStaging.js');
+// gh-957: githubHelpers + pushReworkChanges now require the no-op loop guard.
+var reworkLoopGuardModule = loadModule('js/common/reworkLoopGuard.js');
 // Real PR helper (gh-912): the modules under test delegate cleanCommandOutput
 // and the remote-existence probes to it — the canonical implementation must be
 // in every require map below.
@@ -21,7 +23,8 @@ var githubHelpersModule = loadModule(
             writePRContext: function() {}
         },
         './machineNotice.js': loadModule('js/common/machineNotice.js'),
-        './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') }))
+        './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })),
+        './common/reworkLoopGuard.js': reworkLoopGuardModule
     }),
     {}
 );
@@ -77,7 +80,8 @@ function loadPushReworkChanges() {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './cacheToReleases.js': {}
         ,
-            './common/commentMarkup.js': commentMarkupModule
+            './common/commentMarkup.js': commentMarkupModule,
+            './common/reworkLoopGuard.js': reworkLoopGuardModule
         }),
         {}
     );
@@ -160,7 +164,8 @@ function loadPushReworkChangesForAction(mocks) {
             './common/trackers.js': makeTrackersModule(toolMocks),
             './cacheToReleases.js': { action: function() {} }
         ,
-            './common/commentMarkup.js': commentMarkupModule
+            './common/commentMarkup.js': commentMarkupModule,
+            './common/reworkLoopGuard.js': reworkLoopGuardModule
         }),
         toolMocks
     );
