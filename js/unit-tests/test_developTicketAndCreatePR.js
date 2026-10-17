@@ -1453,10 +1453,15 @@ suite('developTicketAndCreatePR.generateUniqueBranchName — warning-only ls-rem
 var realPrHelperShared = null;
 function realPrHelperForOutcomes() {
     if (!realPrHelperShared) {
+        // file_write/file_delete: the PR body temp file is written through
+        // dmtools globals — absent in the node harness unless stubbed here.
         realPrHelperShared = loadModule('js/common/pullRequest.js', makeRequire({
             './common/commentMarkup.js': commentMarkupModule,
             './mergeState.js': loadModule('js/common/mergeState.js')
-        }), {});
+        }), {
+            file_write: function () { },
+            file_delete: function () { }
+        });
     }
     return realPrHelperShared;
 }
@@ -1482,7 +1487,10 @@ function loadForOutcomePinning(mocks, opts) {
             }, opts.feedbackLoop || {}),
             './common/autoStart.js': {
                 triggerSmIfIdle: function () { autoStartCalls.smIdle++; },
-                triggerConfiguredWorkflowForTicket: function (o) { autoStartCalls.review.push(o); return true; }
+                triggerConfiguredWorkflowForTicket: function (o) {
+                    if (opts.reviewThrows) throw new Error('workflow trigger API down');
+                    autoStartCalls.review.push(o); return true;
+                }
             },
             './common/outputFiles.js': {
                 readOutputFile: function () { return opts.responseMd === undefined ? null : opts.responseMd; }
@@ -1720,6 +1728,27 @@ suite('developTicketAndCreatePR > leg outcome characterization (gh-930)', functi
         assert.equal(loaded.autoStartCalls.review[0].label, 'pr_review');
         assert.equal(loaded.autoStartCalls.review[0].configFile, 'agents/pr_review.json');
         assert.equal(loaded.autoStartCalls.smIdle, 0, 'the SM kicker is skipped while review was started');
+    });
+
+    test('a failing autoStartReview trigger is non-fatal — the leg stays green and the SM kicker runs', function () {
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-61', 'https://github.com/acme/widgets/pull/61')
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n',
+            reviewThrows: true
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-61', fields: { summary: 'trigger fails', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: { autoStartReview: true, autoStartReviewConfigFile: 'agents/pr_review.json' },
+            response: 'ok'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, 'https://github.com/acme/widgets/pull/61');
+        assert.equal(loaded.autoStartCalls.review.length, 0);
+        assert.equal(loaded.autoStartCalls.smIdle, 1);
     });
 
     test('no autoStartReview config → the SM kicker runs instead', function () {
