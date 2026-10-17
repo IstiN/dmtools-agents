@@ -209,6 +209,38 @@ suite('createIntakeTickets: full intake flow', function() {
         assert.equal(rec.calls.filter(function(c) { return c[0] === 'link'; }).length, 1); // linkToSource only
     });
 
+    test('finalize step failures are swallowed and do not fail the run', function() {
+        var rec = intakeRecorder();
+        var mocks = rec.jiraMocks();
+        mocks.jira_post_comment = function(a) { rec.calls.push(['comment', a]); throw new Error('comment down'); };
+        mocks.jira_add_label = function(a) { rec.calls.push(['label', a]); throw new Error('label down'); };
+        mocks.jira_assign_ticket_to = function(a) { rec.calls.push(['assign', a]); throw new Error('assign down'); };
+        mocks.jira_move_to_status = function(a) { rec.calls.push(['move', a]); throw new Error('move down'); };
+        mocks.jira_remove_label = function(a) { rec.calls.push(['rm', a]); throw new Error('rm down'); };
+        var mod = loadIntake(intakeFiles([], mocks));
+        var r = mod.action({ ticket: { key: 'P-7' }, initiator: 'acc1', metadata: { contextId: 'intake' } });
+        assert.equal(r.success, true);
+        var seq = toolSequence(rec.calls);
+        assert.deepEqual(seq, ['comment', 'label', 'label', 'assign', 'move', 'rm']);
+    });
+
+    test('failed Blocks link does not block; failed Blocked move is swallowed', function() {
+        var rec = intakeRecorder();
+        var mocks = rec.jiraMocks();
+        mocks.jira_link_issues = function(a) {
+            rec.calls.push(['link', a]);
+            if (a.relationship === 'Blocks') throw new Error('link down');
+        };
+        var mod = loadIntake(intakeFiles([
+            { tempId: 'b1', type: 'Bug', summary: 'Bug one', description: 'x' },
+            { tempId: 's1', type: 'Story', summary: 'Story one', parent: null, blockedBy: ['missing-1', 'b1'] }
+        ], mocks));
+        var r = mod.action({ ticket: { key: 'P-8' }, initiator: 'acc1', metadata: {} });
+        assert.equal(r.success, true);
+        assert.equal(rec.calls.filter(function(c) { return c[0] === 'link' && c[1].relationship === 'Blocks'; }).length, 1);
+        assert.equal(rec.calls.filter(function(c) { return c[0] === 'move' && c[1].statusName === 'Blocked'; }).length, 0);
+    });
+
     test('exception in body posts error comment and returns success:false', function() {
         var rec = intakeRecorder();
         var mocks = rec.jiraMocks();

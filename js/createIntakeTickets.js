@@ -434,6 +434,42 @@ function createStoriesPass(stories, ctx, state) {
 }
 
 /**
+ * Create a single blockedBy Blocks link; returns true when linked.
+ * @param {string} blockedKey - Created ticket that is blocked
+ * @param {string} ref - Blocker ref (tempId or real key)
+ * @param {Object} keyMap - Maps tempId OR real key -> actual tracker key
+ * @returns {boolean}
+ */
+function linkBlockedByRef(blockedKey, ref, keyMap) {
+    var blockerKey = resolveKey(ref, keyMap);
+    if (!blockerKey) {
+        console.warn('Cannot resolve blockedBy ref "' + ref + '" for ' + blockedKey);
+        return false;
+    }
+    try {
+        tracker.linkIssues(blockedKey, blockerKey, 'Blocks');
+        console.log(blockerKey + ' blocks ' + blockedKey);
+        return true;
+    } catch (e) {
+        console.warn('Failed to link ' + blockerKey + ' blocks ' + blockedKey + ':', e);
+        return false;
+    }
+}
+
+/**
+ * Move a blocked ticket to Blocked status.
+ * @param {string} blockedKey
+ */
+function moveToBlocked(blockedKey) {
+    try {
+        tracker.moveToStatus(blockedKey, STATUSES.BLOCKED);
+        console.log('Set ' + blockedKey + ' to Blocked');
+    } catch (e) {
+        console.warn('Failed to set Blocked status on ' + blockedKey + ':', e);
+    }
+}
+
+/**
  * PASS 3a: blockedBy — create Blocks links + move blocked story to Blocked status.
  * Uses entry._createdKey to avoid index mismatch with results.
  * @param {Array} stories - Entries from stories.json
@@ -445,27 +481,9 @@ function linkBlockedByPass(stories, keyMap) {
         if (!blockedKey || !Array.isArray(entry.blockedBy) || entry.blockedBy.length === 0) return;
         var anyLinked = false;
         entry.blockedBy.forEach(function(ref) {
-            var blockerKey = resolveKey(ref, keyMap);
-            if (!blockerKey) {
-                console.warn('Cannot resolve blockedBy ref "' + ref + '" for ' + blockedKey);
-                return;
-            }
-            try {
-                tracker.linkIssues(blockedKey, blockerKey, 'Blocks');
-                console.log(blockerKey + ' blocks ' + blockedKey);
-                anyLinked = true;
-            } catch (e) {
-                console.warn('Failed to link ' + blockerKey + ' blocks ' + blockedKey + ':', e);
-            }
+            if (linkBlockedByRef(blockedKey, ref, keyMap)) anyLinked = true;
         });
-        if (anyLinked) {
-            try {
-                tracker.moveToStatus(blockedKey, STATUSES.BLOCKED);
-                console.log('Set ' + blockedKey + ' to Blocked');
-            } catch (e) {
-                console.warn('Failed to set Blocked status on ' + blockedKey + ':', e);
-            }
-        }
+        if (anyLinked) moveToBlocked(blockedKey);
     });
 }
 
@@ -492,14 +510,11 @@ function linkIntegrationsPass(stories, keyMap) {
 }
 
 /**
- * Finalize the source intake ticket: post combined comment, labels, assignee,
- * status move, WIP label removal and token usage comments.
+ * Post the combined AI analysis + created ticket list comment to the source ticket.
  * @param {Object} ctx - Action context from initActionContext()
  * @param {Array} results - Per-entry creation results
- * @param {Object} params - action() params
  */
-function finalizeIntakeTicket(ctx, results, params) {
-    // Post combined comment to source ticket
+function postFinalComment(ctx, results) {
     try {
         var finalComment = buildFinalComment(results, readCommentFile());
         tracker.postComment(ctx.ticketKey, finalComment);
@@ -507,22 +522,32 @@ function finalizeIntakeTicket(ctx, results, params) {
     } catch (commentError) {
         console.warn('Failed to post comment to ' + ctx.ticketKey + ':', commentError);
     }
+}
 
-    // Add ai_intake label
+/**
+ * Add the ai_intake and ai_generated labels to the source ticket.
+ * @param {Object} ctx - Action context from initActionContext()
+ */
+function addIntakeLabels(ctx) {
     try {
         tracker.addLabel(ctx.ticketKey, LABELS.AI_INTAKE);
     } catch (labelError) {
         console.warn('Failed to add ' + LABELS.AI_INTAKE + ' label:', labelError);
     }
 
-    // Add ai_generated label
     try {
         tracker.addLabel(ctx.ticketKey, LABELS.AI_GENERATED);
     } catch (labelError) {
         console.warn('Failed to add ' + LABELS.AI_GENERATED + ' label:', labelError);
     }
+}
 
-    // Assign to initiator
+/**
+ * Assign the source ticket to the initiator and move it to In Development
+ * (transition name is 'In Progress' in this Jira instance).
+ * @param {Object} ctx - Action context from initActionContext()
+ */
+function assignAndMoveToInProgress(ctx) {
     try {
         tracker.assignTo(ctx.ticketKey, ctx.initiatorId);
         console.log('Assigned ' + ctx.ticketKey + ' to initiator');
@@ -530,31 +555,55 @@ function finalizeIntakeTicket(ctx, results, params) {
         console.warn('Failed to assign ticket:', assignError);
     }
 
-    // Move to In Development (transition name is 'In Progress' in this Jira instance)
     try {
         tracker.moveToStatus(ctx.ticketKey, STATUSES.IN_PROGRESS);
         console.log('Moved ' + ctx.ticketKey + ' to In Development');
     } catch (statusError) {
         console.warn('Failed to move ticket to In Development:', statusError);
     }
+}
 
-    // Remove WIP label if present
-    if (ctx.wipLabel) {
-        try {
-            tracker.removeLabel(ctx.ticketKey, ctx.wipLabel);
-            console.log('Removed WIP label "' + ctx.wipLabel + '" from ' + ctx.ticketKey);
-        } catch (wipError) {
-            console.warn('Failed to remove WIP label:', wipError);
-        }
+/**
+ * Remove the WIP label from the source ticket if one was derived from the context.
+ * @param {Object} ctx - Action context from initActionContext()
+ */
+function removeWipLabel(ctx) {
+    if (!ctx.wipLabel) return;
+    try {
+        tracker.removeLabel(ctx.ticketKey, ctx.wipLabel);
+        console.log('Removed WIP label "' + ctx.wipLabel + '" from ' + ctx.ticketKey);
+    } catch (wipError) {
+        console.warn('Failed to remove WIP label:', wipError);
     }
+}
 
-    // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-    // wrote outputs/*_usage.json during the agent run.
+/**
+ * Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
+ * wrote outputs/*_usage.json during the agent run.
+ * @param {Object} ctx - Action context from initActionContext()
+ * @param {Object} params - action() params
+ */
+function postTokenUsage(ctx, params) {
     try {
         tokenUsageComment.postTokenUsageComments(ctx.ticketKey, { initiator: params.initiator, tracker: tracker });
     } catch (e) {
         console.warn('Failed to post token usage comments:', e);
     }
+}
+
+/**
+ * Finalize the source intake ticket: post combined comment, labels, assignee,
+ * status move, WIP label removal and token usage comments.
+ * @param {Object} ctx - Action context from initActionContext()
+ * @param {Array} results - Per-entry creation results
+ * @param {Object} params - action() params
+ */
+function finalizeIntakeTicket(ctx, results, params) {
+    postFinalComment(ctx, results);
+    addIntakeLabels(ctx);
+    assignAndMoveToInProgress(ctx);
+    removeWipLabel(ctx);
+    postTokenUsage(ctx, params);
 }
 
 function action(params) {
