@@ -2697,10 +2697,15 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // from checks:write, gh-848 belt); with no App token
                     // configured the in-place cure is skipped entirely —
                     // the reset below is the only working remedy.
-                    if (vProbe && vProbe.green && (RUN_JOB_PARAMS || {}).silentToken) {
+                    if ((RUN_JOB_PARAMS || {}).silentToken) {
                         var phHeadRuns = headWorkflowRunsSafe(effectiveRepoInfo, vHead0);
                         if (phHeadRuns !== null && !hasActiveHeadRun(phHeadRuns)) {
-                            var phCover = greenCoverRun(effectiveRepoInfo, vCiWf, vHead0);
+                            // gh-857 leg: the verdict mirror requires the
+                            // probe-green gate AND an independently probed
+                            // green cover (unchanged semantics).
+                            var phCover = (vProbe && vProbe.green)
+                                ? greenCoverRun(effectiveRepoInfo, vCiWf, vHead0)
+                                : null;
                             if (phCover) {
                                 // gh-865: conclude the link-less placeholders
                                 // AND the numeric-id orphans in ONE pass —
@@ -2749,7 +2754,54 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                         }
                                     }
                                 }
-                            }
+                            } else if (vOrphans && vOrphans.length) {
+                                // gh-998 NEUTRAL SWEEP — the finally-path rows
+                                // the gh-857 mirror never covered: terminal-
+                                // owner orphans (the gh-865 detector: pending
+                                // check-runs whose owning run concluded, past
+                                // the grace) whose cycle left NO verdict on the
+                                // head (no green cover — the failure/
+                                // superseded/cancelled/died rows of the gh-998
+                                // capability table). Live fa #1563 (2026-10-17,
+                                // head f3d58647): the kicker-suite placeholder
+                                // Quality gate (check-run 117469671401) stayed
+                                // in_progress 40+ min past its cycle and held
+                                // mergeStateStatus=BLOCKED with 58 green
+                                // siblings; the fall-through legacy cure (a
+                                // same-sha re-dispatch) cannot conclude a stamp
+                                // nothing will conclude (gh-865's own note).
+                                // The honest terminal state is 'neutral' — a
+                                // terminal owner carries no live verdict about
+                                // its head (I3) — closed under the cycle's own
+                                // app token (I4) with the gh-857 AC2 fail-safe
+                                // already established above (no ACTIVE run on
+                                // the head). Link-less placeholders deliberately
+                                // keep the gh-852 fresh-sha reset below: a
+                                // same-sha re-dispatch RE-MINTS them, so only a
+                                // fresh head cures that pathology (gh-852 AC3).
+                                // A neutral close is not a green verdict — the
+                                // PR still re-validates via the legacy dispatch
+                                // fall-through; the sweep only retires the
+                                // zombie. Every swept check-run logs the
+                                // zombie-swept line and increments the tick
+                                // counter ridden into the factory-state payload
+                                // (I5) — and a close that GitHub rejects (403
+                                // ownership, transient) is retried next tick,
+                                // never silently dropped (E2 degradation).
+                                var swConc = sweepZombieCheckRunsNeutral(
+                                    effectiveRepoInfo, vOrphans, vHead0);
+                                if (swConc.concluded > 0) {
+                                    console.log('  🧹 ' + key + ' zombie-swept ' +
+                                        swConc.concluded + ' terminal-owner check-run(s) as' +
+                                        ' neutral (gh-998)' +
+                                        (swConc.rejected
+                                            ? ' — ' + swConc.rejected + ' rejected, retry next tick'
+                                            : ''));
+                                    tickZombiesSwept += swConc.concluded;
+                                } else if (swConc.rejected) {
+                                    console.warn('  ⚠️  ' + key + ' zombie sweep rejected (' +
+                                        swConc.rejected + ') — retry next tick (gh-998)');
+                                }
                         } else if (phHeadRuns !== null) {
                             console.log('  ⏭️  ' + key + ' placeholders carry a LIVE run on' +
                                         ' the head (gh-857 AC2) — no in-place conclusion,' +
