@@ -1,1 +1,1 @@
-[{"id":"sh-4-hnazjbkw9z1uxlseu","command":"cd /home/runner/work/dmtools-agents/dmtools-agents && cat js/unit-tests/run_all.json | head -40; echo \"---\"; wc -l js/unit-tests/test_smProvider.js js/unit-tests/test_smGithubSource.js js/unit-tests/test_scmAdoProvider.js","pid":"3099","startedAtMs":1792265788614}]
+[]
