@@ -358,6 +358,224 @@ function fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, fie
  * Main action — called from pre-CLI setup scripts.
  * No-op when parent context fetching is not enabled in project config or overrides.
  */
+
+/**
+ * Determine the ticket key: the input folder name wins over the ticket object.
+ */
+function resolveTicketKey(folder, ticket) {
+    return folder ? folder.split('/').pop() : (ticket && ticket.key);
+}
+
+/**
+ * Determine the ticket fields: from the passed ticket, else fetch by key.
+ * Returns null ONLY when the fetch itself failed (caller must bail out —
+ * the warning is logged here); returns undefined when the ticket was fetched
+ * but carries no fields (caller falls through to the no-parent path).
+ */
+function resolveTicketFields(tracker, ticket, ticketKey) {
+    var ticketFields = ticket && ticket.fields;
+    if (ticketFields) return ticketFields;
+    try {
+        var fetched = tracker.getIssue(ticketKey);
+        return fetched ? fetched.fields : undefined;
+    } catch (e) {
+        console.warn('fetchParentContextToInput: could not fetch ticket ' + ticketKey + ' — skipping', e);
+        return null;
+    }
+}
+
+/**
+ * Project key for custom-field resolution: project config, else key prefix.
+ */
+function resolveProjectKey(projectConfig, parentKey, ticketKey) {
+    return (projectConfig && projectConfig.jira && projectConfig.jira.project) ||
+        parentKey.split('-')[0] ||
+        ticketKey.split('-')[0];
+}
+
+/**
+ * Resolve the run options from the merged config, applying defaults.
+ */
+function resolveFetchOptions(cfg, projectConfig) {
+    return {
+        jqlTemplate: cfg.jql || DEFAULT_JQL,
+        siblingFields: cfg.siblingFields || cfg.fields || buildDefaultFields(projectConfig),
+        contexts: cfg.contexts || DEFAULT_CONTEXTS,
+        fieldLabels: cfg.fieldLabels || {},
+        childQuestionsCfg: cfg.childQuestions || null
+    };
+}
+
+/**
+ * key/summary/status must always be requested so the header can be rendered.
+ */
+function ensureBaseFields(fields) {
+    var fetchFields = fields.slice();
+    ['key', 'summary', 'status'].forEach(function(f) {
+        if (fetchFields.indexOf(f) === -1) fetchFields.unshift(f);
+    });
+    return fetchFields;
+}
+
+/**
+ * Run the sibling JQL ({parentKey} replaced). Returns null when the search
+ * failed (non-fatal); otherwise the result list (possibly empty).
+ */
+function searchSiblingTickets(tracker, jqlTemplate, parentKey, fetchFields) {
+    var jql = jqlTemplate.replace(/\{parentKey\}/g, parentKey);
+    console.log('fetchParentContextToInput: parent=' + parentKey + ', JQL: ' + jql);
+
+    var results;
+    try {
+        // JQL text: provider-specific query (WIQL on ado)
+        results = tracker.searchIssues(jql, { fields: fetchFields }) || [];
+    } catch (e) {
+        console.warn('fetchParentContextToInput: JQL search failed — skipping', e);
+        return null;
+    }
+
+    console.log('fetchParentContextToInput: ' + results.length + ' results found');
+    return results;
+}
+
+/**
+ * Find the first context whose prefix (case-insensitive) appears in the summary.
+ */
+function findMatchingContext(summary, contexts) {
+    for (var j = 0; j < contexts.length; j++) {
+        if (summary.toUpperCase().indexOf(contexts[j].prefix.toUpperCase()) !== -1) return contexts[j];
+    }
+    return null;
+}
+
+/**
+ * True when any requested field is missing in the search result
+ * (key lives on the issue object, not in fields).
+ */
+function needsFullFetch(itemFields, fetchFields) {
+    for (var i = 0; i < fetchFields.length; i++) {
+        var f = fetchFields[i];
+        if (f === 'key') continue;
+        if (findFieldValue(itemFields, f) === undefined) return true;
+    }
+    return false;
+}
+
+/**
+ * Re-fetch the full ticket; null when the fetch failed (non-fatal).
+ */
+function fetchFullTicket(tracker, itemKey) {
+    try {
+        return tracker.getIssue(itemKey);
+    } catch (e) {
+        console.warn('fetchParentContextToInput: re-fetch failed for ' + itemKey + ' (using partial data)', e);
+        return null;
+    }
+}
+
+/**
+ * Merge full-ticket fields over the partial search result.
+ * Full-ticket fields override; itemFields is returned untouched on empty full.
+ */
+function mergeTicketFields(itemFields, full) {
+    if (!full || !full.fields) return itemFields;
+    var merged = {};
+    for (var k in itemFields) { merged[k] = itemFields[k]; }
+    for (var k2 in full.fields) { merged[k2] = full.fields[k2]; }
+    return merged;
+}
+
+/**
+ * Build the markdown header for one matched context file.
+ */
+function buildContextMarkdown(ctx, itemKey, summary, itemFields, fieldsContent) {
+    var md = '# ' + ctx.label + ' — ' + summary + '\n\n';
+    if (ctx.description) {
+        md += '> **' + ctx.label + '** (' + itemKey + '): ' + ctx.description + '\n\n';
+    }
+    md += '**Ticket:** ' + itemKey + '\n';
+    md += '**Status:** ' + (itemFields.status && itemFields.status.name || 'Unknown') + '\n\n';
+    md += '---\n\n';
+    md += fieldsContent || '_No content available._';
+    md += '\n';
+    return md;
+}
+
+/**
+ * Write one context file; write errors are non-fatal.
+ */
+function writeContextFile(filePath, md, ctxFile, itemKey) {
+    try {
+        file_write(filePath, md);
+        console.log('✅ fetchParentContextToInput: wrote ' + ctxFile + ' (' + itemKey + ')');
+    } catch (writeErr) {
+        console.warn('fetchParentContextToInput: failed to write ' + filePath, writeErr);
+    }
+}
+
+/**
+ * Resolve the answer of a question item: the configured answer field,
+ * falling back to its lowercase spelling.
+ */
+function findAnswer(qf, answerField) {
+    return qf[answerField] || qf[answerField.toLowerCase()] || null;
+}
+
+/**
+ * Render one question entry: title, description (when it is not the answer
+ * itself), and the answer (or an explicit unanswered marker).
+ */
+function renderQuestionEntry(qItem, index, answerField) {
+    var qf = qItem.fields || {};
+    var answer = findAnswer(qf, answerField);
+    var qMd = '**Q' + index + ': ' + (qf.summary || qItem.key) + '**\n\n';
+    if (qf.description && qf.description !== answer) {
+        qMd += qf.description + '\n\n';
+    }
+    qMd += answer
+        ? '_Answer: ' + answer + '_\n\n'
+        : '_Answer: (not yet answered)_\n\n';
+    return qMd;
+}
+
+/**
+ * Render the Questions & Answers appendix for one context ticket.
+ */
+function renderQuestionsMarkdown(itemKey, qResults, answerField) {
+    var qMd = '\n\n---\n\n## Questions & Answers (' + itemKey + ')\n\n';
+    for (var q = 0; q < qResults.length; q++) {
+        qMd += renderQuestionEntry(qResults[q], q + 1, answerField);
+    }
+    return qMd;
+}
+
+/**
+ * Fetch [Q] question sub-tasks of a context ticket (when configured) and
+ * append them to its context file. All failures are non-fatal.
+ */
+function appendChildQuestions(filePath, itemKey, ctxFile, childQuestionsCfg, tracker) {
+    try {
+        var qJql = (childQuestionsCfg.jql || 'parent = {contextTicketKey} AND labels = Q ORDER BY created ASC')
+            .replace(/\{contextTicketKey\}/g, itemKey);
+        var answerField = childQuestionsCfg.answerField || 'description';
+        var qResults = tracker.searchIssues(qJql, {
+            fields: ['key', 'summary', 'description', 'status', answerField]
+        }) || [];
+        if (qResults.length === 0) return;
+
+        var qMd = renderQuestionsMarkdown(itemKey, qResults, answerField);
+        try {
+            var existing = file_read({ path: filePath }) || '';
+            file_write(filePath, existing + qMd);
+            console.log('✅ fetchParentContextToInput: appended ' + qResults.length + ' Q(s) to ' + ctxFile);
+        } catch (appendErr) {
+            console.warn('fetchParentContextToInput: failed to append questions to ' + ctxFile, appendErr);
+        }
+    } catch (qErr) {
+        console.warn('fetchParentContextToInput: childQuestions fetch failed for ' + itemKey + ' (non-fatal):', qErr);
+    }
+}
+
 function action(params) {
     try {
         var jobParams  = params.jobParams || params;
@@ -376,7 +594,7 @@ function action(params) {
 
         var folder = actualParams.inputFolderPath;
         var ticket = actualParams.ticket || (jobParams.ticket);
-        var ticketKey = folder ? folder.split('/').pop() : (ticket && ticket.key);
+        var ticketKey = resolveTicketKey(folder, ticket);
 
         if (!ticketKey) {
             console.warn('fetchParentContextToInput: cannot determine ticketKey — skipping');
@@ -384,16 +602,8 @@ function action(params) {
         }
 
         // 1. Get parent key
-        var ticketFields = ticket && ticket.fields;
-        if (!ticketFields) {
-            try {
-                var fetched = tracker.getIssue(ticketKey);
-                ticketFields = fetched && fetched.fields;
-            } catch (e) {
-                console.warn('fetchParentContextToInput: could not fetch ticket ' + ticketKey + ' — skipping', e);
-                return;
-            }
-        }
+        var ticketFields = resolveTicketFields(tracker, ticket, ticketKey);
+        if (ticketFields === null) return; // fetch failed — warning already logged
 
         var parentKey = ticketFields && ticketFields.parent && ticketFields.parent.key;
         if (!parentKey) {
@@ -403,136 +613,58 @@ function action(params) {
 
         // Resolve configured options with defaults after parent is known so human-readable
         // custom fields can be resolved by project key when Jira requires customfield_* IDs.
-        var jqlTemplate = cfg.jql || DEFAULT_JQL;
-        var siblingFields = cfg.siblingFields || cfg.fields || buildDefaultFields(projectConfig);
-        var contexts    = cfg.contexts || DEFAULT_CONTEXTS;
-        var fieldLabels = cfg.fieldLabels || {};
-        var childQuestionsCfg = cfg.childQuestions || null;
-        var projectKey = (projectConfig && projectConfig.jira && projectConfig.jira.project) ||
-            parentKey.split('-')[0] ||
-            ticketKey.split('-')[0];
+        var opts = resolveFetchOptions(cfg, projectConfig);
+        var projectKey = resolveProjectKey(projectConfig, parentKey, ticketKey);
 
         // 2. Fetch parent story itself (unless explicitly disabled)
         if (cfg.includeParentStory !== false) {
-            fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, fieldLabels, tracker);
+            fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, opts.fieldLabels, tracker);
         }
 
         // Always ensure base fields are present for sibling search
-        var fetchFields = siblingFields.slice();
-        ['key', 'summary', 'status'].forEach(function(f) {
-            if (fetchFields.indexOf(f) === -1) fetchFields.unshift(f);
-        });
-        fetchFields = resolveFetchFields(fetchFields, projectKey, fieldLabels, cfg.resolveFieldNames === true, tracker);
+        var fetchFields = ensureBaseFields(opts.siblingFields);
+        fetchFields = resolveFetchFields(fetchFields, projectKey, opts.fieldLabels, cfg.resolveFieldNames === true, tracker);
 
-        // 3. Run JQL with {parentKey} replaced
-        var jql = jqlTemplate.replace(/\{parentKey\}/g, parentKey);
-        console.log('fetchParentContextToInput: parent=' + parentKey + ', JQL: ' + jql);
+        // 3. Run JQL with {parentKey} replaced and match each result to a context
+        var results = searchSiblingTickets(tracker, opts.jqlTemplate, parentKey, fetchFields);
+        if (!results || results.length === 0) return;
 
-        var results = [];
-        try {
-            // JQL text: provider-specific query (WIQL on ado)
-            results = tracker.searchIssues(jql, { fields: fetchFields }) || [];
-        } catch (e) {
-            console.warn('fetchParentContextToInput: JQL search failed — skipping', e);
-            return;
-        }
-
-        console.log('fetchParentContextToInput: ' + results.length + ' results found');
-        if (results.length === 0) return;
-
-        // 3. Match each result to a context and write file
+        // 4. Write one file per matched context
         for (var i = 0; i < results.length; i++) {
-            var item = results[i];
-            var itemFields = item.fields || {};
-            var summary = itemFields.summary || '';
-
-            for (var j = 0; j < contexts.length; j++) {
-                var ctx = contexts[j];
-                if (summary.toUpperCase().indexOf(ctx.prefix.toUpperCase()) === -1) continue;
-
-                // Re-fetch full ticket if any requested field is missing in search result
-                var needsFullFetch = fetchFields.some(function(f) {
-                    if (f === 'key') return false; // key lives on the issue object, not fields
-                    return findFieldValue(itemFields, f) === undefined;
-                });
-                if (needsFullFetch) {
-                    try {
-                        var full = tracker.getIssue(item.key);
-                        if (full && full.fields) {
-                            // Merge: full ticket fields override partial search result
-                            var merged = {};
-                            for (var k in itemFields) { merged[k] = itemFields[k]; }
-                            for (var k2 in full.fields) { merged[k2] = full.fields[k2]; }
-                            itemFields = merged;
-                        }
-                    } catch (e) {
-                        console.warn('fetchParentContextToInput: re-fetch failed for ' + item.key + ' (using partial data)', e);
-                    }
-                }
-
-                // Build markdown
-                var md = '# ' + ctx.label + ' — ' + summary + '\n\n';
-                if (ctx.description) {
-                    md += '> **' + ctx.label + '** (' + item.key + '): ' + ctx.description + '\n\n';
-                }
-                md += '**Ticket:** ' + item.key + '\n';
-                md += '**Status:** ' + (itemFields.status && itemFields.status.name || 'Unknown') + '\n\n';
-                md += '---\n\n';
-
-                var fieldsContent = renderFieldsMarkdown(itemFields, fetchFields, fieldLabels);
-                md += fieldsContent || '_No content available._';
-                md += '\n';
-
-                var filePath = folder + '/' + ctx.file;
-                try {
-                    file_write(filePath, md);
-                    console.log('✅ fetchParentContextToInput: wrote ' + ctx.file + ' (' + item.key + ')');
-                } catch (writeErr) {
-                    console.warn('fetchParentContextToInput: failed to write ' + filePath, writeErr);
-                }
-
-                // Append [Q] question sub-tasks of this context ticket (if configured)
-                if (childQuestionsCfg) {
-                    try {
-                        var qJql = (childQuestionsCfg.jql || 'parent = {contextTicketKey} AND labels = Q ORDER BY created ASC')
-                            .replace(/\{contextTicketKey\}/g, item.key);
-                        var answerField = childQuestionsCfg.answerField || 'description';
-                        var qResults = tracker.searchIssues(qJql, {
-                            fields: ['key', 'summary', 'description', 'status', answerField]
-                        }) || [];
-                        if (qResults.length > 0) {
-                            var qMd = '\n\n---\n\n## Questions & Answers (' + item.key + ')\n\n';
-                            for (var q = 0; q < qResults.length; q++) {
-                                var qItem = qResults[q];
-                                var qf = qItem.fields || {};
-                                var answer = qf[answerField] || qf[answerField.toLowerCase()] || null;
-                                qMd += '**Q' + (q + 1) + ': ' + (qf.summary || qItem.key) + '**\n\n';
-                                if (qf.description && qf.description !== answer) {
-                                    qMd += qf.description + '\n\n';
-                                }
-                                qMd += answer
-                                    ? '_Answer: ' + answer + '_\n\n'
-                                    : '_Answer: (not yet answered)_\n\n';
-                            }
-                            try {
-                                var existing = file_read({ path: filePath }) || '';
-                                file_write(filePath, existing + qMd);
-                                console.log('✅ fetchParentContextToInput: appended ' + qResults.length + ' Q(s) to ' + ctx.file);
-                            } catch (appendErr) {
-                                console.warn('fetchParentContextToInput: failed to append questions to ' + ctx.file, appendErr);
-                            }
-                        }
-                    } catch (qErr) {
-                        console.warn('fetchParentContextToInput: childQuestions fetch failed for ' + item.key + ' (non-fatal):', qErr);
-                    }
-                }
-
-                break;
-            }
+            processContextItem(results[i], opts, fetchFields, folder, tracker);
         }
 
     } catch (error) {
         console.warn('fetchParentContextToInput: unexpected error (non-fatal):', error);
+    }
+}
+
+/**
+ * Match one search result against the configured contexts and write its file.
+ * Unmatched results are skipped; per-item failures are non-fatal.
+ */
+function processContextItem(item, opts, fetchFields, folder, tracker) {
+    var itemFields = item.fields || {};
+    var summary = itemFields.summary || '';
+
+    var ctx = findMatchingContext(summary, opts.contexts);
+    if (!ctx) return;
+
+    // Re-fetch full ticket if any requested field is missing in search result
+    if (needsFullFetch(itemFields, fetchFields)) {
+        itemFields = mergeTicketFields(itemFields, fetchFullTicket(tracker, item.key));
+    }
+
+    // Build markdown
+    var fieldsContent = renderFieldsMarkdown(itemFields, fetchFields, opts.fieldLabels);
+    var md = buildContextMarkdown(ctx, item.key, summary, itemFields, fieldsContent);
+
+    var filePath = folder + '/' + ctx.file;
+    writeContextFile(filePath, md, ctx.file, item.key);
+
+    // Append [Q] question sub-tasks of this context ticket (if configured)
+    if (opts.childQuestionsCfg) {
+        appendChildQuestions(filePath, item.key, ctx.file, opts.childQuestionsCfg, tracker);
     }
 }
 

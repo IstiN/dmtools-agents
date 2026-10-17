@@ -690,34 +690,51 @@ suite('fetchParentContextToInput — child questions', function() {
         childQuestions: {}
     };
 
+    // Search dispatch: the sibling JQL names the parent key; the question JQL
+    // names the context ticket key (PROJ-200).
+    function questionSearchHandler(opts, searchCalls) {
+        return function(q) {
+            searchCalls.push(q.jql);
+            if (q.jql.indexOf('PROJ-200') === -1) return [makeSearchResult('PROJ-200', '[BA]')];
+            if (opts.questionsThrow) throw new Error('question search failed');
+            return opts.questions || [];
+        };
+    }
+
+    function questionFileReadHandler(opts, files, readCallsRef) {
+        return function(args) {
+            readCallsRef.count++;
+            if (opts.readThrows) throw new Error('read failed');
+            return files[args.path] || '';
+        };
+    }
+
+    function questionFileWriteHandler(opts, files, readCallsRef) {
+        return function(p, c) {
+            if (opts.appendThrows && readCallsRef.count > 0) throw new Error('append failed');
+            files[p] = c;
+        };
+    }
+
     function makeQuestionMocks(opts) {
         opts = opts || {};
         var files = {};
-        var readCalls = 0;
+        var readCallsRef = { count: 0 };
         var searchCalls = [];
         var mocks = {
             jira_get_ticket: function() {
                 return { key: PARENT_KEY, fields: { summary: 'parent', status: { name: 'Done' } } };
             },
-            jira_search_by_jql: function(q) {
-                searchCalls.push(q.jql);
-                if (q.jql.indexOf('PROJ-200') !== -1) {
-                    if (opts.questionsThrow) throw new Error('question search failed');
-                    return opts.questions || [];
-                }
-                return [makeSearchResult('PROJ-200', '[BA]')];
-            },
-            file_read: function(args) {
-                readCalls++;
-                if (opts.readThrows) throw new Error('read failed');
-                return files[args.path] || '';
-            },
-            file_write: function(p, c) {
-                if (opts.appendThrows && readCalls > 0) throw new Error('append failed');
-                files[p] = c;
-            }
+            jira_search_by_jql: questionSearchHandler(opts, searchCalls),
+            file_read: questionFileReadHandler(opts, files, readCallsRef),
+            file_write: questionFileWriteHandler(opts, files, readCallsRef)
         };
-        return { mocks: mocks, files: files, searchCalls: searchCalls, readCount: function() { return readCalls; } };
+        return {
+            mocks: mocks,
+            files: files,
+            searchCalls: searchCalls,
+            readCount: function() { return readCallsRef.count; }
+        };
     }
 
     function runChildQuestions(customQuestionsCfg, opts) {
