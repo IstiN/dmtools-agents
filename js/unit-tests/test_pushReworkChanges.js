@@ -2486,3 +2486,263 @@ suite('pushReworkChanges.commitAndPush — squashReworkWip (agents#895)', functi
         assert.ok(!has(cmds, 'git reset --soft'));
     });
 });
+
+// ── gh-1011: action stage helpers (pre/post-push gates, commit recovery) ────
+// Characterization tests pinning the failure/resume branches of the extracted
+// stage helpers: gate failures throw into the outer catch, one resume attempt
+// is made per failure mode, and every failure posts its specific comment.
+
+function statefulFeedbackLoop(behavior) {
+    var calls = { quality: 0, policy: 0, postPublish: 0, resume: 0 };
+    return {
+        runQualityGates: function() {
+            calls.quality++;
+            return behavior.quality(calls.quality);
+        },
+        runPolicyGates: function() {
+            calls.policy++;
+            return behavior.policy(calls.policy);
+        },
+        runPostPublishGates: function() {
+            calls.postPublish++;
+            return behavior.postPublish(calls.postPublish);
+        },
+        resumeAgent: function() {
+            calls.resume++;
+            return behavior.resume(calls.resume);
+        },
+        calls: calls
+    };
+}
+
+function happyGates() {
+    return { success: true };
+}
+
+suite('pushReworkChanges.action — stage gates and commit recovery (gh-1011)', function() {
+
+    test('a failing pre-push quality gate fails the step with the gate error and an error comment', function() {
+        var fl = statefulFeedbackLoop({
+            quality: function() { return { success: false, failedGate: 'unit-tests', error: '3 tests red' }; },
+            policy: happyGates,
+            postPublish: happyGates,
+            resume: function() { return { attempted: false }; }
+        });
+        var loaded = loadPushReworkChangesForAction({}, { feedbackLoop: fl });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Some fix summary.'
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Quality gate failed before rework push: unit-tests');
+        assert.contains(result.error, '3 tests red');
+        assert.equal(loaded.resumeAgentCalls.length, 1, 'one outer-catch resume attempt');
+        assert.equal(fl.calls.postPublish, 0, 'post-publish gates never run after a pre-push gate failure');
+        assert.ok(
+            loaded.jiraPostCommentCalls.some(function(c) {
+                return c.comment.indexOf('❌ Rework Workflow Error') !== -1 &&
+                    c.comment.indexOf('Quality gate failed before rework push') !== -1;
+            }),
+            'the tracker carries the error comment, got: ' + JSON.stringify(loaded.jiraPostCommentCalls)
+        );
+    });
+
+    test('a failing pre-push policy gate fails the step with the policy error', function() {
+        var fl = statefulFeedbackLoop({
+            quality: happyGates,
+            policy: function() { return { success: false, failedGate: 'no-todo-markers', error: 'found TODO' }; },
+            postPublish: happyGates,
+            resume: function() { return { attempted: false }; }
+        });
+        var loaded = loadPushReworkChangesForAction({}, { feedbackLoop: fl });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Some fix summary.'
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Policy gate failed before rework push: no-todo-markers');
+        assert.ok(
+            loaded.jiraPostCommentCalls.some(function(c) {
+                return c.comment.indexOf('Policy gate failed before rework push') !== -1;
+            }),
+            'the tracker carries the policy-gate error'
+        );
+    });
+
+    test('non-blocking gate failures do not block the push but appear in the completion comment', function() {
+        var prComments = [];
+        var fl = statefulFeedbackLoop({
+            quality: function() { return { success: true, nonBlockingFailures: [{ name: 'spotbugs', error: '2 findings' }] }; },
+            policy: function() { return { success: true, nonBlockingFailures: [{ name: 'dep-scan', error: '1 warn' }] }; },
+            postPublish: happyGates,
+            resume: function() { return { attempted: false }; }
+        });
+        var loaded = loadPushReworkChangesForAction({}, {
+            feedbackLoop: fl,
+            scm: {
+                addComment: function(prNumber, body) { prComments.push({ prNumber: prNumber, body: body }); }
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Some fix summary that should be pushed normally.'
+        });
+
+        assert.equal(result.success, true, 'non-blocking failures never fail the step');
+        assert.equal(result.branchName, 'bug/PROJ-123');
+        var combined = prComments.map(function(c) { return c.body; }).join('\n---\n');
+        assert.contains(combined, '⚠️ **Non-blocking gate warnings** (did not block this push):');
+        assert.contains(combined, '- **spotbugs**: 2 findings');
+        assert.contains(combined, '- **dep-scan**: 1 warn');
+    });
+
+    test('a git failure during commitAndPush posts the rework-push-failed comment and returns the error', function() {
+        var fl = statefulFeedbackLoop({
+            quality: happyGates,
+            policy: happyGates,
+            postPublish: happyGates,
+            resume: function() { return { attempted: false }; }
+        });
+        var loaded = loadPushReworkChangesForAction({
+            cli_execute_command: function(args) {
+                var c = args.command || '';
+                if (c === 'git branch --show-current') return 'bug/PROJ-123\n';
+                if (c.indexOf('git ls-remote --heads origin') === 0) {
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
+                }
+                if (c.indexOf('git commit') === 0) {
+                    throw new Error('commit boom: nothing to commit after filter');
+                }
+                return '';
+            },
+            jira_post_comment: function(args) { throw new Error('tracker down'); }
+        }, { feedbackLoop: fl });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Some fix summary.'
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'commit boom', 'the git error is surfaced verbatim');
+        assert.equal(fl.calls.resume, 1, 'one resume attempt on the git failure');
+        assert.equal(fl.calls.postPublish, 0, 'post-publish gates never run after a push failure');
+    });
+
+    test('a git failure with a granted resume re-enters the action once, then fails honestly', function() {
+        var fl = statefulFeedbackLoop({
+            quality: happyGates,
+            policy: happyGates,
+            postPublish: happyGates,
+            resume: function(n) { return { attempted: n === 1 }; }
+        });
+        var loaded = loadPushReworkChangesForAction({
+            cli_execute_command: function(args) {
+                var c = args.command || '';
+                if (c === 'git branch --show-current') return 'bug/PROJ-123\n';
+                if (c.indexOf('git ls-remote --heads origin') === 0) {
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
+                }
+                if (c.indexOf('git commit') === 0) {
+                    throw new Error('commit boom');
+                }
+                return '';
+            }
+        }, { feedbackLoop: fl });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Some fix summary.'
+        });
+
+        assert.equal(fl.calls.resume, 2, 'first failure resumes, re-entered action fails again and resumes no more');
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'commit boom');
+        assert.ok(
+            loaded.jiraPostCommentCalls.some(function(c) {
+                return c.comment.indexOf('❌ Rework Push Failed') !== -1;
+            }),
+            'the re-entered failure posts the rework-push-failed comment, got: ' +
+                JSON.stringify(loaded.jiraPostCommentCalls)
+        );
+    });
+
+    test('a failing post-publish gate posts the quality-gate-failed comment and returns the gate error', function() {
+        var fl = statefulFeedbackLoop({
+            quality: happyGates,
+            policy: happyGates,
+            postPublish: function() { return { success: false, failedGate: 'integration-probe', error: 'probe red' }; },
+            resume: function() { return { attempted: false }; }
+        });
+        var loaded = loadPushReworkChangesForAction({}, { feedbackLoop: fl });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Some fix summary.'
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Post-publish quality gate failed: integration-probe');
+        assert.contains(result.error, 'probe red');
+        assert.equal(fl.calls.resume, 0, 'the post-publish failure path has no resume of its own');
+        assert.ok(
+            loaded.jiraPostCommentCalls.some(function(c) {
+                return c.comment.indexOf('❌ Rework Quality Gate Failed') !== -1 &&
+                    c.comment.indexOf('Post-publish quality gate failed') !== -1;
+            }),
+            'the tracker carries the post-publish gate comment'
+        );
+    });
+
+    test('a post-publish gate requesting a resume re-enters the action, which then completes', function() {
+        var fl = statefulFeedbackLoop({
+            quality: happyGates,
+            policy: happyGates,
+            postPublish: function(n) {
+                if (n === 1) return { success: false, failedGate: 'flaky-probe', error: 'timeout', resumeAttempted: true };
+                return { success: true };
+            },
+            resume: function() { return { attempted: false }; }
+        });
+        var loaded = loadPushReworkChangesForAction({}, { feedbackLoop: fl });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Some fix summary that should be pushed normally.'
+        });
+
+        assert.equal(fl.calls.postPublish, 2, 'the gate re-runs after the resume');
+        assert.equal(result.success, true, 'the re-entered action completes normally');
+        assert.equal(result.branchName, 'bug/PROJ-123');
+    });
+
+    test('an error before the tracker is probed rebuilds one from config for the error comment', function() {
+        var fl = statefulFeedbackLoop({
+            quality: happyGates,
+            policy: happyGates,
+            postPublish: happyGates,
+            resume: function() { return { attempted: false }; }
+        });
+        var explodingConfig = {};
+        Object.defineProperty(explodingConfig, 'jira', {
+            enumerable: true,
+            get: function() { throw new Error('config boom'); }
+        });
+        var loaded = loadPushReworkChangesForAction({}, { config: explodingConfig, feedbackLoop: fl });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Some fix summary.'
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'config boom');
+        assert.equal(loaded.resumeAgentCalls.length, 1, 'the outer catch still attempts one resume');
+        assert.equal(loaded.jiraPostCommentCalls.length, 0, 'tracker rebuild fails the same way — no error comment, never a rethrow');
+    });
+});
