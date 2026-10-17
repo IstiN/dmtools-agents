@@ -52,6 +52,51 @@ function releaseLock(storyKey, customParams) {
     }
 }
 
+// ── gh-964: pure check-run classification (extracted from checkCiStatus) ──
+
+/**
+ * Normalizes the raw getCommitCheckRuns payload into a check-run array.
+ * Accepts a bare array, a { check_runs: [...] } wrapper, or a JSON string
+ * of either shape; anything else yields [].
+ */
+function normalizeCheckRuns(raw) {
+    if (typeof raw === 'string') {
+        try { raw = JSON.parse(raw); } catch (e) {}
+    }
+    return Array.isArray(raw) ? raw
+        : (raw && raw.check_runs ? raw.check_runs : []);
+}
+
+function isPendingCheckStatus(status) {
+    return status === 'in_progress' || status === 'queued' ||
+        status === 'pending' || status === 'waiting';
+}
+
+function isFailedCheckConclusion(conclusion) {
+    return conclusion === 'failure' || conclusion === 'timed_out' ||
+        conclusion === 'action_required';
+}
+
+/**
+ * Pure classification of a check-run list: which checks are still running,
+ * which failed (and their names), and how many there were in total.
+ */
+function classifyCheckRuns(checkRuns) {
+    var result = { inProgress: false, failed: false, failedNames: [], total: checkRuns.length };
+    checkRuns.forEach(function(c) {
+        var status = (c.status || '').toLowerCase();
+        var conclusion = (c.conclusion || '').toLowerCase();
+        if (isPendingCheckStatus(status)) {
+            result.inProgress = true;
+        }
+        if (isFailedCheckConclusion(conclusion)) {
+            result.failed = true;
+            if (c.name) result.failedNames.push(c.name);
+        }
+    });
+    return result;
+}
+
 function checkCiStatus(scm, headSha) {
     var result = { inProgress: false, failed: false, failedNames: [], total: 0 };
     if (!scm || typeof scm.getCommitCheckRuns !== 'function' || !headSha) {
@@ -59,23 +104,7 @@ function checkCiStatus(scm, headSha) {
     }
     try {
         var raw = scm.getCommitCheckRuns(headSha);
-        if (typeof raw === 'string') {
-            try { raw = JSON.parse(raw); } catch (e) {}
-        }
-        var checkRuns = Array.isArray(raw) ? raw
-            : (raw && raw.check_runs ? raw.check_runs : []);
-        result.total = checkRuns.length;
-        checkRuns.forEach(function(c) {
-            var status = (c.status || '').toLowerCase();
-            var conclusion = (c.conclusion || '').toLowerCase();
-            if (status === 'in_progress' || status === 'queued' || status === 'pending' || status === 'waiting') {
-                result.inProgress = true;
-            }
-            if (conclusion === 'failure' || conclusion === 'timed_out' || conclusion === 'action_required') {
-                result.failed = true;
-                if (c.name) result.failedNames.push(c.name);
-            }
-        });
+        result = classifyCheckRuns(normalizeCheckRuns(raw));
     } catch (e) {
         console.warn('Could not determine CI status:', e);
     }
@@ -170,13 +199,153 @@ function finalizeAlreadyMergedPR(params, scm, storyKey, pr, testCaseType, custom
             'PR [#' + prNumber + '|' + prUrl + '] for branch {code}test/' + storyKey + '{code} was already merged.\n\n' +
             'Linked Test Cases moved to final status: *' + tcResult.moved + '* moved, *' + tcResult.skipped + '* skipped.');
 
+    postTokenUsageCommentsSafe(params, storyKey);
+
+    return true;
+}
+
+// ── gh-964: pure merge-decision helpers (extracted from attemptMerge) ──
+
+function resolveCustomParams(params) {
+    return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+}
+
+// Mergeable states that mean "GitHub has not finished computing / CI gates the
+// merge" — the CI check-run gate below decides between failed / running / retry.
+var UNDETERMINED_MERGE_STATES = {
+    unknown: true,
+    blocked: true,
+    unstable: true,
+    checking: true,
+    unchecked: true,
+    preparing: true,
+    ci_must_pass: true,
+    ci_still_running: true
+};
+
+function isUndeterminedMergeState(mergeable, mergeableState) {
+    return mergeable === null || !!UNDETERMINED_MERGE_STATES[mergeableState];
+}
+
+function isConflictMergeState(mergeable, mergeableState) {
+    return (mergeable === false && mergeableState === 'dirty') ||
+        mergeableState === 'cannot_be_merged' ||
+        mergeableState === 'conflict';
+}
+
+/**
+ * Pure decision over a classified CI status: 'ci_failed' when a check failed,
+ * 'ci_running' while checks are pending or none are known at all, null when
+ * every check has passed (callers map null to their own default action).
+ */
+function decideCiBlock(ci) {
+    if (ci.failed) return 'ci_failed';
+    if (ci.inProgress || ci.total === 0) return 'ci_running';
+    return null;
+}
+
+/**
+ * Pure classification of a merge error message: the message itself, whether it
+ * denotes a conflict, and whether it looks like a CI-required/blocking failure
+ * worth re-checking the check runs for.
+ */
+function classifyMergeError(mergeErr) {
+    var errMsg = mergeErr ? String(mergeErr) : '';
+    return {
+        errMsg: errMsg,
+        isConflict: errMsg.toLowerCase().indexOf('conflict') !== -1,
+        isCIBlocking: errMsg.indexOf('blocked') !== -1 ||
+            errMsg.indexOf('422') !== -1 ||
+            errMsg.indexOf('405') !== -1
+    };
+}
+
+/**
+ * Reads PR merge details, tolerating provider errors (logged, details stay
+ * null so the merge state is treated as undetermined downstream).
+ */
+function readPrMergeDetail(scm, prNumber) {
+    var detail = { mergeable: null, mergeableState: null, headSha: null };
+    try {
+        const prDetail = scm.getPr(prNumber);
+        detail.mergeable = prDetail && prDetail.mergeable;
+        detail.mergeableState = prDetail && prDetail.mergeable_state;
+        detail.headSha = prDetail && prDetail.head && prDetail.head.sha;
+        console.log('PR mergeable: ' + detail.mergeable + ', state: ' + detail.mergeableState +
+            ', headSha: ' + (detail.headSha ? detail.headSha.substring(0, 8) : 'n/a'));
+    } catch (e) {
+        console.warn('Could not get PR details, will attempt merge anyway:', e);
+    }
+    return detail;
+}
+
+/**
+ * Best-effort base-branch update for a behind PR; failures are logged and
+ * swallowed — the caller reports 'behind' either way so the SM retries.
+ */
+function requestBranchUpdate(scm, prNumber, repoInfo) {
+    try {
+        if (scm.updateBranch) {
+            scm.updateBranch(prNumber, repoInfo.owner, repoInfo.repo);
+        } else {
+            throw new Error('SCM provider does not support updateBranch');
+        }
+    } catch (updateErr) {
+        console.warn('Could not update branch:', updateErr);
+    }
+}
+
+/**
+ * Shared tail of both finalize paths: post the token-usage summary comments,
+ * logging and swallowing provider errors.
+ */
+function postTokenUsageCommentsSafe(params, storyKey) {
     try {
         tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
     } catch (e) {
         console.warn('Failed to post token usage comments:', e);
     }
+}
 
-    return true;
+/**
+ * Everything that happens after a successful squash merge: label cleanup on
+ * the PR and the ticket, the merge summary comment, token-usage comments, and
+ * moving the linked Test Cases to their final status. Returns the merged
+ * result object (with tcResult) for the caller.
+ */
+function finalizeMergedPR(params, scm, storyKey, prNumber, prUrl, testCaseType, jiraConfig, issueType) {
+    console.log('✅ PR #' + prNumber + ' merged successfully');
+
+    try { scm.removeLabel(prNumber, LABELS.PR_APPROVED); } catch (e) {}
+
+    var tcResult = moveLinkedTestCases(storyKey, testCaseType, jiraConfig);
+
+    try {
+        getTracker().removeLabel(storyKey, LABELS.PR_APPROVED);
+        console.log('Removed pr_approved label from Jira ticket');
+    } catch (e) {
+        console.warn('Could not remove pr_approved from Jira ticket:', e);
+    }
+    try {
+        getTracker().removeLabel(storyKey, LABELS.TEST_PR_MERGED);
+    } catch (e) {
+        console.warn('Could not remove test_pr_merged label:', e);
+    }
+    try {
+        getTracker().addLabel(storyKey, LABELS.TEST_PR_FINALIZED);
+        console.log('Added test_pr_finalized label to', storyKey);
+    } catch (e) {
+        console.warn('Could not add test_pr_finalized label:', e);
+    }
+
+    var ticketLabel = issueType || 'Story';
+    getTracker().postComment(storyKey, 'h3. ✅ ' + ticketLabel + ' Test PR Merged\n\n' +
+            'PR [#' + prNumber + '|' + prUrl + '] for branch {code}test/' + storyKey + '{code} was merged.\n\n' +
+            'Linked Test Cases moved to final status: *' + tcResult.moved + '* moved, *' + tcResult.skipped + '* skipped.');
+
+    postTokenUsageCommentsSafe(params, storyKey);
+
+    return { success: true, reason: 'merged', prNumber: prNumber, prUrl: prUrl, tcResult: tcResult };
 }
 
 /**
@@ -202,7 +371,7 @@ function attemptMerge(params) {
     var config = configLoader.loadProjectConfig(params.jobParams || params);
     var jiraConfig = config.jira;
     var scm = scmModule.createScm(config);
-    var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+    var customParams = resolveCustomParams(params);
     initTracker(config, customParams);
     var testCaseType = jiraConfig.issueTypes.TEST_CASE || 'Test Case';
     var issueType = params.ticket && params.ticket.fields &&
@@ -236,34 +405,19 @@ function attemptMerge(params) {
     const prUrl = pr.html_url;
     console.log('Found PR #' + prNumber + ' for story ' + storyKey);
 
-    let mergeableState = null;
-    let mergeable = null;
-    let headSha = null;
-    try {
-        const prDetail = scm.getPr(prNumber);
-        mergeable = prDetail && prDetail.mergeable;
-        mergeableState = prDetail && prDetail.mergeable_state;
-        headSha = prDetail && prDetail.head && prDetail.head.sha;
-        console.log('PR mergeable: ' + mergeable + ', state: ' + mergeableState + ', headSha: ' + (headSha ? headSha.substring(0, 8) : 'n/a'));
-    } catch (e) {
-        console.warn('Could not get PR details, will attempt merge anyway:', e);
-    }
+    var prDetail = readPrMergeDetail(scm, prNumber);
+    var mergeable = prDetail.mergeable;
+    var mergeableState = prDetail.mergeableState;
+    var headSha = prDetail.headSha;
 
-    if (mergeable === null ||
-        mergeableState === 'unknown' ||
-        mergeableState === 'blocked' ||
-        mergeableState === 'unstable' ||
-        mergeableState === 'checking' ||
-        mergeableState === 'unchecked' ||
-        mergeableState === 'preparing' ||
-        mergeableState === 'ci_must_pass' ||
-        mergeableState === 'ci_still_running') {
+    if (isUndeterminedMergeState(mergeable, mergeableState)) {
         const ci = checkCiStatus(scm, headSha);
-        if (ci.failed) {
+        const block = decideCiBlock(ci);
+        if (block === 'ci_failed') {
             console.log('PR #' + prNumber + ' CI checks failed');
             return { success: false, reason: 'ci_failed', prNumber, prUrl, failedNames: ci.failedNames };
         }
-        if (ci.inProgress || ci.total === 0) {
+        if (block === 'ci_running') {
             console.log('PR not ready to merge (' + mergeableState + ') — checks still running or unknown — will retry');
             return { success: false, reason: 'ci_running', prNumber, prUrl };
         }
@@ -273,88 +427,41 @@ function attemptMerge(params) {
 
     if (mergeableState === 'behind') {
         console.log('PR branch is behind base — requesting branch update');
-        try {
-            if (scm.updateBranch) {
-                scm.updateBranch(prNumber, repoInfo.owner, repoInfo.repo);
-            } else {
-                throw new Error('SCM provider does not support updateBranch');
-            }
-        } catch (updateErr) {
-            console.warn('Could not update branch:', updateErr);
-        }
+        requestBranchUpdate(scm, prNumber, repoInfo);
         return { success: false, reason: 'behind', prNumber, prUrl };
     }
 
-    if ((mergeable === false && mergeableState === 'dirty') ||
-        mergeableState === 'cannot_be_merged' ||
-        mergeableState === 'conflict') {
+    if (isConflictMergeState(mergeable, mergeableState)) {
         console.log('PR #' + prNumber + ' has merge conflict');
         return { success: false, reason: 'conflict', prNumber, prUrl };
     }
 
     try {
         scm.mergePr(prNumber, 'squash');
-        console.log('✅ PR #' + prNumber + ' merged successfully');
-
-        try { scm.removeLabel(prNumber, LABELS.PR_APPROVED); } catch (e) {}
-
-        var tcResult = moveLinkedTestCases(storyKey, testCaseType, jiraConfig);
-
-        try {
-            getTracker().removeLabel(storyKey, LABELS.PR_APPROVED);
-            console.log('Removed pr_approved label from Jira ticket');
-        } catch (e) {
-            console.warn('Could not remove pr_approved from Jira ticket:', e);
-        }
-        try {
-            getTracker().removeLabel(storyKey, LABELS.TEST_PR_MERGED);
-        } catch (e) {
-            console.warn('Could not remove test_pr_merged label:', e);
-        }
-        try {
-            getTracker().addLabel(storyKey, LABELS.TEST_PR_FINALIZED);
-            console.log('Added test_pr_finalized label to', storyKey);
-        } catch (e) {
-            console.warn('Could not add test_pr_finalized label:', e);
-        }
-
-        var ticketLabel = issueType || 'Story';
-        getTracker().postComment(storyKey, 'h3. ✅ ' + ticketLabel + ' Test PR Merged\n\n' +
-                'PR [#' + prNumber + '|' + prUrl + '] for branch {code}test/' + storyKey + '{code} was merged.\n\n' +
-                'Linked Test Cases moved to final status: *' + tcResult.moved + '* moved, *' + tcResult.skipped + '* skipped.');
-
-        try {
-            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
-
-        return { success: true, reason: 'merged', prNumber, prUrl, tcResult };
-
+        return finalizeMergedPR(params, scm, storyKey, prNumber, prUrl, testCaseType, jiraConfig, issueType);
     } catch (mergeErr) {
         console.warn('Merge failed:', mergeErr);
-        const errMsg = mergeErr ? String(mergeErr) : '';
-        const isConflict = errMsg.toLowerCase().indexOf('conflict') !== -1;
-        const isCIBlocking = errMsg.indexOf('blocked') !== -1 || errMsg.indexOf('422') !== -1 || errMsg.indexOf('405') !== -1;
+        const errInfo = classifyMergeError(mergeErr);
 
-        if (!isConflict && (isCIBlocking || errMsg === '')) {
+        if (!errInfo.isConflict && (errInfo.isCIBlocking || errInfo.errMsg === '')) {
             const ci = checkCiStatus(scm, headSha);
-            if (ci.failed) {
+            const block = decideCiBlock(ci);
+            if (block === 'ci_failed') {
                 return { success: false, reason: 'ci_failed', prNumber, prUrl, failedNames: ci.failedNames };
             }
-            if (ci.inProgress || ci.total === 0) {
+            if (block === 'ci_running') {
                 console.log('Merge blocked temporarily — checks still running or unknown — will retry');
                 return { success: false, reason: 'ci_running', prNumber, prUrl };
             }
         }
 
-        return { success: false, reason: isConflict ? 'conflict' : 'merge_failed', prNumber, prUrl, error: errMsg };
+        return { success: false, reason: errInfo.isConflict ? 'conflict' : 'merge_failed', prNumber, prUrl, error: errInfo.errMsg };
     }
 }
 
 function action(params) {
     const storyKey = params.ticket && params.ticket.key;
-    var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+    var customParams = resolveCustomParams(params);
     initTracker(null, customParams);
 
     // Some callers (e.g. checkBugTestsPassed.js) only need the merge attempt
@@ -429,5 +536,19 @@ function action(params) {
 action.attemptMerge = attemptMerge;
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, attemptMerge };
+    module.exports = {
+        action: action,
+        attemptMerge: attemptMerge,
+        // gh-964: pure helpers extracted from checkCiStatus / attemptMerge —
+        // exported for direct unit testing (additive surface, same signatures).
+        normalizeCheckRuns: normalizeCheckRuns,
+        classifyCheckRuns: classifyCheckRuns,
+        isPendingCheckStatus: isPendingCheckStatus,
+        isFailedCheckConclusion: isFailedCheckConclusion,
+        decideCiBlock: decideCiBlock,
+        classifyMergeError: classifyMergeError,
+        isUndeterminedMergeState: isUndeterminedMergeState,
+        isConflictMergeState: isConflictMergeState,
+        resolveCustomParams: resolveCustomParams
+    };
 }
