@@ -134,6 +134,24 @@ suite('postStoryTestAutomationReviewHelpers: diff filtering', function() {
         );
     });
 
+    test('isInlineCommentInDiff returns false for missing diff, path or line', function() {
+        var helpers = loadReviewHelpers();
+        var prc = loadPrReviewComments();
+        assert.equal(helpers.isInlineCommentInDiff(null, { path: 'a.ts', line: 1 }, prc), false);
+        assert.equal(helpers.isInlineCommentInDiff(SIMPLE_DIFF, { line: 42 }, prc), false, 'no path');
+        assert.equal(helpers.isInlineCommentInDiff(SIMPLE_DIFF, { path: 'testing/tests/TS-300/test.ts' }, prc), false, 'no line');
+    });
+
+    test('isInlineCommentInDiff rejects a submodule target whose pointer line is not in the diff', function() {
+        var helpers = loadReviewHelpers();
+        // gitlink header without a parseable +/- pointer line
+        var diff = 'diff --git a/mobile-app b/mobile-app\nindex 1111111..2222222 160000\n';
+        assert.equal(
+            helpers.isInlineCommentInDiff(diff, { path: 'mobile-app/lib/foo.ts', line: 5 }, loadPrReviewComments()),
+            false
+        );
+    });
+
     test('isInlineCommentInDiff anchors submodule content on the pointer change', function() {
         var helpers = loadReviewHelpers();
         var diff = 'diff --git a/mobile-app b/mobile-app\n' +

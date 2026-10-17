@@ -338,6 +338,96 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
         ]);
     });
 
+    test('Bug with product failure returns to Ready For Development and finalizes failed TCs', function() {
+        var statusMoves = [];
+        var comments = [];
+
+        var module = loadPostStoryTestAutomationResults({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/story_test_automation_result.json') {
+                    return JSON.stringify({
+                        storyKey: 'BUG-150',
+                        overall: 'failed',
+                        summary: 'Fix did not work',
+                        results: [
+                            { testCaseKey: 'TS-151', status: 'passed', testPath: 'testing/tests/TS-151/test.py' },
+                            { testCaseKey: 'TS-152', status: 'failed', testPath: 'testing/tests/TS-152/test.py', failedDescriptionFile: 'outputs/failed_description_TS-152.md', failureSummary: 'regression' }
+                        ]
+                    });
+                }
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            cli_execute_command: function() { return ''; },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            jira_attach_file_to_ticket: function() {},
+            jira_update_field: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'BUG-150', fields: { summary: 'Broken fix', issuetype: { name: 'Bug' } } },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.status, 'failed');
+        assert.deepEqual(result.failedTestCases, ['TS-152']);
+        assert.deepEqual(statusMoves, [
+            { key: 'TS-152', statusName: 'In Review - Failed' },
+            { key: 'TS-152', statusName: 'Failed' },
+            { key: 'BUG-150', statusName: 'Ready For Development' }
+        ]);
+        assert.ok(comments.some(function(c) { return c.indexOf('Bug Fix Did Not Pass Automated Tests') !== -1; }));
+        assert.ok(comments.some(function(c) { return c.indexOf('TS-152') !== -1 && c.indexOf('regression') !== -1; }));
+    });
+
+    test('ignores result entries with an unknown status', function() {
+        var statusMoves = [];
+
+        var module = loadPostStoryTestAutomationResults({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/story_test_automation_result.json') {
+                    return JSON.stringify({
+                        storyKey: 'TS-160',
+                        overall: 'passed',
+                        summary: 'One unknown entry',
+                        results: [
+                            { testCaseKey: 'TS-161', status: 'passed', testPath: 'testing/tests/TS-161/test.py' },
+                            { testCaseKey: 'TS-162', status: 'in_progress' }
+                        ]
+                    });
+                }
+                if (opts.path === 'outputs/tracker_comment.md') return 'h3. Story Test Result';
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --show-current') return 'test/TS-160';
+                if (opts.command === 'git status --short -- testing') return '?? testing/tests/TS-161/test.py';
+                if (opts.command === 'git diff --cached --stat') return ' testing/tests/TS-161/test.py | 1 +';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-160') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/TS-160';
+                if (opts.command.indexOf('gh pr list --head test/TS-160') === 0) return '';
+                if (opts.command.indexOf('gh pr create') === 0) return 'https://github.com/IstiN/trackstate/pull/160';
+                return '';
+            },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_attach_file_to_ticket: function() {},
+            jira_update_field: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-160', fields: { summary: 'Unknown status story' } },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(statusMoves, [
+            { key: 'TS-161', statusName: 'In Review - Passed' },
+            { key: 'TS-160', statusName: 'In Testing' }
+        ]);
+    });
+
     test('resumes agent when linked Test Cases are missing from result', function() {
         var resumeCommands = [];
         var filesWritten = {};

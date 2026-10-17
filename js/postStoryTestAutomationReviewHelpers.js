@@ -5,8 +5,38 @@
  * orchestrator. Dependencies (readFile, prReviewComments, outputFiles,
  * getTracker, LABELS) are passed as arguments — this module stays free of
  * requires so suites can load it with an empty require map. Posted comment
- * strings stay byte-identical to the originals.
+ * strings stay byte-identical to the originals. Every function stays ≤ CC 8
+ * so the per-function CRAP ratchet (new keys must be ≤ 8) holds.
  */
+
+/** Pure: pull the PR number/URL/branch out of a pr_info.md payload. */
+function parsePrInfoFields(prInfo) {
+    const numMatch = prInfo.match(/\*\*PR #\*\*:\s*(\d+)/);
+    const urlMatch = prInfo.match(/\*\*URL\*\*:\s*(https:\/\/[^\s]+)/);
+    const branchMatch = prInfo.match(/\*\*Branch\*\*:\s*([^\s\n]+)/);
+    return {
+        prNumber: numMatch ? parseInt(numMatch[1], 10) : null,
+        prUrl: urlMatch ? urlMatch[1] : null,
+        prBranch: branchMatch ? branchMatch[1] : null
+    };
+}
+
+/** Finds the open PR whose head branch matches, or null (never throws). */
+function findOpenPrForBranch(scm, branchName) {
+    try {
+        const openPRs = scm.listPrs('open');
+        const openMatch = (openPRs || []).filter(function(pr) {
+            return pr.head && pr.head.ref && pr.head.ref === branchName;
+        });
+        if (openMatch.length > 0) {
+            return openMatch[0];
+        }
+        console.warn('No open PR found for branch', branchName);
+    } catch (e) {
+        console.warn('Failed to find test PR by branch:', e);
+    }
+    return null;
+}
 
 function getPRNumber(params, storyKey, scm, readFile) {
     let prNumber = null;
@@ -17,31 +47,19 @@ function getPRNumber(params, storyKey, scm, readFile) {
         const inputFolder = params.inputFolderPath || ('input/' + storyKey);
         const prInfo = readFile(inputFolder + '/pr_info.md');
         if (prInfo) {
-            const numMatch = prInfo.match(/\*\*PR #\*\*:\s*(\d+)/);
-            const urlMatch = prInfo.match(/\*\*URL\*\*:\s*(https:\/\/[^\s]+)/);
-            const branchMatch = prInfo.match(/\*\*Branch\*\*:\s*([^\s\n]+)/);
-            if (numMatch) prNumber = parseInt(numMatch[1], 10);
-            if (urlMatch) prUrl = urlMatch[1];
-            if (branchMatch) prBranch = branchMatch[1];
+            const parsed = parsePrInfoFields(prInfo);
+            prNumber = parsed.prNumber;
+            prUrl = parsed.prUrl;
+            prBranch = parsed.prBranch;
         }
     } catch (e) {}
 
     if (!prNumber && scm) {
-        const branchName = 'test/' + storyKey;
-        try {
-            const openPRs = scm.listPrs('open');
-            const openMatch = (openPRs || []).filter(function(pr) {
-                return pr.head && pr.head.ref && pr.head.ref === branchName;
-            });
-            if (openMatch.length > 0) {
-                prNumber = openMatch[0].number;
-                prUrl = openMatch[0].html_url;
-                prBranch = openMatch[0].head && openMatch[0].head.ref;
-            } else {
-                console.warn('No open PR found for branch', branchName);
-            }
-        } catch (e) {
-            console.warn('Failed to find test PR by branch:', e);
+        const openPr = findOpenPrForBranch(scm, 'test/' + storyKey);
+        if (openPr) {
+            prNumber = openPr.number;
+            prUrl = openPr.html_url;
+            prBranch = openPr.head && openPr.head.ref;
         }
     }
 
@@ -66,15 +84,19 @@ function isInlineCommentInDiff(diffText, inlineComment, prReviewComments) {
     return false;
 }
 
+function fetchPrDiff(scm, prNumber) {
+    try {
+        return scm.getPrDiff(prNumber);
+    } catch (diffError) {
+        console.warn('Could not fetch PR diff for inline comment filtering:', diffError.message || diffError);
+        return null;
+    }
+}
+
 function filterInlineCommentsByDiff(scm, prNumber, inlineComments, prReviewComments) {
     if (!inlineComments || inlineComments.length === 0) return [];
 
-    var diffText = null;
-    try {
-        diffText = scm.getPrDiff(prNumber);
-    } catch (diffError) {
-        console.warn('Could not fetch PR diff for inline comment filtering:', diffError.message || diffError);
-    }
+    var diffText = fetchPrDiff(scm, prNumber);
 
     if (diffText === null || diffText === '') {
         // Without a diff we cannot anchor inline comments safely. Drop them to avoid
@@ -88,6 +110,62 @@ function filterInlineCommentsByDiff(scm, prNumber, inlineComments, prReviewComme
         console.warn('Skipping inline comment not present in PR diff:', (ic.path || ic.file) + ':' + ic.line);
         return false;
     });
+}
+
+/**
+ * Side inference for the SCM comment: an explicit AI-provided side wins;
+ * otherwise the diff decides (deleted files get LEFT).
+ */
+function inferRequestedSide(diffText, effectivePath, lineInfo, inlineComment, prReviewComments) {
+    if (inlineComment.side) return inlineComment.side;
+    if (lineInfo.present) return lineInfo.side;
+    if (prReviewComments.isFileDeletedInDiff(diffText, effectivePath)) return 'LEFT';
+    return null;
+}
+
+/**
+ * Resolves where an inline comment can be anchored: the direct file/line, or
+ * the submodule pointer change when the target lives inside a submodule.
+ */
+function resolveInlineAnchor(diffText, inlineComment, prReviewComments) {
+    var filePath = inlineComment.path || inlineComment.file;
+    var effectivePath = filePath;
+    var effectiveLine = inlineComment.line;
+    var startLine = inlineComment.startLine || null;
+    var lineInfo = prReviewComments.parseDiffLineInfo(diffText, effectivePath, effectiveLine);
+    var mappedFromSubmodule = false;
+
+    if (!lineInfo.present) {
+        var submodulePath = prReviewComments.findSubmodulePathForFile(diffText, filePath);
+        if (submodulePath) {
+            effectivePath = submodulePath;
+            effectiveLine = 1;
+            startLine = null;
+            lineInfo = prReviewComments.parseDiffLineInfo(diffText, effectivePath, effectiveLine);
+            mappedFromSubmodule = true;
+        }
+    }
+
+    var requestedSide;
+    if (mappedFromSubmodule) {
+        // Submodule anchors always take the pointer-change side: RIGHT when the
+        // pointer moved, otherwise whatever side the diff reports.
+        requestedSide = (lineInfo.side === 'LEFT' && prReviewComments.submoduleHasNewPointer(diffText, effectivePath))
+            ? 'RIGHT'
+            : (lineInfo.side || 'RIGHT');
+    } else {
+        requestedSide = inferRequestedSide(diffText, effectivePath, lineInfo, inlineComment, prReviewComments);
+    }
+
+    return {
+        filePath: filePath,
+        effectivePath: effectivePath,
+        effectiveLine: effectiveLine,
+        startLine: startLine,
+        requestedSide: requestedSide,
+        lineInfo: lineInfo,
+        mappedFromSubmodule: mappedFromSubmodule
+    };
 }
 
 function postInlineComment(scm, prNumber, inlineComment, storyKey, readFile, prReviewComments) {
@@ -107,49 +185,25 @@ function postInlineComment(scm, prNumber, inlineComment, storyKey, readFile, prR
         console.log('Posting inline comment on ' + filePath + ':' + inlineComment.line);
 
         var diffText = scm.getPrDiff(prNumber);
-        var requestedSide = inlineComment.side || null;
-        var effectivePath = filePath;
-        var effectiveLine = inlineComment.line;
-        var startLine = inlineComment.startLine || null;
-        var lineInfo = prReviewComments.parseDiffLineInfo(diffText, effectivePath, effectiveLine);
+        var anchor = resolveInlineAnchor(diffText, inlineComment, prReviewComments);
 
-        if (!lineInfo.present) {
-            var submodulePath = prReviewComments.findSubmodulePathForFile(diffText, filePath);
-            if (submodulePath) {
-                effectivePath = submodulePath;
-                effectiveLine = 1;
-                startLine = null;
-                lineInfo = prReviewComments.parseDiffLineInfo(diffText, effectivePath, effectiveLine);
-                requestedSide = (lineInfo.side === 'LEFT' && prReviewComments.submoduleHasNewPointer(diffText, effectivePath))
-                    ? 'RIGHT'
-                    : (lineInfo.side || 'RIGHT');
-                if (submodulePath !== filePath || inlineComment.line != 1) {
-                    commentText = '📍 **`' + filePath + ':' + inlineComment.line + '`** (submodule content line)\n\n' + commentText;
-                }
-            }
+        var text = commentText;
+        if (anchor.mappedFromSubmodule && (anchor.effectivePath !== filePath || inlineComment.line != 1)) {
+            text = '📍 **`' + filePath + ':' + inlineComment.line + '`** (submodule content line)\n\n' + text;
         }
 
-        // If the AI did not specify a side, infer it from the diff so deleted files get LEFT.
-        if (!requestedSide) {
-            if (lineInfo.present) {
-                requestedSide = lineInfo.side;
-            } else if (prReviewComments.isFileDeletedInDiff(diffText, effectivePath)) {
-                requestedSide = 'LEFT';
-            }
-        }
-
-        if (!lineInfo.present) {
+        if (!anchor.lineInfo.present) {
             console.warn('Inline comment line is not present in PR diff; skipping ' + filePath + ':' + inlineComment.line);
             return false;
         }
 
         scm.addInlineComment(
-            prNumber, effectivePath, effectiveLine, commentText,
-            startLine, requestedSide
+            prNumber, anchor.effectivePath, anchor.effectiveLine, text,
+            anchor.startLine, anchor.requestedSide
         );
 
-        console.log('✅ Posted inline comment on ' + effectivePath + ':' + effectiveLine +
-            (effectivePath !== filePath || effectiveLine !== inlineComment.line ?
+        console.log('✅ Posted inline comment on ' + anchor.effectivePath + ':' + anchor.effectiveLine +
+            (anchor.effectivePath !== filePath || anchor.effectiveLine !== inlineComment.line ?
                 ' (mapped from ' + filePath + ':' + inlineComment.line + ')' : ''));
         return true;
     } catch (error) {
@@ -181,6 +235,17 @@ function postGeneralComment(scm, prNumber, generalComment, storyKey, workingDir,
     }
 }
 
+function resolveStaleReviewThreads(scm, prNumber, threads) {
+    threads.forEach(function(t) {
+        try {
+            scm.resolveThread(prNumber, { threadId: t.threadId });
+            console.log('✅ Resolved stale review thread', t.threadId);
+        } catch (e) {
+            console.warn('Failed to resolve stale review thread', t.threadId + ':', e.message || e);
+        }
+    });
+}
+
 function resolveExistingAgentReviewThreads(scm, prNumber, repoInfo, fetchDiscussionsAndRawData) {
     if (!repoInfo || !repoInfo.owner || !repoInfo.repo || !prNumber) return;
     try {
@@ -193,14 +258,7 @@ function resolveExistingAgentReviewThreads(scm, prNumber, repoInfo, fetchDiscuss
         if (staleThreads.length === 0) return;
 
         console.log('Resolving ' + staleThreads.length + ' stale review thread(s) before posting new feedback...');
-        staleThreads.forEach(function(t) {
-            try {
-                scm.resolveThread(prNumber, { threadId: t.threadId });
-                console.log('✅ Resolved stale review thread', t.threadId);
-            } catch (e) {
-                console.warn('Failed to resolve stale review thread', t.threadId + ':', e.message || e);
-            }
-        });
+        resolveStaleReviewThreads(scm, prNumber, staleThreads);
     } catch (e) {
         console.warn('Could not resolve stale review threads:', e.message || e);
     }
@@ -236,10 +294,10 @@ function applyVerdictLabels(scm, prNumber, storyKey, isApproved, getTracker, LAB
     }
 }
 
-function buildReworkFeedback(reviewData, readFile) {
-    var feedback = 'h3. 📝 Test Automation Rework Feedback\n\n';
-    feedback += 'The following review comments must be addressed before the test PR can be merged:\n\n';
-    reviewData.inlineComments.forEach(function(ic, idx) {
+/** Numbered per-comment section of the rework feedback comment. */
+function buildInlineFeedbackEntries(inlineComments, readFile) {
+    var entries = '';
+    inlineComments.forEach(function(ic, idx) {
         var path = ic.path || ic.file || '(file unknown)';
         var line = ic.line ? ':' + ic.line : '';
         var body = ic.body;
@@ -248,27 +306,45 @@ function buildReworkFeedback(reviewData, readFile) {
         }
         body = (body || '').trim();
         if (!body) return;
-        feedback += '#' + (idx + 1) + '. *' + path + line + '*\n';
-        feedback += '{code}' + body + '{code}\n\n';
+        entries += '#' + (idx + 1) + '. *' + path + line + '*\n';
+        entries += '{code}' + body + '{code}\n\n';
     });
-    if (reviewData.generalComment) {
-        var generalBody = readFile(reviewData.generalComment);
-        if (generalBody && generalBody.trim()) {
-            feedback += 'h4. General comment\n\n{code}' + generalBody.trim() + '{code}\n';
-        }
+    return entries;
+}
+
+function appendGeneralFeedback(feedback, generalComment, readFile) {
+    if (!generalComment) return feedback;
+    var generalBody = readFile(generalComment);
+    if (generalBody && generalBody.trim()) {
+        feedback += 'h4. General comment\n\n{code}' + generalBody.trim() + '{code}\n';
     }
     return feedback;
 }
 
+function buildReworkFeedback(reviewData, readFile) {
+    var feedback = 'h3. 📝 Test Automation Rework Feedback\n\n';
+    feedback += 'The following review comments must be addressed before the test PR can be merged:\n\n';
+    feedback += buildInlineFeedbackEntries(reviewData.inlineComments, readFile);
+    return appendGeneralFeedback(feedback, reviewData.generalComment, readFile);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
+        parsePrInfoFields: parsePrInfoFields,
+        findOpenPrForBranch: findOpenPrForBranch,
         getPRNumber: getPRNumber,
         isInlineCommentInDiff: isInlineCommentInDiff,
+        fetchPrDiff: fetchPrDiff,
         filterInlineCommentsByDiff: filterInlineCommentsByDiff,
+        inferRequestedSide: inferRequestedSide,
+        resolveInlineAnchor: resolveInlineAnchor,
         postInlineComment: postInlineComment,
         postGeneralComment: postGeneralComment,
+        resolveStaleReviewThreads: resolveStaleReviewThreads,
         resolveExistingAgentReviewThreads: resolveExistingAgentReviewThreads,
         applyVerdictLabels: applyVerdictLabels,
+        buildInlineFeedbackEntries: buildInlineFeedbackEntries,
+        appendGeneralFeedback: appendGeneralFeedback,
         buildReworkFeedback: buildReworkFeedback
     };
 }

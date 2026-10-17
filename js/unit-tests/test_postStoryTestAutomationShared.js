@@ -282,6 +282,39 @@ suite('postStoryTestAutomationShared: git ops', function() {
         assert.ok(calls.indexOf('git push -u origin test/TS-2') !== -1);
     });
 
+    test('publishExistingBranch: a failed fast-forward push falls back to the lease push', function() {
+        var calls = [];
+        var pushAttempts = 0;
+        var shared = loadShared({
+            cli_execute_command: function(args) {
+                calls.push(args.command);
+                if (args.command === 'git rev-parse HEAD') return 'bbb\n';
+                if (args.command === 'git rev-parse origin/test/TS-2') return 'aaa\n';
+                if (args.command === 'git merge-base HEAD origin/test/TS-2') return 'aaa\n';
+                if (args.command === 'git push -u origin test/TS-2') {
+                    pushAttempts++;
+                    if (pushAttempts === 1) throw new Error('rejected');
+                    return '';
+                }
+                if (args.command === 'git push -u origin test/TS-2 --force-with-lease') return '';
+                throw new Error('unexpected command: ' + args.command);
+            }
+        });
+        var result = shared.createGitOps(fakePrHelper()).publishExistingBranch('test/TS-2', null);
+        assert.equal(result.success, true);
+        assert.equal(pushAttempts, 2);
+        assert.ok(calls.indexOf('git push -u origin test/TS-2 --force-with-lease') !== -1);
+    });
+
+    test('syncDecision classifies identical/ahead/behind/diverged shas', function() {
+        var ops = loadShared({}).createGitOps(fakePrHelper());
+        assert.equal(ops.syncDecision('aaa', 'aaa', 'aaa'), 'identical');
+        assert.equal(ops.syncDecision('bbb', 'aaa', 'aaa'), 'ahead');
+        assert.equal(ops.syncDecision('aaa', 'bbb', 'aaa'), 'behind');
+        assert.equal(ops.syncDecision('bbb', 'ccc', 'aaa'), 'diverged');
+        assert.equal(ops.syncDecision('bbb', '', ''), 'diverged', 'unknown remote sha is treated as diverged');
+    });
+
     test('publishExistingBranch: remote ahead resets to the remote state', function() {
         var calls = [];
         var shared = loadShared({
@@ -409,8 +442,7 @@ suite('postStoryTestAutomationShared: git ops', function() {
         assert.equal(result.success, false);
     });
 
-    test('performGitOperations: a failing commit reports failure', function() {
-        var shared = loadShared({
+    test('performGitOperations: a failing commit reports failure', function() {        var shared = loadShared({
             cli_execute_command: cliMock({
                 'git status --short -- testing': '?? testing/tests/TS-1/test.py\n',
                 'git add testing/': '',
@@ -444,6 +476,45 @@ suite('postStoryTestAutomationShared: git ops', function() {
             .performGitOperations('test/TS-1', 'msg', null, 'testing/');
         assert.equal(result.success, true);
         assert.ok(calls.indexOf('git push -u origin test/TS-1 --force') !== -1);
+    });
+
+    test('performGitOperations: nothing staged and a missing remote branch that cannot be pushed reports failure', function() {
+        var shared = loadShared({
+            cli_execute_command: function(args) {
+                if (args.command === 'git status --short -- testing') return '';
+                if (args.command === 'git add testing/') return '';
+                if (args.command === 'git diff --cached --stat') return '';
+                if (args.command.indexOf('git ls-remote --heads origin test/TS-1') === 0) return '';
+                if (args.command === 'git push -u origin test/TS-1') throw new Error('push refused');
+                throw new Error('unexpected command: ' + args.command);
+            }
+        });
+        var result = shared.createGitOps(fakePrHelper())
+            .performGitOperations('test/TS-1', 'msg', null, 'testing/');
+        assert.equal(result.success, false);
+        assert.ok(result.error.indexOf('could not push branch') !== -1);
+    });
+
+    test('performGitOperations: a failing git status log does not stop staging', function() {
+        var calls = [];
+        var shared = loadShared({
+            cli_execute_command: function(args) {
+                calls.push(args.command);
+                if (args.command === 'git status --short -- testing') throw new Error('status exploded');
+                if (args.command === 'git add testing/') return '';
+                if (args.command === 'git diff --cached --stat') return ' f | 1 +\n';
+                if (args.command === 'git commit -m "msg"') return '';
+                if (args.command === 'git fetch origin test/TS-1') throw new Error('offline');
+                if (args.command === 'git push -u origin test/TS-1') return '';
+                if (args.command.indexOf('git ls-remote --heads origin test/TS-1') === 0) return 'aaa\trefs/heads/test/TS-1\n';
+                throw new Error('unexpected command: ' + args.command);
+            }
+        });
+        var result = shared.createGitOps(fakePrHelper())
+            .performGitOperations('test/TS-1', 'msg', null, 'testing/');
+        assert.equal(result.success, true);
+        assert.ok(calls.indexOf('git add testing/') !== -1, 'staging still ran after the status log failure');
+        assert.ok(calls.indexOf('git push -u origin test/TS-1') !== -1, 'fetch failure is tolerated before the push');
     });
 
 });

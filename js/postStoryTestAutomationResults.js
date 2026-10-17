@@ -398,6 +398,35 @@ function removeAutomationLabels(storyKey, params) {
 // ── action() step helpers (gh-1008 CRAP split) ───────────────────────────────
 
 /**
+ * Bug with a real product failure: the fix did not work — finalize the
+ * failing Test Cases as Failed (stage + final status).
+ */
+function finalizeFailedBugTestCases(failedResults, workingDir, storyKey, config, jiraConfig) {
+    failedResults.forEach(function(item) {
+        updateTestCaseStatus(item.testCaseKey, 'failed', workingDir, storyKey, config);
+        finalizeTestCaseStatus(item.testCaseKey, 'failed', jiraConfig);
+    });
+}
+
+/** Moves the Bug back to Ready For Development and posts the failure summary. */
+function returnBugToDevelopment(storyKey, failedResults, statuses) {
+    var bugReturnStatus = statuses.READY_FOR_DEVELOPMENT;
+    try {
+        getTracker().moveToStatus(storyKey, bugReturnStatus);
+        console.log('✅ Moved Bug', storyKey, 'back to', bugReturnStatus);
+    } catch (moveErr) {
+        console.warn('Failed to move Bug', storyKey, 'to', bugReturnStatus, ':', moveErr);
+    }
+
+    try {
+        var failureList = failedResults.map(function(r) { return '* ' + r.testCaseKey + (r.failureSummary ? ' — ' + r.failureSummary : ''); }).join('\n');
+        getTracker().postComment(storyKey, 'h3. ⚠️ Bug Fix Did Not Pass Automated Tests\n\nThe following Test Cases failed with a product regression:\n' + failureList + '\n\nThe Bug is being returned to *Ready For Development* for a corrected fix.');
+    } catch (e) {
+        console.warn('Failed to post bug return comment:', e);
+    }
+}
+
+/**
  * Bug with a real product failure: the fix did not work — send the Bug
  * straight back to development and finalize the failing Test Cases as Failed.
  * Returns the action result when this path handled the run, null otherwise.
@@ -413,25 +442,8 @@ function handleBugWithProductFailure(params, result, storyKey, jiraConfig, statu
     }
 
     console.log('Bug', storyKey, 'has', failedResults.length, 'product failure(s) — returning to development');
-    failedResults.forEach(function(item) {
-        updateTestCaseStatus(item.testCaseKey, 'failed', workingDir, storyKey, config);
-        finalizeTestCaseStatus(item.testCaseKey, 'failed', jiraConfig);
-    });
-
-    var bugReturnStatus = statuses.READY_FOR_DEVELOPMENT;
-    try {
-        getTracker().moveToStatus(storyKey, bugReturnStatus);
-        console.log('✅ Moved Bug', storyKey, 'back to', bugReturnStatus);
-    } catch (moveErr) {
-        console.warn('Failed to move Bug', storyKey, 'to', bugReturnStatus, ':', moveErr);
-    }
-
-    try {
-        var failureList = failedResults.map(function(r) { return '* ' + r.testCaseKey + (r.failureSummary ? ' — ' + r.failureSummary : ''); }).join('\n');
-        getTracker().postComment(storyKey, 'h3. ⚠️ Bug Fix Did Not Pass Automated Tests\n\nThe following Test Cases failed with a product regression:\n' + failureList + '\n\nThe Bug is being returned to *Ready For Development* for a corrected fix.');
-    } catch (e) {
-        console.warn('Failed to post bug return comment:', e);
-    }
+    finalizeFailedBugTestCases(failedResults, workingDir, storyKey, config, jiraConfig);
+    returnBugToDevelopment(storyKey, failedResults, statuses);
 
     removeAutomationLabels(storyKey, params);
     return {
@@ -475,26 +487,34 @@ function handleBlockedByHuman(storyKey, result, jiraConfig, params) {
     return { success: true, status: 'blocked_by_human', storyKey: storyKey };
 }
 
+function updatePassedOrFailedTc(item, noCodeChanges, workingDir, storyKey, config, jiraConfig) {
+    updateTestCaseStatus(item.testCaseKey, item.status, workingDir, storyKey, config);
+    // When there are no test code changes we skip the PR/review/merge flow,
+    // so we must finalize TC statuses immediately so story_done_check can act.
+    if (noCodeChanges) {
+        finalizeTestCaseStatus(item.testCaseKey, item.status, jiraConfig);
+    }
+}
+
+function handleTestCaseOutcome(item, noCodeChanges, workingDir, storyKey, config, jiraConfig, statuses, testFilesPath) {
+    if (item.status === 'passed' || item.status === 'failed') {
+        updatePassedOrFailedTc(item, noCodeChanges, workingDir, storyKey, config, jiraConfig);
+    } else if (item.status === 'skipped') {
+        // Skipped tests are final — no PR/review needed.
+        moveSkippedTcToStatus(item.testCaseKey, statuses.SKIPPED);
+    } else if (item.status === 'irrelevant') {
+        // Legacy/no-longer-applicable tests are final; delete their test code.
+        moveIrrelevantTcToStatus(item.testCaseKey, statuses.IRRELEVANT, testFilesPath, workingDir);
+    } else {
+        console.log('Skipping status update for', item.testCaseKey, '— status:', item.status);
+    }
+}
+
 function applyTestCaseResults(result, noCodeChanges, workingDir, storyKey, config, jiraConfig, statuses, testFilesPath) {
     if (!result.results || result.results.length === 0) return;
 
     result.results.forEach(function(item) {
-        if (item.status === 'passed' || item.status === 'failed') {
-            updateTestCaseStatus(item.testCaseKey, item.status, workingDir, storyKey, config);
-            // When there are no test code changes we skip the PR/review/merge flow,
-            // so we must finalize TC statuses immediately so story_done_check can act.
-            if (noCodeChanges) {
-                finalizeTestCaseStatus(item.testCaseKey, item.status, jiraConfig);
-            }
-        } else if (item.status === 'skipped') {
-            // Skipped tests are final — no PR/review needed.
-            moveSkippedTcToStatus(item.testCaseKey, statuses.SKIPPED);
-        } else if (item.status === 'irrelevant') {
-            // Legacy/no-longer-applicable tests are final; delete their test code.
-            moveIrrelevantTcToStatus(item.testCaseKey, statuses.IRRELEVANT, testFilesPath, workingDir);
-        } else {
-            console.log('Skipping status update for', item.testCaseKey, '— status:', item.status);
-        }
+        handleTestCaseOutcome(item, noCodeChanges, workingDir, storyKey, config, jiraConfig, statuses, testFilesPath);
     });
 }
 

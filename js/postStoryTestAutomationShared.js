@@ -8,7 +8,9 @@
  * byte-identical to the originals — they are posted verbatim to the tracker.
  *
  * The git ops take the pullRequest helper as a factory argument so test
- * suites inject the same instance the calling module uses.
+ * suites inject the same instance the calling module uses. Every function
+ * stays ≤ CC 8 so the per-function CRAP ratchet (new keys must be ≤ 8)
+ * holds even before coverage is applied.
  */
 
 /**
@@ -119,36 +121,18 @@ function createGitOps(prHelper) {
         }
     }
 
-    function publishExistingBranch(branchName, workingDir) {
-        // Ensure the local remote-tracking ref is fresh before any push decision.
-        fetchRemoteBranch(branchName, workingDir);
+    /**
+     * Pure sync decision for a branch whose local/remote shas are known:
+     * 'identical' | 'ahead' (fast-forward) | 'behind' (adopt remote) | 'diverged'.
+     */
+    function syncDecision(localSha, remoteSha, mergeBase) {
+        if (localSha && remoteSha && localSha === remoteSha) return 'identical';
+        if (mergeBase && mergeBase === remoteSha && mergeBase !== localSha) return 'ahead';
+        if (mergeBase && mergeBase === localSha && mergeBase !== remoteSha) return 'behind';
+        return 'diverged';
+    }
 
-        var localSha = revParse('HEAD', workingDir);
-        var remoteSha = revParse('origin/' + branchName, workingDir);
-
-        if (localSha && remoteSha && localSha === remoteSha) {
-            console.log('Local branch already matches origin/' + branchName + '; no push needed');
-            return { success: true, noNewCommit: true };
-        }
-
-        var mergeBase = (localSha && remoteSha) ? findMergeBase('HEAD', 'origin/' + branchName, workingDir) : '';
-
-        if (mergeBase === remoteSha && mergeBase !== localSha) {
-            // Local is strictly ahead of remote (fast-forward).
-            try {
-                runInRepo('git push -u origin ' + branchName, workingDir);
-                return { success: true, noNewCommit: true };
-            } catch (e) {
-                console.warn('Fast-forward push failed:', e);
-            }
-        } else if (mergeBase === localSha && mergeBase !== remoteSha) {
-            // Remote moved ahead while we had no local changes to keep. Adopt remote state.
-            console.log('Remote ' + branchName + ' is ahead of local branch; resetting to origin/' + branchName);
-            runInRepo('git reset --hard origin/' + branchName, workingDir);
-            return { success: true, noNewCommit: true };
-        }
-
-        // Branches diverged or no remote yet; fall back to push with refreshed lease.
+    function pushBranchWithLease(branchName, workingDir) {
         try {
             runInRepo('git push -u origin ' + branchName, workingDir);
             return { success: true, noNewCommit: true };
@@ -164,79 +148,142 @@ function createGitOps(prHelper) {
         }
     }
 
+    function publishExistingBranch(branchName, workingDir) {
+        // Ensure the local remote-tracking ref is fresh before any push decision.
+        fetchRemoteBranch(branchName, workingDir);
+
+        var localSha = revParse('HEAD', workingDir);
+        var remoteSha = revParse('origin/' + branchName, workingDir);
+        var mergeBase = (localSha && remoteSha) ? findMergeBase('HEAD', 'origin/' + branchName, workingDir) : '';
+
+        var decision = syncDecision(localSha, remoteSha, mergeBase);
+
+        if (decision === 'identical') {
+            console.log('Local branch already matches origin/' + branchName + '; no push needed');
+            return { success: true, noNewCommit: true };
+        }
+
+        if (decision === 'ahead') {
+            // Local is strictly ahead of remote (fast-forward).
+            try {
+                runInRepo('git push -u origin ' + branchName, workingDir);
+                return { success: true, noNewCommit: true };
+            } catch (e) {
+                console.warn('Fast-forward push failed:', e);
+            }
+        } else if (decision === 'behind') {
+            // Remote moved ahead while we had no local changes to keep. Adopt remote state.
+            console.log('Remote ' + branchName + ' is ahead of local branch; resetting to origin/' + branchName);
+            runInRepo('git reset --hard origin/' + branchName, workingDir);
+            return { success: true, noNewCommit: true };
+        }
+
+        // Branches diverged (or the fast-forward push failed); push with refreshed lease.
+        return pushBranchWithLease(branchName, workingDir);
+    }
+
+    /**
+     * Logs the working-tree state and stages the test path.
+     * Returns the `git diff --cached --stat` output (empty when nothing staged).
+     */
+    function inspectAndStage(addPath, inspectPath, workingDir) {
+        try {
+            var lsOutput = runInRepo('git status --short -- ' + inspectPath, workingDir) || '';
+            console.log('Git status for ' + inspectPath + ':', cleanCommandOutput(lsOutput) || '(empty)');
+        } catch (e) {
+            console.warn('Could not list ' + inspectPath + ':', e);
+        }
+
+        console.log('Staging test path:', addPath);
+        runInRepo('git add ' + addPath, workingDir);
+
+        return cleanCommandOutput(runInRepo('git diff --cached --stat', workingDir) || '');
+    }
+
+    /**
+     * Nothing new to commit: publish the branch state as-is (push when the
+     * remote branch is missing, otherwise adopt/publish the existing one).
+     */
+    function handleNoStagedChanges(addPath, branchName, workingDir) {
+        console.warn('No new staged changes in ' + addPath + ' (files may already exist on branch)');
+        var remoteBranchExists = false;
+        try {
+            // gh-912: decide on a real refs/heads/<branch> ref line — a
+            // warning-only capture (central-mode insteadOf origin, git
+            // ≥ 2.54) must classify as "branch absent" so the push runs.
+            remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
+        } catch (lsRemoteErr) {
+            console.warn('Error checking remote branches:', lsRemoteErr);
+        }
+        if (!remoteBranchExists) {
+            console.log('No remote branch found, pushing current branch state...');
+            try {
+                runInRepo('git push -u origin ' + branchName, workingDir);
+            } catch (pushErr) {
+                console.warn('Failed to push branch:', pushErr);
+                return { success: false, error: 'No test files were written and could not push branch' };
+            }
+        } else {
+            var publishResult = publishExistingBranch(branchName, workingDir);
+            if (!publishResult.success) {
+                return publishResult;
+            }
+        }
+        return { success: true, branchName: branchName, noNewCommit: true };
+    }
+
+    /**
+     * Pushes the current HEAD, escalating normal push → --force-with-lease →
+     * --force on rejections.
+     */
+    function pushWithEscalation(branchName, workingDir) {
+        console.log('Pushing to remote...');
+        fetchRemoteBranch(branchName, workingDir);
+        try {
+            runInRepo('git push -u origin ' + branchName, workingDir);
+        } catch (e) {
+            console.log('Normal push failed, retrying with --force-with-lease...');
+            try {
+                runInRepo('git push -u origin ' + branchName + ' --force-with-lease', workingDir);
+            } catch (leaseErr) {
+                console.log('Force-with-lease push failed, force pushing...');
+                runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
+            }
+        }
+    }
+
+    /**
+     * gh-912: verify the push produced a real refs/heads/<branch> ref line —
+     * stderr noise never counts as the branch existing.
+     */
+    function verifyRemoteBranchPresent(branchName, workingDir) {
+        var remoteBranchExists = false;
+        try {
+            remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
+        } catch (lsRemoteErr) {
+            console.warn('Error checking remote branches:', lsRemoteErr);
+        }
+        if (!remoteBranchExists) {
+            throw new Error('Branch not found on remote after push');
+        }
+    }
+
     function performGitOperations(branchName, commitMessage, workingDir, testFilesPath) {
         var addPath = testFilesPath || 'testing/';
         var inspectPath = addPath.replace(/\/$/, '') || '.';
         try {
-            try {
-                var lsOutput = runInRepo('git status --short -- ' + inspectPath, workingDir) || '';
-                console.log('Git status for ' + inspectPath + ':', cleanCommandOutput(lsOutput) || '(empty)');
-            } catch (e) {
-                console.warn('Could not list ' + inspectPath + ':', e);
-            }
-
-            console.log('Staging test path:', addPath);
-            runInRepo('git add ' + addPath, workingDir);
-
-            var stagedOutput = cleanCommandOutput(runInRepo('git diff --cached --stat', workingDir) || '');
+            var stagedOutput = inspectAndStage(addPath, inspectPath, workingDir);
             console.log('Staged changes:', stagedOutput || '(none)');
 
             if (!stagedOutput || !stagedOutput.trim()) {
-                console.warn('No new staged changes in ' + addPath + ' (files may already exist on branch)');
-                var remoteBranchExists = false;
-                try {
-                    // gh-912: decide on a real refs/heads/<branch> ref line — a
-                    // warning-only capture (central-mode insteadOf origin, git
-                    // ≥ 2.54) must classify as "branch absent" so the push runs.
-                    remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
-                } catch (lsRemoteErr) {
-                    console.warn('Error checking remote branches:', lsRemoteErr);
-                }
-                if (!remoteBranchExists) {
-                    console.log('No remote branch found, pushing current branch state...');
-                    try {
-                        runInRepo('git push -u origin ' + branchName, workingDir);
-                    } catch (pushErr) {
-                        console.warn('Failed to push branch:', pushErr);
-                        return { success: false, error: 'No test files were written and could not push branch' };
-                    }
-                } else {
-                    var publishResult = publishExistingBranch(branchName, workingDir);
-                    if (!publishResult.success) {
-                        return publishResult;
-                    }
-                }
-                return { success: true, branchName: branchName, noNewCommit: true };
+                return handleNoStagedChanges(addPath, branchName, workingDir);
             }
 
             console.log('Committing...');
             runInRepo('git commit -m "' + prHelper.sanitizeCommitMessage(commitMessage) + '"', workingDir);
 
-            console.log('Pushing to remote...');
-            fetchRemoteBranch(branchName, workingDir);
-            try {
-                runInRepo('git push -u origin ' + branchName, workingDir);
-            } catch (e) {
-                console.log('Normal push failed, retrying with --force-with-lease...');
-                try {
-                    runInRepo('git push -u origin ' + branchName + ' --force-with-lease', workingDir);
-                } catch (leaseErr) {
-                    console.log('Force-with-lease push failed, force pushing...');
-                    runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
-                }
-            }
-
-            var remoteBranchExists = false;
-            try {
-                // gh-912: verify the push produced a real refs/heads/<branch> ref
-                // line — stderr noise never counts as the branch existing.
-                remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
-            } catch (lsRemoteErr) {
-                console.warn('Error checking remote branches:', lsRemoteErr);
-            }
-            if (!remoteBranchExists) {
-                throw new Error('Branch not found on remote after push');
-            }
+            pushWithEscalation(branchName, workingDir);
+            verifyRemoteBranchPresent(branchName, workingDir);
 
             console.log('✅ Git operations completed');
             return { success: true, branchName: branchName };
@@ -251,7 +298,13 @@ function createGitOps(prHelper) {
         fetchRemoteBranch: fetchRemoteBranch,
         revParse: revParse,
         findMergeBase: findMergeBase,
+        syncDecision: syncDecision,
+        pushBranchWithLease: pushBranchWithLease,
         publishExistingBranch: publishExistingBranch,
+        inspectAndStage: inspectAndStage,
+        handleNoStagedChanges: handleNoStagedChanges,
+        pushWithEscalation: pushWithEscalation,
+        verifyRemoteBranchPresent: verifyRemoteBranchPresent,
         performGitOperations: performGitOperations
     };
 }
