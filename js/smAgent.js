@@ -3034,7 +3034,27 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     var ghostProbe = rcHeadRuns
                         ? mutexRegistryModule.isGhostCancelProbe(rcHeadRuns, null)
                         : null;
-                    if (ghostProbe && ghostProbe.isGhostCancel) {
+                    // gh-1000 ghost gate: a re-dispatch is only justified
+                    // while the merge gate is actually WAITING on a
+                    // required context that will never report (missing
+                    // from the rollup or non-terminal). All-terminal
+                    // contexts (green/failure) mean the gate is not
+                    // blocked-by-absence — red belongs to fail_validation,
+                    // a cancelled CONTEXT to the rerun path above (the
+                    // gh-682 kicker fixtures: cancelled run in the
+                    // rollup, contexts re-stamped green — never act).
+                    var ghostGateHeld = false;
+                    try {
+                        var ghostRollup = headCheckRunsSafe(effectiveRepoInfo, rcHead);
+                        if (ghostRollup !== null) {
+                            var ghostLatest = latestCheckRunConclusions(ghostRollup);
+                            var ghostNames = rcAny ? Object.keys(ghostLatest) : rcContexts;
+                            ghostGateHeld = ghostNames.some(function (c) {
+                                return !ghostLatest[c] || ghostLatest[c].concl === null;
+                            });
+                        }
+                    } catch (eGhostGate) { ghostGateHeld = false; }
+                    if (ghostProbe && ghostProbe.isGhostCancel && ghostGateHeld) {
                         var ghostMarker = '🔁 Ghost-cancelled validation re-dispatched';
                         var ghostReported = false;
                         try {
@@ -4082,6 +4102,18 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     spFull, spCfg, function (a) {
                         return cli_execute_command(a);
                     });
+                // gh-1000: drain this tick's mutex events accumulated by
+                // the github-source phantom-heal scan. The require is
+                // lazy + guarded: unit tests load smAgent under
+                // makeRequire without the source module chain mapped,
+                // and a miss simply means no mutex block this tick.
+                var ghSrcForMutex = null;
+                try {
+                    ghSrcForMutex = require('./sm/sources/githubSource.js');
+                } catch (eGhSrc) { ghSrcForMutex = null; }
+                spMutex = (ghSrcForMutex &&
+                    typeof ghSrcForMutex.takeMutexTickSnapshot === 'function')
+                    ? ghSrcForMutex.takeMutexTickSnapshot() : null;
                 var spState = factoryStateModule.buildFactoryState({
                     repoInfo: spRepo,
                     prs: spPrList,

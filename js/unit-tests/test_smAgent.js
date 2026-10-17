@@ -310,7 +310,8 @@ function makeSmAgent(opts) {
             makeRequire({
                 '../../common/machineAuthor.js': machineAuthorModule,
                 '../../common/smProvider.js': smProviderStub,
-                '../../common/smAsync.js': smAsyncForSource
+                '../../common/smAsync.js': smAsyncForSource,
+                '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
             }),
             smMocks
         );
@@ -342,6 +343,7 @@ function makeSmAgent(opts) {
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
             './common/triggerFailures.js': loadModule('js/common/triggerFailures.js', makeRequire({}), {}),
+            './common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {

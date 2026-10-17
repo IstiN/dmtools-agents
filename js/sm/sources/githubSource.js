@@ -687,6 +687,22 @@ function mutexHoldersOf(items, q) {
     }).map(function (p) { return p.number; });
 }
 
+// gh-1000 — per-tick event accumulator: the phantom-heal scan below
+// records self-heal events HERE; the SM (smAgent factory-state publish
+// rule) drains them once per tick via takeMutexTickSnapshot(). Module
+// state, not a global — githubSource and smAgent are separate modules.
+var mutexTickEvents = null;
+
+function recordMutexTickEvent(ev) {
+    mutexTickEvents = mutexRegistryModule.mergeSnapshot(mutexTickEvents, ev || {});
+}
+
+function takeMutexTickSnapshot() {
+    var s = mutexTickEvents;
+    mutexTickEvents = null;
+    return s;
+}
+
 function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {
     var q = rule.query || {};
     // The open-PR list rides the provider's per-tick ioCache — this site
@@ -853,7 +869,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
                         console.log('   ⚠️ ' + alarm.title + ' — ' + alarm.detail +
                             ' (cached holders [' + holders.join(', ') + '] vs live [' +
                             liveHolderSet.holders.join(', ') + ']; ioCache self-healed, defer cancelled)');
-                        spMutex = mutexRegistryModule.mergeSnapshot(spMutex, {
+                        recordMutexTickEvent({
                             mutexSelfHeals: 1,
                             phantomHolderTicks: 1,
                             alarm: alarm
@@ -1002,5 +1018,6 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { query: query, matchesGuards: matchesGuards };
+    module.exports = { query: query, matchesGuards: matchesGuards,
+        takeMutexTickSnapshot: takeMutexTickSnapshot };
 }

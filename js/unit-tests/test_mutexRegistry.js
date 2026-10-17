@@ -68,9 +68,10 @@ suite('mutexRegistry derive — reconciliation from the label layer (AC1, I1)', 
 
 suite('mutexRegistry reconcile — self-heal with alarm, tick counters (AC2, I2)', function () {
     test('cached-vs-live divergence self-heals: corrected holders + alarm record', function () {
-        var cached = registry.derive([997], [item(997, [])], registry.noCompletedRuns, 'o/r', T0);
-        var live = registry.derive([997], [item(997, [])], registry.noCompletedRuns, 'o/r', T1);
-        live.holders = []; // live re-read: the phantom is gone
+        // The cached registry view says pr-997 holds; the live re-read
+        // (label layer) says nobody does — the recorded 19:08Z shape.
+        var cached = { holders: [997], repo: 'o/r', at: T0 };
+        var live = { holders: [], repo: 'o/r', at: T1 };
         var out = registry.reconcile(cached, live);
         assert.equal(out.selfHealed, true);
         assert.deepEqual(out.holders, []);
@@ -100,14 +101,16 @@ suite('mutexRegistry reconcile — self-heal with alarm, tick counters (AC2, I2)
     });
 
     test('clean tick resets the consecutive counter but keeps the cumulative self-heal count', function () {
-        var cached = registry.derive([997], [item(997, [])], registry.noCompletedRuns, 'o/r', T0);
-        var empty = registry.derive([], [], registry.noCompletedRuns, 'o/r', T1);
-        var healed = registry.reconcile(cached, empty);
+        // Tick 1: cached says 997 holds, live says nobody (phantom heal).
+        var healed = registry.reconcile({ holders: [997], at: T0 }, { holders: [], at: T0 });
+        assert.equal(healed.selfHealed, true);
         assert.equal(healed.mutexSelfHeals, 1);
-        // Next tick is clean: no new events, consecutive resets.
+        assert.equal(healed.consecutivePhantomTicks, 1);
+        // Tick 2 is clean: no new events, no self-heal.
+        var empty = { holders: [], at: T1 };
         var clean = registry.reconcile(empty, empty);
         assert.equal(clean.selfHealed, false);
-        assert.equal(clean.mutexSelfHeals || 0, 0);
+        assert.equal(clean.mutexSelfHeals, 0);
     });
 
     test('null/undefined state degrades to a fresh state (fail-open, never a throw)', function () {
