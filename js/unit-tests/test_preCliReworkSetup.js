@@ -298,23 +298,10 @@ function resolveStatusesMock(customParams, jiraStatuses) {
     return jiraStatuses || DEFAULT_REWORK_STATUSES;
 }
 
-// Swap global console for a recorder for the duration of fn, then restore it.
-// The eval-loaded modules look console up dynamically, so the swap is visible.
-function captureConsole1002(fn) {
-    var logs = { log: [], warn: [], error: [] };
-    var orig = console;
-    global.console = {
-        log: function() { logs.log.push(Array.prototype.join.call(arguments, ' ')); },
-        warn: function() { logs.warn.push(Array.prototype.join.call(arguments, ' ')); },
-        error: function() { logs.error.push(Array.prototype.join.call(arguments, ' ')); }
-    };
-    try {
-        fn();
-    } finally {
-        global.console = orig;
-    }
-    return logs;
-}
+// gh-1002: console output of the SUT is captured by injecting a recorder as a
+// `console` mock in the loadModule mocks bag (the repo-standard pattern, cf.
+// test_reviewVerdicts.js) — never by touching `global`, which does not exist in
+// the GraalJS host the canonical testRunner.js runs in.
 
 /**
  * Full-action harness for the gh-1002 suites: loads js/preCliReworkSetup.js with
@@ -429,6 +416,13 @@ function makeActionHarness(overides) {
         }
     };
 
+    var logs = { log: [], warn: [], error: [] };
+    var consoleRecorder = {
+        log: function() { logs.log.push(Array.prototype.join.call(arguments, ' ')); },
+        warn: function() { logs.warn.push(Array.prototype.join.call(arguments, ' ')); },
+        error: function() { logs.error.push(Array.prototype.join.call(arguments, ' ')); }
+    };
+
     var mod = loadModule(
         'js/preCliReworkSetup.js',
         makeRequire({
@@ -445,6 +439,7 @@ function makeActionHarness(overides) {
             './config.js': { resolveStatuses: resolveStatusesMock }
         }),
         {
+            console: consoleRecorder,
             file_write: function(args) {
                 var failPaths = def1002(overides.failFileWritePaths, []);
                 if (failPaths.indexOf(args.path) !== -1) {
@@ -455,7 +450,7 @@ function makeActionHarness(overides) {
         }
     );
 
-    return { module: mod, calls: calls, files: files, tracker: tracker };
+    return { module: mod, calls: calls, files: files, tracker: tracker, logs: logs };
 }
 
 // ── gh-799 AC1: pinned input trio, armer-independent ─────────────────────────
@@ -1120,16 +1115,14 @@ suite('preCliReworkSetup — extracted helpers (gh-1002)', function() {
     suite('resolveRepoInfo', function() {
         test('a pinned targetRepository in the config wins; the remote is never probed', function() {
             var h = makeActionHarness({ repository: { owner: 'cfg', repo: 'proj' } });
-            var logs = captureConsole1002(function() {
-                var repoInfo = h.module.resolveRepoInfo({ repository: { owner: 'cfg', repo: 'proj' } }, {
-                    getRemoteRepoInfo: function() { throw new Error('must not be called'); }
-                });
-                assert.deepEqual(repoInfo, { owner: 'cfg', repo: 'proj' });
+            var repoInfo = h.module.resolveRepoInfo({ repository: { owner: 'cfg', repo: 'proj' } }, {
+                getRemoteRepoInfo: function() { throw new Error('must not be called'); }
             });
+            assert.deepEqual(repoInfo, { owner: 'cfg', repo: 'proj' });
 
             assert.equal(h.calls.getRemoteRepoInfo, 0);
-            assert.ok(logs.log.some(function(l) { return l.indexOf('Using targetRepository from config:') !== -1; }),
-                'the config-pinned log line is preserved: ' + JSON.stringify(logs.log));
+            assert.ok(h.logs.log.some(function(l) { return l.indexOf('Using targetRepository from config:') !== -1; }),
+                'the config-pinned log line is preserved: ' + JSON.stringify(h.logs.log));
         });
 
         test('falls back to the git remote when the config does not pin the repo', function() {
@@ -1194,14 +1187,12 @@ suite('preCliReworkSetup — extracted helpers (gh-1002)', function() {
 
         test('a failing transition is logged with its content, not thrown', function() {
             var h = makeActionHarness({ failMoveToStatus: true });
-            var logs = captureConsole1002(function() {
-                assert.doesNotThrow(function() {
-                    h.module.moveTicketToReworkStatus({ jira: { markReworkInDevelopment: true } }, h.tracker, 'PROJ-123', { IN_REWORK: 'In Rework' }, null);
-                });
+            assert.doesNotThrow(function() {
+                h.module.moveTicketToReworkStatus({ jira: { markReworkInDevelopment: true } }, h.tracker, 'PROJ-123', { IN_REWORK: 'In Rework' }, null);
             });
 
-            assert.ok(logs.warn.some(function(l) { return l.indexOf('Failed to move ticket to In Rework') !== -1; }),
-                'the gh-802 log line is preserved: ' + JSON.stringify(logs.warn));
+            assert.ok(h.logs.warn.some(function(l) { return l.indexOf('Failed to move ticket to In Rework') !== -1; }),
+                'the gh-802 log line is preserved: ' + JSON.stringify(h.logs.warn));
         });
     });
 
@@ -1246,14 +1237,12 @@ suite('preCliReworkSetup — extracted helpers (gh-1002)', function() {
 
         test('warnings write failure → warn logged, not thrown', function() {
             var h = makeActionHarness({ setupWarnings: 'w', failFileWritePaths: ['input/PROJ-123/setup_warnings.md'] });
-            var logs = captureConsole1002(function() {
-                assert.doesNotThrow(function() {
-                    h.module.runSetupCommandsStep({}, { workingDir: '/repo' }, 'input/PROJ-123', h.tracker, 'PROJ-123');
-                });
+            assert.doesNotThrow(function() {
+                h.module.runSetupCommandsStep({}, { workingDir: '/repo' }, 'input/PROJ-123', h.tracker, 'PROJ-123');
             });
 
-            assert.ok(logs.warn.some(function(l) { return l.indexOf('Failed to write setup_warnings.md') !== -1; }),
-                JSON.stringify(logs.warn));
+            assert.ok(h.logs.warn.some(function(l) { return l.indexOf('Failed to write setup_warnings.md') !== -1; }),
+                JSON.stringify(h.logs.warn));
         });
 
         test('commands failure → failSetup marker + comment, then throws', function() {
@@ -1287,11 +1276,9 @@ suite('preCliReworkSetup — extracted helpers (gh-1002)', function() {
 
         test('write failure → warn, not thrown', function() {
             var h = makeActionHarness({ failFileWritePaths: ['input/PROJ-123/rework_base_head.txt'] });
-            var logs = captureConsole1002(function() {
-                assert.doesNotThrow(function() { h.module.writeReworkBaseHead('input/PROJ-123', 'sha-123'); });
-            });
+            assert.doesNotThrow(function() { h.module.writeReworkBaseHead('input/PROJ-123', 'sha-123'); });
 
-            assert.ok(logs.warn.some(function(l) { return l.indexOf('rework_base_head.txt') !== -1; }), JSON.stringify(logs.warn));
+            assert.ok(h.logs.warn.some(function(l) { return l.indexOf('rework_base_head.txt') !== -1; }), JSON.stringify(h.logs.warn));
         });
     });
 
@@ -1308,13 +1295,11 @@ suite('preCliReworkSetup — extracted helpers (gh-1002)', function() {
 
         test('post failure → warn, not thrown', function() {
             var h = makeActionHarness({ failTrackerPostComment: true });
-            var logs = captureConsole1002(function() {
-                assert.doesNotThrow(function() {
-                    h.module.postReworkStartedCommentStep(h.tracker, 'PROJ-123', {}, { prNumber: 7 });
-                });
+            assert.doesNotThrow(function() {
+                h.module.postReworkStartedCommentStep(h.tracker, 'PROJ-123', {}, { prNumber: 7 });
             });
 
-            assert.ok(logs.warn.some(function(l) { return l.indexOf('Failed to post tracker comment') !== -1; }), JSON.stringify(logs.warn));
+            assert.ok(h.logs.warn.some(function(l) { return l.indexOf('Failed to post tracker comment') !== -1; }), JSON.stringify(h.logs.warn));
         });
     });
 
@@ -1338,27 +1323,23 @@ suite('preCliReworkSetup — extracted helpers (gh-1002)', function() {
 
         test('a failing fallback tracker creation is logged, not thrown', function() {
             var h = makeActionHarness({ failTrackerCreate: true });
-            var logs = captureConsole1002(function() {
-                assert.doesNotThrow(function() {
-                    h.module.reportActionError({ inputFolderPath: 'input/PROJ-123' }, null, new Error('boom'));
-                });
+            assert.doesNotThrow(function() {
+                h.module.reportActionError({ inputFolderPath: 'input/PROJ-123' }, null, new Error('boom'));
             });
 
             assert.equal(h.calls.postComment.length, 0);
-            assert.ok(logs.error.some(function(l) { return l.indexOf('Failed to create tracker for error comment') !== -1; }),
-                JSON.stringify(logs.error));
+            assert.ok(h.logs.error.some(function(l) { return l.indexOf('Failed to create tracker for error comment') !== -1; }),
+                JSON.stringify(h.logs.error));
         });
 
         test('a failing comment post inside the reporter is contained', function() {
             var h = makeActionHarness({ failTrackerPostComment: true });
-            var logs = captureConsole1002(function() {
-                assert.doesNotThrow(function() {
-                    h.module.reportActionError({ inputFolderPath: 'input/PROJ-123' }, h.tracker, new Error('boom'));
-                });
+            assert.doesNotThrow(function() {
+                h.module.reportActionError({ inputFolderPath: 'input/PROJ-123' }, h.tracker, new Error('boom'));
             });
 
-            assert.ok(logs.error.some(function(l) { return l.indexOf('Failed to post rework setup error comment') !== -1; }),
-                JSON.stringify(logs.error));
+            assert.ok(h.logs.error.some(function(l) { return l.indexOf('Failed to post rework setup error comment') !== -1; }),
+                JSON.stringify(h.logs.error));
         });
 
         test('no derivable ticket key → no tracker, no comment', function() {
