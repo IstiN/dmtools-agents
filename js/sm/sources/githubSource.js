@@ -304,23 +304,29 @@ function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
     // PENDING check run on every fresh head, so "no CI yet" is either
     // 'none' or 'pending' — validate-fresh matches both.
     var rollup = function (pr) { return pr ? (pr.checkConclusion || pr.checks) : undefined; };
-    var rollupWant = function (want) {
+    // Shared string-or-list normalizer (string|string[] → string[]|null).
+    // gh-944 CI: matchesGuards is baseline-locked by the CRAP ratchet
+    // (Quality workflow) — every added guard decision must be offset. The
+    // mergeState/notMergeState sites below inlined this exact expression;
+    // routing them through the helper keeps the added noOpenPr guard
+    // complexity-neutral (baseline 93.5 → measured below it).
+    var wantList = function (want) {
         return Array.isArray(want) ? want : (want ? [want] : null);
     };
-    if (q.prChecks && rollupWant(q.prChecks).indexOf(rollup(item.pr)) === -1) return false;
+    if (q.prChecks && wantList(q.prChecks).indexOf(rollup(item.pr)) === -1) return false;
     if (q.prMergeState && (!item.pr || item.pr.mergeState !== q.prMergeState)) return false;
-    var msWant = Array.isArray(q.mergeState) ? q.mergeState : (q.mergeState ? [q.mergeState] : null);
+    var msWant = wantList(q.mergeState);
     if (msWant && (!item.pr || msWant.indexOf(item.pr.mergeState) === -1)) return false;
     // PR-carrier guards (issue #687 lifecycle rules): `checks` reads the
     // provider's check rollup (green/red/pending/none); `notMergeState`
     // excludes one state (e.g. BEHIND while a silent update lands).
-    if (q.checks && rollupWant(q.checks).indexOf(rollup(item.pr)) === -1) return false;
+    if (q.checks && wantList(q.checks).indexOf(rollup(item.pr)) === -1) return false;
     // Array form (owner FIFO rule 2026-09-22): exclude PRs in ANY of the
     // listed states — validate-armed must skip BEHIND (refresh first) AND
     // DIRTY (conflict-rework owns the oldest; a newer approved proceeds
     // while the conflicted one reworks — no wasted validation on a head
     // that can never merge).
-    var nmsWant = Array.isArray(q.notMergeState) ? q.notMergeState : (q.notMergeState ? [q.notMergeState] : null);
+    var nmsWant = wantList(q.notMergeState);
     if (nmsWant && (!item.pr || nmsWant.indexOf(item.pr.mergeState) !== -1)) return false;
     // gh-829 mergeState latch: a listed merge state matches ONLY when the
     // PR's linked issue carries the latch label(s). The gh-759
