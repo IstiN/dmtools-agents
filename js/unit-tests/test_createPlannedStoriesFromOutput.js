@@ -164,6 +164,213 @@ suite('createPlannedStoriesFromOutput — creation flow', function() {
     });
 });
 
+suite('createPlannedStoriesFromOutput — guards and edge paths (gh-1010 characterization)', function() {
+
+    test('skips when storyPlanCreation is disabled', function() {
+        var m = loadStoryPlanAction({
+            file_read: function() { throw new Error('must not read files'); }
+        });
+        var result = m.action(makeParams({ enabled: false }));
+        assert.equal(result.success, true);
+        assert.equal(result.skipped, true);
+        assert.equal(result.message, 'storyPlanCreation disabled');
+    });
+
+    test('fails when the source ticket key is missing', function() {
+        var m = loadStoryPlanAction({});
+        var result = m.action(makeParams({}, { ticket: { fields: {} } }));
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'Missing source ticket key');
+    });
+
+    test('fails when the plan file is required but missing', function() {
+        var m = loadStoryPlanAction({
+            file_read: function() { return null; }
+        });
+        var result = m.action(makeParams({ required: true }));
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'outputs/stories.json not found or empty');
+    });
+
+    test('skips silently when the plan file is missing and not required', function() {
+        var m = loadStoryPlanAction({
+            file_read: function() { return null; }
+        });
+        var result = m.action(makeParams({ required: false }));
+        assert.equal(result.success, true);
+        assert.equal(result.skipped, true);
+        assert.equal(result.message, 'No story plan file found');
+    });
+
+    test('reports invalid JSON and non-array payloads as errors', function() {
+        var m = loadStoryPlanAction({
+            file_read: function() { return '{not json'; }
+        });
+        var bad = m.action(makeParams({ required: true }));
+        assert.equal(bad.success, false);
+        assert.contains(bad.error, 'stories.json is invalid JSON');
+
+        var m2 = loadStoryPlanAction({
+            file_read: function() { return '{"a":1}'; }
+        });
+        var notArray = m2.action(makeParams({ required: true }));
+        assert.equal(notArray.success, false);
+        assert.contains(notArray.error, 'stories.json is not an array');
+    });
+
+    test('returns an empty result when the plan contains no stories', function() {
+        var m = loadStoryPlanAction({
+            file_read: function() { return '[]'; }
+        });
+        var result = m.action(makeParams({ required: true }));
+        assert.equal(result.success, true);
+        assert.deepEqual(result.createdTickets, []);
+        assert.equal(result.message, 'No planned stories to create');
+    });
+
+    test('records unsupported entry types and missing parents as per-entry failures', function() {
+        var m = loadStoryPlanAction({
+            file_read: function() {
+                return JSON.stringify([
+                    { type: 'Bug', summary: 'Not a story' },
+                    { summary: 'Orphan story' }
+                ]);
+            },
+            jira_search_by_jql: function() { return []; }
+        });
+
+        var result = m.action(makeParams({
+            required: true,
+            defaultParentSource: undefined
+        }, {
+            ticket: {
+                key: 'SRC-101',
+                fields: { summary: 'Src', labels: [] }
+            }
+        }));
+
+        assert.equal(result.success, false);
+        assert.equal(result.createdTickets.length, 2);
+        assert.equal(result.createdTickets[0].success, false);
+        assert.contains(result.createdTickets[0].error, 'Unsupported entry type');
+        assert.equal(result.createdTickets[1].success, false);
+        assert.contains(result.createdTickets[1].error, 'No parent key resolved');
+    });
+
+    test('records a failed story creation and keeps processing the rest', function() {
+        var m = loadStoryPlanAction({
+            file_read: function(arg) {
+                var path = typeof arg === 'string' ? arg : arg.path;
+                if (path === 'outputs/stories.json') {
+                    return JSON.stringify([
+                        { summary: 'Failing story' },
+                        { summary: 'Good story', description: 'outputs/good.md' }
+                    ]);
+                }
+                if (path === 'outputs/good.md') return 'Good description';
+                return null;
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_create_ticket_with_json: function(args) {
+                if (args.fieldsJson.summary === 'Failing story') return '';
+                return { key: 'PROJ-3000' };
+            },
+            jira_post_comment: function() {},
+            jira_add_label: function() {}
+        });
+
+        var result = m.action(makeParams({ required: true }));
+
+        assert.equal(result.success, false);
+        assert.equal(result.createdTickets.length, 2);
+        assert.equal(result.createdTickets[0].success, false);
+        assert.contains(result.createdTickets[0].error, 'Could not extract Jira key');
+        assert.equal(result.createdTickets[1].success, true);
+        assert.equal(result.createdTickets[1].key, 'PROJ-3000');
+    });
+
+    test('falls back to the summary when no description file is provided', function() {
+        var createCalls = [];
+        var m = loadStoryPlanAction({
+            file_read: function(arg) {
+                var path = typeof arg === 'string' ? arg : arg.path;
+                if (path === 'outputs/stories.json') {
+                    return JSON.stringify([{ summary: 'Bare story' }]);
+                }
+                return null;
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_create_ticket_with_json: function(args) {
+                createCalls.push(args);
+                return { key: 'PROJ-3001' };
+            },
+            jira_post_comment: function() {},
+            jira_add_label: function() {}
+        });
+
+        var result = m.action(makeParams({ required: true }));
+
+        assert.equal(result.success, true);
+        assert.equal(createCalls[0].fieldsJson.description, 'Bare story');
+    });
+
+    test('honors postSummaryComment:false and missing addLabel', function() {
+        var commentCalls = [];
+        var labelCalls = [];
+        var m = loadStoryPlanAction({
+            file_read: function(arg) {
+                var path = typeof arg === 'string' ? arg : arg.path;
+                if (path === 'outputs/stories.json') {
+                    return JSON.stringify([{ summary: 'Silent story' }]);
+                }
+                return null;
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_create_ticket_with_json: function() { return { key: 'PROJ-3002' }; },
+            jira_post_comment: function(args) { commentCalls.push(args); },
+            jira_add_label: function(args) { labelCalls.push(args); }
+        });
+
+        var result = m.action(makeParams({ required: true, postSummaryComment: false, addLabel: undefined }));
+
+        assert.equal(result.success, true);
+        assert.equal(commentCalls.length, 0);
+        assert.equal(labelCalls.length, 0);
+    });
+
+    test('creates blockedBy links without moving when blockedStatusName is false', function() {
+        var linkCalls = [];
+        var statusCalls = [];
+        var m = loadStoryPlanAction({
+            file_read: function(arg) {
+                var path = typeof arg === 'string' ? arg : arg.path;
+                if (path === 'outputs/stories.json') {
+                    return JSON.stringify([
+                        { tempId: 'blocker', summary: 'Blocker story' },
+                        { summary: 'Waiting story', blockedBy: ['blocker'] }
+                    ]);
+                }
+                return null;
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_create_ticket_with_json: function(args) {
+                return { key: args.fieldsJson.summary === 'Blocker story' ? 'PROJ-3003' : 'PROJ-3004' };
+            },
+            jira_link_issues: function(args) { linkCalls.push(args); },
+            jira_move_to_status: function(args) { statusCalls.push(args); },
+            jira_post_comment: function() {},
+            jira_add_label: function() {}
+        });
+
+        var result = m.action(makeParams({ required: true, blockedStatusName: false }));
+
+        assert.equal(result.success, true);
+        assert.ok(linkCalls.some(function(l) { return l.relationship === 'is blocked by'; }));
+        assert.equal(statusCalls.length, 0);
+    });
+
+});
+
 suite('createPlannedStoriesFromOutput — reuse and guards', function() {
     test('reuses existing story with the same summary under the same parent', function() {
         var createCalls = [];
