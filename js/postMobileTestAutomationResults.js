@@ -33,6 +33,7 @@ const { LABELS } = require('./config.js');
 var prHelper = require('./common/pullRequest.js');
 var outputFiles = require('./common/outputFiles.js');
 var trackersModule = require('./common/trackers.js');
+var mobileHelpers = require('./postMobileTestAutomationResultsHelpers.js');
 // Tracker-agnostic ticket ops; created inside action() (never at module load).
 var tracker = null;
 
@@ -508,16 +509,14 @@ function buildJiraComment(result, automationPrUrl) {
 }
 
 function removeWipLabel(params, ticketKey) {
-    var wipLabel = params.metadata && params.metadata.contextId
-        ? params.metadata.contextId + '_wip'
-        : 'mobile_test_automation_wip';
+    var wipLabel = mobileHelpers.decideWipLabel(params.metadata);
     try { tracker.removeLabel(ticketKey, wipLabel); } catch (e) {}
 }
 
 function removeSMTriggerLabel(params, ticketKey) {
     if (!ticketKey) return;
     var customParams = (params.jobParams || params).customParams || {};
-    var smTriggerLabel = customParams.removeLabel;
+    var smTriggerLabel = mobileHelpers.decideSmTriggerLabel(customParams);
     if (smTriggerLabel) {
         try {
             tracker.removeLabel(ticketKey, smTriggerLabel);
