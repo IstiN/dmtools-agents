@@ -24,7 +24,8 @@ function loadGithubHelpers(mocks) {
             './pullRequest.js': PR_HELPER_REAL_GH,
             './gitOps.js': gitOpsStub,
             './machineNotice.js': machineNoticeModule,
-            './reviewThreadInventory.js': reviewThreadInventoryModule
+            './reviewThreadInventory.js': reviewThreadInventoryModule,
+            './ci.js': loadModule('js/common/ci.js')
         }),
         mocks || {}
     );
@@ -1572,6 +1573,85 @@ suite('githubHelpers.detectFailedChecks — run-level details_url (/actions/runs
         var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
         assert.ok(fullLogWrite, 'ci_failures_full.log should be written');
         assert.contains(fullLogWrite.content, 'timed-out log');
+    });
+
+    test('supports the {job_runs: [...]} envelope in a workflow-run-jobs response', function() {
+        var jobLogCalls = [];
+        var writes = [];
+
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [{
+                        name: 'CI',
+                        conclusion: 'failure',
+                        details_url: 'https://github.com/acme/widgets/actions/runs/777'
+                    }]
+                };
+            },
+            github_get_workflow_run_jobs: function() {
+                return JSON.stringify({
+                    total_count: 2,
+                    job_runs: [
+                        { id: 888, name: 'build', conclusion: 'success', status: 'completed' },
+                        { id: 999, name: 'integration', conclusion: 'failure', status: 'completed' }
+                    ]
+                });
+            },
+            github_get_job_logs: function(args) {
+                jobLogCalls.push(args);
+                return 'job-runs envelope log';
+            },
+            file_write: function(args) {
+                writes.push(args);
+            }
+        });
+
+        var failed = gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input');
+
+        assert.equal(failed.length, 1, 'check is still reported as failed');
+        assert.equal(jobLogCalls.length, 1, 'logs fetched only for the failed job in the job_runs envelope');
+        assert.equal(jobLogCalls[0].jobId, '999');
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(fullLogWrite, 'ci_failures_full.log should be written');
+        assert.contains(fullLogWrite.content, 'job-runs envelope log');
+        assert.contains(fullLogWrite.content, 'integration');
+    });
+
+    test('treats an unparseable JSON-string run-jobs response as no jobs', function() {
+        var jobLogCalls = [];
+        var writes = [];
+
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [{
+                        name: 'CI',
+                        conclusion: 'failure',
+                        details_url: 'https://github.com/acme/widgets/actions/runs/888'
+                    }]
+                };
+            },
+            github_get_workflow_run_jobs: function() {
+                return '{not json';
+            },
+            github_get_job_logs: function(args) {
+                jobLogCalls.push(args);
+                return 'log';
+            },
+            file_write: function(args) {
+                writes.push(args);
+            }
+        });
+
+        var failed = gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input');
+
+        assert.equal(failed.length, 1, 'check is still reported as failed');
+        assert.equal(jobLogCalls.length, 0, 'no job logs fetched when the run-jobs response cannot be parsed');
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.ok(mdWrite, 'ci_failures.md should still be written');
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(!fullLogWrite, 'ci_failures_full.log should not be written when no jobs were parsed');
     });
 });
 
