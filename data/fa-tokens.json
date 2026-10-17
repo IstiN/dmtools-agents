@@ -2390,6 +2390,15 @@
       "total": 52680,
       "cacheRead": 154499,
       "model": "glm-5.3-flash"
+    },
+    {
+      "leg": "dev",
+      "at": "2026-10-17T19:41:40Z",
+      "prompt": 38882,
+      "completion": 0,
+      "total": 38882,
+      "cacheRead": 0,
+      "model": "kimi-for-coding"
     }
   ],
   "issue-1009": [
