@@ -194,6 +194,132 @@ function performPushOnly(branchName, baseBranch) {
 }
 
 /**
+ * gh-1003: pure commit-message sanitizer extracted from performGitOperations
+ * so the escape chain is unit-testable in isolation. The replace order is
+ * behaviour (each escape feeds the next), kept verbatim.
+ */
+function sanitizeCommitMessage(message) {
+    return message
+        .replace(/"/g, '\\"')
+        .replace(/[><|;`$\r\n]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/**
+ * gh-1003: `parseInt(output, 10) || 0` was repeated inside
+ * performGitOperations; one named helper owns the rev-list count parsing
+ * (NaN/blank → 0).
+ */
+function parseAheadCount(output) {
+    return parseInt(output, 10) || 0;
+}
+
+/**
+ * gh-1003: predicate for "does the staged diff-stat report anything" —
+ * the original `!statusOutput || !statusOutput.trim()` gate, inverted so the
+ * call site reads as a positive question.
+ */
+function hasStagedChanges(statusOutput) {
+    return !!statusOutput && !!statusOutput.trim();
+}
+
+/**
+ * gh-1003: push-failure detector extracted from performGitOperations.
+ * `threwException` is evaluated FIRST, matching the original `||` chain
+ * short-circuit: a thrown push fails without scanning the output text.
+ */
+function detectPushFailure(output, threwException) {
+    if (threwException) {
+        return true;
+    }
+    var markers = ['remote rejected', 'GH013', 'error: failed to push', 'push declined', 'non-fast-forward', 'rejected'];
+    for (var i = 0; i < markers.length; i++) {
+        if (output.indexOf(markers[i]) !== -1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * gh-1003: remote-branch presence probe extracted from performGitOperations'
+ * post-push verification — same `refs/heads/<branch>` substring check.
+ */
+function branchMissingOnRemote(lsRemoteOutput, branchName) {
+    return (lsRemoteOutput || '').indexOf('refs/heads/' + branchName) === -1;
+}
+
+/**
+ * gh-1003: the `git push -u origin <branch>` attempt extracted from
+ * performGitOperations. On a non-zero exit the cli tool throws; the original
+ * code converted the exception to text and treated it as a failure signal —
+ * preserved here via the `threw` flag.
+ */
+function pushBranchToRemote(runCommand, branchName) {
+    try {
+        return { output: runCommand('git push -u origin ' + branchName) || '', threw: false };
+    } catch (pushErr) {
+        // git push exits with non-zero (e.g. non-fast-forward) — cli_execute_command throws
+        return { output: String(pushErr), threw: true };
+    }
+}
+
+/**
+ * gh-1003: `git rev-list --count` probe extracted from performGitOperations'
+ * nothing-staged handling. `warnMessage` keeps the two distinct historical
+ * log lines ("commits ahead of <ref>" vs "remote branch commits") byte-identical.
+ */
+function probeCommitsAhead(runCommand, refExpression, warnMessage) {
+    var output = '';
+    try {
+        output = cleanCommandOutput(runCommand('git rev-list --count ' + refExpression)) || '';
+    } catch (e) {
+        console.warn(warnMessage, e);
+    }
+    return parseAheadCount(output);
+}
+
+/**
+ * gh-1003: the whole "nothing staged" decision tree extracted from
+ * performGitOperations: did the agent already commit (→ push-only), was the
+ * branch already pushed (→ proceed to PR creation), or is there genuinely no
+ * work (→ the historical no-changes error). Log lines and return shapes are
+ * preserved verbatim.
+ */
+function resolveNothingStagedOutcome(runCommand, branchName, baseBranch) {
+    var originRef = baseBranch ? 'origin/' + baseBranch : 'origin/main';
+    console.log('Nothing staged — checking whether the agent already committed or pushed its work...');
+    var commitsAhead = probeCommitsAhead(runCommand, originRef + '..HEAD', 'Could not check commits ahead of ' + originRef + ':');
+    if (commitsAhead > 0) {
+        console.log('No uncommitted changes, but branch is ' + commitsAhead + ' commit(s) ahead of ' + originRef + ' — agent already committed. Skipping commit step.');
+        // Jump straight to push after syncing with the latest base branch.
+        return performPushOnly(branchName, baseBranch);
+    }
+
+    // Check if the remote branch already has commits not yet in origin/main
+    // (e.g. agent pushed in a previous run but was interrupted before PR creation)
+    var remoteCommitsAhead = 0;
+    try {
+        try { runCommand(prHelper.buildOriginFetchCommand(branchName)); } catch (e) { }
+        remoteCommitsAhead = probeCommitsAhead(runCommand, originRef + '..origin/' + branchName, 'Could not check remote branch commits:');
+    } catch (e) {
+        console.warn('Could not check remote branch commits:', e);
+    }
+    if (remoteCommitsAhead > 0) {
+        console.log('Remote branch origin/' + branchName + ' is ' + remoteCommitsAhead + ' commit(s) ahead of ' + originRef + ' — branch already pushed. Skipping push, proceeding to PR creation.');
+        // No push needed — return success so the caller proceeds to PR creation
+        return { success: true, branchName: branchName };
+    }
+
+    console.warn('No changes to commit');
+    return {
+        success: false,
+        error: 'No changes were made by the development process'
+    };
+}
+
+/**
  * Stage changes, commit, and push on current branch
  *
  * @param {string} branchName - Current branch name (already checked out by preCliJSAction)
@@ -258,58 +384,17 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
             return runCmd({ command: command });
         }, _workingDir);
 
-        if (!statusOutput || !statusOutput.trim()) {
-            // gh-729: name this branch in the log — the live gh-1197 leg went
-            // quiet between the staging probes and the PR-create call, and
-            // without step logs that window is indistinguishable from a
-            // clean "nothing to do".
-            console.log('Nothing staged — checking whether the agent already committed or pushed its work...');
-            // No uncommitted changes — but check if the agent already committed its work
-            // (the CLI agent sometimes commits itself before postJSAction runs)
-            var originRef = baseBranch ? 'origin/' + baseBranch : 'origin/main';
-            var aheadOutput = '';
-            try {
-                aheadOutput = cleanCommandOutput(runCmd({ command: 'git rev-list --count ' + originRef + '..HEAD' }) || '');
-            } catch (e) {
-                console.warn('Could not check commits ahead of ' + originRef + ':', e);
-            }
-            var commitsAhead = parseInt(aheadOutput, 10) || 0;
-            if (commitsAhead > 0) {
-                console.log('No uncommitted changes, but branch is ' + commitsAhead + ' commit(s) ahead of ' + originRef + ' — agent already committed. Skipping commit step.');
-                // Jump straight to push after syncing with the latest base branch.
-                return performPushOnly(branchName, baseBranch);
-            }
-
-            // Check if the remote branch already has commits not yet in origin/main
-            // (e.g. agent pushed in a previous run but was interrupted before PR creation)
-            var remoteAheadOutput = '';
-            try {
-                // Fetch remote refs so origin/<branchName> is up to date
-                try { runCmd({ command: prHelper.buildOriginFetchCommand(branchName) }); } catch (e) { }
-                remoteAheadOutput = cleanCommandOutput(runCmd({ command: 'git rev-list --count ' + originRef + '..origin/' + branchName }) || '');
-            } catch (e) {
-                console.warn('Could not check remote branch commits:', e);
-            }
-            var remoteCommitsAhead = parseInt(remoteAheadOutput, 10) || 0;
-            if (remoteCommitsAhead > 0) {
-                console.log('Remote branch origin/' + branchName + ' is ' + remoteCommitsAhead + ' commit(s) ahead of ' + originRef + ' — branch already pushed. Skipping push, proceeding to PR creation.');
-                // No push needed — return success so the caller proceeds to PR creation
-                return { success: true, branchName: branchName };
-            }
-
-            console.warn('No changes to commit');
-            return {
-                success: false,
-                error: 'No changes were made by the development process'
-            };
+        // gh-1003: the whole nothing-staged decision tree (agent already
+        // committed / branch already pushed / genuinely nothing) lives in
+        // resolveNothingStagedOutcome; the gh-729 step logging moved with it.
+        if (!hasStagedChanges(statusOutput)) {
+            return resolveNothingStagedOutcome(function (command) {
+                return runCmd({ command: command });
+            }, branchName, baseBranch);
         }
 
         // Commit changes — sanitize message to avoid shell metacharacter rejection
-        var safeMessage = commitMessage
-            .replace(/"/g, '\\"')
-            .replace(/[><|;`$\r\n]/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
+        var safeMessage = sanitizeCommitMessage(commitMessage);
         console.log('Committing changes...');
         runCmd({
             command: 'git commit -m "' + safeMessage + '"'
@@ -335,27 +420,14 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
 
         // Push to remote
         console.log('Pushing to remote...');
-        var pushOutput = '';
-        var pushThrewException = false;
-        try {
-            pushOutput = runCmd({
-                command: 'git push -u origin ' + branchName
-            }) || '';
-        } catch (pushErr) {
-            // git push exits with non-zero (e.g. non-fast-forward) — cli_execute_command throws
-            pushOutput = String(pushErr);
-            pushThrewException = true;
-        }
-
-        // Check output text for soft-rejected pushes (exit 0 but error text) AND
-        // exception messages (exit non-zero) — covers both code paths.
-        const pushFailed = pushThrewException ||
-            pushOutput.indexOf('remote rejected') !== -1 ||
-            pushOutput.indexOf('GH013') !== -1 ||
-            pushOutput.indexOf('error: failed to push') !== -1 ||
-            pushOutput.indexOf('push declined') !== -1 ||
-            pushOutput.indexOf('non-fast-forward') !== -1 ||
-            pushOutput.indexOf('rejected') !== -1;
+        // gh-1003: the push attempt + failure detection live in
+        // pushBranchToRemote / detectPushFailure — same soft-rejection markers
+        // and exception handling as the original inline chain.
+        const pushAttempt = pushBranchToRemote(function (command) {
+            return runCmd({ command: command });
+        }, branchName);
+        var pushOutput = pushAttempt.output;
+        const pushFailed = detectPushFailure(pushOutput, pushAttempt.threw);
 
         if (pushFailed) {
             return {
@@ -372,7 +444,7 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         }) || '';
 
         // ls-remote stdout contains refs/heads/<branch> when the branch exists
-        if (lsRemoteOutput.indexOf('refs/heads/' + branchName) === -1) {
+        if (branchMissingOnRemote(lsRemoteOutput, branchName)) {
             return {
                 success: false,
                 isPushFailure: true,
@@ -1484,5 +1556,11 @@ function action(params) {
 }
 // Export for dmtools standalone execution
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, throwInterruptedReset, recoverMissingResponse, generateUniqueBranchName };
+    module.exports = {
+        action, throwInterruptedReset, recoverMissingResponse, generateUniqueBranchName,
+        // gh-1003: pure helpers extracted from performGitOperations — exported
+        // for direct characterization tests.
+        sanitizeCommitMessage, parseAheadCount, hasStagedChanges, detectPushFailure,
+        branchMissingOnRemote, pushBranchToRemote, probeCommitsAhead, resolveNothingStagedOutcome
+    };
 }
