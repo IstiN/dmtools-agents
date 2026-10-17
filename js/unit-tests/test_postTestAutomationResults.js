@@ -42,21 +42,29 @@ function loadPostTestAutomation(mocks) {
         allMocks
     );
 
+    // Overridable via mocks._autoStart / mocks._trackers so characterization
+    // tests can pin the autoStart-review and error-catch branches.
+    var autoStartMock = mocks._autoStart || {
+        triggerSmIfIdle: function() {
+            return { success: true };
+        },
+        triggerConfiguredWorkflowForTicket: function() {
+            return false;
+        }
+    };
+    var trackersMockModule = mocks._trackers || loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), allMocks);
+
     return loadModule(
         'js/postTestAutomationResults.js',
         makeRequire({
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
             './common/pullRequest.js': prHelper,
-            './common/autoStart.js': {
-                triggerSmIfIdle: function() {
-                    return { success: true };
-                }
-            },
-            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
-                '../config.js': configModule,
-                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
-            }), allMocks),
+            './common/autoStart.js': autoStartMock,
+            './common/trackers.js': trackersMockModule,
             './common/outputFiles.js': outputFiles,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
