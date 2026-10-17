@@ -675,24 +675,46 @@ suite('gitOps.getPRDiff — characterization (gh-962)', function() {
 // failure, shallow clone, quiet-diff anomalies) so the CRAP-reducing
 // extraction of the pure parse/build helpers stays byte-identical.
 
+// Response table for the conflict-detect mock: maps exact commands to their
+// captures and routes failures through a `throw` marker (kept separate from
+// the mock closure so both stay under the CRAP gate).
+function conflictResponses(spec) {
+    var outs = {
+        'git rev-parse --is-shallow-repository': (spec.shallow || 'false') + '\nCOMMAND_EXIT_CODE=0',
+        'git diff --cached --quiet HEAD': 'COMMAND_EXIT_CODE=0',
+        'git status --short': (spec.statusRaw || '') + '\nCOMMAND_EXIT_CODE=0'
+    };
+    var throws = {};
+    if (spec.shallow === 'THROW') {
+        delete outs['git rev-parse --is-shallow-repository'];
+        throws['git rev-parse --is-shallow-repository'] = 'shallow probe failed';
+    }
+    if (spec.quietThrow) {
+        delete outs['git diff --cached --quiet HEAD'];
+        throws['git diff --cached --quiet HEAD'] = spec.quietThrow;
+    }
+    if (spec.statusThrow) {
+        delete outs['git status --short'];
+        throws['git status --short'] = spec.statusThrow;
+    }
+    return { outs: outs, throws: throws };
+}
+
 function makeConflictCmdMock(spec) {
+    var table = conflictResponses(spec);
     return function(args) {
         var c = args.command || '';
-        if (c === 'git rev-parse --is-shallow-repository') return (spec.shallow || 'false') + '\nCOMMAND_EXIT_CODE=0';
-        if (c.indexOf('git merge origin/') === 0 && c.indexOf('--no-commit') !== -1) {
+        if (c.indexOf('git merge origin/') === 0) {
             if (spec.mergeThrow) throw new Error(spec.mergeThrow);
+            if (spec.record) spec.record(c, args);
             return 'Merge cleanup\nCOMMAND_EXIT_CODE=0';
         }
-        if (c === 'git diff --cached --quiet HEAD') {
-            if (spec.quietThrow) throw new Error(spec.quietThrow);
-            return 'COMMAND_EXIT_CODE=0';
-        }
-        if (c === 'git status --short') {
-            if (spec.statusThrow) throw new Error(spec.statusThrow);
-            return (spec.statusRaw || '') + '\nCOMMAND_EXIT_CODE=0';
+        var response = table.throws[c];
+        if (response) {
+            throw new Error(response);
         }
         if (spec.record) spec.record(c, args);
-        return 'COMMAND_EXIT_CODE=0';
+        return table.outs[c] || 'COMMAND_EXIT_CODE=0';
     };
 }
 

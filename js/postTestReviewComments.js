@@ -315,29 +315,56 @@ function handleMissingReview(tracker, ticketKey, customParams, params) {
     return { success: false, error: 'No review data found' };
 }
 
+// Step 4a: the general review comment (best-effort — a missing/unreadable
+// comment file must not fail the step).
+function postGeneralReviewComment(repoInfo, prNumber, reviewData) {
+    if (!reviewData.generalComment) return;
+    try {
+        const commentText = readFile(reviewData.generalComment);
+        if (commentText) {
+            github_add_pr_comment({
+                workspace: repoInfo.owner,
+                repository: repoInfo.repo,
+                pullRequestId: String(prNumber),
+                text: commentText
+            });
+            console.log('✅ Posted general review comment to PR');
+        }
+    } catch (e) {
+        console.warn('Failed to post general comment:', e);
+    }
+}
+
+// Step 4b: queue for merge via pr_approved label (same pattern as stories/bugs).
+// Returns the mergeSucceeded signal (true only when the PR was actually queued).
+function queueApprovedPrForMerge(repoInfo, prNumber, tracker, ticketKey) {
+    try {
+        github_add_pr_label({
+            workspace: repoInfo.owner,
+            repository: repoInfo.repo,
+            pullRequestId: String(prNumber),
+            label: LABELS.PR_APPROVED
+        });
+        console.log('✅ Added pr_approved label to GitHub PR');
+    } catch (e) {
+        console.warn('Failed to add pr_approved to GitHub PR:', e);
+    }
+    try {
+        tracker.addLabel(ticketKey, LABELS.PR_APPROVED);
+        console.log('✅ Added pr_approved label to Jira ticket');
+    } catch (e) {
+        console.warn('Failed to add pr_approved to Jira ticket:', e);
+    }
+    console.log('✅ PR #' + prNumber + ' queued for merge via pr_approved');
+    return true;
+}
+
 // Step 4: general comment, inline comments, resolved-thread cleanup and the
 // pr_approved queueing. Returns the mergeSucceeded signal (true only when an
 // approved PR was actually queued for merge).
 function postReviewComments(repoInfo, prNumber, reviewData, tracker, ticketKey, isApproved) {
-    var mergeSucceeded = false;
     if (prNumber && repoInfo) {
-        // General comment
-        if (reviewData.generalComment) {
-            try {
-                const commentText = readFile(reviewData.generalComment);
-                if (commentText) {
-                    github_add_pr_comment({
-                        workspace: repoInfo.owner,
-                        repository: repoInfo.repo,
-                        pullRequestId: String(prNumber),
-                        text: commentText
-                    });
-                    console.log('✅ Posted general review comment to PR');
-                }
-            } catch (e) {
-                console.warn('Failed to post general comment:', e);
-            }
-        }
+        postGeneralReviewComment(repoInfo, prNumber, reviewData);
 
         // Inline comments
         if (reviewData.inlineComments && reviewData.inlineComments.length > 0) {
@@ -349,32 +376,13 @@ function postReviewComments(repoInfo, prNumber, reviewData, tracker, ticketKey, 
         // Resolve threads that were fully fixed in this rework
         resolveApprovedThreads(repoInfo, prNumber, reviewData.resolvedThreadIds);
 
-        // Queue for merge via pr_approved label (same pattern as stories/bugs)
         if (isApproved) {
-            try {
-                github_add_pr_label({
-                    workspace: repoInfo.owner,
-                    repository: repoInfo.repo,
-                    pullRequestId: String(prNumber),
-                    label: LABELS.PR_APPROVED
-                });
-                console.log('✅ Added pr_approved label to GitHub PR');
-            } catch (e) {
-                console.warn('Failed to add pr_approved to GitHub PR:', e);
-            }
-            try {
-                tracker.addLabel(ticketKey, LABELS.PR_APPROVED);
-                console.log('✅ Added pr_approved label to Jira ticket');
-            } catch (e) {
-                console.warn('Failed to add pr_approved to Jira ticket:', e);
-            }
-            mergeSucceeded = true; // signal "no conflict yet"
-            console.log('✅ PR #' + prNumber + ' queued for merge via pr_approved');
+            return queueApprovedPrForMerge(repoInfo, prNumber, tracker, ticketKey);
         }
-    } else {
-        console.warn('No PR info — skipping GitHub comments');
+        return false;
     }
-    return mergeSucceeded;
+    console.warn('No PR info — skipping GitHub comments');
+    return false;
 }
 
 // Step 6: on approval the ticket stays in In Review - Passed/Failed until SM
@@ -443,17 +451,29 @@ function postTokenUsageSummary(ticketKey, params) {
 // Outer-catch cleanup: recreate the tracker when the failure happened before
 // it was built, best-effort remove the SM trigger label, post the error
 // comment and fail the step.
+function failureCustomParamsOf(params) {
+    return (params && params.customParams) ||
+        (params && params.jobParams && params.jobParams.customParams) ||
+        {};
+}
+
+function postFailureErrorComment(tracker, ticketKey, error) {
+    try {
+        tracker.removeLabel(ticketKey, 'sm_test_review_triggered');
+    } catch (e) {}
+    try {
+        tracker.postComment(ticketKey, 'h3. ❌ Test Review Error\n\n{code}' + error.toString() + '{code}');
+    } catch (e) {}
+}
+
 function handleActionFailure(params, error, tracker) {
     console.error('❌ Error in postTestReviewComments:', error);
-    if (!tracker) tracker = trackersModule.createTracker(null, (params && params.customParams) || (params && params.jobParams && params.jobParams.customParams) || {});
+    if (!tracker) tracker = trackersModule.createTracker(null, failureCustomParamsOf(params));
     try {
         const ticketKey = params.ticket ? params.ticket.key : (params.inputFolderPath ? params.inputFolderPath.split('/').pop() : null);
         if (ticketKey) {
-            tracker.removeLabel(ticketKey, 'sm_test_review_triggered');
+            postFailureErrorComment(tracker, ticketKey, error);
         }
-    } catch (e) {}
-    try {
-        tracker.postComment(params.ticket.key, 'h3. ❌ Test Review Error\n\n{code}' + error.toString() + '{code}');
     } catch (e) {}
     return { success: false, error: error.toString() };
 }

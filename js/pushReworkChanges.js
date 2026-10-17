@@ -1978,16 +1978,23 @@ function errorCustomParamsOf(params) {
 }
 
 function resolveErrorTracker(params, customParams, tracker) {
-    var errorTracker = tracker || null;
-    if (!errorTracker) {
-        try {
-            errorTracker = trackersModule.createTracker(
-                configLoader.loadProjectConfig(params.jobParams || params), customParams);
-        } catch (trackerError) {
-            console.error('Failed to create tracker for error comment:', trackerError);
-        }
+    if (tracker) {
+        return tracker;
     }
-    return errorTracker;
+    return buildErrorTracker(params, customParams);
+}
+
+// Tracker-less error path: the failure happened before the tracker was
+// probed, so rebuild one from the project config — when even that fails the
+// error comment is skipped, never rethrown.
+function buildErrorTracker(params, customParams) {
+    try {
+        return trackersModule.createTracker(
+            configLoader.loadProjectConfig(params.jobParams || params), customParams);
+    } catch (trackerError) {
+        console.error('Failed to create tracker for error comment:', trackerError);
+        return null;
+    }
 }
 
 function postReworkErrorComment(errorTracker, ticketKey, error) {
@@ -2099,34 +2106,8 @@ function action(params) {
         }
 
         // Find PR to post comment — prefer targetRepository from config over git remote
-        var repoInfo = null;
-        if (config.repository && config.repository.owner && config.repository.repo) {
-            repoInfo = { owner: config.repository.owner, repo: config.repository.repo };
-            console.log('Using targetRepository from config:', repoInfo.owner + '/' + repoInfo.repo);
-        } else {
-            repoInfo = scm.getRemoteRepoInfo();
-        }
-        if (!repoInfo) {
-            throw new Error(PR_LOOKUP_FAILED_PREFIX +
-                ' could not determine the GitHub repository (no config.repository, git remote unparsable) for ticket ' +
-                ticketKey + ' — the rework PR replies/comments cannot be posted and the rework cycle is NOT closed.');
-        }
-        const pr = findPRForTicket(scm, ticketKey);
-        if (!pr) {
-            // Loud failure instead of silent skip (live fa #1212, run 37200002499,
-            // 2026-10-04): the old silent skip left review threads unresolved, still
-            // moved the ticket to In Review, removed the rework labels and declared
-            // the cycle closed — SM re-armed rework on the same unresolved threads →
-            // infinite empty-lap loop. Replies/resolutions were skipped for
-            // infrastructure reasons: the cycle-close steps below must NOT run.
-            console.error(PR_LOOKUP_FAILED_PREFIX + ' no Pull Request found for ticket ' + ticketKey +
-                " after the rework push (branch '" + branchName + "') — PR replies/resolutions skipped;" +
-                ' failing the leg instead of closing the cycle.');
-            throw new Error(PR_LOOKUP_FAILED_PREFIX + ' no Pull Request found for ticket ' + ticketKey +
-                " after the rework push (branch '" + branchName + "'). Review-thread replies/resolutions and the" +
-                ' fix-summary comment were NOT posted; the rework cycle was NOT closed — failing loudly instead of' +
-                ' silently skipping (silent skip re-arms empty rework laps forever, live fa #1212 2026-10-04).');
-        }
+        var repoInfo = resolveRepoInfo(config, scm, ticketKey);
+        const pr = requirePrForTicket(scm, ticketKey, branchName);
         // agents#827 + gh-957: rework only reworks — but a pass that changed no
         // production file while review threads are open is BLOCKED only when
         // the reply coverage is INCOMPLETE. A leg that put a targeted,
@@ -2136,27 +2117,12 @@ function action(params) {
         // a reply per thread is not a silent drop. Incomplete coverage keeps
         // the historical blocked path (threads NOT resolved, ticket Blocked)
         // and the gh-957 lap marker records the empty lap for the SM guard.
-        var realCodeChanges = hasRealCodeChanges(ticketKey, config);
-        var outputOptsForCoverage = { ticketKey: ticketKey, workingDir: config.workingDir || null };
-        var inputSnapshotThreads = readInputRawThreads(ticketKey, outputOptsForCoverage);
-        var openInputThreads = inputSnapshotThreads.filter(isOpenThread);
-        var replyCoverage = buildReplyCoverage(inputSnapshotThreads, readRepliesArray(outputOptsForCoverage).replies);
-        var lapGate = evaluateAuditResolveGate(realCodeChanges, codeChangesCommitted,
-            openInputThreads.length, replyCoverage.unaddressed.length);
-        if (lapGate.blocked) {
-            return handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary,
-                openInputThreads.length, actualParams, replyCoverage.unaddressed);
+        var lapGateRun = runLapGate(ticketKey, config, codeChangesCommitted, actualParams, statuses,
+            scm, tracker, pr, fixSummary);
+        if (lapGateRun.blocked) {
+            return lapGateRun.result;
         }
-        // gh-957 audit-resolve is live when the gate above passed with zero
-        // code changes: every open thread has a targeted reply and the
-        // resolve pass below closes them with the audit trail. A FAILED diff
-        // probe (null) with no landed commit is treated as no-change too —
-        // resolution without the audit line is never allowed on an unknown
-        // tree.
-        if (lapGate.auditResolve) {
-            console.log('ℹ️ gh-957 audit-resolve: no code changes but ' + openInputThreads.length +
-                ' open thread(s) fully covered by targeted replies — resolving with audit trail');
-        }
+        var lapGate = lapGateRun.lapGate;
         let prCommentPosted = false;
 
         // Reply to each review thread and resolve it. responseText feeds the
@@ -2218,41 +2184,7 @@ function action(params) {
         };
 
     } catch (error) {
-        console.error('❌ Error in pushReworkChanges:', error);
-        try {
-            const actualParams = params.ticket ? params : (params.jobParams || params);
-            if (actualParams && actualParams.ticket && actualParams.ticket.key) {
-                const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
-                var resume = tryResumeAgent({
-                    ticketKey: actualParams.ticket.key,
-                    customParams: customParams,
-                    section: 'postAction',
-                    stage: 'rework_post_action',
-                    error: error.toString()
-                });
-                if (resume.attempted) {
-                    return action(params);
-                }
-                // Post the error to the ticket via the probed tracker provider
-                var errorTracker = (typeof tracker !== 'undefined' && tracker) ? tracker : null;
-                if (!errorTracker) {
-                    try {
-                        errorTracker = trackersModule.createTracker(
-                            configLoader.loadProjectConfig(params.jobParams || params), customParams);
-                    } catch (trackerError) {
-                        console.error('Failed to create tracker for error comment:', trackerError);
-                    }
-                }
-                if (errorTracker) {
-                    var em = commentMarkup.forTicket(actualParams.ticket.key);
-                    errorTracker.postComment(
-                        actualParams.ticket.key,
-                        em.h(3, '❌ Rework Workflow Error') + '\n\n' + em.code(error.toString())
-                    );
-                }
-            }
-        } catch (e) {}
-        return { success: false, error: error.toString() };
+        return handleActionError(params, error, tracker);
     }
 }
 

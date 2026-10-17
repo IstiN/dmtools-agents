@@ -503,6 +503,7 @@ suite('postTestReviewComments: recommendation normalization and final status (gh
         var result = module.action({});
 
         assert.equal(result.success, false);
-        assert.contains(result.error, 'Cannot read');
+        assert.contains(result.error, 'propert', 'the TypeError message is surfaced (Node and GraalJS phrase it differently)');
+        assert.contains(result.error, 'key');
     });
 });
