@@ -11,7 +11,7 @@ You are fixing code issues identified in a Pull Request review.
 8. `pr_diff.txt` — Current code changes already in the PR (what was implemented)
 9. `merge_conflicts.md` *(if present)* — **Merge conflicts that MUST be resolved FIRST** before any rework
 10. `ci_failures.md` *(if present)* — **CI check failures with error logs that MUST be fixed** (last 500 lines of each failed check; full logs are in `ci_failures_full.log`)
-11. `pr_discussions.md` — **ALL open (unresolved) review threads that MUST be fixed** — this file contains ONLY threads that are still open on GitHub. Already-resolved threads are excluded. **Every single thread in this file requires a code fix AND a reply entry in `review_replies.json` — no exceptions.**
+11. `pr_discussions.md` — **ALL open (unresolved) review threads that MUST be addressed** — this file contains ONLY threads that are still open on GitHub. Already-resolved threads are excluded. **Every single thread in this file requires a reply entry in `review_replies.json` — no exceptions.** Most threads also require a code fix; the exception is an already-addressed/invalid thread (see "Already-addressed or invalid threads" below) — there a thorough explanatory reply IS the fix.
 12. `pr_discussions_raw.json` — Same threads with numeric IDs — use `rootCommentId` as `inReplyToId` and `id` as `threadId` when writing `outputs/review_replies.json`. **The number of reply entries MUST equal the number of threads in `pr_discussions.md`.**
 13. `review_state.md` *(always present)* — Reviewer verdict context: the latest concluded review decision (`CHANGES_REQUESTED` = blocking, `APPROVED`, `NONE`) and the open-thread inventory with IDs. If the decision is `CHANGES_REQUESTED`, the reviewer requires changes — treat every open thread as blocking.
 
@@ -79,6 +79,16 @@ For each thread:
 5. Write a reply entry in `outputs/review_replies.json` — mention all files you fixed (both the flagged one and the similar ones found by search)
 
 **Every human review thread in `pr_discussions.md` must have exactly one matching entry in `review_replies.json`. Do not skip any thread.**
+
+### Already-addressed or invalid threads (audit-resolve — gh-957)
+
+Before changing code for a thread, VERIFY the finding against the current head (`pr_diff.txt` + the checked-out branch): the finding may already be fixed by an earlier commit, or it may be wrong for this codebase (invalid/outdated/machine-generated duplicate). In that case a code change is NOT required — but the thread must NOT be left unanswered:
+
+1. Confirm the claim concretely — cite the commit/file/line that already addresses it, or explain precisely why the finding is invalid for this code. Vague "already fixed" replies will be rejected by the next review cycle.
+2. Write the reply entry in `outputs/review_replies.json` exactly like a fix reply (same `threadId` + `inReplyToId`), with the explanation as the reply text.
+3. The automation will post your reply into the thread and RESOLVE it, appending an audit line with the rework run URL — resolution without a code change is allowed ONLY with this per-thread explanation.
+
+**Coverage rule:** resolution without pushed commits is permitted only when EVERY open thread in `pr_discussions.md` has a targeted reply. If even one thread is left without a reply, the whole pass is treated as blocked and NOTHING is resolved — always write the full set of reply entries.
 
 ### 🧪 Fixing Test Automation Results (CRITICAL)
 

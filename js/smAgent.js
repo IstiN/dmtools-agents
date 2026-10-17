@@ -46,6 +46,15 @@
  *   head, so it is only live while redHeadCap >= emptyLapMax + 2 (3 >= 1 + 2 at the
  *   defaults — with the old emptyLapMax=2 the arm-side red-head skip killed the 4th
  *   same-head validation first and the cap was dead code).
+ *   jobParams.noopLapMax (default 2, gh-957) — the THREADS-armed twin of the
+ *   empty-lap cap, bound on the lap markers pushReworkChanges stamps per leg
+ *   close ({head, pushed, resolved}): after this many consecutive laps on
+ *   the SAME head with ZERO pushed commits AND ZERO resolved threads, the
+ *   arm_rework action AND the restore_rework_arm sweep withhold the arm and
+ *   escalate the owner once per head (label rework-loop-escalated + 🛑
+ *   comment) instead of re-arming forever (live dart #424: 7 no-op legs / 2h
+ *   starved the whole queue). A lap that pushed or resolved anything, or a
+ *   new head, resets the budget by construction.
  *   jobParams.cancelMaterializeTimeoutMs (default 45000, gh-848) — the
  *   twin-guard cancel polls a selected stale run until its jobs materialize
  *   (run.status != 'queued') up to this long before cancelling; still
@@ -147,6 +156,12 @@ var redConvergenceModule = require('./common/redConvergence.js');
 // processRule consumeLabels paths stamp, and the pure consumed-without-work
 // sweep decision the restore_rework_arm localAction consults.
 var reworkConsumptionModule = require('./common/reworkConsumption.js');
+// gh-957 (hoisted, never lazy — the gh-823 pack-require rule): the rework
+// no-op loop guard — lap-marker build/parse, the consecutive-no-op-lap count
+// (pushed 0 AND resolved 0 on one head) and the once-per-head escalation
+// marker math. The threads-armed arm_rework path had NO bound (live dart
+// #424: 7 no-op legs / 2h starved the whole queue).
+var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
 // gh-922 (hoisted, never lazy — the gh-823 pack-require rule): fail-open
 // dispatch vocabulary — the no-ref/transient error classification, the
 // ⚠️ trigger-failed marker math and the dead-head park cap. The pure
@@ -1611,6 +1626,59 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 if (armGate.effective && armGate.effective.record) {
                     console.log('  ℹ️  ' + key + ' rework arm allowed — ' + armGate.reason +
                         ' on head ' + armGate.headShort);
+                }
+                // gh-957 no-op loop guard: count the consecutive rework laps
+                // on THIS head that closed with zero pushed commits AND zero
+                // resolved threads (live dart #424: 7 legs / 2h, every leg
+                // 'successful', the arm re-matched every tick and starved
+                // the whole queue). At the cap the arm is WITHHELD and the
+                // owner is escalated once per head (label + 🛑 comment) —
+                // instead of burning the machine forever. The lap markers
+                // are stamped by pushReworkChanges and machine-author-gated
+                // (the marker format is public). A lap that pushed or
+                // resolved anything, or a new head, resets the count.
+                var noopHead = redGateHead ||
+                    ((ticket.pr && ticket.pr.headSha) || ticket.headSha) || null;
+                // gh-957: the machineAuthor doctrine — no configured machine
+                // identity means no trusted markers at all; the guard stays
+                // inert (arm as before) rather than trusting everyone.
+                var noopLogins = verdictMachineLogins(effectiveConfig);
+                if (noopHead && noopLogins.length) {
+                    var noopComments = prCommentList(effectiveRepoInfo, ticket.prNumber);
+                    var noopAllow = { authorLogins: noopLogins };
+                    var noopDecision = reworkLoopGuardModule.shouldWithholdArm({
+                        markers: reworkLoopGuardModule.parseLapMarkers(noopComments, noopAllow),
+                        escalationMarkers: reworkLoopGuardModule.parseEscalationMarkers(noopComments, noopAllow),
+                        headSha: noopHead,
+                        maxNoopLaps: noopLapMaxOf(RUN_JOB_PARAMS)
+                    });
+                    if (noopDecision.withhold) {
+                        if (noopDecision.escalate) {
+                            try {
+                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo)
+                                    .addLabel(ticket.prNumber, reworkLoopGuardModule.ESCALATION_LABEL);
+                            } catch (eLabel) {
+                                console.warn('  ⚠️ ' + key + ' loop-guard escalation label failed: ' + (eLabel.message || eLabel));
+                            }
+                            try {
+                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(
+                                    ticket.prNumber,
+                                    reworkLoopGuardModule.buildEscalationComment(
+                                        noopHead, noopDecision.laps, noopDecision.maxLaps));
+                            } catch (eComment) {
+                                console.warn('  ⚠️ ' + key + ' loop-guard escalation comment failed: ' + (eComment.message || eComment));
+                            }
+                            console.log('  🛑 ' + key + ' agent:rework WITHHELD — rework no-op loop guard (' +
+                                noopDecision.laps + '/' + noopDecision.maxLaps + ' empty laps on head ' +
+                                String(noopHead).substring(0, 7) + ', gh-957) — owner escalated (label +' +
+                                ' comment); a new head or a resolving leg resets the budget');
+                            processedKeys.push(key);
+                        } else {
+                            console.log('  ⏭️  ' + key + ' agent:rework stays withheld — no-op loop guard' +
+                                ' escalation already posted for head ' + String(noopHead).substring(0, 7) + ' (gh-957)');
+                        }
+                        continue;
+                    }
                 }
                 githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'agent:rework');
                 if (redGated) {
@@ -5009,6 +5077,39 @@ function restoreReworkArm(key, ticket, rule, repoInfo, effectiveConfig) {
         console.log('  ⏭️  ' + key + ' sweep: no restore (' + decision.reason + ')');
         return false;
     }
+    // gh-957: the no-op loop guard binds the restore path too — otherwise
+    // the gh-840 stale-grace sweep re-arms past an exhausted no-op budget
+    // 30 minutes later and the loop resumes. Same decision as the
+    // arm_rework action; the comments fetch above is reused (one read).
+    if (head) {
+        var noopDecision = reworkLoopGuardModule.shouldWithholdArm({
+            markers: reworkLoopGuardModule.parseLapMarkers(comments, allow),
+            escalationMarkers: reworkLoopGuardModule.parseEscalationMarkers(comments, allow),
+            headSha: head,
+            maxNoopLaps: noopLapMaxOf(RUN_JOB_PARAMS)
+        });
+        if (noopDecision.withhold) {
+            if (noopDecision.escalate) {
+                try {
+                    githubTracker(repoInfo.owner, repoInfo.repo)
+                        .addLabel(prNumber, reworkLoopGuardModule.ESCALATION_LABEL);
+                    githubTracker(repoInfo.owner, repoInfo.repo).postComment(
+                        prNumber,
+                        reworkLoopGuardModule.buildEscalationComment(
+                            head, noopDecision.laps, noopDecision.maxLaps));
+                    console.log('  🛑 ' + key + ' sweep: agent:rework restore WITHHELD — no-op loop guard (' +
+                        noopDecision.laps + '/' + noopDecision.maxLaps + ' empty laps on head ' +
+                        String(head).substring(0, 7) + ', gh-957) — owner escalated');
+                } catch (eGuard) {
+                    console.warn('  ⚠️ ' + key + ' sweep: loop-guard escalation post failed: ' + (eGuard.message || eGuard));
+                }
+            } else {
+                console.log('  ⏭️  ' + key + ' sweep: restore stays withheld — no-op loop guard' +
+                    ' escalation already posted for head ' + String(head).substring(0, 7) + ' (gh-957)');
+            }
+            return false;
+        }
+    }
     githubTracker(repoInfo.owner, repoInfo.repo).addLabel(prNumber, 'agent:rework');
     var markerBody = reworkConsumptionModule.buildRestoreMarkerComment(
         head || (newestConsume && newestConsume.head) || 'unknown', decision.reason);
@@ -5215,6 +5316,20 @@ function emptyLapMaxOf(jobParams) {
     // Default 1 (review #703 retune; was 2) — see the reachability note
     // above: at 2 the WITHHELD branch never fired under redHeadCap=3.
     return (typeof n === 'number' && n > 0) ? Math.floor(n) : 1;
+}
+
+// gh-957: the no-op loop guard budget — consecutive rework legs on the SAME
+// head that closed with ZERO pushed commits AND ZERO resolved threads
+// (live dart #424: 7 legs / 2h, every one 'successful', threads never
+// resolved, arm re-matched every tick). At the cap the threads-armed and
+// red-gated arm_rework paths AND the gh-840 restore sweep withhold the arm
+// and escalate the owner once per head (label + 🛑 comment). A lap that
+// pushed OR resolved anything, or a new head, resets the count by
+// construction (the lap markers are head-keyed).
+function noopLapMaxOf(jobParams) {
+    var n = (jobParams || {}).noopLapMax;
+    n = typeof n === 'string' ? parseInt(n, 10) : n;
+    return (typeof n === 'number' && n > 0) ? Math.floor(n) : reworkLoopGuardModule.DEFAULT_NOOP_LAP_MAX;
 }
 
 // Invalidate-after-mutation (owner directive 2026-10-04): PR labels changed

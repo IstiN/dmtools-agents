@@ -47,6 +47,7 @@ var githubHelpersModule = loadModule(
 function makeOutputFiles(fileMap) {
     return loadModule('js/common/outputFiles.js', makeRequire({
             './common/commentMarkup.js': commentMarkupModule,
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }), {
         file_read: function(opts) {
             var path = opts && (opts.path || opts);
@@ -127,6 +128,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
             './common/tokenUsageComment.js': { postTokenUsageComments: noop }
         ,
             './common/commentMarkup.js': commentMarkupModule,
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }),
         {
             file_read: function(opts) {
@@ -533,6 +535,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }),
         Object.assign({
             cli_execute_command: function() { return ''; },
@@ -852,6 +855,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }),
         mergedMocks
     );
@@ -1030,6 +1034,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }),
         mergedMocks
     );
