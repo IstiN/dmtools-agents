@@ -58,10 +58,10 @@ function fixture(opts) {
         },
         github_list_prs: function (a) {
             listCalls.push(a);
-            return listPayload(opts, pr, a && a.state);
+            return listPayload(opts, pr, a.state);
         },
         github_get_pr: function (a) {
-            return prPayload(opts, pr, a && a.pullRequestId);
+            return prPayload(opts, pr, a.pullRequestId);
         },
         github_get_commit_check_runs: function (a) {
             // The Dart tool requires workspace/repository — a bare
@@ -70,7 +70,7 @@ function fixture(opts) {
             // Assert in the test body, not here: mocks run in the module
             // scope, where `assert` is not a global.
             crCalls.push(a);
-            return checkRunsPayload(opts, checkRuns, a && a.commitSha);
+            return checkRunsPayload(opts, checkRuns, a.commitSha);
         },
         github_merge_pr: function (m) {
             calls.merges.push(m);
@@ -699,7 +699,7 @@ suite('mergeBot: externally-merged slot holder releases the merge window (gh-952
             },
             github_list_prs: function (a) {
                 listCalls.push(a);
-                return slotListPayload(openPrs, mergedPrs, a && a.state);
+                return slotListPayload(openPrs, mergedPrs, a.state);
             },
             github_get_pr: function (a) {
                 return JSON.stringify(slotPrBody(byNumber[a.pullRequestId] || {}));
