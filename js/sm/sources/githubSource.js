@@ -903,10 +903,6 @@ function _priorityRankCompare(a, b) {
     return (a.prNumber || 0) - (b.prNumber || 0);
 }
 
-function _fifoCompare(a, b) {
-    return (a.prNumber || 0) - (b.prNumber || 0);
-}
-
 function _logPriorityPremption(matched, limit) {
     // Preemption marker (grep-able in tick logs): a blocker took a slot
     // a non-blocker would have held under plain FIFO. Fires only when the

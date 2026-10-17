@@ -282,10 +282,16 @@ var GH_PENDING_CHECK_STATUSES = ['QUEUED', 'IN_PROGRESS', 'WAITING', 'PENDING'];
 // bookkeeping checks below (dmtools-agents#628/#635, live dart gh-191).
 // 'neutral' = a conclusive non-verdict entry (SUCCESS next to nothing
 // pending, SKIPPED, …) — it neither reddens nor pendings the rollup.
-function _ghCheckOutcome(c) {
+function _ghCheckBookeepingOutcome(c) {
     var cname = String((c && (c.name || c.context)) || '');
     if (_ghIsBookeepingCheck(cname)) return 'bookeeping';
     if (c.conclusion === 'CANCELLED') return 'canceled';
+    return null;
+}
+
+function _ghCheckOutcome(c) {
+    var early = _ghCheckBookeepingOutcome(c);
+    if (early) return early;
     if (c.conclusion && GH_RED_CHECK_CONCLUSIONS.indexOf(c.conclusion) !== -1) return 'red';
     if (!c.conclusion || GH_PENDING_CHECK_STATUSES.indexOf(c.status) !== -1) return 'pending';
     return 'neutral';
@@ -634,6 +640,27 @@ function _ghThreadFirstComment(t) {
 // (the reply anchor), the root author and body (the machine-auth and
 // severity classification inputs) and the resolved flag. Fail OPEN to
 // []: a broken threads read means "nothing eligible", never a throw.
+function _ghThreadAuthor(first) {
+    return (first.author && (first.author.login || first.author.name)) || '';
+}
+
+function _ghThreadLine(t) {
+    return (t.line === 0 || t.line) ? t.line : null;
+}
+
+function _ghReviewThreadRow(t) {
+    var first = _ghThreadFirstComment(t);
+    return {
+        threadId: t.id || null,
+        rootCommentId: first.databaseId || null,
+        resolved: t.isResolved === true,
+        author: _ghThreadAuthor(first),
+        body: first.body || '',
+        path: t.path || null,
+        line: _ghThreadLine(t)
+    };
+}
+
 function _ghReviewThreadList(owner, repo, prNumber) {
     try {
         var res = parseMcp(github_get_pr_review_threads({
@@ -641,19 +668,7 @@ function _ghReviewThreadList(owner, repo, prNumber) {
         }));
         var nodes = _ghThreadNodes(res);
         var out = [];
-        nodes.forEach(function (t) {
-            if (!t) return;
-            var first = _ghThreadFirstComment(t);
-            out.push({
-                threadId: t.id || null,
-                rootCommentId: first.databaseId || null,
-                resolved: t.isResolved === true,
-                author: (first.author && (first.author.login || first.author.name)) || '',
-                body: first.body || '',
-                path: t.path || null,
-                line: (t.line === 0 || t.line) ? t.line : null
-            });
-        });
+        nodes.forEach(function (t) { if (t) out.push(_ghReviewThreadRow(t)); });
         return out;
     } catch (e) {
         console.warn('  ⚠️ review-thread list failed (fail-open): ' + (e.message || e));
