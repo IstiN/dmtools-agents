@@ -2083,6 +2083,147 @@ suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)'
 });
 
 
+// ── gh-957: the lap gate — a failed diff probe must never mislabel a progress lap ──
+suite('pushReworkChanges.evaluateAuditResolveGate — failed probe (null) semantics (gh-957)', function() {
+
+    function loadGate() {
+        return loadPushReworkChangesForAction({}).mod.evaluateAuditResolveGate;
+    }
+
+    test('confirmed change (probe true) — progress lap, never blocked, no audit line', function() {
+        var gate = loadGate();
+        var d = gate(true, false, 2, 0);
+        assert.equal(d.lapPushed, true);
+        assert.equal(d.blocked, false);
+        assert.equal(d.auditResolve, false);
+        assert.equal(gate(true, true, 2, 1).lapPushed, true, 'either change signal marks progress');
+    });
+
+    test('confirmed no-change + incomplete coverage — blocked (agents#827 path unchanged)', function() {
+        var gate = loadGate();
+        var d = gate(false, false, 2, 1);
+        assert.equal(d.blocked, true);
+        assert.equal(d.auditResolve, false);
+        assert.equal(d.lapPushed, false);
+    });
+
+    test('confirmed no-change + full coverage — audit-resolve (resolution only with the audit line)', function() {
+        var gate = loadGate();
+        var d = gate(false, false, 2, 0);
+        assert.equal(d.blocked, false);
+        assert.equal(d.auditResolve, true);
+        assert.equal(d.lapPushed, false);
+    });
+
+    test('FAILED probe + landed commits — progress lap (the thread-5 fix: no false no-op escalation)', function() {
+        var gate = loadGate();
+        var d = gate(null, true, 2, 0);
+        assert.equal(d.lapPushed, true, 'commitAndPush() knows real commits landed even when the diff probe failed');
+        assert.equal(d.auditResolve, false, 'commits landed — the "no code change" audit claim would be a lie');
+        assert.equal(d.blocked, false);
+    });
+
+    test('FAILED probe + no commits + full coverage — assumed no-change, audit line required', function() {
+        var gate = loadGate();
+        var d = gate(null, false, 2, 0);
+        assert.equal(d.lapPushed, false);
+        assert.equal(d.auditResolve, true, 'no commits and an unknown diff — resolution needs the audit trail');
+        assert.equal(d.blocked, false, 'fail-open on a failed probe (agents#827 doctrine), not the blocked path');
+    });
+
+    test('no open threads — no audit-resolve regardless of the probe result', function() {
+        var gate = loadGate();
+        assert.equal(gate(null, false, 0, 0).auditResolve, false);
+        assert.equal(gate(false, false, 0, 0).auditResolve, false);
+    });
+
+    test('inconsistent signals (probe says no change but a commit landed) — treated as progress, never a false audit claim', function() {
+        var gate = loadGate();
+        var d = gate(false, true, 2, 0);
+        assert.equal(d.lapPushed, true);
+        assert.equal(d.auditResolve, false);
+        assert.equal(d.blocked, false);
+    });
+});
+
+suite('pushReworkChanges.action — failed diff probe never stamps a false no-op lap (gh-957)', function() {
+    var BASE = 'd'.repeat(40);
+
+    // diffProbe: 'THROW' makes the hasRealCodeChanges probe fail (null);
+    // noCommits: the leg's own commit lands nothing.
+    function run(diffProbe, opts) {
+        opts = opts || {};
+        var resolved = [], replies = [], comments = [];
+        var loaded = loadPushReworkChangesForAction({
+            cli_execute_command: function(a) {
+                if (a.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+                if (a.command.indexOf('git ls-remote --heads origin') === 0) {
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
+                }
+                if (a.command.indexOf('git diff --name-only') === 0 && diffProbe === 'THROW') throw new Error('git failed');
+                return '';
+            },
+            file_read: function(a) {
+                var p = a && (a.path || a);
+                if (p.indexOf('rework_setup_failed.md') !== -1) throw new Error('nope');
+                if (p.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
+                if (p.indexOf('rework_base_head.txt') !== -1) return BASE;
+                if (p.indexOf('pr_discussions_raw.json') !== -1) {
+                    return JSON.stringify({ threads: [{ threadId: 'T1', rootCommentId: 11, resolved: false }] });
+                }
+                return null;
+            }
+        }, {
+            stagedDiffStat: opts.noCommits ? function() { return ''; } : undefined,
+            scm: {
+                addComment: function(n, body) { comments.push(String(body)); },
+                resolveThread: function(n, t) { resolved.push(t); },
+                replyToThread: function(n, thread, text) { replies.push(String(text)); }
+            },
+            outputFiles: {
+                readOutputFile: function(name) {
+                    if (name === 'review_replies.json') {
+                        return JSON.stringify({ replies: [
+                            { inReplyToId: 11, threadId: 'T1', reply: 'Already addressed on this head.' }
+                        ] });
+                    }
+                    return null;
+                }
+            }
+        });
+        // One open thread in the input snapshot, fully covered by the reply above.
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Fix summary long enough to be a meaningful rework completion summary.',
+            customParams: {}
+        });
+        return { result: result, resolved: resolved, replies: replies, comments: comments };
+    }
+
+    test('probe failed but commits landed: the lap marker records pushed=1 and replies carry NO audit line', function() {
+        var r = run('THROW', {});
+        assert.equal(r.result.success, true);
+        assert.equal(r.resolved.length, 1, 'the covered thread is resolved');
+        assert.equal(r.replies.length, 1);
+        assert.notContains(r.replies[0], 'Audit (gh-957)', 'changes landed — no "no code change required" claim');
+        var marker = r.comments.filter(function(c) { return c.indexOf('📓 rework lap on head') !== -1; });
+        assert.equal(marker.length, 1, 'exactly one lap marker was stamped');
+        assert.contains(marker[0], 'pushed 1', 'a genuine progress lap — the SM guard must not count it as a no-op');
+    });
+
+    test('probe failed and no commits landed: replies carry the audit line and the marker records pushed=0', function() {
+        var r = run('THROW', { noCommits: true });
+        assert.equal(r.result.success, true);
+        assert.equal(r.resolved.length, 1, 'full reply coverage — audit-resolve is allowed');
+        assert.equal(r.replies.length, 1);
+        assert.contains(r.replies[0], 'Audit (gh-957)', 'resolution without a confirmed change needs the audit trail');
+        var marker = r.comments.filter(function(c) { return c.indexOf('📓 rework lap on head') !== -1; });
+        assert.equal(marker.length, 1);
+        assert.contains(marker[0], 'pushed 0', 'no commits landed — this IS an empty lap');
+    });
+});
+
+
 // ── agents#895: squash the timer's WIP auto-save commits (opt-in) ────────────
 suite('pushReworkChanges.commitAndPush — squashReworkWip (agents#895)', function() {
 

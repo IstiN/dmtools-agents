@@ -40,6 +40,29 @@
 var machineNotice = require('./machineNotice.js');
 
 /**
+ * Walk a fixed key path down a (possibly nested) envelope; null-safe at
+ * every level. Returns the node's array when the holder carries one.
+ */
+function envelopeNodesAt(path, data) {
+    var cur = data;
+    for (var i = 0; i < path.length; i++) {
+        cur = cur ? cur[path[i]] : null;
+    }
+    if (Array.isArray(cur)) return cur;
+    return cur && Array.isArray(cur.nodes) ? cur.nodes : null;
+}
+
+/**
+ * The two accepted envelope shapes: the full GraphQL response
+ * (data.repository.pullRequest.reviewThreads.nodes) and the short
+ * ({nodes:[...]}) envelope.
+ */
+function envelopeReviewThreads(data) {
+    return envelopeNodesAt(['data', 'repository', 'pullRequest', 'reviewThreads'], data) ||
+        envelopeNodesAt(['nodes'], data) || [];
+}
+
+/**
  * Normalize the github_get_pr_review_threads return (JSON string | node
  * array | full envelope | {nodes:[...]} short envelope) into a node array.
  */
@@ -50,12 +73,7 @@ function parseGraphQLNodes(raw) {
         try { data = JSON.parse(data); } catch (e) { return []; }
     }
     if (Array.isArray(data)) return data;
-    var rt = data && data.data && data.data.repository &&
-             data.data.repository.pullRequest &&
-             data.data.repository.pullRequest.reviewThreads;
-    if (rt && Array.isArray(rt.nodes)) return rt.nodes;
-    if (data && Array.isArray(data.nodes)) return data.nodes;
-    return [];
+    return envelopeReviewThreads(data);
 }
 
 /**
@@ -77,45 +95,124 @@ function indexConversations(conversations) {
 }
 
 /**
- * Map one GraphQL reviewThread node to the enriched internal thread shape
- * ({rootCommentId, threadId, path, line, resolved, bot, body, author, date,
- * replies}), filling body/author/path/line/replies from the matched
- * conversation when the node's first comment does not carry them (the
- * dmtools export may omit fields). The RESOLVED flag is GraphQL truth only —
- * the arm rule counts isResolved, so the inventory must never disagree.
+ * REST conversation root author login: user.login (GitHub export) or
+ * author.login/name (other exports) — '' when the conversation names no one.
  */
-function threadFromGraphQLNode(node, conversation) {
-    var first = (node.comments && node.comments.nodes && node.comments.nodes[0]) || {};
-    var convRoot = conversation ? (conversation.rootComment || conversation) : {};
-    var author = (first.author && (first.author.login || first.author.name)) || '';
-    if (!author) {
-        author = convRoot.user ? (convRoot.user.login || '') :
-            (convRoot.author ? (convRoot.author.login || convRoot.author.name || '') : '');
+function conversationAuthorLogin(convRoot) {
+    var u = convRoot.user || convRoot.author || null;
+    return u ? (u.login || u.name || '') : '';
+}
+
+/**
+ * The author of a GraphQL thread: the first comment's author wins; the
+ * matched conversation root is the fallback (the dmtools export may omit
+ * fields on the GraphQL payload).
+ */
+function nodeAuthor(first, convRoot) {
+    if (first.author && (first.author.login || first.author.name)) {
+        return first.author.login || first.author.name;
     }
-    var body = String(first.body || convRoot.body || '').trim();
-    var path = node.path || (conversation && conversation.path) || null;
-    var line = (node.line === 0 || node.line) ? node.line
-        : (conversation ? (conversation.line || conversation.original_line || null) : null);
+    return conversationAuthorLogin(convRoot);
+}
+
+/**
+ * The diff position: the node's own line wins (0 is a valid position);
+ * the conversation's line/original_line is the fallback; null when neither
+ * side carries one.
+ */
+function resolveNodeLine(node, conversation) {
+    if (node.line === 0 || node.line) return node.line;
+    if (!conversation) return null;
+    return conversation.line || conversation.original_line || null;
+}
+
+/**
+ * The identity fields of an internal thread straight from the GraphQL node
+ * (ids, path, resolved). The RESOLVED flag is GraphQL truth only — the arm
+ * rule counts isResolved, so the inventory must never disagree.
+ */
+function threadIdentityFromNode(node, conversation) {
+    var first = (node.comments && node.comments.nodes && node.comments.nodes[0]) || {};
     return {
         rootCommentId: first.databaseId || null,
         threadId: node.id || null,
-        path: path,
-        line: line,
-        resolved: node.isResolved === true,
-        bot: machineNotice.isBotAuthor(author),
-        body: body,
-        author: author || 'unknown',
-        date: convRoot.created_at ? String(convRoot.created_at).substring(0, 10) : '',
-        replies: (conversation && Array.isArray(conversation.replies)) ? conversation.replies : []
+        path: node.path || (conversation && conversation.path) || null,
+        line: resolveNodeLine(node, conversation),
+        resolved: node.isResolved === true
     };
+}
+
+/**
+ * Fill the presentation fields (bot/body/author/date/replies) from the
+ * GraphQL first comment and the matched conversation.
+ */
+function enrichThreadFromConversation(t, node, conversation) {
+    var first = (node.comments && node.comments.nodes && node.comments.nodes[0]) || {};
+    var convRoot = conversation ? (conversation.rootComment || conversation) : {};
+    var author = nodeAuthor(first, convRoot);
+    t.bot = machineNotice.isBotAuthor(author);
+    t.body = String(first.body || convRoot.body || '').trim();
+    t.author = author || 'unknown';
+    t.date = convRoot.created_at ? String(convRoot.created_at).substring(0, 10) : '';
+    t.replies = (conversation && Array.isArray(conversation.replies)) ? conversation.replies : [];
+    return t;
+}
+
+/**
+ * Map one GraphQL reviewThread node to the enriched internal thread shape
+ * ({rootCommentId, threadId, path, line, resolved, bot, body, author, date,
+ * replies}), filling body/author/path/line/replies from the matched
+ * conversation when the node's first comment does not carry them.
+ */
+function threadFromGraphQLNode(node, conversation) {
+    return enrichThreadFromConversation(
+        threadIdentityFromNode(node, conversation), node, conversation);
+}
+
+/**
+ * The conversation matching one GraphQL node: joined on the first comment's
+ * databaseId. Returns {conv, dbId} (both null when the node carries no
+ * databaseId — such threads keep their GraphQL-only shape).
+ */
+function matchConversationForNode(node, convById) {
+    var first = (node.comments && node.comments.nodes && node.comments.nodes[0]) || {};
+    if (first.databaseId === null || first.databaseId === undefined) {
+        return { conv: null, dbId: null };
+    }
+    var dbId = String(first.databaseId);
+    return { conv: convById[dbId] || null, dbId: dbId };
+}
+
+/**
+ * Conversation-only machine notices — the gh-808 corpus shape: counted for
+ * the exclusion note but never enumerated (they are not GraphQL review
+ * threads; the arm rule does not count them either).
+ */
+function countConversationOnlyNotices(conversations, matchedConvIds) {
+    var noticeCount = 0;
+    (conversations || []).forEach(function(c) {
+        var id = conversationRootId(c);
+        if (id !== null && id !== undefined && matchedConvIds[String(id)]) return;
+        var root = c.rootComment || c;
+        if (machineNotice.isMachineNoticeBody(String(root.body || '').trim())) noticeCount++;
+    });
+    return noticeCount;
+}
+
+/**
+ * The arm-rule census: how many GraphQL reviewThreads are unresolved — the
+ * SAME number the SM arm rule counts.
+ */
+function countUnresolvedNodes(nodes) {
+    var unresolved = 0;
+    nodes.forEach(function(n) { if (n && n.isResolved !== true) unresolved++; });
+    return unresolved;
 }
 
 /**
  * GraphQL-first inventory (gh-957): enumerate the SAME census the SM arm
  * rule counts. Notice threads (enriched body matches a harness marker) are
- * dropped and counted. Conversation-only notices — the gh-808 corpus shape —
- * are counted for the exclusion note but never enumerated (they are not
- * GraphQL review threads; the arm rule does not count them either).
+ * dropped and counted.
  */
 function buildFromGraphQL(nodes, conversations) {
     var convById = indexConversations(conversations);
@@ -124,43 +221,30 @@ function buildFromGraphQL(nodes, conversations) {
     var matchedConvIds = {};
     nodes.forEach(function(node) {
         if (!node) return;
-        var first = (node.comments && node.comments.nodes && node.comments.nodes[0]) || {};
-        var conv = null;
-        if (first.databaseId !== null && first.databaseId !== undefined) {
-            conv = convById[String(first.databaseId)] || null;
-            if (conv) matchedConvIds[String(first.databaseId)] = true;
-        }
-        var t = threadFromGraphQLNode(node, conv);
+        var match = matchConversationForNode(node, convById);
+        if (match.dbId !== null && match.conv) matchedConvIds[match.dbId] = true;
+        var t = threadFromGraphQLNode(node, match.conv);
         if (machineNotice.isMachineNoticeBody(t.body)) {
             noticeCount++;
             return;
         }
         enriched.push(t);
     });
-    (conversations || []).forEach(function(c) {
-        var id = conversationRootId(c);
-        if (id !== null && id !== undefined && matchedConvIds[String(id)]) return;
-        var root = c.rootComment || c;
-        if (machineNotice.isMachineNoticeBody(String(root.body || '').trim())) noticeCount++;
-    });
-    var unresolved = 0;
-    nodes.forEach(function(n) { if (n && n.isResolved !== true) unresolved++; });
+    noticeCount += countConversationOnlyNotices(conversations, matchedConvIds);
     return {
         enriched: enriched,
         noticeCount: noticeCount,
         source: 'graphql',
         graphqlTotal: nodes.length,
-        graphqlUnresolved: unresolved
+        graphqlUnresolved: countUnresolvedNodes(nodes)
     };
 }
 
 /**
- * Legacy conversation-first inventory (pre-gh-957 behavior, preserved for
- * the fallback path): enumerate the conversations export, resolve status
- * from REST flags enriched with GraphQL isResolved, threadId from the
- * GraphQL node id matched by first-comment databaseId.
+ * Index the GraphQL nodes by first-comment databaseId — the join keys for
+ * the legacy path's threadId/resolved enrichment.
  */
-function buildFromConversations(conversations, nodes) {
+function indexGraphqlByCommentId(nodes) {
     var threadIdByCommentId = {};
     var resolvedByCommentId = {};
     (nodes || []).forEach(function(rt) {
@@ -172,33 +256,59 @@ function buildFromConversations(conversations, nodes) {
             }
         }
     });
+    return { threadIdByCommentId: threadIdByCommentId, resolvedByCommentId: resolvedByCommentId };
+}
+
+/**
+ * The REST root author login (user.login or author.login) — '' when unnamed.
+ */
+function conversationAuthor(root) {
+    if (root.user) return root.user.login || '';
+    return root.author ? (root.author.login || '') : '';
+}
+
+/**
+ * Map one REST conversation to the internal thread shape, enriching
+ * threadId/resolved from the GraphQL index (matched by root comment id).
+ */
+function threadFromConversation(thread, idIndex) {
+    var root = thread.rootComment || thread;
+    var body = String(root.body || '').trim();
+    var rootId = conversationRootId(thread);
+    var hasRootId = rootId !== null && rootId !== undefined;
+    var author = conversationAuthor(root);
+    return {
+        rootCommentId: rootId,
+        threadId: hasRootId ? (idIndex.threadIdByCommentId[String(rootId)] || null) : null,
+        path: thread.path || null,
+        line: thread.line || thread.original_line || null,
+        resolved: thread.resolved === true || thread.isResolved === true ||
+            (hasRootId && idIndex.resolvedByCommentId[String(rootId)] === true),
+        bot: machineNotice.isBotAuthor(author),
+        body: body,
+        author: author || 'unknown',
+        date: root.created_at ? String(root.created_at).substring(0, 10) : '',
+        replies: Array.isArray(thread.replies) ? thread.replies : []
+    };
+}
+
+/**
+ * Legacy conversation-first inventory (pre-gh-957 behavior, preserved for
+ * the fallback path): enumerate the conversations export, resolve status
+ * from REST flags enriched with GraphQL isResolved, threadId from the
+ * GraphQL node id matched by first-comment databaseId.
+ */
+function buildFromConversations(conversations, nodes) {
+    var idIndex = indexGraphqlByCommentId(nodes);
     var enriched = [];
     var noticeCount = 0;
     (conversations || []).forEach(function(thread) {
         var root = thread.rootComment || thread;
-        var body = String(root.body || '').trim();
-        if (machineNotice.isMachineNoticeBody(body)) {
+        if (machineNotice.isMachineNoticeBody(String(root.body || '').trim())) {
             noticeCount++;
             return;
         }
-        var rootId = conversationRootId(thread);
-        var author = root.user ? (root.user.login || '') :
-            (root.author ? (root.author.login || '') : '');
-        var graphqlResolved = rootId !== null && rootId !== undefined
-            ? resolvedByCommentId[String(rootId)] === true : false;
-        enriched.push({
-            rootCommentId: rootId,
-            threadId: rootId !== null && rootId !== undefined
-                ? (threadIdByCommentId[String(rootId)] || null) : null,
-            path: thread.path || null,
-            line: thread.line || thread.original_line || null,
-            resolved: thread.resolved === true || thread.isResolved === true || graphqlResolved,
-            bot: machineNotice.isBotAuthor(author),
-            body: body,
-            author: author || 'unknown',
-            date: root.created_at ? String(root.created_at).substring(0, 10) : '',
-            replies: Array.isArray(thread.replies) ? thread.replies : []
-        });
+        enriched.push(threadFromConversation(thread, idIndex));
     });
     return {
         enriched: enriched,
@@ -210,6 +320,64 @@ function buildFromConversations(conversations, nodes) {
 }
 
 /**
+ * Render one reply line of a thread block ('> **author** (date): body').
+ */
+function renderReplyLine(reply) {
+    var rAuthor = reply.user ? reply.user.login : 'unknown';
+    var rDate = reply.created_at ? reply.created_at.substring(0, 10) : '';
+    return '> **' + rAuthor + '** (' + rDate + '): ' + String(reply.body || '').trim() + '\n\n';
+}
+
+/**
+ * Render one open thread block: heading with location, the root comment,
+ * the replies, and the trailing rule.
+ */
+function renderThreadBlock(t, idx) {
+    var section = '### Thread ' + (idx + 1);
+    if (t.path) {
+        section += ' — `' + t.path + '`';
+        if (t.line) section += ' line ' + t.line;
+    }
+    section += '\n\n';
+    if (t.body) {
+        section += '**' + t.author + '** (' + t.date + '):\n' + t.body + '\n\n';
+    } else {
+        section += '_[No comment body]_\n\n';
+    }
+    (t.replies || []).forEach(function(reply) {
+        section += renderReplyLine(reply);
+    });
+    return section + '---\n\n';
+}
+
+/**
+ * The exclusion summary note (gh-808): resolved/bot/notice counts that did
+ * NOT make the readable section. Returns null when nothing was excluded.
+ */
+function buildExclusionNote(counts, noticeCount) {
+    var infoLines = [];
+    if (counts.resolved > 0) infoLines.push(counts.resolved + ' resolved thread(s) excluded');
+    if (counts.bot > 0) infoLines.push(counts.bot + ' bot-generated thread(s) excluded (informational only)');
+    if (noticeCount > 0) infoLines.push(noticeCount + ' machine notice(s) excluded (arming/status boilerplate — never reply targets)');
+    if (infoLines.length === 0) return null;
+    return '> ℹ️ **' + infoLines.join('; ') + '.**\n\n';
+}
+
+/**
+ * Count the excluded categories of the enriched inventory: resolved threads,
+ * bot-authored open threads, and the open actionable remainder.
+ */
+function countExcludedCategories(enriched) {
+    var resolvedCount = 0;
+    var botCount = 0;
+    (enriched || []).forEach(function(t) {
+        if (t.resolved) resolvedCount++;
+        else if (t.bot) botCount++;
+    });
+    return { resolved: resolvedCount, bot: botCount };
+}
+
+/**
  * Render the '## Review Threads (Inline Comments)' markdown section from
  * the enriched inventory: every open non-bot thread with body and replies,
  * prefixed by the exclusion summary note (gh-808). Resolved/bot threads are
@@ -217,43 +385,21 @@ function buildFromConversations(conversations, nodes) {
  */
 function renderThreadsMarkdown(enriched, noticeCount) {
     var section = '## Review Threads (Inline Comments)\n\n';
-    enriched.forEach(function(t, idx) {
+    (enriched || []).forEach(function(t, idx) {
         if (t.resolved || t.bot) return;
-        section += '### Thread ' + (idx + 1);
-        if (t.path) {
-            section += ' — `' + t.path + '`';
-            if (t.line) section += ' line ' + t.line;
-        }
-        section += '\n\n';
-        if (t.body) {
-            section += '**' + t.author + '** (' + t.date + '):\n' + t.body + '\n\n';
-        } else {
-            section += '_[No comment body]_\n\n';
-        }
-        (t.replies || []).forEach(function(reply) {
-            var rAuthor = reply.user ? reply.user.login : 'unknown';
-            var rDate = reply.created_at ? reply.created_at.substring(0, 10) : '';
-            section += '> **' + rAuthor + '** (' + rDate + '): ' + String(reply.body || '').trim() + '\n\n';
-        });
-        section += '---\n\n';
+        section += renderThreadBlock(t, idx);
     });
-    var resolvedCount = enriched.filter(function(t) { return t.resolved; }).length;
-    var botCount = enriched.filter(function(t) { return !t.resolved && t.bot; }).length;
-    var openCount = enriched.length - resolvedCount - botCount;
-    var infoLines = [];
-    if (resolvedCount > 0) infoLines.push(resolvedCount + ' resolved thread(s) excluded');
-    if (botCount > 0) infoLines.push(botCount + ' bot-generated thread(s) excluded (informational only)');
-    if (noticeCount > 0) infoLines.push(noticeCount + ' machine notice(s) excluded (arming/status boilerplate — never reply targets)');
-    if (infoLines.length > 0) {
-        section = '> ℹ️ **' + infoLines.join('; ') + '.**\n\n' + section;
-    }
+    var excluded = countExcludedCategories(enriched);
+    var openCount = (enriched || []).length - excluded.resolved - excluded.bot;
+    var note = buildExclusionNote(excluded, noticeCount);
+    if (note) section = note + section;
     return {
         markdown: section,
         counts: {
-            total: enriched.length,
+            total: (enriched || []).length,
             open: openCount,
-            resolved: resolvedCount,
-            bot: botCount,
+            resolved: excluded.resolved,
+            bot: excluded.bot,
             notices: noticeCount
         }
     };

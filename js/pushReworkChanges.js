@@ -896,6 +896,81 @@ function buildCompletionLiveState(scm, pr, ticketKey, config) {
  * Fail-open by design: probe/resolution errors are logged, never thrown — a
  * broken sweep must not fail the rework leg.
  */
+/**
+ * True when a fresh-swept thread is addressed by this rework: cited by
+ * threadId in the response text, claimed in review_replies.json by
+ * threadId, or claimed by root comment id.
+ */
+function isAddressedThread(t, byThreadId, byRootId, cited) {
+    return (t.threadId && (byThreadId[String(t.threadId)] || cited.indexOf(String(t.threadId)) !== -1)) ||
+        (t.rootCommentId !== null && t.rootCommentId !== undefined && byRootId[String(t.rootCommentId)]);
+}
+
+/**
+ * The fresh open-thread sweep: re-reads the PR's live threads and resolves
+ * every still-open one this rework addressed. Fail-quiet: a sweep probe
+ * failure degrades to the cited-ids direct resolution below. Returns
+ * {resolvedCount, resolvedViaSweep} — the latter keeps the cited pass from
+ * double-resolving.
+ */
+function sweepAddressedThreads(scm, pullRequestId, freshThreads, addressed, counter) {
+    var byThreadId = addressed.byThreadId;
+    var byRootId = addressed.byRootId;
+    var cited = addressed.cited;
+    var resolvedCount = 0;
+    var resolvedViaSweep = {};
+    (freshThreads || []).forEach(function(t) {
+        if (!t || t.resolved === true) return;
+        if (!isAddressedThread(t, byThreadId, byRootId, cited)) return;
+        try {
+            scm.resolveThread(pullRequestId, { threadId: t.threadId });
+            console.log('✅ Resolved still-open addressed thread (fresh sweep):', t.threadId);
+            resolvedCount++;
+            if (counter) counter.resolved = (counter.resolved || 0) + 1;
+            if (t.threadId) resolvedViaSweep[String(t.threadId)] = true;
+        } catch (e) {
+            console.warn('Failed to resolve thread', t.threadId + ':', e.message || e);
+        }
+    });
+    return { resolvedCount: resolvedCount, resolvedViaSweep: resolvedViaSweep };
+}
+
+/**
+ * Threads cited in the rework response MUST be resolved even when the sweep
+ * could not confirm them open (probe failed, pagination, stale flags) —
+ * resolve them directly; resolving an already-resolved thread is harmless.
+ */
+function resolveCitedThreads(scm, pullRequestId, cited, resolvedViaSweep, counter) {
+    var resolvedCount = 0;
+    (cited || []).forEach(function(threadId) {
+        if (resolvedViaSweep[String(threadId)]) return;
+        try {
+            scm.resolveThread(pullRequestId, { threadId: threadId });
+            console.log('✅ Resolved thread cited in rework response:', threadId);
+            resolvedCount++;
+            if (counter) counter.resolved = (counter.resolved || 0) + 1;
+        } catch (e) {
+            console.warn('Failed to resolve cited thread', threadId + ':', e.message || e);
+        }
+    });
+    return resolvedCount;
+}
+
+/**
+ * The live thread re-read for the closure sweep: the rawThreads list from
+ * fetchDiscussions, [] when the provider lacks the probe or it fails.
+ */
+function fetchFreshThreadsForSweep(scm, pullRequestId) {
+    if (!(scm && typeof scm.fetchDiscussions === 'function')) return [];
+    try {
+        var data = scm.fetchDiscussions(String(pullRequestId));
+        return ((data && data.rawThreads && data.rawThreads.threads) || []);
+    } catch (e) {
+        console.warn('Fresh review-thread sweep failed (falling back to direct resolution of cited ids):', e.message || e);
+        return [];
+    }
+}
+
 function resolveRemainingAddressedThreads(scm, pullRequestId, addressed) {
     var cited = (addressed && addressed.citedThreadIds) || [];
     var byThreadId = (addressed && addressed.addressedThreadIds) || {};
@@ -909,50 +984,11 @@ function resolveRemainingAddressedThreads(scm, pullRequestId, addressed) {
         Object.keys(byRootId).length > 0;
     if (!hasWork) return 0;
 
-    var resolvedCount = 0;
-    var resolvedViaSweep = {};
-    var freshThreads = [];
-    if (scm && typeof scm.fetchDiscussions === 'function') {
-        try {
-            var data = scm.fetchDiscussions(String(pullRequestId));
-            freshThreads = (data && data.rawThreads && data.rawThreads.threads) || [];
-        } catch (e) {
-            console.warn('Fresh review-thread sweep failed (falling back to direct resolution of cited ids):', e.message || e);
-        }
-    }
-
-    freshThreads.forEach(function(t) {
-        if (!t || t.resolved === true) return;
-        var isAddressed =
-            (t.threadId && (byThreadId[String(t.threadId)] || cited.indexOf(String(t.threadId)) !== -1)) ||
-            (t.rootCommentId !== null && t.rootCommentId !== undefined && byRootId[String(t.rootCommentId)]);
-        if (!isAddressed) return;
-        try {
-            scm.resolveThread(pullRequestId, { threadId: t.threadId });
-            console.log('✅ Resolved still-open addressed thread (fresh sweep):', t.threadId);
-            resolvedCount++;
-            if (counter) counter.resolved = (counter.resolved || 0) + 1;
-            if (t.threadId) resolvedViaSweep[String(t.threadId)] = true;
-        } catch (e) {
-            console.warn('Failed to resolve thread', t.threadId + ':', e.message || e);
-        }
-    });
-
-    // Threads cited in the rework response MUST be resolved even when the sweep
-    // could not confirm them open (probe failed, pagination, stale flags) —
-    // resolve them directly; resolving an already-resolved thread is harmless.
-    cited.forEach(function(threadId) {
-        if (resolvedViaSweep[String(threadId)]) return;
-        try {
-            scm.resolveThread(pullRequestId, { threadId: threadId });
-            console.log('✅ Resolved thread cited in rework response:', threadId);
-            resolvedCount++;
-            if (counter) counter.resolved = (counter.resolved || 0) + 1;
-        } catch (e) {
-            console.warn('Failed to resolve cited thread', threadId + ':', e.message || e);
-        }
-    });
-    return resolvedCount;
+    var sweep = sweepAddressedThreads(scm, pullRequestId,
+        fetchFreshThreadsForSweep(scm, pullRequestId),
+        { byThreadId: byThreadId, byRootId: byRootId, cited: cited }, counter);
+    return sweep.resolvedCount +
+        resolveCitedThreads(scm, pullRequestId, cited, sweep.resolvedViaSweep, counter);
 }
 
 /**
@@ -1342,6 +1378,38 @@ function headMovedSinceLastReview(scm, pr) {
 }
 
 /**
+ * gh-957 audit-resolve gate decision (pure — extracted from action for the
+ * CRAP budget and the failed-probe semantics, review thread 'realCodeChanges
+ * mislabels a failed probe as a no-op lap'). Combines the two independent
+ * change signals into one decision per leg close:
+ *   realCodeChanges     — hasRealCodeChanges() probe: true/false, or null
+ *                         when the git diff probe itself failed (unknown)
+ *   codeChangesCommitted— commitAndPush()'s own hasChanges (a rework commit
+ *                         actually landed this leg)
+ *   openThreadCount     — open threads in the input snapshot
+ *   unaddressedCount    — open threads with no targeted reply
+ * Returns { blocked, auditResolve, lapPushed }:
+ *   lapPushed    — a real change landed (either signal) — the lap marker
+ *                  records it so a genuine progress lap is NEVER counted as
+ *                  a no-op: a failed probe must not escalate a healthy PR
+ *                  one lap early.
+ *   blocked      — no change CONFIRMED, open threads AND incomplete reply
+ *                  coverage: the historical agents#827 blocked path.
+ *   auditResolve — no change (confirmed, or ASSUMED when the probe failed
+ *                  and no commit landed) with full reply coverage:
+ *                  resolution is allowed ONLY with the per-thread audit
+ *                  line. When commits landed under a failed probe we cannot
+ *                  claim "no code change" — the normal resolving path (no
+ *                  audit line) applies.
+ */
+function evaluateAuditResolveGate(realCodeChanges, codeChangesCommitted, openThreadCount, unaddressedCount) {
+    var lapPushed = realCodeChanges === true || codeChangesCommitted === true;
+    var blocked = realCodeChanges === false && openThreadCount > 0 && unaddressedCount > 0;
+    var auditResolve = !blocked && openThreadCount > 0 && !lapPushed;
+    return { blocked: blocked, auditResolve: auditResolve, lapPushed: lapPushed };
+}
+
+/**
  * agents#827 + gh-957: the rework pass produced no production change while
  * review threads are open AND reply coverage is incomplete (gh-957 tightens
  * the gate — full coverage takes the audit-resolve path instead). Posts the
@@ -1567,15 +1635,19 @@ function action(params) {
         var inputSnapshotThreads = readInputRawThreads(ticketKey, outputOptsForCoverage);
         var openInputThreads = inputSnapshotThreads.filter(isOpenThread);
         var replyCoverage = buildReplyCoverage(inputSnapshotThreads, readRepliesArray(outputOptsForCoverage).replies);
-        if (realCodeChanges === false && openInputThreads.length > 0 && replyCoverage.unaddressed.length > 0) {
+        var lapGate = evaluateAuditResolveGate(realCodeChanges, codeChangesCommitted,
+            openInputThreads.length, replyCoverage.unaddressed.length);
+        if (lapGate.blocked) {
             return handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary,
                 openInputThreads.length, actualParams, replyCoverage.unaddressed);
         }
         // gh-957 audit-resolve is live when the gate above passed with zero
         // code changes: every open thread has a targeted reply and the
-        // resolve pass below closes them with the audit trail.
-        var auditResolve = (realCodeChanges === false && openInputThreads.length > 0);
-        if (auditResolve) {
+        // resolve pass below closes them with the audit trail. A FAILED diff
+        // probe (null) with no landed commit is treated as no-change too —
+        // resolution without the audit line is never allowed on an unknown
+        // tree.
+        if (lapGate.auditResolve) {
             console.log('ℹ️ gh-957 audit-resolve: no code changes but ' + openInputThreads.length +
                 ' open thread(s) fully covered by targeted replies — resolving with audit trail');
         }
@@ -1591,7 +1663,7 @@ function action(params) {
             workingDir: config.workingDir || null,
             responseText: fixSummary,
             resolutions: lapResolutions,
-            auditNoCodeChange: auditResolve,
+            auditNoCodeChange: lapGate.auditResolve,
             runUrl: reworkRunUrl()
         });
         console.log('Thread replies posted:', repliesPosted);
@@ -1767,7 +1839,7 @@ function action(params) {
             scm,
             pr.number,
             readReworkBaseHead(ticketKey) || (pr.head && (pr.head.sha || pr.head)) || null,
-            realCodeChanges === true,
+            lapGate.lapPushed,
             lapResolutions.resolved
         );
 
@@ -1827,5 +1899,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, squashReworkWipCommits, hasRealCodeChanges, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker };
+    module.exports = { action, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker };
 }

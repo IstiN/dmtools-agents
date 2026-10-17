@@ -52,12 +52,10 @@ var MARKER_SUFFIX = ' -->';
 var ESCALATION_LABEL = 'rework-loop-escalated';
 
 /**
- * Builds the per-leg-close audit marker comment. pushed: 0|1 (a real
- * production change landed), resolved: count of threads the leg resolved.
- * runUrl: the rework run URL for the audit trail (null on local runs).
- * Returns null on an unbuildable record — callers skip the post.
+ * The marker payload: {head, pushed: 0|1, resolved: N, at} (+ run URL when
+ * known). null on an unbuildable record — callers skip the post.
  */
-function buildLapMarker(headSha, pushed, resolved, runUrl, atIso) {
+function lapPayload(headSha, pushed, resolved, runUrl, atIso) {
     if (!headSha || typeof headSha !== 'string') return null;
     var payload = {
         head: headSha,
@@ -66,6 +64,18 @@ function buildLapMarker(headSha, pushed, resolved, runUrl, atIso) {
         at: atIso || new Date().toISOString()
     };
     if (runUrl) payload.run = String(runUrl);
+    return payload;
+}
+
+/**
+ * Builds the per-leg-close audit marker comment. pushed: 0|1 (a real
+ * production change landed), resolved: count of threads the leg resolved.
+ * runUrl: the rework run URL for the audit trail (null on local runs).
+ * Returns null on an unbuildable record — callers skip the post.
+ */
+function buildLapMarker(headSha, pushed, resolved, runUrl, atIso) {
+    var payload = lapPayload(headSha, pushed, resolved, runUrl, atIso);
+    if (!payload) return null;
     return LAP_MARKER_PREFIX + JSON.stringify(payload) + MARKER_SUFFIX + '\n' +
         '📓 rework lap on head ' + String(headSha).substring(0, 7) + ': pushed ' +
         payload.pushed + ', resolved ' + payload.resolved + ' (gh-957 loop-guard audit).';
@@ -96,34 +106,39 @@ function commentAuthorLogin(item) {
     return login ? String(login).toLowerCase() : null;
 }
 
-function parseMarkers(comments, prefix, opts) {
-    var list = Array.isArray(comments) ? comments : [];
-    var allow = (opts && Array.isArray(opts.authorLogins) && opts.authorLogins.length)
-        ? opts.authorLogins : null;
-    var out = [];
-    for (var i = 0; i < list.length; i++) {
-        if (allow) {
-            var who = commentAuthorLogin(list[i]);
-            var trusted = false;
-            for (var a = 0; a < allow.length; a++) {
-                if (who && who === String(allow[a] || '').toLowerCase()) { trusted = true; break; }
-            }
-            if (!trusted) continue;
-        }
-        var text = String((list[i] && list[i].body) || '');
-        var start = text.indexOf(prefix);
-        if (start === -1) continue;
-        start += prefix.length;
-        var end = text.indexOf(MARKER_SUFFIX, start);
-        if (end === -1) continue;
-        var parsed;
-        try { parsed = JSON.parse(text.substring(start, end).trim()); } catch (e) { continue; }
-        if (!parsed || typeof parsed !== 'object') continue;
-        parsed.atMs = Date.parse(parsed.at || '');
-        parsed.order = i;
-        out.push(parsed);
+/**
+ * Machine-author gate (the marker format is public — only trusted identities
+ * count): true when the comment author is in the allowlist.
+ */
+function isTrustedAuthor(item, allow) {
+    var who = commentAuthorLogin(item);
+    for (var a = 0; a < allow.length; a++) {
+        if (who && who === String(allow[a] || '').toLowerCase()) return true;
     }
-    // Timestamp order, payload order as tiebreak (reworkConsumption parity).
+    return false;
+}
+
+/**
+ * Extract and JSON-parse ONE marker payload from a comment body: null when
+ * the prefix/suffix are absent or the payload is not an object.
+ */
+function extractMarker(body, prefix) {
+    var text = String(body || '');
+    var start = text.indexOf(prefix);
+    if (start === -1) return null;
+    start += prefix.length;
+    var end = text.indexOf(MARKER_SUFFIX, start);
+    if (end === -1) return null;
+    var parsed;
+    try { parsed = JSON.parse(text.substring(start, end).trim()); } catch (e) { return null; }
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
+}
+
+/**
+ * Timestamp order, payload order as tiebreak (reworkConsumption parity).
+ */
+function sortMarkersByTime(out) {
     out.sort(function(a, b) {
         var aTime = isNaN(a.atMs) ? -1 : a.atMs;
         var bTime = isNaN(b.atMs) ? -1 : b.atMs;
@@ -131,6 +146,22 @@ function parseMarkers(comments, prefix, opts) {
         return (a.order || 0) - (b.order || 0);
     });
     return out;
+}
+
+function parseMarkers(comments, prefix, opts) {
+    var list = Array.isArray(comments) ? comments : [];
+    var allow = (opts && Array.isArray(opts.authorLogins) && opts.authorLogins.length)
+        ? opts.authorLogins : null;
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+        if (allow && !isTrustedAuthor(list[i], allow)) continue;
+        var parsed = extractMarker(list[i] && list[i].body, prefix);
+        if (!parsed) continue;
+        parsed.atMs = Date.parse(parsed.at || '');
+        parsed.order = i;
+        out.push(parsed);
+    }
+    return sortMarkersByTime(out);
 }
 
 function parseLapMarkers(comments, opts) {
