@@ -267,247 +267,380 @@ function buildFinalComment(results, aiComment) {
     return comment;
 }
 
-function action(params) {
-    tracker = trackersModule.createTracker(null, (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {});
-    try {
-        var ticketKey = params.ticket.key;
-        var projectKey = ticketKey.split('-')[0];
-        var initiatorId = params.initiator;
-        var wipLabel = params.metadata && params.metadata.contextId
+/**
+ * Resolve a story parent reference to a real tracker key.
+ * @param {Object} entry - Entry from stories.json (has parent)
+ * @param {Object} keyMap - Maps tempId OR real key -> actual tracker key
+ * @returns {{resolved: boolean, parent: string|null}} Resolved key, or resolved=false for an unresolvable tempId
+ */
+function resolveParentRef(entry, keyMap) {
+    if (keyMap[entry.parent]) {
+        return { resolved: true, parent: keyMap[entry.parent] };
+    }
+    if (!/^[A-Z]+-\d+$/.test(entry.parent)) {
+        return { resolved: false, parent: null };
+    }
+    return { resolved: true, parent: entry.parent };
+}
+
+/**
+ * Resolve any ref (tempId or real key) to a created tracker key.
+ * @param {string} ref
+ * @param {Object} keyMap
+ * @returns {string|null}
+ */
+function resolveKey(ref, keyMap) {
+    return keyMap[ref] || null;
+}
+
+/**
+ * Build the per-run action context (pure — no tracker or file access).
+ * @param {Object} params - action() params
+ * @returns {{ticketKey: string, projectKey: string, initiatorId: *, wipLabel: string|null}}
+ */
+function initActionContext(params) {
+    var ticketKey = params.ticket.key;
+    return {
+        ticketKey: ticketKey,
+        projectKey: ticketKey.split('-')[0],
+        initiatorId: params.initiator,
+        wipLabel: params.metadata && params.metadata.contextId
             ? params.metadata.contextId + '_wip'
-            : null;
+            : null
+    };
+}
 
-        console.log('Processing intake ticket creation for:', ticketKey);
+/**
+ * PASS 0: create all Bugs (entries with type === 'Bug').
+ * Bugs are standalone — no parent, no tempId resolution needed,
+ * moved directly to Ready For Development after creation.
+ * @param {Array} stories - Entries from stories.json
+ * @param {Object} ctx - Action context from initActionContext()
+ * @param {Object} state - Mutable { results, tempIdMap, keyMap }
+ */
+function createBugsPass(stories, ctx, state) {
+    stories.forEach(function(entry) {
+        if (entry.type !== 'Bug') return;
 
-        // 1. Read stories.json
-        var stories = readStoriesJson();
-        console.log('Found ' + stories.length + ' entries in stories.json');
+        var key = createBug(entry, ctx.projectKey);
+        var summary = buildSummary(entry.summary, 0);
 
-        var results = [];
-        var tempIdMap = {}; // maps "temp-X" / "epic-X" -> actual Jira key
-        var keyMap = {};   // maps tempId OR real key -> actual Jira key (for dependency resolution)
-
-        // 2. PASS 0: Create all Bugs (entries with type === 'Bug')
-        // Bugs are standalone — no parent, no tempId resolution needed,
-        // moved directly to Ready For Development after creation.
-        stories.forEach(function(entry) {
-            if (entry.type !== 'Bug') return;
-
-            var key = createBug(entry, projectKey);
-            var summary = buildSummary(entry.summary, 0);
-
-            if (key) {
-                if (entry.tempId) {
-                    tempIdMap[entry.tempId] = key;
-                    keyMap[entry.tempId] = key;
-                }
-                keyMap[key] = key;
-
-                // Move bug to Ready For Development so SM picks it up immediately
-                try {
-                    tracker.moveToStatus(key, STATUSES.READY_FOR_DEVELOPMENT);
-                    console.log('Moved Bug ' + key + ' to Ready For Development');
-                } catch (e) {
-                    console.warn('Failed to move bug ' + key + ' to Ready For Development:', e);
-                }
+        if (key) {
+            if (entry.tempId) {
+                state.tempIdMap[entry.tempId] = key;
+                state.keyMap[entry.tempId] = key;
             }
+            state.keyMap[key] = key;
 
-            entry._createdKey = key;
+            // Move bug to Ready For Development so SM picks it up immediately
+            try {
+                tracker.moveToStatus(key, STATUSES.READY_FOR_DEVELOPMENT);
+                console.log('Moved Bug ' + key + ' to Ready For Development');
+            } catch (e) {
+                console.warn('Failed to move bug ' + key + ' to Ready For Development:', e);
+            }
+        }
+
+        entry._createdKey = key;
+        attachFilesToTicket(key, entry);
+        linkToSource(key, ctx.ticketKey);
+        state.results.push({
+            type: 'Bug',
+            summary: summary,
+            key: key,
+            success: !!key,
+            error: key ? null : 'Creation failed (see logs)'
+        });
+    });
+}
+
+/**
+ * PASS 1: create all Epics (entries with no parent or parent=null, not Bug type).
+ * @param {Array} stories - Entries from stories.json
+ * @param {Object} ctx - Action context from initActionContext()
+ * @param {Object} state - Mutable { results, tempIdMap, keyMap }
+ */
+function createEpicsPass(stories, ctx, state) {
+    stories.forEach(function(entry) {
+        if (entry.type === 'Bug') return; // already handled in pass 0
+        if (!entry.parent) {
+            var key = createEpic(entry, ctx.projectKey);
+            var summary = buildSummary(entry.summary, 0);
+            if (key && entry.tempId) {
+                state.tempIdMap[entry.tempId] = key;
+                state.keyMap[entry.tempId] = key;
+                console.log('Mapped tempId ' + entry.tempId + ' -> ' + key);
+            }
+            if (key) state.keyMap[key] = key;
+            entry._createdKey = key; // track for pass 4
             attachFilesToTicket(key, entry);
-            linkToSource(key, ticketKey);
-            results.push({
-                type: 'Bug',
+            linkToSource(key, ctx.ticketKey);
+            setStoryPoints(key, entry);
+            state.results.push({
+                type: 'Epic',
                 summary: summary,
                 key: key,
                 success: !!key,
                 error: key ? null : 'Creation failed (see logs)'
             });
-        });
-
-        // 3. PASS 1: Create all Epics (entries with no parent or parent=null, not Bug type)
-        stories.forEach(function(entry) {
-            if (entry.type === 'Bug') return; // already handled in pass 0
-            if (!entry.parent) {
-                var key = createEpic(entry, projectKey);
-                var summary = buildSummary(entry.summary, 0);
-                if (key && entry.tempId) {
-                    tempIdMap[entry.tempId] = key;
-                    keyMap[entry.tempId] = key;
-                    console.log('Mapped tempId ' + entry.tempId + ' -> ' + key);
-                }
-                if (key) keyMap[key] = key;
-                entry._createdKey = key; // track for pass 4
-                attachFilesToTicket(key, entry);
-                linkToSource(key, ticketKey);
-                setStoryPoints(key, entry);
-                results.push({
-                    type: 'Epic',
-                    summary: summary,
-                    key: key,
-                    success: !!key,
-                    error: key ? null : 'Creation failed (see logs)'
-                });
-            }
-        });
-
-        // 4. PASS 2: Create all Stories (entries with parent set)
-        stories.forEach(function(entry) {
-            if (entry.type === 'Bug') return; // already handled in pass 0
-            if (entry.parent) {
-                var resolvedParent = entry.parent;
-                // Resolve tempIds (e.g. "epic-1", "temp-1") to actual Jira keys via keyMap
-                if (keyMap[resolvedParent]) {
-                    resolvedParent = keyMap[resolvedParent];
-                } else if (!/^[A-Z]+-\d+$/.test(resolvedParent)) {
-                    // Not a real Jira key and not in keyMap — unresolvable tempId
-                    console.warn('Could not resolve parent "' + entry.parent + '" - skipping story: ' + entry.summary);
-                    entry._createdKey = null;
-                    results.push({
-                        type: 'Story',
-                        summary: buildSummary(entry.summary, 0),
-                        key: null,
-                        success: false,
-                        error: 'Could not resolve parent "' + entry.parent + '"'
-                    });
-                    return;
-                }
-                var key = createStory(entry, resolvedParent, projectKey);
-                var summary = buildSummary(entry.summary, 0);
-                if (key) {
-                    if (entry.tempId) keyMap[entry.tempId] = key;
-                    keyMap[key] = key;
-                }
-                entry._createdKey = key; // track for pass 4
-                attachFilesToTicket(key, entry);
-                linkToSource(key, ticketKey);
-                setStoryPoints(key, entry);
-                results.push({
-                    type: 'Story',
-                    summary: summary,
-                    key: key,
-                    success: !!key,
-                    error: key ? null : 'Creation failed (see logs)'
-                });
-            }
-        });
-
-        // 4. Dependency and integration links
-        function resolveKey(ref) {
-            return keyMap[ref] || null;
         }
+    });
+}
 
-        // blockedBy: create Blocks links + move blocked story to Blocked status
-        // Uses entry._createdKey instead of results[idx] to avoid index mismatch
-        stories.forEach(function(entry) {
-            var blockedKey = entry._createdKey;
-            if (!blockedKey || !Array.isArray(entry.blockedBy) || entry.blockedBy.length === 0) return;
-            var anyLinked = false;
-            entry.blockedBy.forEach(function(ref) {
-                var blockerKey = resolveKey(ref);
-                if (!blockerKey) {
-                    console.warn('Cannot resolve blockedBy ref "' + ref + '" for ' + blockedKey);
-                    return;
-                }
-                try {
-                    tracker.linkIssues(blockedKey, blockerKey, 'Blocks');
-                    console.log(blockerKey + ' blocks ' + blockedKey);
-                    anyLinked = true;
-                } catch (e) {
-                    console.warn('Failed to link ' + blockerKey + ' blocks ' + blockedKey + ':', e);
-                }
+/**
+ * PASS 2: create all Stories (entries with parent set), resolving tempIds via keyMap.
+ * @param {Array} stories - Entries from stories.json
+ * @param {Object} ctx - Action context from initActionContext()
+ * @param {Object} state - Mutable { results, tempIdMap, keyMap }
+ */
+function createStoriesPass(stories, ctx, state) {
+    stories.forEach(function(entry) {
+        if (entry.type === 'Bug') return; // already handled in pass 0
+        if (!entry.parent) return;        // already handled in pass 1
+
+        var parent = resolveParentRef(entry, state.keyMap);
+        if (!parent.resolved) {
+            // Not a real tracker key and not in keyMap — unresolvable tempId
+            console.warn('Could not resolve parent "' + entry.parent + '" - skipping story: ' + entry.summary);
+            entry._createdKey = null;
+            state.results.push({
+                type: 'Story',
+                summary: buildSummary(entry.summary, 0),
+                key: null,
+                success: false,
+                error: 'Could not resolve parent "' + entry.parent + '"'
             });
-            if (anyLinked) {
-                try {
-                    tracker.moveToStatus(blockedKey, STATUSES.BLOCKED);
-                    console.log('Set ' + blockedKey + ' to Blocked');
-                } catch (e) {
-                    console.warn('Failed to set Blocked status on ' + blockedKey + ':', e);
-                }
-            }
+            return;
+        }
+
+        var key = createStory(entry, parent.parent, ctx.projectKey);
+        var summary = buildSummary(entry.summary, 0);
+        if (key) {
+            if (entry.tempId) state.keyMap[entry.tempId] = key;
+            state.keyMap[key] = key;
+        }
+        entry._createdKey = key; // track for pass 4
+        attachFilesToTicket(key, entry);
+        linkToSource(key, ctx.ticketKey);
+        setStoryPoints(key, entry);
+        state.results.push({
+            type: 'Story',
+            summary: summary,
+            key: key,
+            success: !!key,
+            error: key ? null : 'Creation failed (see logs)'
         });
+    });
+}
 
-        // integrates: create Relates links between parallel stories that will be combined
-        stories.forEach(function(entry) {
-            var storyKey = entry._createdKey;
-            if (!storyKey || !Array.isArray(entry.integrates) || entry.integrates.length === 0) return;
-            entry.integrates.forEach(function(ref) {
-                var otherKey = resolveKey(ref);
-                if (!otherKey || otherKey === storyKey) return;
-                try {
-                    tracker.linkIssues(storyKey, otherKey, 'Relates');
-                    console.log(storyKey + ' relates to ' + otherKey + ' (integration)');
-                } catch (e) {
-                    console.warn('Failed to link integration ' + storyKey + ' <-> ' + otherKey + ':', e);
-                }
-            });
+/**
+ * Create a single blockedBy Blocks link; returns true when linked.
+ * @param {string} blockedKey - Created ticket that is blocked
+ * @param {string} ref - Blocker ref (tempId or real key)
+ * @param {Object} keyMap - Maps tempId OR real key -> actual tracker key
+ * @returns {boolean}
+ */
+function linkBlockedByRef(blockedKey, ref, keyMap) {
+    var blockerKey = resolveKey(ref, keyMap);
+    if (!blockerKey) {
+        console.warn('Cannot resolve blockedBy ref "' + ref + '" for ' + blockedKey);
+        return false;
+    }
+    try {
+        tracker.linkIssues(blockedKey, blockerKey, 'Blocks');
+        console.log(blockerKey + ' blocks ' + blockedKey);
+        return true;
+    } catch (e) {
+        console.warn('Failed to link ' + blockerKey + ' blocks ' + blockedKey + ':', e);
+        return false;
+    }
+}
+
+/**
+ * Move a blocked ticket to Blocked status.
+ * @param {string} blockedKey
+ */
+function moveToBlocked(blockedKey) {
+    try {
+        tracker.moveToStatus(blockedKey, STATUSES.BLOCKED);
+        console.log('Set ' + blockedKey + ' to Blocked');
+    } catch (e) {
+        console.warn('Failed to set Blocked status on ' + blockedKey + ':', e);
+    }
+}
+
+/**
+ * PASS 3a: blockedBy — create Blocks links + move blocked story to Blocked status.
+ * Uses entry._createdKey to avoid index mismatch with results.
+ * @param {Array} stories - Entries from stories.json
+ * @param {Object} keyMap - Maps tempId OR real key -> actual tracker key
+ */
+function linkBlockedByPass(stories, keyMap) {
+    stories.forEach(function(entry) {
+        var blockedKey = entry._createdKey;
+        if (!blockedKey || !Array.isArray(entry.blockedBy) || entry.blockedBy.length === 0) return;
+        var anyLinked = false;
+        entry.blockedBy.forEach(function(ref) {
+            if (linkBlockedByRef(blockedKey, ref, keyMap)) anyLinked = true;
         });
+        if (anyLinked) moveToBlocked(blockedKey);
+    });
+}
 
-        // 5. Read AI comment
-        var aiComment = readCommentFile();
-
-        // 6. Post combined comment to source ticket
-        try {
-            var finalComment = buildFinalComment(results, aiComment);
-            tracker.postComment(ticketKey, finalComment);
-            console.log('Posted intake analysis comment to ' + ticketKey);
-        } catch (commentError) {
-            console.warn('Failed to post comment to ' + ticketKey + ':', commentError);
-        }
-
-        // 7. Add ai_intake label
-        try {
-            tracker.addLabel(ticketKey, LABELS.AI_INTAKE);
-        } catch (labelError) {
-            console.warn('Failed to add ' + LABELS.AI_INTAKE + ' label:', labelError);
-        }
-
-        // 8. Add ai_generated label
-        try {
-            tracker.addLabel(ticketKey, LABELS.AI_GENERATED);
-        } catch (labelError) {
-            console.warn('Failed to add ' + LABELS.AI_GENERATED + ' label:', labelError);
-        }
-
-        // 9. Assign to initiator
-        try {
-            tracker.assignTo(ticketKey, initiatorId);
-            console.log('Assigned ' + ticketKey + ' to initiator');
-        } catch (assignError) {
-            console.warn('Failed to assign ticket:', assignError);
-        }
-
-        // 10. Move to In Development (transition name is 'In Progress' in this Jira instance)
-        try {
-            tracker.moveToStatus(ticketKey, STATUSES.IN_PROGRESS);
-            console.log('Moved ' + ticketKey + ' to In Development');
-        } catch (statusError) {
-            console.warn('Failed to move ticket to In Development:', statusError);
-        }
-
-        // 11. Remove WIP label if present
-        if (wipLabel) {
+/**
+ * PASS 3b: integrates — create Relates links between parallel stories that will be combined.
+ * @param {Array} stories - Entries from stories.json
+ * @param {Object} keyMap - Maps tempId OR real key -> actual tracker key
+ */
+function linkIntegrationsPass(stories, keyMap) {
+    stories.forEach(function(entry) {
+        var storyKey = entry._createdKey;
+        if (!storyKey || !Array.isArray(entry.integrates) || entry.integrates.length === 0) return;
+        entry.integrates.forEach(function(ref) {
+            var otherKey = resolveKey(ref, keyMap);
+            if (!otherKey || otherKey === storyKey) return;
             try {
-                tracker.removeLabel(ticketKey, wipLabel);
-                console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
-            } catch (wipError) {
-                console.warn('Failed to remove WIP label:', wipError);
+                tracker.linkIssues(storyKey, otherKey, 'Relates');
+                console.log(storyKey + ' relates to ' + otherKey + ' (integration)');
+            } catch (e) {
+                console.warn('Failed to link integration ' + storyKey + ' <-> ' + otherKey + ':', e);
             }
-        }
+        });
+    });
+}
 
-        var successCount = results.filter(function(r) { return r.success; }).length;
+/**
+ * Post the combined AI analysis + created ticket list comment to the source ticket.
+ * @param {Object} ctx - Action context from initActionContext()
+ * @param {Array} results - Per-entry creation results
+ */
+function postFinalComment(ctx, results) {
+    try {
+        var finalComment = buildFinalComment(results, readCommentFile());
+        tracker.postComment(ctx.ticketKey, finalComment);
+        console.log('Posted intake analysis comment to ' + ctx.ticketKey);
+    } catch (commentError) {
+        console.warn('Failed to post comment to ' + ctx.ticketKey + ':', commentError);
+    }
+}
 
-        // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-        // wrote outputs/*_usage.json during the agent run.
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
+/**
+ * Add the ai_intake and ai_generated labels to the source ticket.
+ * @param {Object} ctx - Action context from initActionContext()
+ */
+function addIntakeLabels(ctx) {
+    try {
+        tracker.addLabel(ctx.ticketKey, LABELS.AI_INTAKE);
+    } catch (labelError) {
+        console.warn('Failed to add ' + LABELS.AI_INTAKE + ' label:', labelError);
+    }
+
+    try {
+        tracker.addLabel(ctx.ticketKey, LABELS.AI_GENERATED);
+    } catch (labelError) {
+        console.warn('Failed to add ' + LABELS.AI_GENERATED + ' label:', labelError);
+    }
+}
+
+/**
+ * Assign the source ticket to the initiator and move it to In Development
+ * (transition name is 'In Progress' in this Jira instance).
+ * @param {Object} ctx - Action context from initActionContext()
+ */
+function assignAndMoveToInProgress(ctx) {
+    try {
+        tracker.assignTo(ctx.ticketKey, ctx.initiatorId);
+        console.log('Assigned ' + ctx.ticketKey + ' to initiator');
+    } catch (assignError) {
+        console.warn('Failed to assign ticket:', assignError);
+    }
+
+    try {
+        tracker.moveToStatus(ctx.ticketKey, STATUSES.IN_PROGRESS);
+        console.log('Moved ' + ctx.ticketKey + ' to In Development');
+    } catch (statusError) {
+        console.warn('Failed to move ticket to In Development:', statusError);
+    }
+}
+
+/**
+ * Remove the WIP label from the source ticket if one was derived from the context.
+ * @param {Object} ctx - Action context from initActionContext()
+ */
+function removeWipLabel(ctx) {
+    if (!ctx.wipLabel) return;
+    try {
+        tracker.removeLabel(ctx.ticketKey, ctx.wipLabel);
+        console.log('Removed WIP label "' + ctx.wipLabel + '" from ' + ctx.ticketKey);
+    } catch (wipError) {
+        console.warn('Failed to remove WIP label:', wipError);
+    }
+}
+
+/**
+ * Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
+ * wrote outputs/*_usage.json during the agent run.
+ * @param {Object} ctx - Action context from initActionContext()
+ * @param {Object} params - action() params
+ */
+function postTokenUsage(ctx, params) {
+    try {
+        tokenUsageComment.postTokenUsageComments(ctx.ticketKey, { initiator: params.initiator, tracker: tracker });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
+/**
+ * Finalize the source intake ticket: post combined comment, labels, assignee,
+ * status move, WIP label removal and token usage comments.
+ * @param {Object} ctx - Action context from initActionContext()
+ * @param {Array} results - Per-entry creation results
+ * @param {Object} params - action() params
+ */
+function finalizeIntakeTicket(ctx, results, params) {
+    postFinalComment(ctx, results);
+    addIntakeLabels(ctx);
+    assignAndMoveToInProgress(ctx);
+    removeWipLabel(ctx);
+    postTokenUsage(ctx, params);
+}
+
+function action(params) {
+    tracker = trackersModule.createTracker(null, (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {});
+    try {
+        var ctx = initActionContext(params);
+
+        console.log('Processing intake ticket creation for:', ctx.ticketKey);
+
+        // 1. Read stories.json
+        var stories = readStoriesJson();
+        console.log('Found ' + stories.length + ' entries in stories.json');
+
+        var state = {
+            results: [],
+            tempIdMap: {}, // maps "temp-X" / "epic-X" -> actual tracker key
+            keyMap: {}     // maps tempId OR real key -> actual tracker key (for dependency resolution)
+        };
+
+        // 2-4. Creation passes: Bugs -> Epics -> Stories (same tracker calls, same order)
+        createBugsPass(stories, ctx, state);
+        createEpicsPass(stories, ctx, state);
+        createStoriesPass(stories, ctx, state);
+
+        // 5. Dependency and integration links
+        linkBlockedByPass(stories, state.keyMap);
+        linkIntegrationsPass(stories, state.keyMap);
+
+        // 6-11. Finalize the source ticket
+        finalizeIntakeTicket(ctx, state.results, params);
+
+        var successCount = state.results.filter(function(r) { return r.success; }).length;
 
         return {
             success: true,
-            message: 'Intake complete for ' + ticketKey + ': created ' + successCount + ' ticket(s), moved to In Development',
-            results: results
+            message: 'Intake complete for ' + ctx.ticketKey + ': created ' + successCount + ' ticket(s), moved to In Development',
+            results: state.results
         };
 
     } catch (error) {
