@@ -1445,3 +1445,377 @@ suite('developTicketAndCreatePR.generateUniqueBranchName — warning-only ls-rem
     });
 
 });
+
+// ── gh-930: outcome characterization for the whole leg ───────────────────────
+// Pins the observable outcomes of every action() path (result shape, tracker
+// side effects, non-fatal vs fatal) BEFORE the function is decomposed into
+// helpers. These tests must pass unchanged before and after the refactor.
+var realPrHelperShared = null;
+function realPrHelperForOutcomes() {
+    if (!realPrHelperShared) {
+        realPrHelperShared = loadModule('js/common/pullRequest.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule,
+            './mergeState.js': loadModule('js/common/mergeState.js')
+        }), {});
+    }
+    return realPrHelperShared;
+}
+
+// Loader with overridable gates, scm, response.md and telemetry stubs.
+function loadForOutcomePinning(mocks, opts) {
+    opts = opts || {};
+    var autoStartCalls = { review: [], smIdle: 0 };
+    var telemetry = { cache: 0, tokenUsage: [] };
+    var loaderConfigLoader = opts.scm
+        ? Object.assign({}, configLoaderModule, { createScm: function () { return opts.scm; } })
+        : configLoaderModule;
+    var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
+            './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+            './common/pullRequest.js': realPrHelperForOutcomes(),
+            './common/submodules.js': { pushManagedSubmodules: function () { } },
+            './common/feedbackLoop.js': Object.assign({
+                runQualityGates: function () { return { success: true }; },
+                runPolicyGates: function () { return { success: true }; },
+                runPostPublishGates: function () { return { success: true }; },
+                resumeAgent: function () { return { attempted: false, reason: 'attempts-exhausted' }; },
+                resumeOnceForMissingResponse: function () { return { attempted: false, reason: 'disabled' }; }
+            }, opts.feedbackLoop || {}),
+            './common/autoStart.js': {
+                triggerSmIfIdle: function () { autoStartCalls.smIdle++; },
+                triggerConfiguredWorkflowForTicket: function (o) { autoStartCalls.review.push(o); return true; }
+            },
+            './common/outputFiles.js': {
+                readOutputFile: function () { return opts.responseMd === undefined ? null : opts.responseMd; }
+            },
+            './cacheToReleases.js': {
+                action: function () { telemetry.cache++; }
+            },
+            './common/gitStaging.js': gitStagingModule,
+            './configLoader.js': loaderConfigLoader,
+            './config.js': configModule,
+            './common/tokenUsageComment.js': {
+                postTokenUsageComments: function (k, o) {
+                    if (opts.tokenUsageThrows) throw new Error('token usage provider down');
+                    telemetry.tokenUsage.push({ ticketKey: k, options: o });
+                },
+                customParamsOf: function () { return {}; }
+            },
+            './common/commentMarkup.js': commentMarkupModule
+        }, { './common/trackers.js': trackersWith(_m) })), _m); })(Object.assign({
+            cli_execute_command: function () { return ''; },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { },
+            jira_add_label: function () { },
+            jira_assign_ticket_to: function () { },
+            file_write: function () { },
+            file_delete: function () { }
+        }, mocks || {}));
+    return { mod: mod, autoStartCalls: autoStartCalls, telemetry: telemetry };
+}
+
+suite('developTicketAndCreatePR > leg outcome characterization (gh-930)', function () {
+
+    test('an already-open PR for the branch is reused — comment + In Review, no git work', function () {
+        var comments = [];
+        var movedTo = [];
+        var commands = [];
+        var fakeScm = {
+            listPrs: function (state) {
+                commands.push('scm.listPrs:' + state);
+                return [{
+                    number: 41,
+                    html_url: 'https://github.com/acme/widgets/pull/41',
+                    head: { ref: 'ai/TS-50' }
+                }];
+            }
+        };
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: function (args) { commands.push(args.command); return ''; },
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); }
+        }, { scm: fakeScm });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-50', fields: { summary: 'reuse open PR', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {}
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'pr_already_open');
+        assert.equal(result.ticketKey, 'TS-50');
+        assert.deepEqual(movedTo, ['In Review']);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'PR Already Open');
+        assert.contains(comments[0].comment, 'https://github.com/acme/widgets/pull/41');
+        assert.ok(!commands.some(function (c) { return c.indexOf('git ') === 0; }),
+            'no git work may run when a PR already exists — commands: ' + JSON.stringify(commands));
+    });
+
+    test('a stale pr_approved label is removed from the ticket before the leg proceeds', function () {
+        var removedLabels = [];
+        var comments = [];
+        var movedTo = [];
+        var caught = null;
+        var loaded = loadForOutcomePinning({
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+            jira_remove_label: function (args) { removedLabels.push(args.label); }
+        }, {});
+
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-51', fields: { summary: 'rework cycle', description: '', labels: ['pr_approved'] } },
+                metadata: { contextId: 'story_development' },
+                customParams: {}
+            });
+        } catch (e) { caught = e; }
+
+        assert.deepEqual(removedLabels, ['pr_approved', 'story_development_wip'],
+            'pr_approved goes first (stale-review cleanup), the wip label only on the reset path');
+        assert.ok(caught && caught.interruptedReset === true,
+            'with no work and no response.md the leg throws the interrupted-reset marker (gh-742 contract)');
+        assert.deepEqual(movedTo, ['Ready For Development']);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'Development Interrupted');
+    });
+
+    test('a failed quality gate resets the ticket for retry (comment, no throw)', function () {
+        var comments = [];
+        var movedTo = [];
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-52', ''),
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); }
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n',
+            feedbackLoop: {
+                runQualityGates: function () { return { success: false, failedGate: 'unit-tests', error: '3 failing' }; }
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-52', fields: { summary: 'gate fail', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'ok'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'development-reset-for-retry');
+        assert.contains(result.error, 'Quality gate failed before development publish');
+        assert.contains(result.error, 'unit-tests');
+        assert.deepEqual(movedTo, ['Ready For Development']);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'Quality Gate');
+    });
+
+    test('a failed policy gate resets the ticket for retry (comment, no throw)', function () {
+        var comments = [];
+        var movedTo = [];
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-53', ''),
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); }
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n',
+            feedbackLoop: {
+                runPolicyGates: function () { return { success: false, failedGate: 'secrets', error: 'key found' }; }
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-53', fields: { summary: 'policy fail', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'ok'
+        });
+
+        assert.equal(result.path, 'development-reset-for-retry');
+        assert.contains(result.error, 'Policy gate failed before development publish');
+        assert.contains(result.error, 'secrets');
+        assert.deepEqual(movedTo, ['Ready For Development']);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'Policy Gate');
+    });
+
+    test('a failed post-publish gate without a resume attempt resets the ticket for retry', function () {
+        var comments = [];
+        var movedTo = [];
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-54', ''),
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); }
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n',
+            feedbackLoop: {
+                runPostPublishGates: function () {
+                    return { success: false, failedGate: 'crap', error: 'regression', resumeAttempted: false };
+                }
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-54', fields: { summary: 'post-publish fail', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'ok'
+        });
+
+        assert.equal(result.path, 'development-reset-for-retry');
+        assert.contains(result.error, 'Post-publish quality gate failed');
+        assert.contains(result.error, 'crap');
+        assert.deepEqual(movedTo, ['Ready For Development']);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'Post-Publish Quality Gate');
+    });
+
+    test('a post-publish gate failure that already resumed re-runs the leg instead of resetting', function () {
+        var postPublishCalls = 0;
+        var prUrl = 'https://github.com/acme/widgets/pull/54';
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-55', prUrl)
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n',
+            feedbackLoop: {
+                runPostPublishGates: function () {
+                    postPublishCalls++;
+                    return postPublishCalls === 1
+                        ? { success: false, failedGate: 'quality', error: 'first pass fails', resumeAttempted: true }
+                        : { success: true };
+                }
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-55', fields: { summary: 'post-publish resume', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'ok'
+        });
+
+        assert.equal(postPublishCalls, 2, 'the leg re-ran once after the resume attempt');
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, prUrl);
+    });
+
+    test('autoStartReview configured → review workflow triggered, SM not kicked', function () {
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-56', 'https://github.com/acme/widgets/pull/56')
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n'
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-56', fields: { summary: 'auto review', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: { autoStartReview: true, autoStartReviewConfigFile: 'agents/pr_review.json' },
+            response: 'ok'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(loaded.autoStartCalls.review.length, 1, 'the review workflow is triggered');
+        assert.equal(loaded.autoStartCalls.review[0].ticketKey, 'TS-56');
+        assert.equal(loaded.autoStartCalls.review[0].label, 'pr_review');
+        assert.equal(loaded.autoStartCalls.review[0].configFile, 'agents/pr_review.json');
+        assert.equal(loaded.autoStartCalls.smIdle, 0, 'the SM kicker is skipped while review was started');
+    });
+
+    test('no autoStartReview config → the SM kicker runs instead', function () {
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-58', 'https://github.com/acme/widgets/pull/58')
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n'
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-58', fields: { summary: 'no auto review', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'ok'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(loaded.autoStartCalls.review.length, 0);
+        assert.equal(loaded.autoStartCalls.smIdle, 1);
+    });
+
+    test('autoStartReview with a failing stale-pr_approved cleanup is skipped — SM kicker runs', function () {
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-59', 'https://github.com/acme/widgets/pull/59'),
+            jira_remove_label: function () { throw new Error('tracker down'); }
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n'
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-59', fields: { summary: 'cleanup failed', description: '', labels: ['pr_approved'] } },
+            metadata: { contextId: 'story_development' },
+            customParams: { autoStartReview: true, autoStartReviewConfigFile: 'agents/pr_review.json' },
+            response: 'ok'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, 'https://github.com/acme/widgets/pull/59', 'the leg runs to PR creation');
+        assert.equal(loaded.autoStartCalls.review.length, 0,
+            'review must not be auto-started while pr_approved survived the cleanup');
+        assert.equal(loaded.autoStartCalls.smIdle, 1);
+    });
+
+    test('success tail assigns the initiator, labels, strips wip and posts telemetry (telemetry failures non-fatal)', function () {
+        var assigned = [];
+        var addedLabels = [];
+        var removedLabels = [];
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-57', 'https://github.com/acme/widgets/pull/57'),
+            jira_assign_ticket_to: function (a) { assigned.push(a); },
+            jira_add_label: function (a) { addedLabels.push(a.label); },
+            jira_remove_label: function (a) { removedLabels.push(a.label); }
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n',
+            tokenUsageThrows: true
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-57', fields: { summary: 'success tail', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            initiator: 'initiator-1',
+            response: 'ok'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.branchName, 'ai/TS-57');
+        assert.equal(result.prUrl, 'https://github.com/acme/widgets/pull/57');
+        assert.contains(result.message, 'developed, committed, and PR created');
+        assert.deepEqual(assigned, [{ key: 'TS-57', accountId: 'initiator-1' }]);
+        assert.ok(addedLabels.indexOf('ai_developed') !== -1, 'ai_developed label added');
+        assert.ok(removedLabels.indexOf('story_development_wip') !== -1, 'wip label removed');
+        assert.equal(loaded.telemetry.cache, 1, 'cacheToReleases ran exactly once');
+        assert.equal(loaded.telemetry.tokenUsage.length, 0, 'a throwing token-usage provider is non-fatal');
+    });
+
+    test('token usage provider records the comment with the initiator context', function () {
+        var loaded = loadForOutcomePinning({
+            cli_execute_command: committedWorkGitMock('ai/TS-60', 'https://github.com/acme/widgets/pull/60'),
+            jira_assign_ticket_to: function () { }
+        }, {
+            responseMd: '### What changed\n- Parser fix (`js/parser.js`).\n'
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-60', fields: { summary: 'token usage', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            initiator: 'initiator-2',
+            response: 'ok'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(loaded.telemetry.tokenUsage.length, 1);
+        assert.equal(loaded.telemetry.tokenUsage[0].ticketKey, 'TS-60');
+        assert.equal(loaded.telemetry.tokenUsage[0].options.initiator, 'initiator-2');
+    });
+
+});
