@@ -88,6 +88,8 @@
         "js/unit-tests/test_mergeStoryTestAutomationPR.js",
         "js/unit-tests/test_triggerStoryTestAutomation.js",
         "js/unit-tests/test_triggerBugTestAutomation.js",
+        "js/unit-tests/test_triggerBitriseTestAutomation.js",
+        "js/unit-tests/test_triggerBitriseIosBuild.js",
         "js/unit-tests/test_postTestAutomationResults.js",
         "js/unit-tests/test_postTestReviewComments.js",
         "js/unit-tests/test_agentDocs.js",
