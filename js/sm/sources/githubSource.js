@@ -265,6 +265,15 @@ function benchDeadHeadParks(list, provider) {
     return live.length === list.length ? list : live;
 }
 
+// gh-944 dev-on-assignment guard predicate: TRUE when the query demands no
+// OPEN linked PR (`noOpenPr`) and the item still carries one — the issue is
+// post-dev and the PR lifecycle rules own it. Excluding only OPEN keeps the
+// recovery shapes eligible: a MERGED-PR issue a human reopened and a PR-less
+// issue are fresh dev handoffs.
+function hasOpenLinkedPr(q, item) {
+    return !!(q.noOpenPr && item.pr && item.pr.state === 'OPEN');
+}
+
 // `owner` (repoInfo.owner) rides through for the release-bump form of the
 // machine-authorship gate (#1104): chore/release-v* | chore(release): from
 // the repo owner counts as machine — see common/machineAuthor.js.
@@ -276,10 +285,9 @@ function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
     }
     // gh-944 dev-on-assignment: an issue whose linked PR is OPEN is
     // post-dev — the PR lifecycle rules own it (validate-fresh,
-    // rework-on-red-gate-unlatched, develop-done). Excluding only OPEN
-    // keeps the recovery shapes eligible: a MERGED-PR issue a human
-    // reopened and a PR-less issue are fresh dev handoffs.
-    if (q.noOpenPr && item.pr && item.pr.state === 'OPEN') return false;
+    // rework-on-red-gate-unlatched, develop-done). hasOpenLinkedPr carries
+    // the eligibility detail (MERGED-PR / PR-less stay fresh dev handoffs).
+    if (hasOpenLinkedPr(q, item)) return false;
     // 'blocked' = human hold (fa #939): the machine skips the item
     // ENTIRELY — all rules, all legs (no dispatch, no merge, no review, no
     // branch updates) — until a human removes the label. Engine-level, not
@@ -472,6 +480,26 @@ function query(rule, ctx) {
     return queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAuthor, owner);
 }
 
+// gh-944: the assignee may carry the {machineAuthor} deployment knob —
+// the dev-on-assignment rule re-derives dev legs for issues assigned to
+// THE MACHINE without hardcoding any login in the generic rule pack.
+// Resolves against the same knob every machine-keyed guard uses
+// (jobParams.machineAuthor at factory setup, config.machineAuthor per
+// repo); a comma-separated list searches its FIRST login (the harness
+// bot — the CI-bot twin never receives assignments). Fail-closed: an
+// unresolvable placeholder (no machineAuthor configured, or a knob that
+// itself carries the literal placeholder) returns null — never search
+// for a literal '{machineAuthor}'.
+function resolveAssigneeQuery(assignee, machineAuthor) {
+    if (!assignee) return null;
+    var expandedAssignee = String(assignee).replace(
+        /\{machineAuthor\}/g,
+        (machineAuthor === null || machineAuthor === undefined) ? '' : String(machineAuthor));
+    if (expandedAssignee.indexOf('{machineAuthor}') !== -1 || expandedAssignee === '') return null;
+    var assigneeLogins = machineAuthorModule.machineAuthorLogins(expandedAssignee);
+    return assigneeLogins.length > 0 ? assigneeLogins[0] : null;
+}
+
 function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAuthor, owner) {
     var q = rule.query || {};
     var full = repoInfo.owner + '/' + repoInfo.repo;
@@ -491,23 +519,8 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
     });
     // gh-944: the assignee may carry the {machineAuthor} deployment knob —
     // the dev-on-assignment rule re-derives dev legs for issues assigned to
-    // THE MACHINE without hardcoding any login in the generic rule pack.
-    // Resolves against the same knob every machine-keyed guard uses
-    // (jobParams.machineAuthor at factory setup, config.machineAuthor per
-    // repo); a comma-separated list searches its FIRST login (the harness
-    // bot — the CI-bot twin never receives assignments). Fail-closed: an
-    // unresolvable placeholder (no machineAuthor configured) drops the
-    // descriptor — never search for a literal '{machineAuthor}'.
-    var assigneeQuery = null;
-    if (q.assignee) {
-        var expandedAssignee = String(q.assignee).replace(
-            /\{machineAuthor\}/g,
-            (machineAuthor === null || machineAuthor === undefined) ? '' : String(machineAuthor));
-        if (expandedAssignee.indexOf('{machineAuthor}') === -1 && expandedAssignee !== '') {
-            var assigneeLogins = machineAuthorModule.machineAuthorLogins(expandedAssignee);
-            if (assigneeLogins.length > 0) assigneeQuery = assigneeLogins[0];
-        }
-    }
+    // THE MACHINE (resolveAssigneeQuery; fail-closed when unresolvable).
+    var assigneeQuery = resolveAssigneeQuery(q.assignee, machineAuthor);
     if (assigneeQuery) descriptors.push({ kind: 'assignee' });
 
     var searchOne = function (d) {

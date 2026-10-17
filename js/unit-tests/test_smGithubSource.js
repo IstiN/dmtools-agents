@@ -2680,6 +2680,26 @@ suite('sm github source: dev-on-assignment re-derive (gh-944)', function () {
         assert.equal(items.length, 0, 'the rule matches nothing (fail-closed, like prMachineAuthor)');
     });
 
+    test('fail-closed: a machineAuthor that IS the literal placeholder never searches for it', function () {
+        // Edge of the resolution contract (pr-945 rework): a misconfigured
+        // knob ('{machineAuthor}' as the literal login) must survive the
+        // expansion WITHOUT re-introducing the placeholder — the descriptor
+        // is dropped, the search never runs for a literal '{machineAuthor}'.
+        var queries = [];
+        var srcMod = devLoad({
+            github_search_issues: function (args) {
+                queries.push(args.query);
+                return { items: [] };
+            }
+        });
+        srcMod.query({
+            query: { type: 'issue', assignee: '{machineAuthor}' }
+        }, { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: '{machineAuthor}' });
+
+        assert.equal(queries.length, 0,
+            'a placeholder-valued knob must not produce an assignee search descriptor');
+    });
+
     test('noOpenPr guard: an issue with an OPEN linked PR is post-dev and never re-derived (2+ PR states)', function () {
         // A dev leg already produced PRs for these issues: OPEN must exclude
         // (the loop owns the item via the PR lifecycle rules), while MERGED
