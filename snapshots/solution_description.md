@@ -23,10 +23,7 @@ You are an agent triggered to perform a specific task. All required context — 
 **IMPORTANT** Implementation details is out of scope here. Focus on highlevel solution design
 **IMPORTANT** Write the enhanced technical description with solution design template to outputs/response.md file. The content must be valid tracker markdown format. **YOU MUST** check template in {code:markdown} from confluence page.
 Never write: [SD CORE] dmtools-core solution architecture template of standalone module (Think MVP all time) in description. Start from content all time.
-**IMPORTANT** Write the valid Mermaid diagram to outputs/diagram.md file
-**IMPORTANT** Create a valid Mermaid diagram showing the technical architecture, component relationships, or workflow for the solution design implementation
-The diagram should visualize key components, data flow, integration points, and architectural patterns mentioned in the enhanced description
-Use proper Mermaid syntax: graph TD, flowchart TD, sequenceDiagram, classDiagram, etc. based on what best represents the technical solution
+**IMPORTANT** Write a Mermaid diagram to outputs/diagram.md visualizing the key components, data flow, integration points, and architectural patterns mentioned in the enhanced description. Follow the `common/diagram_output_contract.md` rules exactly for format (one diagram, plain syntax, no fences).
 Content from the response.md and diagram.md files will be used for automated description and diagram update
 
 
@@ -191,12 +188,73 @@ The Acceptance Criteria are defined in the BA ticket (<link>BA-TICKET|https://ji
 - Do NOT leave literal XML-style tags such as `<bold>` or `<code>` in the final `outputs/response.md`.
 - Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
 - Use the tracker-specific link format when referencing tickets or URLs.
-- Write the Mermaid diagram to `outputs/diagram.md` using plain Mermaid syntax — do not wrap it in markup tags.
+- Write the Mermaid diagram to `outputs/diagram.md` following `common/diagram_output_contract.md` exactly (plain Mermaid syntax, no fences, no markup tags).
 
 
 ---
 
-### [11] `./agents/instructions/enhancement/solution_design_few_shots.md`
+### [11] `./agents/instructions/common/diagram_output_contract.md`
+
+# `outputs/diagram.md` — Single Source of Truth
+
+Any agent that writes `outputs/diagram.md` (Solution Design, Solution Description,
+and their variants) MUST follow this exact contract. It replaces every other,
+possibly conflicting, phrasing of "write a diagram" you may see elsewhere in
+this prompt — if another instruction seems to disagree with this file, this
+file wins.
+
+## Rules
+
+1. **Exactly one Mermaid diagram, in one file.** Do not write two separate
+   diagrams (e.g. one for the architecture and a second one for affected
+   repositories) — see rule 3 for how to combine them.
+2. **Plain Mermaid syntax only. No fences, no markup tags.** The file must
+   start directly with a Mermaid diagram-type keyword (`graph TD`,
+   `flowchart TD`, `sequenceDiagram`, `classDiagram`, `stateDiagram-v2`, ...).
+   Do **NOT** wrap the content in triple backticks (`` ```mermaid ... ``` ``),
+   HTML/XML-style tags (`<codeblock:mermaid>`), or any other markup — the
+   post-action script wraps the raw content in the correct macro/fence for
+   the target (Jira, Confluence, ADO) automatically. Adding your own
+   fence around it results in a double-wrapped, unrenderable diagram.
+3. **Need to show affected repositories or a dependency chain?** Add it as an
+   additional `subgraph` **inside this same diagram** (not a second,
+   separate diagram) — see any repository-specific guidance in your prompt
+   for exact conventions. Do not duplicate a repo-dependency graph that a
+   post-action already renders automatically from `outputs/affected_repos.json`
+   (check whether your job's `affected_repos_*` instructions say the
+   dependency chain is auto-rendered — if so, do not draw it again yourself).
+4. **One diagram type for the whole file.** Pick the Mermaid diagram type
+   that best represents the solution (`graph`/`flowchart` for architecture
+   and component relationships, `sequenceDiagram` for request/response
+   flows, `classDiagram` for data models, `stateDiagram-v2` for workflow
+   states) and stay consistent — do not mix unrelated diagram types in the
+   same file.
+
+## Example content for `outputs/diagram.md`
+
+```
+flowchart TD
+    A[User Request] --> B[Workflow Engine]
+    B --> C[AI Analysis]
+    C --> D[Enhanced Description]
+    D --> E[Jira Update]
+
+    subgraph Affected Repositories
+        R1[repo-a<br/>new REST endpoint]
+        R2[repo-b<br/>UI component]
+    end
+    B --> R1
+    C --> R2
+```
+
+(The fenced code block above is only to show you the example text in this
+instruction document — do not include the fence in your actual
+`outputs/diagram.md` file, only the Mermaid content itself.)
+
+
+---
+
+### [12] `./agents/instructions/enhancement/solution_design_few_shots.md`
 
 The examples below use generic XML-style tags (`<bold>`, `<bullet>`, `<code>`, etc.) only to illustrate the required structure. In the final `outputs/response.md`, replace every generic tag with the tracker-specific markup defined in the transformation table (for example, Jira wiki markup from `agents/instructions/tracker/jira_markup_transform.md`). Do not leave literal XML-style tags in the final output.
 
@@ -228,7 +286,7 @@ graph TD
 
 ---
 
-### [12] `./agents/prompts/bash_tools.md`
+### [13] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -237,22 +295,10 @@ flowchart TD
         U2["Credentials preconfigured via environment variables"]
     end
 
-    subgraph SAFETY["CLI command safety"]
-        S1["One simple executable command at a time"]
-        S2["DMTools rejects shell metacharacters"]
-    end
-
-    subgraph FORBIDDEN["NEVER USE"]
-        F1["Pipes: |"]
-        F2["Redirection: > < 2>/dev/null"]
-        F3["Chaining: ; && ||"]
-        F4["Substitution: backticks, $(), ${...}"]
-    end
-
-    subgraph EXAMPLES["Instead"]
-        E1["find ... | head -20"] --> E1a["run: find ..."]
-        E2["cmd1 && cmd2"] --> E2a["run: cmd1"] --> E2b["then: cmd2"]
-        E3["Complex logic"] --> E3a["Write script file, run script as single command"]
+    subgraph SHELLSTATE["⚠️ Persistent-shell pitfalls (sandbox-observed)"]
+        P1["Never end commands with exit — it kills the shell session, making read_bash fail with Invalid shell ID"]
+        P2["Capture the exit code via $? right after the command, before running anything else — a late $? reads the wrong command's code"]
+        P3["Avoid $PIPESTATUS — it produced wrong exit codes in the sandbox; redirect output to a file and check $? instead"]
     end
 
     subgraph CWD["Working directory discipline (persistent shell!)"]
@@ -266,12 +312,21 @@ flowchart TD
         C8["Git global flags like --no-pager go BEFORE the subcommand: git --no-pager diff ... is correct, git diff ... --no-pager errors out (git treats the trailing flag as a positional argument)"]
     end
 
-    USE --> SAFETY
-    SAFETY --> FORBIDDEN
-    SAFETY --> EXAMPLES
-    SAFETY --> CWD
-```
+    subgraph BGJOBS["⚠️ Long-running commands — background execution, never foreground-poll"]
+        B1["Any command that can run longer than ~2 minutes (full test suite, coverage run, build, dependency install, dev server or watch mode) MUST be started with bash background: true — you get a job id immediately and the completion notice arrives as a message"]
+        B2["❌ NEVER wait for a long job with foreground sleep-polling: repeated sleep-then-check loops like sleep 540 → ls coverage. A foreground sleep pins the tool-call open — owner steering and cancel cannot reach you until it ends — and burns wall-clock plus a runner slot"]
+        B3["While a background job runs, keep working on other steps — check progress between steps with bash_job status / bash_job output &lt;job-id&gt; — never park the turn in a watch loop"]
+        B4["A harness hint like background candidate: bash background: true, job board /tasks, --wait-for-jobs is an ORDER, not a suggestion — obey it and start the command in the background; working around it with foreground sleeps is a violation"]
+        B5["Verification order: finalize ALL code edits BEFORE launching a long verification run (full suite, coverage) — verification must run against a frozen tree, otherwise the run is wasted"]
+        B6["Files changed while a verification run is in flight? Do NOT kill it mid-flight — let it finish, treat the result as stale, then deliberately start a fresh run against the updated tree"]
+        B7["B6 covers a job still making progress — do NOT kill it mid-flight; a job with NO progress for ~10 min (or 2× its expected duration) is HUNG — dispose of it and MOVE ON: bash_job stop &lt;job-id&gt;, note the disposal in the deliverable (job id, command, last output tail), finish the remaining steps and write outputs/response.md reporting the unverified part. NEVER let a hung child hold the deliverable hostage: validation CI on the pull request is the safety net"]
+        B1 --> B2 --> B3 --> B4 --> B5 --> B6 --> B7
+    end
 
+    USE --> SHELLSTATE
+    SHELLSTATE --> CWD
+    CWD --> BGJOBS
+```
 
 
 ---

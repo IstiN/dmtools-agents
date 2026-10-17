@@ -96,8 +96,11 @@ flowchart TD
     PASS -->|Yes| GITSTATUS["Run git status and review every new/modified file"]
     GITSTATUS --> SECRETS{Sensitive or untracked non-code files present?}
     SECRETS -->|Yes| IGNORE["Add appropriate patterns to .gitignore"]
-    SECRETS -->|No| SUMMARY["Write concise PR description to outputs/response.md — see output_rules.md"]
-    IGNORE --> SUMMARY
+    SECRETS -->|No| GUARD["⚠️ COMPLETION GUARD — prove work landed BEFORE writing the summary:<br/>git fetch origin main &amp;&amp; git log origin/main..HEAD --oneline<br/>EMPTY result = work did NOT land — re-do or resume the work,<br/>NEVER report done from session memory or main's tip"]
+    IGNORE --> GUARD
+    GUARD -->|Diff shows your commits| SUMMARY["Write concise PR description to outputs/response.md — see output_rules.md"]
+    GUARD -->|Empty diff| REDO["Re-do or resume the work — verify the working dir,<br/>git log, git stash list.<br/>If the fix is genuinely already on the base branch,<br/>prove it (git log origin/main -- grep) before any<br/>'no changes needed' conclusion"]
+    REDO --> IMPLEMENT
     SUMMARY --> END([End — post-processing handles branch, commit and PR])
 ```
 
@@ -125,7 +128,8 @@ flowchart TD
         R2["❌ NEVER write more production code than needed to pass the test"]
         R3["✅ Tests must be fast, isolated, and deterministic"]
         R4["✅ Aim for 100% unit test coverage on new and modified code"]
-        R5["✅ Run the full test suite before finishing — no regressions allowed"]
+        R5["✅ When behavior involves a loop/collection, add a case with 2+ items, not only a single-item happy path — a single-item test can pass while multi-item logic is still wrong"]
+        R6["✅ Run the full test suite before finishing — no regressions allowed"]
     end
 
     TDD --> RULES
@@ -152,6 +156,8 @@ existing tests there, leave them untouched and mention the breakage in
 
 ```mermaid
 flowchart TD
+    O0["⚠️ COMPLETION GUARD — run BEFORE writing the PR description:<br/>git fetch origin main &amp;&amp; git log origin/main..HEAD --oneline<br/>— EMPTY result = your work did NOT land: re-do or resume it,<br/>do NOT write response.md and do NOT declare completion<br/>— Same guard before any 'no changes needed' conclusion:<br/>claimed changes MUST exist in the branch diff vs main,<br/>otherwise the claim is a session-memory hallucination"]
+    O0 --> O1
     O1["Write outputs/response.md — concise PR description"]
     O2["Target length: under 20 lines. A reviewer should understand the change in under 30 seconds"]
     O3["Required sections:<br/>### What changed<br/>1-2 sentences describing the implementation"]
@@ -193,7 +199,36 @@ flowchart TD
 
 ---
 
-### [10] `./agents/instructions/common/dmtools_cli.md`
+### [10] `./agents/instructions/common/github_comment_format.md`
+
+# GitHub tracker comment
+
+Use GitHub-flavored Markdown in `outputs/response.md` for GitHub issue
+comments and descriptions. Your output is posted to the issue as-is — every
+construct must render natively on GitHub.
+
+- Headings: `##`, `###`
+- Bullets: `- item`
+- Numbered lists: `1. item`
+- Bold: `**text**`
+- Inline code: `` `code` ``
+- Code block: ` ```lang ... ``` ` with a language tag (`dart`, `bash`, `json`)
+- Link: `[text](url)`
+- Tables: standard GFM table syntax (`|---|` separator row)
+
+Do not use Jira wiki markup in GitHub fields: no `{code}...{code}` blocks,
+no `{panel}` macros, no `h1.`/`h2.`/`h3.` heading prefixes, no
+`{{monospace}}` inline code, no `[title|url]` links. None of it renders on
+GitHub — a comment full of `{code}` fences and `h3.` headers is unreadable.
+
+**IMPORTANT** When the issue references a parent story or related issues,
+get them for full context using: `dmtools github_get_issue OWNER/REPO#NUMBER`
+(the composite key form works directly).
+
+
+---
+
+### [11] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -231,7 +266,26 @@ flowchart TD
 
 ---
 
-### [11] `./agents/prompts/bash_tools.md`
+### [12] `./agents/instructions/common/session_ephemerality.md`
+
+```mermaid
+flowchart LR
+    ENV["⚠️ ONE-SHOT SESSION — this agent runs in an ephemeral CI runner.<br/>When your final turn ends, the process EXITS and the runner is destroyed:<br/>- schedule_message / self-reminders NEVER fire after exit — no wake-up exists<br/>- detached processes (nohup/&) are killed with the runner<br/>- nothing can be finished 'later' — there is no later"]
+    ENV --> RULE["NEVER end the session with work pending.<br/>A long job (full test suite, build) must be concluded INSIDE the turn:<br/>run it in background (bash background:true) and poll with<br/>bash_job status/output BETWEEN your steps — the process stays alive<br/>while you keep working — or run it in the foreground if nothing else<br/>remains. Do NOT arm a timer and exit; do NOT nohup-and-exit."]
+    RULE --> ARTIFACT["The ONLY completion artifact is outputs/response.md<br/>written BEFORE you exit. Missing response.md = the run is read as<br/>'interrupted mid-way' (gh-742): the ticket resets for retry and the<br/>whole leg re-runs — your work survives only if committed to the branch."]
+```
+
+**Evidence (fa#1341, 2026-10-07):** the dev agent finished its edits, launched
+the full test suite detached (`nohup dart test &`), armed a `schedule_message`
+wake-up "in 18m", and ended its turn. The process exited code 0, the timer
+could never fire, `outputs/response.md` was never written — the leg failed
+twice in a row with the same "interrupted mid-way" reset, burning two full
+dev runs on a completed implementation.
+
+
+---
+
+### [13] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -240,22 +294,10 @@ flowchart TD
         U2["Credentials preconfigured via environment variables"]
     end
 
-    subgraph SAFETY["CLI command safety"]
-        S1["One simple executable command at a time"]
-        S2["DMTools rejects shell metacharacters"]
-    end
-
-    subgraph FORBIDDEN["NEVER USE"]
-        F1["Pipes: |"]
-        F2["Redirection: > < 2>/dev/null"]
-        F3["Chaining: ; && ||"]
-        F4["Substitution: backticks, $(), ${...}"]
-    end
-
-    subgraph EXAMPLES["Instead"]
-        E1["find ... | head -20"] --> E1a["run: find ..."]
-        E2["cmd1 && cmd2"] --> E2a["run: cmd1"] --> E2b["then: cmd2"]
-        E3["Complex logic"] --> E3a["Write script file, run script as single command"]
+    subgraph SHELLSTATE["⚠️ Persistent-shell pitfalls (sandbox-observed)"]
+        P1["Never end commands with exit — it kills the shell session, making read_bash fail with Invalid shell ID"]
+        P2["Capture the exit code via $? right after the command, before running anything else — a late $? reads the wrong command's code"]
+        P3["Avoid $PIPESTATUS — it produced wrong exit codes in the sandbox; redirect output to a file and check $? instead"]
     end
 
     subgraph CWD["Working directory discipline (persistent shell!)"]
@@ -269,12 +311,21 @@ flowchart TD
         C8["Git global flags like --no-pager go BEFORE the subcommand: git --no-pager diff ... is correct, git diff ... --no-pager errors out (git treats the trailing flag as a positional argument)"]
     end
 
-    USE --> SAFETY
-    SAFETY --> FORBIDDEN
-    SAFETY --> EXAMPLES
-    SAFETY --> CWD
-```
+    subgraph BGJOBS["⚠️ Long-running commands — background execution, never foreground-poll"]
+        B1["Any command that can run longer than ~2 minutes (full test suite, coverage run, build, dependency install, dev server or watch mode) MUST be started with bash background: true — you get a job id immediately and the completion notice arrives as a message"]
+        B2["❌ NEVER wait for a long job with foreground sleep-polling: repeated sleep-then-check loops like sleep 540 → ls coverage. A foreground sleep pins the tool-call open — owner steering and cancel cannot reach you until it ends — and burns wall-clock plus a runner slot"]
+        B3["While a background job runs, keep working on other steps — check progress between steps with bash_job status / bash_job output &lt;job-id&gt; — never park the turn in a watch loop"]
+        B4["A harness hint like background candidate: bash background: true, job board /tasks, --wait-for-jobs is an ORDER, not a suggestion — obey it and start the command in the background; working around it with foreground sleeps is a violation"]
+        B5["Verification order: finalize ALL code edits BEFORE launching a long verification run (full suite, coverage) — verification must run against a frozen tree, otherwise the run is wasted"]
+        B6["Files changed while a verification run is in flight? Do NOT kill it mid-flight — let it finish, treat the result as stale, then deliberately start a fresh run against the updated tree"]
+        B7["B6 covers a job still making progress — do NOT kill it mid-flight; a job with NO progress for ~10 min (or 2× its expected duration) is HUNG — dispose of it and MOVE ON: bash_job stop &lt;job-id&gt;, note the disposal in the deliverable (job id, command, last output tail), finish the remaining steps and write outputs/response.md reporting the unverified part. NEVER let a hung child hold the deliverable hostage: validation CI on the pull request is the safety net"]
+        B1 --> B2 --> B3 --> B4 --> B5 --> B6 --> B7
+    end
 
+    USE --> SHELLSTATE
+    SHELLSTATE --> CWD
+    CWD --> BGJOBS
+```
 
 
 ---

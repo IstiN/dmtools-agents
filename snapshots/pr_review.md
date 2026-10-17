@@ -259,7 +259,106 @@ await db.query(query, [email]);
 
 ---
 
-### [8] `./agents/instructions/common/dmtools_cli.md`
+### [8] `./agents/instructions/pr_review/review_verdict_rules.md`
+
+# Review verdict rules — machine protocol (binding)
+
+The review↔rework loop is a machine, not a conversation: your
+`recommendation` in `outputs/pr_review.json` is parsed mechanically and
+drives issue labels, rework runs and CI (each wasted round costs 15–20 CI
+minutes — gh-71). These rules govern the verdict; every other instruction
+(severity definitions, output files, thread etiquette) is unchanged.
+
+## Verdict mapping
+
+Classify findings exactly as instructed:
+
+- 🚨 **BLOCKING** — correctness/bug findings: broken behavior, failing
+  gates (red CI), scope violations, security issues, data loss.
+- ⚠️ **IMPORTANT** — real maintainability debt worth fixing, but the PR
+  works as shipped.
+- 💡 **SUGGESTION** — style, wording, import order, dartdoc refs, polish.
+
+Then map to the verdict:
+
+| Findings | `recommendation` |
+|---|---|
+| Any 🚨 BLOCKING (correctness/bug) | `REQUEST_CHANGES` — or `BLOCK` for security / data loss |
+| No 🚨 BLOCKING — only ⚠️ / 💡 remain | `APPROVE` |
+
+`APPROVE` with remaining ⚠️/💡 findings is the expected terminal state
+(`allowApproveWithSuggestions: true`): post every remaining finding as
+before (inline threads + general comment) — they do **not** block the merge
+and must **not** trigger another rework round.
+
+## Anti-patterns (observed live, gh-71)
+
+- ❌ Returning `REQUEST_CHANGES` because a re-review surfaced new
+  suggestion-level nits (docs wording, import style, dartdoc refs). A cycle
+  with only suggestion-level findings **must** converge to `APPROVE`.
+- ❌ `REQUEST_CHANGES` while `issueCounts.blocking` is `0` — the machine
+  treats that as an approval and skips the rework round. Keep
+  `issueCounts` accurate: it is the machine's source of truth, not prose.
+  The machine also cross-checks the counter against your inline comments
+  (a `severity: "BLOCKING"` entry or a 🚨 marker in the referenced comment
+  file) before honoring a blocking-0 approval — if any finding is truly
+  blocking, set `recommendation: REQUEST_CHANGES` with `blocking: 1`+.
+- ❌ Verdict-by-prose: never phrase the verdict only in the summary text.
+  The `recommendation` field of `outputs/pr_review.json` is the verdict.
+- ❌ Re-opening a thread that the rework demonstrably fixed in this diff —
+  add its id to `resolvedThreadIds` instead.
+
+## Label guard rails — the chore:pin lane (live: fa pr-1104, 2026-09-30)
+
+`chore:pin` is a trusted, **non-exclusive** factory fast-lane: several PRs
+may carry it at the same time (a release bump `chore/release-vX.Y.Z` AND a
+factory pin `chore/factory-pin-*` are both legitimate holders — they ride
+the lane independently). Reviews must therefore:
+
+- ❌ **NEVER remove `chore:pin` from any PR** — not as a "one pin" dedup,
+  not as a side-effect of closing a related PR as superseded. Removing it
+  from the release bump stranded the v1.0.494 tag behind the guest queue
+  for an hour (fa pr-1104, unlabeled 13:31:08Z while pr-1105 was closed).
+- ✅ When a PR is superseded (e.g. a workflow change already shipped via
+  another PR), close **only that PR** and leave every label on every other
+  PR untouched. Label restoration is a keeper action, not yours.
+- ✅ If you believe two `chore:pin` holders conflict, SAY SO in the review
+  comment and keep both labels — the owner resolves the lane, the machine
+  only merges.
+
+
+---
+
+### [9] `./agents/instructions/common/github_comment_format.md`
+
+# GitHub tracker comment
+
+Use GitHub-flavored Markdown in `outputs/response.md` for GitHub issue
+comments and descriptions. Your output is posted to the issue as-is — every
+construct must render natively on GitHub.
+
+- Headings: `##`, `###`
+- Bullets: `- item`
+- Numbered lists: `1. item`
+- Bold: `**text**`
+- Inline code: `` `code` ``
+- Code block: ` ```lang ... ``` ` with a language tag (`dart`, `bash`, `json`)
+- Link: `[text](url)`
+- Tables: standard GFM table syntax (`|---|` separator row)
+
+Do not use Jira wiki markup in GitHub fields: no `{code}...{code}` blocks,
+no `{panel}` macros, no `h1.`/`h2.`/`h3.` heading prefixes, no
+`{{monospace}}` inline code, no `[title|url]` links. None of it renders on
+GitHub — a comment full of `{code}` fences and `h3.` headers is unreadable.
+
+**IMPORTANT** When the issue references a parent story or related issues,
+get them for full context using: `dmtools github_get_issue OWNER/REPO#NUMBER`
+(the composite key form works directly).
+
+
+---
+
+### [10] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -297,7 +396,7 @@ flowchart TD
 
 ---
 
-### [9] `./agents/prompts/bash_tools.md`
+### [11] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -306,22 +405,10 @@ flowchart TD
         U2["Credentials preconfigured via environment variables"]
     end
 
-    subgraph SAFETY["CLI command safety"]
-        S1["One simple executable command at a time"]
-        S2["DMTools rejects shell metacharacters"]
-    end
-
-    subgraph FORBIDDEN["NEVER USE"]
-        F1["Pipes: |"]
-        F2["Redirection: > < 2>/dev/null"]
-        F3["Chaining: ; && ||"]
-        F4["Substitution: backticks, $(), ${...}"]
-    end
-
-    subgraph EXAMPLES["Instead"]
-        E1["find ... | head -20"] --> E1a["run: find ..."]
-        E2["cmd1 && cmd2"] --> E2a["run: cmd1"] --> E2b["then: cmd2"]
-        E3["Complex logic"] --> E3a["Write script file, run script as single command"]
+    subgraph SHELLSTATE["⚠️ Persistent-shell pitfalls (sandbox-observed)"]
+        P1["Never end commands with exit — it kills the shell session, making read_bash fail with Invalid shell ID"]
+        P2["Capture the exit code via $? right after the command, before running anything else — a late $? reads the wrong command's code"]
+        P3["Avoid $PIPESTATUS — it produced wrong exit codes in the sandbox; redirect output to a file and check $? instead"]
     end
 
     subgraph CWD["Working directory discipline (persistent shell!)"]
@@ -335,12 +422,21 @@ flowchart TD
         C8["Git global flags like --no-pager go BEFORE the subcommand: git --no-pager diff ... is correct, git diff ... --no-pager errors out (git treats the trailing flag as a positional argument)"]
     end
 
-    USE --> SAFETY
-    SAFETY --> FORBIDDEN
-    SAFETY --> EXAMPLES
-    SAFETY --> CWD
-```
+    subgraph BGJOBS["⚠️ Long-running commands — background execution, never foreground-poll"]
+        B1["Any command that can run longer than ~2 minutes (full test suite, coverage run, build, dependency install, dev server or watch mode) MUST be started with bash background: true — you get a job id immediately and the completion notice arrives as a message"]
+        B2["❌ NEVER wait for a long job with foreground sleep-polling: repeated sleep-then-check loops like sleep 540 → ls coverage. A foreground sleep pins the tool-call open — owner steering and cancel cannot reach you until it ends — and burns wall-clock plus a runner slot"]
+        B3["While a background job runs, keep working on other steps — check progress between steps with bash_job status / bash_job output &lt;job-id&gt; — never park the turn in a watch loop"]
+        B4["A harness hint like background candidate: bash background: true, job board /tasks, --wait-for-jobs is an ORDER, not a suggestion — obey it and start the command in the background; working around it with foreground sleeps is a violation"]
+        B5["Verification order: finalize ALL code edits BEFORE launching a long verification run (full suite, coverage) — verification must run against a frozen tree, otherwise the run is wasted"]
+        B6["Files changed while a verification run is in flight? Do NOT kill it mid-flight — let it finish, treat the result as stale, then deliberately start a fresh run against the updated tree"]
+        B7["B6 covers a job still making progress — do NOT kill it mid-flight; a job with NO progress for ~10 min (or 2× its expected duration) is HUNG — dispose of it and MOVE ON: bash_job stop &lt;job-id&gt;, note the disposal in the deliverable (job id, command, last output tail), finish the remaining steps and write outputs/response.md reporting the unverified part. NEVER let a hung child hold the deliverable hostage: validation CI on the pull request is the safety net"]
+        B1 --> B2 --> B3 --> B4 --> B5 --> B6 --> B7
+    end
 
+    USE --> SHELLSTATE
+    SHELLSTATE --> CWD
+    CWD --> BGJOBS
+```
 
 
 ---

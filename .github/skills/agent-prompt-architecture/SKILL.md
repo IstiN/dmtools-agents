@@ -228,6 +228,26 @@ Use GraalJS-safe patterns:
 Unit tests may run in Node.js and provide mocks, but runtime code must stay
 GraalJS-compatible.
 
+## cli_execute_command — author-side executor rules (never teammate-facing)
+
+`cli_execute_command` runs only inside dmtools JS actions in this repo (agent
+authoring) — never in the teammate runtime. Its executor (CliCommandExecutor)
+rejects `;`, `&&`, `||`, `|`, `>`, `<`, and substitution (backticks, `$(...)`,
+`${...}`) anywhere in the command string.
+
+Rules for author-side JS:
+
+- One simple executable command at a time.
+- Quoting does NOT bypass the guard — the scan covers the whole command string.
+- Compound logic goes through a script file: write the script, then run the
+  script as a single command.
+
+Enforced in `js/common/setupCommands.js`, `js/preCliDevelopmentSetup.js`, and
+the dmtools global Copilot instructions. These rules must NOT be copied into
+teammate prompts (`prompts/`, `instructions/`) — teammate bash is the fa-harness
+persistent shell and follows only the fa-sandbox guidance in
+`prompts/bash_tools.md`.
+
 ## Refactor checklist
 
 1. Identify whether each rule is generic, provider-specific, platform-specific,
