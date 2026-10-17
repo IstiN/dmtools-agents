@@ -255,6 +255,53 @@ function ghostGuardMarks(bodies) {
     return out;
 }
 
+// ── Silent-update failure markers (gh-1000 I5) ──────────────────────────────
+//
+// update_branch's silentUpdateBranch runs a throwaway /tmp clone to merge
+// main under the head (no CI). A bare `exit 1` from that harness (live
+// 2026-10-17 ~19:14Z) skipped park-set/unpark bookkeeping silently and the
+// branch stayed stale forever. One marker line per failed attempt records
+// the event durably on the PR — bookkeeping only, same contract as the
+// markers above; nothing tick-side consumes them beyond the I5 bookkeeping
+// (retry with backoff + cleaned workspace, degraded flag after
+// SILENT_UPDATE_MAX_FAILURES):
+//
+//   ⚠️ silent-update failure — attempt <n> at <iso>
+
+var SILENT_UPDATE_MAX_FAILURES = 3;
+var SILENT_UPDATE_DEGRADED_LABEL = 'silent-update-degraded';
+var SILENT_UPDATE_MARKER_RE = /⚠️ silent-update failure — attempt (\d+) at (\S+)/g;
+
+function silentUpdateFailureLine(attempt, iso) {
+    return '⚠️ silent-update failure — attempt ' + attempt + ' at ' + (iso || '');
+}
+
+// Failure markers seen in a PR comment list (bodies or single strings).
+// Returns { count, newest } — count is the highest attempt number observed
+// (markers are monotonic per branch), newest the newest ISO timestamp.
+function silentUpdateFailureCount(comments) {
+    var count = 0;
+    var newest = null;
+    (comments || []).forEach(function (c) {
+        var body = (c && (c.body || c.text)) || (typeof c === 'string' ? c : '');
+        var re = /⚠️ silent-update failure — attempt (\d+) at ([0-9T:\-.\+Z]+)/g;
+        var m;
+        while ((m = re.exec(String(body))) !== null) {
+            var n = parseInt(m[1], 10);
+            if (n > count) count = n;
+            var t = String(m[2]);
+            if (!newest || t > newest) newest = t;
+        }
+    });
+    return { count: count, newest: newest };
+}
+
+// Remaining attempts before the branch is flagged degraded.
+function silentUpdateAttemptsLeft(count) {
+    var left = SILENT_UPDATE_MAX_FAILURES - (Math.floor(Number(count)) || 0);
+    return left > 0 ? left : 0;
+}
+
 module.exports = {
     classify: classify,
     zombieMarks: zombieMarks,
@@ -267,5 +314,10 @@ module.exports = {
     ZOMBIE_MARKER_RE: ZOMBIE_MARKER_RE,
     ACTIVE_RUN_STATES: ACTIVE_RUN_STATES,
     STALE_CANCEL_MARKER_RE: STALE_CANCEL_MARKER_RE,
-    staleCancelMarkerLine: staleCancelMarkerLine
+    staleCancelMarkerLine: staleCancelMarkerLine,
+    SILENT_UPDATE_MAX_FAILURES: SILENT_UPDATE_MAX_FAILURES,
+    SILENT_UPDATE_DEGRADED_LABEL: SILENT_UPDATE_DEGRADED_LABEL,
+    silentUpdateFailureLine: silentUpdateFailureLine,
+    silentUpdateFailureCount: silentUpdateFailureCount,
+    silentUpdateAttemptsLeft: silentUpdateAttemptsLeft
 };

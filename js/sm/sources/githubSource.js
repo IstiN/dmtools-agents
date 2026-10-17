@@ -28,6 +28,7 @@
 var smProviderModule = require('../../common/smProvider.js');
 var machineAuthorModule = require('../../common/machineAuthor.js');
 var smAsyncModule = require('../../common/smAsync.js');
+var mutexRegistryModule = require('../../common/mutexRegistry.js');
 
 // runAsync worker sources — STRING literals of CLOSURE-FREE functions.
 // The Dart runtime serializes them via fn.toString() and runs each on a
@@ -661,7 +662,33 @@ function linkedIssueNumber(body) {
     return m ? parseInt(m[2], 10) : null;
 }
 
-function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {    var q = rule.query || {};
+// gh-1000 — phantom mutex holder reconciliation (I1/I2/E4/AC2).
+// The mutex scan below reads the holder set from the provider's per-tick
+// ioCache. A holder that vanished from the live label layer (arm strip
+// racing the cached open-PR list) would otherwise stay a phantom turnstile
+// deferring every candidate with zero labeled open PRs (live 19:08Z:
+// `slots 1/1 taken` while factory lanes.validating was empty). On a
+// full-slot defer decision the holders are re-derived against a LIVE
+// github_list_prs re-read — divergence means the cached view was stale:
+// drop the cache entry (self-heal), record the alarm + counters, and let
+// the query proceed with the corrected holder set IN THE SAME TICK (a
+// queued candidate may arm immediately — AC2). Probe failure keeps the
+// cached decision for one more tick (fail-closed, E4).
+
+// Numbers of the PRs in `items` that hold the mutex label, honoring the
+// same guards the scan applies (mutexAmong scope; 'blocked' exempts).
+function mutexHoldersOf(items, q) {
+    var among = (q.mutexAmong && q.mutexAmong.length) ? q.mutexAmong : null;
+    return items.filter(function (p) {
+        var labels = p.labels || [];
+        if (labels.indexOf('blocked') !== -1) return false;
+        if (labels.indexOf(q.mutex) === -1) return false;
+        return !among || among.some(function (m) { return labels.indexOf(m) !== -1; });
+    }).map(function (p) { return p.number; });
+}
+
+function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {
+    var q = rule.query || {};
     // The open-PR list rides the provider's per-tick ioCache — this site
     // fired github_list_prs once PER RULE (measured: 18 calls, one idle
     // tick, all the same payload). Providers without the cache contract
