@@ -333,17 +333,23 @@ function resolveMaxResolveThreads(override, p, dflt) {
 // knob, same resolution chain as every other machine-keyed guard).
 // Unconfigured → empty list → the leg fails closed and resolves
 // nothing (human threads would otherwise be closed by the machine).
+// First truthy value among three candidates — the sm-style string-knob
+// defaulting pattern (override || jobParams || built-in default).
+function firstDefined(a, b, c) {
+    return a || b || c;
+}
+
 function resolveMachineSmConfig(p, projectConfig) {
     var override = (projectConfig && projectConfig.machineSm) || {};
     var cfg = {
         dryRun:            pickKnob(override.dryRun, p.dryRun, false),
         maxConcurrentRuns: pickKnob(override.maxConcurrentRuns, p.maxConcurrentRuns, 1),
         maxReworkRounds:   pickKnob(override.maxReworkRounds, p.maxReworkRounds, 2),
-        workflowFile:      override.workflowFile || p.workflowFile || 'ai-teammate.yml',
-        branchPrefix:      override.branchPrefix || p.branchPrefix || 'ai/gh-',
-        agentHandle:       override.agentHandle || p.agentHandle || 'ai-teammate',
-        issueLimit:        override.issueLimit || p.issueLimit || 50,
-        closeComment:      override.closeComment || p.closeComment || 'Machine SM: linked PR merged — closing the loop.'
+        workflowFile:      firstDefined(override.workflowFile, p.workflowFile, 'ai-teammate.yml'),
+        branchPrefix:      firstDefined(override.branchPrefix, p.branchPrefix, 'ai/gh-'),
+        agentHandle:       firstDefined(override.agentHandle, p.agentHandle, 'ai-teammate'),
+        issueLimit:        firstDefined(override.issueLimit, p.issueLimit, 50),
+        closeComment:      firstDefined(override.closeComment, p.closeComment, 'Machine SM: linked PR merged — closing the loop.')
     };
     cfg.machineLogins = machineAuthorModule.machineAuthorLogins(
         machineAuthorModule.resolveMachineAuthor(p, projectConfig));
@@ -361,6 +367,30 @@ function resolveRepoCfg(projectConfig, p) {
     if (p.repository) return p.repository;
     if (p.repo) return { owner: String(p.repo).split('/')[0], repo: String(p.repo).split('/')[1] };
     return null;
+}
+
+function loadMachineSmProjectConfig(p) {
+    try {
+        return configLoader.loadProjectConfig({ configPath: p.configPath }) || {};
+    } catch (e) {
+        return {};
+    }
+}
+
+// Forge selection: scm.provider (github | gitlab) — scm.js contract.
+function resolveScmCfg(projectConfig, p) {
+    return (projectConfig.scm && projectConfig.scm.provider)
+        ? projectConfig.scm
+        : (p.scm || { provider: 'github' });
+}
+
+// Provider creation is fail-closed: the error string lands in the result.
+function createSmProviderOrError(scmCfg, repoCfg) {
+    try {
+        return { provider: smProviderModule.createSmProvider({ scm: scmCfg, repository: repoCfg }) };
+    } catch (e) {
+        return { error: String(e.message || e) };
+    }
 }
 
 // gh-952 (live fa 2026-10-17): a run whose linked PR is MERGED is
@@ -396,36 +426,60 @@ function filterLiveActiveIssues(provider, activeIssues, branchPrefix) {
 // One issue through the reconcile loop: probe the linked PR, run the pure
 // decision core, execute (or plan, in dryRun) every action. Returns the
 // per-issue counters action() aggregates.
+function buildIssueState(provider, issue, branchPrefix, activeSet) {
+    var prRef = provider.findPr(issue.number, branchPrefix);
+    var pr = prRef && prRef.state === 'OPEN' ? provider.prStatus(prRef.number) : prRef;
+    return {
+        prRef: prRef,
+        pr: pr,
+        state: {
+            issue: issue,
+            pr: pr,
+            activeRunForIssue: !!activeSet[issue.number] || !!activeSet['unknown']
+        }
+    };
+}
+
+function planActionFields(a, prRef, pr) {
+    a.prNumber = prRef ? prRef.number : null;
+    a.headSha = (pr && pr.headSha) || null;
+}
+
+function logAction(issue, a, cfg) {
+    console.log('  ' + (cfg.dryRun ? '[dry] ' : '') + '▶️  gh-' + issue.number + ' ' +
+        a.type + (a.leg ? ':' + a.leg : '') + ' — ' + a.reason);
+}
+
+// Executes one non-skip action unless dryRun; returns 'planned' | 'acted' | 'failed'.
+function applyIssueAction(provider, issue, cfg, a) {
+    if (cfg.dryRun) return 'planned';
+    try {
+        executeAction(provider, a, issue, cfg);
+        return 'acted';
+    } catch (e) {
+        console.error('  ❌ gh-' + issue.number + ' ' + a.type + ' failed: ' + (e.message || e));
+        return 'failed';
+    }
+}
+
 function reconcileIssue(provider, issue, cfg, activeSet) {
     var counters = { acted: 0, dispatched: 0, skipped: 0, failures: 0 };
-    var prRef = provider.findPr(issue.number, cfg.branchPrefix);
-    var pr = prRef && prRef.state === 'OPEN' ? provider.prStatus(prRef.number) : prRef;
-    var state = {
-        issue: issue,
-        pr: pr,
-        activeRunForIssue: !!activeSet[issue.number] || !!activeSet['unknown']
-    };
-    var acts = decideActions(state, cfg);
-    acts.forEach(function (a) {
+    var built = buildIssueState(provider, issue, cfg.branchPrefix, activeSet);
+    var acts = decideActions(built.state, cfg);
+    for (var i = 0; i < acts.length; i++) {
+        var a = acts[i];
         if (a.type === 'skip') {
             counters.skipped++;
             console.log('  ⏭️  gh-' + issue.number + ': ' + a.reason);
-            return;
+            continue;
         }
-        a.prNumber = prRef ? prRef.number : null;
-        a.headSha = (pr && pr.headSha) || null;
-        console.log('  ' + (cfg.dryRun ? '[dry] ' : '') + '▶️  gh-' + issue.number + ' ' +
-            a.type + (a.leg ? ':' + a.leg : '') + ' — ' + a.reason);
-        if (cfg.dryRun) { counters.acted++; if (a.type === 'dispatch') counters.dispatched++; return; }
-        try {
-            executeAction(provider, a, issue, cfg);
-            counters.acted++;
-            if (a.type === 'dispatch') counters.dispatched++;
-        } catch (e) {
-            counters.failures++;
-            console.error('  ❌ gh-' + issue.number + ' ' + a.type + ' failed: ' + (e.message || e));
-        }
-    });
+        planActionFields(a, built.prRef, built.pr);
+        logAction(issue, a, cfg);
+        var outcome = applyIssueAction(provider, issue, cfg, a);
+        if (outcome === 'failed') { counters.failures++; continue; }
+        counters.acted++;
+        if (a.type === 'dispatch') counters.dispatched++;
+    }
     return counters;
 }
 
@@ -434,10 +488,7 @@ function reconcileIssue(provider, issue, cfg, activeSet) {
 // ─────────────────────────────────────────────────────────────────────────────
 function action(params) {
     var p = params.jobParams || params;
-    var projectConfig = {};
-    try {
-        projectConfig = configLoader.loadProjectConfig({ configPath: p.configPath }) || {};
-    } catch (e) { projectConfig = {}; }
+    var projectConfig = loadMachineSmProjectConfig(p);
 
     var cfg = resolveMachineSmConfig(p, projectConfig);
     var repoCfg = resolveRepoCfg(projectConfig, p);
@@ -447,19 +498,12 @@ function action(params) {
         return { success: false, error: 'Missing repo' };
     }
 
-    // Forge selection: scm.provider (github | gitlab) — scm.js contract.
-    var scmCfg = (projectConfig.scm && projectConfig.scm.provider)
-        ? projectConfig.scm
-        : (p.scm || { provider: 'github' });
-    var provider;
-    try {
-        provider = smProviderModule.createSmProvider({
-            scm: scmCfg, repository: repoCfg
-        });
-    } catch (e) {
-        console.error('❌ machineSm: ' + (e.message || e));
-        return { success: false, error: String(e.message || e) };
+    var providerResult = createSmProviderOrError(resolveScmCfg(projectConfig, p), repoCfg);
+    if (providerResult.error !== undefined) {
+        console.error('❌ machineSm: ' + providerResult.error);
+        return { success: false, error: providerResult.error };
     }
+    var provider = providerResult.provider;
 
     console.log('Machine SM — ' + repoCfg.owner + '/' + repoCfg.repo + ' [' + provider.provider + ']' +
         (cfg.dryRun ? ' [DRY RUN]' : '') + ' (cap ' + cfg.maxConcurrentRuns + ', rounds ' + cfg.maxReworkRounds + ')');
@@ -506,7 +550,6 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveMachineSmConfig: resolveMachineSmConfig,
         resolveRepoCfg: resolveRepoCfg,
         probeOrphanRun: probeOrphanRun,
-        filterLiveActiveIssues: filterLiveActiveIssues,
-        reconcileIssue: reconcileIssue
+        filterLiveActiveIssues: filterLiveActiveIssues
     };
 }

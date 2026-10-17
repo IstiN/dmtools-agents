@@ -175,6 +175,62 @@ function escalateToInRework(opts) {
     triggerAutoStartRework(opts.ticketKey, opts.customParams, opts.config, opts.scm);
 }
 
+// Cosmetic label strips around a successful merge — each best-effort with
+// its own warning, exactly the historical log lines.
+function stripMergedPrLabel(scm, prNumber) {
+    try {
+        scm.removeLabel(prNumber, LABELS.PR_APPROVED);
+        console.log('Removed pr_approved label from GitHub PR');
+    } catch (e) {
+        console.warn('Could not remove pr_approved from GitHub PR:', e);
+    }
+}
+
+function stripApprovedLabelAfterMerge(ticketKey) {
+    try {
+        getTracker().removeLabel(ticketKey, LABELS.PR_APPROVED);
+        console.log('Removed pr_approved label from Jira ticket');
+    } catch (e) {
+        console.warn('Could not remove pr_approved from Jira ticket:', e);
+    }
+}
+
+// gh-916: Passed/Failed/Merged can be tag-only (restricted ADO workflows) —
+// stage-label fallback on a rejected transition.
+function resolveTestCaseFinalStatus(ticketKey, jiraConfig) {
+    var ticketDetail = getTracker().getIssue(ticketKey);
+    // hasStage also accepts the stage_in_review_passed marker a rejected transition
+    // left (jira.stageFallback 'label'); 'none' mode compares the status only.
+    var wasReviewPassed = getTracker().hasStage(ticketDetail, 'IN_REVIEW_PASSED', jiraConfig.statuses.IN_REVIEW_PASSED);
+    var finalStatus = wasReviewPassed ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
+    var moved = getTracker().moveToStatusOrMark(ticketKey, finalStatus, wasReviewPassed ? 'PASSED' : 'FAILED');
+    if (moved.moved || moved.marked) {
+        console.log('✅ Ticket moved to ' + finalStatus);
+    }
+}
+
+function moveTicketToMerged(ticketKey, jiraConfig) {
+    var mergedMove = getTracker().moveToStatusOrMark(ticketKey, jiraConfig.statuses.MERGED, 'MERGED');
+    if (mergedMove.moved || mergedMove.marked) {
+        console.log('✅ Ticket moved to Merged');
+    }
+}
+
+// Post-merge finalization: move the ticket to its final status BEFORE
+// removing pr_approved from Jira. Jira's search index can lag: if the status
+// update hasn't propagated yet when the next SM rule runs its JQL, the
+// ticket would still appear as "In Review". Keeping pr_approved on the Jira
+// ticket until after the status move means the review-trigger rule (JQL:
+// NOT IN pr_approved) naturally skips the ticket.
+function finalizeMergedTicket(params, ticketKey, jiraConfig) {
+    var isTestCase = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.testCaseMerge;
+    if (isTestCase) {
+        resolveTestCaseFinalStatus(ticketKey, jiraConfig);
+    } else {
+        moveTicketToMerged(ticketKey, jiraConfig);
+    }
+}
+
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
     if (!ticketKey) {
@@ -263,45 +319,13 @@ function action(params) {
         console.log('✅ PR #' + prNumber + ' merged successfully');
 
         // Remove GitHub PR label immediately (cosmetic — PR is closed)
-        try {
-            scm.removeLabel(prNumber, LABELS.PR_APPROVED);
-            console.log('Removed pr_approved label from GitHub PR');
-        } catch (e) {
-            console.warn('Could not remove pr_approved from GitHub PR:', e);
-        }
+        stripMergedPrLabel(scm, prNumber);
         releaseLock(ticketKey, customParams);
 
-        // Move ticket to final status BEFORE removing pr_approved from Jira.
-        // Jira's search index can lag: if the status update hasn't propagated yet when
-        // the next SM rule runs its JQL, the ticket would still appear as "In Review".
-        // Keeping pr_approved on the Jira ticket until after the status move means
-        // the review-trigger rule (JQL: NOT IN pr_approved) naturally skips the ticket.
-        const isTestCase = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.testCaseMerge;
-        if (isTestCase) {
-            var ticketDetail = getTracker().getIssue(ticketKey);
-            // gh-916: hasStage also accepts the stage_in_review_passed marker a rejected transition
-            // left (jira.stageFallback 'label'); 'none' mode compares the status only.
-            var wasReviewPassed = getTracker().hasStage(ticketDetail, 'IN_REVIEW_PASSED', jiraConfig.statuses.IN_REVIEW_PASSED);
-            var finalStatus = wasReviewPassed ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
-            // gh-916: Passed/Failed/Merged can be tag-only (restricted ADO workflows) — stage-label fallback.
-            var moved = getTracker().moveToStatusOrMark(ticketKey, finalStatus, wasReviewPassed ? 'PASSED' : 'FAILED');
-            if (moved.moved || moved.marked) {
-                console.log('✅ Ticket moved to ' + finalStatus);
-            }
-        } else {
-            var mergedMove = getTracker().moveToStatusOrMark(ticketKey, jiraConfig.statuses.MERGED, 'MERGED');
-            if (mergedMove.moved || mergedMove.marked) {
-                console.log('✅ Ticket moved to Merged');
-            }
-        }
+        finalizeMergedTicket(params, ticketKey, jiraConfig);
 
         // Now safe to remove pr_approved from Jira — status is already updated
-        try {
-            getTracker().removeLabel(ticketKey, LABELS.PR_APPROVED);
-            console.log('Removed pr_approved label from Jira ticket');
-        } catch (e) {
-            console.warn('Could not remove pr_approved from Jira ticket:', e);
-        }
+        stripApprovedLabelAfterMerge(ticketKey);
         return true;
     } catch (mergeErr) {
         console.warn('Merge failed:', mergeErr);
