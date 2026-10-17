@@ -274,6 +274,12 @@ function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
     if (q.notLabels && q.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) {
         return false;
     }
+    // gh-944 dev-on-assignment: an issue whose linked PR is OPEN is
+    // post-dev — the PR lifecycle rules own it (validate-fresh,
+    // rework-on-red-gate-unlatched, develop-done). Excluding only OPEN
+    // keeps the recovery shapes eligible: a MERGED-PR issue a human
+    // reopened and a PR-less issue are fresh dev handoffs.
+    if (q.noOpenPr && item.pr && item.pr.state === 'OPEN') return false;
     // 'blocked' = human hold (fa #939): the machine skips the item
     // ENTIRELY — all rules, all legs (no dispatch, no merge, no review, no
     // branch updates) — until a human removes the label. Engine-level, not
@@ -483,11 +489,30 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
     var descriptors = (q.labels || []).map(function (ml) {
         return { kind: 'label', label: ml };
     });
-    if (q.assignee) descriptors.push({ kind: 'assignee' });
+    // gh-944: the assignee may carry the {machineAuthor} deployment knob —
+    // the dev-on-assignment rule re-derives dev legs for issues assigned to
+    // THE MACHINE without hardcoding any login in the generic rule pack.
+    // Resolves against the same knob every machine-keyed guard uses
+    // (jobParams.machineAuthor at factory setup, config.machineAuthor per
+    // repo); a comma-separated list searches its FIRST login (the harness
+    // bot — the CI-bot twin never receives assignments). Fail-closed: an
+    // unresolvable placeholder (no machineAuthor configured) drops the
+    // descriptor — never search for a literal '{machineAuthor}'.
+    var assigneeQuery = null;
+    if (q.assignee) {
+        var expandedAssignee = String(q.assignee).replace(
+            /\{machineAuthor\}/g,
+            (machineAuthor === null || machineAuthor === undefined) ? '' : String(machineAuthor));
+        if (expandedAssignee.indexOf('{machineAuthor}') === -1 && expandedAssignee !== '') {
+            var assigneeLogins = machineAuthorModule.machineAuthorLogins(expandedAssignee);
+            if (assigneeLogins.length > 0) assigneeQuery = assigneeLogins[0];
+        }
+    }
+    if (assigneeQuery) descriptors.push({ kind: 'assignee' });
 
     var searchOne = function (d) {
         var queryStr = 'repo:' + full + ' is:issue is:open ' +
-            (d.kind === 'label' ? 'label:"' + d.label + '"' : 'assignee:' + q.assignee);
+            (d.kind === 'label' ? 'label:"' + d.label + '"' : 'assignee:' + assigneeQuery);
         var res = parseMcp(github_search_issues({ query: queryStr }));
         return { descriptor: d, items: asList(res) };
     };
@@ -495,7 +520,7 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
     var searchResults;
     if (descriptors.length > 1) {
         searchResults = smAsyncModule.map(descriptors, ISSUE_SEARCH_WORKER_SOURCE, function (d) {
-            return { repo: repoInfo, descriptor: d, assignee: q.assignee };
+            return { repo: repoInfo, descriptor: d, assignee: assigneeQuery };
         });
     } else {
         searchResults = descriptors.map(searchOne);
