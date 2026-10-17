@@ -682,6 +682,23 @@ function firstAssignee(it) {
  * published snapshot (parsed) or null — the timestamp AND history
  * accumulation source (see the schema 2 note above).
  */
+// gh-1000 — mutex metrics snapshot normalizer: caps the alarm tail,
+// coerces counters, drops a malformed blob rather than poisoning state.
+function normalizeMutexSnapshot(input) {
+    var snap = (input && typeof input === 'object') ? input : {};
+    function num(v) {
+        var n = Math.floor(Number(v));
+        return (typeof n === 'number' && !isNaN(n) && n >= 0) ? n : 0;
+    }
+    var alarms = Array.isArray(snap.alarms) ? snap.alarms.slice(-5) : [];
+    return {
+        mutexSelfHeals: num(snap.mutexSelfHeals),
+        phantomHolderTicks: num(snap.phantomHolderTicks),
+        consecutivePhantomTicks: num(snap.consecutivePhantomTicks),
+        alarms: alarms
+    };
+}
+
 function buildFactoryState(input) {
     var prs = input.prs || [];
     var mergedPrs = input.mergedPrs || [];
@@ -983,6 +1000,9 @@ function buildFactoryState(input) {
     // gh-825 — the board header's global Σ$ (all cards, 14d window). Absent
     // key when pricing is off/absent/malformed: the board renders tokens-only.
     if (costs) state.costs = costs;
+    // gh-1000 — phantom-holder bookkeeping (second tier). Present only when
+    // the SM published a mutex snapshot this tick; malformed blobs drop.
+    if (input.mutex) state.mutex = normalizeMutexSnapshot(input.mutex);
     return state;
 }
 

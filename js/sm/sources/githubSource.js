@@ -28,6 +28,7 @@
 var smProviderModule = require('../../common/smProvider.js');
 var machineAuthorModule = require('../../common/machineAuthor.js');
 var smAsyncModule = require('../../common/smAsync.js');
+var mutexRegistryModule = require('../../common/mutexRegistry.js');
 
 // runAsync worker sources — STRING literals of CLOSURE-FREE functions.
 // The Dart runtime serializes them via fn.toString() and runs each on a
@@ -661,7 +662,49 @@ function linkedIssueNumber(body) {
     return m ? parseInt(m[2], 10) : null;
 }
 
-function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {    var q = rule.query || {};
+// gh-1000 — phantom mutex holder reconciliation (I1/I2/E4/AC2).
+// The mutex scan below reads the holder set from the provider's per-tick
+// ioCache. A holder that vanished from the live label layer (arm strip
+// racing the cached open-PR list) would otherwise stay a phantom turnstile
+// deferring every candidate with zero labeled open PRs (live 19:08Z:
+// `slots 1/1 taken` while factory lanes.validating was empty). On a
+// full-slot defer decision the holders are re-derived against a LIVE
+// github_list_prs re-read — divergence means the cached view was stale:
+// drop the cache entry (self-heal), record the alarm + counters, and let
+// the query proceed with the corrected holder set IN THE SAME TICK (a
+// queued candidate may arm immediately — AC2). Probe failure keeps the
+// cached decision for one more tick (fail-closed, E4).
+
+// Numbers of the PRs in `items` that hold the mutex label, honoring the
+// same guards the scan applies (mutexAmong scope; 'blocked' exempts).
+function mutexHoldersOf(items, q) {
+    var among = (q.mutexAmong && q.mutexAmong.length) ? q.mutexAmong : null;
+    return items.filter(function (p) {
+        var labels = p.labels || [];
+        if (labels.indexOf('blocked') !== -1) return false;
+        if (labels.indexOf(q.mutex) === -1) return false;
+        return !among || among.some(function (m) { return labels.indexOf(m) !== -1; });
+    }).map(function (p) { return p.number; });
+}
+
+// gh-1000 — per-tick event accumulator: the phantom-heal scan below
+// records self-heal events HERE; the SM (smAgent factory-state publish
+// rule) drains them once per tick via takeMutexTickSnapshot(). Module
+// state, not a global — githubSource and smAgent are separate modules.
+var mutexTickEvents = null;
+
+function recordMutexTickEvent(ev) {
+    mutexTickEvents = mutexRegistryModule.mergeSnapshot(mutexTickEvents, ev || {});
+}
+
+function takeMutexTickSnapshot() {
+    var s = mutexTickEvents;
+    mutexTickEvents = null;
+    return s;
+}
+
+function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {
+    var q = rule.query || {};
     // The open-PR list rides the provider's per-tick ioCache — this site
     // fired github_list_prs once PER RULE (measured: 18 calls, one idle
     // tick, all the same payload). Providers without the cache contract
@@ -787,6 +830,59 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
                 return !blocked;
             });
         } else {
+            // gh-1000 I1/I2 — phantom-holder reconciliation before deferring.
+            // Full-slot decision MUST be re-derived against the LIVE label
+            // layer; a divergent cached holder is self-healed here so a
+            // queued candidate arms in the SAME tick (AC2).
+            if (holders.length >= mutexMax) {
+                var liveHolderSet = null;
+                var holdersLive = false;
+                if (provider && typeof provider.githubApi === 'function' && repoInfo) {
+                    try {
+                        var liveData = provider.githubApi('list_prs', { owner: repoInfo.owner, repo: repoInfo.repo });
+                        var liveItems = ((liveData || {}).items || liveData || []);
+                        if (Array.isArray(liveItems)) {
+                            liveHolderSet = mutexRegistryModule.derive(
+                                mutexHoldersOf(liveItems, q),
+                                liveItems,
+                                mutexRegistryModule.noCompletedRuns,
+                                repoInfo.owner + '/' + repoInfo.repo, nowIso());
+                            holdersLive = true;
+                        }
+                    } catch (e) {
+                        console.log('   ⚠️ gh-1000 phantom-heal live re-read failed: ' +
+                            String((e && e.message) || e) + ' — keeping cached mutex decision (fail-closed)');
+                    }
+                }
+                if (holdersLive) {
+                    var cachedSet = mutexRegistryModule.derive(
+                        holders,
+                        items,
+                        mutexRegistryModule.noCompletedRuns,
+                        repoInfo ? repoInfo.owner + '/' + repoInfo.repo : '', nowIso());
+                    var divergent = mutexRegistryModule.reconcile(cachedSet, liveHolderSet);
+                    if (divergent.selfHealed) {
+                        // The cache is module-level in smProvider (the
+                        // provider object is a facade) — drop via the
+                        // module, guarded for minimal test stubs.
+                        if (smProviderModule && typeof smProviderModule.ioCacheDrop === 'function') {
+                            try {
+                                smProviderModule.ioCacheDrop(repoInfo.owner, repoInfo.repo, 'openPrs', null);
+                            } catch (e2) { /* probe-only */ }
+                        }
+                        var alarm = divergent.alarm;
+                        console.log('   ⚠️ ' + alarm.title + ' — ' + alarm.detail +
+                            ' (cached holders [' + holders.join(', ') + '] vs live [' +
+                            liveHolderSet.holders.join(', ') + ']; ioCache self-healed, defer cancelled)');
+                        recordMutexTickEvent({
+                            mutexSelfHeals: 1,
+                            phantomHolderTicks: 1,
+                            alarm: alarm
+                        });
+                    }
+                    holders = liveHolderSet.holders;
+                }
+            }
             if (holders.length >= mutexMax) {
                 console.log('   🔒 mutex "' + q.mutex + '" slots ' + holders.length + '/' + mutexMax +
                     ' taken — rule defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ')');
@@ -927,5 +1023,6 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { query: query, matchesGuards: matchesGuards };
+    module.exports = { query: query, matchesGuards: matchesGuards,
+        takeMutexTickSnapshot: takeMutexTickSnapshot };
 }
