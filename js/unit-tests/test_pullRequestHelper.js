@@ -623,6 +623,19 @@ suite('pullRequest helper — cleanCommandOutput / stripGitNoise (gh-912 UT-3, b
 // status read failure.
 suite('pullRequest helper — syncBranchWithBase conflict auto-resolution (gh-965)', function() {
 
+    // Consumed-once reply matching: each scripted reply satisfies exactly one
+    // call, in order. An unmatched git command means the scenario drifted from
+    // what the test pins — fail loudly instead of silently succeeding.
+    function takeReply(replies, command) {
+        for (var i = 0; i < replies.length; i++) {
+            if (!replies[i].used && command.indexOf(replies[i].match) === 0) {
+                replies[i].used = true;
+                return replies[i];
+            }
+        }
+        throw new Error('scriptedSync: unmatched git command: ' + command);
+    }
+
     // Scripted runCommand: dispatches by command prefix, each reply consumed
     // once (order-strict), records every call in order.
     function scriptedSync(script) {
@@ -635,18 +648,20 @@ suite('pullRequest helper — syncBranchWithBase conflict auto-resolution (gh-96
             workingDir: 'repo',
             runCommand: function(command, workingDir) {
                 commands.push({ command: command, workingDirectory: workingDir || null });
-                for (var i = 0; i < replies.length; i++) {
-                    var r = replies[i];
-                    if (!r.used && command.indexOf(r.match) === 0) {
-                        r.used = true;
-                        if (r.throwError) throw new Error(r.throwError);
-                        return r.output || '';
-                    }
-                }
-                return '';
+                var reply = takeReply(replies, command);
+                if (reply.throwError) throw new Error(reply.throwError);
+                return reply.output || '';
             }
         });
         return { result: result, commands: commands };
+    }
+
+    // Reply pair for the checkout+add a resolved file always ends with.
+    function resolvedWith(side, file) {
+        return [
+            { match: 'git checkout --' + side + ' -- "' + file + '"', output: '' },
+            { match: 'git add -- "' + file + '"', output: '' }
+        ];
     }
 
     // Standard prefix: not mid-merge, behind base, clean tree, merge explodes.
@@ -675,7 +690,7 @@ suite('pullRequest helper — syncBranchWithBase conflict auto-resolution (gh-96
                 { match: 'git diff mb-sha HEAD -- "src/other.ts"', output: 'diff --git a/src/other.ts b/src/other.ts\n+branch line' },
                 { match: 'git diff --name-only --diff-filter=U', output: '' },
                 { match: 'git commit', output: '[feature/CONF-1 abc] Merge origin/main into feature/CONF-1' }
-            ])
+            ]).concat(resolvedWith('ours', 'src/app.js')).concat(resolvedWith('ours', 'src/other.ts'))
         });
 
         assert.equal(s.result.success, true);
@@ -711,7 +726,7 @@ suite('pullRequest helper — syncBranchWithBase conflict auto-resolution (gh-96
                 { match: 'git diff mb-sha HEAD -- "src/app.js"', output: '' },
                 { match: 'git diff --name-only --diff-filter=U', output: '' },
                 { match: 'git commit', output: 'ok' }
-            ])
+            ]).concat(resolvedWith('theirs', 'src/app.js'))
         });
 
         assert.equal(s.result.success, true);
@@ -727,7 +742,7 @@ suite('pullRequest helper — syncBranchWithBase conflict auto-resolution (gh-96
                 { match: 'git ls-files --stage -- "src/sub"', output: '160000 deadbeef 1\tsrc/sub' },
                 { match: 'git diff --name-only --diff-filter=U', output: '' },
                 { match: 'git commit', output: 'ok' }
-            ])
+            ]).concat(resolvedWith('theirs', 'src/sub'))
         });
 
         assert.equal(s.result.success, true);
@@ -771,7 +786,7 @@ suite('pullRequest helper — syncBranchWithBase conflict auto-resolution (gh-96
                 { match: 'git diff mb-sha HEAD -- "src/app.js"', throwError: 'diff probe failed' },
                 { match: 'git diff --name-only --diff-filter=U', output: 'src/app.js' },
                 { match: 'git merge --abort', output: '' }
-            ])
+            ]).concat(resolvedWith('theirs', 'src/app.js'))
         });
 
         assert.equal(s.result.success, false);
@@ -788,7 +803,7 @@ suite('pullRequest helper — syncBranchWithBase conflict auto-resolution (gh-96
                 { match: 'git diff mb-sha HEAD -- "src/app.js"', output: '+line' },
                 { match: 'git diff --name-only --diff-filter=U', output: '' },
                 { match: 'git commit', throwError: 'nothing to commit' }
-            ])
+            ]).concat(resolvedWith('ours', 'src/app.js'))
         });
 
         assert.equal(s.result.success, false);
@@ -811,7 +826,7 @@ suite('pullRequest helper — syncBranchWithBase conflict auto-resolution (gh-96
                 { match: 'git ls-files --stage -- "src/app.js"', output: '100644 abc123 1\tsrc/app.js' },
                 { match: 'git diff --name-only --diff-filter=U', output: '' },
                 { match: 'git commit', output: 'ok' }
-            ]
+            ].concat(resolvedWith('theirs', 'src/app.js'))
         });
 
         assert.equal(s.result.success, true);
@@ -821,7 +836,8 @@ suite('pullRequest helper — syncBranchWithBase conflict auto-resolution (gh-96
         }).map(function(c) { return c.command; }), ['git checkout --theirs -- "src/app.js"']);
     });
 
-    test('unreadable conflict status surfaces the status error and aborts', function() {        var s = scriptedSync({
+    test('unreadable conflict status surfaces the status error and aborts', function() {
+        var s = scriptedSync({
             replies: [
                 { match: 'git rev-parse --quiet --verify MERGE_HEAD', output: '' },
                 { match: 'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main', output: '' },
