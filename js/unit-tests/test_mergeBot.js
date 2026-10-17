@@ -24,13 +24,29 @@ function fixture(opts) {
     };
     var wfCalls = [];
     var crCalls = [];
+    var listCalls = [];
     var mods = {
         github_list_workflow_runs: function (a) {
             wfCalls.push(a);
             return JSON.stringify({ workflow_runs: opts.workflowRuns || [] });
         },
-        github_list_prs: function () { return JSON.stringify([{ number: pr.number }]); },
-        github_get_pr: function () { return JSON.stringify(pr); },
+        github_list_prs: function (a) {
+            listCalls.push(a);
+            // gh-952: state-aware list (open/merged) for the multi-PR
+            // slot-holder scenarios. prIndex maps state → raw REST list
+            // payload; absent, the legacy single-PR shape is served.
+            if (opts.prIndex) {
+                var state = (a && a.state) || 'open';
+                return JSON.stringify(opts.prIndex[state] || []);
+            }
+            return JSON.stringify([{ number: pr.number }]);
+        },
+        github_get_pr: function (a) {
+            if (opts.prByNumber) {
+                return JSON.stringify(opts.prByNumber[a.pullRequestId] || { state: 'OPEN' });
+            }
+            return JSON.stringify(pr);
+        },
         github_get_commit_check_runs: function (a) {
             // The Dart tool requires workspace/repository — a bare
             // {commitSha} call dies with 'Required parameter workspace is
@@ -38,6 +54,9 @@ function fixture(opts) {
             // Assert in the test body, not here: mocks run in the module
             // scope, where `assert` is not a global.
             crCalls.push(a);
+            if (opts.checkRunsByNumber && opts.checkRunsByNumber[a.commitSha] !== undefined) {
+                return JSON.stringify({ check_runs: opts.checkRunsByNumber[a.commitSha] });
+            }
             return JSON.stringify({ check_runs: checkRuns });
         },
         github_merge_pr: function (m) {
@@ -55,7 +74,7 @@ function fixture(opts) {
         }
     };
     var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
-    return { bot: bot, calls: calls, mods: mods, wfCalls: wfCalls, crCalls: crCalls };
+    return { bot: bot, calls: calls, mods: mods, wfCalls: wfCalls, crCalls: crCalls, listCalls: listCalls };
 }
 
 suite('mergeBot', function () {
