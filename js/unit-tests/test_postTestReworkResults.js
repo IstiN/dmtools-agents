@@ -253,3 +253,815 @@ suite('postTestReworkResults.buildTestReworkResultComment — per-tracker markup
     });
 
 });
+
+// ── gh-928: end-to-end characterization of action() and createPRIfMissing ────
+// These pin the CURRENT postJSAction wiring of pr_test_automation_rework:
+// result-json handling, status normalization, gates, commit/push, PR
+// create-if-missing, thread replies, PR body/comment, status moves, tracker
+// comment, label release, autoStart and the failure/resume paths. They are the
+// safety net for the CRAP refactor of action() — behaviour must not move.
+
+var REWORK_ACTION_CONFIG = {
+    workingDir: '/repo',
+    git: { baseBranch: 'main', authorName: 'AI Teammate', authorEmail: 'agent@example.com' },
+    formats: { commitMessage: { testRework: '{ticketKey} test rework {result}' } },
+    jira: { statuses: { IN_REVIEW_PASSED: 'In Review - Passed', IN_REVIEW_FAILED: 'In Review - Failed' } }
+};
+
+var REWORK_PR12 = {
+    number: 12,
+    html_url: 'https://github.com/acme/widgets/pull/12',
+    head: { ref: 'test/PROJ-123' },
+    base: { ref: 'main' }
+};
+
+var SHA40_ACTION = '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec';
+
+/** file_read double driven by an explicit path→content map (blocks real config). */
+function makeReworkFileReadMock(files) {
+    return function(args) {
+        var p = args && args.path ? args.path : args;
+        if (files[p] !== undefined) return files[p];
+        if (p && p.indexOf('.dmtools/config') !== -1) return null;
+        return null;
+    };
+}
+
+/** cli_execute_command double with realistic git answers for the rework flow. */
+function makeReworkCliMock(recorded, deps) {
+    return function(args) {
+        var command = args.command;
+        recorded.cli.push(command);
+        if (command === 'git branch --show-current') return 'test/PROJ-123';
+        if (command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
+            throw new Error('Command execution failed (exit code 1)'); // no MERGE_HEAD
+        }
+        if (command === 'git rev-parse HEAD') return SHA40_ACTION;
+        if (command.indexOf('git ls-remote --heads origin') === 0) {
+            return SHA40_ACTION + '\trefs/heads/' + command.replace('git ls-remote --heads origin ', '');
+        }
+        if (command === 'git diff --cached --stat') return deps.stagedStat || '';
+        return '';
+    };
+}
+
+/** scm double recording body/comment/thread side effects. */
+function makeReworkScmMock(recorded, deps) {
+    var scm = deps.scm || {
+        updatePrBody: function(number, body) { recorded.prBodies.push({ number: number, body: body }); },
+        addComment: function(number, body) { recorded.prComments.push({ number: number, body: body }); },
+        replyToThread: function(number, thread, text) { recorded.threadReplies.push({ number: number, thread: thread, text: text }); },
+        resolveThread: function(number, thread) { recorded.threadResolves.push({ number: number, thread: thread }); }
+    };
+    scm.openPrs = deps.openPrs !== undefined ? deps.openPrs : [REWORK_PR12];
+    scm.listPrs = function(state) { return this.openPrs; };
+    return scm;
+}
+
+/** tracker double recording comments, label removals and status moves. */
+function makeReworkTrackerMock(recorded) {
+    return {
+        postComment: function(key, body) { recorded.trackerComments.push({ key: key, body: body }); },
+        removeLabel: function(key, label) { recorded.labelRemovals.push({ key: key, label: label }); },
+        moveToStatusOrMark: function(key, status, stageKey) {
+            recorded.statusMoves.push({ key: key, status: status, stageKey: stageKey });
+            return { moved: true, marked: false };
+        },
+        getIssue: function(key) {
+            return { key: key, fields: { summary: 'Fix flaky login test' } };
+        }
+    };
+}
+
+/** feedbackLoop double with per-deps gate results and resume recording. */
+function makeReworkFeedbackLoopMock(recorded, deps) {
+    return {
+        runQualityGates: function(opts) {
+            recorded.qualityGates.push(opts);
+            return deps.qualityGateResult !== undefined ? deps.qualityGateResult : { success: true };
+        },
+        runPolicyGates: function(opts) {
+            recorded.policyGates.push(opts);
+            return deps.policyGateResult !== undefined ? deps.policyGateResult : { success: true };
+        },
+        resumeAgent: function(opts) {
+            recorded.resumeCalls.push(opts);
+            return deps.resumeAttempted ? { attempted: true } : { attempted: false };
+        }
+    };
+}
+
+/** autoStart double recording both trigger kinds. */
+function makeReworkAutoStartMock(recorded, deps) {
+    return {
+        triggerConfiguredWorkflowForTicket: function(opts) {
+            recorded.configuredTriggers.push(opts);
+            return deps.configuredTriggerResult || false;
+        },
+        triggerSmIfIdle: function(opts) { recorded.smTriggers.push(opts); }
+    };
+}
+
+// Shared mutable state for the hoisted configLoader closures — the factories
+// below must stay flat: nested closure bodies double-count into the factory's
+// complexity and blow the per-function CRAP ≤ 8 gate for new functions.
+var reworkHarnessState = { deps: {}, scm: null };
+
+function reworkLoadProjectConfig() {
+    var deps = reworkHarnessState.deps;
+    if (deps.configError) throw new Error(deps.configError);
+    return REWORK_ACTION_CONFIG;
+}
+
+function reworkCreateScm() {
+    return reworkHarnessState.scm;
+}
+
+function reworkFormatTemplate(template, vars) {
+    var out = template;
+    for (var k in vars) {
+        if (vars.hasOwnProperty(k)) {
+            out = out.split('{' + k + '}').join(vars[k] === undefined ? '' : vars[k]);
+        }
+    }
+    return out;
+}
+
+function reworkResolveInstructions() {
+    return { jobParamPatch: reworkHarnessState.deps.jobParamPatch || {} };
+}
+
+/** configLoader double over the shared REWORK_ACTION_CONFIG. */
+function makeReworkConfigLoaderMock(deps, scm) {
+    reworkHarnessState.deps = deps;
+    reworkHarnessState.scm = scm;
+    return {
+        loadProjectConfig: reworkLoadProjectConfig,
+        createScm: reworkCreateScm,
+        formatTemplate: reworkFormatTemplate,
+        resolveInstructions: reworkResolveInstructions
+    };
+}
+
+/** prHelper double: real helpers, recorded createPullRequest with a fixed result. */
+function makeReworkPrHelperMock(recorded, deps) {
+    return Object.assign({}, prHelperRealForRework, {
+        createPullRequest: function(opts) {
+            recorded.createPullRequests.push(opts);
+            return deps.createPullRequestResult || { success: true, prUrl: 'https://github.com/acme/widgets/pull/99' };
+        }
+    });
+}
+
+/**
+ * Full-control harness for postTestReworkResults.action().
+ * Every collaborator is a recorded double; file reads come from `deps.files`.
+ */
+function loadReworkActionHarness(deps) {
+    deps = deps || {};
+    var recorded = {
+        cli: [],
+        trackerComments: [],
+        labelRemovals: [],
+        statusMoves: [],
+        prComments: [],
+        prBodies: [],
+        threadReplies: [],
+        threadResolves: [],
+        qualityGates: [],
+        policyGates: [],
+        resumeCalls: [],
+        smTriggers: [],
+        configuredTriggers: [],
+        tokenUsage: [],
+        createPullRequests: []
+    };
+
+    var files = deps.files || {};
+    var scm = makeReworkScmMock(recorded, deps);
+    var tracker = makeReworkTrackerMock(recorded);
+    var moduleExports = loadModule(
+        'js/postTestReworkResults.js',
+        makeRequire({
+            './configLoader.js': makeReworkConfigLoaderMock(deps, scm),
+            './config.js': configModule,
+            './common/autoStart.js': makeReworkAutoStartMock(recorded, deps),
+            './common/feedbackLoop.js': makeReworkFeedbackLoopMock(recorded, deps),
+            './common/pullRequest.js': makeReworkPrHelperMock(recorded, deps),
+            './common/mergeState.js': loadModule('js/common/mergeState.js'),
+            './common/tokenUsageComment.js': {
+                postTokenUsageComments: function(key, opts) { recorded.tokenUsage.push({ key: key, opts: opts }); },
+                customParamsOf: function(params) { return (params && params.customParams) || {}; }
+            },
+            './common/trackers.js': {
+                createTracker: function(config, customParams) { return tracker; }
+            },
+            './common/commentMarkup.js': loadModule('js/common/commentMarkup.js',
+                makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }))
+        }),
+        {
+            cli_execute_command: deps.cliWrapper ? deps.cliWrapper(makeReworkCliMock(recorded, deps)) : makeReworkCliMock(recorded, deps),
+            file_read: makeReworkFileReadMock(files)
+        }
+    );
+
+    return { module: moduleExports, recorded: recorded, tracker: tracker, scm: scm, cliMock: null };
+}
+
+function reworkActionParams(overrides) {
+    overrides = overrides || {};
+    return {
+        ticket: { key: 'PROJ-123' },
+        response: overrides.omitResponse ? undefined :
+            (overrides.response !== undefined ? overrides.response : 'Fixed the flaky assertion'),
+        initiator: 'sm',
+        jobParams: overrides.jobParams,
+        customParams: overrides.customParams,
+        metadata: overrides.metadata
+    };
+}
+
+var PASSED_RESULT_JSON = JSON.stringify({ status: 'passed', summary: 'all green' });
+
+suite('postTestReworkResults.action — end-to-end characterization (gh-928)', function() {
+
+    function passedFlowDeps(overrides) {
+        overrides = overrides || {};
+        var d = {
+            files: {
+                'outputs/test_automation_result.json': overrides.resultJson !== undefined ? overrides.resultJson : PASSED_RESULT_JSON
+            }
+        };
+        if (overrides.prBody !== undefined) d.files['outputs/pr_body.md'] = overrides.prBody;
+        if (overrides.replies !== undefined) d.files['outputs/review_replies.json'] = overrides.replies;
+        return d;
+    }
+
+    test('passed flow: gates → commit/push → PR body+comment → move to In Review - Passed → tracker comment → unlock → SM trigger', function() {
+        var h = loadReworkActionHarness(passedFlowDeps({ prBody: '## What the agent did' }));
+
+        var result = h.module.action(reworkActionParams());
+
+        assert.deepEqual(result, {
+            success: true,
+            testStatus: 'passed',
+            jiraStatus: 'In Review - Passed',
+            ticketKey: 'PROJ-123'
+        }, 'success shape consumed by the rework workflow');
+
+        assert.deepEqual(h.recorded.qualityGates, [{ ticketKey: 'PROJ-123', customParams: {}, section: 'qualityGates' }]);
+        assert.deepEqual(h.recorded.policyGates, [{ ticketKey: 'PROJ-123', customParams: {}, section: 'policyGates' }]);
+
+        assert.ok(h.recorded.cli.indexOf('git add testing/') !== -1, 'testing/ staged');
+        assert.ok(h.recorded.cli.some(function(c) { return c.indexOf('git push -u origin test/PROJ-123') === 0; }), 'pushed to test branch');
+        assert.equal(h.recorded.cli.filter(function(c) { return c.indexOf('git commit') === 0; }).length, 0,
+            'no commit when the tree is clean and no merge pending');
+
+        assert.deepEqual(h.recorded.prBodies, [{
+            number: 12,
+            body: '## PROJ-123 Result: PASSED\n\n**Latest rework result:** `PASSED`\n\n---\n\n## What the agent did'
+        }], 'PR body refreshed with the latest rework result');
+        assert.equal(h.recorded.prComments.length, 1, 'one PR summary comment');
+        assert.contains(h.recorded.prComments[0].body, '## 🔧 Test Rework Complete — PROJ-123');
+        assert.contains(h.recorded.prComments[0].body, '**Re-run result**: ✅ PASSED');
+        assert.contains(h.recorded.prComments[0].body, '## What the agent did');
+
+        assert.deepEqual(h.recorded.statusMoves, [{
+            key: 'PROJ-123', status: 'In Review - Passed', stageKey: 'IN_REVIEW_PASSED'
+        }]);
+
+        assert.equal(h.recorded.trackerComments.length, 1, 'exactly one tracker comment');
+        assert.contains(h.recorded.trackerComments[0].body, 'h3. 🔧 Test Rework Completed');
+        assert.contains(h.recorded.trackerComments[0].body, '*Re-run result*: ✅ *PASSED*');
+        assert.contains(h.recorded.trackerComments[0].body, 'Fixed the flaky assertion');
+
+        assert.deepEqual(h.recorded.labelRemovals, [{ key: 'PROJ-123', label: 'pr_test_automation_rework_wip' }],
+            'WIP label released');
+
+        assert.equal(h.recorded.configuredTriggers.length, 0, 'no autoStartReview by default');
+        assert.equal(h.recorded.smTriggers.length, 1, 'SM triggered when idle');
+        assert.deepEqual(h.recorded.smTriggers[0].config, REWORK_ACTION_CONFIG);
+        assert.deepEqual(h.recorded.tokenUsage, [{ key: 'PROJ-123', opts: { initiator: 'sm', customParams: {} } }]);
+    });
+
+    test('failed flow: ❌ emoji, In Review - Failed, commit message result "update"', function() {
+        var h = loadReworkActionHarness(passedFlowDeps({
+            resultJson: JSON.stringify({ status: 'FAILED', reason: 'login still flaky' })
+        }));
+
+        var result = h.module.action(reworkActionParams());
+
+        assert.deepEqual(result, {
+            success: true,
+            testStatus: 'failed',
+            jiraStatus: 'In Review - Failed',
+            ticketKey: 'PROJ-123'
+        });
+        assert.deepEqual(h.recorded.statusMoves, [{
+            key: 'PROJ-123', status: 'In Review - Failed', stageKey: 'IN_REVIEW_FAILED'
+        }]);
+        assert.contains(h.recorded.prComments[0].body, '**Re-run result**: ❌ FAILED');
+        assert.contains(h.recorded.trackerComments[0].body, '*Re-run result*: ❌ *FAILED*');
+    });
+
+    test('status synonyms "pass" and "fail" normalize to passed/failed', function() {
+        var h = loadReworkActionHarness(passedFlowDeps({ resultJson: JSON.stringify({ status: 'pass' }) }));
+        var result = h.module.action(reworkActionParams());
+        assert.equal(result.testStatus, 'passed');
+
+        var h2 = loadReworkActionHarness(passedFlowDeps({ resultJson: JSON.stringify({ status: 'fail' }) }));
+        var result2 = h2.module.action(reworkActionParams());
+        assert.equal(result2.testStatus, 'failed');
+    });
+
+    test('missing result file → ⚠️ Rework Error comment, unlock, failure — gates never run', function() {
+        var h = loadReworkActionHarness({ files: {} });
+
+        var result = h.module.action(reworkActionParams());
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Could not read outputs/test_automation_result.json — file missing or empty.');
+        assert.equal(h.recorded.qualityGates.length, 0, 'gates must not run without a result');
+        assert.equal(h.recorded.trackerComments.length, 1);
+        assert.contains(h.recorded.trackerComments[0].body, 'h3. ⚠️ Rework Error');
+        assert.contains(h.recorded.trackerComments[0].body, 'file missing or empty');
+        assert.deepEqual(h.recorded.labelRemovals, [{ key: 'PROJ-123', label: 'pr_test_automation_rework_wip' }],
+            'lock released on the early-exit path too');
+    });
+
+    test('result without status field → error names the field and shows the payload', function() {
+        var h = loadReworkActionHarness({ files: { 'outputs/test_automation_result.json': '{"foo":1}' } });
+
+        var result = h.module.action(reworkActionParams());
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'missing required "status" field');
+        assert.contains(result.error, '{"foo":1}');
+        assert.equal(h.recorded.qualityGates.length, 0);
+    });
+
+    test('quality gate failure → outer catch: resume not attempted → ❌ Test Rework Error + unlock', function() {
+        var h = loadReworkActionHarness({
+            files: { 'outputs/test_automation_result.json': PASSED_RESULT_JSON },
+            qualityGateResult: { success: false, failedGate: 'crap', error: 'too crappy' }
+        });
+
+        var result = h.module.action(reworkActionParams());
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Quality gate failed before test rework publish: crap');
+        assert.equal(h.recorded.resumeCalls.length, 1, 'resumeAgent consulted');
+        assert.deepEqual(h.recorded.resumeCalls[0], {
+            ticketKey: 'PROJ-123', customParams: {}, section: 'postAction',
+            stage: 'test_rework_post_action', error: result.error
+        });
+        assert.equal(h.recorded.trackerComments.length, 1);
+        assert.contains(h.recorded.trackerComments[0].body, 'h3. ❌ Test Rework Error');
+        assert.contains(h.recorded.trackerComments[0].body, '{code}Error: Quality gate failed before test rework publish: crap');
+        assert.deepEqual(h.recorded.labelRemovals, [{ key: 'PROJ-123', label: 'pr_test_automation_rework_wip' }]);
+    });
+
+    test('push failure with resume attempted → action retries itself and the retry succeeds', function() {
+        var pushes = 0;
+        var h = loadReworkActionHarness({
+            files: passedFlowDeps({}).files,
+            resumeAttempted: true,
+            // The FIRST push verify sees stderr noise with no ref line → commitAndPush throws;
+            // the recursive retry (attempt 2) sees a clean capture and succeeds.
+            cliWrapper: function(base) {
+                return function(args) {
+                    if (args.command.indexOf('git ls-remote --heads origin') === 0 && pushes === 1) {
+                        return 'warning: redirecting to https://git.example.com/\n';
+                    }
+                    if (args.command.indexOf('git push -u origin') === 0) pushes++;
+                    return base(args);
+                };
+            }
+        });
+
+        var result = h.module.action(reworkActionParams());
+
+        assert.equal(result.success, true, 'the retried action completes');
+        assert.equal(pushes, 2, 'exactly two push attempts');
+        assert.equal(h.recorded.resumeCalls.length, 1, 'one resume consult');
+        assert.equal(h.recorded.resumeCalls[0].stage, 'test_rework_git_operations');
+        assert.equal(h.recorded.trackerComments.length, 1, 'only the completion comment');
+        assert.contains(h.recorded.trackerComments[0].body, 'h3. 🔧 Test Rework Completed',
+            'the surviving comment is the success one, not a failure one');
+    });
+
+    test('push failure with resume NOT attempted → ❌ Rework Push Failed comment + unlock + failure', function() {
+        var h = loadReworkActionHarness({
+            files: passedFlowDeps({}).files,
+            // Warning-only ls-remote capture → "Branch not found on remote after push".
+            cliWrapper: function(base) {
+                return function(args) {
+                    if (args.command.indexOf('git ls-remote --heads origin') === 0) {
+                        return 'warning: redirecting to https://git.example.com/\n';
+                    }
+                    return base(args);
+                };
+            }
+        });
+
+        var result = h.module.action(reworkActionParams());
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Branch not found on remote after push');
+        assert.equal(h.recorded.resumeCalls.length, 1);
+        assert.equal(h.recorded.resumeCalls[0].stage, 'test_rework_git_operations');
+        assert.equal(h.recorded.trackerComments.length, 1);
+        assert.contains(h.recorded.trackerComments[0].body, 'h3. ❌ Rework Push Failed');
+        assert.contains(h.recorded.trackerComments[0].body, 'Branch not found on remote after push');
+        assert.deepEqual(h.recorded.labelRemovals, [{ key: 'PROJ-123', label: 'pr_test_automation_rework_wip' }]);
+    });
+
+    test('no open PR → createPRIfMissing creates one after the push', function() {
+        var h = loadReworkActionHarness({
+            files: { 'outputs/test_automation_result.json': PASSED_RESULT_JSON },
+            openPrs: []
+        });
+
+        var result = h.module.action(reworkActionParams());
+
+        assert.equal(result.success, true);
+        assert.equal(h.recorded.createPullRequests.length, 1, 'PR created post-push');
+        assert.equal(h.recorded.createPullRequests[0].branchName, 'test/PROJ-123');
+        assert.equal(h.recorded.createPullRequests[0].baseBranch, 'main');
+        assert.contains(h.recorded.createPullRequests[0].bodyContent, 'Auto-created PR after test rework');
+        assert.equal(h.recorded.createPullRequests[0].ticketKey, 'PROJ-123');
+        // listPrs still returns [] → the refreshed lookup misses → fallback shape from the URL.
+        assert.equal(h.recorded.prComments[0].number, 99, 'comment lands on the fallback PR shape (number from URL)');
+        assert.equal(h.recorded.prBodies[0].number, 99);
+    });
+
+    test('autoStartReview configured → configured workflow triggered, SM idle trigger skipped', function() {
+        var h = loadReworkActionHarness({
+            files: { 'outputs/test_automation_result.json': PASSED_RESULT_JSON },
+            jobParamPatch: { customParams: { autoStartReview: true, autoStartReviewConfigFile: 'agents/pr_test_automation_review.json', removeLabel: 'sm_rework' } },
+            configuredTriggerResult: true
+        });
+
+        var params = reworkActionParams({});
+        var result = h.module.action(params);
+
+        assert.equal(result.success, true);
+        assert.equal(h.recorded.configuredTriggers.length, 1);
+        assert.equal(h.recorded.configuredTriggers[0].configFile, 'agents/pr_test_automation_review.json');
+        assert.equal(h.recorded.configuredTriggers[0].label, 'pr_test_automation_review');
+        assert.deepEqual(h.recorded.configuredTriggers[0].stripKeys, ['removeLabel', 'autoStartReview', 'autoStartReviewConfigFile']);
+        assert.equal(h.recorded.smTriggers.length, 0, 'configured trigger suppresses the SM idle trigger');
+        assert.deepEqual(h.recorded.labelRemovals, [
+            { key: 'PROJ-123', label: 'pr_test_automation_rework_wip' },
+            { key: 'PROJ-123', label: 'sm_rework' }
+        ], 'WIP label AND the custom SM idempotency label removed');
+    });
+
+    test('thread replies: explicit replies post inside threads; resolves happen; generic-comment flood avoided', function() {
+        var h = loadReworkActionHarness(passedFlowDeps({
+            replies: JSON.stringify({ replies: [
+                { inReplyToId: 'root-1', threadId: 'th-1', reply: 'Addressed — tightened the wait.' },
+                { threadId: 'th-2' },
+                { reply: 'orphan reply without rootCommentId' }
+            ] })
+        }));
+
+        var result = h.module.action(reworkActionParams());
+
+        assert.equal(result.success, true);
+        assert.deepEqual(h.recorded.threadReplies, [{
+            number: 12,
+            thread: { rootCommentId: 'root-1', threadId: 'th-1' },
+            text: 'Addressed — tightened the wait.'
+        }], 'only explicit replies with rootCommentId are posted');
+        assert.deepEqual(h.recorded.threadResolves, [
+            { number: 12, thread: { threadId: 'th-1' } },
+            { number: 12, thread: { threadId: 'th-2' } }
+        ], 'threads with threadId resolved');
+    });
+
+    test('no fix summary → placeholder used, result JSON summary ignored', function() {
+        var h = loadReworkActionHarness({ files: { 'outputs/test_automation_result.json': PASSED_RESULT_JSON } });
+
+        var result = h.module.action(reworkActionParams({ omitResponse: true }));
+
+        assert.equal(result.success, true);
+        assert.contains(h.recorded.trackerComments[0].body, '_(No fix summary)_');
+    });
+
+    test('wip label follows the metadata.contextId when present', function() {
+        var h = loadReworkActionHarness({
+            files: { 'outputs/test_automation_result.json': PASSED_RESULT_JSON }
+        });
+
+        var params = reworkActionParams({ metadata: { contextId: 'pr_test_automation_rework_mobile' } });
+        h.module.action(params);
+
+        assert.deepEqual(h.recorded.labelRemovals, [{ key: 'PROJ-123', label: 'pr_test_automation_rework_mobile_wip' }]);
+    });
+});
+
+/**
+/**
+ * createPRIfMissing is internal (not exported) — its coverage is driven
+ * through action() with no open PR. Every branch: refresh hit, URL fallback,
+ * creation failure, listPrs throwing, unreadable ticket.
+ */
+suite('postTestReworkResults — createPRIfMissing via action (gh-928)', function() {
+
+    test('refresh after creation finds the PR → downstream pr is refreshed.pr (undefined today — pinned quirk)', function() {
+        // CHARACTERIZED QUIRK: findTestPRForTicket returns the PR object itself, but the
+        // refresh branch reads `refreshed.pr` — always undefined. A successful re-fetch
+        // therefore yields NO downstream PR (no comment/body) today. Pinned as-is; the
+        // CRAP refactor must not silently change it.
+        var created = {
+            number: 41,
+            html_url: 'https://github.com/acme/widgets/pull/41',
+            head: { ref: 'test/PROJ-123' },
+            base: { ref: 'main' }
+        };
+        var calls = 0;
+        var h = loadReworkActionHarness({
+            files: { 'outputs/test_automation_result.json': PASSED_RESULT_JSON },
+            openPrs: []
+        });
+        h.scm.listPrs = function() {
+            calls++;
+            return calls >= 3 ? [created] : [];  // 1: dirty lookup, 2: create-check, 3: refresh
+        };
+
+        var result = h.module.action(reworkActionParams());
+
+        assert.equal(result.success, true);
+        assert.equal(h.recorded.createPullRequests.length, 1);
+        assert.deepEqual(h.recorded.prComments, [], 'refreshed.pr is undefined → no PR comment today');
+        assert.deepEqual(h.recorded.prBodies, [], 'refreshed.pr is undefined → no PR body today');
+    });
+
+    test('creation failure → rework still succeeds, no PR comment/body, status still moves', function() {
+        var h = loadReworkActionHarness({
+            files: { 'outputs/test_automation_result.json': PASSED_RESULT_JSON },
+            openPrs: [],
+            createPullRequestResult: { success: false, error: 'validation failed' }
+        });
+
+        var result = h.module.action(reworkActionParams());
+
+        assert.equal(result.success, true, 'missing PR does not fail the rework publish');
+        assert.equal(h.recorded.createPullRequests.length, 1, 'creation attempted exactly once');
+        assert.deepEqual(h.recorded.prComments, [], 'no PR comment without a PR');
+        assert.deepEqual(h.recorded.prBodies, [], 'no PR body without a PR');
+        assert.deepEqual(h.recorded.statusMoves, [{
+            key: 'PROJ-123', status: 'In Review - Passed', stageKey: 'IN_REVIEW_PASSED'
+        }], 'status still moves');
+        assert.contains(h.recorded.trackerComments[0].body, '*Branch*: {code}test/PROJ-123{code}');
+    });
+
+    test('listPrs throwing → createPRIfMissing catch → null → no PR comment, success preserved', function() {
+        var h = loadReworkActionHarness({
+            files: { 'outputs/test_automation_result.json': PASSED_RESULT_JSON },
+            openPrs: []
+        });
+        h.scm.listPrs = function() { throw new Error('api down'); };
+
+        var result = h.module.action(reworkActionParams());
+
+        assert.equal(result.success, true);
+        assert.deepEqual(h.recorded.prComments, []);
+        assert.deepEqual(h.recorded.prBodies, []);
+    });
+
+    test('tracker getIssue failing → creation title falls back to the bare ticket key', function() {
+        var h = loadReworkActionHarness({
+            files: { 'outputs/test_automation_result.json': PASSED_RESULT_JSON },
+            openPrs: [],
+            createPullRequestResult: { success: true, prUrl: 'https://github.com/acme/widgets/pull/7' }
+        });
+        h.tracker.getIssue = function() { throw new Error('jira down'); };
+
+        h.module.action(reworkActionParams());
+
+        assert.equal(h.recorded.createPullRequests[0].title, 'PROJ-123 PROJ-123',
+            'unreadable issue → summary falls back to the key → title "KEY KEY"');
+    });
+});
+
+// ── gh-928: direct tests for the extracted planners/parsers/executors ────────
+
+suite('postTestReworkResults — extracted helpers (gh-928)', function() {
+
+    function helperModule() {
+        return loadReworkActionHarness({ files: {} }).module;
+    }
+
+    test('normalizeTestStatus maps the pass/fail synonym family, passes anything else through', function() {
+        var m = helperModule();
+        assert.equal(m.normalizeTestStatus('pass'), 'passed');
+        assert.equal(m.normalizeTestStatus('passed'), 'passed');
+        assert.equal(m.normalizeTestStatus('fail'), 'failed');
+        assert.equal(m.normalizeTestStatus('failed'), 'failed');
+        assert.equal(m.normalizeTestStatus('SKIPPED'), 'SKIPPED', 'unknown statuses pass through verbatim');
+        assert.equal(m.normalizeTestStatus(''), '');
+    });
+
+    test('buildResultErrorMessage distinguishes missing file from missing status field', function() {
+        var m = helperModule();
+        assert.equal(
+            m.buildResultErrorMessage(null),
+            'Could not read outputs/test_automation_result.json — file missing or empty.'
+        );
+        var msg = m.buildResultErrorMessage({ foo: 'bar' });
+        assert.contains(msg, 'missing required "status" field');
+        assert.contains(msg, '{"foo":"bar"}');
+        assert.contains(msg, 'The agent must write { "status": "passed" | "failed", ... }.');
+    });
+
+    test('resolveWipLabel follows contextId, defaulting to the rework wip label', function() {
+        var m = helperModule();
+        assert.equal(m.resolveWipLabel({ metadata: { contextId: 'pr_test_automation_rework_mobile' } }),
+            'pr_test_automation_rework_mobile_wip');
+        assert.equal(m.resolveWipLabel({}), 'pr_test_automation_rework_wip');
+        assert.equal(m.resolveWipLabel({ metadata: {} }), 'pr_test_automation_rework_wip');
+    });
+
+    test('prMatchesBranch requires head.ref equality', function() {
+        var m = helperModule();
+        assert.equal(m.prMatchesBranch({ head: { ref: 'test/PROJ-1' } }, 'test/PROJ-1'), true);
+        assert.equal(m.prMatchesBranch({ head: { ref: 'other' } }, 'test/PROJ-1'), false);
+        // The original inline filter callback returned the bare && expression —
+        // a missing head yields null (falsy for filter), not false. Pinned as-is.
+        assert.ok(!m.prMatchesBranch({ head: null }, 'test/PROJ-1'), 'missing head → falsy');
+        assert.ok(!m.prMatchesBranch({}, 'test/PROJ-1'), 'missing head object → falsy');
+    });
+
+    test('buildAutoPRTitle degrades: full summary, empty summary, missing ticket', function() {
+        var m = helperModule();
+        assert.equal(m.buildAutoPRTitle({ fields: { summary: 'Fix login' } }, 'PROJ-1'), 'PROJ-1 Fix login');
+        assert.equal(m.buildAutoPRTitle({ fields: { summary: '' } }, 'PROJ-1'), 'PROJ-1 PROJ-1');
+        assert.equal(m.buildAutoPRTitle(null, 'PROJ-1'), 'PROJ-1 PROJ-1');
+        assert.equal(m.buildAutoPRTitle({}, 'PROJ-1'), 'PROJ-1 PROJ-1');
+    });
+
+    test('prNumberFromUrl parses trailing /pull/<n>, null otherwise', function() {
+        var m = helperModule();
+        assert.equal(m.prNumberFromUrl('https://github.com/acme/w/pull/41'), 41);
+        assert.equal(m.prNumberFromUrl('https://github.com/acme/w/pull/0'), 0);
+        assert.equal(m.prNumberFromUrl('https://gitlab.com/acme/w/-/merge_requests/7'), null, 'non-GitHub URL shape');
+        assert.equal(m.prNumberFromUrl('https://github.com/acme/w/pull/41/commits'), null, 'not a PR landing URL');
+        assert.equal(m.prNumberFromUrl(''), null);
+        assert.equal(m.prNumberFromUrl(null), null);
+    });
+
+    test('buildFallbackPR keeps the URL even when the number is unparseable', function() {
+        var m = helperModule();
+        assert.deepEqual(
+            m.buildFallbackPR({ prUrl: 'https://github.com/acme/w/pull/9' }, 'test/PROJ-1'),
+            { number: 9, html_url: 'https://github.com/acme/w/pull/9', head: { ref: 'test/PROJ-1' } }
+        );
+        assert.deepEqual(
+            m.buildFallbackPR({ prUrl: 'https://gitlab.com/acme/w/-/merge_requests/7' }, 'test/PROJ-1'),
+            { number: null, html_url: 'https://gitlab.com/acme/w/-/merge_requests/7', head: { ref: 'test/PROJ-1' } }
+        );
+    });
+
+    test('buildPRReworkComment flips emoji with the outcome and keeps the markdown contract', function() {
+        var m = helperModule();
+        assert.equal(
+            m.buildPRReworkComment('PROJ-2', 'passed', true, 'BODY'),
+            '## 🔧 Test Rework Complete — PROJ-2\n\n**Re-run result**: ✅ PASSED\n\n---\n\nBODY'
+        );
+        assert.equal(
+            m.buildPRReworkComment('PROJ-2', 'failed', false, 'BODY'),
+            '## 🔧 Test Rework Complete — PROJ-2\n\n**Re-run result**: ❌ FAILED\n\n---\n\nBODY'
+        );
+    });
+
+    test('runPublishGates: quality gate throws first, policy gate throws second, success passes silently', function() {
+        var calls = [];
+        var h = loadReworkActionHarness({
+            files: { 'outputs/test_automation_result.json': PASSED_RESULT_JSON },
+            qualityGateResult: { success: false, failedGate: 'crap', error: 'boom' }
+        });
+        var err = null;
+        try { h.module.action(reworkActionParams()); } catch (e) { /* action catches internally */ }
+        void calls;
+
+        // Direct: quality failure surfaces the quality message.
+        var h1 = loadReworkActionHarness({
+            files: { 'outputs/test_automation_result.json': PASSED_RESULT_JSON },
+            qualityGateResult: { success: false, failedGate: 'crap', error: 'boom' }
+        });
+        var r1 = h1.module.action(reworkActionParams());
+        assert.contains(r1.error, 'Quality gate failed before test rework publish: crap\nboom');
+
+        // Direct: policy failure surfaces the policy message.
+        var h2 = loadReworkActionHarness({
+            files: { 'outputs/test_automation_result.json': PASSED_RESULT_JSON },
+            policyGateResult: { success: false, failedGate: 'method_size', error: 'too big' }
+        });
+        var r2 = h2.module.action(reworkActionParams());
+        assert.contains(r2.error, 'Policy gate failed before test rework publish: method_size\ntoo big');
+        assert.ok(h2.recorded.qualityGates.length >= 1, 'quality gate ran before the policy gate');
+    });
+
+    test('handleReplyItem: reply error is a warn (tally unchanged), resolve error likewise', function() {
+        var m = helperModule();
+        var scm = {
+            replyToThread: function() { throw new Error('reply api down'); },
+            resolveThread: function() { throw new Error('resolve api down'); }
+        };
+        var tally = { posted: 0, resolved: 0 };
+        m.handleReplyItem(scm, 12, { inReplyToId: 'r1', threadId: 't1', reply: 'Done' }, tally);
+        assert.deepEqual(tally, { posted: 0, resolved: 0 }, 'failed reply/resolve do not count');
+    });
+
+    test('replyThreadIdOf prefers threadId, falls back to discussionId, else undefined', function() {
+        var m = helperModule();
+        assert.equal(m.replyThreadIdOf({ threadId: 't1', discussionId: 'd1' }), 't1');
+        assert.equal(m.replyThreadIdOf({ discussionId: 'd1' }), 'd1');
+        assert.equal(m.replyThreadIdOf({}), undefined);
+    });
+
+    test('reworkFormatTemplate substitutes every var and empties missing ones', function() {
+        assert.equal(reworkFormatTemplate('KEY {ticketKey} RESULT {result}', { ticketKey: 'PROJ-9', result: 'fix' }),
+            'KEY PROJ-9 RESULT fix');
+        // Keys absent from the map stay unreplaced; present-but-undefined values → ''.
+        assert.equal(reworkFormatTemplate('KEY {ticketKey} RESULT {result}', { ticketKey: 'PROJ-9' }),
+            'KEY PROJ-9 RESULT {result}', 'absent key stays unreplaced');
+        assert.equal(reworkFormatTemplate('KEY {ticketKey}', { ticketKey: undefined }),
+            'KEY ', 'undefined value → empty string');
+        assert.equal(reworkFormatTemplate('no vars', { ignored: 1 }), 'no vars');
+    });
+
+    test('handleReplyItem uses discussionId when threadId is absent (resolve skipped)', function() {
+        var seen = [];
+        var m = helperModule();
+        var scm = {
+            replyToThread: function(id, thread, text) { seen.push({ id: id, thread: thread, text: text }); },
+            resolveThread: function() { seen.push('resolved-should-not-happen'); }
+        };
+        var tally = { posted: 0, resolved: 0 };
+        m.handleReplyItem(scm, 12, { inReplyToId: 'r9', discussionId: 'd9', reply: ' Noted. ' }, tally);
+        assert.deepEqual(seen, [{ id: 12, thread: { rootCommentId: 'r9', threadId: 'd9' }, text: 'Noted.' }],
+            'reply text trimmed, discussionId used as the thread id, nothing resolved');
+        assert.deepEqual(tally, { posted: 1, resolved: 0 });
+    });
+
+    test('releaseReworkLock removes the wip label always and the SM label only when configured', function() {
+        var removals = [];
+        var h = loadReworkActionHarness({ files: {} });
+        h.tracker.removeLabel = function(key, label) { removals.push(label); };
+
+        h.module.releaseReworkLock('PROJ-1', 'wip_label', undefined);
+        assert.deepEqual(removals, ['wip_label'], 'no SM label when removeLabel is absent');
+
+        h.module.releaseReworkLock('PROJ-1', 'wip_label', 'sm_rework');
+        assert.deepEqual(removals, ['wip_label', 'wip_label', 'sm_rework'], 'both labels removed when configured');
+    });
+
+    test('triggerAutoStart: configured trigger success suppresses the SM idle trigger', function() {
+        var h = loadReworkActionHarness({
+            files: {},
+            jobParamPatch: { customParams: { autoStartReview: true, autoStartReviewConfigFile: 'cfg.json' } },
+            configuredTriggerResult: true
+        });
+        var started = h.module.triggerAutoStart('PROJ-1', { autoStartReview: true, autoStartReviewConfigFile: 'cfg.json' }, REWORK_ACTION_CONFIG);
+        assert.equal(started, true);
+        assert.equal(h.recorded.configuredTriggers[0].ticketKey, 'PROJ-1');
+        assert.equal(h.recorded.smTriggers.length, 0);
+
+        var h2 = loadReworkActionHarness({ files: {} });
+        var started2 = h2.module.triggerAutoStart('PROJ-1', {}, REWORK_ACTION_CONFIG);
+        assert.equal(started2, false, 'no autoStart config → SM idle trigger fallback');
+        assert.equal(h2.recorded.smTriggers.length, 1);
+
+        var h3 = loadReworkActionHarness({ files: {}, configuredTriggerResult: false });
+        var started3 = h3.module.triggerAutoStart('PROJ-1', { autoStartReview: true, autoStartReviewConfigFile: 'cfg.json' }, REWORK_ACTION_CONFIG);
+        assert.equal(started3, false, 'configured trigger returning false still falls back to SM');
+        assert.equal(h3.recorded.smTriggers.length, 1);
+    });
+
+    test('postReworkBodyAndComment: body update and comment share prBodyContent; failure of one warns only', function() {
+        var h = loadReworkActionHarness({ files: {} });
+        var scmCalls = [];
+        var scm = {
+            updatePrBody: function(n, b) { scmCalls.push(['body', n, b]); },
+            addComment: function(n, c) { scmCalls.push(['comment', n, c]); }
+        };
+        h.module.postReworkBodyAndComment(scm, { number: 5 }, 'PROJ-1', 'passed', true, 'CONTENT');
+        assert.deepEqual(scmCalls, [
+            ['body', 5, '## PROJ-1 Result: PASSED\n\n**Latest rework result:** `PASSED`\n\n---\n\nCONTENT'],
+            ['comment', 5, '## 🔧 Test Rework Complete — PROJ-1\n\n**Re-run result**: ✅ PASSED\n\n---\n\nCONTENT']
+        ], 'both side effects fire with the same content and PR number');
+
+        // updatePullRequestBody catches internally — a body failure does NOT stop
+        // the summary comment. Pinned: the comment still posts.
+        var scmBroken = {
+            updatePrBody: function() { throw new Error('api down'); },
+            addComment: function(n, c) { scmCalls.push(['comment-after-failure', n, c]); }
+        };
+        h.module.postReworkBodyAndComment(scmBroken, { number: 5 }, 'PROJ-1', 'passed', true, 'C');
+        assert.deepEqual(scmCalls[2], ['comment-after-failure', 5, '## 🔧 Test Rework Complete — PROJ-1\n\n**Re-run result**: ✅ PASSED\n\n---\n\nC'],
+            'summary comment survives a PR-body failure');
+    });
+});
