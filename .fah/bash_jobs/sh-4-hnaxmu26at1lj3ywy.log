@@ -1,0 +1,28 @@
+total 400
+drwxr-xr-x@ 10 uladzimir_klyshevich  staff     320 Oct 15 20:38 .
+drwxr-xr-x@ 18 uladzimir_klyshevich  staff     576 Sep 27 13:41 ..
+-rw-r--r--@  1 uladzimir_klyshevich  staff   42067 Oct 15 20:38 app.js
+-rw-r--r--@  1 uladzimir_klyshevich  staff    4024 Oct  6 22:07 config.js
+-rw-r--r--@  1 uladzimir_klyshevich  staff   13867 Oct 15 20:38 flow.js
+-rw-r--r--@  1 uladzimir_klyshevich  staff    5158 Oct 15 20:38 index.html
+-rw-r--r--@  1 uladzimir_klyshevich  staff   14534 Oct 15 20:38 README.md
+-rw-r--r--@  1 uladzimir_klyshevich  staff    3887 Oct  5 11:19 steps.js
+-rw-r--r--@  1 uladzimir_klyshevich  staff  107900 Oct  7 01:11 styles.css
+drwxr-xr-x@  9 uladzimir_klyshevich  staff     288 Oct 15 20:38 visual-check
+---
+988K	site/factory
+---
+agent-docs.yml
+agent-pack-release-kicker.yml
+agent-pack-release.yml
+ai-teammate.yml
+factory-probe.yml
+factory-sm-kicker.yml
+machine-merge.yml
+machine-sm.yml
+merge-trigger.yml
+pages.yml
+quality.yml
+sm-merge-guard.yml
+---
+ae84903e fix(ado): #889 #890 #894; feat(rework): opt-in WIP squash #895 (#896)
