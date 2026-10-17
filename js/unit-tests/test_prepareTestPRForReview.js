@@ -43,7 +43,9 @@ function loadPrepareTestPRForReview(mocks) {
             './mergeState.js': loadModule('js/common/mergeState.js'),
             './common/mergeState.js': loadModule('js/common/mergeState.js')
         }),
-        { cli_execute_command: function() { return ''; }, jira_search_by_jql: function() { return []; }, file_write: function() {} }
+        // gh-965: delegate to the caller's cli mock so tests can script the
+        // `gh pr create` path exercised when a branch exists without a PR.
+        { cli_execute_command: allMocks.cli_execute_command, jira_search_by_jql: allMocks.jira_search_by_jql, file_write: allMocks.file_write }
     );
 
     var githubHelpers = Object.assign({
@@ -217,5 +219,243 @@ suite('prepareTestPRForReview', function() {
         assert.equal(result, false);
         assert.deepEqual(calls.filter(function(c) { return c.tool === 'add'; })[0].args, { id: '92', label: 'test_pr_merged' });
         assert.deepEqual(calls.filter(function(c) { return c.tool === 'move'; })[0].args, { id: '92', state: 'In Testing' });
+    });
+
+    // ── gh-965: no-PR / setup-failure characterization ─────────────────────
+    test('no PR and no remote branch → In Rework + re-automation comment, returns false', function() {
+        var statusMoves = [];
+        var comments = [];
+
+        var module = loadPrepareTestPRForReview({
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            cli_execute_command: function() { return ''; }
+        });
+
+        var result = module.action({
+            inputFolderPath: 'input/TS-93',
+            ticket: { key: 'TS-93', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result, false);
+        assert.deepEqual(statusMoves, [{ key: 'TS-93', statusName: 'In Rework' }]);
+        assert.ok(comments.some(function(c) { return c.indexOf('re-automation') !== -1; }));
+    });
+
+    test('branch exists without PR → creates PR via gh, refetches it and proceeds with review', function() {
+        var commands = [];
+        var comments = [];
+        var contextWritten = false;
+        var openCalls = 0;
+
+        var module = loadPrepareTestPRForReview({
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-94') === 0) {
+                    return 'abc123\trefs/heads/test/TS-94';
+                }
+                if (opts.command.indexOf('gh pr list --head test/TS-94') === 0) return '';
+                if (opts.command.indexOf('gh pr create') === 0) return 'https://github.com/IstiN/trackstate/pull/61';
+                return '';
+            },
+            scmMock: {
+                listPrs: function(state) {
+                    if (state === 'open') {
+                        openCalls++;
+                        if (openCalls >= 2) {
+                            return [{ number: 61, head: { ref: 'test/TS-94' }, html_url: 'https://github.com/IstiN/trackstate/pull/61' }];
+                        }
+                        return [];
+                    }
+                    return [];
+                }
+            },
+            githubHelpers: {
+                getPRDetails: function() {
+                    return {
+                        number: 61,
+                        changed_files: 3,
+                        head: { ref: 'test/TS-94' },
+                        base: { ref: 'main' },
+                        html_url: 'https://github.com/IstiN/trackstate/pull/61'
+                    };
+                }
+            },
+            gitOpsMock: {
+                writePRContext: function() { contextWritten = true; }
+            }
+        });
+
+        var result = module.action({
+            inputFolderPath: 'input/TS-94',
+            ticket: { key: 'TS-94', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.prNumber, 61);
+        assert.equal(contextWritten, true);
+        assert.ok(commands.some(function(c) { return c.indexOf('gh pr create') === 0; }), 'must create the missing PR');
+        assert.ok(commands.some(function(c) { return c.indexOf('git ls-remote --heads origin test/TS-94') === 0; }));
+        assert.ok(comments.some(function(c) { return c.indexOf('Review Started') !== -1; }));
+    });
+
+    test('branch without commits ahead of main (No commits between) → finalize as already merged, returns false', function() {
+        var labelsAdded = [];
+        var statusMoves = [];
+        var commands = [];
+
+        var module = loadPrepareTestPRForReview({
+            jira_add_label: function(args) { labelsAdded.push(args); },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-95') === 0) {
+                    return 'abc123\trefs/heads/test/TS-95';
+                }
+                if (opts.command.indexOf('gh pr list --head test/TS-95') === 0) return '';
+                if (opts.command.indexOf('gh pr create') === 0) {
+                    throw new Error('No commits between main and test/TS-95');
+                }
+                return '';
+            }
+        });
+
+        var result = module.action({
+            inputFolderPath: 'input/TS-95',
+            ticket: { key: 'TS-95', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result, false);
+        assert.deepEqual(labelsAdded, [{ key: 'TS-95', label: 'test_pr_merged' }]);
+        assert.deepEqual(statusMoves, [{ key: 'TS-95', statusName: 'In Testing' }]);
+        assert.ok(commands.some(function(c) { return c === 'git push origin --delete test/TS-95'; }));
+    });
+
+    test('PR creation failure → setup-failed comment, returns false (no status move)', function() {
+        var comments = [];
+        var statusMoves = [];
+
+        var module = loadPrepareTestPRForReview({
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            cli_execute_command: function(opts) {
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-96') === 0) {
+                    return 'abc123\trefs/heads/test/TS-96';
+                }
+                if (opts.command.indexOf('gh pr list --head test/TS-96') === 0) return '';
+                if (opts.command.indexOf('gh pr create') === 0) throw new Error('HTTP 500 boom');
+                return '';
+            }
+        });
+
+        var result = module.action({
+            inputFolderPath: 'input/TS-96',
+            ticket: { key: 'TS-96', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result, false);
+        assert.deepEqual(statusMoves, [], 'no status move on setup failure');
+        assert.ok(comments.some(function(c) { return c.indexOf('could not create PR') !== -1; }));
+    });
+
+    test('WIP/draft PR → skip comment, returns false', function() {
+        var comments = [];
+
+        var module = loadPrepareTestPRForReview({
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            scmMock: {
+                listPrs: function(state) {
+                    if (state === 'open') {
+                        return [{ number: 62, draft: true, head: { ref: 'test/TS-97' }, html_url: 'https://github.com/IstiN/trackstate/pull/62' }];
+                    }
+                    return [];
+                }
+            }
+        });
+
+        var result = module.action({
+            inputFolderPath: 'input/TS-97',
+            ticket: { key: 'TS-97', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result, false);
+        assert.ok(comments.some(function(c) { return c.indexOf('WIP/draft') !== -1; }));
+    });
+
+    test('unfetchable PR details → setup-failed comment, returns false', function() {
+        var comments = [];
+
+        var module = loadPrepareTestPRForReview({
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            scmMock: {
+                listPrs: function(state) {
+                    if (state === 'open') {
+                        return [{ number: 63, head: { ref: 'test/TS-98' }, html_url: 'https://github.com/IstiN/trackstate/pull/63' }];
+                    }
+                    return [];
+                }
+            },
+            githubHelpers: {
+                getPRDetails: function() { return null; }
+            }
+        });
+
+        var result = module.action({
+            inputFolderPath: 'input/TS-98',
+            ticket: { key: 'TS-98', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result, false);
+        assert.ok(comments.some(function(c) { return c.indexOf('Could not fetch details') !== -1; }));
+    });
+
+    test('push failure while finalizing already-merged test code does not abort the finalization', function() {
+        var labelsAdded = [];
+        var statusMoves = [];
+
+        var module = loadPrepareTestPRForReview({
+            jira_add_label: function(args) { labelsAdded.push(args); },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            cli_execute_command: function(opts) {
+                if (opts.command.indexOf('git push origin --delete') === 0) throw new Error('remote refused');
+                return '';
+            },
+            scmMock: {
+                listPrs: function(state) {
+                    if (state === 'open') {
+                        return [{ number: 64, head: { ref: 'test/TS-99' }, html_url: 'https://github.com/IstiN/trackstate/pull/64' }];
+                    }
+                    return [];
+                }
+            },
+            githubHelpers: {
+                getPRDetails: function() {
+                    return {
+                        number: 64,
+                        changed_files: 0,
+                        head: { ref: 'test/TS-99' },
+                        base: { ref: 'main' },
+                        html_url: 'https://github.com/IstiN/trackstate/pull/64'
+                    };
+                }
+            }
+        });
+
+        var result = module.action({
+            inputFolderPath: 'input/TS-99',
+            ticket: { key: 'TS-99', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result, false);
+        assert.deepEqual(labelsAdded, [{ key: 'TS-99', label: 'test_pr_merged' }]);
+        assert.deepEqual(statusMoves, [{ key: 'TS-99', statusName: 'In Testing' }]);
     });
 });

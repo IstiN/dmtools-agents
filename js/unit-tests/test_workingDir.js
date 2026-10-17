@@ -653,6 +653,11 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
                 './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
             }), allMocks),
             './common/commentMarkup.js': commentMarkupModule,
+            './postTestAutomationResultsHelpers.js': loadModule(
+                'js/postTestAutomationResultsHelpers.js',
+                makeRequire({}),
+                {}
+            ),
         }),
         allMocks
     );

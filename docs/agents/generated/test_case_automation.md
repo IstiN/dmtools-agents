@@ -36,7 +36,18 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `adoTextFormat`
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
   - `checkOpenPR`
+  - `configPath`
+  - `customStatuses`
+  - `featureBranchEnabled`
+  - `prSearchFnPath`
+  - `scmProvider`
+  - `stageFallback`
+  - `targetRepository`
+  - `trackerProvider`
 
 ### preCliJSAction: `preCliTestAutomationSetup.js`
 
@@ -48,6 +59,18 @@ _Pre-CLI Test Automation Setup Action (preCliJSAction for test_case_automation)_
 - Side effects:
   - git checkout
   - git merge
+- Parameters (customParams):
+  - `adoTextFormat`
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
+  - `configPath`
+  - `customStatuses`
+  - `featureBranchEnabled`
+  - `prSearchFnPath`
+  - `scmProvider`
+  - `stageFallback`
+  - `targetRepository`
+  - `trackerProvider`
 
 
 ### postJSAction: `postTestAutomationResults.js`
@@ -62,10 +85,27 @@ _Post Test Automation Results Action (postJSAction for test_case_automation)_
   - git push
   - git merge
 - Parameters (customParams):
+  - `adoTextFormat`
+  - `aiRepository`
   - `autoStartReview`
   - `autoStartReviewConfigFile`
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
+  - `configPath`
+  - `contentOutput`
+  - `contentOutput.target`
+  - `customStatuses`
+  - `featureBranchEnabled`
+  - `localTeammate`
+  - `prSearchFnPath`
+  - `projectKey`
   - `removeLabel`
+  - `scmProvider`
+  - `smFallback`
+  - `stageFallback`
+  - `targetRepository`
   - `testFilesGlob`
+  - `trackerProvider`
 
 
 ## LLM step
@@ -76,9 +116,26 @@ _Post Test Automation Results Action (postJSAction for test_case_automation)_
 ## Custom params
 
 - `removeLabel`: `"sm_test_automation_triggered"`
+- `adoTextFormat` _(used by JS action)_
+- `branchCreateFnPath` _(used by JS action)_
+- `branchNamingFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
+- `configPath` _(used by JS action)_
+- `customStatuses` _(used by JS action)_
+- `featureBranchEnabled` _(used by JS action)_
+- `prSearchFnPath` _(used by JS action)_
+- `scmProvider` _(used by JS action)_
+- `stageFallback` _(used by JS action)_
+- `targetRepository` _(used by JS action)_
+- `trackerProvider` _(used by JS action)_
+- `aiRepository` _(used by JS action)_
 - `autoStartReview` _(used by JS action)_
 - `autoStartReviewConfigFile` _(used by JS action)_
+- `contentOutput` _(used by JS action)_
+- `contentOutput.target` _(used by JS action)_
+- `localTeammate` _(used by JS action)_
+- `projectKey` _(used by JS action)_
+- `smFallback` _(used by JS action)_
 - `testFilesGlob` _(used by JS action)_
 
 ---

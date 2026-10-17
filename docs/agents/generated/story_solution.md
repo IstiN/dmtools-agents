@@ -64,14 +64,42 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `adoTextFormat`
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
   - `checkOpenPR`
+  - `configPath`
+  - `customStatuses`
+  - `featureBranchEnabled`
+  - `prSearchFnPath`
+  - `scmProvider`
+  - `stageFallback`
+  - `targetRepository`
+  - `trackerProvider`
 
 ### preCliJSAction: `preCliSolutionSetup.js`
 
 _Pre-CLI Solution Setup_
 
 - Source: `agents/js/preCliSolutionSetup.js`
-- No detected file I/O or side effects.
+- Parameters (customParams):
+  - `adoTextFormat`
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
+  - `childQuestions`
+  - `configPath`
+  - `contentOutput`
+  - `contexts`
+  - `customStatuses`
+  - `featureBranchEnabled`
+  - `fields`
+  - `jql`
+  - `parentContextFetch`
+  - `prSearchFnPath`
+  - `scmProvider`
+  - `stageFallback`
+  - `targetRepository`
+  - `trackerProvider`
 
 
 ### postJSAction: `writeSolutionAndDiagrams.js`
@@ -84,14 +112,30 @@ _Write Solution and Diagrams Post-Action_
   - move ticket to status (via tracker)
   - assign ticket (via tracker)
 - Parameters (customParams):
+  - `adoTextFormat`
+  - `aiRepository`
   - `autoStartDevelopment`
   - `autoStartDevelopmentConfigFile`
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
+  - `configPath`
   - `contentOutput`
+  - `contentOutput.target`
+  - `customStatuses`
   - `diagramField`
+  - `featureBranchEnabled`
+  - `localTeammate`
   - `outputType`
+  - `prSearchFnPath`
+  - `projectKey`
   - `removeLabel`
   - `requireDiagram`
+  - `scmProvider`
+  - `smFallback`
   - `solutionField`
+  - `stageFallback`
+  - `targetRepository`
+  - `trackerProvider`
 
 
 ## LLM step
@@ -102,13 +146,34 @@ _Write Solution and Diagrams Post-Action_
 ## Custom params
 
 - `removeLabel`: `"sm_story_solution_triggered"`
+- `adoTextFormat` _(used by JS action)_
+- `branchCreateFnPath` _(used by JS action)_
+- `branchNamingFnPath` _(used by JS action)_
 - `checkOpenPR` _(used by JS action)_
+- `configPath` _(used by JS action)_
+- `customStatuses` _(used by JS action)_
+- `featureBranchEnabled` _(used by JS action)_
+- `prSearchFnPath` _(used by JS action)_
+- `scmProvider` _(used by JS action)_
+- `stageFallback` _(used by JS action)_
+- `targetRepository` _(used by JS action)_
+- `trackerProvider` _(used by JS action)_
+- `childQuestions` _(used by JS action)_
+- `contentOutput` _(used by JS action)_
+- `contexts` _(used by JS action)_
+- `fields` _(used by JS action)_
+- `jql` _(used by JS action)_
+- `parentContextFetch` _(used by JS action)_
+- `aiRepository` _(used by JS action)_
 - `autoStartDevelopment` _(used by JS action)_
 - `autoStartDevelopmentConfigFile` _(used by JS action)_
-- `contentOutput` _(used by JS action)_
+- `contentOutput.target` _(used by JS action)_
 - `diagramField` _(used by JS action)_
+- `localTeammate` _(used by JS action)_
 - `outputType` _(used by JS action)_
+- `projectKey` _(used by JS action)_
 - `requireDiagram` _(used by JS action)_
+- `smFallback` _(used by JS action)_
 - `solutionField` _(used by JS action)_
 
 ---

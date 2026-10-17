@@ -62,4 +62,8 @@ jobs:
       silent-token: ${{ github.token }}
     secrets:
       SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+      # App auth (awf#52): minted installation token wins over the PAT
+      # inside the factory when both secrets are present.
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
       SILENT_GH_TOKEN: ${{ secrets.SILENT_GH_TOKEN }}
