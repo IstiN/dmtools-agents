@@ -1,1 +1,1 @@
-[{"id":"sh-2-hnazj11mvb1dxzkmd","command":"cat .dmtools-target-workingdir; echo; cat input/gh-1008/ticket.md","pid":"3282","startedAtMs":1792265770899},{"id":"sh-3-hnazj2jelq6lnv65","command":"cat input/gh-1008/ticket.json; echo \"---\"; ls dependencies 2>/dev/null; ls","pid":"3287","startedAtMs":1792265773394},{"id":"sh-5-hnazjbztsz1787xqh","command":"ls js/unit-tests/ | head -60; echo ---; grep -i 'testautomation' js/unit-tests/run_all.json js/unit-tests/*.json 2>/dev/null | head -20","pid":"3346","startedAtMs":1792265789277}]
+[]
