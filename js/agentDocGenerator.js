@@ -281,6 +281,73 @@ function collectCustomParamsUsage(src) {
     return found.sort();
 }
 
+/**
+ * Extract local relative require paths from a JS source, e.g.
+ *   require('./postTestAutomationResultsHelpers.js') → ./postTestAutomationResultsHelpers.js
+ * Built-in (non-relative) requires are ignored — only files next to the
+ * action source can carry customParams usage we need to document.
+ */
+function collectLocalRequires(src) {
+    var found = [];
+    var re = /require\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g;
+    var match;
+    while ((match = re.exec(src)) !== null) {
+        found.push(match[1]);
+    }
+    return found;
+}
+
+// Resolve a relative require specifier against the requiring file's path,
+// without relying on path.dirname/resolve (the unit-test mock only joins).
+function resolveLocalRequire(fromFile, reqPath) {
+    var base = fromFile.replace(/\\/g, '/');
+    var dir = base.substring(0, base.lastIndexOf('/'));
+    var parts = (dir + '/' + reqPath).split('/');
+    var out = [];
+    parts.forEach(function(p) {
+        if (p === '.' || p === '') return;
+        if (p === '..') { out.pop(); return; }
+        out.push(p);
+    });
+    return out.join('/');
+}
+
+/**
+ * Extract customParams paths used by a JS action source, e.g.
+ *   customParams.foo            → foo
+ *   customParams['bar']         → bar
+ *   customParams.contentOutput.target → contentOutput.target
+ *
+ * Local relative requires are followed transitively (with cycle protection):
+ * extractions like gh-961 move member accesses into helper modules next to
+ * the action, and the generated docs must keep documenting those params.
+ */
+function collectCustomParamsUsageFrom(filePath, src, visited) {
+    visited = visited || {};
+    if (visited[filePath]) return [];
+    visited[filePath] = true;
+
+    var found = [];
+    var seen = {};
+    function add(key) {
+        if (!seen[key]) {
+            seen[key] = true;
+            found.push(key);
+        }
+    }
+
+    collectCustomParamsUsage(src).forEach(add);
+
+    collectLocalRequires(src).forEach(function(reqPath) {
+        var resolved = resolveLocalRequire(filePath, reqPath);
+        var helperSrc = readSource(resolved);
+        if (!helperSrc) return;
+        collectCustomParamsUsageFrom(resolved, helperSrc, visited).forEach(add);
+    });
+
+    return found.sort();
+}
+
 function analyzeActionFile(filePath, phase) {
     var src = readSource(filePath);
     if (!src) {
@@ -296,7 +363,7 @@ function analyzeActionFile(filePath, phase) {
         description: firstJsDescription(src),
         artifacts: collectArtifacts(src, phase),
         effects: collectSideEffects(src),
-        paramsUsed: collectCustomParamsUsage(src)
+        paramsUsed: collectCustomParamsUsageFrom(filePath, src)
     };
 }
 

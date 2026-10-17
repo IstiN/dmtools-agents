@@ -36,7 +36,18 @@ _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
 - Parameters (customParams):
+  - `adoTextFormat`
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
   - `checkOpenPR`
+  - `configPath`
+  - `customStatuses`
+  - `featureBranchEnabled`
+  - `prSearchFnPath`
+  - `scmProvider`
+  - `stageFallback`
+  - `targetRepository`
+  - `trackerProvider`
 
 
 
@@ -46,10 +57,27 @@ _retryMergePR.js_
 
 - Source: `agents/js/retryMergePR.js`
 - Parameters (customParams):
+  - `adoTextFormat`
+  - `aiRepository`
   - `autoStartRework`
   - `autoStartReworkConfigFile`
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
+  - `configPath`
+  - `contentOutput`
+  - `contentOutput.target`
+  - `customStatuses`
+  - `featureBranchEnabled`
+  - `localTeammate`
+  - `prSearchFnPath`
+  - `projectKey`
   - `removeLabel`
+  - `scmProvider`
+  - `smFallback`
+  - `stageFallback`
+  - `targetRepository`
   - `testCaseMerge`
+  - `trackerProvider`
 
 
 ## LLM step
@@ -61,8 +89,25 @@ _retryMergePR.js_
 
 - `removeLabel`: `"sm_pr_merge_triggered"`
 - `checkOpenPR`: `true`
+- `adoTextFormat` _(used by JS action)_
+- `branchCreateFnPath` _(used by JS action)_
+- `branchNamingFnPath` _(used by JS action)_
+- `configPath` _(used by JS action)_
+- `customStatuses` _(used by JS action)_
+- `featureBranchEnabled` _(used by JS action)_
+- `prSearchFnPath` _(used by JS action)_
+- `scmProvider` _(used by JS action)_
+- `stageFallback` _(used by JS action)_
+- `targetRepository` _(used by JS action)_
+- `trackerProvider` _(used by JS action)_
+- `aiRepository` _(used by JS action)_
 - `autoStartRework` _(used by JS action)_
 - `autoStartReworkConfigFile` _(used by JS action)_
+- `contentOutput` _(used by JS action)_
+- `contentOutput.target` _(used by JS action)_
+- `localTeammate` _(used by JS action)_
+- `projectKey` _(used by JS action)_
+- `smFallback` _(used by JS action)_
 - `testCaseMerge` _(used by JS action)_
 
 ---
