@@ -308,62 +308,202 @@ function resolveSuggestionThreads(provider, prNumber, headSha, cfg) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// JSRunner entry point
+// gh-980: config/state resolution helpers extracted from action() — the
+// sm-style override-before-jobParams priority, verbatim semantics.
 // ─────────────────────────────────────────────────────────────────────────────
-function action(params) {
-    var p = params.jobParams || params;
-    var projectConfig = {};
-    try {
-        projectConfig = configLoader.loadProjectConfig({ configPath: p.configPath }) || {};
-    } catch (e) { projectConfig = {}; }
-    var override = projectConfig.machineSm || {};
 
+// Knob with an explicit-undefined override check: the project override wins
+// even over an explicit falsy jobParams value (e.g. dryRun:false).
+function pickKnob(overrideVal, pVal, dflt) {
+    return overrideVal !== undefined ? overrideVal : (pVal || dflt);
+}
+
+function resolveMaxResolveThreads(override, p, dflt) {
+    if (typeof override.maxResolveThreads === 'number' && override.maxResolveThreads > 0) {
+        return Math.floor(override.maxResolveThreads);
+    }
+    if (typeof p.maxResolveThreads === 'number' && p.maxResolveThreads > 0) {
+        return Math.floor(p.maxResolveThreads);
+    }
+    return dflt;
+}
+
+// gh-828: the post-APPROVE thread-resolution leg resolves ONLY threads
+// authored by the machine identities (the gh-728 comma-separated list
+// knob, same resolution chain as every other machine-keyed guard).
+// Unconfigured → empty list → the leg fails closed and resolves
+// nothing (human threads would otherwise be closed by the machine).
+// First truthy value among three candidates — the sm-style string-knob
+// defaulting pattern (override || jobParams || built-in default).
+function firstDefined(a, b, c) {
+    return a || b || c;
+}
+
+function resolveMachineSmConfig(p, projectConfig) {
+    var override = (projectConfig && projectConfig.machineSm) || {};
     var cfg = {
-        dryRun:            override.dryRun            !== undefined ? override.dryRun            : (p.dryRun || false),
-        maxConcurrentRuns: override.maxConcurrentRuns !== undefined ? override.maxConcurrentRuns : (p.maxConcurrentRuns || 1),
-        maxReworkRounds:   override.maxReworkRounds   !== undefined ? override.maxReworkRounds   : (p.maxReworkRounds || 2),
-        workflowFile:      override.workflowFile      || p.workflowFile   || 'ai-teammate.yml',
-        branchPrefix:      override.branchPrefix      || p.branchPrefix   || 'ai/gh-',
-        agentHandle:       override.agentHandle       || p.agentHandle    || 'ai-teammate',
-        issueLimit:        override.issueLimit        || p.issueLimit     || 50,
-        closeComment:      override.closeComment      || p.closeComment   || 'Machine SM: linked PR merged — closing the loop.'
+        dryRun:            pickKnob(override.dryRun, p.dryRun, false),
+        maxConcurrentRuns: pickKnob(override.maxConcurrentRuns, p.maxConcurrentRuns, 1),
+        maxReworkRounds:   pickKnob(override.maxReworkRounds, p.maxReworkRounds, 2),
+        workflowFile:      firstDefined(override.workflowFile, p.workflowFile, 'ai-teammate.yml'),
+        branchPrefix:      firstDefined(override.branchPrefix, p.branchPrefix, 'ai/gh-'),
+        agentHandle:       firstDefined(override.agentHandle, p.agentHandle, 'ai-teammate'),
+        issueLimit:        firstDefined(override.issueLimit, p.issueLimit, 50),
+        closeComment:      firstDefined(override.closeComment, p.closeComment, 'Machine SM: linked PR merged — closing the loop.')
     };
-    // gh-828: the post-APPROVE thread-resolution leg resolves ONLY threads
-    // authored by the machine identities (the gh-728 comma-separated list
-    // knob, same resolution chain as every other machine-keyed guard).
-    // Unconfigured → empty list → the leg fails closed and resolves
-    // nothing (human threads would otherwise be closed by the machine).
     cfg.machineLogins = machineAuthorModule.machineAuthorLogins(
         machineAuthorModule.resolveMachineAuthor(p, projectConfig));
     // gh-828 review round 4: same override-before-p priority as every other
     // machineSm knob — a project-config cap silently ignored would leave an
     // operator tuning the wrong bound.
-    cfg.maxResolveThreads = (typeof override.maxResolveThreads === 'number' && override.maxResolveThreads > 0)
-        ? Math.floor(override.maxResolveThreads)
-        : (typeof p.maxResolveThreads === 'number' && p.maxResolveThreads > 0)
-            ? Math.floor(p.maxResolveThreads) : reviewVerdictsModule.DEFAULT_RESOLVE_THREADS_CAP;
-    var repoCfg = (projectConfig.repository && projectConfig.repository.owner &&
-        projectConfig.repository.repo && projectConfig.repository) ||
-        (p.repository || (p.repo ? { owner: String(p.repo).split('/')[0], repo: String(p.repo).split('/')[1] } : null));
+    cfg.maxResolveThreads = resolveMaxResolveThreads(override, p,
+        reviewVerdictsModule.DEFAULT_RESOLVE_THREADS_CAP);
+    return cfg;
+}
+
+function resolveRepoCfg(projectConfig, p) {
+    var projectRepo = projectConfig && projectConfig.repository;
+    if (projectRepo && projectRepo.owner && projectRepo.repo) return projectRepo;
+    if (p.repository) return p.repository;
+    if (p.repo) return { owner: String(p.repo).split('/')[0], repo: String(p.repo).split('/')[1] };
+    return null;
+}
+
+function loadMachineSmProjectConfig(p) {
+    try {
+        return configLoader.loadProjectConfig({ configPath: p.configPath }) || {};
+    } catch (e) {
+        return {};
+    }
+}
+
+// Forge selection: scm.provider (github | gitlab) — scm.js contract.
+function resolveScmCfg(projectConfig, p) {
+    return (projectConfig.scm && projectConfig.scm.provider)
+        ? projectConfig.scm
+        : (p.scm || { provider: 'github' });
+}
+
+// Provider creation is fail-closed: the error string lands in the result.
+function createSmProviderOrError(scmCfg, repoCfg) {
+    try {
+        return { provider: smProviderModule.createSmProvider({ scm: scmCfg, repository: repoCfg }) };
+    } catch (e) {
+        return { error: String(e.message || e) };
+    }
+}
+
+// gh-952 (live fa 2026-10-17): a run whose linked PR is MERGED is
+// archaeology, not a slot event — it can never be consumed by the loop.
+// Probe result kinds: 'unknown' (issue indeterminate — never dropped),
+// 'merged' (release the slot), 'live', 'error' (fail closed — keep).
+function probeOrphanRun(provider, n, branchPrefix) {
+    if (n === 'unknown') return { kind: 'unknown' };
+    try {
+        var ref = provider.findPr(n, branchPrefix);
+        if (ref && ref.state === 'MERGED') return { kind: 'merged', prNumber: ref.number };
+        return { kind: 'live' };
+    } catch (eOrphan) {
+        return { kind: 'error' };
+    }
+}
+
+function filterLiveActiveIssues(provider, activeIssues, branchPrefix) {
+    return activeIssues.filter(function (n) {
+        var probe = probeOrphanRun(provider, n, branchPrefix);
+        if (probe.kind === 'merged') {
+            console.log('  🔓 gh-' + n + ': the active run\'s linked PR #' + probe.prNumber +
+                ' is MERGED (owner bypass) — it can never be consumed; releasing the slot (gh-952)');
+            return false;
+        }
+        if (probe.kind === 'error') {
+            console.warn('  ⚠️  gh-' + n + ': orphan-slot probe failed — keeping the run in the count (fail closed)');
+        }
+        return true;
+    });
+}
+
+// One issue through the reconcile loop: probe the linked PR, run the pure
+// decision core, execute (or plan, in dryRun) every action. Returns the
+// per-issue counters action() aggregates.
+function buildIssueState(provider, issue, branchPrefix, activeSet) {
+    var prRef = provider.findPr(issue.number, branchPrefix);
+    var pr = prRef && prRef.state === 'OPEN' ? provider.prStatus(prRef.number) : prRef;
+    return {
+        prRef: prRef,
+        pr: pr,
+        state: {
+            issue: issue,
+            pr: pr,
+            activeRunForIssue: !!activeSet[issue.number] || !!activeSet['unknown']
+        }
+    };
+}
+
+function planActionFields(a, prRef, pr) {
+    a.prNumber = prRef ? prRef.number : null;
+    a.headSha = (pr && pr.headSha) || null;
+}
+
+function logAction(issue, a, cfg) {
+    console.log('  ' + (cfg.dryRun ? '[dry] ' : '') + '▶️  gh-' + issue.number + ' ' +
+        a.type + (a.leg ? ':' + a.leg : '') + ' — ' + a.reason);
+}
+
+// Executes one non-skip action unless dryRun; returns 'planned' | 'acted' | 'failed'.
+function applyIssueAction(provider, issue, cfg, a) {
+    if (cfg.dryRun) return 'planned';
+    try {
+        executeAction(provider, a, issue, cfg);
+        return 'acted';
+    } catch (e) {
+        console.error('  ❌ gh-' + issue.number + ' ' + a.type + ' failed: ' + (e.message || e));
+        return 'failed';
+    }
+}
+
+function reconcileIssue(provider, issue, cfg, activeSet) {
+    var counters = { acted: 0, dispatched: 0, skipped: 0, failures: 0 };
+    var built = buildIssueState(provider, issue, cfg.branchPrefix, activeSet);
+    var acts = decideActions(built.state, cfg);
+    for (var i = 0; i < acts.length; i++) {
+        var a = acts[i];
+        if (a.type === 'skip') {
+            counters.skipped++;
+            console.log('  ⏭️  gh-' + issue.number + ': ' + a.reason);
+            continue;
+        }
+        planActionFields(a, built.prRef, built.pr);
+        logAction(issue, a, cfg);
+        var outcome = applyIssueAction(provider, issue, cfg, a);
+        if (outcome === 'failed') { counters.failures++; continue; }
+        counters.acted++;
+        if (a.type === 'dispatch') counters.dispatched++;
+    }
+    return counters;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JSRunner entry point
+// ─────────────────────────────────────────────────────────────────────────────
+function action(params) {
+    var p = params.jobParams || params;
+    var projectConfig = loadMachineSmProjectConfig(p);
+
+    var cfg = resolveMachineSmConfig(p, projectConfig);
+    var repoCfg = resolveRepoCfg(projectConfig, p);
 
     if (!repoCfg || !repoCfg.owner || !repoCfg.repo) {
         console.error('❌ machineSm: repository required (.dmtools/config.js repository or jobParams.repo owner/repo)');
         return { success: false, error: 'Missing repo' };
     }
 
-    // Forge selection: scm.provider (github | gitlab) — scm.js contract.
-    var scmCfg = (projectConfig.scm && projectConfig.scm.provider)
-        ? projectConfig.scm
-        : (p.scm || { provider: 'github' });
-    var provider;
-    try {
-        provider = smProviderModule.createSmProvider({
-            scm: scmCfg, repository: repoCfg
-        });
-    } catch (e) {
-        console.error('❌ machineSm: ' + (e.message || e));
-        return { success: false, error: String(e.message || e) };
+    var providerResult = createSmProviderOrError(resolveScmCfg(projectConfig, p), repoCfg);
+    if (providerResult.error !== undefined) {
+        console.error('❌ machineSm: ' + providerResult.error);
+        return { success: false, error: providerResult.error };
     }
+    var provider = providerResult.provider;
 
     console.log('Machine SM — ' + repoCfg.owner + '/' + repoCfg.repo + ' [' + provider.provider + ']' +
         (cfg.dryRun ? ' [DRY RUN]' : '') + ' (cap ' + cfg.maxConcurrentRuns + ', rounds ' + cfg.maxReworkRounds + ')');
@@ -371,31 +511,7 @@ function action(params) {
     // 1. Global concurrency gate — the user contract: with parallel runs
     //    in flight, wait them out; the cron tick re-fires soon.
     var activeIssues = provider.activeMachineRuns(cfg.workflowFile);
-    // gh-952 (live fa 2026-10-17): release the slot for orphaned runs. PR
-    // #1661 was merged by the OWNER via bypass while its machine run was
-    // still active — the run outlived its issue's lifecycle and can never
-    // be consumed by the loop, but activeMachineRuns kept counting it, so
-    // the gate saw a busy machine on EVERY tick ('⏳ idle — active machine
-    // run(s) for issue(s) 1661') and the approved queue starved, arms
-    // nobody. A run whose linked PR is MERGED is archaeology, not a slot
-    // event — drop it from the count (the reconcile loop below still
-    // closes the issue via the Fixes #N safety net). Fail closed: a probe
-    // error or an unresolvable PR keeps the run in the count, and the
-    // 'unknown' placeholder (run's issue indeterminate) is never dropped.
-    var liveActiveIssues = activeIssues.filter(function (n) {
-        if (n === 'unknown') return true;
-        try {
-            var orphanRef = provider.findPr(n, cfg.branchPrefix);
-            if (orphanRef && orphanRef.state === 'MERGED') {
-                console.log('  🔓 gh-' + n + ': the active run\'s linked PR #' + orphanRef.number +
-                    ' is MERGED (owner bypass) — it can never be consumed; releasing the slot (gh-952)');
-                return false;
-            }
-        } catch (eOrphan) {
-            console.warn('  ⚠️  gh-' + n + ': orphan-slot probe failed — keeping the run in the count (fail closed)');
-        }
-        return true;
-    });
+    var liveActiveIssues = filterLiveActiveIssues(provider, activeIssues, cfg.branchPrefix);
     if (liveActiveIssues.length >= cfg.maxConcurrentRuns) {
         console.log('  ⏳ idle — active machine run(s) for ' +
             (liveActiveIssues.join(', ') === 'unknown' ? 'this project' : 'issue(s) ' + liveActiveIssues.join(', ')) +
@@ -413,34 +529,11 @@ function action(params) {
     liveActiveIssues.forEach(function (n) { activeSet[n] = true; });
 
     issues.forEach(function (issue) {
-        var prRef = provider.findPr(issue.number, cfg.branchPrefix);
-        var pr = prRef && prRef.state === 'OPEN' ? provider.prStatus(prRef.number) : prRef;
-        var state = {
-            issue: issue,
-            pr: pr,
-            activeRunForIssue: !!activeSet[issue.number] || !!activeSet['unknown']
-        };
-        var acts = decideActions(state, cfg);
-        acts.forEach(function (a) {
-            if (a.type === 'skip') {
-                skipped++;
-                console.log('  ⏭️  gh-' + issue.number + ': ' + a.reason);
-                return;
-            }
-            a.prNumber = prRef ? prRef.number : null;
-            a.headSha = (pr && pr.headSha) || null;
-            console.log('  ' + (cfg.dryRun ? '[dry] ' : '') + '▶️  gh-' + issue.number + ' ' +
-                a.type + (a.leg ? ':' + a.leg : '') + ' — ' + a.reason);
-            if (cfg.dryRun) { acted++; if (a.type === 'dispatch') dispatched++; return; }
-            try {
-                executeAction(provider, a, issue, cfg);
-                acted++;
-                if (a.type === 'dispatch') dispatched++;
-            } catch (e) {
-                failures++;
-                console.error('  ❌ gh-' + issue.number + ' ' + a.type + ' failed: ' + (e.message || e));
-            }
-        });
+        var counters = reconcileIssue(provider, issue, cfg, activeSet);
+        acted += counters.acted;
+        dispatched += counters.dispatched;
+        skipped += counters.skipped;
+        failures += counters.failures;
     });
 
     console.log('\n══ Machine SM complete — acted: ' + acted + ' (dispatched ' + dispatched +
@@ -453,6 +546,10 @@ if (typeof module !== 'undefined' && module.exports) {
         action: action,
         decideActions: decideActions,
         issueFromRunTitle: issueFromRunTitle,
-        resolveSuggestionThreads: resolveSuggestionThreads
+        resolveSuggestionThreads: resolveSuggestionThreads,
+        resolveMachineSmConfig: resolveMachineSmConfig,
+        resolveRepoCfg: resolveRepoCfg,
+        probeOrphanRun: probeOrphanRun,
+        filterLiveActiveIssues: filterLiveActiveIssues
     };
 }
