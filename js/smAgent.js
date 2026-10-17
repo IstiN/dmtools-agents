@@ -1932,8 +1932,32 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                               ' > park ' + parkedAtVf + ')';
                     }
                     if (actorVf === null || parkedAtVf === null) {
-                        console.warn('  ⚠️  ' + key + ' ' + parkLabelVf +
-                            ': park probe failed (substantive commit / park time) — keeping the park (fail closed)');
+                        // gh-952 (live fa 2026-10-17): PROBE-OUTAGE exemption
+                        // for MACHINE-authored PRs with a sha-keyed park
+                        // comment. Both self-clear rungs below sit behind the
+                        // substantive-commit/park-time probes — during the
+                        // CLI outage that froze fa's queue every probe came
+                        // back null and this branch fail-closed HOLD each
+                        // tick, so a machine park with a moved head was
+                        // permanent (gh-750's own comment: 'the park is
+                        // permanent'). The park comment's parked-head sha
+                        // needs NONE of those probes: it names the sha the
+                        // park punished, so any different current sha proves
+                        // the head moved, and the memoized dispatched-verdict
+                        // probe (fail-open by #633 design) guards the fresh
+                        // head. Guests keep their contracts in full — none
+                        // of this evaluates for them (fa#923/#681/#1249
+                        // pins): the guest pins below still hold.
+                        if (isMachinePrU && uHead && parkedHeadVf &&
+                                uHead !== parkedHeadVf &&
+                                probeHeadVerdictVf() !== 'failure') {
+                            clearStalePark952(effectiveRepoInfo, ticket, uHead,
+                                parkedHeadVf, key);
+                            unparkedThisPass = true;
+                        } else {
+                            console.warn('  ⚠️  ' + key + ' ' + parkLabelVf +
+                                ': park probe failed (substantive commit / park time) — keeping the park (fail closed)');
+                        }
                     } else if (headChangedNoVerdictVf) {
                         if (!DRY) {
                             try {
@@ -1968,25 +1992,6 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         console.log('  ▶ ' + key + ' ' + parkLabelVf +
                             ' cleared: machine-authored PR, ' + machineUnparkWhyVf +
                             ' — re-validating (the park had no self-clear path, gh-750)');
-                        unparkedThisPass = true;
-                    } else if (staleParkHeadMovedClean(effectiveRepoInfo, uHead, parkedAtVf,
-                                parkedHeadVf, probeHeadVerdictVf)) {
-                        // gh-952 (live fa 2026-10-17): STALE-LABEL CLEANUP —
-                        // the park's red verdict belongs to a sha that no
-                        // longer exists. The #633 rung above needs the park
-                        // comment's parked-head sha (the fail_validation
-                        // guest park and the zombie/convergence parks never
-                        // write one) and the gh-750 rung needs a
-                        // machine-authored PR — a guest park whose head
-                        // moved via silent refreshes could outlive its
-                        // verdict FOREVER (the human-push reset can never
-                        // fire), freezing the validate-armed queue head.
-                        // Same #633 ruling, sha-comment independent: the
-                        // CURRENT head postdates the park event AND carries
-                        // no red dispatched verdict of its own → the old
-                        // verdict is void here → clear and let validate-armed
-                        // re-arm the fresh head. Fails closed on every probe.
-                        clearStalePark952(effectiveRepoInfo, ticket, uHead, parkedAtVf, key);
                         unparkedThisPass = true;
                     } else if (machinePushVf) {
                         console.log('  🅿️  ' + key + ' ' + parkLabelVf +
