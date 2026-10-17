@@ -97,10 +97,126 @@ function clearStaleReviewOutputs() {
     }
 }
 
+// gh-965: ticket summary for the PR title — falls back to the ticket key when
+// the tracker issue or its summary is unavailable.
+function prTitleSummary(ticket, ticketKey) {
+    return ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
+}
+
+// gh-965: creates the review PR for an existing test branch and re-fetches it
+// so downstream code gets a consistent PR shape from the SCM. Throws on failure.
+function createReviewPrForBranch(scm, ticketKey, branchName, config) {
+    const ticket = getTracker().getIssue(ticketKey);
+    const prTitle = configLoader.formatTemplate(config.formats.prTitle.testAutomation,
+        {ticketKey: ticketKey, ticketSummary: prTitleSummary(ticket, ticketKey)});
+
+    const prResult = prHelper.createPullRequest({
+        scm: scm,
+        title: prTitle,
+        branchName: branchName,
+        baseBranch: config.git.baseBranch,
+        // gh-737: merge bot links approved issues via 'Closes #N' —
+        // emit it by construction on this auto-created review PR.
+        ticketKey: ticketKey,
+        bodyContent: 'Auto-created PR for test automation review.\n\nTicket: ' + ticketKey
+    });
+    if (!prResult || !prResult.success) {
+        throw new Error((prResult && prResult.error) || 'Failed to create PR/MR');
+    }
+
+    console.log('✅ Created new PR/MR for review:', prResult.prUrl || '(URL unknown)');
+    const found = findTestPRForTicket(scm, ticketKey);
+    if (!found) {
+        throw new Error('PR was created but could not be found immediately after creation');
+    }
+    return found;
+}
+
+// gh-965: the "no open/merged PR" decision. Re-automation when the remote
+// branch is gone; otherwise create the review PR. Returns { found } to proceed
+// with review, or { result: false } when action() must abort.
+function ensureReviewPrExists(scm, ticketKey, config, jiraConfig, issueType) {
+    const branchName = 'test/' + ticketKey;
+    console.log('No PR found. Checking if branch exists on remote:', branchName);
+
+    if (!remoteBranchExistsOnOrigin(branchName)) {
+        // No branch at all — needs re-automation from scratch
+        const err = 'No test PR and no remote branch found for test/' + ticketKey + '. Ticket needs re-automation.';
+        try {
+            getTracker().postComment(ticketKey, 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n_Moving to In Rework so it can be re-automated._');
+            getTracker().moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
+        } catch (e) {}
+        return { result: false };
+    }
+
+    // Branch exists — create a new PR/MR so review can proceed
+    console.log('Branch exists but no PR — creating PR for review...');
+    try {
+        return { found: createReviewPrForBranch(scm, ticketKey, branchName, config) };
+    } catch (createErr) {
+        if (isNoCommitsError(createErr)) {
+            console.log('Branch test/' + ticketKey + ' has no commits ahead of main — test code is already merged.');
+            finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType, jiraConfig);
+            return { result: false };
+        }
+        postReviewSetupFailed(ticketKey,
+            'Branch test/' + ticketKey + ' exists but could not create PR: ' + createErr.toString(),
+            '_Review cancelled._');
+        return { result: false };
+    }
+}
+
+// gh-965: PR already merged — move ticket to final status without re-reviewing.
+function handleAlreadyMergedPr(ticketKey, pr, issueType, jiraConfig) {
+    markTestPrMerged(ticketKey);
+    try {
+        const ticket = getTracker().getIssue(ticketKey);
+        const finalStatus = resolveFinalStatus(ticket, issueType, jiraConfig, getTracker());
+        // gh-916: the final status (Passed/Failed/In Testing) can be tag-only — stage-label fallback.
+        const moved = getTracker().moveToStatusOrMark(ticketKey, finalStatus,
+            issueType === jiraConfig.issueTypes.TEST_CASE
+                ? (finalStatus === jiraConfig.statuses.FAILED ? 'FAILED' : 'PASSED')
+                : 'IN_TESTING');
+        if (moved.moved || moved.marked) {
+            getTracker().postComment(ticketKey, 'h3. ✅ Test PR Already Merged\n\n' +
+                    'PR [#' + pr.number + '|' + pr.html_url + '] for branch {code}test/' + ticketKey + '{code} was already merged.\n\n' +
+                    'Skipping re-review — moved ticket to *' + finalStatus + '*.');
+            console.log('✅ PR already merged — moved', ticketKey, 'to', finalStatus);
+        }
+    } catch (e) {
+        console.warn('Failed to handle already-merged PR:', e);
+    }
+}
+
+// gh-965: a PR whose diff is empty carries no test code to review.
+function hasNoChanges(prDetails) {
+    var changedFiles = prDetails.changed_files;
+    return typeof changedFiles === 'number' && changedFiles === 0;
+}
+
 function isNoCommitsError(error) {
     const msg = error && error.toString ? error.toString() : String(error);
     return msg.indexOf('No commits between') !== -1 ||
            msg.indexOf('no commits between') !== -1;
+}
+
+// gh-965: setup-failure comment shared by every abort-before-review path.
+function postReviewSetupFailed(ticketKey, err, note) {
+    try {
+        getTracker().postComment(ticketKey, 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n' + note);
+    } catch (e) {}
+}
+
+// gh-965: probes origin for the test branch via ls-remote (stderr-noise tolerant:
+// the check is on a real refs/heads/<name> line, not capture non-emptiness).
+function remoteBranchExistsOnOrigin(branchName) {
+    try {
+        const lsOutput = cli_execute_command({ command: 'git ls-remote --heads origin ' + branchName }) || '';
+        return lsOutput.indexOf('refs/heads/' + branchName) !== -1;
+    } catch (e) {
+        console.warn('Could not check remote branch:', e);
+        return false;
+    }
 }
 
 function getIssueType(params) {
@@ -194,95 +310,22 @@ function action(params) {
         // Step 1: GitHub repo info
         var repoInfo = scm.getRemoteRepoInfo();
         if (!repoInfo) {
-            const err = 'Could not determine repository from git remote';
-            try { getTracker().postComment(ticketKey, 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n_Review cancelled._'); } catch (e) {}
+            postReviewSetupFailed(ticketKey, 'Could not determine repository from git remote', '_Review cancelled._');
             return false;
         }
 
         // Step 2: Find PR on test/{KEY} branch specifically
         var found = findTestPRForTicket(scm, ticketKey);
         if (!found) {
-            // No open/merged PR — check if the test branch exists on remote
-            const branchName = 'test/' + ticketKey;
-            console.log('No PR found. Checking if branch exists on remote:', branchName);
-            var branchExists = false;
-            try {
-                const lsOutput = cli_execute_command({ command: 'git ls-remote --heads origin ' + branchName }) || '';
-                branchExists = lsOutput.indexOf('refs/heads/' + branchName) !== -1;
-            } catch (e) {
-                console.warn('Could not check remote branch:', e);
-            }
-
-            if (!branchExists) {
-                // No branch at all — needs re-automation from scratch
-                const err = 'No test PR and no remote branch found for test/' + ticketKey + '. Ticket needs re-automation.';
-                try {
-                    getTracker().postComment(ticketKey, 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n_Moving to In Rework so it can be re-automated._');
-                    getTracker().moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
-                } catch (e) {}
-                return false;
-            }
-
-            // Branch exists — create a new PR/MR so review can proceed
-            console.log('Branch exists but no PR — creating PR for review...');
-            try {
-                const ticket = getTracker().getIssue(ticketKey);
-                const summary = ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
-                const prTitle = configLoader.formatTemplate(config.formats.prTitle.testAutomation, {ticketKey: ticketKey, ticketSummary: summary});
-
-                const prResult = prHelper.createPullRequest({
-                    scm: scm,
-                    title: prTitle,
-                    branchName: branchName,
-                    baseBranch: config.git.baseBranch,
-                    // gh-737: merge bot links approved issues via 'Closes #N' —
-                    // emit it by construction on this auto-created review PR.
-                    ticketKey: ticketKey,
-                    bodyContent: 'Auto-created PR for test automation review.\n\nTicket: ' + ticketKey
-                });
-                if (!prResult || !prResult.success) {
-                    throw new Error((prResult && prResult.error) || 'Failed to create PR/MR');
-                }
-
-                console.log('✅ Created new PR/MR for review:', prResult.prUrl || '(URL unknown)');
-                // Re-fetch so downstream code gets a consistent PR shape from the SCM.
-                found = findTestPRForTicket(scm, ticketKey);
-                if (!found) {
-                    throw new Error('PR was created but could not be found immediately after creation');
-                }
-            } catch (createErr) {
-                if (isNoCommitsError(createErr)) {
-                    console.log('Branch test/' + ticketKey + ' has no commits ahead of main — test code is already merged.');
-                    finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType, jiraConfig);
-                    return false;
-                }
-                const err = 'Branch test/' + ticketKey + ' exists but could not create PR: ' + createErr.toString();
-                try { getTracker().postComment(ticketKey, 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n_Review cancelled._'); } catch (e) {}
-                return false;
-            }
+            // No open/merged PR — re-automate, or create a review PR for the existing branch
+            var ensured = ensureReviewPrExists(scm, ticketKey, config, jiraConfig, issueType);
+            if (ensured.result !== undefined) return ensured.result;
+            found = ensured.found;
         }
 
         // If PR is already merged — move ticket to final status without re-reviewing
         if (found.merged) {
-            const pr = found.pr;
-            markTestPrMerged(ticketKey);
-            try {
-                const ticket = getTracker().getIssue(ticketKey);
-                const finalStatus = resolveFinalStatus(ticket, issueType, jiraConfig, getTracker());
-                // gh-916: the final status (Passed/Failed/In Testing) can be tag-only — stage-label fallback.
-                const moved = getTracker().moveToStatusOrMark(ticketKey, finalStatus,
-                    issueType === jiraConfig.issueTypes.TEST_CASE
-                        ? (finalStatus === jiraConfig.statuses.FAILED ? 'FAILED' : 'PASSED')
-                        : 'IN_TESTING');
-                if (moved.moved || moved.marked) {
-                    getTracker().postComment(ticketKey, 'h3. ✅ Test PR Already Merged\n\n' +
-                            'PR [#' + pr.number + '|' + pr.html_url + '] for branch {code}test/' + ticketKey + '{code} was already merged.\n\n' +
-                            'Skipping re-review — moved ticket to *' + finalStatus + '*.');
-                    console.log('✅ PR already merged — moved', ticketKey, 'to', finalStatus);
-                }
-            } catch (e) {
-                console.warn('Failed to handle already-merged PR:', e);
-            }
+            handleAlreadyMergedPr(ticketKey, found.pr, issueType, jiraConfig);
             return false;
         }
 
@@ -300,15 +343,14 @@ function action(params) {
         // Step 3: PR details
         const prDetails = gh.getPRDetails(scm, pr.number);
         if (!prDetails) {
-            try { getTracker().postComment(ticketKey, 'h3. ⚠️ Test PR Review Setup Failed\n\nCould not fetch details for PR #' + pr.number + '.\n\n_Review cancelled._'); } catch (e) {}
+            postReviewSetupFailed(ticketKey, 'Could not fetch details for PR #' + pr.number + '.', '_Review cancelled._');
             return false;
         }
 
         const branchName = prDetails.head ? prDetails.head.ref : null;
 
         // If the PR has no actual changes, the test code is already in main. Finalize and skip review.
-        var changedFiles = prDetails.changed_files;
-        if (typeof changedFiles === 'number' && changedFiles === 0) {
+        if (hasNoChanges(prDetails)) {
             console.log('PR #' + pr.number + ' has 0 changed files — test code is already in main');
             finalizeAlreadyMergedTestCase(ticketKey, branchName || ('test/' + ticketKey), issueType, jiraConfig);
             return false;
