@@ -12546,3 +12546,168 @@ suite('smAgent: targetStatus stage-label fallback (gh-916)', function() {
         assert.deepEqual(added, [{ key: 'T-12', label: 'stage_ready_for_testing' }]);
     });
 });
+
+suite('smAgent: stale validation_failed label cleanup (gh-952)', function () {
+    // Live fa 2026-10-17 (gh-952): the approved queue head carried a STALE
+    // validation_failed label from an OLDER head. The park's red verdict
+    // belonged to a sha that no longer exists — the head moved since (the
+    // silent refreshes merged main in) and the fresh head carries no red
+    // dispatched verdict of its own. None of the reset rungs could clear
+    // it: the #633 head-change path needs the park comment's parked-head
+    // sha (the fail_validation guest park and the zombie/convergence parks
+    // never write one) and the gh-750 machine self-clear needs a
+    // machine-authored PR. The park outlived its verdict, validate-armed's
+    // notLabels excluded the queue head forever, and the whole approved
+    // FIFO starved for 3+h behind a label that punished a dead sha.
+    // gh-952 rung: the park clears when the CURRENT head postdates the
+    // park event AND carries no red verdict of its own — the verdict does
+    // not transfer across sha changes (#633's ruling, sha-comment
+    // independent). Fails closed on every probe error.
+
+    var PARK_RESET = { source: 'github', query: { type: 'pr',
+        labels: ['validation_failed'], notLabels: ['ai_validating', 'blocked'], draft: false },
+        localAction: 'update_branch', limit: 10, id: 'park-reset' };
+
+    function gh952Config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+    function parkedItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['validation_failed'], prNumber: n, draft: false,
+                   branch: 'ai/gh-' + n, headSha: '11ab22cd3' + n, author: 'vendor-human' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+    var HEAD = 'cc445566ccdd';
+    var PARKED_AT = '2026-10-17T05:00:00Z';
+    // The head MOVED via the machine's silent refresh (merge-of-main by the
+    // sm-silent-update identity, ai-teammate login) — exactly the gh-952
+    // shape: machine movement never satisfies the HUMAN-push reset, and
+    // being a guest PR it never evaluates the gh-750 machine self-clear.
+    var HEAD_COMMIT = { login: 'ai-teammate', date: '2026-10-17T07:30:00Z',
+                        committer: 'sm-silent-update', sha: HEAD, parents: [] };
+    // Answers the three park probes by command shape (vfCli idiom): the
+    // events probe (park time), the commits probe (head actor) and the
+    // dispatched-verdict probe (runs?head_sha=).
+    function gh952Cli(opts) {
+        return function (cmd) {
+            var c = cmd.command || '';
+            if (c.indexOf('/events?per_page=100') !== -1) {
+                return opts.parkedAt === undefined ? '"' + PARKED_AT + '"' : opts.parkedAt;
+            }
+            if (c.indexOf('/commits/' + HEAD + '"') !== -1 && /--jq '\{login/.test(c)) {
+                return JSON.stringify(opts.headActor === undefined ? HEAD_COMMIT : opts.headActor);
+            }
+            if (c.indexOf('/actions/workflows/quality.yml/runs?head_sha=') !== -1) {
+                return JSON.stringify({ workflow_runs: opts.dispatchedRuns || [] });
+            }
+            return '';
+        };
+    }
+    var GREEN_RUN = { status: 'completed', conclusion: 'success', id: 9001 };
+    var RED_RUN = { status: 'completed', conclusion: 'failure', id: 9002 };
+    var NO_PARKED_SHA_COMMENTS = [];
+
+    test('gh-952 RED: a sha-less park clears when the head moved past the park carrying no red verdict of its own', function () {
+        // The fail_validation GUEST park writes NO parked-head comment
+        // (prComments empty) — parkedHeadSha returns '' and the #633
+        // head-change rung is dead. The verdict belongs to the OLD sha;
+        // the current head is newer than the park event and carries a
+        // green dispatched verdict. The label must clear so validate-armed
+        // can re-arm the fresh head.
+        var sm = makeSmAgent(Object.assign(gh952Config('a', 'b'), {
+            github: {
+                items: [parkedItem(1563, { headSha: undefined })],
+                pr: { number: 1563, head: { sha: HEAD, ref: 'ai/gh-1563' } },
+                prComments: NO_PARKED_SHA_COMMENTS,
+                prStatus: { checkConclusion: 'green' }
+            },
+            onCliExecute: gh952Cli({ dispatchedRuns: [GREEN_RUN] })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [PARK_RESET] } });
+
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.label === 'validation_failed';
+        }), 'the stale park clears: ' + JSON.stringify(sm.capturedPrLabelRemoves));
+        assert.ok(sm.capturedPrComments.some(function (c) {
+            return c.body.indexOf('🅿️→▶') !== -1 && c.body.indexOf('gh-952') !== -1;
+        }), 'the clear comment names the rung: ' + JSON.stringify(sm.capturedPrComments.map(function (c) { return c.body; })));
+        assert.ok(sm.capturedIoCacheDrops.some(function (d) {
+            return d.kind === 'openPrs' && d.owner === 'a' && d.repo === 'b';
+        }), 'the open-PR cache drops so validate-armed re-queries the same tick (same-tick slot yield)');
+        assert.ok(!sm.capturedCliCommands.some(function (c) {
+            return (c.command || '').indexOf('gh workflow run') === 0;
+        }), 'park-reset never dispatches CI itself');
+    });
+
+    test('gh-952: a red verdict ON the fresh head keeps the park (the verdict re-justifies itself)', function () {
+        var sm = makeSmAgent(Object.assign(gh952Config('a', 'b'), {
+            github: {
+                items: [parkedItem(1564, { headSha: undefined })],
+                pr: { number: 1564, head: { sha: HEAD, ref: 'ai/gh-1564' } },
+                prComments: NO_PARKED_SHA_COMMENTS,
+                prStatus: { checkConclusion: 'red' }
+            },
+            onCliExecute: gh952Cli({ dispatchedRuns: [RED_RUN] })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [PARK_RESET] } });
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'a red fresh head stays parked');
+    });
+
+    test('gh-952: the head PREDATING the park event keeps the park (nothing moved)', function () {
+        var sm = makeSmAgent(Object.assign(gh952Config('a', 'b'), {
+            github: {
+                items: [parkedItem(1565, { headSha: undefined })],
+                pr: { number: 1565, head: { sha: HEAD, ref: 'ai/gh-1565' } },
+                prComments: NO_PARKED_SHA_COMMENTS,
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: gh952Cli({
+                headActor: { login: 'ai-teammate', date: '2026-10-17T04:00:00Z',
+                             committer: 'sm-silent-update', sha: HEAD, parents: [] },
+                dispatchedRuns: [GREEN_RUN]
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [PARK_RESET] } });
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'the head is the parked sha in all but name — the verdict still describes it');
+    });
+
+    test('gh-952: a park-time probe failure keeps the park (fail closed)', function () {
+        var sm = makeSmAgent(Object.assign(gh952Config('a', 'b'), {
+            github: {
+                items: [parkedItem(1566, { headSha: undefined })],
+                pr: { number: 1566, head: { sha: HEAD, ref: 'ai/gh-1566' } },
+                prComments: NO_PARKED_SHA_COMMENTS,
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: gh952Cli({ parkedAt: '""', dispatchedRuns: [GREEN_RUN] })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [PARK_RESET] } });
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'no park event → no head-moved evidence → the park stands');
+    });
+
+    test('gh-952: a parked-head sha KNOWN and EQUAL to the current head keeps the park', function () {
+        // The legacy parks DO carry the marker; when it names the current
+        // sha the #633 rung correctly declines (no head change) — gh-952
+        // must not widen the clear past it.
+        var sm = makeSmAgent(Object.assign(gh952Config('a', 'b'), {
+            github: {
+                items: [parkedItem(1567, { headSha: undefined })],
+                pr: { number: 1567, head: { sha: HEAD, ref: 'ai/gh-1567' } },
+                prComments: [{ body: '🛑 validation_failed — parked-head: ' + HEAD }],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: gh952Cli({ dispatchedRuns: [GREEN_RUN] })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [PARK_RESET] } });
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'the sha-keyed verdict still describes THIS head — the park stands');
+    });
+});

@@ -435,3 +435,95 @@ suite('machineSm cfg knobs — gh-828 review round 4 (override priority)', funct
         assert.equal(resolved.length, 7, 'all 7 eligible threads resolve under the default cap of 20');
     });
 });
+
+suite('machineSm: merged slot-holder releases the concurrency slot (gh-952)', function () {
+    // Live fa 2026-10-17 (gh-952): PR #1661 was merged by the OWNER via
+    // bypass while the machine's validation run for it was still active.
+    // The run outlived its issue's lifecycle — and activeMachineRuns kept
+    // counting it, so the global concurrency gate (maxConcurrentRuns=1)
+    // saw a busy machine on EVERY tick: '⏳ idle — active machine run(s)
+    // for issue(s) 1661'. Four+ SM ticks never reconciled anything, the
+    // approved queue starved, arms nobody. A run whose issue's linked PR
+    // is MERGED can never be consumed by the loop — the slot must release.
+
+    var rvReal = function () {
+        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        return rvReal.mod;
+    };
+    var maReal = function () {
+        if (!maReal.mod) maReal.mod = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+        return maReal.mod;
+    };
+
+    function loadAgent() {
+        var holder = { provider: null };
+        var agent = loadModule('js/machineSmAgent.js', makeRequire({
+            './configLoader.js': { loadProjectConfig: function () { return {}; } },
+            './common/smProvider.js': { createSmProvider: function () { return holder.provider; } },
+            './common/reviewVerdicts.js': rvReal(),
+            './common/machineAuthor.js': maReal()
+        }), {
+            cli_execute_command: function () { return '{}'; }
+        });
+        return { agent: agent, holder: holder };
+    }
+
+    function providerWith(activeIssues, prStateByIssue, recorded) {
+        return {
+            activeMachineRuns: function () { return activeIssues; },
+            listMachineIssues: function () {
+                return [
+                    { number: 1661, title: 'gh-1661', labels: ['ai_developed'], assignees: [] },
+                    { number: 2001, title: 'gh-2001', labels: ['agent:dev'], assignees: [] }
+                ];
+            },
+            findPr: function (n) {
+                if (prStateByIssue[n]) return { number: 1661, state: prStateByIssue[n] };
+                return null;
+            },
+            prStatus: function () { return null; },
+            dispatchLeg: function (issue, leg) { recorded.dispatched.push({ issue: issue, leg: leg }); },
+            closeIssue: function (issue) { recorded.closed.push(issue); },
+            merge: function () {},
+            updateBranch: function () {},
+            addIssueLabel: function () {}
+        };
+    }
+
+    function run(agent) {
+        return agent.action({ jobParams: { repo: 'o/r', machineAuthor: 'ai-teammate' } });
+    }
+
+    test('gh-952 RED: an active run whose linked PR is MERGED does not idle the machine', function () {
+        var recorded = { dispatched: [], closed: [] };
+        var loaded = loadAgent();
+        loaded.holder.provider = providerWith([1661], { 1661: 'MERGED' }, recorded);
+        var out = run(loaded.agent);
+
+        assert.equal(out.idle, undefined, 'the orphaned run must not hold the slot');
+        assert.equal(recorded.dispatched.length, 1, 'the dev leg dispatches the same tick');
+        assert.equal(recorded.dispatched[0].issue, 2001, 'the live issue gets its leg');
+        assert.deepEqual(recorded.closed, [1661], 'the merged-PR issue still closes (Fixes #N safety net)');
+    });
+
+    test('an active run for an issue with an OPEN linked PR still holds the slot', function () {
+        var recorded = { dispatched: [], closed: [] };
+        var loaded = loadAgent();
+        loaded.holder.provider = providerWith([2001], { 2001: 'OPEN' }, recorded);
+        var out = run(loaded.agent);
+
+        assert.equal(out.idle, true, 'the concurrency contract stands for live runs');
+        assert.equal(out.waitingFor.join(','), '2001');
+        assert.equal(recorded.dispatched.length, 0, 'nothing dispatches while the machine is busy');
+    });
+
+    test('a mixed set releases only the orphaned runs', function () {
+        var recorded = { dispatched: [], closed: [] };
+        var loaded = loadAgent();
+        loaded.holder.provider = providerWith([1661, 2001], { 1661: 'MERGED', 2001: 'OPEN' }, recorded);
+        var out = run(loaded.agent);
+
+        assert.equal(out.idle, true, 'one live run at cap 1 still gates the tick');
+        assert.deepEqual(out.waitingFor, [2001], 'the gate waits on the LIVE run only — the orphan is invisible');
+    });
+});
