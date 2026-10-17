@@ -26,6 +26,9 @@ var gh = require('./common/githubHelpers.js');
 const commentMarkup = require('./common/commentMarkup.js');
 var reviewVerdicts = require('./common/reviewVerdicts.js');
 var reviewSpecClaims = require('./common/reviewSpecClaims.js');
+// The runtime's input folder name for a ticket (input/gh-N for a GitHub key): the Java runtime
+// passes params.inputFolderPath to pre-CLI actions only, so a post-action derives it.
+var ticketKeyShapes = require('./common/ticketKeyShapes.js');
 
 var RESUME_MARKER = 'outputs/.pr-review-missing-output-resume-attempted';
 
@@ -1375,7 +1378,7 @@ function resolveRepoInfo(config, scm) {
 
 function readPRInfoMarkdown(inputFolderPath, ticketKey) {
     try {
-        var inputFolder = inputFolderPath || ('input/' + ticketKey);
+        var inputFolder = inputFolderPath || ('input/' + ticketKeyShapes.inputFolderNameFor(ticketKey));
         return file_read({
             path: inputFolder + '/pr_info.md'
         });

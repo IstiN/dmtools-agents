@@ -60,6 +60,7 @@ function prReviewOutputFiles(fileReadMock) {
  */
 function prReviewRequireMap(overrides) {
     var map = {
+        './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
         './common/machineAuthor.js': machineAuthorModule,
         './config.js': configModule,
         './common/scm.js': { createScm: function() { return {}; } },
@@ -376,6 +377,7 @@ suite('postPRReviewComments', function() {
             var mod = loadModule(
                 'js/postPRReviewComments.js',
                 makeRequire({
+            './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
             './common/machineAuthor.js': machineAuthorModule,
                     './config.js': configModule,
                     './common/scm.js': { createScm: function() { return scm; } },
@@ -670,6 +672,7 @@ suite('postPRReviewComments', function() {
             var mod = loadModule(
                 'js/postPRReviewComments.js',
                 makeRequire({
+            './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
             './common/machineAuthor.js': machineAuthorModule,
                     './config.js': configModule,
                     './common/scm.js': { createScm: function() { return scm; } },
@@ -951,6 +954,7 @@ suite('postPRReviewComments', function() {
             var mod2 = loadModule(
                 'js/postPRReviewComments.js',
                 makeRequire({
+            './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
             './common/machineAuthor.js': machineAuthorModule,
                     './config.js': configModule,
                     './common/scm.js': {
@@ -1361,6 +1365,7 @@ function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged
     return loadModule(
         'js/postPRReviewComments.js',
         makeRequire({
+            './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
             './common/machineAuthor.js': machineAuthorModule,
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return scm; } },
@@ -2053,6 +2058,7 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
 
     test('readReviewJson: malformed JSON → null (and the empty-output branch)', function() {
         var bad = loadModule('js/postPRReviewComments.js', makeRequire({
+            './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
             './common/machineAuthor.js': machineAuthorModule,
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return {}; } },
@@ -2137,6 +2143,7 @@ function makeResumeHarness(opts) {
 // these lambdas into makeResumeHarness — same rule as the action harness.
 function gh926ResumeRequire(opts) {
     return makeRequire({
+        './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
         './common/machineAuthor.js': machineAuthorModule,
         './config.js': configModule,
         './common/scm.js': { createScm: function() { return {}; } },
@@ -2480,6 +2487,7 @@ function loadForPrSearch(foundPr) {
     var mod = loadModule(
         'js/postPRReviewComments.js',
         makeRequire({
+            './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
             './common/machineAuthor.js': machineAuthorModule,
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return {}; } },
