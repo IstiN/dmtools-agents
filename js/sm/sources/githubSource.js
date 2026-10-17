@@ -844,6 +844,7 @@ function _absorbPrStatuses(items, provider, prStatuses) {
             provider.memoPrStatus(item.prNumber, prStatuses[i]);
         }
     });
+    return items;
 }
 
 function _enrichPrItemsWithStatus(items, provider, repoInfo) {
