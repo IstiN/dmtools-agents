@@ -314,3 +314,55 @@ suite('tokenUsageComment — Azure DevOps rendering (agents#877, #878)', functio
     });
 });
 
+
+suite('tokenUsageComment — provider from the project config (agents#942)', function() {
+    function load(loader, mocks) {
+        return loadModule('js/common/tokenUsageComment.js', makeRequire({
+            './trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), mocks),
+            '../configLoader.js': loader
+        }), mocks);
+    }
+    function mocks(extra) {
+        var m = {
+            file_read: function(opts) {
+                if (opts.path === 'outputs/token_usage_files.json') return JSON.stringify(['outputs/a_usage.json']);
+                if (opts.path === 'outputs/a_usage.json') return JSON.stringify({ provider: 'copilot', total_tokens: 5 });
+                return null;
+            }
+        };
+        Object.keys(extra).forEach(function(k) { m[k] = extra[k]; });
+        return m;
+    }
+
+    test('config.tracker.provider=ado with no trackerProvider: posts through ADO, not jira_post_comment', function() {
+        var ado = [], jira = [];
+        var mod = load({ loadProjectConfig: function() { return { tracker: { provider: 'ado' } }; } },
+            mocks({ ado_add_work_item_comment: function(a) { ado.push(a); }, jira_post_comment: function(a) { jira.push(a); } }));
+        var r = mod.postTokenUsageComments('2010283', { customParams: {} });
+        assert.equal(r.posted, 1, JSON.stringify(r));
+        assert.equal(ado.length, 1);
+        assert.equal(jira.length, 0);
+    });
+
+    test('customParams.trackerProvider wins and the project config is not consulted', function() {
+        var loaded = 0, ado = [];
+        var mod = load({ loadProjectConfig: function() { loaded++; return { tracker: { provider: 'jira' } }; } },
+            mocks({ ado_add_work_item_comment: function(a) { ado.push(a); } }));
+        var r = mod.postTokenUsageComments('1', { customParams: { trackerProvider: 'ado' } });
+        assert.equal(r.posted, 1, JSON.stringify(r));
+        assert.equal(loaded, 0);
+        assert.equal(ado.length, 1);
+    });
+
+    test('a throwing config loader falls back to the Jira default (fail-open, as before)', function() {
+        var jira = [];
+        var mod = load({ loadProjectConfig: function() { throw new Error('boom'); } },
+            mocks({ jira_post_comment: function(a) { jira.push(a); } }));
+        var r = mod.postTokenUsageComments('PROJ-1', { customParams: {} });
+        assert.equal(r.posted, 1, JSON.stringify(r));
+        assert.equal(jira.length, 1);
+    });
+});
