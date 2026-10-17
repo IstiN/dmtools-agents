@@ -1750,7 +1750,281 @@ function postCompletionTokenUsage(params, ticketKey) {
     }
 }
 
+// ── action stage helpers (gh-1011 CRAP rework) ──────────────────────────────
+// Extracted verbatim from the former action monolith. Stage order, git/SCM
+// calls, tracker calls, log lines and every return shape are byte-identical
+// to the inline code they replace — pinned by the characterization suite in
+// js/unit-tests/test_pushReworkChanges.js. Resume outcomes are reported as
+// { resume: true } so action can re-enter itself exactly where the inline
+// `return action(params)` did.
+
+// Pre-push quality + policy gates. Hard gate failures throw (they land in
+// action's catch exactly like the inline throws did); non-blocking failures
+// are assembled into the warning block appended to the completion comments.
+function runPrePushGates(ticketKey, customParams, fixSummary) {
+    var gateResult = feedbackLoop.runQualityGates({
+        ticketKey: ticketKey,
+        customParams: customParams,
+        section: 'qualityGates'
+    });
+    if (!gateResult.success) {
+        throw new Error('Quality gate failed before rework push: ' + gateResult.failedGate + '\n' + gateResult.error);
+    }
+    var policyResult = feedbackLoop.runPolicyGates({
+        ticketKey: ticketKey,
+        customParams: customParams,
+        section: 'policyGates'
+    });
+    if (!policyResult.success) {
+        throw new Error('Policy gate failed before rework push: ' + policyResult.failedGate + '\n' + policyResult.error);
+    }
+
+    // Non-blocking gate failures (e.g. spotbugs findings unrelated to the PR, marked
+    // "blocking": false in config) don't abort the push/PR-reply flow, but should still
+    // be visible to the developer/reviewer rather than silently swallowed.
+    var nonBlockingGateWarnings = [].concat(
+        gateResult.nonBlockingFailures || [],
+        policyResult.nonBlockingFailures || []
+    );
+    var nonBlockingGateWarningBlock = '';
+    if (nonBlockingGateWarnings.length > 0) {
+        var warningLines = nonBlockingGateWarnings.map(function(f) {
+            return '- **' + f.name + '**: ' + String(f.error).substring(0, 500);
+        });
+        nonBlockingGateWarningBlock = '\n\n⚠️ **Non-blocking gate warnings** (did not block this push):\n' + warningLines.join('\n');
+        console.warn('⚠️ Non-blocking gate failures (push/replies continue):\n' + warningLines.join('\n'));
+    }
+    return {
+        fixSummaryWithWarnings: fixSummary + nonBlockingGateWarningBlock,
+        nonBlockingGateWarningBlock: nonBlockingGateWarningBlock
+    };
+}
+
+// Commit and push, mapping the failure modes onto outcome objects: one
+// resume attempt, then an honest failure comment + result (never a fake
+// completion announcement).
+function commitAndPushWithRecovery(ticketKey, config, customParams, tracker) {
+    try {
+        const pushResult = commitAndPush(ticketKey, config, customParams);
+        return {
+            resume: false,
+            failed: false,
+            branchName: pushResult.branch,
+            codeChangesCommitted: pushResult.hasChanges
+        };
+    } catch (gitError) {
+        console.error('Git operations failed:', gitError);
+        var resume = tryResumeAgent({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            section: 'postAction',
+            stage: 'rework_git_operations',
+            error: gitError.toString()
+        });
+        if (resume.attempted) {
+            return { resume: true };
+        }
+        try {
+            var pm = commentMarkup.forTicket(ticketKey);
+            tracker.postComment(
+                ticketKey,
+                pm.h(3, '❌ Rework Push Failed') + '\n\n' + pm.code(gitError.toString()) + '\n\nPlease check the logs and retry.'
+            );
+        } catch (e) {}
+        return { resume: false, failed: true, error: gitError.toString() };
+    }
+}
+
+// Post-publish gates run after the push. A gate-requested resume is reported
+// back; otherwise the failure comment is posted and the gate error returned.
+function runPostPublishGatesOrFail(ticketKey, config, customParams, tracker) {
+    var postPublishGateResult = feedbackLoop.runPostPublishGates({
+        ticketKey: ticketKey,
+        customParams: customParams,
+        section: 'postPublishGates',
+        workingDir: config.workingDir || null
+    });
+    if (postPublishGateResult.success) {
+        return { resume: false, failed: false };
+    }
+    var gateError = 'Post-publish quality gate failed: ' +
+        postPublishGateResult.failedGate + '\n' + postPublishGateResult.error;
+    if (postPublishGateResult.resumeAttempted) {
+        return { resume: true };
+    }
+    try {
+        var qm = commentMarkup.forTicket(ticketKey);
+        tracker.postComment(
+            ticketKey,
+            qm.h(3, '❌ Rework Quality Gate Failed') + '\n\n' + qm.code(gateError) + '\n\nThe branch was pushed before running this gate. Please check the logs and retry.'
+        );
+    } catch (e) {}
+    return { resume: false, failed: true, error: gateError };
+}
+
+// Interrupted leg (agent died mid-run, no outputs): one resume attempt, then
+// the interrupted-rework handler.
+function resumeOrHandleInterrupted(ticketKey, customParams, tracker, branchName, statuses, fixSummary) {
+    var interruptedResume = tryResumeAgent({
+        ticketKey: ticketKey,
+        customParams: customParams,
+        section: 'postAction',
+        stage: 'rework_missing_outputs',
+        error: fixSummary
+    });
+    if (interruptedResume.attempted) {
+        return { resume: true };
+    }
+    return { resume: false, result: handleInterruptedRework(tracker, ticketKey, branchName, customParams, statuses) };
+}
+
+// Fatal CLI failure (non-zero exit ≠ interruption): one resume attempt, then
+// the honest failure path — never a "Rework Complete" announcement
+// (live 2026-09-29: exit 1 was announced as completion, the #1052 loop).
+function resumeOrHandleFailedCli(ticketKey, customParams, tracker, branchName, statuses, fixSummary) {
+    var failedResume = tryResumeAgent({
+        ticketKey: ticketKey,
+        customParams: customParams,
+        section: 'postAction',
+        stage: 'rework_cli_failed',
+        error: String(fixSummary).substring(0, 2000)
+    });
+    if (failedResume.attempted) {
+        return { resume: true };
+    }
+    return { resume: false, result: handleFailedReworkCli(tracker, ticketKey, branchName, customParams, statuses, fixSummary) };
+}
+
+// Resolve the repository — prefer targetRepository from config over the git
+// remote. Throws the loud PR-LOOKUP-FAILED error when undeterminable.
+function resolveRepoInfo(config, scm, ticketKey) {
+    if (config.repository && config.repository.owner && config.repository.repo) {
+        var fromConfig = { owner: config.repository.owner, repo: config.repository.repo };
+        console.log('Using targetRepository from config:', fromConfig.owner + '/' + fromConfig.repo);
+        return fromConfig;
+    }
+    var fromRemote = scm.getRemoteRepoInfo();
+    if (!fromRemote) {
+        throw new Error(PR_LOOKUP_FAILED_PREFIX +
+            ' could not determine the GitHub repository (no config.repository, git remote unparsable) for ticket ' +
+            ticketKey + ' — the rework PR replies/comments cannot be posted and the rework cycle is NOT closed.');
+    }
+    return fromRemote;
+}
+
+// Find PR to post comment. Loud failure instead of silent skip (live fa #1212,
+// run 37200002499, 2026-10-04): the old silent skip left review threads
+// unresolved, still moved the ticket to In Review, removed the rework labels
+// and declared the cycle closed — SM re-armed rework on the same unresolved
+// threads → infinite empty-lap loop.
+function requirePrForTicket(scm, ticketKey, branchName) {
+    const pr = findPRForTicket(scm, ticketKey);
+    if (!pr) {
+        console.error(PR_LOOKUP_FAILED_PREFIX + ' no Pull Request found for ticket ' + ticketKey +
+            " after the rework push (branch '" + branchName + "') — PR replies/resolutions skipped;" +
+            ' failing the leg instead of closing the cycle.');
+        throw new Error(PR_LOOKUP_FAILED_PREFIX + ' no Pull Request found for ticket ' + ticketKey +
+            " after the rework push (branch '" + branchName + "'). Review-thread replies/resolutions and the" +
+            ' fix-summary comment were NOT posted; the rework cycle was NOT closed — failing loudly instead of' +
+            ' silently skipping (silent skip re-arms empty rework laps forever, live fa #1212 2026-10-04).');
+    }
+    return pr;
+}
+
+// gh-957 audit-resolve lap gate: a pass that changed no production file while
+// review threads are open is BLOCKED only when the reply coverage is
+// INCOMPLETE. Full targeted-reply coverage resolves threads with the audit
+// line even with zero pushed commits; incomplete coverage keeps the
+// historical blocked path.
+function runLapGate(ticketKey, config, codeChangesCommitted, actualParams, statuses, scm, tracker, pr, fixSummary) {
+    var realCodeChanges = hasRealCodeChanges(ticketKey, config);
+    var outputOptsForCoverage = { ticketKey: ticketKey, workingDir: config.workingDir || null };
+    var inputSnapshotThreads = readInputRawThreads(ticketKey, outputOptsForCoverage);
+    var openInputThreads = inputSnapshotThreads.filter(isOpenThread);
+    var replyCoverage = buildReplyCoverage(inputSnapshotThreads, readRepliesArray(outputOptsForCoverage).replies);
+    var lapGate = evaluateAuditResolveGate(realCodeChanges, codeChangesCommitted,
+        openInputThreads.length, replyCoverage.unaddressed.length);
+    if (lapGate.blocked) {
+        return {
+            blocked: true,
+            result: handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary,
+                openInputThreads.length, actualParams, replyCoverage.unaddressed)
+        };
+    }
+    // gh-957 audit-resolve is live when the gate above passed with zero
+    // code changes: every open thread has a targeted reply and the
+    // resolve pass below closes them with the audit trail. A FAILED diff
+    // probe (null) with no landed commit is treated as no-change too —
+    // resolution without the audit line is never allowed on an unknown
+    // tree.
+    if (lapGate.auditResolve) {
+        console.log('ℹ️ gh-957 audit-resolve: no code changes but ' + openInputThreads.length +
+            ' open thread(s) fully covered by targeted replies — resolving with audit trail');
+    }
+    return { blocked: false, lapGate: lapGate };
+}
+
+// Outer-catch cleanup: one resume attempt, then best-effort error comment via
+// the probed tracker provider. Never rethrows — the step fails with the
+// error result exactly like the inline catch did.
+function errorTicketKeyOf(params) {
+    var actualParams = params.ticket ? params : (params.jobParams || params);
+    return (actualParams && actualParams.ticket && actualParams.ticket.key) || null;
+}
+
+function errorCustomParamsOf(params) {
+    var actualParams = params.ticket ? params : (params.jobParams || params);
+    return (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+}
+
+function resolveErrorTracker(params, customParams, tracker) {
+    var errorTracker = tracker || null;
+    if (!errorTracker) {
+        try {
+            errorTracker = trackersModule.createTracker(
+                configLoader.loadProjectConfig(params.jobParams || params), customParams);
+        } catch (trackerError) {
+            console.error('Failed to create tracker for error comment:', trackerError);
+        }
+    }
+    return errorTracker;
+}
+
+function postReworkErrorComment(errorTracker, ticketKey, error) {
+    if (!errorTracker) return;
+    var em = commentMarkup.forTicket(ticketKey);
+    errorTracker.postComment(
+        ticketKey,
+        em.h(3, '❌ Rework Workflow Error') + '\n\n' + em.code(error.toString())
+    );
+}
+
+function handleActionError(params, error, tracker) {
+    console.error('❌ Error in pushReworkChanges:', error);
+    try {
+        const ticketKey = errorTicketKeyOf(params);
+        if (!ticketKey) {
+            return { success: false, error: error.toString() };
+        }
+        const customParams = errorCustomParamsOf(params);
+        var resume = tryResumeAgent({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            section: 'postAction',
+            stage: 'rework_post_action',
+            error: error.toString()
+        });
+        if (resume.attempted) {
+            return action(params);
+        }
+        postReworkErrorComment(resolveErrorTracker(params, customParams, tracker), ticketKey, error);
+        return { success: false, error: error.toString() };
+    } catch (e) {}
+    return { success: false, error: error.toString() };
+}
+
 function action(params) {
+    var tracker = null;
     try {
         const actualParams = params.ticket ? params : (params.jobParams || params);
         const ticketKey = actualParams.ticket.key;
@@ -1761,46 +2035,16 @@ function action(params) {
         const statuses = resolveStatuses(_customParams, config.jira && config.jira.statuses);
         // Probe the tracker provider once — the same script then runs unchanged
         // on Jira / ADO / GitHub deployments.
-        var tracker = trackersModule.createTracker(config, _customParams);
+        tracker = trackersModule.createTracker(config, _customParams);
 
         console.log('=== Push rework changes for:', ticketKey, '===');
 
         // Configure git
         configureGitAuthor(config);
 
-        var gateResult = feedbackLoop.runQualityGates({
-            ticketKey: ticketKey,
-            customParams: _customParams,
-            section: 'qualityGates'
-        });
-        if (!gateResult.success) {
-            throw new Error('Quality gate failed before rework push: ' + gateResult.failedGate + '\n' + gateResult.error);
-        }
-        var policyResult = feedbackLoop.runPolicyGates({
-            ticketKey: ticketKey,
-            customParams: _customParams,
-            section: 'policyGates'
-        });
-        if (!policyResult.success) {
-            throw new Error('Policy gate failed before rework push: ' + policyResult.failedGate + '\n' + policyResult.error);
-        }
-
-        // Non-blocking gate failures (e.g. spotbugs findings unrelated to the PR, marked
-        // "blocking": false in config) don't abort the push/PR-reply flow, but should still
-        // be visible to the developer/reviewer rather than silently swallowed.
-        var nonBlockingGateWarnings = [].concat(
-            gateResult.nonBlockingFailures || [],
-            policyResult.nonBlockingFailures || []
-        );
-        var nonBlockingGateWarningBlock = '';
-        if (nonBlockingGateWarnings.length > 0) {
-            var warningLines = nonBlockingGateWarnings.map(function(f) {
-                return '- **' + f.name + '**: ' + String(f.error).substring(0, 500);
-            });
-            nonBlockingGateWarningBlock = '\n\n⚠️ **Non-blocking gate warnings** (did not block this push):\n' + warningLines.join('\n');
-            console.warn('⚠️ Non-blocking gate failures (push/replies continue):\n' + warningLines.join('\n'));
-        }
-        const fixSummaryWithWarnings = fixSummary + nonBlockingGateWarningBlock;
+        var gateSummary = runPrePushGates(ticketKey, _customParams, fixSummary);
+        const fixSummaryWithWarnings = gateSummary.fixSummaryWithWarnings;
+        const nonBlockingGateWarningBlock = gateSummary.nonBlockingGateWarningBlock;
 
         // If rework setup already failed (e.g. no PR found for this ticket), there is
         // nothing to commit/push to and no amount of CLI retrying can fix a missing PR.
@@ -1811,68 +2055,30 @@ function action(params) {
         }
 
         // Commit and push
-        let branchName;
-        let codeChangesCommitted = false;
-        try {
-            const pushResult = commitAndPush(ticketKey, config, _customParams);
-            branchName = pushResult.branch;
-            codeChangesCommitted = pushResult.hasChanges;
-        } catch (gitError) {
-            console.error('Git operations failed:', gitError);
-            var resume = tryResumeAgent({
-                ticketKey: ticketKey,
-                customParams: _customParams,
-                section: 'postAction',
-                stage: 'rework_git_operations',
-                error: gitError.toString()
-            });
-            if (resume.attempted) {
-                return action(params);
-            }
-            try {
-                var pm = commentMarkup.forTicket(ticketKey);
-                tracker.postComment(
-                    ticketKey,
-                    pm.h(3, '❌ Rework Push Failed') + '\n\n' + pm.code(gitError.toString()) + '\n\nPlease check the logs and retry.'
-                );
-            } catch (e) {}
-            return { success: false, error: gitError.toString() };
+        var pushOutcome = commitAndPushWithRecovery(ticketKey, config, _customParams, tracker);
+        if (pushOutcome.resume) {
+            return action(params);
         }
+        if (pushOutcome.failed) {
+            return { success: false, error: pushOutcome.error };
+        }
+        const branchName = pushOutcome.branchName;
+        const codeChangesCommitted = pushOutcome.codeChangesCommitted;
 
-        var postPublishGateResult = feedbackLoop.runPostPublishGates({
-            ticketKey: ticketKey,
-            customParams: _customParams,
-            section: 'postPublishGates',
-            workingDir: config.workingDir || null
-        });
-        if (!postPublishGateResult.success) {
-            var gateError = 'Post-publish quality gate failed: ' +
-                postPublishGateResult.failedGate + '\n' + postPublishGateResult.error;
-            if (postPublishGateResult.resumeAttempted) {
-                return action(params);
-            }
-            try {
-                var qm = commentMarkup.forTicket(ticketKey);
-                tracker.postComment(
-                    ticketKey,
-                    qm.h(3, '❌ Rework Quality Gate Failed') + '\n\n' + qm.code(gateError) + '\n\nThe branch was pushed before running this gate. Please check the logs and retry.'
-                );
-            } catch (e) {}
-            return { success: false, error: gateError };
+        var publishOutcome = runPostPublishGatesOrFail(ticketKey, config, _customParams, tracker);
+        if (publishOutcome.resume) {
+            return action(params);
+        }
+        if (publishOutcome.failed) {
+            return { success: false, error: publishOutcome.error };
         }
 
         if (isInterruptedReworkResponse(fixSummary)) {
-            var interruptedResume = tryResumeAgent({
-                ticketKey: ticketKey,
-                customParams: _customParams,
-                section: 'postAction',
-                stage: 'rework_missing_outputs',
-                error: fixSummary
-            });
-            if (interruptedResume.attempted) {
+            var interruptedOutcome = resumeOrHandleInterrupted(ticketKey, _customParams, tracker, branchName, statuses, fixSummary);
+            if (interruptedOutcome.resume) {
                 return action(params);
             }
-            return handleInterruptedRework(tracker, ticketKey, branchName, _customParams, statuses);
+            return interruptedOutcome.result;
         }
 
         // Fatal CLI failure (non-zero exit ≠ interruption): one resume attempt,

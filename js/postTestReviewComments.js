@@ -283,6 +283,181 @@ function resolveCustomParams(params, config) {
     return merged;
 }
 
+// Normalize recommendation: LLM may return "PASS"/"PASED" or "APPROVED" instead of "APPROVE",
+// and "FAIL"/"FAILED" instead of "BLOCK".
+function normalizeRecommendation(rec) {
+    const value = String(rec || '').toUpperCase().trim();
+    if (value === 'PASS' || value === 'PASSED' || value === 'APPROVED') return 'APPROVE';
+    if (value === 'FAIL' || value === 'FAILED' || value === 'REJECT') return 'BLOCK';
+    return rec;
+}
+
+// review JSON unreadable/missing: tell the tracker the SM trigger label was
+// removed (so SM can retry), best-effort remove the trigger + WIP labels and
+// fail the step.
+function handleMissingReview(tracker, ticketKey, customParams, params) {
+    tracker.postComment(ticketKey, 'h3. ⚠️ Review Error\n\nCould not read pr_review.json. Removed SM trigger label so SM can retry.');
+    try {
+        const smTriggerLabel = customParams.removeLabel || 'sm_test_review_triggered';
+        tracker.removeLabel(ticketKey, smTriggerLabel);
+        console.log('✅ Removed SM trigger label after missing review:', smTriggerLabel);
+    } catch (e) {
+        console.warn('Failed to remove SM trigger label after missing review:', e);
+    }
+    try {
+        const wipLabelMissingReview = params.metadata && params.metadata.contextId
+            ? params.metadata.contextId + '_wip'
+            : 'pr_test_automation_review_wip';
+        tracker.removeLabel(ticketKey, wipLabelMissingReview);
+    } catch (e) {
+        console.warn('Failed to remove WIP label after missing review:', e);
+    }
+    return { success: false, error: 'No review data found' };
+}
+
+// Step 4: general comment, inline comments, resolved-thread cleanup and the
+// pr_approved queueing. Returns the mergeSucceeded signal (true only when an
+// approved PR was actually queued for merge).
+function postReviewComments(repoInfo, prNumber, reviewData, tracker, ticketKey, isApproved) {
+    var mergeSucceeded = false;
+    if (prNumber && repoInfo) {
+        // General comment
+        if (reviewData.generalComment) {
+            try {
+                const commentText = readFile(reviewData.generalComment);
+                if (commentText) {
+                    github_add_pr_comment({
+                        workspace: repoInfo.owner,
+                        repository: repoInfo.repo,
+                        pullRequestId: String(prNumber),
+                        text: commentText
+                    });
+                    console.log('✅ Posted general review comment to PR');
+                }
+            } catch (e) {
+                console.warn('Failed to post general comment:', e);
+            }
+        }
+
+        // Inline comments
+        if (reviewData.inlineComments && reviewData.inlineComments.length > 0) {
+            reviewData.inlineComments.forEach(function(ic) {
+                postInlineComment(repoInfo, prNumber, ic);
+            });
+        }
+
+        // Resolve threads that were fully fixed in this rework
+        resolveApprovedThreads(repoInfo, prNumber, reviewData.resolvedThreadIds);
+
+        // Queue for merge via pr_approved label (same pattern as stories/bugs)
+        if (isApproved) {
+            try {
+                github_add_pr_label({
+                    workspace: repoInfo.owner,
+                    repository: repoInfo.repo,
+                    pullRequestId: String(prNumber),
+                    label: LABELS.PR_APPROVED
+                });
+                console.log('✅ Added pr_approved label to GitHub PR');
+            } catch (e) {
+                console.warn('Failed to add pr_approved to GitHub PR:', e);
+            }
+            try {
+                tracker.addLabel(ticketKey, LABELS.PR_APPROVED);
+                console.log('✅ Added pr_approved label to Jira ticket');
+            } catch (e) {
+                console.warn('Failed to add pr_approved to Jira ticket:', e);
+            }
+            mergeSucceeded = true; // signal "no conflict yet"
+            console.log('✅ PR #' + prNumber + ' queued for merge via pr_approved');
+        }
+    } else {
+        console.warn('No PR info — skipping GitHub comments');
+    }
+    return mergeSucceeded;
+}
+
+// Step 6: on approval the ticket stays in In Review - Passed/Failed until SM
+// merges the PR via the pr_approved flow; on changes-requested it moves to
+// In Rework and triggers the rework continuation.
+function moveTicketAfterReview(ticketKey, isApproved, tracker, jiraConfig, currentStatus, config, customParams) {
+    if (isApproved) {
+        // Ticket stays in In Review - Passed/Failed until SM merges the PR via pr_approved flow
+        console.log('✅ Ticket stays in', currentStatus, '— SM will merge and move to final status');
+        autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
+    } else {
+        try {
+            tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
+            console.log('✅ Changes requested — moved', ticketKey, 'to In Rework');
+            if (!triggerReworkIfConfigured(ticketKey, config, customParams)) {
+                markForSmTestRework(ticketKey, tracker);
+                autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
+            }
+        } catch (e) {
+            console.warn('Failed to move to In Rework:', e);
+        }
+    }
+}
+
+// Step 7: reviewed label + WIP/trigger label cleanup (every call is
+// best-effort — a failing label op must not fail the step).
+function finalizeReviewLabels(tracker, ticketKey, params) {
+    try {
+        tracker.addLabel(ticketKey, LABELS.AI_PR_REVIEWED);
+    } catch (e) {}
+
+    const wipLabel = params.metadata && params.metadata.contextId
+        ? params.metadata.contextId + '_wip'
+        : 'pr_test_automation_review_wip';
+    try {
+        tracker.removeLabel(ticketKey, wipLabel);
+    } catch (e) {}
+
+    try {
+        tracker.removeLabel(ticketKey, 'sm_test_review_triggered');
+        console.log('✅ Removed SM label: sm_test_review_triggered');
+    } catch (e) {}
+}
+
+// Terminal status for the result payload (the ticket itself is moved by SM).
+function decideFinalStatus(isApproved, mergeSucceeded, currentStatus, statuses) {
+    if (isApproved && !mergeSucceeded) {
+        return statuses.IN_REWORK;
+    }
+    if (isApproved) {
+        return (currentStatus === statuses.IN_REVIEW_PASSED) ? statuses.PASSED : statuses.FAILED;
+    }
+    return statuses.IN_REWORK;
+}
+
+// Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
+// wrote outputs/*_usage.json during the agent run.
+function postTokenUsageSummary(ticketKey, params) {
+    try {
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
+// Outer-catch cleanup: recreate the tracker when the failure happened before
+// it was built, best-effort remove the SM trigger label, post the error
+// comment and fail the step.
+function handleActionFailure(params, error, tracker) {
+    console.error('❌ Error in postTestReviewComments:', error);
+    if (!tracker) tracker = trackersModule.createTracker(null, (params && params.customParams) || (params && params.jobParams && params.jobParams.customParams) || {});
+    try {
+        const ticketKey = params.ticket ? params.ticket.key : (params.inputFolderPath ? params.inputFolderPath.split('/').pop() : null);
+        if (ticketKey) {
+            tracker.removeLabel(ticketKey, 'sm_test_review_triggered');
+        }
+    } catch (e) {}
+    try {
+        tracker.postComment(params.ticket.key, 'h3. ❌ Test Review Error\n\n{code}' + error.toString() + '{code}');
+    } catch (e) {}
+    return { success: false, error: error.toString() };
+}
+
 function action(params) {
     var tracker = null;
     try {
@@ -299,33 +474,9 @@ function action(params) {
         // Step 1: Read review data
         const reviewData = readReviewJson(ticketKey, workingDir);
         if (!reviewData) {
-            tracker.postComment(ticketKey, 'h3. ⚠️ Review Error\n\nCould not read pr_review.json. Removed SM trigger label so SM can retry.');
-            try {
-                const smTriggerLabel = customParams.removeLabel || 'sm_test_review_triggered';
-                tracker.removeLabel(ticketKey, smTriggerLabel);
-                console.log('✅ Removed SM trigger label after missing review:', smTriggerLabel);
-            } catch (e) {
-                console.warn('Failed to remove SM trigger label after missing review:', e);
-            }
-            try {
-                const wipLabelMissingReview = params.metadata && params.metadata.contextId
-                    ? params.metadata.contextId + '_wip'
-                    : 'pr_test_automation_review_wip';
-                tracker.removeLabel(ticketKey, wipLabelMissingReview);
-            } catch (e) {
-                console.warn('Failed to remove WIP label after missing review:', e);
-            }
-            return { success: false, error: 'No review data found' };
+            return handleMissingReview(tracker, ticketKey, customParams, params);
         }
 
-        // Normalize recommendation: LLM may return "PASS"/"PASSED" or "APPROVED" instead of "APPROVE",
-        // and "FAIL"/"FAILED" instead of "BLOCK".
-        function normalizeRecommendation(rec) {
-            const value = String(rec || '').toUpperCase().trim();
-            if (value === 'PASS' || value === 'PASSED' || value === 'APPROVED') return 'APPROVE';
-            if (value === 'FAIL' || value === 'FAILED' || value === 'REJECT') return 'BLOCK';
-            return rec;
-        }
         reviewData.recommendation = normalizeRecommendation(reviewData.recommendation);
         const isApproved = reviewData.recommendation === 'APPROVE';
         console.log('Review recommendation:', reviewData.recommendation);
@@ -339,61 +490,7 @@ function action(params) {
         const { prNumber, prUrl } = getPRNumber(params, ticketKey, repoInfo);
 
         // Step 4: Post GitHub comments
-        var mergeSucceeded = false;
-        if (prNumber && repoInfo) {
-            // General comment
-            if (reviewData.generalComment) {
-                try {
-                    const commentText = readFile(reviewData.generalComment);
-                    if (commentText) {
-                        github_add_pr_comment({
-                            workspace: repoInfo.owner,
-                            repository: repoInfo.repo,
-                            pullRequestId: String(prNumber),
-                            text: commentText
-                        });
-                        console.log('✅ Posted general review comment to PR');
-                    }
-                } catch (e) {
-                    console.warn('Failed to post general comment:', e);
-                }
-            }
-
-            // Inline comments
-            if (reviewData.inlineComments && reviewData.inlineComments.length > 0) {
-                reviewData.inlineComments.forEach(function(ic) {
-                    postInlineComment(repoInfo, prNumber, ic);
-                });
-            }
-
-            // Resolve threads that were fully fixed in this rework
-            resolveApprovedThreads(repoInfo, prNumber, reviewData.resolvedThreadIds);
-
-            // Queue for merge via pr_approved label (same pattern as stories/bugs)
-            if (isApproved) {
-                try {
-                    github_add_pr_label({
-                        workspace: repoInfo.owner,
-                        repository: repoInfo.repo,
-                        pullRequestId: String(prNumber),
-                        label: LABELS.PR_APPROVED
-                    });
-                    console.log('✅ Added pr_approved label to GitHub PR');
-                } catch (e) {
-                    console.warn('Failed to add pr_approved to GitHub PR:', e);
-                }
-                try {
-                    tracker.addLabel(ticketKey, LABELS.PR_APPROVED);
-                    console.log('✅ Added pr_approved label to Jira ticket');
-                } catch (e) {
-                    console.warn('Failed to add pr_approved to Jira ticket:', e);
-                }
-                mergeSucceeded = true; // signal "no conflict yet"
-                console.log('✅ PR #' + prNumber + ' queued for merge via pr_approved');
-            }
-        } else {
-            console.warn('No PR info — skipping GitHub comments');
-        }
+        var mergeSucceeded = postReviewComments(repoInfo, prNumber, reviewData, tracker, ticketKey, isApproved);
 
         // Step 5: Post Jira comment
         try {
@@ -406,57 +503,15 @@ function action(params) {
         }
 
         // Step 6: Move ticket status
-        if (isApproved) {
-            // Ticket stays in In Review - Passed/Failed until SM merges the PR via pr_approved flow
-            console.log('✅ Ticket stays in', currentStatus, '— SM will merge and move to final status');
-            autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
-        } else {
-            try {
-                tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
-                console.log('✅ Changes requested — moved', ticketKey, 'to In Rework');
-                if (!triggerReworkIfConfigured(ticketKey, config, customParams)) {
-                    markForSmTestRework(ticketKey, tracker);
-                    autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
-                }
-            } catch (e) {
-                console.warn('Failed to move to In Rework:', e);
-            }
-        }
+        moveTicketAfterReview(ticketKey, isApproved, tracker, jiraConfig, currentStatus, config, customParams);
 
         // Step 7: Add label + remove WIP
-        try {
-            tracker.addLabel(ticketKey, LABELS.AI_PR_REVIEWED);
-        } catch (e) {}
+        finalizeReviewLabels(tracker, ticketKey, params);
 
-        const wipLabel = params.metadata && params.metadata.contextId
-            ? params.metadata.contextId + '_wip'
-            : 'pr_test_automation_review_wip';
-        try {
-            tracker.removeLabel(ticketKey, wipLabel);
-        } catch (e) {}
-
-        try {
-            tracker.removeLabel(ticketKey, 'sm_test_review_triggered');
-            console.log('✅ Removed SM label: sm_test_review_triggered');
-        } catch (e) {}
-
-        var finalStatus;
-        if (isApproved && !mergeSucceeded) {
-            finalStatus = jiraConfig.statuses.IN_REWORK;
-        } else if (isApproved) {
-            finalStatus = (currentStatus === jiraConfig.statuses.IN_REVIEW_PASSED) ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
-        } else {
-            finalStatus = jiraConfig.statuses.IN_REWORK;
-        }
+        var finalStatus = decideFinalStatus(isApproved, mergeSucceeded, currentStatus, jiraConfig.statuses);
         console.log('✅ Test review workflow complete:', isApproved ? (mergeSucceeded ? 'APPROVED' : 'MERGE CONFLICT') : 'CHANGES REQUESTED');
 
-        // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-        // wrote outputs/*_usage.json during the agent run.
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
+        postTokenUsageSummary(ticketKey, params);
 
         return {
             success: true,
@@ -467,18 +522,7 @@ function action(params) {
         };
 
     } catch (error) {
-        console.error('❌ Error in postTestReviewComments:', error);
-        if (!tracker) tracker = trackersModule.createTracker(null, (params && params.customParams) || (params && params.jobParams && params.jobParams.customParams) || {});
-        try {
-            const ticketKey = params.ticket ? params.ticket.key : (params.inputFolderPath ? params.inputFolderPath.split('/').pop() : null);
-            if (ticketKey) {
-                tracker.removeLabel(ticketKey, 'sm_test_review_triggered');
-            }
-        } catch (e) {}
-        try {
-            tracker.postComment(params.ticket.key, 'h3. ❌ Test Review Error\n\n{code}' + error.toString() + '{code}');
-        } catch (e) {}
-        return { success: false, error: error.toString() };
+        return handleActionFailure(params, error, tracker);
     }
 }
 
