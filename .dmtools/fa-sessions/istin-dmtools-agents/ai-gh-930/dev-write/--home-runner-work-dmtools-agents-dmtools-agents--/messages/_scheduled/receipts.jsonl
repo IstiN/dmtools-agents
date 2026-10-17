@@ -1,0 +1,4 @@
+{"ts":"2026-10-17T09:48:49.801305Z","event":"scheduled","id":"1792230529795094_0000_a0wk2n","dueMs":1792230649795,"to":"main","text":"Check background job sh-39-hnajbrs9n4czfkgz (CRAP replication) and continue PR-955 rework: verify ratchet output, run remaining suites, commit/push, write outputs."}
+{"ts":"2026-10-17T09:50:49.800636Z","event":"delivered","id":"1792230529795094_0000_a0wk2n","to":"main","dueMs":1792230649795,"lagMs":5}
+{"ts":"2026-10-17T09:51:04.963966Z","event":"scheduled","id":"1792230664963342_0001_1lne0km","dueMs":1792230784963,"to":"main","text":"Re-check CRAP ratchet job sh-39-hnajbrs9n4czfkgz (/tmp/crap2.txt). If maybeAutoStartReview is clear, run remaining test suites, commit+push the fix to ai/gh-930, and write outputs/response.md + review"}
+{"ts":"2026-10-17T09:53:04.966241Z","event":"delivered","id":"1792230664963342_0001_1lne0km","to":"main","dueMs":1792230784963,"lagMs":3}

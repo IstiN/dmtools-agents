@@ -1,0 +1,1 @@
+{"id":"1792230664963342_0001_1lne0km","fromId":"main","toId":"main","text":"[scheduled] Re-check CRAP ratchet job sh-39-hnajbrs9n4czfkgz (/tmp/crap2.txt). If maybeAutoStartReview is clear, run remaining test suites, commit+push the fix to ai/gh-930, and write outputs/response.md + review_replies.json for PR-955 rework.","sentAt":"2026-10-17T09:53:04.964596Z","hops":0}
