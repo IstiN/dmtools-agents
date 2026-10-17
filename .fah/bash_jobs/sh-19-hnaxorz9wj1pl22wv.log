@@ -1,0 +1,6 @@
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+hint: Disable this message with "git config set advice.mergeConflict false"
+Could not apply 622d0241... # fix(sm): recognize dmtools-factory-bot as a machine author (app-migration fall-out)
+error: could not write index
+.dmtools/config.js: needs merge
+The stash entry is kept in case you need it again.

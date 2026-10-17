@@ -1,0 +1,5 @@
+test_factoryBoardSteps.js:12:var steps = loadModule('steps.js');
+test_factoryBoardSteps.js:155:    var fixture = JSON.parse(file_read({ path: 'visual-check/fixture.json' }));
+test_factoryFlow.js:13:var flow = loadModule('flow.js');
+test_factoryFlow.js:266:    var fixture = JSON.parse(file_read({ path: 'visual-check/fixture.json' }));
+test_factoryBoardApp.js:22:var APP_SRC = file_read({ path: 'app.js' })

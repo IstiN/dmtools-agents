@@ -1,0 +1,7 @@
+HEAD is now at d888eee6 gh-990 rework-loop-escalated false-positive jams the whole queue's validate-armed pointer (2nd live instance) (#993)
+ delete mode 100644 site/factory/visual-check/factory-board.visual-check.390x844.dark.mobile.png
+ delete mode 100644 site/factory/visual-check/fixture.json
+ ! [remote rejected]   main -> main (push declined due to repository rule violations)
+error: failed to push some refs to 'https://github.com/IstiN/dmtools-agents.git'
+88d9a68b chore(site): move factory board to the dmtools-factory repo
+d888eee6 gh-990 rework-loop-escalated false-positive jams the whole queue's validate-armed pointer (2nd live instance) (#993)
