@@ -506,28 +506,38 @@ suite('createRepoTasks — action branch coverage', function() {
 // ---------------------------------------------------------------------------
 
 suite('createRepoTasks — extracted helpers', function() {
+    function throwsIf(behavior, flag) {
+        if (behavior && behavior[flag]) {
+            throw new Error(flag.replace(/Error$/, '') + ' failed');
+        }
+    }
+
+    function resultFor(behavior, key, fallback) {
+        return behavior && typeof behavior[key] !== 'undefined' ? behavior[key] : fallback;
+    }
+
     function fakeTracker(behavior) {
         var calls = { create: [], link: [], move: [], comment: [], search: [] };
         return {
             calls: calls,
             createTicketWithParent: function(project, type, title, desc, parentKey, extra) {
                 calls.create.push({ project: project, issueType: type, summary: title, description: desc, parentKey: parentKey, labels: extra && extra.labels });
-                if (behavior && behavior.createError) { throw new Error('create failed'); }
-                return behavior && typeof behavior.createResult !== 'undefined' ? behavior.createResult : '{"key":"PROJ-9"}';
+                throwsIf(behavior, 'createError');
+                return resultFor(behavior, 'createResult', '{"key":"PROJ-9"}');
             },
             linkIssues: function(sourceKey, anotherKey, relationship) {
                 calls.link.push({ sourceKey: sourceKey, anotherKey: anotherKey, relationship: relationship });
-                if (behavior && behavior.linkError) { throw new Error('link failed'); }
+                throwsIf(behavior, 'linkError');
             },
             moveToStatus: function(key, statusName) {
                 calls.move.push({ key: key, statusName: statusName });
-                if (behavior && behavior.moveError) { throw new Error('move failed'); }
+                throwsIf(behavior, 'moveError');
             },
             postComment: function(key, comment) { calls.comment.push({ key: key, comment: comment }); },
             searchIssues: function(jql, opts) {
                 calls.search.push({ jql: jql, opts: opts });
-                if (behavior && behavior.searchError) { throw new Error('search failed'); }
-                return behavior && typeof behavior.searchResult !== 'undefined' ? behavior.searchResult : [];
+                throwsIf(behavior, 'searchError');
+                return resultFor(behavior, 'searchResult', []);
             }
         };
     }
@@ -565,6 +575,9 @@ suite('createRepoTasks — extracted helpers', function() {
         assert.equal(mod.extractCreatedKey({ id: 'PROJ-10' }), 'PROJ-10', 'object with id');
         assert.equal(mod.extractCreatedKey('not a key at all'), null, 'garbage string');
         assert.equal(mod.extractCreatedKey(null), null, 'null');
+        var hostile = {};
+        Object.defineProperty(hostile, 'key', { get: function() { throw new Error('nope'); } });
+        assert.equal(mod.extractCreatedKey(hostile), null, 'throwing accessor yields null');
     });
 
     test('buildSummaryComment lists ok and error lines plus skips', function() {
