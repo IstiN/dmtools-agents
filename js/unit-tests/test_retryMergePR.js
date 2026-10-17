@@ -344,13 +344,13 @@ suite('retryMergePR: action branch characterization (gh-980)', function() {
         assert.equal(toolsOf(loaded.calls, 'scm_mergePr').length, 0);
     });
 
-    test('mergeability probe failure → the merge is still attempted (prior behaviour)', function() {
+    test('mergeability probe failure → mergeable stays null → retry next cycle, no merge attempted', function() {
         var loaded = load({ getPrError: new Error('probe down'), prDetail: null });
         var out = loaded.mod.action(runParams({ removeLabel: 'sm_pr_merge_triggered' }));
-        assert.equal(out, true);
-        assert.deepEqual(toolsOf(loaded.calls, 'scm_mergePr')[0].args, { number: 121, mode: 'squash' });
-        assert.deepEqual(toolsOf(loaded.calls, 'jira_move_to_status')[0].args,
-            { key: 'TS-125', statusName: configModule.STATUSES.MERGED });
+        assert.equal(out, false);
+        assert.equal(toolsOf(loaded.calls, 'scm_mergePr').length, 0, 'no merge while mergeability is unknown');
+        assert.equal(toolsOf(loaded.calls, 'jira_move_to_status').length, 0);
+        assert.equal(toolsOf(loaded.calls, 'jira_remove_label').length, 0);
     });
 
     var RETRY_STATES = ['unknown', 'blocked', 'unstable', 'checking', 'unchecked', 'preparing', 'ci_must_pass', 'ci_still_running'];
@@ -407,9 +407,10 @@ suite('retryMergePR: action branch characterization (gh-980)', function() {
         assert.deepEqual(toolsOf(loaded.calls, 'scm_mergePr')[0].args, { number: 121, mode: 'squash' });
         var events = loaded.calls.map(function(c) { return c.tool; });
         function idx(name) { return events.indexOf(name); }
+        function lastIdx(name) { return events.lastIndexOf(name); }
         assert.ok(idx('scm_removeLabel') !== -1 && idx('scm_removeLabel') < idx('jira_move_to_status'),
             'the cosmetic GitHub label strip happens BEFORE the tracker status move');
-        assert.ok(idx('jira_move_to_status') < idx('jira_remove_label'),
+        assert.ok(idx('jira_move_to_status') < lastIdx('jira_remove_label'),
             'the Merged move happens BEFORE pr_approved is stripped from Jira');
         assert.deepEqual(toolsOf(loaded.calls, 'jira_move_to_status')[0].args,
             { key: 'TS-125', statusName: configModule.STATUSES.MERGED });
@@ -468,7 +469,10 @@ suite('retryMergePR pure helpers (gh-980)', function() {
         // conflicts
         assert.equal(decide(false, 'dirty'), 'conflict');
         assert.equal(decide(true, 'cannot_be_merged'), 'conflict');
-        assert.equal(decide(null, 'conflict'), 'conflict');
+        assert.equal(decide(false, 'conflict'), 'conflict');
+        // a null mergeable outranks every state — GitHub is still computing
+        assert.equal(decide(null, 'conflict'), 'retry');
+        assert.equal(decide(null, 'dirty'), 'retry');
         // everything else is mergeable
         assert.equal(decide(true, 'clean'), 'merge');
         assert.equal(decide(false, 'clean'), 'merge', 'mergeable=false without a conflict state still attempts the merge');

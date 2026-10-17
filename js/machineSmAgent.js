@@ -308,6 +308,128 @@ function resolveSuggestionThreads(provider, prNumber, headSha, cfg) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// gh-980: config/state resolution helpers extracted from action() — the
+// sm-style override-before-jobParams priority, verbatim semantics.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Knob with an explicit-undefined override check: the project override wins
+// even over an explicit falsy jobParams value (e.g. dryRun:false).
+function pickKnob(overrideVal, pVal, dflt) {
+    return overrideVal !== undefined ? overrideVal : (pVal || dflt);
+}
+
+function resolveMaxResolveThreads(override, p, dflt) {
+    if (typeof override.maxResolveThreads === 'number' && override.maxResolveThreads > 0) {
+        return Math.floor(override.maxResolveThreads);
+    }
+    if (typeof p.maxResolveThreads === 'number' && p.maxResolveThreads > 0) {
+        return Math.floor(p.maxResolveThreads);
+    }
+    return dflt;
+}
+
+// gh-828: the post-APPROVE thread-resolution leg resolves ONLY threads
+// authored by the machine identities (the gh-728 comma-separated list
+// knob, same resolution chain as every other machine-keyed guard).
+// Unconfigured → empty list → the leg fails closed and resolves
+// nothing (human threads would otherwise be closed by the machine).
+function resolveMachineSmConfig(p, projectConfig) {
+    var override = (projectConfig && projectConfig.machineSm) || {};
+    var cfg = {
+        dryRun:            pickKnob(override.dryRun, p.dryRun, false),
+        maxConcurrentRuns: pickKnob(override.maxConcurrentRuns, p.maxConcurrentRuns, 1),
+        maxReworkRounds:   pickKnob(override.maxReworkRounds, p.maxReworkRounds, 2),
+        workflowFile:      override.workflowFile || p.workflowFile || 'ai-teammate.yml',
+        branchPrefix:      override.branchPrefix || p.branchPrefix || 'ai/gh-',
+        agentHandle:       override.agentHandle || p.agentHandle || 'ai-teammate',
+        issueLimit:        override.issueLimit || p.issueLimit || 50,
+        closeComment:      override.closeComment || p.closeComment || 'Machine SM: linked PR merged — closing the loop.'
+    };
+    cfg.machineLogins = machineAuthorModule.machineAuthorLogins(
+        machineAuthorModule.resolveMachineAuthor(p, projectConfig));
+    // gh-828 review round 4: same override-before-p priority as every other
+    // machineSm knob — a project-config cap silently ignored would leave an
+    // operator tuning the wrong bound.
+    cfg.maxResolveThreads = resolveMaxResolveThreads(override, p,
+        reviewVerdictsModule.DEFAULT_RESOLVE_THREADS_CAP);
+    return cfg;
+}
+
+function resolveRepoCfg(projectConfig, p) {
+    var projectRepo = projectConfig && projectConfig.repository;
+    if (projectRepo && projectRepo.owner && projectRepo.repo) return projectRepo;
+    if (p.repository) return p.repository;
+    if (p.repo) return { owner: String(p.repo).split('/')[0], repo: String(p.repo).split('/')[1] };
+    return null;
+}
+
+// gh-952 (live fa 2026-10-17): a run whose linked PR is MERGED is
+// archaeology, not a slot event — it can never be consumed by the loop.
+// Probe result kinds: 'unknown' (issue indeterminate — never dropped),
+// 'merged' (release the slot), 'live', 'error' (fail closed — keep).
+function probeOrphanRun(provider, n, branchPrefix) {
+    if (n === 'unknown') return { kind: 'unknown' };
+    try {
+        var ref = provider.findPr(n, branchPrefix);
+        if (ref && ref.state === 'MERGED') return { kind: 'merged', prNumber: ref.number };
+        return { kind: 'live' };
+    } catch (eOrphan) {
+        return { kind: 'error' };
+    }
+}
+
+function filterLiveActiveIssues(provider, activeIssues, branchPrefix) {
+    return activeIssues.filter(function (n) {
+        var probe = probeOrphanRun(provider, n, branchPrefix);
+        if (probe.kind === 'merged') {
+            console.log('  🔓 gh-' + n + ': the active run\'s linked PR #' + probe.prNumber +
+                ' is MERGED (owner bypass) — it can never be consumed; releasing the slot (gh-952)');
+            return false;
+        }
+        if (probe.kind === 'error') {
+            console.warn('  ⚠️  gh-' + n + ': orphan-slot probe failed — keeping the run in the count (fail closed)');
+        }
+        return true;
+    });
+}
+
+// One issue through the reconcile loop: probe the linked PR, run the pure
+// decision core, execute (or plan, in dryRun) every action. Returns the
+// per-issue counters action() aggregates.
+function reconcileIssue(provider, issue, cfg, activeSet) {
+    var counters = { acted: 0, dispatched: 0, skipped: 0, failures: 0 };
+    var prRef = provider.findPr(issue.number, cfg.branchPrefix);
+    var pr = prRef && prRef.state === 'OPEN' ? provider.prStatus(prRef.number) : prRef;
+    var state = {
+        issue: issue,
+        pr: pr,
+        activeRunForIssue: !!activeSet[issue.number] || !!activeSet['unknown']
+    };
+    var acts = decideActions(state, cfg);
+    acts.forEach(function (a) {
+        if (a.type === 'skip') {
+            counters.skipped++;
+            console.log('  ⏭️  gh-' + issue.number + ': ' + a.reason);
+            return;
+        }
+        a.prNumber = prRef ? prRef.number : null;
+        a.headSha = (pr && pr.headSha) || null;
+        console.log('  ' + (cfg.dryRun ? '[dry] ' : '') + '▶️  gh-' + issue.number + ' ' +
+            a.type + (a.leg ? ':' + a.leg : '') + ' — ' + a.reason);
+        if (cfg.dryRun) { counters.acted++; if (a.type === 'dispatch') counters.dispatched++; return; }
+        try {
+            executeAction(provider, a, issue, cfg);
+            counters.acted++;
+            if (a.type === 'dispatch') counters.dispatched++;
+        } catch (e) {
+            counters.failures++;
+            console.error('  ❌ gh-' + issue.number + ' ' + a.type + ' failed: ' + (e.message || e));
+        }
+    });
+    return counters;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // JSRunner entry point
 // ─────────────────────────────────────────────────────────────────────────────
 function action(params) {
@@ -316,35 +438,9 @@ function action(params) {
     try {
         projectConfig = configLoader.loadProjectConfig({ configPath: p.configPath }) || {};
     } catch (e) { projectConfig = {}; }
-    var override = projectConfig.machineSm || {};
 
-    var cfg = {
-        dryRun:            override.dryRun            !== undefined ? override.dryRun            : (p.dryRun || false),
-        maxConcurrentRuns: override.maxConcurrentRuns !== undefined ? override.maxConcurrentRuns : (p.maxConcurrentRuns || 1),
-        maxReworkRounds:   override.maxReworkRounds   !== undefined ? override.maxReworkRounds   : (p.maxReworkRounds || 2),
-        workflowFile:      override.workflowFile      || p.workflowFile   || 'ai-teammate.yml',
-        branchPrefix:      override.branchPrefix      || p.branchPrefix   || 'ai/gh-',
-        agentHandle:       override.agentHandle       || p.agentHandle    || 'ai-teammate',
-        issueLimit:        override.issueLimit        || p.issueLimit     || 50,
-        closeComment:      override.closeComment      || p.closeComment   || 'Machine SM: linked PR merged — closing the loop.'
-    };
-    // gh-828: the post-APPROVE thread-resolution leg resolves ONLY threads
-    // authored by the machine identities (the gh-728 comma-separated list
-    // knob, same resolution chain as every other machine-keyed guard).
-    // Unconfigured → empty list → the leg fails closed and resolves
-    // nothing (human threads would otherwise be closed by the machine).
-    cfg.machineLogins = machineAuthorModule.machineAuthorLogins(
-        machineAuthorModule.resolveMachineAuthor(p, projectConfig));
-    // gh-828 review round 4: same override-before-p priority as every other
-    // machineSm knob — a project-config cap silently ignored would leave an
-    // operator tuning the wrong bound.
-    cfg.maxResolveThreads = (typeof override.maxResolveThreads === 'number' && override.maxResolveThreads > 0)
-        ? Math.floor(override.maxResolveThreads)
-        : (typeof p.maxResolveThreads === 'number' && p.maxResolveThreads > 0)
-            ? Math.floor(p.maxResolveThreads) : reviewVerdictsModule.DEFAULT_RESOLVE_THREADS_CAP;
-    var repoCfg = (projectConfig.repository && projectConfig.repository.owner &&
-        projectConfig.repository.repo && projectConfig.repository) ||
-        (p.repository || (p.repo ? { owner: String(p.repo).split('/')[0], repo: String(p.repo).split('/')[1] } : null));
+    var cfg = resolveMachineSmConfig(p, projectConfig);
+    var repoCfg = resolveRepoCfg(projectConfig, p);
 
     if (!repoCfg || !repoCfg.owner || !repoCfg.repo) {
         console.error('❌ machineSm: repository required (.dmtools/config.js repository or jobParams.repo owner/repo)');
@@ -371,31 +467,7 @@ function action(params) {
     // 1. Global concurrency gate — the user contract: with parallel runs
     //    in flight, wait them out; the cron tick re-fires soon.
     var activeIssues = provider.activeMachineRuns(cfg.workflowFile);
-    // gh-952 (live fa 2026-10-17): release the slot for orphaned runs. PR
-    // #1661 was merged by the OWNER via bypass while its machine run was
-    // still active — the run outlived its issue's lifecycle and can never
-    // be consumed by the loop, but activeMachineRuns kept counting it, so
-    // the gate saw a busy machine on EVERY tick ('⏳ idle — active machine
-    // run(s) for issue(s) 1661') and the approved queue starved, arms
-    // nobody. A run whose linked PR is MERGED is archaeology, not a slot
-    // event — drop it from the count (the reconcile loop below still
-    // closes the issue via the Fixes #N safety net). Fail closed: a probe
-    // error or an unresolvable PR keeps the run in the count, and the
-    // 'unknown' placeholder (run's issue indeterminate) is never dropped.
-    var liveActiveIssues = activeIssues.filter(function (n) {
-        if (n === 'unknown') return true;
-        try {
-            var orphanRef = provider.findPr(n, cfg.branchPrefix);
-            if (orphanRef && orphanRef.state === 'MERGED') {
-                console.log('  🔓 gh-' + n + ': the active run\'s linked PR #' + orphanRef.number +
-                    ' is MERGED (owner bypass) — it can never be consumed; releasing the slot (gh-952)');
-                return false;
-            }
-        } catch (eOrphan) {
-            console.warn('  ⚠️  gh-' + n + ': orphan-slot probe failed — keeping the run in the count (fail closed)');
-        }
-        return true;
-    });
+    var liveActiveIssues = filterLiveActiveIssues(provider, activeIssues, cfg.branchPrefix);
     if (liveActiveIssues.length >= cfg.maxConcurrentRuns) {
         console.log('  ⏳ idle — active machine run(s) for ' +
             (liveActiveIssues.join(', ') === 'unknown' ? 'this project' : 'issue(s) ' + liveActiveIssues.join(', ')) +
@@ -413,34 +485,11 @@ function action(params) {
     liveActiveIssues.forEach(function (n) { activeSet[n] = true; });
 
     issues.forEach(function (issue) {
-        var prRef = provider.findPr(issue.number, cfg.branchPrefix);
-        var pr = prRef && prRef.state === 'OPEN' ? provider.prStatus(prRef.number) : prRef;
-        var state = {
-            issue: issue,
-            pr: pr,
-            activeRunForIssue: !!activeSet[issue.number] || !!activeSet['unknown']
-        };
-        var acts = decideActions(state, cfg);
-        acts.forEach(function (a) {
-            if (a.type === 'skip') {
-                skipped++;
-                console.log('  ⏭️  gh-' + issue.number + ': ' + a.reason);
-                return;
-            }
-            a.prNumber = prRef ? prRef.number : null;
-            a.headSha = (pr && pr.headSha) || null;
-            console.log('  ' + (cfg.dryRun ? '[dry] ' : '') + '▶️  gh-' + issue.number + ' ' +
-                a.type + (a.leg ? ':' + a.leg : '') + ' — ' + a.reason);
-            if (cfg.dryRun) { acted++; if (a.type === 'dispatch') dispatched++; return; }
-            try {
-                executeAction(provider, a, issue, cfg);
-                acted++;
-                if (a.type === 'dispatch') dispatched++;
-            } catch (e) {
-                failures++;
-                console.error('  ❌ gh-' + issue.number + ' ' + a.type + ' failed: ' + (e.message || e));
-            }
-        });
+        var counters = reconcileIssue(provider, issue, cfg, activeSet);
+        acted += counters.acted;
+        dispatched += counters.dispatched;
+        skipped += counters.skipped;
+        failures += counters.failures;
     });
 
     console.log('\n══ Machine SM complete — acted: ' + acted + ' (dispatched ' + dispatched +
@@ -453,6 +502,11 @@ if (typeof module !== 'undefined' && module.exports) {
         action: action,
         decideActions: decideActions,
         issueFromRunTitle: issueFromRunTitle,
-        resolveSuggestionThreads: resolveSuggestionThreads
+        resolveSuggestionThreads: resolveSuggestionThreads,
+        resolveMachineSmConfig: resolveMachineSmConfig,
+        resolveRepoCfg: resolveRepoCfg,
+        probeOrphanRun: probeOrphanRun,
+        filterLiveActiveIssues: filterLiveActiveIssues,
+        reconcileIssue: reconcileIssue
     };
 }

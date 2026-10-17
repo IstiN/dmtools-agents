@@ -128,6 +128,53 @@ function triggerAutoStartRework(ticketKey, customParams, config, scm) {
     }
 }
 
+// ── gh-980: pure decision helpers extracted from action() (CRAP 190 → 30) ──
+// The merge-readiness branch table, verbatim semantics: 'retry' covers
+// GitHub's still-computing / CI-running states and a null mergeable,
+// 'updateBranch' the behind-base case, 'conflict' every pre-merge conflict
+// signal, 'merge' everything else.
+var RETRY_MERGE_STATES = {
+    unknown: true, blocked: true, unstable: true, checking: true,
+    unchecked: true, preparing: true, ci_must_pass: true, ci_still_running: true
+};
+var CONFLICT_MERGE_STATES = { cannot_be_merged: true, conflict: true };
+
+function decideMergeReadiness(mergeable, mergeableState) {
+    if (mergeable === null || RETRY_MERGE_STATES[mergeableState]) return 'retry';
+    if (mergeableState === 'behind') return 'updateBranch';
+    if (mergeable === false && mergeableState === 'dirty') return 'conflict';
+    if (CONFLICT_MERGE_STATES[mergeableState]) return 'conflict';
+    return 'merge';
+}
+
+function isCiBlockingMessage(errMsg) {
+    return errMsg.indexOf('blocked') !== -1 || errMsg.indexOf('422') !== -1 || errMsg.indexOf('405') !== -1;
+}
+
+// The merge-error classification, verbatim semantics: a message mentioning
+// 'conflict' (case-insensitive) is a conflict; an empty or CI-blocking
+// message is a temporary block (retry next cycle, keep pr_approved);
+// anything else is a hard failure → In Rework.
+function classifyMergeError(mergeErr) {
+    var errMsg = mergeErr ? String(mergeErr) : '';
+    if (errMsg.toLowerCase().indexOf('conflict') !== -1) return 'conflict';
+    if (errMsg === '' || isCiBlockingMessage(errMsg)) return 'temporary';
+    return 'ci-failing';
+}
+
+// The shared In-Rework escalation: strip pr_approved (SCM + tracker),
+// release the SM lock, post the caller-built comment, move the ticket,
+// re-arm the rework leg. Called by both the pre-merge conflict path and
+// the post-merge-failure path.
+function escalateToInRework(opts) {
+    removeApprovedLabels(opts.scm, opts.prNumber, opts.ticketKey);
+    releaseLock(opts.ticketKey, opts.customParams);
+    getTracker().postComment(opts.ticketKey, opts.commentBody);
+    getTracker().moveToStatus(opts.ticketKey, opts.config.jira.statuses.IN_REWORK);
+    console.log('✅ Ticket moved to In Rework (' + opts.reason + ')');
+    triggerAutoStartRework(opts.ticketKey, opts.customParams, opts.config, opts.scm);
+}
+
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
     if (!ticketKey) {
@@ -173,21 +220,14 @@ function action(params) {
     }
 
     // GitHub hasn't computed mergeability yet, or CI checks still running — retry next cycle
-    if (mergeable === null ||
-        mergeableState === 'unknown' ||
-        mergeableState === 'blocked' ||
-        mergeableState === 'unstable' ||
-        mergeableState === 'checking' ||
-        mergeableState === 'unchecked' ||
-        mergeableState === 'preparing' ||
-        mergeableState === 'ci_must_pass' ||
-        mergeableState === 'ci_still_running') {
+    var readiness = decideMergeReadiness(mergeable, mergeableState);
+    if (readiness === 'retry') {
         console.log('PR not ready to merge (' + mergeableState + ') — will retry next cycle');
         return false;
     }
 
     // PR branch is behind base — update it so CI can re-run, then retry next cycle
-    if (mergeableState === 'behind') {
+    if (readiness === 'updateBranch') {
         console.log('PR branch is behind base — requesting branch update');
         try {
             if (scm.updateBranch) {
@@ -203,16 +243,17 @@ function action(params) {
     }
 
     // Conflict detected before attempting merge
-    if ((mergeable === false && mergeableState === 'dirty') ||
-        mergeableState === 'cannot_be_merged' ||
-        mergeableState === 'conflict') {
+    if (readiness === 'conflict') {
         console.log('PR has merge conflict — moving ticket to In Rework');
-        removeApprovedLabels(scm, prNumber, ticketKey);
-        releaseLock(ticketKey, customParams);
-        getTracker().postComment(ticketKey, '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE CONFLICT* — PR #' + prNumber + ' has a merge conflict with main. Please resolve conflicts and re-push.\n\n[View PR|' + prUrl + ']{panel}');
-        getTracker().moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
-        console.log('✅ Ticket moved to In Rework (merge conflict)');
-        triggerAutoStartRework(ticketKey, customParams, config, scm);
+        escalateToInRework({
+            scm: scm,
+            prNumber: prNumber,
+            ticketKey: ticketKey,
+            customParams: customParams,
+            config: config,
+            reason: 'merge conflict',
+            commentBody: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE CONFLICT* — PR #' + prNumber + ' has a merge conflict with main. Please resolve conflicts and re-push.\n\n[View PR|' + prUrl + ']{panel}'
+        });
         return true;
     }
 
@@ -264,23 +305,24 @@ function action(params) {
         return true;
     } catch (mergeErr) {
         console.warn('Merge failed:', mergeErr);
-        const errMsg = mergeErr ? String(mergeErr) : '';
-        const isConflict = errMsg.toLowerCase().indexOf('conflict') !== -1;
-        const isCIBlocking = errMsg.indexOf('blocked') !== -1 || errMsg.indexOf('422') !== -1 || errMsg.indexOf('405') !== -1;
+        var failure = classifyMergeError(mergeErr);
 
-        if (!isConflict && (isCIBlocking || errMsg === '')) {
+        if (failure === 'temporary') {
             // Temporary block — retry next cycle, keep pr_approved
             console.log('Merge blocked temporarily — will retry next cycle');
             return false;
         }
 
-        const reason = isConflict ? 'merge conflict' : 'CI checks failing or PR not mergeable';
-        removeApprovedLabels(scm, prNumber, ticketKey);
-        releaseLock(ticketKey, customParams);
-        getTracker().postComment(ticketKey, '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE FAILED* — Could not merge PR #' + prNumber + ': ' + reason + '. Please check and re-push.\n\n[View PR|' + prUrl + ']{panel}');
-        getTracker().moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
-        console.log('✅ Ticket moved to In Rework (' + reason + ')');
-        triggerAutoStartRework(ticketKey, customParams, config, scm);
+        var reason = failure === 'conflict' ? 'merge conflict' : 'CI checks failing or PR not mergeable';
+        escalateToInRework({
+            scm: scm,
+            prNumber: prNumber,
+            ticketKey: ticketKey,
+            customParams: customParams,
+            config: config,
+            reason: reason,
+            commentBody: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE FAILED* — Could not merge PR #' + prNumber + ': ' + reason + '. Please check and re-push.\n\n[View PR|' + prUrl + ']{panel}'
+        });
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
@@ -295,5 +337,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams, triggerAutoStartRework };
+    module.exports = { action, resolveCustomParams, triggerAutoStartRework, decideMergeReadiness, classifyMergeError };
 }
