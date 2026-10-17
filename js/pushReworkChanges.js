@@ -22,6 +22,77 @@ var gitStaging = require('./common/gitStaging.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 var cacheToReleases = require('./cacheToReleases.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+// gh-957: the no-op loop guard's lap markers — the post-action stamps one
+// per leg close ({head, pushed, resolved}) so the SM arm actions can bound
+// consecutive empty laps on one head.
+var reworkLoopGuard = require('./common/reworkLoopGuard.js');
+
+// ── gh-957: lap audit (loop guard) + audit-resolve support ──────────────────
+//
+// The rework no-op loop (live dart #424, 7 legs / 2h): every leg closed
+// 'successful' with zero pushed commits and zero resolved threads, and the
+// arm rule re-armed on the next tick every time. Two mechanisms close it:
+//
+//   Lap markers — every leg close (success, blocked, or audit-resolve) posts
+//                 ONE machine-parseable marker {head, pushed, resolved, at}
+//                 (js/common/reworkLoopGuard.js). The SM arm actions count
+//                 consecutive no-op laps (pushed 0 AND resolved 0) on one
+//                 head and withhold + escalate at the cap.
+//   Audit-resolve — a leg that determines every open thread is already
+//                 addressed/invalid MUST be able to resolve those threads
+//                 with an explanatory reply per thread (the rework run URL
+//                 rides the reply for the audit trail) — even with zero
+//                 pushed commits. The agents#827 no-change guard only
+//                 blocks when reply coverage is INCOMPLETE: a reply on every
+//                 open thread is not a silent drop.
+
+/**
+ * Best-effort URL of the rework run driving this post-action
+ * (https://github.com/<owner>/<repo>/actions/runs/<id>). Available on the
+ * Actions runner; null on local teammate runs — callers degrade to a
+ * run-URL-less audit line.
+ */
+function reworkRunUrl() {
+    try {
+        var server = java.lang.System.getenv('GITHUB_SERVER_URL');
+        var repo = java.lang.System.getenv('GITHUB_REPOSITORY');
+        var runId = java.lang.System.getenv('GITHUB_RUN_ID');
+        if (server && repo && runId) {
+            return String(server) + '/' + String(repo) + '/actions/runs/' + String(runId);
+        }
+    } catch (e) { /* local run — no run identity */ }
+    return null;
+}
+
+/**
+ * Reads the head this rework pass started from
+ * (input/<ticketKey>/rework_base_head.txt, written by preCliReworkSetup) —
+ * the head the lap marker anchors to. Returns null when unknown.
+ */
+function readReworkBaseHead(ticketKey) {
+    try {
+        var base = String(file_read({ path: 'input/' + ticketKey + '/rework_base_head.txt' }) || '').trim();
+        return /^[0-9a-f]{7,40}$/i.test(base) ? base : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Stamps the gh-957 lap marker on the PR. Fail-quiet by design: the audit
+ * must never break the leg close.
+ */
+function postLapMarker(scm, prNumber, headSha, pushed, resolved) {
+    var body = reworkLoopGuard.buildLapMarker(headSha, pushed, resolved, reworkRunUrl());
+    if (!body) return;
+    try {
+        scm.addComment(prNumber, body);
+        console.log('📓 rework lap marker posted on PR #' + prNumber + ': head ' +
+            String(headSha).substring(0, 7) + ', pushed ' + (pushed ? 1 : 0) + ', resolved ' + resolved);
+    } catch (e) {
+        console.warn('Failed to post rework lap marker on PR #' + prNumber + ':', e.message || e);
+    }
+}
 
 /**
  * Wraps feedbackLoop.resumeAgent() so an unexpected failure inside it (e.g. its own
@@ -825,53 +896,234 @@ function buildCompletionLiveState(scm, pr, ticketKey, config) {
  * Fail-open by design: probe/resolution errors are logged, never thrown — a
  * broken sweep must not fail the rework leg.
  */
-function resolveRemainingAddressedThreads(scm, pullRequestId, addressed) {
-    var cited = (addressed && addressed.citedThreadIds) || [];
-    var byThreadId = (addressed && addressed.addressedThreadIds) || {};
-    var byRootId = (addressed && addressed.addressedRootIds) || {};
-    var hasWork = cited.length > 0 ||
-        Object.keys(byThreadId).length > 0 ||
-        Object.keys(byRootId).length > 0;
-    if (!hasWork) return;
+/**
+ * True when a fresh-swept thread is addressed by this rework: cited by
+ * threadId in the response text, claimed in review_replies.json by
+ * threadId, or claimed by root comment id.
+ */
+function isAddressedThread(t, byThreadId, byRootId, cited) {
+    return (t.threadId && (byThreadId[String(t.threadId)] || cited.indexOf(String(t.threadId)) !== -1)) ||
+        (t.rootCommentId !== null && t.rootCommentId !== undefined && byRootId[String(t.rootCommentId)]);
+}
 
+/**
+ * Count one successful resolution toward the gh-957 lap marker (no-op when
+ * the caller passed no counter).
+ */
+function countResolution(counter) {
+    if (!counter) return;
+    counter.resolved = (counter.resolved || 0) + 1;
+}
+
+/**
+ * The fresh open-thread sweep: re-reads the PR's live threads and resolves
+ * every still-open one this rework addressed. Fail-quiet: a sweep probe
+ * failure degrades to the cited-ids direct resolution below. Returns
+ * {resolvedCount, resolvedViaSweep} — the latter keeps the cited pass from
+ * double-resolving.
+ */
+function sweepAddressedThreads(scm, pullRequestId, freshThreads, addressed, counter) {
+    var byThreadId = addressed.byThreadId;
+    var byRootId = addressed.byRootId;
+    var cited = addressed.cited;
+    var resolvedCount = 0;
     var resolvedViaSweep = {};
-    var freshThreads = [];
-    if (scm && typeof scm.fetchDiscussions === 'function') {
-        try {
-            var data = scm.fetchDiscussions(String(pullRequestId));
-            freshThreads = (data && data.rawThreads && data.rawThreads.threads) || [];
-        } catch (e) {
-            console.warn('Fresh review-thread sweep failed (falling back to direct resolution of cited ids):', e.message || e);
-        }
-    }
-
-    freshThreads.forEach(function(t) {
+    (freshThreads || []).forEach(function(t) {
         if (!t || t.resolved === true) return;
-        var isAddressed =
-            (t.threadId && (byThreadId[String(t.threadId)] || cited.indexOf(String(t.threadId)) !== -1)) ||
-            (t.rootCommentId !== null && t.rootCommentId !== undefined && byRootId[String(t.rootCommentId)]);
-        if (!isAddressed) return;
+        if (!isAddressedThread(t, byThreadId, byRootId, cited)) return;
         try {
             scm.resolveThread(pullRequestId, { threadId: t.threadId });
             console.log('✅ Resolved still-open addressed thread (fresh sweep):', t.threadId);
+            resolvedCount++;
+            countResolution(counter);
             if (t.threadId) resolvedViaSweep[String(t.threadId)] = true;
         } catch (e) {
             console.warn('Failed to resolve thread', t.threadId + ':', e.message || e);
         }
     });
+    return { resolvedCount: resolvedCount, resolvedViaSweep: resolvedViaSweep };
+}
 
-    // Threads cited in the rework response MUST be resolved even when the sweep
-    // could not confirm them open (probe failed, pagination, stale flags) —
-    // resolve them directly; resolving an already-resolved thread is harmless.
-    cited.forEach(function(threadId) {
+/**
+ * Threads cited in the rework response MUST be resolved even when the sweep
+ * could not confirm them open (probe failed, pagination, stale flags) —
+ * resolve them directly; resolving an already-resolved thread is harmless.
+ */
+function resolveCitedThreads(scm, pullRequestId, cited, resolvedViaSweep, counter) {
+    var resolvedCount = 0;
+    (cited || []).forEach(function(threadId) {
         if (resolvedViaSweep[String(threadId)]) return;
         try {
             scm.resolveThread(pullRequestId, { threadId: threadId });
             console.log('✅ Resolved thread cited in rework response:', threadId);
+            resolvedCount++;
+            countResolution(counter);
         } catch (e) {
             console.warn('Failed to resolve cited thread', threadId + ':', e.message || e);
         }
     });
+    return resolvedCount;
+}
+
+/**
+ * The live thread re-read for the closure sweep: the rawThreads list from
+ * fetchDiscussions, [] when the provider lacks the probe or it fails.
+ */
+function fetchFreshThreadsForSweep(scm, pullRequestId) {
+    if (!(scm && typeof scm.fetchDiscussions === 'function')) return [];
+    try {
+        var data = scm.fetchDiscussions(String(pullRequestId));
+        return ((data && data.rawThreads && data.rawThreads.threads) || []);
+    } catch (e) {
+        console.warn('Fresh review-thread sweep failed (falling back to direct resolution of cited ids):', e.message || e);
+        return [];
+    }
+}
+
+function resolveRemainingAddressedThreads(scm, pullRequestId, addressed) {
+    var cited = (addressed && addressed.citedThreadIds) || [];
+    var byThreadId = (addressed && addressed.addressedThreadIds) || {};
+    var byRootId = (addressed && addressed.addressedRootIds) || {};
+    // gh-957: optional lap-accounting counter ({resolved: N}) — incremented on
+    // every successful resolution so the leg close can stamp an accurate lap
+    // marker (zero-resolved laps are what the SM loop guard counts).
+    var counter = (addressed && addressed.resolutions) || null;
+    var hasWork = cited.length > 0 ||
+        Object.keys(byThreadId).length > 0 ||
+        Object.keys(byRootId).length > 0;
+    if (!hasWork) return 0;
+
+    var sweep = sweepAddressedThreads(scm, pullRequestId,
+        fetchFreshThreadsForSweep(scm, pullRequestId),
+        { byThreadId: byThreadId, byRootId: byRootId, cited: cited }, counter);
+    return sweep.resolvedCount +
+        resolveCitedThreads(scm, pullRequestId, cited, sweep.resolvedViaSweep, counter);
+}
+
+/**
+ * gh-957: the audit line appended to every reply when the leg changed no
+ * code (audit-resolve) — resolution without a code change is allowed ONLY
+ * with this per-thread explanation (rework run URL when known).
+ */
+function buildAuditResolveLine(auditNoCodeChange, runUrl) {
+    if (!auditNoCodeChange) return null;
+    return '\n\n— Audit (gh-957): no code change required — this thread is already addressed on the current head' +
+        (runUrl ? (' or an invalid finding. Resolved by rework run ' + runUrl + '.') : '. (rework run URL unavailable on this runner)');
+}
+
+/**
+ * One untargeted reply's combined top-level fallback text: a single item
+ * posts as-is; several are numbered into ONE comment (anti-spam).
+ */
+function buildCombinedUntargetedComment(untargeted) {
+    if (untargeted.length === 1) return untargeted[0].text;
+    const lines = untargeted.map(function(u, i) {
+        return (i + 1) + '. ' + u.text + (u.threadId ? ' (thread ' + u.threadId + ')' : '');
+    });
+    return '✅ Addressed ' + untargeted.length + ' review comment(s) without a specific inline target:\n\n' + lines.join('\n');
+}
+
+/**
+ * The reply anchor id from whichever field the agent wrote
+ * (inReplyToId first, rootCommentId as the input-schema fallback).
+ */
+function firstPresentId(item) {
+    if (item.inReplyToId) return item.inReplyToId;
+    return item.rootCommentId || null;
+}
+
+/**
+ * The root comment id the setup-time snapshot holds for a threadId — null
+ * when the snapshot lacks the thread or its root id.
+ */
+function threadRootIdOrNull(lookup, threadId) {
+    var t = threadId ? lookup.byThread[String(threadId)] : null;
+    if (!t || t.rootCommentId === null || t.rootCommentId === undefined) return null;
+    return t.rootCommentId;
+}
+
+/**
+ * The threadId the snapshot holds for a root comment id — null when unknown.
+ */
+function fillThreadIdFromRoot(lookup, inReplyToId) {
+    if (!inReplyToId) return null;
+    var byRoot = lookup.byRoot[String(inReplyToId)];
+    return (byRoot && byRoot.threadId) ? byRoot.threadId : null;
+}
+
+/**
+ * gh-692 id enrichment: fill a missing inReplyToId from the setup-time
+ * snapshot (matched by threadId) and a missing threadId from the snapshot
+ * (matched by root id) — either id makes the reply threaded AND its thread
+ * resolvable. Mutates item.threadId when fillable; returns the anchor id.
+ */
+function enrichReplyIds(item, lookup) {
+    var inReplyToId = firstPresentId(item);
+    if (!inReplyToId && item.threadId) {
+        inReplyToId = threadRootIdOrNull(lookup, item.threadId) || inReplyToId;
+    }
+    if (!item.threadId && inReplyToId) {
+        item.threadId = fillThreadIdFromRoot(lookup, inReplyToId);
+    }
+    return inReplyToId;
+}
+
+/**
+ * The reply text: a path reference resolves to the file content, anything
+ * else posts as-is; an empty/absent ref falls back to the generic marker.
+ */
+function resolveReplyText(replyRef, outputOptions) {
+    if (!replyRef) return '✅ Addressed.';
+    const looksLikePath = replyRef.indexOf('outputs/') === 0 ||
+        replyRef.indexOf('/') !== -1 ||
+        replyRef.indexOf('.md') !== -1;
+    if (looksLikePath) {
+        const fileContent = outputFiles.readOutputFile(replyRef, outputOptions);
+        if (fileContent && fileContent.trim()) {
+            return fileContent.trim();
+        }
+    }
+    return replyRef;
+}
+
+/**
+ * Resolve one reply's thread and count the resolution for the gh-957 lap
+ * marker. No-op when the reply carries no threadId.
+ */
+function resolveReplyThread(scm, pullRequestId, thread, item, resolutions) {
+    if (!item.threadId) return;
+    try {
+        scm.resolveThread(pullRequestId, thread);
+        console.log('✅ Resolved thread', item.threadId);
+        if (resolutions) resolutions.resolved = (resolutions.resolved || 0) + 1;
+    } catch (e) {
+        console.warn('Failed to resolve thread', item.threadId + ':', e.message || e);
+    }
+}
+
+/**
+ * Post one prepared reply: an inline threaded reply when an anchor id
+ * exists, else queue it for the combined top-level fallback (anti-spam —
+ * never one generic comment per item). Resolves the thread either way.
+ */
+function postReplyAndResolve(scm, pullRequestId, item, thread, replyText, state) {
+    if (thread.rootCommentId) {
+        // Normal case: post an inline threaded reply — this appears nested
+        // inside the review conversation, not as a new top-level PR comment.
+        try {
+            scm.replyToThread(pullRequestId, thread, replyText);
+            console.log('✅ Replied to comment #' + thread.rootCommentId);
+            state.posted++;
+        } catch (e) {
+            console.warn('Failed to post reply:', e.message || e);
+        }
+    } else {
+        // No comment id available at all — a threaded reply is not possible.
+        // Queue it instead of posting a separate top-level PR comment per
+        // item, which would spam the conversation with repeated generic text.
+        state.untargeted.push({ threadId: item.threadId || null, text: replyText });
+    }
+    resolveReplyThread(scm, pullRequestId, thread, item, state.resolutions);
 }
 
 /**
@@ -919,43 +1171,26 @@ function postThreadReplies(scm, pullRequestId, outputOptions) {
         console.log('No thread replies to post');
     }
 
-    function resolveReplyText(replyRef) {
-        if (!replyRef) return '✅ Addressed.';
-        const looksLikePath = replyRef.indexOf('outputs/') === 0 ||
-            replyRef.indexOf('/') !== -1 ||
-            replyRef.indexOf('.md') !== -1;
-        if (looksLikePath) {
-            const fileContent = outputFiles.readOutputFile(replyRef, outputOptions);
-            if (fileContent && fileContent.trim()) {
-                return fileContent.trim();
-            }
-        }
-        return replyRef;
-    }
-
     let posted = 0;
     const untargeted = [];
     const addressed = { threadIds: {}, rootIds: {} };
+    // gh-957: lap-accounting counter — incremented on every successful
+    // resolution so the leg close can stamp an accurate lap marker.
+    const resolutions = outputOptions.resolutions || null;
+    const state = { posted: 0, untargeted: untargeted, resolutions: resolutions };
+    // gh-957 audit-resolve: when the leg changed no code, every reply below
+    // carries the audit line (rework run URL) — resolution without a code
+    // change is allowed ONLY with this per-thread explanation.
+    const auditLine = buildAuditResolveLine(outputOptions.auditNoCodeChange, outputOptions.runUrl);
+
     replies.forEach(function(item) {
         // Accept both the documented field names (inReplyToId/reply) and the
         // input-schema field names (rootCommentId/body) — the AI agent commonly
         // mirrors field names from input/<TICKET>/pr_discussions_raw.json
-        // (which uses rootCommentId/body) instead of renaming them for output.
-        let inReplyToId = item.inReplyToId || item.rootCommentId || null;
-
-        // gh-692: fill a missing id from the setup-time snapshot so the reply can
-        // be posted inline and the thread can be resolved.
-        if (!inReplyToId && item.threadId && lookup.byThread[String(item.threadId)] &&
-            lookup.byThread[String(item.threadId)].rootCommentId !== null &&
-            lookup.byThread[String(item.threadId)].rootCommentId !== undefined) {
-            inReplyToId = lookup.byThread[String(item.threadId)].rootCommentId;
-        }
-        if (!item.threadId && inReplyToId && lookup.byRoot[String(inReplyToId)] &&
-            lookup.byRoot[String(inReplyToId)].threadId) {
-            item.threadId = lookup.byRoot[String(inReplyToId)].threadId;
-        }
-
-        const replyText = resolveReplyText(item.reply || item.body);
+        // instead of renaming them for output. gh-692 fills either missing id
+        // from the setup-time snapshot so the reply is threaded + resolvable.
+        const inReplyToId = enrichReplyIds(item, lookup);
+        const replyText = resolveReplyText(item.reply || item.body, outputOptions) + (auditLine || '');
         const thread = { rootCommentId: inReplyToId, threadId: item.threadId || null };
 
         // Track every id this rework claims as addressed — the closure sweep
@@ -964,44 +1199,15 @@ function postThreadReplies(scm, pullRequestId, outputOptions) {
         if (item.threadId) addressed.threadIds[String(item.threadId)] = true;
         if (inReplyToId) addressed.rootIds[String(inReplyToId)] = true;
 
-        if (inReplyToId) {
-            // Normal case: post an inline threaded reply — this appears nested
-            // inside the review conversation, not as a new top-level PR comment.
-            try {
-                scm.replyToThread(pullRequestId, thread, replyText);
-                console.log('✅ Replied to comment #' + inReplyToId);
-                posted++;
-            } catch (e) {
-                console.warn('Failed to post reply:', e.message || e);
-            }
-        } else {
-            // No comment id available at all — a threaded reply is not possible.
-            // Queue it instead of posting a separate top-level PR comment per
-            // item, which would spam the conversation with repeated generic text.
-            untargeted.push({ threadId: item.threadId || null, text: replyText });
-        }
-
-        if (item.threadId) {
-            try {
-                scm.resolveThread(pullRequestId, thread);
-                console.log('✅ Resolved thread', item.threadId);
-            } catch (e) {
-                console.warn('Failed to resolve thread', item.threadId + ':', e.message || e);
-            }
-        }
+        postReplyAndResolve(scm, pullRequestId, item, thread, replyText, state);
     });
+    posted = state.posted;
 
     if (untargeted.length > 0) {
         // Post exactly one combined top-level comment for all untargeted replies
         // instead of one generic comment per item.
-        const lines = untargeted.map(function(u, i) {
-            return (i + 1) + '. ' + u.text + (u.threadId ? ' (thread ' + u.threadId + ')' : '');
-        });
-        const combinedText = untargeted.length === 1
-            ? untargeted[0].text
-            : '✅ Addressed ' + untargeted.length + ' review comment(s) without a specific inline target:\n\n' + lines.join('\n');
         try {
-            scm.addComment(pullRequestId, combinedText);
+            scm.addComment(pullRequestId, buildCombinedUntargetedComment(untargeted));
             console.log('✅ Posted 1 combined comment for ' + untargeted.length + ' untargeted repl' + (untargeted.length === 1 ? 'y' : 'ies'));
             posted++;
         } catch (e) {
@@ -1016,7 +1222,8 @@ function postThreadReplies(scm, pullRequestId, outputOptions) {
     resolveRemainingAddressedThreads(scm, pullRequestId, {
         citedThreadIds: extractCitedThreadIds(outputOptions.responseText),
         addressedThreadIds: addressed.threadIds,
-        addressedRootIds: addressed.rootIds
+        addressedRootIds: addressed.rootIds,
+        resolutions: outputOptions.resolutions || null
     });
 
     console.log('Posted ' + posted + '/' + replies.length + ' thread replies');
@@ -1249,20 +1456,63 @@ function headMovedSinceLastReview(scm, pr) {
 }
 
 /**
- * agents#827: the rework pass produced no production change while review threads are open. Posts the
- * agent's response.md as the explanation, moves the ticket to Blocked and leaves threads/labels alone.
+ * gh-957 audit-resolve gate decision (pure — extracted from action for the
+ * CRAP budget and the failed-probe semantics, review thread 'realCodeChanges
+ * mislabels a failed probe as a no-op lap'). Combines the two independent
+ * change signals into one decision per leg close:
+ *   realCodeChanges     — hasRealCodeChanges() probe: true/false, or null
+ *                         when the git diff probe itself failed (unknown)
+ *   codeChangesCommitted— commitAndPush()'s own hasChanges (a rework commit
+ *                         actually landed this leg)
+ *   openThreadCount     — open threads in the input snapshot
+ *   unaddressedCount    — open threads with no targeted reply
+ * Returns { blocked, auditResolve, lapPushed }:
+ *   lapPushed    — a real change landed (either signal) — the lap marker
+ *                  records it so a genuine progress lap is NEVER counted as
+ *                  a no-op: a failed probe must not escalate a healthy PR
+ *                  one lap early.
+ *   blocked      — no change CONFIRMED, open threads AND incomplete reply
+ *                  coverage: the historical agents#827 blocked path.
+ *   auditResolve — no change (confirmed, or ASSUMED when the probe failed
+ *                  and no commit landed) with full reply coverage:
+ *                  resolution is allowed ONLY with the per-thread audit
+ *                  line. When commits landed under a failed probe we cannot
+ *                  claim "no code change" — the normal resolving path (no
+ *                  audit line) applies.
  */
-function handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, openCount, actualParams) {
+function evaluateAuditResolveGate(realCodeChanges, codeChangesCommitted, openThreadCount, unaddressedCount) {
+    var lapPushed = realCodeChanges === true || codeChangesCommitted === true;
+    var blocked = realCodeChanges === false && openThreadCount > 0 && unaddressedCount > 0;
+    var auditResolve = !blocked && openThreadCount > 0 && !lapPushed;
+    return { blocked: blocked, auditResolve: auditResolve, lapPushed: lapPushed };
+}
+
+/**
+ * agents#827 + gh-957: the rework pass produced no production change while
+ * review threads are open AND reply coverage is incomplete (gh-957 tightens
+ * the gate — full coverage takes the audit-resolve path instead). Posts the
+ * agent's response.md as the explanation, moves the ticket to Blocked, leaves
+ * threads/labels alone, and stamps a no-op lap marker (pushed 0, resolved 0)
+ * so the SM loop guard can bound consecutive empty laps on this head.
+ */
+function handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, openCount, actualParams, unaddressed) {
     var reason = String(fixSummary || '').trim();
     var message = 'Rework is **blocked**: no code changes were made while ' + openCount +
-        ' review thread(s) are still open. Threads were NOT resolved and the review labels were left as they are.' +
-        (reason && reason !== '_(No fix summary generated)_' ? '\n\n' + reason : '');
+        ' review thread(s) are still open. Threads were NOT resolved and the review labels were left as they are.';
+    if (Array.isArray(unaddressed) && unaddressed.length > 0) {
+        message += ' ' + unaddressed.length + ' open thread(s) had no targeted reply in ' +
+            '`outputs/review_replies.json` (gh-957 coverage gate): ' +
+            unaddressed.map(function(t) { return '`' + threadLabel(t) + '`'; }).join(', ') + '.';
+    }
+    if (reason && reason !== '_(No fix summary generated)_') message += '\n\n' + reason;
     console.error('❌ Rework blocked (no code changes, ' + openCount + ' open thread(s))');
     try {
         scm.addComment(pr.number, '⚠️ ' + message);
     } catch (e) {
         console.warn('Failed to post blocked rework comment on PR #' + pr.number + ':', e.message || e);
     }
+    // gh-957: the empty lap counts toward the SM no-op loop guard.
+    postLapMarker(scm, pr.number, readReworkBaseHead(ticketKey), false, 0);
     var blocked = (statuses && statuses.BLOCKED) || 'Blocked';
     try {
         tracker.moveToStatus(ticketKey, blocked);
@@ -1276,6 +1526,228 @@ function handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, 
         try { tracker.removeLabel(ticketKey, wip); } catch (e) { /* non-fatal */ }
     }
     return { success: false, blocked: true, error: 'Rework blocked: no code changes while ' + openCount + ' review thread(s) are open' };
+}
+
+// gh-957 CRAP split (ratchet: action regressed 263.3 -> 288.5 against the
+// released baseline): the completion tail of action extracted into small
+// single-responsibility helpers. Behavior-preserving — the original block
+// order, comments and log lines live on in the helpers; each is covered by
+// the dedicated suite in test_pushReworkChanges.js so the ratchet stays
+// under CRAP_THRESHOLD for the new functions too.
+
+// Post general fix summary as a top-level PR comment only when there are no
+// review thread replies. When replies exist, the thread replies themselves are
+// sufficient; an extra top-level comment is noise — except non-blocking gate
+// warnings, which are worth a short standalone comment even then, since they
+// wouldn't otherwise be visible anywhere on the PR.
+function hasMeaningfulSummary(fixSummary) {
+    return fixSummary && fixSummary.length > 50
+        && fixSummary !== '_(No fix summary generated)_';
+}
+
+function postCompletionPrComment(scm, pr, ticketKey, fixSummary, fixSummaryWithWarnings, repliesPosted, nonBlockingGateWarningBlock, codeChangesCommitted) {
+    if (repliesPosted > 0) {
+        console.log('ℹ️ Review thread replies posted — skipping general PR comment');
+        if (nonBlockingGateWarningBlock) {
+            try {
+                scm.addComment(pr.number, '## ⚠️ Non-blocking gate warnings' + nonBlockingGateWarningBlock);
+            } catch (e) {
+                console.warn('Failed to post non-blocking gate warning comment:', e);
+            }
+        }
+        return false;
+    }
+    if (codeChangesCommitted || hasMeaningfulSummary(fixSummary)) {
+        return postPRComment(scm, pr.number, fixSummaryWithWarnings, ticketKey, repliesPosted);
+    }
+    console.log('ℹ️ No thread replies, no code changes, and no meaningful summary — skipping general PR comment');
+    return false;
+}
+
+// Ticket finalization on the completion path: In Review move, initiator
+// assign-back, WIP label removal, SM idempotency-label removal.
+function wipLabelOf(actualParams) {
+    return actualParams.metadata && actualParams.metadata.contextId
+        ? actualParams.metadata.contextId + '_wip'
+        : null;
+}
+
+function finalizeTicketState(tracker, ticketKey, statuses, actualParams, customParams) {
+    try {
+        tracker.moveToStatus(ticketKey, statuses.IN_REVIEW);
+        console.log('✅ Moved', ticketKey, 'to', statuses.IN_REVIEW);
+    } catch (statusError) {
+        console.warn('Failed to move ticket to In Review:', statusError);
+    }
+
+    // Assign back to initiator (if provided)
+    try {
+        const initiatorId = actualParams.initiator;
+        if (initiatorId) {
+            tracker.assignTo(ticketKey, initiatorId);
+            console.log('✅ Assigned ticket back to initiator');
+        }
+    } catch (e) {
+        console.warn('Failed to assign ticket:', e);
+    }
+
+    // Remove WIP label if present
+    const wipLabel = wipLabelOf(actualParams);
+    if (wipLabel) {
+        try {
+            tracker.removeLabel(ticketKey, wipLabel);
+            console.log('Removed WIP label:', wipLabel);
+        } catch (e) {
+            console.warn('Failed to remove WIP label:', e);
+        }
+    }
+
+    // Remove SM idempotency label so the ticket can be re-triggered next cycle
+    removeConfiguredLabels(tracker, ticketKey, customParams);
+}
+
+// GitHub machine loop latches. A no-op rework (no new commits since the last
+// review's head) keeps the latch and goes straight back to rework — no LLM
+// re-review of the unchanged head; owner rule (sticky approval): never
+// re-review an approved PR.
+function latchGateOpen(stickyApproved, freshReviewWanted, pr) {
+    return !!(!stickyApproved && !freshReviewWanted && pr && pr.number);
+}
+
+function rearmNoopRework(scm, tracker, pr, ticketKey) {
+    try {
+        tracker.addLabel(ticketKey, 'agent:rework');
+        console.log('✅ No-op rework: verdict head unchanged — agent:rework re-armed on ' + ticketKey);
+    } catch (e) {
+        console.warn('Failed to re-arm agent:rework on ' + ticketKey + ':', e.message || e);
+    }
+    try {
+        scm.addComment(pr.number,
+            '⚠️ Rework finished with **no new commits** — the previous review verdict (same head) ' +
+            'still stands and its findings are unchanged. Re-review skipped (token guard); rework re-armed.');
+    } catch (e) {
+        console.warn('Failed to post no-op rework comment on PR #' + pr.number + ':', e.message || e);
+    }
+}
+
+function noopLapDecisions(scm, tracker, pr, ticketKey, stickyApproved, freshReviewWanted, resolvedCount) {
+    if (!latchGateOpen(stickyApproved, freshReviewWanted, pr)) return;
+    if (resolvedCount === 0) {
+        rearmNoopRework(scm, tracker, pr, ticketKey);
+        return;
+    }
+    console.log('ℹ️ No-op push but ' + resolvedCount + ' thread(s) resolved this lap (gh-957 audit-resolve)' +
+        ' — agent:rework NOT re-armed; the threadsResolved sweep owns the next step');
+}
+
+function stickyApprovalNotice(scm, pr, stickyApproved) {
+    if (stickyApproved && pr && pr.number) {
+        // Owner rule (sticky approval): never re-review an approved PR.
+        // The rework pushed its fixes; validation re-runs on the new
+        // head and merge-validated closes the loop. Keep BOTH latches
+        // (pr_approved + ai_pr_reviewed) and arm nothing.
+        try {
+            scm.addComment(pr.number,
+                '✅ Rework finished. `pr_approved` is sticky (approved once — never re-reviewed): ' +
+                'the new head re-validates and merges directly.');
+        } catch (e) {
+            console.warn('Failed to post sticky-approval comment on PR #' + pr.number + ':', e.message || e);
+        }
+        console.log('ℹ️ Sticky approval on PR #' + pr.number + ' — re-review NOT armed; re-validation + merge follow');
+    }
+}
+
+function clearAiReviewedLatch(pr, freshReviewWanted, repoInfo) {
+    if (freshReviewWanted && pr && pr.number && typeof github_remove_label === 'function') {
+        try {
+            github_remove_label({
+                workspace: repoInfo.owner, repository: repoInfo.repo,
+                number: pr.number, label: 'ai_pr_reviewed'
+            });
+            console.log('✅ Cleared ai_pr_reviewed on PR #' + pr.number + ' — fresh review armed');
+        } catch (e) {
+            console.warn('Failed to clear ai_pr_reviewed on PR #' + pr.number + ':', e.message || e);
+        }
+    }
+}
+
+// Auto-start pr_review after rework is pushed to In Review (opt-in via customParams).
+function ticketOf(params, actualParams) {
+    return actualParams.ticket || (params.jobParams && params.jobParams.ticket);
+}
+
+function autoStartReviewSkipReason(freshReviewWanted, stickyApproved, ticket) {
+    if (!freshReviewWanted) return 'rework pushed no new commits (token guard)';
+    if (stickyApproved) return 'pr_approved is sticky on the PR (owner rule 2026-09-21)';
+    if (hasPrApprovedLabel(ticket)) return 'ticket has pr_approved label';
+    return null;
+}
+
+function triggerAutoStartReview(ticketKey, customParams, config, reviewConfigFile, scm) {
+    try {
+        return autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            config: config,
+            configFile: reviewConfigFile,
+            label: 'pr_review',
+            scm: scm,
+            stripKeys: [
+                'removeLabel',
+                'autoStartReview',
+                'autoStartReviewConfigFile'
+            ]
+        });
+    } catch (e) {
+        console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
+        return false;
+    }
+}
+
+function runAutoStartReview(scm, config, ticketKey, params, actualParams, customParams, freshReviewWanted, stickyApproved) {
+    var reviewStarted = false;
+    var reviewConfigFile = customParams && customParams.autoStartReviewConfigFile;
+    if (!(customParams && customParams.autoStartReview && reviewConfigFile)) {
+        autoStart.triggerSmIfIdle({ config: config, customParams: customParams, scm: scm });
+        return false;
+    }
+    var skipReason = autoStartReviewSkipReason(freshReviewWanted, stickyApproved, ticketOf(params, actualParams));
+    if (skipReason) {
+        console.log('ℹ️ autoStartReview: skipped — ' + skipReason);
+    } else {
+        reviewStarted = triggerAutoStartReview(ticketKey, customParams, config, reviewConfigFile, scm);
+    }
+    if (!reviewStarted) {
+        autoStart.triggerSmIfIdle({ config: config, customParams: customParams, scm: scm });
+    }
+    return reviewStarted;
+}
+
+function cacheCompletionArtifacts(params) {
+    try { cacheToReleases.action(params); } catch (e) { console.warn('⚠️ cacheToReleases failed (non-fatal):', e); }
+}
+
+// gh-957: stamp the lap marker (head the leg started from, whether a
+// real change landed, how many threads the leg resolved) — the SM
+// no-op loop guard counts consecutive empty laps on one head.
+function stampCompletionLapMarker(scm, pr, ticketKey, lapGate, lapResolutions) {
+    postLapMarker(
+        scm,
+        pr.number,
+        readReworkBaseHead(ticketKey) || (pr.head && (pr.head.sha || pr.head)) || null,
+        lapGate.lapPushed,
+        lapResolutions.resolved
+    );
+}
+
+function postCompletionTokenUsage(params, ticketKey) {
+    // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
+    // wrote outputs/*_usage.json during the agent run.
+    try {
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
 }
 
 function action(params) {
@@ -1449,66 +1921,57 @@ function action(params) {
                 ' fix-summary comment were NOT posted; the rework cycle was NOT closed — failing loudly instead of' +
                 ' silently skipping (silent skip re-arms empty rework laps forever, live fa #1212 2026-10-04).');
         }
-        // agents#827: rework only reworks. A pass that changed no production file while review threads
-        // are open is BLOCKED, not done: no thread resolution, no fresh review, no label cleanup — the
-        // ticket moves to the Blocked status and response.md (the agent's own explanation) is posted.
+        // agents#827 + gh-957: rework only reworks — but a pass that changed no
+        // production file while review threads are open is BLOCKED only when
+        // the reply coverage is INCOMPLETE. A leg that put a targeted,
+        // explanatory reply on EVERY open thread (already addressed on the
+        // head / invalid finding) is allowed to resolve those threads with
+        // the audit line (rework run URL) even with zero pushed commits —
+        // a reply per thread is not a silent drop. Incomplete coverage keeps
+        // the historical blocked path (threads NOT resolved, ticket Blocked)
+        // and the gh-957 lap marker records the empty lap for the SM guard.
         var realCodeChanges = hasRealCodeChanges(ticketKey, config);
-        var openInputThreads = readInputRawThreads(ticketKey, { workingDir: config.workingDir || null }).filter(isOpenThread);
-        if (realCodeChanges === false && openInputThreads.length > 0) {
-            return handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, openInputThreads.length, actualParams);
+        var outputOptsForCoverage = { ticketKey: ticketKey, workingDir: config.workingDir || null };
+        var inputSnapshotThreads = readInputRawThreads(ticketKey, outputOptsForCoverage);
+        var openInputThreads = inputSnapshotThreads.filter(isOpenThread);
+        var replyCoverage = buildReplyCoverage(inputSnapshotThreads, readRepliesArray(outputOptsForCoverage).replies);
+        var lapGate = evaluateAuditResolveGate(realCodeChanges, codeChangesCommitted,
+            openInputThreads.length, replyCoverage.unaddressed.length);
+        if (lapGate.blocked) {
+            return handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary,
+                openInputThreads.length, actualParams, replyCoverage.unaddressed);
+        }
+        // gh-957 audit-resolve is live when the gate above passed with zero
+        // code changes: every open thread has a targeted reply and the
+        // resolve pass below closes them with the audit trail. A FAILED diff
+        // probe (null) with no landed commit is treated as no-change too —
+        // resolution without the audit line is never allowed on an unknown
+        // tree.
+        if (lapGate.auditResolve) {
+            console.log('ℹ️ gh-957 audit-resolve: no code changes but ' + openInputThreads.length +
+                ' open thread(s) fully covered by targeted replies — resolving with audit trail');
         }
         let prCommentPosted = false;
 
         // Reply to each review thread and resolve it. responseText feeds the
         // gh-692 closure sweep: threads cited in the rework response MUST be
-        // resolved even when review_replies.json lacks their ids.
+        // resolved even when review_replies.json lacks their ids. The
+        // resolutions counter feeds the gh-957 lap marker.
+        const lapResolutions = { resolved: 0 };
         const repliesPosted = postThreadReplies(scm, pr.number, {
             ticketKey: ticketKey,
             workingDir: config.workingDir || null,
-            responseText: fixSummary
+            responseText: fixSummary,
+            resolutions: lapResolutions,
+            auditNoCodeChange: lapGate.auditResolve,
+            runUrl: reworkRunUrl()
         });
         console.log('Thread replies posted:', repliesPosted);
 
-        // Post general fix summary as a top-level PR comment only when there are no
-        // review thread replies. When replies exist, the thread replies themselves are
-        // sufficient; an extra top-level comment is noise — except non-blocking gate
-        // warnings, which are worth a short standalone comment even then, since they
-        // wouldn't otherwise be visible anywhere on the PR.
-        var hasMeaningfulSummary = fixSummary && fixSummary.length > 50
-            && fixSummary !== '_(No fix summary generated)_';
-        if (repliesPosted > 0) {
-            console.log('ℹ️ Review thread replies posted — skipping general PR comment');
-            if (nonBlockingGateWarningBlock) {
-                try {
-                    scm.addComment(pr.number, '## ⚠️ Non-blocking gate warnings' + nonBlockingGateWarningBlock);
-                } catch (e) {
-                    console.warn('Failed to post non-blocking gate warning comment:', e);
-                }
-            }
-        } else if (codeChangesCommitted || hasMeaningfulSummary) {
-            prCommentPosted = postPRComment(scm, pr.number, fixSummaryWithWarnings, ticketKey, repliesPosted);
-        } else {
-            console.log('ℹ️ No thread replies, no code changes, and no meaningful summary — skipping general PR comment');
-        }
+        prCommentPosted = postCompletionPrComment(scm, pr, ticketKey, fixSummary, fixSummaryWithWarnings,
+            repliesPosted, nonBlockingGateWarningBlock, codeChangesCommitted);
 
-        // Move ticket to In Review
-        try {
-            tracker.moveToStatus(ticketKey, statuses.IN_REVIEW);
-            console.log('✅ Moved', ticketKey, 'to', statuses.IN_REVIEW);
-        } catch (statusError) {
-            console.warn('Failed to move ticket to In Review:', statusError);
-        }
-
-        // Assign back to initiator (if provided)
-        try {
-            const initiatorId = actualParams.initiator;
-            if (initiatorId) {
-                tracker.assignTo(ticketKey, initiatorId);
-                console.log('✅ Assigned ticket back to initiator');
-            }
-        } catch (e) {
-            console.warn('Failed to assign ticket:', e);
-        }
+        finalizeTicketState(tracker, ticketKey, statuses, actualParams, _customParams);
 
         // Post completion comment to the ticket.
         // gh-799: the comment is generated from a LIVE unresolved-thread
@@ -1520,122 +1983,25 @@ function action(params) {
         postJiraComment(tracker, ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted,
             fixSummaryWithWarnings, buildCompletionLiveState(scm, pr, ticketKey, config));
 
-        // Remove WIP label if present
-        const wipLabel = actualParams.metadata && actualParams.metadata.contextId
-            ? actualParams.metadata.contextId + '_wip'
-            : null;
-        if (wipLabel) {
-            try {
-                tracker.removeLabel(ticketKey, wipLabel);
-                console.log('Removed WIP label:', wipLabel);
-            } catch (e) {
-                console.warn('Failed to remove WIP label:', e);
-            }
-        }
-
-        // Remove SM idempotency label so the ticket can be re-triggered next cycle
-        removeConfiguredLabels(tracker, ticketKey, _customParams);
-
         // GitHub machine loop: the once-guard lives on the PR (ai_pr_reviewed),
         // not the issue. Clear it so the reworked head gets a FRESH review —
         // otherwise review-after-dev (notPrLabels: ai_pr_reviewed) skips the
         // PR forever and the loop stalls after one review round.
-        //
-        // Token-burn guard: a no-op rework (no new commits since the last
-        // review's head) keeps the latch and goes straight back to rework —
-        // no LLM re-review of the unchanged head.
         var stickyApproved = prHasApproved(pr, actualParams.ticket || (params.jobParams && params.jobParams.ticket));
         var freshReviewWanted = !stickyApproved && headMovedSinceLastReview(scm, pr);
-        if (stickyApproved && pr && pr.number) {
-            // Owner rule (sticky approval): never re-review an approved PR.
-            // The rework pushed its fixes; validation re-runs on the new
-            // head and merge-validated closes the loop. Keep BOTH latches
-            // (pr_approved + ai_pr_reviewed) and arm nothing.
-            try {
-                scm.addComment(pr.number,
-                    '✅ Rework finished. `pr_approved` is sticky (approved once — never re-reviewed): ' +
-                    'the new head re-validates and merges directly.');
-            } catch (e) {
-                console.warn('Failed to post sticky-approval comment on PR #' + pr.number + ':', e.message || e);
-            }
-            console.log('ℹ️ Sticky approval on PR #' + pr.number + ' — re-review NOT armed; re-validation + merge follow');
-        }
-        if (!stickyApproved && !freshReviewWanted && pr && pr.number) {
-            try {
-                tracker.addLabel(ticketKey, 'agent:rework');
-                console.log('✅ No-op rework: verdict head unchanged — agent:rework re-armed on ' + ticketKey);
-            } catch (e) {
-                console.warn('Failed to re-arm agent:rework on ' + ticketKey + ':', e.message || e);
-            }
-            try {
-                scm.addComment(pr.number,
-                    '⚠️ Rework finished with **no new commits** — the previous review verdict (same head) ' +
-                    'still stands and its findings are unchanged. Re-review skipped (token guard); rework re-armed.');
-            } catch (e) {
-                console.warn('Failed to post no-op rework comment on PR #' + pr.number + ':', e.message || e);
-            }
-        }
-        if (freshReviewWanted && pr && pr.number && typeof github_remove_label === 'function') {
-            try {
-                github_remove_label({
-                    workspace: repoInfo.owner, repository: repoInfo.repo,
-                    number: pr.number, label: 'ai_pr_reviewed'
-                });
-                console.log('✅ Cleared ai_pr_reviewed on PR #' + pr.number + ' — fresh review armed');
-            } catch (e) {
-                console.warn('Failed to clear ai_pr_reviewed on PR #' + pr.number + ':', e.message || e);
-            }
-        }
+        stickyApprovalNotice(scm, pr, stickyApproved);
+        noopLapDecisions(scm, tracker, pr, ticketKey, stickyApproved, freshReviewWanted, lapResolutions.resolved);
+        clearAiReviewedLatch(pr, freshReviewWanted, repoInfo);
 
-        // Auto-start pr_review after rework is pushed to In Review (opt-in via customParams)
-        var reviewStarted = false;
-        const autoStartReview = _customParams && _customParams.autoStartReview;
-        const reviewConfigFile = _customParams && _customParams.autoStartReviewConfigFile;
-        if (autoStartReview && reviewConfigFile) {
-            // Skip if ticket already has pr_approved label (already approved, merge pending)
-            const ticket = actualParams.ticket || (params.jobParams && params.jobParams.ticket);
-            if (!freshReviewWanted) {
-                console.log('ℹ️ autoStartReview: skipped — rework pushed no new commits (token guard)');
-            } else if (stickyApproved) {
-                console.log('ℹ️ autoStartReview: skipped — pr_approved is sticky on the PR (owner rule 2026-09-21)');
-            } else if (hasPrApprovedLabel(ticket)) {
-                console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
-            } else {
-                try {
-                    reviewStarted = autoStart.triggerConfiguredWorkflowForTicket({
-                        ticketKey: ticketKey,
-                        customParams: _customParams,
-                        config: config,
-                        configFile: reviewConfigFile,
-                        label: 'pr_review',
-                        scm: scm,
-                        stripKeys: [
-                            'removeLabel',
-                            'autoStartReview',
-                            'autoStartReviewConfigFile'
-                        ]
-                    });
-                } catch (e) {
-                    console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
-                }
-            }
-        }
-        if (!reviewStarted) {
-            autoStart.triggerSmIfIdle({ config: config, customParams: _customParams, scm: scm });
-        }
+        runAutoStartReview(scm, config, ticketKey, params, actualParams, _customParams, freshReviewWanted, stickyApproved);
 
         // Cache configured artefacts (e.g. cosmo test reports) to GitHub Release — non-fatal
-        try { cacheToReleases.action(params); } catch (e) { console.warn('⚠️ cacheToReleases failed (non-fatal):', e); }
+        cacheCompletionArtifacts(params);
 
         console.log('✅ Rework workflow completed successfully');
 
-        // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-        // wrote outputs/*_usage.json during the agent run.
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
+        stampCompletionLapMarker(scm, pr, ticketKey, lapGate, lapResolutions);
+        postCompletionTokenUsage(params, ticketKey);
 
         return {
             success: true,
@@ -1685,5 +2051,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, squashReworkWipCommits, hasRealCodeChanges, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment };
+    module.exports = { action, hasMeaningfulSummary, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker };
 }

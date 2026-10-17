@@ -38,7 +38,8 @@ var githubHelpersModule = loadModule(
             trimLargeTextForInput: function() {},
             writePRContext: function() {}
         },
-        './machineNotice.js': loadModule('js/common/machineNotice.js')
+        './machineNotice.js': loadModule('js/common/machineNotice.js'),
+        './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') }))
     }),
     {}
 );
@@ -46,6 +47,7 @@ var githubHelpersModule = loadModule(
 function makeOutputFiles(fileMap) {
     return loadModule('js/common/outputFiles.js', makeRequire({
             './common/commentMarkup.js': commentMarkupModule,
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }), {
         file_read: function(opts) {
             var path = opts && (opts.path || opts);
@@ -126,6 +128,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
             './common/tokenUsageComment.js': { postTokenUsageComments: noop }
         ,
             './common/commentMarkup.js': commentMarkupModule,
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }),
         {
             file_read: function(opts) {
@@ -532,6 +535,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }),
         Object.assign({
             cli_execute_command: function() { return ''; },
@@ -752,6 +756,13 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
 // in the observed incident retrying instead led the CLI agent to fabricate a
 // fake pr_info.md just to slip past the "refuse to commit on base branch" guard.
 
+// gh-969 ratchet: opt() keeps loadPushReworkChangesForAction under its
+// baseline CRAP — every `(opts && opts.x) || default` site costs 2 decisions,
+// the accessor costs none at the call site.
+function opt(opts, key) {
+    return (opts && opts[key]) || null;
+}
+
 function loadPushReworkChangesForAction(mocks, opts) {
     var jiraPostCommentCalls = [];
     var jiraMoveToStatusCalls = [];
@@ -773,7 +784,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
             }];
         },
         getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; }
-    }, (opts && opts.scm) || {});
+    }, opt(opts, 'scm') || {});
 
     var defaultMocks = {
         cli_execute_command: function(args) {
@@ -811,7 +822,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
         makeRequire({
             './common/gitStaging.js': gitStagingModule,
             './configLoader.js': {
-                loadProjectConfig: function() { return baseConfig(opts && opts.config); },
+                loadProjectConfig: function() { return baseConfig(opt(opts, 'config')); },
                 resolveInstructions: function() { return { jobParamPatch: {} }; },
                 formatTemplate: function(template, vars) {
                     return template.replace(/\{(\w+)\}/g, function(m, key) {
@@ -822,12 +833,12 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './common/scm.js': { createScm: function() { return scm; } },
             './common/submodules.js': { pushManagedSubmodules: function() {} },
             './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
-                readStagedDiffStat: function() { return 'M file.txt\n'; },
+                readStagedDiffStat: opt(opts, 'stagedDiffStat') || function() { return 'M file.txt\n'; },
                 syncBranchWithBase: function() { return { success: true, updated: false }; }
             }),
             './common/githubHelpers.js': githubHelpersModule,
             './common/feedbackLoop.js': (function() {
-                var fl = (opts && opts.feedbackLoop) || {
+                var fl = opt(opts, 'feedbackLoop') || {
                     runQualityGates: function() { return { success: true }; },
                     runPolicyGates: function() { return { success: true }; },
                     runPostPublishGates: function() { return { success: true }; },
@@ -840,17 +851,18 @@ function loadPushReworkChangesForAction(mocks, opts) {
                 };
                 return fl;
             })(),
-            './common/autoStart.js': (opts && opts.autoStart) || {
+            './common/autoStart.js': opt(opts, 'autoStart') || {
                 triggerSmIfIdle: function() {},
                 triggerConfiguredWorkflowForTicket: function() { return false; }
             },
-            './common/outputFiles.js': (opts && opts.outputFiles) || { readOutputFile: function() { return null; } },
+            './common/outputFiles.js': opt(opts, 'outputFiles') || { readOutputFile: function() { return null; } },
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }),
         mergedMocks
     );
@@ -1029,6 +1041,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
         }),
         mergedMocks
     );
@@ -2073,6 +2086,345 @@ suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)'
         var r = run('src/App.java\n');
         assert.equal(r.result.success, true);
         assert.equal(r.comments.filter(function(c) { return c.indexOf('NOT resolved') !== -1; }).length, 0);
+    });
+});
+
+
+// ── gh-957: the lap gate — a failed diff probe must never mislabel a progress lap ──
+suite('pushReworkChanges.evaluateAuditResolveGate — failed probe (null) semantics (gh-957)', function() {
+
+    function loadGate() {
+        return loadPushReworkChangesForAction({}).mod.evaluateAuditResolveGate;
+    }
+
+    test('confirmed change (probe true) — progress lap, never blocked, no audit line', function() {
+        var gate = loadGate();
+        var d = gate(true, false, 2, 0);
+        assert.equal(d.lapPushed, true);
+        assert.equal(d.blocked, false);
+        assert.equal(d.auditResolve, false);
+        assert.equal(gate(true, true, 2, 1).lapPushed, true, 'either change signal marks progress');
+    });
+
+    test('confirmed no-change + incomplete coverage — blocked (agents#827 path unchanged)', function() {
+        var gate = loadGate();
+        var d = gate(false, false, 2, 1);
+        assert.equal(d.blocked, true);
+        assert.equal(d.auditResolve, false);
+        assert.equal(d.lapPushed, false);
+    });
+
+    test('confirmed no-change + full coverage — audit-resolve (resolution only with the audit line)', function() {
+        var gate = loadGate();
+        var d = gate(false, false, 2, 0);
+        assert.equal(d.blocked, false);
+        assert.equal(d.auditResolve, true);
+        assert.equal(d.lapPushed, false);
+    });
+
+    test('FAILED probe + landed commits — progress lap (the thread-5 fix: no false no-op escalation)', function() {
+        var gate = loadGate();
+        var d = gate(null, true, 2, 0);
+        assert.equal(d.lapPushed, true, 'commitAndPush() knows real commits landed even when the diff probe failed');
+        assert.equal(d.auditResolve, false, 'commits landed — the "no code change" audit claim would be a lie');
+        assert.equal(d.blocked, false);
+    });
+
+    test('FAILED probe + no commits + full coverage — assumed no-change, audit line required', function() {
+        var gate = loadGate();
+        var d = gate(null, false, 2, 0);
+        assert.equal(d.lapPushed, false);
+        assert.equal(d.auditResolve, true, 'no commits and an unknown diff — resolution needs the audit trail');
+        assert.equal(d.blocked, false, 'fail-open on a failed probe (agents#827 doctrine), not the blocked path');
+    });
+
+    test('no open threads — no audit-resolve regardless of the probe result', function() {
+        var gate = loadGate();
+        assert.equal(gate(null, false, 0, 0).auditResolve, false);
+        assert.equal(gate(false, false, 0, 0).auditResolve, false);
+    });
+
+    test('inconsistent signals (probe says no change but a commit landed) — treated as progress, never a false audit claim', function() {
+        var gate = loadGate();
+        var d = gate(false, true, 2, 0);
+        assert.equal(d.lapPushed, true);
+        assert.equal(d.auditResolve, false);
+        assert.equal(d.blocked, false);
+    });
+});
+
+// ── gh-969: completion-tail helpers extracted from action for the CRAP ratchet ──
+// Each helper is a behavior-preserving slice of the old action tail; these
+// tests pin the observable behavior (comments posted, labels touched, SM
+// triggers) so the extraction cannot drift.
+suite('pushReworkChanges completion-tail helpers (gh-969 CRAP split)', function() {
+
+    function loadTail(mocks, opts) {
+        return loadPushReworkChangesForAction(mocks || {}, opts || {});
+    }
+
+    function prMock(extra) {
+        return Object.assign({ number: 123, html_url: 'https://example.com/pr/123', head: { sha: 'f'.repeat(40) } }, extra || {});
+    }
+
+    test('postCompletionPrComment — replies posted posts only the gate-warning block and returns false', function() {
+        var comments = [];
+        var loaded = loadTail();
+        var posted = loaded.mod.postCompletionPrComment(
+            { addComment: function(n, b) { comments.push(b); } },
+            prMock(), 'PROJ-123',
+            'a fix summary', 'a fix summary', 2, '\n\n- warn 1', true);
+        assert.equal(posted, false);
+        assert.equal(comments.length, 1);
+        assert.ok(comments[0].indexOf('## ⚠️ Non-blocking gate warnings') === 0);
+        assert.ok(comments[0].indexOf('- warn 1') !== -1);
+    });
+
+    test('postCompletionPrComment — no replies + landed commits posts the summary via postPRComment', function() {
+        var comments = [];
+        var loaded = loadTail();
+        var posted = loaded.mod.postCompletionPrComment(
+            { addComment: function(n, b) { comments.push(b); } },
+            prMock(), 'PROJ-123',
+            'a fix summary with warnings', 'a fix summary with warnings', 0, '', true);
+        assert.equal(posted, true, 'postPRComment reports the comment landed');
+        assert.equal(comments.length, 1);
+        assert.ok(comments[0].indexOf('a fix summary with warnings') !== -1);
+    });
+
+    test('postCompletionPrComment — nothing to say posts nothing and returns false', function() {
+        var comments = [];
+        var loaded = loadTail();
+        var posted = loaded.mod.postCompletionPrComment(
+            { addComment: function(n, b) { comments.push(b); } },
+            prMock(), 'PROJ-123', 'short', 'short', 0, '', false);
+        assert.equal(posted, false);
+        assert.equal(comments.length, 0);
+    });
+
+    test('postCompletionPrComment — no replies + meaningful summary (no commits) still posts', function() {
+        var comments = [];
+        var loaded = loadTail();
+        var longSummary = 'x'.repeat(60);
+        var posted = loaded.mod.postCompletionPrComment(
+            { addComment: function(n, b) { comments.push(b); } },
+            prMock(), 'PROJ-123', longSummary, longSummary, 0, '', false);
+        assert.equal(posted, true);
+        assert.equal(comments.length, 1);
+    });
+
+    test('finalizeTicketState — moves status, assigns initiator, removes WIP + SM labels', function() {
+        var moves = [], assigns = [], removed = [];
+        var loaded = loadTail();
+        var handTracker = {
+            moveToStatus: function(k, s) { moves.push({ key: k, status: s }); },
+            assignTo: function(k, id) { assigns.push({ key: k, id: id }); },
+            removeLabel: function(k, l) { removed.push({ key: k, label: l }); }
+        };
+        loaded.mod.finalizeTicketState(handTracker, 'PROJ-123', { IN_REVIEW: 'In Review' },
+            { initiator: 'u-1', metadata: { contextId: 'ctx' } }, {});
+        assert.deepEqual(moves, [{ key: 'PROJ-123', status: 'In Review' }]);
+        assert.deepEqual(assigns, [{ key: 'PROJ-123', id: 'u-1' }]);
+        assert.deepEqual(removed, [{ key: 'PROJ-123', label: 'ctx_wip' }]);
+    });
+
+    test('noopLapDecisions — gate open with zero resolutions re-arms agent:rework with the no-op comment', function() {
+        var labels = [], comments = [];
+        var loaded = loadTail();
+        var tracker = { addLabel: function(k, l) { labels.push(l); } };
+        var scm = { addComment: function(n, b) { comments.push(b); } };
+        assert.equal(loaded.mod.latchGateOpen(false, false, prMock()), true);
+        loaded.mod.noopLapDecisions(scm, tracker, prMock(), 'PROJ-123', false, false, 0);
+        assert.deepEqual(labels, ['agent:rework']);
+        assert.equal(comments.length, 1);
+        assert.ok(comments[0].indexOf('no new commits') !== -1);
+    });
+
+    test('noopLapDecisions — resolutions this lap suppress the re-arm; a fresh review leaves it quiet', function() {
+        var labels = [], comments = [];
+        var loaded = loadTail();
+        var tracker = { addLabel: function(k, l) { labels.push(l); } };
+        var scm = { addComment: function(n, b) { comments.push(b); } };
+        loaded.mod.noopLapDecisions(scm, tracker, prMock(), 'PROJ-123', false, false, 3);
+        assert.equal(labels.length, 0, 'resolved laps are owned by the threadsResolved sweep');
+        loaded.mod.noopLapDecisions(scm, tracker, prMock(), 'PROJ-123', false, true, 0);
+        assert.equal(labels.length, 0, 'fresh review wanted — no re-arm');
+        assert.equal(loaded.mod.latchGateOpen(false, true, prMock()), false);
+        assert.equal(loaded.mod.latchGateOpen(true, false, prMock()), false);
+    });
+
+    test('stickyApprovalNotice — posts the sticky-approval comment once', function() {
+        var comments = [];
+        var loaded = loadTail();
+        loaded.mod.stickyApprovalNotice({ addComment: function(n, b) { comments.push(b); } }, prMock(), true);
+        assert.equal(comments.length, 1);
+        assert.ok(comments[0].indexOf('sticky') !== -1);
+        loaded.mod.stickyApprovalNotice({ addComment: function(n, b) { comments.push(b); } }, prMock(), false);
+        assert.equal(comments.length, 1, 'not sticky — no notice');
+    });
+
+    test('clearAiReviewedLatch — no fresh review wanted is a quiet no-op (no github_remove_label global in the harness)', function() {
+        var loaded = loadTail();
+        // must not throw even with a null repoInfo and no global stub
+        loaded.mod.clearAiReviewedLatch(prMock(), false, null);
+        loaded.mod.clearAiReviewedLatch(prMock(), true, { owner: 'o', repo: 'r' });
+    });
+
+    test('autoStartReviewSkipReason — the three skip reasons and the go-ahead', function() {
+        var loaded = loadTail();
+        var reason = loaded.mod.autoStartReviewSkipReason;
+        assert.equal(reason(false, false, { fields: { labels: [] } }), 'rework pushed no new commits (token guard)');
+        assert.equal(reason(true, true, { fields: { labels: [] } }), 'pr_approved is sticky on the PR (owner rule 2026-09-21)');
+        assert.equal(reason(true, false, { fields: { labels: ['pr_approved'] } }), 'ticket has pr_approved label');
+        assert.equal(reason(true, false, { fields: { labels: [] } }), null);
+    });
+
+    test('runAutoStartReview — not configured only wakes the SM; configured + clean triggers the workflow', function() {
+        var smIdle = 0, triggered = 0;
+        var autoStartMock = {
+            triggerSmIfIdle: function() { smIdle++; },
+            triggerConfiguredWorkflowForTicket: function() { triggered++; return true; }
+        };
+        var loaded = loadTail({}, { autoStart: autoStartMock });
+        var params = { ticket: { key: 'PROJ-123', fields: { labels: [] } } };
+        var started = loaded.mod.runAutoStartReview(prMock(), {}, 'PROJ-123', params, params,
+            { autoStartReview: true, autoStartReviewConfigFile: 'review.yml' }, true, false);
+        assert.equal(started, true);
+        assert.equal(triggered, 1);
+        assert.equal(smIdle, 0, 'a started review must not also wake the SM');
+        started = loaded.mod.runAutoStartReview(prMock(), {}, 'PROJ-123', params, params, {}, true, false);
+        assert.equal(started, false);
+        assert.equal(smIdle, 1, 'not configured — SM idles wake');
+        started = loaded.mod.runAutoStartReview(prMock(), {}, 'PROJ-123', params, params,
+            { autoStartReview: true, autoStartReviewConfigFile: 'review.yml' }, false, false);
+        assert.equal(started, false);
+        assert.equal(smIdle, 2, 'skipped (token guard) — SM idles wake');
+    });
+
+    test('runAutoStartReview — a throwing trigger degrades to the SM wake', function() {
+        var smIdle = 0;
+        var autoStartMock = {
+            triggerSmIfIdle: function() { smIdle++; },
+            triggerConfiguredWorkflowForTicket: function() { throw new Error('boom'); }
+        };
+        var loaded = loadTail({}, { autoStart: autoStartMock });
+        var params = { ticket: { key: 'PROJ-123', fields: { labels: [] } } };
+        var started = loaded.mod.runAutoStartReview(prMock(), {}, 'PROJ-123', params, params,
+            { autoStartReview: true, autoStartReviewConfigFile: 'review.yml' }, true, false);
+        assert.equal(started, false);
+        assert.equal(smIdle, 1);
+    });
+
+    test('stampCompletionLapMarker — stamps a machine lap marker on the PR', function() {
+        var comments = [];
+        var loaded = loadTail();
+        var scm = { addComment: function(n, b) { comments.push(b); } };
+        loaded.mod.stampCompletionLapMarker(scm, prMock(), 'PROJ-123',
+            { lapPushed: true }, { resolved: 2 });
+        assert.equal(comments.length, 1);
+        assert.ok(comments[0].indexOf('dmtools:rework-lap') !== -1);
+        assert.ok(comments[0].indexOf('pushed 1') !== -1, 'a real change landed — the lap is not a no-op');
+    });
+
+    test('postCompletionTokenUsage + cacheCompletionArtifacts — never throw on the completion path', function() {
+        var loaded = loadTail();
+        loaded.mod.cacheCompletionArtifacts({ ticket: { key: 'PROJ-123' } });
+        loaded.mod.postCompletionTokenUsage({ initiator: 'u-1' }, 'PROJ-123');
+    });
+});
+
+suite('pushReworkChanges.action — failed diff probe never stamps a false no-op lap (gh-957)', function() {
+    var BASE = 'd'.repeat(40);
+
+    // The leg always lands on its expected branch and pushes fine; only the
+    // hasRealCodeChanges diff probe is parameterized.
+    function lapGateCli(diffProbe) {
+        return function(a) {
+            if (a.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+            if (a.command.indexOf('git ls-remote --heads origin') === 0) {
+                return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
+            }
+            if (a.command.indexOf('git diff --name-only') === 0 && diffProbe === 'THROW') throw new Error('git failed');
+            return '';
+        };
+    }
+
+    // One open thread in the input snapshot, fully covered by the reply below.
+    function lapGateFileRead() {
+        return function(a) {
+            var p = a && (a.path || a);
+            if (p.indexOf('rework_setup_failed.md') !== -1) throw new Error('nope');
+            if (p.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
+            if (p.indexOf('rework_base_head.txt') !== -1) return BASE;
+            if (p.indexOf('pr_discussions_raw.json') !== -1) {
+                return JSON.stringify({ threads: [{ threadId: 'T1', rootCommentId: 11, resolved: false }] });
+            }
+            return null;
+        };
+    }
+
+    function lapGateScm(capture) {
+        return {
+            addComment: function(n, body) { capture.comments.push(String(body)); },
+            resolveThread: function(n, t) { capture.resolved.push(t); },
+            replyToThread: function(n, thread, text) { capture.replies.push(String(text)); }
+        };
+    }
+
+    function lapGateOutputFiles() {
+        return {
+            readOutputFile: function(name) {
+                if (name === 'review_replies.json') {
+                    return JSON.stringify({ replies: [
+                        { inReplyToId: 11, threadId: 'T1', reply: 'Already addressed on this head.' }
+                    ] });
+                }
+                return null;
+            }
+        };
+    }
+
+    // diffProbe 'THROW' makes the hasRealCodeChanges probe fail (null);
+    // noCommits: the leg's own commit lands nothing.
+    function runLapGateAction(diffProbe, opts) {
+        opts = opts || {};
+        var capture = { resolved: [], replies: [], comments: [] };
+        var loaded = loadPushReworkChangesForAction({
+            cli_execute_command: lapGateCli(diffProbe),
+            file_read: lapGateFileRead()
+        }, {
+            stagedDiffStat: opts.noCommits ? function() { return ''; } : undefined,
+            scm: lapGateScm(capture),
+            outputFiles: lapGateOutputFiles()
+        });
+        capture.result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Fix summary long enough to be a meaningful rework completion summary.',
+            customParams: {}
+        });
+        return capture;
+    }
+
+    test('probe failed but commits landed: the lap marker records pushed=1 and replies carry NO audit line', function() {
+        var r = runLapGateAction('THROW', {});
+        assert.equal(r.result.success, true);
+        assert.equal(r.resolved.length, 1, 'the covered thread is resolved');
+        assert.equal(r.replies.length, 1);
+        assert.notContains(r.replies[0], 'Audit (gh-957)', 'changes landed — no "no code change required" claim');
+        var marker = r.comments.filter(function(c) { return c.indexOf('📓 rework lap on head') !== -1; });
+        assert.equal(marker.length, 1, 'exactly one lap marker was stamped');
+        assert.contains(marker[0], 'pushed 1', 'a genuine progress lap — the SM guard must not count it as a no-op');
+    });
+
+    test('probe failed and no commits landed: replies carry the audit line and the marker records pushed=0', function() {
+        var r = runLapGateAction('THROW', { noCommits: true });
+        assert.equal(r.result.success, true);
+        assert.equal(r.resolved.length, 1, 'full reply coverage — audit-resolve is allowed');
+        assert.equal(r.replies.length, 1);
+        assert.contains(r.replies[0], 'Audit (gh-957)', 'resolution without a confirmed change needs the audit trail');
+        var marker = r.comments.filter(function(c) { return c.indexOf('📓 rework lap on head') !== -1; });
+        assert.equal(marker.length, 1);
+        assert.contains(marker[0], 'pushed 0', 'no commits landed — this IS an empty lap');
     });
 });
 

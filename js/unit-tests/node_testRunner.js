@@ -95,6 +95,19 @@ var assert = {
         if (!threw) {
             throw new Error(msg || 'expected function to throw but it did not');
         }
+    },
+
+    // mirror parity with testRunner.js (GraalJS harness) — suites using
+    // assert.doesNotThrow must run under the degraded node harness too.
+    doesNotThrow: function(fn, msg) {
+        try {
+            fn();
+        } catch (e) {
+            throw new Error(
+                (msg ? msg + ': ' : '') +
+                'expected function not to throw but it threw: ' + (e && e.message ? e.message : e)
+            );
+        }
     }
 };
 
@@ -184,8 +197,11 @@ var configModule = loadModule('agents/js/config.js');
 // resolves against js/unit-tests/ and cannot find it. Mirror testRunner.js:
 // inject machineNotice through makeRequire.
 var machineNoticeModule = loadModule('agents/js/common/machineNotice.js');
-var scmModule = loadModule('agents/js/common/scm.js',
+var reviewThreadInventoryModule = loadModule('agents/js/common/reviewThreadInventory.js',
     makeRequire({ './machineNotice.js': machineNoticeModule }));
+var scmModule = loadModule('agents/js/common/scm.js',
+    makeRequire({ './machineNotice.js': machineNoticeModule,
+                  './reviewThreadInventory.js': reviewThreadInventoryModule }));
 var configLoaderModule = loadModule(
     'agents/js/configLoader.js',
     makeRequire({

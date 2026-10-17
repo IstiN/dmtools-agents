@@ -29,7 +29,8 @@ function loadMergeStoryTestAutomationPR(mocks) {
 
     var scmModule = loadModule(
         'js/common/scm.js',
-        makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') }),
+        makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js'),
+            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })) }),
         allMocks
     );
 

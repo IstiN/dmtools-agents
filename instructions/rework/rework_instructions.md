@@ -4,6 +4,8 @@ You are performing a focused rework of code based on Pull Request review feedbac
 
 Fix **every issue** raised in `pr_discussions.md`. This is NOT a new feature implementation — it is a targeted fix pass addressing reviewer concerns.
 
+Already-addressed or invalid findings need no code change, but they still need an explanatory reply entry in `outputs/review_replies.json` — see "Already-addressed / invalid threads" in general_guidelines.md (gh-957 audit-resolve). Partial reply coverage resolves nothing.
+
 ## Merge Conflicts (resolve before anything else)
 
 If `merge_conflicts.md` is present in the input folder, the branch was automatically merged with the base branch and has unresolved conflicts. You **must** resolve them first:

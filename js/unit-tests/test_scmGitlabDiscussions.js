@@ -21,7 +21,8 @@ suite('scm gitlab fetchDiscussions', function () {
             for (var k in extraMocks) { if (extraMocks.hasOwnProperty(k)) mocks[k] = extraMocks[k]; }
         }
         var mod = loadModule('js/common/scm.js',
-            makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') }),
+            makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js'),
+            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })) }),
             mocks);
         return mod.createScm({ scm: { provider: 'gitlab' }, repository: { owner: 'mygroup', repo: 'my-repo' } });
     }
@@ -126,7 +127,8 @@ suite('scm gitlab discussion helpers', function () {
 
     function loadGitlabMod(mocks) {
         return loadModule('js/common/scm.js',
-            makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') }),
+            makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js'),
+            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })) }),
             mocks || {});
     }
 
