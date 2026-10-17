@@ -108,27 +108,27 @@ jobs:
         run: |
           "$RUNNER_TEMP/tools/node_modules/.bin/nyc" instrument --cwd . . \
             "$RUNNER_TEMP/inst"
-          # The harness expects the consumer layout (agents/ checkout beside
-          # the cwd) and bare config names — self-symlink covers both.
-          ln -sfn "$RUNNER_TEMP/inst" "$RUNNER_TEMP/inst/agents"
           # nyc instrument copies only .js — add the json/md/sh payloads the
           # suite reads (configs, instructions, prompts, fixtures).
           rsync -a --exclude '*.js' --exclude '.git' ./ "$RUNNER_TEMP/inst/"
+          # Source-level guards read site/ browser scripts as TEXT (they are never executed by the
+          # suite): restore the pristine app.js so the counters nyc injected do not break them.
+          cp site/factory/app.js "$RUNNER_TEMP/inst/site/factory/app.js"
+          # Tests call `git ls-files` (agentDocsCoverage): give the copied tree a throwaway
+          # index of the same tracked files, without the real history.
+          (cd "$RUNNER_TEMP/inst" && git init -q && git add -A -f . >/dev/null 2>&1 || true)
 
       - name: Run the unit suite for coverage (instrumented tree)
-        # The node harness is a degraded mirror of the dmtools runner
-        # (~108 known mock-gap failures, e.g. cli_execute_command stubs);
-        # the canonical green-gate is the pack-release test job. Coverage is
-        # collected regardless — a red harness must not block the ratchet.
-        # ci/run_with_coverage.js wraps the harness and dumps the Istanbul
-        # global after the run.
+        # Canonical green-gate is the dmtools-java runner (pack-release test job); the node
+        # harness mirrors it (file_*/cli_*/assert/network-guard parity) and must be green too,
+        # so a red harness fails this job instead of being swallowed. ci/run_with_coverage.js
+        # wraps the harness and dumps the Istanbul global after the run.
         run: |
           cd "$RUNNER_TEMP/inst"
           FILES="$(node -e "console.log(require('./js/unit-tests/run_all.json').params.jobParams.testFiles.join(' '))")"
           node ci/run_with_coverage.js \
             "$RUNNER_TEMP/inst/js/unit-tests/node_testRunner.js" \
-            "$RUNNER_TEMP/cov/coverage-final.json" $FILES \
-            || echo "::warning::node harness has known mock gaps — coverage still collected"
+            "$RUNNER_TEMP/cov/coverage-final.json" $FILES
 
       - name: Fetch the released baseline
         id: baseline
