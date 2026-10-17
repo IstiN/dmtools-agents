@@ -2153,6 +2153,186 @@ suite('pushReworkChanges.evaluateAuditResolveGate — failed probe (null) semant
     });
 });
 
+// ── gh-969: completion-tail helpers extracted from action for the CRAP ratchet ──
+// Each helper is a behavior-preserving slice of the old action tail; these
+// tests pin the observable behavior (comments posted, labels touched, SM
+// triggers) so the extraction cannot drift.
+suite('pushReworkChanges completion-tail helpers (gh-969 CRAP split)', function() {
+
+    function loadTail(mocks, opts) {
+        return loadPushReworkChangesForAction(mocks || {}, opts || {});
+    }
+
+    function prMock(extra) {
+        return Object.assign({ number: 123, html_url: 'https://example.com/pr/123', head: { sha: 'f'.repeat(40) } }, extra || {});
+    }
+
+    test('postCompletionPrComment — replies posted posts only the gate-warning block and returns false', function() {
+        var comments = [];
+        var loaded = loadTail();
+        var posted = loaded.mod.postCompletionPrComment(
+            { addComment: function(n, b) { comments.push(b); } },
+            prMock(), 'PROJ-123',
+            'a fix summary', 'a fix summary', 2, '\n\n- warn 1', true);
+        assert.equal(posted, false);
+        assert.equal(comments.length, 1);
+        assert.ok(comments[0].indexOf('## ⚠️ Non-blocking gate warnings') === 0);
+        assert.ok(comments[0].indexOf('- warn 1') !== -1);
+    });
+
+    test('postCompletionPrComment — no replies + landed commits posts the summary via postPRComment', function() {
+        var comments = [];
+        var loaded = loadTail();
+        var posted = loaded.mod.postCompletionPrComment(
+            { addComment: function(n, b) { comments.push(b); } },
+            prMock(), 'PROJ-123',
+            'a fix summary with warnings', 'a fix summary with warnings', 0, '', true);
+        assert.equal(posted, true, 'postPRComment reports the comment landed');
+        assert.equal(comments.length, 1);
+        assert.ok(comments[0].indexOf('a fix summary with warnings') !== -1);
+    });
+
+    test('postCompletionPrComment — nothing to say posts nothing and returns false', function() {
+        var comments = [];
+        var loaded = loadTail();
+        var posted = loaded.mod.postCompletionPrComment(
+            { addComment: function(n, b) { comments.push(b); } },
+            prMock(), 'PROJ-123', 'short', 'short', 0, '', false);
+        assert.equal(posted, false);
+        assert.equal(comments.length, 0);
+    });
+
+    test('postCompletionPrComment — no replies + meaningful summary (no commits) still posts', function() {
+        var comments = [];
+        var loaded = loadTail();
+        var longSummary = 'x'.repeat(60);
+        var posted = loaded.mod.postCompletionPrComment(
+            { addComment: function(n, b) { comments.push(b); } },
+            prMock(), 'PROJ-123', longSummary, longSummary, 0, '', false);
+        assert.equal(posted, true);
+        assert.equal(comments.length, 1);
+    });
+
+    test('finalizeTicketState — moves status, assigns initiator, removes WIP + SM labels', function() {
+        var moves = [], assigns = [], removed = [];
+        var loaded = loadTail();
+        var handTracker = {
+            moveToStatus: function(k, s) { moves.push({ key: k, status: s }); },
+            assignTo: function(k, id) { assigns.push({ key: k, id: id }); },
+            removeLabel: function(k, l) { removed.push({ key: k, label: l }); }
+        };
+        loaded.mod.finalizeTicketState(handTracker, 'PROJ-123', { IN_REVIEW: 'In Review' },
+            { initiator: 'u-1', metadata: { contextId: 'ctx' } }, {});
+        assert.deepEqual(moves, [{ key: 'PROJ-123', status: 'In Review' }]);
+        assert.deepEqual(assigns, [{ key: 'PROJ-123', id: 'u-1' }]);
+        assert.deepEqual(removed, [{ key: 'PROJ-123', label: 'ctx_wip' }]);
+    });
+
+    test('noopLapDecisions — gate open with zero resolutions re-arms agent:rework with the no-op comment', function() {
+        var labels = [], comments = [];
+        var loaded = loadTail();
+        var tracker = { addLabel: function(k, l) { labels.push(l); } };
+        var scm = { addComment: function(n, b) { comments.push(b); } };
+        assert.equal(loaded.mod.latchGateOpen(false, false, prMock()), true);
+        loaded.mod.noopLapDecisions(scm, tracker, prMock(), 'PROJ-123', false, false, 0);
+        assert.deepEqual(labels, ['agent:rework']);
+        assert.equal(comments.length, 1);
+        assert.ok(comments[0].indexOf('no new commits') !== -1);
+    });
+
+    test('noopLapDecisions — resolutions this lap suppress the re-arm; a fresh review leaves it quiet', function() {
+        var labels = [], comments = [];
+        var loaded = loadTail();
+        var tracker = { addLabel: function(k, l) { labels.push(l); } };
+        var scm = { addComment: function(n, b) { comments.push(b); } };
+        loaded.mod.noopLapDecisions(scm, tracker, prMock(), 'PROJ-123', false, false, 3);
+        assert.equal(labels.length, 0, 'resolved laps are owned by the threadsResolved sweep');
+        loaded.mod.noopLapDecisions(scm, tracker, prMock(), 'PROJ-123', false, true, 0);
+        assert.equal(labels.length, 0, 'fresh review wanted — no re-arm');
+        assert.equal(loaded.mod.latchGateOpen(false, true, prMock()), false);
+        assert.equal(loaded.mod.latchGateOpen(true, false, prMock()), false);
+    });
+
+    test('stickyApprovalNotice — posts the sticky-approval comment once', function() {
+        var comments = [];
+        var loaded = loadTail();
+        loaded.mod.stickyApprovalNotice({ addComment: function(n, b) { comments.push(b); } }, prMock(), true);
+        assert.equal(comments.length, 1);
+        assert.ok(comments[0].indexOf('sticky') !== -1);
+        loaded.mod.stickyApprovalNotice({ addComment: function(n, b) { comments.push(b); } }, prMock(), false);
+        assert.equal(comments.length, 1, 'not sticky — no notice');
+    });
+
+    test('clearAiReviewedLatch — no fresh review wanted is a quiet no-op (no github_remove_label global in the harness)', function() {
+        var loaded = loadTail();
+        // must not throw even with a null repoInfo and no global stub
+        loaded.mod.clearAiReviewedLatch(prMock(), false, null);
+        loaded.mod.clearAiReviewedLatch(prMock(), true, { owner: 'o', repo: 'r' });
+    });
+
+    test('autoStartReviewSkipReason — the three skip reasons and the go-ahead', function() {
+        var loaded = loadTail();
+        var reason = loaded.mod.autoStartReviewSkipReason;
+        assert.equal(reason(false, false, { fields: { labels: [] } }), 'rework pushed no new commits (token guard)');
+        assert.equal(reason(true, true, { fields: { labels: [] } }), 'pr_approved is sticky on the PR (owner rule 2026-09-21)');
+        assert.equal(reason(true, false, { fields: { labels: ['pr_approved'] } }), 'ticket has pr_approved label');
+        assert.equal(reason(true, false, { fields: { labels: [] } }), null);
+    });
+
+    test('runAutoStartReview — not configured only wakes the SM; configured + clean triggers the workflow', function() {
+        var smIdle = 0, triggered = 0;
+        var autoStartMock = {
+            triggerSmIfIdle: function() { smIdle++; },
+            triggerConfiguredWorkflowForTicket: function() { triggered++; return true; }
+        };
+        var loaded = loadTail({}, { autoStart: autoStartMock });
+        var params = { ticket: { key: 'PROJ-123', fields: { labels: [] } } };
+        var started = loaded.mod.runAutoStartReview(prMock(), {}, 'PROJ-123', params, params,
+            { autoStartReview: true, autoStartReviewConfigFile: 'review.yml' }, true, false);
+        assert.equal(started, true);
+        assert.equal(triggered, 1);
+        assert.equal(smIdle, 0, 'a started review must not also wake the SM');
+        started = loaded.mod.runAutoStartReview(prMock(), {}, 'PROJ-123', params, params, {}, true, false);
+        assert.equal(started, false);
+        assert.equal(smIdle, 1, 'not configured — SM idles wake');
+        started = loaded.mod.runAutoStartReview(prMock(), {}, 'PROJ-123', params, params,
+            { autoStartReview: true, autoStartReviewConfigFile: 'review.yml' }, false, false);
+        assert.equal(started, false);
+        assert.equal(smIdle, 2, 'skipped (token guard) — SM idles wake');
+    });
+
+    test('runAutoStartReview — a throwing trigger degrades to the SM wake', function() {
+        var smIdle = 0;
+        var autoStartMock = {
+            triggerSmIfIdle: function() { smIdle++; },
+            triggerConfiguredWorkflowForTicket: function() { throw new Error('boom'); }
+        };
+        var loaded = loadTail({}, { autoStart: autoStartMock });
+        var params = { ticket: { key: 'PROJ-123', fields: { labels: [] } } };
+        var started = loaded.mod.runAutoStartReview(prMock(), {}, 'PROJ-123', params, params,
+            { autoStartReview: true, autoStartReviewConfigFile: 'review.yml' }, true, false);
+        assert.equal(started, false);
+        assert.equal(smIdle, 1);
+    });
+
+    test('stampCompletionLapMarker — stamps a machine lap marker on the PR', function() {
+        var comments = [];
+        var loaded = loadTail();
+        var scm = { addComment: function(n, b) { comments.push(b); } };
+        loaded.mod.stampCompletionLapMarker(scm, prMock(), 'PROJ-123',
+            { lapPushed: true }, { resolved: 2 });
+        assert.equal(comments.length, 1);
+        assert.ok(comments[0].indexOf('dmtools:rework-lap') !== -1);
+        assert.ok(comments[0].indexOf('pushed 1') !== -1, 'a real change landed — the lap is not a no-op');
+    });
+
+    test('postCompletionTokenUsage + cacheCompletionArtifacts — never throw on the completion path', function() {
+        var loaded = loadTail();
+        loaded.mod.cacheCompletionArtifacts({ ticket: { key: 'PROJ-123' } });
+        loaded.mod.postCompletionTokenUsage({ initiator: 'u-1' }, 'PROJ-123');
+    });
+});
+
 suite('pushReworkChanges.action — failed diff probe never stamps a false no-op lap (gh-957)', function() {
     var BASE = 'd'.repeat(40);
 

@@ -1607,7 +1607,7 @@ function finalizeTicketState(tracker, ticketKey, statuses, actualParams, customP
 // re-review of the unchanged head; owner rule (sticky approval): never
 // re-review an approved PR.
 function latchGateOpen(stickyApproved, freshReviewWanted, pr) {
-    return !stickyApproved && !freshReviewWanted && pr && pr.number;
+    return !!(!stickyApproved && !freshReviewWanted && pr && pr.number);
 }
 
 function rearmNoopRework(scm, tracker, pr, ticketKey) {
