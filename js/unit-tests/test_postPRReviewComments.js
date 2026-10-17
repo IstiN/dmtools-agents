@@ -1175,40 +1175,97 @@ function loadReviewActionHarness(opts) {
     var ops = [];
     function rec(op, detail) { ops.push(Object.assign({ op: op }, detail || {})); }
 
-    var scm = {
+    var scm = Object.assign(
+        {},
+        gh926ScmReadMocks(opts),
+        gh926ScmWriteMocks(rec),
+        gh926ScmThreadMocks(opts, rec)
+    );
+    var autoStartMock = gh926AutoStartMock(opts, rec);
+    var outputFilesMock = gh926OutputFilesMock(opts);
+
+    var mocks = Object.assign({}, gh926IoMocks(opts, rec), {
+        jira_add_label: gh926JiraMock(rec, 'jira.addLabel', ['key', 'label']),
+        jira_remove_label: gh926JiraMock(rec, 'jira.removeLabel', ['key', 'label']),
+        jira_move_to_status: gh926JiraMock(rec, 'jira.moveToStatus', ['key', 'statusName']),
+        jira_post_comment: gh926JiraMock(rec, 'jira.postComment', ['key', 'comment']),
+        jira_assign_ticket_to: gh926JiraMock(rec, 'jira.assign', ['key', 'accountId'])
+    });
+
+    var merged = Object.assign({}, mocks, opts.mocks || {});
+
+    var mod = gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged, rec);
+
+    return {
+        mod: mod,
+        ops: ops,
+        opNames: function() { return ops.map(function(o) { return o.op; }); },
+        opsOf: function(op) { return ops.filter(function(o) { return o.op === op; }); }
+    };
+}
+
+// Mock builders below are named function declarations (not nested closures) on
+// purpose: the CRAP gate counts function expressions toward their enclosing
+// function, so each builder stays small enough to keep CRAP <= 8 regardless of
+// the coverage the harness run happens to collect.
+
+function gh926ScmReadMocks(opts) {
+    return {
         listPrs: function() { return opts.openPrs || []; },
         getRemoteRepoInfo: function() { return opts.repoInfo !== undefined ? opts.repoInfo : null; },
+        fetchDiscussions: function() { return { rawThreads: { threads: opts.threads || [] } }; },
+        listReviews: function() { return opts.existingReviews || []; }
+    };
+}
+
+function gh926ScmWriteMocks(rec) {
+    return {
         addLabel: function(number, label) { rec('scm.addLabel', { number: number, label: label }); },
         removeLabel: function(number, label) { rec('scm.removeLabel', { number: number, label: label }); },
         addComment: function(number, body) { rec('scm.addComment', { number: number, body: body }); },
         addInlineComment: function(number, path, line, text, startLine, side) {
             rec('scm.addInlineComment', { number: number, path: path, line: line, text: text, startLine: startLine, side: side });
         },
+        submitReview: function(prId, event, body) { rec('scm.submitReview', { prId: prId, event: event, body: body }); },
+        dismissReview: function(prId, reviewId, message) { rec('scm.dismissReview', { prId: prId, reviewId: reviewId, message: message }); }
+    };
+}
+
+function gh926ScmThreadMocks(opts, rec) {
+    return {
         resolveThread: function(number, o) { rec('scm.resolveThread', { number: number, threadId: o && o.threadId }); },
         getPrDiff: function() {
             if (opts.diffError) throw new Error(opts.diffError);
             return opts.diff !== undefined ? opts.diff : '';
-        },
-        fetchDiscussions: function() { return { rawThreads: { threads: opts.threads || [] } }; },
-        submitReview: function(prId, event, body) { rec('scm.submitReview', { prId: prId, event: event, body: body }); },
-        listReviews: function() { return opts.existingReviews || []; },
-        dismissReview: function(prId, reviewId, message) { rec('scm.dismissReview', { prId: prId, reviewId: reviewId, message: message }); }
+        }
     };
+}
 
-    var autoStartMock = {
+function gh926AutoStartMock(opts, rec) {
+    return {
         triggerConfiguredWorkflowForTicket: function(args) {
-            rec('autoStart.triggerConfiguredWorkflowForTicket', {
-                configFile: args && args.configFile,
-                label: args && args.label,
-                workflowFile: args && args.workflowFile,
-                stripKeys: args && args.stripKeys
-            });
-            return opts.reworkTriggerStarted !== undefined ? opts.reworkTriggerStarted : true;
+            rec('autoStart.triggerConfiguredWorkflowForTicket', gh926TriggerDetail(args));
+            return gh926TriggerResult(opts);
         },
         triggerSmIfIdle: function() { rec('autoStart.triggerSmIfIdle', {}); }
     };
+}
 
-    var outputFilesMock = {
+function gh926TriggerDetail(args) {
+    return {
+        configFile: args && args.configFile,
+        label: args && args.label,
+        workflowFile: args && args.workflowFile,
+        stripKeys: args && args.stripKeys
+    };
+}
+
+function gh926TriggerResult(opts) {
+    return opts.reworkTriggerStarted !== undefined ? opts.reworkTriggerStarted : true;
+}
+
+function gh926OutputFilesMock(opts) {
+    return {
         readOutputFileDetailed: function() {
             if (opts.reviewData === null || opts.reviewData === undefined) return null;
             return { content: JSON.stringify(opts.reviewData), path: 'outputs/pr_review.json' };
@@ -1217,36 +1274,66 @@ function loadReviewActionHarness(opts) {
             return (opts.outputFileContents && opts.outputFileContents[p]) || null;
         }
     };
+}
 
-    var mocks = {
-        file_read: function(args) {
-            var p = args && (args.path || args);
-            if (typeof p === 'string' && p.indexOf('pr_info.md') !== -1) return opts.prInfoContent || null;
-            if (p === 'outputs/.pr-review-missing-output-resume-attempted') return opts.resumeMarker || null;
-            return null;
-        },
-        file_write: function(args) { rec('file_write', { path: args && (args.path || args) }); },
-        cli_execute_command: function(args) {
-            rec('cli_execute_command', { command: args && args.command });
-            if (opts.resumeCliError) throw new Error(opts.resumeCliError);
-            return opts.resumeCliOutput || 'resume ok';
-        },
+function argPathOf(args) {
+    return args && (args.path || args);
+}
+
+function isResumeMarkerPath(p) {
+    return p === 'outputs/.pr-review-missing-output-resume-attempted';
+}
+
+function gh926FileReadMock(opts) {
+    return function(args) {
+        return gh926FileReadFor(opts, argPathOf(args));
+    };
+}
+
+function gh926FileReadFor(opts, p) {
+    if (typeof p === 'string' && p.indexOf('pr_info.md') !== -1) return opts.prInfoContent || null;
+    if (isResumeMarkerPath(p)) return opts.resumeMarker || null;
+    return null;
+}
+
+function gh926GithubPrResult(opts) {
+    if (opts.githubPrError) throw new Error(opts.githubPrError);
+    return JSON.stringify(opts.githubPr || { number: 42, head: { sha: 'sha0000' }, body: opts.githubPrBody || '' });
+}
+
+function gh926IoMocks(opts, rec) {
+    return {
+        file_read: gh926FileReadMock(opts),
+        file_write: function(args) { rec('file_write', { path: argPathOf(args) }); },
+        cli_execute_command: gh926CliMock(opts, rec),
         github_get_pr: function(args) {
             rec('github_get_pr', { workspace: args && args.workspace, repository: args && args.repository, pullRequestId: args && args.pullRequestId });
-            if (opts.githubPrError) throw new Error(opts.githubPrError);
-            return JSON.stringify(opts.githubPr || { number: 42, head: { sha: 'sha0000' }, body: opts.githubPrBody || '' });
+            return gh926GithubPrResult(opts);
         },
-        bitrise_trigger_build: function(args) { rec('bitrise_trigger_build', args); return '{}'; },
-        jira_add_label: function(args) { rec('jira.addLabel', { key: args && args.key, label: args && args.label }); },
-        jira_remove_label: function(args) { rec('jira.removeLabel', { key: args && args.key, label: args && args.label }); },
-        jira_move_to_status: function(args) { rec('jira.moveToStatus', { key: args && args.key, statusName: args && args.statusName }); },
-        jira_post_comment: function(args) { rec('jira.postComment', { key: args && args.key, comment: args && args.comment }); },
-        jira_assign_ticket_to: function(args) { rec('jira.assign', { key: args && args.key, accountId: args && args.accountId }); }
+        bitrise_trigger_build: function(args) { rec('bitrise_trigger_build', args); return '{}'; }
     };
+}
 
-    var merged = Object.assign({}, mocks, opts.mocks || {});
+function gh926CliMock(opts, rec) {
+    return function(args) {
+        rec('cli_execute_command', { command: args && args.command });
+        if (opts.resumeCliError) throw new Error(opts.resumeCliError);
+        return opts.resumeCliOutput || 'resume ok';
+    };
+}
 
-    var mod = loadModule(
+function gh926JiraMock(rec, op, fields) {
+    return function(args) {
+        var detail = {};
+        for (var i = 0; i < fields.length; i++) {
+            detail[fields[i]] = args && args[fields[i]];
+        }
+        rec(op, detail);
+    };
+}
+
+function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged, rec) {
+    return loadModule(
         'js/postPRReviewComments.js',
         makeRequire({
             './common/machineAuthor.js': machineAuthorModule,
@@ -1268,13 +1355,6 @@ function loadReviewActionHarness(opts) {
         }),
         merged
     );
-
-    return {
-        mod: mod,
-        ops: ops,
-        opNames: function() { return ops.map(function(o) { return o.op; }); },
-        opsOf: function(op) { return ops.filter(function(o) { return o.op === op; }); }
-    };
 }
 
 var GH926_PR_INFO_42 = '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n';
@@ -2020,47 +2100,60 @@ function makeResumeHarness(opts) {
     var calls = { writes: [], cli: [] };
     var mod = loadModule(
         'js/postPRReviewComments.js',
-        makeRequire({
-            './common/machineAuthor.js': machineAuthorModule,
-            './config.js': configModule,
-            './common/scm.js': { createScm: function() { return {}; } },
-            './common/autoStart.js': {},
-            './configLoader.js': {
-                loadProjectConfig: function() { return {}; },
-                resolveInstructions: function() { return { jobParamPatch: {} }; }
-            },
-            './common/outputFiles.js': {
-                readOutputFileDetailed: function() {
-                    return opts.reviewJson
-                        ? { content: JSON.stringify(opts.reviewJson), path: 'outputs/pr_review.json' }
-                        : null;
-                },
-                readOutputFile: function() { return null; }
-            },
-            './common/githubHelpers.js': githubHelpersStub,
-            './common/trackers.js': makeTrackersModule({}),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
-            './common/commentMarkup.js': commentMarkupModule,
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
-        }),
-        {
-            file_read: function(args) {
-                var p = args && (args.path || args);
-                if (p === 'outputs/.pr-review-missing-output-resume-attempted') return opts.marker || null;
-                return null;
-            },
-            file_write: function(args) {
-                calls.writes.push({ path: args && (args.path || args), content: args && args.content });
-                return null;
-            },
-            cli_execute_command: function(args) {
-                calls.cli.push(args && args.command);
-                if (opts.cliError) throw new Error(opts.cliError);
-                return opts.remoteUrl !== undefined ? opts.remoteUrl : 'resume output';
-            }
-        }
+        gh926ResumeRequire(opts),
+        gh926ResumeGlobalMocks(opts, calls)
     );
     return { mod: mod, calls: calls };
+}
+
+// Named declarations (not nested closures) so the CRAP gate does not sweep
+// these lambdas into makeResumeHarness — same rule as the action harness.
+function gh926ResumeRequire(opts) {
+    return makeRequire({
+        './common/machineAuthor.js': machineAuthorModule,
+        './config.js': configModule,
+        './common/scm.js': { createScm: function() { return {}; } },
+        './common/autoStart.js': {},
+        './configLoader.js': {
+            loadProjectConfig: function() { return {}; },
+            resolveInstructions: function() { return { jobParamPatch: {} }; }
+        },
+        './common/outputFiles.js': {
+            readOutputFileDetailed: function() {
+                return opts.reviewJson
+                    ? { content: JSON.stringify(opts.reviewJson), path: 'outputs/pr_review.json' }
+                    : null;
+            },
+            readOutputFile: function() { return null; }
+        },
+        './common/githubHelpers.js': githubHelpersStub,
+        './common/trackers.js': makeTrackersModule({}),
+        './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+        './common/commentMarkup.js': commentMarkupModule,
+        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+    });
+}
+
+function gh926ResumeGlobalMocks(opts, calls) {
+    return {
+        file_read: function(args) {
+            if (isResumeMarkerPath(argPathOf(args))) return opts.marker || null;
+            return null;
+        },
+        file_write: function(args) {
+            calls.writes.push({ path: argPathOf(args), content: args && args.content });
+            return null;
+        },
+        cli_execute_command: gh926ResumeCliMock(opts, calls)
+    };
+}
+
+function gh926ResumeCliMock(opts, calls) {
+    return function(args) {
+        calls.cli.push(args && args.command);
+        if (opts.cliError) throw new Error(opts.cliError);
+        return opts.remoteUrl !== undefined ? opts.remoteUrl : 'resume output';
+    };
 }
 
 suite('postPRReviewComments — gh-926 extracted pipeline helpers', function() {
@@ -2279,3 +2372,101 @@ suite('postPRReviewComments — gh-926 extracted pipeline helpers', function() {
         assert.contains(prompt, 'Do NOT write outputs/response.md');
     });
 });
+
+suite('postPRReviewComments — gh-926 searchMissingPRNumber / ticketKeyOfParams', function() {
+
+    test('ticketKeyOfParams: null params, missing ticket, key passthrough', function() {
+        var mod = loadPostPRReviewComments();
+
+        assert.equal(mod.ticketKeyOfParams(null), null);
+        assert.equal(mod.ticketKeyOfParams({}), null);
+        assert.equal(mod.ticketKeyOfParams({ ticket: null }), null);
+        assert.equal(mod.ticketKeyOfParams({ ticket: { key: 'PROJ-1' } }), 'PROJ-1');
+    });
+
+    test('searchMissingPRNumber: existing PR number wins, no GitHub search', function() {
+        var h = loadForPrSearch({ number: 99, html_url: 'https://example.com/pull/99', head: { ref: 'other' } });
+        var pr = { number: 7, url: null, branch: null };
+
+        h.mod.searchMissingPRNumber({}, {}, 'PROJ-1', pr, { owner: 'a', repo: 'b' });
+
+        assert.equal(pr.number, 7);
+        assert.equal(h.searchCalls.length, 0, 'no search when the PR number is already known');
+    });
+
+    test('searchMissingPRNumber: without repo info it leaves the PR empty and does not search', function() {
+        var h = loadForPrSearch({ number: 99, html_url: 'https://example.com/pull/99', head: { ref: 'other' } });
+        var pr = { number: null, url: null, branch: null };
+
+        h.mod.searchMissingPRNumber({}, {}, 'PROJ-1', pr, null);
+
+        assert.equal(pr.number, null);
+        assert.equal(pr.url, null);
+        assert.equal(h.searchCalls.length, 0, 'no search without repo info');
+    });
+
+    test('searchMissingPRNumber: applies the PR found via GitHub search', function() {
+        var found = { number: 42, html_url: 'https://example.com/pull/42', head: { ref: 'bug/PROJ-1' } };
+        var h = loadForPrSearch(found);
+        var pr = { number: null, url: null, branch: null };
+
+        h.mod.searchMissingPRNumber({}, {}, 'PROJ-1', pr, { owner: 'a', repo: 'b' });
+
+        assert.equal(pr.number, 42);
+        assert.equal(pr.url, 'https://example.com/pull/42');
+        assert.equal(pr.branch, 'bug/PROJ-1');
+        assert.equal(h.searchCalls.length, 1);
+        assert.equal(h.searchCalls[0].ticketKey, 'PROJ-1');
+    });
+
+    test('searchMissingPRNumber: leaves the PR empty when the search finds nothing', function() {
+        var h = loadForPrSearch(null);
+        var pr = { number: null, url: null, branch: null };
+
+        h.mod.searchMissingPRNumber({}, {}, 'PROJ-1', pr, { owner: 'a', repo: 'b' });
+
+        assert.equal(pr.number, null);
+        assert.equal(h.searchCalls.length, 1);
+    });
+});
+
+/**
+ * Loads js/postPRReviewComments.js with a controllable
+ * githubHelpers.findPRForTicket so searchMissingPRNumber can be exercised
+ * directly (the shared githubHelpersStub always returns null).
+ */
+function loadForPrSearch(foundPr) {
+    var searchCalls = [];
+    var ghMock = {
+        findPRForTicket: function(scm, ticketKey, options) {
+            searchCalls.push({ ticketKey: ticketKey, options: options });
+            return foundPr;
+        },
+        findMergedPRForTicket: function() { return null; }
+    };
+    var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+        './common/commentMarkup.js': commentMarkupModule
+    }), {
+        file_read: function() { return null; }
+    });
+    var mod = loadModule(
+        'js/postPRReviewComments.js',
+        makeRequire({
+            './common/machineAuthor.js': machineAuthorModule,
+            './config.js': configModule,
+            './common/scm.js': { createScm: function() { return {}; } },
+            './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
+            './configLoader.js': configLoaderModule,
+            './common/outputFiles.js': outputFiles,
+            './common/githubHelpers.js': ghMock,
+            './common/trackers.js': makeTrackersModule({}),
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/commentMarkup.js': commentMarkupModule,
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+        }),
+        {
+            file_read: function() { return null; }
+        }
+    );
+    return { mod: mod, searchCalls: searchCalls };
+}

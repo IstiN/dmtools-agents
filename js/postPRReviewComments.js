@@ -1433,19 +1433,26 @@ function findPRViaSearch(scm, ticketKey, prSearchOptions) {
     return pr;
 }
 
-function searchMissingPRNumber(scm, config, ticketKey, pr, repoInfo) {
-    if (!needsPRSearch(pr.number, repoInfo)) {
-        if (needsNoSearchWarning(pr.number, repoInfo)) {
-            console.warn('PR number not found and cannot search without repo info');
-        }
-        return;
+function warnIfUnsearchable(prNumber, repoInfo) {
+    if (needsNoSearchWarning(prNumber, repoInfo)) {
+        console.warn('PR number not found and cannot search without repo info');
     }
-    console.log('PR number not found in input folder, searching GitHub...');
-    var found = findPRViaSearch(scm, ticketKey, prSearchOptionsOf(config));
+}
+
+function applyFoundPR(pr, found) {
     if (!found) return;
     pr.number = found.number;
     pr.url = found.html_url;
     pr.branch = prHeadRefOf(found);
+}
+
+function searchMissingPRNumber(scm, config, ticketKey, pr, repoInfo) {
+    if (!needsPRSearch(pr.number, repoInfo)) {
+        warnIfUnsearchable(pr.number, repoInfo);
+        return;
+    }
+    console.log('PR number not found in input folder, searching GitHub...');
+    applyFoundPR(pr, findPRViaSearch(scm, ticketKey, prSearchOptionsOf(config)));
 }
 
 /**
@@ -1915,10 +1922,14 @@ function buildSuccessResult(isApproved, recommendation, reviewData, pr, repoInfo
     };
 }
 
+function ticketKeyOfTicket(ticket) {
+    if (!ticket) return null;
+    return ticket.key;
+}
+
 function ticketKeyOfParams(params) {
     if (!params) return null;
-    if (!params.ticket) return null;
-    return params.ticket.key;
+    return ticketKeyOfTicket(params.ticket);
 }
 
 function fallbackErrorTracker(params) {
@@ -2143,6 +2154,8 @@ if (typeof module !== 'undefined' && module.exports) {
         attemptResumeIfReviewOutputsMissing,
         readReviewJson,
         hasPrApprovedLabel,
-        getGitHubRepoInfo
+        getGitHubRepoInfo,
+        searchMissingPRNumber,
+        ticketKeyOfParams
     };
 }
