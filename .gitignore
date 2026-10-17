@@ -31,3 +31,6 @@ dmtools.env
 -e 
 # playwright-cli scratch (live-board debugging)
 site/factory/.playwright-cli/
+
+# fa session runtime artifacts (bash job logs/state — churn every session)
+.fah/
