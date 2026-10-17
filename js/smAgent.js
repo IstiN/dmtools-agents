@@ -2754,7 +2754,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                         }
                                     }
                                 }
-                            } else if (vOrphans && vOrphans.length) {
+                            } else if (vOrphans && vOrphans.length &&
+                                       !(vProbe && vProbe.green)) {
                                 // gh-998 NEUTRAL SWEEP — the finally-path
                                 // rows the gh-857 mirror never covered:
                                 // terminal-owner orphans (the gh-865
