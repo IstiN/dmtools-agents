@@ -382,21 +382,218 @@ function failSetup(tracker, ticketKey, inputFolder, message, customParams) {
     throw new Error(message);
 }
 
+/**
+ * Parse the incoming params into the rework anchor context: which params bag
+ * carries the input folder, the derived ticket key, and the PR anchor.
+ * PR-anchored rework (#544): a `pr-N` contextId makes the PR itself the
+ * anchor — the labeled PR has no local issue (guest/issue-less PR the owner
+ * labeled agent:rework). The PR number is taken directly, no
+ * findPRForTicket body/branch scrape; tracker status moves and ticket
+ * comments are skipped (a 'pr-N' key parses to no GitHub issue — comments
+ * would throw).
+ * (gh-1002) Pure parse* helper extracted from action().
+ *
+ * @param {Object} params - workflow params (jobParams shape or flat)
+ * @returns {{actualParams: Object, inputFolder: string, ticketKey: string, prAnchor: (number|null)}}
+ */
+function parseReworkParams(params) {
+    var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
+    var inputFolder = actualParams.inputFolderPath;
+    var ticketKey = inputFolder.split('/').pop();
+    var anchorMatch = /^pr-(\d+)$/.exec(String(ticketKey || ''));
+    var jp0 = params.jobParams || params;
+    var prAnchor = (anchorMatch ? parseInt(anchorMatch[1], 10) : null) ||
+        (parseInt(jp0.prNumber || jp0.pr || '', 10) || null);
+    return { actualParams: actualParams, inputFolder: inputFolder, ticketKey: ticketKey, prAnchor: prAnchor };
+}
+
+/**
+ * Resolve the repository (owner/repo) for the rework — prefer targetRepository
+ * from config over the git remote.
+ * (gh-1002) decide* helper extracted from action() Step 1.
+ *
+ * @param {Object} config - resolved project config
+ * @param {Object} scm    - SCM client (configLoader.createScm result)
+ * @returns {{owner: string, repo: string}|null}
+ */
+function resolveRepoInfo(config, scm) {
+    if (config.repository && config.repository.owner && config.repository.repo) {
+        var pinned = { owner: config.repository.owner, repo: config.repository.repo };
+        console.log('Using targetRepository from config:', pinned.owner + '/' + pinned.repo);
+        return pinned;
+    }
+    return scm.getRemoteRepoInfo();
+}
+
+/**
+ * Best-effort tracker comment for the repo-resolution failure. Optional
+ * helper — comment failures are swallowed (the {success:false} result is the
+ * real signal).
+ * (gh-1002) Extracted from action() Step 1.
+ */
+function postRepoResolutionFailure(tracker, ticketKey, customParams, err) {
+    try {
+        var mRepoFail = commentMarkup.forTicket(ticketKey, customParams);
+        tracker.postComment(ticketKey, mRepoFail.h(3, '❌ Rework Setup Failed') + '\n\n' + err);
+    } catch (e) {}
+}
+
+/**
+ * Decide which PR anchors this rework run: an explicit pr-N anchor wins (the
+ * anchor IS the PR, #544), otherwise the PR is looked up from the ticket key.
+ * (gh-1002) decide* helper extracted from action() Step 2.
+ *
+ * @param {(number|null)} prAnchor - PR number parsed from the input folder name, or null
+ * @param {Object} scm        - SCM client
+ * @param {Object} config     - resolved project config (may pin config.prSearchFn)
+ * @param {string} ticketKey  - ticket key (used only when there is no anchor)
+ * @returns {Object|null} PR (or PR-like) object with a number
+ */
+function findPrForRework(prAnchor, scm, config, ticketKey) {
+    if (prAnchor) {
+        console.log('PR-anchored rework: PR #' + prAnchor + ' (no ticket lookup, #544)');
+        return { number: prAnchor };
+    }
+    var prSearchOptions = config.prSearchFn ? { prSearchFn: config.prSearchFn } : {};
+    return gh.findPRForTicket(scm, ticketKey, prSearchOptions);
+}
+
+/**
+ * Mark the ticket actively-worked with the ACTUAL rework-phase status
+ * (gh-802 AC3b): a rework leg used to write statuses.IN_DEVELOPMENT — the
+ * stale dev-phase status — so the board showed the card back in Development
+ * while rework (post-review fixes) was actually running. Opt-in
+ * (config.jira.markReworkInDevelopment); skipped for PR-anchored runs, which
+ * have no ticket. A failed transition is logged with its content, not thrown.
+ * (gh-1002) Side-effecting step helper extracted from action().
+ */
+function moveTicketToReworkStatus(config, tracker, ticketKey, statuses, prAnchor) {
+    if (config.jira && config.jira.markReworkInDevelopment && !prAnchor) {
+        try {
+            tracker.moveToStatus(ticketKey, statuses.IN_REWORK);
+            console.log('Moved ' + ticketKey + ' to ' + statuses.IN_REWORK);
+        } catch (e) {
+            // Log the error CONTENT — the host console renders a raw Error
+            // object as "{}" (same log-hygiene rule as AC3c; matches the
+            // e.message || String(e) pattern used elsewhere in this file).
+            console.warn('Failed to move ticket to ' + statuses.IN_REWORK + ':', e && e.message ? e.message : String(e));
+        }
+    }
+}
+
+/**
+ * Check out the rework branch; a checkout error fails the setup (failSetup
+ * writes the marker + posts the comment, then throws).
+ * (gh-1002) Side-effecting step helper extracted from action() Step 4.
+ */
+function checkoutReworkBranch(branchName, config, inputFolder, tracker, ticketKey, customParams) {
+    try {
+        gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
+    } catch (e) {
+        failSetup(tracker, ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString(), customParams);
+    }
+}
+
+/**
+ * Run project-specific prerequisite/setup commands (e.g. install JDK/Maven,
+ * verify build credentials) before the CLI agent starts fixing code.
+ * Non-fatal setup command failures land in setup_warnings.md; a hard setup
+ * error fails the setup (failSetup throws).
+ * (gh-1002) Side-effecting step helper extracted from action() Step 4.6.
+ */
+function runSetupCommandsStep(customParams, config, inputFolder, tracker, ticketKey) {
+    try {
+        var setupResult = setupCommands.runSetupCommands(customParams, config.workingDir);
+        var setupWarnings = setupCommands.buildSetupWarningsMarkdown(setupResult);
+        if (setupWarnings) {
+            try {
+                file_write({ path: inputFolder + '/setup_warnings.md', content: setupWarnings });
+                console.log('⚠️ Wrote setup_warnings.md (non-fatal setup command failure(s))');
+            } catch (writeErr) {
+                console.warn('Failed to write setup_warnings.md:', writeErr);
+            }
+        }
+    } catch (e) {
+        failSetup(tracker, ticketKey, inputFolder, 'Environment setup failed: ' + (e && e.toString ? e.toString() : String(e)), customParams);
+    }
+}
+
+/**
+ * Remember the head this pass starts from, so pushReworkChanges can tell a
+ * real fix from a pass that only left housekeeping (outputs/, WIP auto-saves)
+ * behind. Optional helper — a write failure leaves the no-fix guard off.
+ * (gh-1002) Side-effecting step helper extracted from action().
+ */
+function writeReworkBaseHead(inputFolder, headSha) {
+    try {
+        if (headSha) file_write({ path: inputFolder + '/rework_base_head.txt', content: String(headSha) });
+    } catch (e) {
+        console.warn('Could not write rework_base_head.txt (no-fix guard stays off):', e.message || e);
+    }
+}
+
+/**
+ * Post the "Automated Rework Started" tracker comment, rendered in the flavor
+ * of the ticket's tracker (gh-770): Markdown on GitHub issues, wiki markup on
+ * Jira. Optional helper — comment failures are logged and swallowed.
+ * (gh-1002) Extracted from action() Step 8.
+ */
+function postReworkStartedCommentStep(tracker, ticketKey, customParams, ctx) {
+    try {
+        tracker.postComment(ticketKey, buildReworkStartedComment(
+            commentMarkup.forTicket(ticketKey, customParams),
+            ctx
+        ));
+    } catch (e) {
+        console.warn('Failed to post tracker comment:', e);
+    }
+}
+
+/**
+ * Report an action()-level failure to the tracker as a "❌ Rework Setup
+ * Error" comment. Optional helper — every failure mode (no ticket key,
+ * tracker creation, the comment itself) is logged and swallowed.
+ * (gh-1002) Extracted from the action() catch block.
+ */
+function reportActionError(params, tracker, error) {
+    try {
+        const ticketKey = (params.inputFolderPath ||
+            (params.jobParams && params.jobParams.inputFolderPath) || '').split('/').pop();
+        if (ticketKey) {
+            // Post the error to the ticket via the probed tracker provider
+            var errorTracker = (typeof tracker !== 'undefined' && tracker) ? tracker : null;
+            if (!errorTracker) {
+                try {
+                    errorTracker = trackersModule.createTracker(
+                        configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params)),
+                        (params.jobParams && params.jobParams.customParams) || params.customParams);
+                } catch (trackerError) {
+                    console.error('Failed to create tracker for error comment:', trackerError);
+                }
+            }
+            if (errorTracker) {
+                // Flavor follows the ticket's tracker (gh-770): Markdown
+                // on GitHub issues, wiki markup on Jira.
+                var errorCustomParams = (params.jobParams && params.jobParams.customParams) || params.customParams;
+                var em = commentMarkup.forTicket(ticketKey, errorCustomParams);
+                errorTracker.postComment(
+                    ticketKey,
+                    em.h(3, '❌ Rework Setup Error') + '\n\n' + em.code(truncateForComment(error.toString()))
+                );
+            }
+        }
+    } catch (e) {
+        console.error('Failed to post rework setup error comment:', e && e.toString ? e.toString() : String(e));
+    }
+}
+
 function action(params) {
     try {
-        var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
-        var inputFolder = actualParams.inputFolderPath;
-        var ticketKey = inputFolder.split('/').pop();
-        // PR-anchored rework (#544): a `pr-N` contextId makes the PR itself
-        // the anchor — the labeled PR has no local issue (guest/issue-less
-        // PR the owner labeled agent:rework). The PR number is taken
-        // directly, no findPRForTicket body/branch scrape; tracker status
-        // moves and ticket comments are skipped (a 'pr-N' key parses to no
-        // GitHub issue — comments would throw).
-        var anchorMatch = /^pr-(\d+)$/.exec(String(ticketKey || ''));
-        var jp0 = params.jobParams || params;
-        const prAnchor = (anchorMatch ? parseInt(anchorMatch[1], 10) : null) ||
-            (parseInt(jp0.prNumber || jp0.pr || '', 10) || null);
+        var parsed = parseReworkParams(params);
+        var actualParams = parsed.actualParams;
+        var inputFolder = parsed.inputFolder;
+        var ticketKey = parsed.ticketKey;
+        var prAnchor = parsed.prAnchor;
         // paramsForConfigLoad re-attaches params.ticket (sibling of jobParams in the
         // real Teammate execution path) so baseBranchResolverFnPath can key off the
         // ticket's fixVersion — see configLoader.js for details.
