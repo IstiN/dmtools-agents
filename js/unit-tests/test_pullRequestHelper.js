@@ -614,3 +614,246 @@ suite('pullRequest helper — cleanCommandOutput / stripGitNoise (gh-912 UT-3, b
     });
 
 });
+
+// ── gh-965: resolveMergeConflicts characterization via syncBranchWithBase ────
+// The conflict auto-resolution fallback (git merge --no-edit fails → resolve →
+// commit, or abort) is pinned here end-to-end: same git commands, same order,
+// same result shapes. Outcomes: keep branch version, keep base version,
+// submodule conflict, already-clean status, unresolved remain, commit failure,
+// status read failure.
+suite('pullRequest helper — syncBranchWithBase conflict auto-resolution (gh-965)', function() {
+
+    // Consumed-once reply matching: each scripted reply satisfies exactly one
+    // call, in order. An unmatched git command means the scenario drifted from
+    // what the test pins — fail loudly instead of silently succeeding.
+    function takeReply(replies, command) {
+        for (var i = 0; i < replies.length; i++) {
+            if (!replies[i].used && command.indexOf(replies[i].match) === 0) {
+                replies[i].used = true;
+                return replies[i];
+            }
+        }
+        throw new Error('scriptedSync: unmatched git command: ' + command);
+    }
+
+    // Scripted runCommand: dispatches by command prefix, each reply consumed
+    // once (order-strict), records every call in order.
+    function scriptedSync(script) {
+        var commands = [];
+        var replies = script.replies.map(function(r) { return { match: r.match, output: r.output, throwError: r.throwError, used: false }; });
+        var pr = loadPullRequestHelper();
+        var result = pr.syncBranchWithBase({
+            branchName: script.branchName || 'feature/CONF-1',
+            baseBranch: script.baseBranch || 'main',
+            workingDir: 'repo',
+            runCommand: function(command, workingDir) {
+                commands.push({ command: command, workingDirectory: workingDir || null });
+                var reply = takeReply(replies, command);
+                if (reply.throwError) throw new Error(reply.throwError);
+                return reply.output || '';
+            }
+        });
+        return { result: result, commands: commands };
+    }
+
+    // Reply pair for the checkout+add a resolved file always ends with.
+    function resolvedWith(side, file) {
+        return [
+            { match: 'git checkout --' + side + ' -- "' + file + '"', output: '' },
+            { match: 'git add -- "' + file + '"', output: '' }
+        ];
+    }
+
+    // Standard prefix: not mid-merge, behind base, clean tree, merge explodes.
+    // merge-base is consumed in order: branchContainsBase, branchHasMergeBase,
+    // then the merge-base lookup inside resolveMergeConflicts.
+    function conflictPrefix(statusShort, mergeError) {
+        return [
+            { match: 'git rev-parse --quiet --verify MERGE_HEAD', output: '' },
+            { match: 'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main', output: '' },
+            { match: 'git rev-parse origin/main', output: 'base-sha' },
+            { match: 'git merge-base origin/main HEAD', output: 'old-sha' },
+            { match: 'git merge-base origin/main HEAD', output: 'old-sha' },
+            { match: 'git status --porcelain --ignore-submodules=dirty', output: '' },
+            { match: 'git merge --no-edit origin/main', throwError: mergeError || 'Auto-merging src/app.js\nCONFLICT (content): Merge conflict in src/app.js\nAutomatic merge failed' },
+            { match: 'git status --short', output: statusShort },
+            { match: 'git merge-base origin/main HEAD', output: 'mb-sha' }
+        ];
+    }
+
+    test('keeps branch version (--ours) for files the branch changed, commits sync, autoResolved=true', function() {
+        var s = scriptedSync({
+            replies: conflictPrefix('UU src/app.js\nAA src/other.ts\n').concat([
+                { match: 'git ls-files --stage -- "src/app.js"', output: '100644 abc123 1\tsrc/app.js' },
+                { match: 'git diff mb-sha HEAD -- "src/app.js"', output: 'diff --git a/src/app.js b/src/app.js\n+branch line' },
+                { match: 'git ls-files --stage -- "src/other.ts"', output: '100644 def456 1\tsrc/other.ts' },
+                { match: 'git diff mb-sha HEAD -- "src/other.ts"', output: 'diff --git a/src/other.ts b/src/other.ts\n+branch line' },
+                { match: 'git diff --name-only --diff-filter=U', output: '' },
+                { match: 'git commit', output: '[feature/CONF-1 abc] Merge origin/main into feature/CONF-1' }
+            ]).concat(resolvedWith('ours', 'src/app.js')).concat(resolvedWith('ours', 'src/other.ts'))
+        });
+
+        assert.equal(s.result.success, true);
+        assert.equal(s.result.updated, true);
+        assert.equal(s.result.autoResolved, true);
+        assert.deepEqual(s.commands.map(function(c) { return c.command; }), [
+            'git rev-parse --quiet --verify MERGE_HEAD',
+            'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main',
+            'git rev-parse origin/main',
+            'git merge-base origin/main HEAD',
+            'git merge-base origin/main HEAD',
+            'git status --porcelain --ignore-submodules=dirty',
+            'git merge --no-edit origin/main',
+            'git status --short',
+            'git merge-base origin/main HEAD',
+            'git ls-files --stage -- "src/app.js"',
+            'git diff mb-sha HEAD -- "src/app.js"',
+            'git checkout --ours -- "src/app.js"',
+            'git add -- "src/app.js"',
+            'git ls-files --stage -- "src/other.ts"',
+            'git diff mb-sha HEAD -- "src/other.ts"',
+            'git checkout --ours -- "src/other.ts"',
+            'git add -- "src/other.ts"',
+            'git diff --name-only --diff-filter=U',
+            'git commit -m "Merge origin/main into feature/CONF-1"'
+        ]);
+    });
+
+    test('keeps origin/main version (--theirs) for files the branch did not change', function() {
+        var s = scriptedSync({
+            replies: conflictPrefix('UU src/app.js\n').concat([
+                { match: 'git ls-files --stage -- "src/app.js"', output: '100644 abc123 1\tsrc/app.js' },
+                { match: 'git diff mb-sha HEAD -- "src/app.js"', output: '' },
+                { match: 'git diff --name-only --diff-filter=U', output: '' },
+                { match: 'git commit', output: 'ok' }
+            ]).concat(resolvedWith('theirs', 'src/app.js'))
+        });
+
+        assert.equal(s.result.success, true);
+        assert.equal(s.result.autoResolved, true);
+        assert.deepEqual(s.commands.filter(function(c) {
+            return c.command.indexOf('git checkout') === 0;
+        }).map(function(c) { return c.command; }), ['git checkout --theirs -- "src/app.js"']);
+    });
+
+    test('submodule conflict adopts origin/main version (--theirs) without a diff probe', function() {
+        var s = scriptedSync({
+            replies: conflictPrefix('UU src/sub\n').concat([
+                { match: 'git ls-files --stage -- "src/sub"', output: '160000 deadbeef 1\tsrc/sub' },
+                { match: 'git diff --name-only --diff-filter=U', output: '' },
+                { match: 'git commit', output: 'ok' }
+            ]).concat(resolvedWith('theirs', 'src/sub'))
+        });
+
+        assert.equal(s.result.success, true);
+        assert.equal(s.result.autoResolved, true);
+        assert.deepEqual(s.commands.map(function(c) { return c.command; }), [
+            'git rev-parse --quiet --verify MERGE_HEAD',
+            'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main',
+            'git rev-parse origin/main',
+            'git merge-base origin/main HEAD',
+            'git merge-base origin/main HEAD',
+            'git status --porcelain --ignore-submodules=dirty',
+            'git merge --no-edit origin/main',
+            'git status --short',
+            'git merge-base origin/main HEAD',
+            'git ls-files --stage -- "src/sub"',
+            'git checkout --theirs -- "src/sub"',
+            'git add -- "src/sub"',
+            'git diff --name-only --diff-filter=U',
+            'git commit -m "Merge origin/main into feature/CONF-1"'
+        ]);
+    });
+
+    test('already-clean status (no conflict markers) aborts and reports the original merge error', function() {
+        var s = scriptedSync({
+            replies: conflictPrefix(' M src/other.js\n', 'merge exploded').concat([
+                { match: 'git merge --abort', output: '' }
+            ])
+        });
+
+        assert.equal(s.result.success, false);
+        assert.equal(s.result.conflict, false);
+        assert.deepEqual(s.result.conflictFiles, []);
+        assert.equal(s.result.error, 'merge exploded', 'original git error is kept when no conflict markers exist');
+        assert.ok(s.commands.some(function(c) { return c.command === 'git merge --abort'; }), 'merge must be aborted');
+    });
+
+    test('unresolvable conflicts remain → conflict=true, conflictFiles listed, merge aborted', function() {
+        var s = scriptedSync({
+            replies: conflictPrefix('UU src/app.js\n').concat([
+                { match: 'git ls-files --stage -- "src/app.js"', output: '100644 abc123 1\tsrc/app.js' },
+                { match: 'git diff mb-sha HEAD -- "src/app.js"', throwError: 'diff probe failed' },
+                { match: 'git diff --name-only --diff-filter=U', output: 'src/app.js' },
+                { match: 'git merge --abort', output: '' }
+            ]).concat(resolvedWith('theirs', 'src/app.js'))
+        });
+
+        assert.equal(s.result.success, false);
+        assert.equal(s.result.conflict, true);
+        assert.deepEqual(s.result.conflictFiles, ['src/app.js']);
+        assert.contains(s.result.error, 'Merge conflict while syncing with origin/main: src/app.js');
+        assert.ok(s.commands.some(function(c) { return c.command === 'git merge --abort'; }));
+    });
+
+    test('commit failure after clean resolution surfaces the commit error', function() {
+        var s = scriptedSync({
+            replies: conflictPrefix('UU src/app.js\n').concat([
+                { match: 'git ls-files --stage -- "src/app.js"', output: '100644 abc123 1\tsrc/app.js' },
+                { match: 'git diff mb-sha HEAD -- "src/app.js"', output: '+line' },
+                { match: 'git diff --name-only --diff-filter=U', output: '' },
+                { match: 'git commit', throwError: 'nothing to commit' }
+            ]).concat(resolvedWith('ours', 'src/app.js'))
+        });
+
+        assert.equal(s.result.success, false);
+        assert.contains(s.result.error, 'Conflict files resolved but merge commit failed');
+        assert.contains(s.result.error, 'nothing to commit');
+    });
+
+    test('unresolvable merge base keeps origin/main version (--theirs) without a diff probe', function() {
+        var s = scriptedSync({
+            replies: [
+                { match: 'git rev-parse --quiet --verify MERGE_HEAD', output: '' },
+                { match: 'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main', output: '' },
+                { match: 'git rev-parse origin/main', output: 'base-sha' },
+                { match: 'git merge-base origin/main HEAD', output: 'old-sha' },
+                { match: 'git merge-base origin/main HEAD', output: 'old-sha' },
+                { match: 'git status --porcelain --ignore-submodules=dirty', output: '' },
+                { match: 'git merge --no-edit origin/main', throwError: 'merge conflict' },
+                { match: 'git status --short', output: 'UU src/app.js\n' },
+                { match: 'git merge-base origin/main HEAD', throwError: 'fatal: no merge base' },
+                { match: 'git ls-files --stage -- "src/app.js"', output: '100644 abc123 1\tsrc/app.js' },
+                { match: 'git diff --name-only --diff-filter=U', output: '' },
+                { match: 'git commit', output: 'ok' }
+            ].concat(resolvedWith('theirs', 'src/app.js'))
+        });
+
+        assert.equal(s.result.success, true);
+        assert.equal(s.result.autoResolved, true);
+        assert.deepEqual(s.commands.filter(function(c) {
+            return c.command.indexOf('git checkout') === 0;
+        }).map(function(c) { return c.command; }), ['git checkout --theirs -- "src/app.js"']);
+    });
+
+    test('unreadable conflict status surfaces the status error and aborts', function() {
+        var s = scriptedSync({
+            replies: [
+                { match: 'git rev-parse --quiet --verify MERGE_HEAD', output: '' },
+                { match: 'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main', output: '' },
+                { match: 'git rev-parse origin/main', output: 'base-sha' },
+                { match: 'git merge-base origin/main HEAD', output: 'old-sha' },
+                { match: 'git merge-base origin/main HEAD', output: 'old-sha' },
+                { match: 'git status --porcelain --ignore-submodules=dirty', output: '' },
+                { match: 'git merge --no-edit origin/main', throwError: 'merge exploded' },
+                { match: 'git status --short', throwError: 'fatal: not a git repository' },
+                { match: 'git merge --abort', output: '' }
+            ]
+        });
+
+        assert.equal(s.result.success, false);
+        assert.equal(s.result.error, 'Could not read conflict status');
+        assert.ok(s.commands.some(function(c) { return c.command === 'git merge --abort'; }));
+    });
+
+});
