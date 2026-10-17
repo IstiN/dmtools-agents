@@ -24,26 +24,8 @@ function prRecorder() {
     return { comments: [], gitOps: [], ghCalls: [], parentCalls: [], configCalls: [] };
 }
 
-/**
- * Loads js/preparePRForReview.js with injected fakes.
- * opts:
- *   config / configError      — loadProjectConfig result / thrown error
- *   remoteRepoInfo            — scm.getRemoteRepoInfo() result (default acme/widget)
- *   findPRResult              — gh.findPRForTicket result (default PR #42)
- *   prDetails                 — gh.getPRDetails result (default details for #42)
- *   discussions               — fetchDiscussionsAndRawData result
- *   failedChecks              — detectFailedChecks result
- *   diffText                  — getPRDiff result
- *   checkoutError             — error thrown by checkoutPRBranch
- *   parentError               — error thrown by fetchParentContextToInput.action
- *   trackerThrows             — make tracker postComment throw
- *   record                    — recorder (auto-created when omitted)
- */
-function prLoad(opts) {
-    opts = opts || {};
-    var record = opts.record || prRecorder();
-
-    var ghDefaults = {
+function prGhMocks(opts, record) {
+    return {
         findPRForTicket: function(scm, ticketKey, options) {
             record.ghCalls.push({ fn: 'findPRForTicket', ticketKey: ticketKey, options: options });
             return opts.findPRResult !== undefined ? opts.findPRResult :
@@ -73,8 +55,10 @@ function prLoad(opts) {
             return opts.failedChecks || [];
         }
     };
+}
 
-    var gitOpsDefaults = {
+function prGitOpsMocks(opts, record) {
+    return {
         checkoutPRBranch: function(branchName, workingDir, baseBranch) {
             record.gitOps.push({ fn: 'checkoutPRBranch', branchName: branchName,
                 workingDir: workingDir, baseBranch: baseBranch });
@@ -91,17 +75,22 @@ function prLoad(opts) {
                 markdown: markdown, rawThreads: rawThreads });
         }
     };
+}
 
-    var trackerGlobals = {
+function prTrackerGlobals(record, trackerThrows) {
+    var g = {
         jira_post_comment: function(a) { record.comments.push({ tool: 'jira_post_comment', args: a }); },
         jira_add_label: function(a) { record.comments.push({ tool: 'jira_add_label', args: a }); },
         ado_add_work_item_comment: function(a) { record.comments.push({ tool: 'ado_add_work_item_comment', args: a }); }
     };
-    if (opts.trackerThrows) {
-        trackerGlobals.jira_post_comment = function() { throw new Error('tracker down'); };
+    if (trackerThrows) {
+        g.jira_post_comment = function() { throw new Error('tracker down'); };
     }
+    return g;
+}
 
-    var configLoaderMock = {
+function prConfigLoader(opts, record) {
+    return {
         loadProjectConfig: function(params) {
             record.configCalls.push(params);
             if (opts.configError) throw opts.configError;
@@ -116,21 +105,32 @@ function prLoad(opts) {
             };
         }
     };
+}
 
-    var parentMock = {
+function prParentMock(opts, record) {
+    return {
         action: function(params) {
             record.parentCalls.push(params);
             if (opts.parentError) throw opts.parentError;
         }
     };
+}
 
-    var globalMocks = Object.assign({}, trackerGlobals);
+/**
+ * Loads js/preparePRForReview.js with injected fakes.
+ * See the suites below for the opts each test uses.
+ */
+function prLoad(opts) {
+    opts = opts || {};
+    var record = opts.record || prRecorder();
+    var globalMocks = prTrackerGlobals(record, opts.trackerThrows);
+
     var module = loadModule('js/preparePRForReview.js', makeRequire({
-        './configLoader.js': configLoaderMock,
-        './common/githubHelpers.js': Object.assign(ghDefaults, opts.gh || {}),
-        './common/gitOps.js': Object.assign(gitOpsDefaults, opts.gitOps || {}),
+        './configLoader.js': prConfigLoader(opts, record),
+        './common/githubHelpers.js': Object.assign(prGhMocks(opts, record), opts.gh || {}),
+        './common/gitOps.js': Object.assign(prGitOpsMocks(opts, record), opts.gitOps || {}),
         './common/commentMarkup.js': prCommentMarkup(),
-        './fetchParentContextToInput.js': parentMock,
+        './fetchParentContextToInput.js': prParentMock(opts, record),
         './common/trackers.js': prTrackersWith(globalMocks)
     }), globalMocks);
 
@@ -332,9 +332,25 @@ test('PR details failure on a pr-N anchor posts nothing', function() {
     assert.equal(rec.comments.length, 0);
 });
 
-test('setup error (config load throws): error comment + false', function() {
+test('setup error (config load throws): false, no comment possible (tracker not yet created)', function() {
     var rec = prRecorder();
     var loaded = prLoad({ record: rec, configError: new Error('bad config') });
+
+    var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: {} });
+
+    assert.equal(result, false);
+    assert.equal(rec.comments.length, 0);
+});
+
+test('setup error mid-flow (diff fails): error comment posted via tracker + false', function() {
+    var rec = prRecorder();
+    var loaded = prLoad({
+        record: rec,
+        config: { repository: { owner: 'acme', repo: 'widget' }, git: { baseBranch: 'main' } },
+        gitOps: {
+            getPRDiff: function() { throw new Error('git exploded'); }
+        }
+    });
 
     var result = loaded.module.action({ inputFolderPath: 'input/TS-42', jobParams: {} });
 
@@ -342,7 +358,7 @@ test('setup error (config load throws): error comment + false', function() {
     assert.equal(rec.comments.length, 1);
     assert.equal(rec.comments[0].args.key, 'TS-42');
     assert.equal(rec.comments[0].args.comment,
-        'h3. ❌ PR Review Setup Error\n\n{code}Error: bad config{code}');
+        'h3. ❌ PR Review Setup Error\n\n{code}Error: git exploded{code}');
 });
 
 test('setup error on a pr-N anchor posts nothing', function() {
@@ -449,11 +465,12 @@ test('parsePrAnchor: pr-N key wins, then jobParams.prNumber, then jobParams.pr',
 test('parseContext: splits input folder, derives prAnchor/noTicket, keeps params', function() {
     var m = prLoad({}).module;
 
-    var ticketCtx = m.parseContext({ inputFolderPath: 'input/TS-42', jobParams: {} });
+    var ticketCtx = m.parseContext({ inputFolderPath: 'input/TS-42' });
     assert.equal(ticketCtx.inputFolder, 'input/TS-42');
     assert.equal(ticketCtx.ticketKey, 'TS-42');
     assert.equal(ticketCtx.prAnchor, null);
     assert.equal(ticketCtx.noTicket, false);
+    // Without jobParams, jp falls back to params itself.
     assert.equal(ticketCtx.jp.inputFolderPath, 'input/TS-42');
 
     var prCtx = m.parseContext({ inputFolderPath: 'input/pr-12', jobParams: {} });
@@ -504,7 +521,7 @@ test('buildReviewStartedComment: clean and failing-check variants', function() {
 
     var failing = m.buildReviewStartedComment('TS-42', prDetails, 'ai/TS-42',
         [{ name: 'lint' }, { name: 'unit' }]);
-    assert.contains(failing, 'CI checks failing — 2 check(s) did not pass');
+    assert.contains(failing, '*CI checks failing* — 2 check(s) did not pass');
     assert.contains(failing, '* {code}lint{code}');
     assert.contains(failing, '* {code}unit{code}');
 });

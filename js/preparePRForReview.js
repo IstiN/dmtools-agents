@@ -135,6 +135,11 @@ function resolveRepoInfo(ctx) {
     return { repoInfo: repoInfo };
 }
 
+function logFoundPr(pr) {
+    console.log('Found PR candidate #' + pr.number + ' with title: ' + (pr.title || '(no title)'));
+    console.log('PR head branch:', pr.head && pr.head.ref ? pr.head.ref : '(missing)');
+}
+
 // Step 2: find the PR — direct anchor or ticket-key search
 function findPullRequest(ctx) {
     var pr;
@@ -147,8 +152,7 @@ function findPullRequest(ctx) {
         pr = gh.findPRForTicket(ctx.scm, ctx.ticketKey, prSearchOptions);
     }
     if (pr) {
-        console.log('Found PR candidate #' + pr.number + ' with title: ' + (pr.title || '(no title)'));
-        console.log('PR head branch:', pr.head && pr.head.ref ? pr.head.ref : '(missing)');
+        logFoundPr(pr);
         return { pr: pr };
     }
     console.warn('No open PR found for ticket:', ctx.ticketKey);
@@ -373,6 +377,7 @@ if (typeof module !== 'undefined' && module.exports) {
         postSetupErrorComment: postSetupErrorComment,
         resolveRepoInfo: resolveRepoInfo,
         findPullRequest: findPullRequest,
+        logFoundPr: logFoundPr,
         refLabel: refLabel,
         fetchPrDetails: fetchPrDetails,
         extractHeadBranch: extractHeadBranch,
