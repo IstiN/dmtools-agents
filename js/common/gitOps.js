@@ -185,6 +185,99 @@ function checkoutPRBranch(branchName, workingDir, baseBranch) {
     return { branch: branchName, hadConflict: hadConflict };
 }
 
+// ── getPRDiff helpers (gh-962) ───────────────────────────────────────────────
+// Extracted verbatim from the former getPRDiff monolith (CRAP 506). The git
+// command strings, fallback order and every log line are byte-identical to
+// the inline code they replace — pinned by the characterization suite in
+// js/unit-tests/test_gitOps.js.
+
+// 'origin/x' → 'x'; anything else passes through unchanged.
+function stripOriginPrefix(branchName) {
+    return branchName.indexOf('origin/') === 0 ? branchName.slice('origin/'.length) : branchName;
+}
+
+// 'x' → 'origin/x'; an already-prefixed name passes through unchanged.
+function withOriginPrefix(branchName) {
+    return branchName.indexOf('origin/') === 0 ? branchName : 'origin/' + branchName;
+}
+
+// Unshallow if needed so there is a full merge base available. A failing
+// probe stays silent — the repository is already complete or unshallow is
+// not supported (same swallow as the original inline block).
+function _unshallowForMergeBase(cmd) {
+    try {
+        var isShallow = cleanCommandOutput(cmd('git rev-parse --is-shallow-repository') || 'false');
+        if (isShallow.trim() === 'true') {
+            cmd('git fetch --unshallow');
+            console.log('Unshallowed repository for full merge base detection');
+        } else {
+            console.log('Repository is already complete (not shallow), skipping unshallow');
+        }
+    } catch (e) {
+        // ignore — already complete or unshallow not supported
+    }
+}
+
+// Runs one git command. Returns the CLEANED capture plus the RAW length —
+// the "Diff size: N chars" log lines count the raw capture (wrapper trailer
+// included), exactly like the original inline code did. A null/undefined
+// throw rethrows so it surfaces in getPRDiff's outer catch exactly like the
+// original `e.message` dereference did — it must NOT be converted into a
+// fallback attempt.
+function _runDiffCommand(cmd, command) {
+    try {
+        var raw = cmd(command) || '';
+        return { ok: true, raw: raw, diff: cleanCommandOutput(raw) };
+    } catch (e) {
+        if (!e) throw e;
+        return { ok: false, error: e.message || e };
+    }
+}
+
+// First strategy: three-dot diff (shows only changes on headBranch since
+// divergence). Returns the diff, or null (after the original warn) on failure.
+function _tryThreeDotDiff(cmd, baseBranch, headBranch) {
+    var result = _runDiffCommand(cmd, 'git diff ' + baseBranch + '...' + headBranch);
+    if (result.ok) {
+        console.log('Diff size:', result.raw.length, 'chars');
+        return result.diff;
+    }
+    console.warn('Three-dot diff failed (likely no merge base), trying with origin/ prefix:', result.error);
+    return null;
+}
+
+// Fallback: three-dot diff with an explicit origin/ prefix on the base branch.
+function _tryOriginFallbackDiff(cmd, baseBranch, headBranch) {
+    var result = _runDiffCommand(cmd, 'git diff ' + withOriginPrefix(baseBranch) + '...' + headBranch);
+    if (result.ok) {
+        console.log('Diff size (origin fallback):', result.raw.length, 'chars');
+        return result.diff;
+    }
+    console.warn('Origin-prefix diff also failed, trying merge-base approach:', result.error);
+    return null;
+}
+
+// Last resort: find the explicit merge-base commit and diff from there. An
+// EMPTY merge-base silently falls through to the all-failed log (original
+// behaviour — only command failures warn).
+function _tryMergeBaseDiff(cmd, baseBranch, headBranch) {
+    var probe = _runDiffCommand(cmd, 'git merge-base ' + withOriginPrefix(baseBranch) + ' ' + headBranch);
+    if (!probe.ok) {
+        console.warn('Merge-base diff also failed:', probe.error);
+        return null;
+    }
+    var mergeBase = probe.diff;
+    if (mergeBase && mergeBase.trim().length > 0) {
+        var result = _runDiffCommand(cmd, 'git diff ' + mergeBase.trim() + '...' + headBranch);
+        if (result.ok) {
+            console.log('Diff size (merge-base fallback):', result.raw.length, 'chars');
+            return result.diff;
+        }
+        console.warn('Merge-base diff also failed:', result.error);
+    }
+    return null;
+}
+
 function getPRDiff(baseBranch, headBranch, workingDir) {
     var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
     var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
@@ -195,53 +288,22 @@ function getPRDiff(baseBranch, headBranch, workingDir) {
         // called standalone (without a preceding checkoutPRBranch in the same
         // working dir) against a base branch never fetched with an explicit
         // refspec before.
-        var baseBranchName = baseBranch.indexOf('origin/') === 0 ? baseBranch.slice('origin/'.length) : baseBranch;
-        prHelper.ensureRemoteBranchRef(cmd, workingDir, baseBranchName);
+        prHelper.ensureRemoteBranchRef(cmd, workingDir, stripOriginPrefix(baseBranch));
 
         // Unshallow if needed so there is a full merge base available
-        try {
-            var isShallow = cleanCommandOutput(cmd('git rev-parse --is-shallow-repository') || 'false');
-            if (isShallow.trim() === 'true') {
-                cmd('git fetch --unshallow');
-                console.log('Unshallowed repository for full merge base detection');
-            } else {
-                console.log('Repository is already complete (not shallow), skipping unshallow');
-            }
-        } catch (e) {
-            // ignore — already complete or unshallow not supported
-        }
+        _unshallowForMergeBase(cmd);
 
         // First try three-dot diff (shows only changes on headBranch since divergence)
-        try {
-            const diff = cmd('git diff ' + baseBranch + '...' + headBranch) || '';
-            console.log('Diff size:', diff.length, 'chars');
-            return cleanCommandOutput(diff);
-        } catch (e1) {
-            console.warn('Three-dot diff failed (likely no merge base), trying with origin/ prefix:', e1.message || e1);
-        }
+        var diff = _tryThreeDotDiff(cmd, baseBranch, headBranch);
+        if (diff !== null) return diff;
 
         // Fallback: try with explicit origin/ prefix on base branch
-        try {
-            const originBase = baseBranch.indexOf('origin/') === 0 ? baseBranch : 'origin/' + baseBranch;
-            const diff = cmd('git diff ' + originBase + '...' + headBranch) || '';
-            console.log('Diff size (origin fallback):', diff.length, 'chars');
-            return cleanCommandOutput(diff);
-        } catch (e2) {
-            console.warn('Origin-prefix diff also failed, trying merge-base approach:', e2.message || e2);
-        }
+        diff = _tryOriginFallbackDiff(cmd, baseBranch, headBranch);
+        if (diff !== null) return diff;
 
         // Last resort: find explicit merge-base commit and diff from there
-        try {
-            const originBase = baseBranch.indexOf('origin/') === 0 ? baseBranch : 'origin/' + baseBranch;
-            const mergeBase = cleanCommandOutput(cmd('git merge-base ' + originBase + ' ' + headBranch) || '');
-            if (mergeBase && mergeBase.trim().length > 0) {
-                const diff = cmd('git diff ' + mergeBase.trim() + '...' + headBranch) || '';
-                console.log('Diff size (merge-base fallback):', diff.length, 'chars');
-                return cleanCommandOutput(diff);
-            }
-        } catch (e3) {
-            console.warn('Merge-base diff also failed:', e3.message || e3);
-        }
+        diff = _tryMergeBaseDiff(cmd, baseBranch, headBranch);
+        if (diff !== null) return diff;
 
         console.error('All diff strategies failed for', baseBranch, '...', headBranch);
         return '';
