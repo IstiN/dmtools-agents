@@ -179,21 +179,30 @@ function ensureClosesLine(body, ticketKey) {
 var MERGE_QUEUE_BODY_LABELS = ['ai_validating'];
 
 /**
- * Whether the PR body must be treated as final — the PR entered the merge
- * queue (validation armed) or is already merged/closed. Accepts both GitHub
- * REST label shapes ({name: …} objects) and plain-string label arrays.
+ * gh-960 rework (review thread js/common/pullRequest.js:192): the label scan
+ * lives in its own helper so isPrBodyFrozen stays under the CI crap gate
+ * (CC ≤ 8) — the loop + name-normalization ternary + indexOf pushed it to 12.
+ * Accepts both GitHub REST label shapes ({name: …} objects) and plain-string
+ * label arrays.
  */
-function isPrBodyFrozen(pr) {
-    if (!pr || typeof pr !== 'object') return false;
-    if (pr.merged === true) return true;
-    var state = String(pr.state || '').toLowerCase();
-    if (state === 'closed' || state === 'merged') return true;
-    var labels = pr.labels || [];
+function mergeQueueBodyLabelPresent(labels) {
+    labels = labels || [];
     for (var i = 0; i < labels.length; i++) {
         var name = labels[i] && labels[i].name !== undefined ? labels[i].name : labels[i];
         if (MERGE_QUEUE_BODY_LABELS.indexOf(String(name)) !== -1) return true;
     }
     return false;
+}
+
+/**
+ * Whether the PR body must be treated as final — the PR entered the merge
+ * queue (validation armed) or is already merged/closed.
+ */
+function isPrBodyFrozen(pr) {
+    if (!pr || typeof pr !== 'object') return false;
+    if (pr.merged === true) return true;
+    var state = String(pr.state || '').toLowerCase();
+    return state === 'closed' || state === 'merged' || mergeQueueBodyLabelPresent(pr.labels);
 }
 
 // GitHub limits PR bodies to 65536 characters. Keep a safety margin so
