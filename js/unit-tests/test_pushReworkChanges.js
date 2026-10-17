@@ -826,7 +826,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './common/scm.js': { createScm: function() { return scm; } },
             './common/submodules.js': { pushManagedSubmodules: function() {} },
             './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
-                readStagedDiffStat: function() { return 'M file.txt\n'; },
+                readStagedDiffStat: (opts && opts.stagedDiffStat) || function() { return 'M file.txt\n'; },
                 syncBranchWithBase: function() { return { success: true, updated: false }; }
             }),
             './common/githubHelpers.js': githubHelpersModule,
