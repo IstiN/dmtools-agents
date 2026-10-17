@@ -12,7 +12,24 @@ function loadReviewHelpers() {
 }
 
 function loadPrReviewComments() {
-    return loadModule('js/postPRReviewComments.js', makeRequire({}), {});
+    var commentMarkupModule = loadModule('js/common/commentMarkup.js',
+        makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+    var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+    var outputFilesModule = loadModule('js/common/outputFiles.js', makeRequire({}), {});
+    return loadModule('js/postPRReviewComments.js', makeRequire({
+        './config.js': configModule,
+        'config': configModule,
+        './common/scm.js': { createScm: function() { return {}; } },
+        './common/trackers.js': { createTracker: function() { return {}; }, extractTicketKey: function() { return null; } },
+        './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; }, triggerSmIfIdle: function() { return { success: true }; } },
+        './configLoader.js': configLoaderModule,
+        './common/machineAuthor.js': machineAuthorModule,
+        './common/outputFiles.js': outputFilesModule,
+        './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, customParamsOf: function() { return {}; } },
+        './common/githubHelpers.js': { findPRForTicket: function() { return null; }, findMergedPRForTicket: function() { return null; } },
+        './common/commentMarkup.js': commentMarkupModule,
+        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+    }), {});
 }
 
 function scmRecorder() {
@@ -35,6 +52,7 @@ function scmRecorder() {
         getPrDiff: function(prId) { return Object.prototype.hasOwnProperty.call(calls.diffs, prId) ? calls.diffs[prId] : null; }
     };
     scm.calls = calls;
+    scm.diffs = calls.diffs;
     return scm;
 }
 
@@ -67,7 +85,7 @@ suite('postStoryTestAutomationReviewHelpers: getPRNumber', function() {
     test('falls back to listing open PRs by test branch', function() {
         var helpers = loadReviewHelpers();
         var scm = scmRecorder();
-        scm.openPrs = [
+        scm.calls.openPrs = [
             { number: 7, html_url: 'https://github.com/IstiN/trackstate/pull/7', head: { ref: 'test/OTHER' } },
             { number: 42, html_url: 'https://github.com/IstiN/trackstate/pull/42', head: { ref: 'test/TS-300' } }
         ];
@@ -249,7 +267,7 @@ suite('postStoryTestAutomationReviewHelpers: postGeneralComment', function() {
                 return path === 'outputs/pr_review_general.md' ? { content: '  General feedback\n' } : null;
             }
         };
-        helpers.postGeneralComment(scm, 42, 'outputs/pr_review_general.md', 'TS-300', outputFiles);
+        helpers.postGeneralComment(scm, 42, 'outputs/pr_review_general.md', 'TS-300', null, outputFiles);
         assert.equal(scm.calls.addComment.length, 1);
         assert.equal(scm.calls.addComment[0].text, 'General feedback');
     });
@@ -258,7 +276,7 @@ suite('postStoryTestAutomationReviewHelpers: postGeneralComment', function() {
         var helpers = loadReviewHelpers();
         var scm = scmRecorder();
         var outputFiles = { readOutputFileDetailed: function() { return { content: '   ' } } };
-        helpers.postGeneralComment(scm, 42, 'outputs/pr_review_general.md', 'TS-300', outputFiles);
+        helpers.postGeneralComment(scm, 42, 'outputs/pr_review_general.md', 'TS-300', null, outputFiles);
         assert.equal(scm.calls.addComment.length, 0);
     });
 

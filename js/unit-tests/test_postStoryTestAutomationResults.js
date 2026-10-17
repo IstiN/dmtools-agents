@@ -44,6 +44,7 @@ function loadPostStoryTestAutomationResults(mocks) {
         './mergeState.js': loadModule('js/common/mergeState.js'),
         './common/mergeState.js': loadModule('js/common/mergeState.js')
     }), allMocks);
+    var sharedModule = loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), allMocks);
 
     return loadModule(
         'js/postStoryTestAutomationResults.js',
@@ -51,6 +52,7 @@ function loadPostStoryTestAutomationResults(mocks) {
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
             './common/pullRequest.js': prHelper,
+            './postStoryTestAutomationShared.js': sharedModule,
             './common/autoStart.js': {
                 triggerConfiguredWorkflowForTicket: function(opts) {
                     return (mocks && mocks.triggerConfiguredWorkflowForTicket)

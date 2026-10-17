@@ -51,9 +51,11 @@ function loadPostStoryTestAutomationReview(mocks) {
     var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
             './common/commentMarkup.js': commentMarkupModule,
         }), allMocks);
-var commentMarkupModule = loadModule('js/common/commentMarkup.js',
+    var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+    var sharedModule = loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), allMocks);
+    var reviewHelpersModule = loadModule('js/postStoryTestAutomationReviewHelpers.js', makeRequire({}), {});
 
     var prReviewComments = loadModule(
         'js/postPRReviewComments.js',
@@ -121,6 +123,8 @@ var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({
             },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './postPRReviewComments.js': prReviewComments,
+            './postStoryTestAutomationShared.js': sharedModule,
+            './postStoryTestAutomationReviewHelpers.js': reviewHelpersModule,
             './common/trackers.js': loadModule(
                 'js/common/trackers.js',
                 makeRequire({
