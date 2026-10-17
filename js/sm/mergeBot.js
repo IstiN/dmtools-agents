@@ -192,6 +192,77 @@ function hasActiveSmRun(owner, name) {
     return false;
 }
 
+/**
+ * gh-952 (live fa 2026-10-17 06:30–08:10Z): the merge-window slot holder
+ * the open list can no longer show. PR #1661 was merged by the OWNER via
+ * bypass while its validation was ARMED (Quality gate / Binaries smoke
+ * pending stamps) — the machine's merge path never ran, so the arm was
+ * never consumed, and the merged PR vanished from github_list_prs
+ * (state:'open'). The FIFO then saw neither a holder nor a released
+ * slot: every approved PR deferred as 'awaiting validate-armed turn'
+ * with acted: 0 while the holder could NEVER validate again. Returns
+ * the recently-merged PR still carrying the merge-window arm
+ * (ai_validating + pr_approved — mutexAmong parity; a dev-lane arm
+ * never held the merge window), or null when no such holder exists.
+ * Consulted ONLY when no OPEN PR holds the arm — a live holder owns the
+ * slot and the merged history is not probed at all. Recency-bounded
+ * (24h): weeks-old merged PRs with lingering labels are archaeology,
+ * not a slot event. An undated body reads as not-fresh (NaN < x is
+ * false) — no release.
+ */
+var MERGED_SLOT_HOLDER_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function mergedSlotHolder(owner, name) {
+    var merged = parseMcp(github_list_prs({
+        workspace: owner, repository: name, state: 'merged'
+    }));
+    for (var i = 0; i < merged.length; i++) {
+        var p = merged[i];
+        var labels = labelNames(p);
+        var armed = labels.indexOf('ai_validating') !== -1 && labels.indexOf('pr_approved') !== -1;
+        var fresh = armed && p.merged_at &&
+            (Date.now() - Date.parse(p.merged_at)) < MERGED_SLOT_HOLDER_MAX_AGE_MS;
+        if (fresh) return p;
+    }
+    return null;
+}
+
+/**
+ * END-OF-RUN SELF-TICK (owner rule 2026-10-04; live: agents#696,
+ * dart#342 — the bot logged the defer line, exited acted:0, the repo
+ * went event-quiet, and the validate-armed turn never came until a
+ * human fired machine-sm.yml manually). A deferred approved PR with
+ * acted==0 means NOTHING consumed this turn and no action of ours will
+ * generate the events that re-drive the queue — fire ONE real SM tick
+ * so the oldest approved PR gets its validate-armed turn. Not fired
+ * when acted>0 (a merge/latch/unarm is motion — its events carry the
+ * conveyor) nor when no deferred-approved was seen (nothing waits on a
+ * turn). Review #701 hardening: the dispatch targets the PR's own repo
+ * explicitly (--repo owner/name — gh resolves the CWD's repo, wrong in
+ * multi-repo runners) and is SKIPPED when a machine-sm.yml run is
+ * already queued/running (hasActiveSmRun — the active SM drains the
+ * queue itself; a second tick per bot run was tick-storm amplification
+ * during healthy waves). jobParams.selfTick=false disables it.
+ * (gh-952: extracted verbatim from action() — the merged-slot-holder
+ * release lives in the FIFO loop now, and the CRAP ratchet forbids
+ * growing action; behavior is unchanged, see test_mergeBot self-tick.)
+ */
+function selfTickToSm(owner, name, job, deferredApproved, acted, say) {
+    if (!deferredApproved || acted > 0 || job.selfTick === false) return;
+    if (hasActiveSmRun(owner, name)) {
+        say('⏭️ self-tick skipped (SM already active)');
+        return;
+    }
+    try {
+        cli_execute_command({
+            command: 'gh workflow run machine-sm.yml -F dryRun=false --repo ' + owner + '/' + name
+        });
+        say('🔁 deferred approved → SM tick dispatched (self-heal)');
+    } catch (eTick) {
+        say('⚠️ self-tick dispatch failed: ' + ((eTick && eTick.message) || eTick));
+    }
+}
+
 function squashMerge(owner, repo, number) {
     var last = null;
     for (var attempt = 1; attempt <= 2; attempt++) {
@@ -243,6 +314,30 @@ function action(params) {
         ? job.staleHeadMinutes : 120;
     var skippedHeads = 0;
     var deadHeadPassed = false;
+    // gh-952 slot release: the holder the open list can no longer see. An
+    // externally-merged (owner bypass) armed PR is invisible to the scan
+    // below — labels outlive the merge, the PR does not — so the FIFO
+    // waited on a validate-armed turn nobody would ever hand out. When no
+    // OPEN PR holds the merge-window arm, probe the merged list once: a
+    // recently-merged still-armed holder means the slot is ALREADY
+    // RELEASED — say so, and vacate the head position (gh-766 dead-head
+    // parity: a validated candidate may take the turn on existing
+    // evidence; the SM still owns arming the fresh head).
+    var approvedSeen = list.some(function (p) {
+        return labelNames(p).indexOf('pr_approved') !== -1;
+    });
+    var armedHolderOpen = list.some(function (p) {
+        var ls = labelNames(p);
+        return ls.indexOf('ai_validating') !== -1 && ls.indexOf('pr_approved') !== -1;
+    });
+    if (approvedSeen && !armedHolderOpen) {
+        var releasedHolder = mergedSlotHolder(owner, name);
+        if (releasedHolder) {
+            deadHeadPassed = true;
+            say('🔓 pr-' + releasedHolder.number + ' held the merge-window slot but is MERGED — ' +
+                'slot released (the armed stamps belonged to a merged PR, gh-952)');
+        }
+    }
 
     // Owner directive 2026-10-04 ("red yields the slot") — diagnostic only:
     // once per run, when the first approved PR is deferred as FIFO-queued,
@@ -416,35 +511,11 @@ function action(params) {
         }
     }
 
-    // END-OF-RUN SELF-TICK (owner rule 2026-10-04; live: agents#696,
-    // dart#342 — the bot logged the defer line, exited acted:0, the repo
-    // went event-quiet, and the validate-armed turn never came until a
-    // human fired machine-sm.yml manually). A deferred approved PR with
-    // acted==0 means NOTHING consumed this turn and no action of ours will
-    // generate the events that re-drive the queue — fire ONE real SM tick
-    // so the oldest approved PR gets its validate-armed turn. Not fired
-    // when acted>0 (a merge/latch/unarm is motion — its events carry the
-    // conveyor) nor when no deferred-approved was seen (nothing waits on a
-    // turn). Review #701 hardening: the dispatch targets the PR's own repo
-    // explicitly (--repo owner/name — gh resolves the CWD's repo, wrong in
-    // multi-repo runners) and is SKIPPED when a machine-sm.yml run is
-    // already queued/running (hasActiveSmRun — the active SM drains the
-    // queue itself; a second tick per bot run was tick-storm amplification
-    // during healthy waves). jobParams.selfTick=false disables it.
-    if (deferredApproved && acted === 0 && job.selfTick !== false) {
-        if (hasActiveSmRun(owner, name)) {
-            say('⏭️ self-tick skipped (SM already active)');
-        } else {
-            try {
-                cli_execute_command({
-                    command: 'gh workflow run machine-sm.yml -F dryRun=false --repo ' + owner + '/' + name
-                });
-                say('🔁 deferred approved → SM tick dispatched (self-heal)');
-            } catch (eTick) {
-                say('⚠️ self-tick dispatch failed: ' + ((eTick && eTick.message) || eTick));
-            }
-        }
-    }
+    // END-OF-RUN SELF-TICK — extracted verbatim into selfTickToSm()
+    // (gh-952: the merged-slot-holder release joined action()'s loop and
+    // the CRAP ratchet forbids growing action; the self-tick block moved
+    // to the helper above, behavior unchanged).
+    selfTickToSm(owner, name, job, deferredApproved, acted, say);
 
     say('mergeBot complete — acted: ' + acted + ', heads skipped: ' + skippedHeads);
     return { success: true, acted: acted, skipped: skippedHeads, log: log };
