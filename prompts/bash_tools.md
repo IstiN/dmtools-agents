@@ -5,22 +5,10 @@ flowchart TD
         U2["Credentials preconfigured via environment variables"]
     end
 
-    subgraph SAFETY["CLI command safety"]
-        S1["One simple executable command at a time"]
-        S2["DMTools rejects shell metacharacters"]
-    end
-
-    subgraph FORBIDDEN["NEVER USE"]
-        F1["Pipes: |"]
-        F2["Redirection: > < 2>/dev/null"]
-        F3["Chaining: ; && ||"]
-        F4["Substitution: backticks, $(), ${...}"]
-    end
-
-    subgraph EXAMPLES["Instead"]
-        E1["find ... | head -20"] --> E1a["run: find ..."]
-        E2["cmd1 && cmd2"] --> E2a["run: cmd1"] --> E2b["then: cmd2"]
-        E3["Complex logic"] --> E3a["Write script file, run script as single command"]
+    subgraph SHELLSTATE["⚠️ Persistent-shell pitfalls (sandbox-observed)"]
+        P1["Never end commands with exit — it kills the shell session, making read_bash fail with Invalid shell ID"]
+        P2["Capture the exit code via $? right after the command, before running anything else — a late $? reads the wrong command's code"]
+        P3["Avoid $PIPESTATUS — it produced wrong exit codes in the sandbox; redirect output to a file and check $? instead"]
     end
 
     subgraph CWD["Working directory discipline (persistent shell!)"]
@@ -45,10 +33,7 @@ flowchart TD
         B1 --> B2 --> B3 --> B4 --> B5 --> B6 --> B7
     end
 
-    USE --> SAFETY
-    SAFETY --> FORBIDDEN
-    SAFETY --> EXAMPLES
-    SAFETY --> CWD
+    USE --> SHELLSTATE
+    SHELLSTATE --> CWD
     CWD --> BGJOBS
 ```
-

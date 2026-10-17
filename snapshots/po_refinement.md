@@ -116,22 +116,10 @@ flowchart TD
         U2["Credentials preconfigured via environment variables"]
     end
 
-    subgraph SAFETY["CLI command safety"]
-        S1["One simple executable command at a time"]
-        S2["DMTools rejects shell metacharacters"]
-    end
-
-    subgraph FORBIDDEN["NEVER USE"]
-        F1["Pipes: |"]
-        F2["Redirection: > < 2>/dev/null"]
-        F3["Chaining: ; && ||"]
-        F4["Substitution: backticks, $(), ${...}"]
-    end
-
-    subgraph EXAMPLES["Instead"]
-        E1["find ... | head -20"] --> E1a["run: find ..."]
-        E2["cmd1 && cmd2"] --> E2a["run: cmd1"] --> E2b["then: cmd2"]
-        E3["Complex logic"] --> E3a["Write script file, run script as single command"]
+    subgraph SHELLSTATE["⚠️ Persistent-shell pitfalls (sandbox-observed)"]
+        P1["Never end commands with exit — it kills the shell session, making read_bash fail with Invalid shell ID"]
+        P2["Capture the exit code via $? right after the command, before running anything else — a late $? reads the wrong command's code"]
+        P3["Avoid $PIPESTATUS — it produced wrong exit codes in the sandbox; redirect output to a file and check $? instead"]
     end
 
     subgraph CWD["Working directory discipline (persistent shell!)"]
@@ -145,12 +133,21 @@ flowchart TD
         C8["Git global flags like --no-pager go BEFORE the subcommand: git --no-pager diff ... is correct, git diff ... --no-pager errors out (git treats the trailing flag as a positional argument)"]
     end
 
-    USE --> SAFETY
-    SAFETY --> FORBIDDEN
-    SAFETY --> EXAMPLES
-    SAFETY --> CWD
-```
+    subgraph BGJOBS["⚠️ Long-running commands — background execution, never foreground-poll"]
+        B1["Any command that can run longer than ~2 minutes (full test suite, coverage run, build, dependency install, dev server or watch mode) MUST be started with bash background: true — you get a job id immediately and the completion notice arrives as a message"]
+        B2["❌ NEVER wait for a long job with foreground sleep-polling: repeated sleep-then-check loops like sleep 540 → ls coverage. A foreground sleep pins the tool-call open — owner steering and cancel cannot reach you until it ends — and burns wall-clock plus a runner slot"]
+        B3["While a background job runs, keep working on other steps — check progress between steps with bash_job status / bash_job output &lt;job-id&gt; — never park the turn in a watch loop"]
+        B4["A harness hint like background candidate: bash background: true, job board /tasks, --wait-for-jobs is an ORDER, not a suggestion — obey it and start the command in the background; working around it with foreground sleeps is a violation"]
+        B5["Verification order: finalize ALL code edits BEFORE launching a long verification run (full suite, coverage) — verification must run against a frozen tree, otherwise the run is wasted"]
+        B6["Files changed while a verification run is in flight? Do NOT kill it mid-flight — let it finish, treat the result as stale, then deliberately start a fresh run against the updated tree"]
+        B7["B6 covers a job still making progress — do NOT kill it mid-flight; a job with NO progress for ~10 min (or 2× its expected duration) is HUNG — dispose of it and MOVE ON: bash_job stop &lt;job-id&gt;, note the disposal in the deliverable (job id, command, last output tail), finish the remaining steps and write outputs/response.md reporting the unverified part. NEVER let a hung child hold the deliverable hostage: validation CI on the pull request is the safety net"]
+        B1 --> B2 --> B3 --> B4 --> B5 --> B6 --> B7
+    end
 
+    USE --> SHELLSTATE
+    SHELLSTATE --> CWD
+    CWD --> BGJOBS
+```
 
 
 ---

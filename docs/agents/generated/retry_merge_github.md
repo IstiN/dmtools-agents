@@ -26,6 +26,10 @@ _Human doc: [`agents/docs/agents/retry_merge_github.md`](agents/docs/agents/retr
 | outputType | `none` |
 | skipAIProcessing | `true` |
 
+## Prompt snapshot
+
+Full prompt / instruction set: [`agents/snapshots/retry_merge_github.md`](agents/snapshots/retry_merge_github.md)
+
 ## Actions
 
 
@@ -55,6 +59,7 @@ _retryMergeGithubPR.js — GitHub-issues machine loop: merge leg._
 ## LLM step
 
 - outputType: `none`
+- Prompt snapshot: `agents/snapshots/retry_merge_github.md`
 
 ## Custom params
 

@@ -14,6 +14,10 @@ _Human doc: [`agents/docs/agents/recover_stuck_development.md`](agents/docs/agen
 | outputType | `none` |
 | skipAIProcessing | `true` |
 
+## Prompt snapshot
+
+Full prompt / instruction set: [`agents/snapshots/recover_stuck_development.md`](agents/snapshots/recover_stuck_development.md)
+
 ## Actions
 
 
@@ -41,6 +45,7 @@ _recoverStuckDevelopment.js_
 ## LLM step
 
 - outputType: `none`
+- Prompt snapshot: `agents/snapshots/recover_stuck_development.md`
 
 ## Custom params
 
