@@ -167,6 +167,7 @@ var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
 // ⚠️ trigger-failed marker math and the dead-head park cap. The pure
 // half lives in the module; recordDispatchFailure below wires transport.
 var triggerFailuresModule = require('./common/triggerFailures.js');
+var mutexRegistryModule = require('./common/mutexRegistry.js');
 // gh-922 (same-tick dedup, review): PR numbers whose dispatch failure was
 // already recorded THIS tick. The already-parked guard in
 // recordDispatchFailure reads the query-time label snapshot — within one
@@ -182,6 +183,10 @@ var projectConfig = null;
 // paths, ridden into the published snapshot. Null until the first latch
 // touch; reset at the top of action().
 var tickReworkLatch = null;
+// gh-1000 (phantom ai_validating holder): per-tick snapshot carried from
+// the github-source mutex scan to the factory-state publish rule (second
+// tier — the publish merge keeps counters/alarm tail across ticks).
+var spMutex = null;
 // Priority-tier label names (owner directive 2026-10-08), resolved once in
 // action() from config.smPriorityLabels — passed down to the source query
 // path (githubSource queryPrs' tier-aware FIFO sort).
@@ -3007,8 +3012,78 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     console.warn('  ⚠️  ' + key + ' rerun_cancelled_checks: rule carries no requiredContexts and no anyCancelled — skip');
                     continue;
                 }
+                // One head-runs fetch feeds the ghost-cancel probe (below),
+                // the in-flight guard and the target mapping (#695 review:
+                // the double identical gh api call was redundant).
+                var rcHeadRuns = headWorkflowRunsSafe(effectiveRepoInfo, rcHead);
                 var rcCancelled = cancelledRequiredContexts(effectiveRepoInfo, rcHead, rcAny ? null : rcContexts);
                 if (!rcCancelled.length) {
+                    // gh-1000 (AC3/I3/I4 — live gh-757): a validation run
+                    // that concluded CANCELLED pre-materialization leaves
+                    // NO check contexts at all, so the probe above sees
+                    // nothing while the arm sits wedged with no live
+                    // validation run behind it — and a guest PR has no
+                    // machine push to escape (merge gate refuses forever).
+                    // Newest dispatched run completed cancelled/timed_out +
+                    // nothing active on the head + fresh-cancel grace
+                    // observed ⇒ re-dispatch fresh CI on the SAME head.
+                    // Authorship-blind by construction: the dispatch is a
+                    // plain workflow run on the head ref, no write to the
+                    // guest branch (a failed --ref surfaces next tick,
+                    // marker not posted).
+                    var ghostProbe = rcHeadRuns
+                        ? mutexRegistryModule.isGhostCancelProbe(rcHeadRuns, null)
+                        : null;
+                    if (ghostProbe && ghostProbe.isGhostCancel) {
+                        var ghostMarker = '🔁 Ghost-cancelled validation re-dispatched';
+                        var ghostReported = false;
+                        try {
+                            var ghostCommentsRaw = github_get_pr_comments({
+                                workspace: effectiveRepoInfo.owner,
+                                repository: effectiveRepoInfo.repo,
+                                pullRequestId: ticket.prNumber
+                            });
+                            var ghostCommentsObj = typeof ghostCommentsRaw === 'string'
+                                ? JSON.parse(ghostCommentsRaw) : (ghostCommentsRaw || []);
+                            var ghostCommentList = Array.isArray(ghostCommentsObj)
+                                ? ghostCommentsObj
+                                : (ghostCommentsObj.comments || ghostCommentsObj.items || []);
+                            ghostReported = ghostCommentList.some(function (c) {
+                                var b = String((c && c.body) || '');
+                                return b.indexOf(ghostMarker) !== -1 &&
+                                    b.indexOf(String(rcHead)) !== -1;
+                            });
+                        } catch (eGhostRead) { /* read failed — treat as not reported */ }
+                        if (ghostReported) {
+                            console.log('  ⏭️  ' + key + ' ghost-cancelled validation already re-dispatched for head — waiting on the run');
+                            continue;
+                        }
+                        var ghostCi = rule.ciWorkflow ||
+                            ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
+                        if (DRY) {
+                            console.log('  🧪 [dry] ghost-cancel re-dispatch skipped (gh workflow run ' +
+                                        ghostCi + ' @ ' + (ticket.branch || '?') + ')');
+                            continue;
+                        }
+                        cli_execute_command({
+                            command: 'gh workflow run ' + ghostCi +
+                                     ' --repo ' + effectiveRepoInfo.owner + '/' +
+                                     effectiveRepoInfo.repo +
+                                     ' --ref ' + (ticket.branch || '')
+                        });
+                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(
+                            ticket.prNumber,
+                            ghostMarker + ': the newest dispatched validation run (' +
+                            ghostProbe.runId + ') concluded CANCELLED before its check runs ' +
+                            'materialized — no required check will ever re-report on its own ' +
+                            '(gh-1000 ghost-cancel class, live gh-757). CANCELLED is never a ' +
+                            'verdict: fresh CI re-dispatched on the same head, merging resumes ' +
+                            'automatically. (head `' + rcHead + '`)');
+                        console.log('  🔁 ' + key + ' ghost-cancelled validation re-dispatched (run ' +
+                                    ghostProbe.runId + ' concluded ' + ghostProbe.conclusion + ')');
+                        processedKeys.push(key);
+                        continue;
+                    }
                     console.log('  ⏭️  ' + key + ' no context reads CANCELLED on ' +
                                 rcHead.substring(0, 7) + ' — nothing to rerun');
                     continue;
@@ -3040,11 +3115,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 }
                 // No in-flight run on the head: a queued/running run
                 // re-stamps the contexts on its own (hasActiveDispatchedRun
-                // probe pattern, widened to every event). One head-runs
-                // fetch feeds both the probe and the target mapping below
-                // (#695 review: the double identical gh api call was
-                // redundant).
-                var rcHeadRuns = headWorkflowRunsSafe(effectiveRepoInfo, rcHead);
+                // probe pattern, widened to every event). The head rollup
+                // was fetched above (shared with the ghost-cancel probe).
                 if (hasActiveHeadRun(rcHeadRuns)) {
                     console.log('  ⏭️  ' + key + ' head carries an in-flight run — it re-stamps the contexts, no rerun');
                     continue;
@@ -4039,8 +4111,19 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // gh-806: this tick's rework latch rides the snapshot —
                     // the next tick's armer consults what this tick armed.
                     reworkInFlight: tickReworkLatch ? tickReworkLatch.map : {},
-                    legWorkflow: reworkLatchModule.DEFAULT_LEG_WORKFLOW
+                    legWorkflow: reworkLatchModule.DEFAULT_LEG_WORKFLOW,
+                    // gh-1000 (phantom ai_validating holder): this tick's
+                    // mutex bookkeeping from the github-source scan —
+                    // counters + alarm tail, carried across ticks below.
+                    mutex: spMutex
                 });
+                // gh-1000 second tier: merge over the PREVIOUS published
+                // snapshot's mutex block so counters/alarm tail persist
+                // across ticks (absent on both sides ⇒ key stays absent).
+                if (spMutex || (spPrev && spPrev.mutex)) {
+                    spState.mutex = mutexRegistryModule.mergeSnapshot(
+                        spPrev && spPrev.mutex, spMutex);
+                }
                 var spUrl = factoryStateModule.publishFactoryState(
                     spState, spCfg, function (args) {
                         // MUST return: publishFactoryState probes the

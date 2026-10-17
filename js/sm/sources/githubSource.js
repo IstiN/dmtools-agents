@@ -814,6 +814,54 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
                 return !blocked;
             });
         } else {
+            // gh-1000 I1/I2 — phantom-holder reconciliation before deferring.
+            // Full-slot decision MUST be re-derived against the LIVE label
+            // layer; a divergent cached holder is self-healed here so a
+            // queued candidate arms in the SAME tick (AC2).
+            if (holders.length >= mutexMax) {
+                var liveHolderSet = null;
+                var holdersLive = false;
+                if (provider && typeof provider.githubApi === 'function' && repoInfo) {
+                    try {
+                        var liveData = provider.githubApi('list_prs', { owner: repoInfo.owner, repo: repoInfo.repo });
+                        var liveItems = ((liveData || {}).items || liveData || []);
+                        if (Array.isArray(liveItems)) {
+                            liveHolderSet = mutexRegistryModule.derive(
+                                mutexHoldersOf(liveItems, q),
+                                liveItems,
+                                mutexRegistryModule.noCompletedRuns,
+                                repoInfo.owner + '/' + repoInfo.repo, nowIso());
+                            holdersLive = true;
+                        }
+                    } catch (e) {
+                        console.log('   ⚠️ gh-1000 phantom-heal live re-read failed: ' +
+                            String((e && e.message) || e) + ' — keeping cached mutex decision (fail-closed)');
+                    }
+                }
+                if (holdersLive) {
+                    var cachedSet = mutexRegistryModule.derive(
+                        holders,
+                        items,
+                        mutexRegistryModule.noCompletedRuns,
+                        repoInfo ? repoInfo.owner + '/' + repoInfo.repo : '', nowIso());
+                    var divergent = mutexRegistryModule.reconcile(cachedSet, liveHolderSet);
+                    if (divergent.selfHealed) {
+                        if (provider && typeof provider.ioCacheDrop === 'function') {
+                            try { provider.ioCacheDrop('openPrs'); } catch (e2) { /* probe-only */ }
+                        }
+                        var alarm = divergent.alarm;
+                        console.log('   ⚠️ ' + alarm.title + ' — ' + alarm.detail +
+                            ' (cached holders [' + holders.join(', ') + '] vs live [' +
+                            liveHolderSet.holders.join(', ') + ']; ioCache self-healed, defer cancelled)');
+                        spMutex = mutexRegistryModule.mergeSnapshot(spMutex, {
+                            mutexSelfHeals: 1,
+                            phantomHolderTicks: 1,
+                            alarm: alarm
+                        });
+                    }
+                    holders = liveHolderSet.holders;
+                }
+            }
             if (holders.length >= mutexMax) {
                 console.log('   🔒 mutex "' + q.mutex + '" slots ' + holders.length + '/' + mutexMax +
                     ' taken — rule defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ')');
