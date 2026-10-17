@@ -1028,10 +1028,11 @@ suite('smAgent: arm_rework no-op loop guard (gh-957)', function () {
             'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
     }
 
-    function lapComment(head, n, max) {
+    function lapComment(head, n) {
+        // a real leg-close marker: zero pushes, zero resolutions
         return { user: { login: 'ai-teammate' },
-                 body: guard.noopLapMarkerPrefix(head) + ' lap ' + n + '/' + max +
-                     ' resolved 0/0 unaddressed threads on the unchanged head (gh-957)' };
+                 body: guard.buildLapMarker(head, 0, 0, null,
+                     '2026-10-19T0' + n + ':00:00.000Z') };
     }
 
     var HEAD = 'c957c957c957c957c957c957c957c957c957c957';
@@ -1041,7 +1042,7 @@ suite('smAgent: arm_rework no-op loop guard (gh-957)', function () {
             github: {
                 items: [devItem(1364, HEAD)],
                 pr: { number: 1364, body: 'Closes #1363', head: { sha: HEAD } },
-                prComments: [lapComment(HEAD, 1, 2), lapComment(HEAD, 2, 2)]
+                prComments: [lapComment(HEAD, 1), lapComment(HEAD, 2)]
             }
         }));
         sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-agents', noopLapMax: 2,
@@ -1052,10 +1053,10 @@ suite('smAgent: arm_rework no-op loop guard (gh-957)', function () {
             'the escalation label — never agent:rework at the empty-lap cap');
         assert.equal(sm.capturedPrComments.length, 1, 'one escalation comment');
         var body = sm.capturedPrComments[0].body;
-        assert.contains(body, '\uD83D\uDED1 rework arm withheld on head ' + HEAD,
-            'the once-per-head escalation marker (machine-parseable for the dedup)');
+        assert.contains(body, '\uD83D\uDED1 rework no-op loop guard',
+            'the 🛑 escalation comment leads');
         assert.contains(body, '2/2', 'the escalation names the spent no-op budget');
-        assert.contains(body, 'gh-957', 'the comment names the coverage');
+        assert.contains(body, 'rework-loop-escalated', 'the escalation names the gating label');
         assert.equal(sm.capturedTriggers.length, 0, 'the guard never dispatches a rework leg');
     });
 
@@ -1065,10 +1066,10 @@ suite('smAgent: arm_rework no-op loop guard (gh-957)', function () {
                 items: [devItem(1364, HEAD)],
                 pr: { number: 1364, body: 'Closes #1363', head: { sha: HEAD } },
                 prComments: [
-                    lapComment(HEAD, 1, 2), lapComment(HEAD, 2, 2),
+                    lapComment(HEAD, 1), lapComment(HEAD, 2),
                     { user: { login: 'ai-teammate' },
-                      body: guard.escalationMarkerPrefix(HEAD) +
-                          ' \u2014 2/2 no-op rework laps left the head unchanged (gh-957)' }
+                      body: guard.buildEscalationComment(HEAD, 2, 2,
+                          '2026-10-19T03:00:00.000Z') }
                 ]
             }
         }));
