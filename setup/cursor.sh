@@ -71,7 +71,7 @@ fi
 
 # ── Install ───────────────────────────────────────────────────────────────────
 echo "📥 Installing Cursor Agent CLI..."
-curl https://cursor.com/install -fsS | bash
+( set -o pipefail; curl https://cursor.com/install -fsS | bash )
 
 _ensure_cursor_agent_symlink
 

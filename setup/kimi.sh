@@ -122,7 +122,7 @@ if [ -n "${KIMI_VERSION}" ]; then
 fi
 INSTALL_ENV+=(env "KIMI_NO_MODIFY_PATH=1")
 
-"${INSTALL_ENV[@]}" bash -c 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash'
+"${INSTALL_ENV[@]}" bash -c 'set -o pipefail; curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash'
 
 if [ -x "${KIMI_BIN_DIR}/kimi" ]; then
   register_path "${KIMI_BIN_DIR}"

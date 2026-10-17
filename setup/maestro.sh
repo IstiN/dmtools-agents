@@ -34,7 +34,7 @@ if [ -n "${MAESTRO_VERSION}" ]; then
   # Install specific version
   curl -fsSL "https://get.maestro.mobile.dev" | MAESTRO_VERSION="${MAESTRO_VERSION}" bash
 else
-  curl -fsSL "https://get.maestro.mobile.dev" | bash
+  ( set -o pipefail; curl -fsSL "https://get.maestro.mobile.dev" | bash )
 fi
 
 register_path "${MAESTRO_BIN}"
