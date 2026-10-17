@@ -439,9 +439,12 @@ function writePRContext(inputFolder, prDetails, diff, markdown, rawThreads) {
             console.log('Filtered ' + (allThreads.length - openThreads.length) +
                 ' already-resolved thread(s) out of pr_discussions_raw.json (gh-806 AC4)');
         }
+        // gh-957 AC3: the GraphQL census (arm-rule unresolved count + the
+        // trusted-author breakdown) rides along — the rework leg's input
+        // and the SM arm's threads count stay the SAME source.
         writeInputFile(
             inputFolder + '/pr_discussions_raw.json',
-            JSON.stringify({ threads: openThreads }, null, 2),
+            JSON.stringify({ threads: openThreads, census: rawThreads.census || null }, null, 2),
             'pr_discussions_raw.json (' + openThreads.length + ' threads)'
         );
     }

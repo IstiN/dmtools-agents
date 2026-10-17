@@ -330,6 +330,35 @@ suite('gitOps.writePRContext — resolved threads filtered from pr_discussions_r
         assert.equal(raw.threads.length, 1);
         assert.equal(raw.threads[0].threadId, 'A');
     });
+
+    test('gh-957 AC3: the GraphQL threads census rides into pr_discussions_raw.json', function() {
+        var writes = {};
+        var gitOps = loadGitOps({ file_write: function(call) { writes[call.path] = call.content; } });
+        var census = {
+            source: 'graphql',
+            graphqlTotal: 3,
+            graphqlUnresolved: 2
+        };
+
+        gitOps.writePRContext('input/PROJ-10', prDetailsFixture(), 'diff', null,
+            { threads: [{ index: 1, rootCommentId: 1, threadId: 'A', resolved: false, body: 'x' }],
+              census: census });
+
+        var raw = JSON.parse(writes['input/PROJ-10/pr_discussions_raw.json']);
+        assert.deepEqual(raw.census, census,
+            'the rework leg input and the SM arm consult the same census object');
+    });
+
+    test('gh-957 AC3: legacy input without a census writes census null (no crash)', function() {
+        var writes = {};
+        var gitOps = loadGitOps({ file_write: function(call) { writes[call.path] = call.content; } });
+
+        gitOps.writePRContext('input/PROJ-10', prDetailsFixture(), 'diff', null,
+            { threads: [{ index: 1, rootCommentId: 1, threadId: 'A', resolved: false, body: 'x' }] });
+
+        var raw = JSON.parse(writes['input/PROJ-10/pr_discussions_raw.json']);
+        assert.equal(raw.census, null, 'absent census stays absent, never undefined-keyed');
+    });
 });
 
 // ── gh-912: _switchToBranch decides on ref lines, never on stderr noise ──────
