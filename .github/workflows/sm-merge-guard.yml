@@ -1,10 +1,21 @@
-# SM merge guard — thin stub over the canonical alarm in the factory home.
-# All logic lives in
+# SM merge guard — the cheap alarm for the SM serialized-validation
+# invariant (gh-1537 AC5): on every push to main, assert the pushed tree
+# was covered by a SUCCESSFUL quality.yml run of ANY event
+# (workflow_dispatch, pull_request, push — gh-1044). Most validations in
+# this repo arrive as pull_request-event runs (a leg pushes to the PR
+# branch -> PR synchronize -> Quality), and the invariant is tree
+# coverage by a green validation, not who dispatched it. The old
+# `--event workflow_dispatch`-only probe false-alarmed on every
+# conflict-rework merge (live: #1020 merge -> alarm gh-1033).
+#
+# Canonical home is the factory reusable workflow
 # IstiN/dmtools-agentic-workflows/.github/workflows/factory-sm-merge-guard.yml
-# (+ scripts/sm_merge_guard.py there); this repo's validation CI is
-# `quality.yml` (display name "Quality"), dispatched by the Machine SM as
-# workflow_dispatch before every merge — the exact tree-coverage
-# invariant the guard asserts.
+# (+ scripts/sm_merge_guard.py there, always-latest @main). This stub no
+# longer delegates: the canonical probe drops non-dispatch events and the
+# factory token cannot push the fix to the workflows repo, so the fixed
+# guard is vendored here (scripts/sm_merge_guard.py, covered by
+# scripts/tests/test_sm_merge_guard.py). Once upstream accepts any-event
+# coverage, delete the vendored copy and restore the `uses:` delegation.
 name: SM merge guard
 
 on:
@@ -13,16 +24,42 @@ on:
 
 permissions:
   contents: read
-  # The canonical guard files the `sm-guard` alarm ISSUE on red — the
-  # caller token is a ceiling for the reusable workflow: without
-  # issues:write the alarm path 403s (review round-1..5 blocking finding).
+  # The guard files/updates the `sm-guard` alarm ISSUE on red.
   issues: write
 
 jobs:
   guard:
-    # Tracks dmtools-agentic-workflows @main — always-latest policy (owner
-    # directive 2026-10-04, kicker parity): guard fixes go live on merge,
-    # no re-pin ceremony.
-    uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-sm-merge-guard.yml@main
-    with:
-      ci_workflow: quality.yml
+    name: Validate the pushed tree was covered by a green Quality run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The SAME frozen identity PUSHED_SHA uses
+          # (github.event.head_commit.id || github.sha): the tree under
+          # assertion is read from this checkout's HEAD, so an unpinned
+          # checkout could drift to a moved main and have run-for-push-A
+          # certify a newer push B's tree it never examined.
+          ref: ${{ github.event.head_commit.id || github.sha }}
+          # Only the pushed tree sha is read — no history, no blobs.
+          fetch-depth: 1
+
+      - name: Assert a green Quality run of any event covers this tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CI_WORKFLOW: quality.yml
+          # head_commit.id is frozen at push time — the checkout can
+          # drift to a main that moved in the seconds before the job
+          # starts.
+          PUSHED_SHA: ${{ github.event.head_commit.id || github.sha }}
+          PUSHED_SUBJECT: ${{ github.event.head_commit.message }}
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          python3 scripts/sm_merge_guard.py \
+            --repo "$REPO" \
+            --sha "$PUSHED_SHA" \
+            --subject "$PUSHED_SUBJECT" \
+            --tree "$tree" \
+            --workflow "$CI_WORKFLOW" \
+            --alarm-issue
