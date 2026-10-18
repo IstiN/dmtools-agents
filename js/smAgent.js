@@ -1853,6 +1853,63 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             });
         }
 
+        // gh-1000 I5 — silent-update clone-failure bookkeeping (the pure
+        // helpers live in validationLiveness; THIS is the wiring the rework
+        // thread demanded — without it a live repeat of the 19:14Z
+        // clone failure behaves exactly as before). On a clone failure:
+        // post the per-head failure marker (attempt N at ISO), and once
+        // the attempts are exhausted flag the PR 'silent-update-degraded'
+        // — visible state INSTEAD OF a silent retry-forever loop. The
+        // retry itself stays every-tick (self-healing by design); the
+        // marker trail makes the failure observable and the flag routes
+        // it to a human before the queue burns more ticks on a dead
+        // workspace. Bookkeeping failures never mask the clone error.
+        function recordSilentUpdateFailure() {
+            try {
+                var tracker = githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo);
+                var comments = tracker.getComments(ticket.prNumber) || [];
+                var count = validationLivenessModule.silentUpdateFailureCount(comments);
+                var attempt = count.count + 1;
+                var iso = new Date().toISOString();
+                var left = validationLivenessModule.silentUpdateAttemptsLeft(attempt);
+                // Every failure lands a marker (attempt N at ISO) — the
+                // trail stops at the cap: no comment spam beyond it, the
+                // label becomes the durable signal.
+                tracker.postComment(ticket.prNumber,
+                    validationLivenessModule.silentUpdateFailureLine(attempt, iso));
+                if (left > 0) {
+                    console.warn('  ⚠️  ' + key + ' silent-update clone failure #' + attempt +
+                        ' recorded on the PR — ' + left + ' attempt(s) left before the degraded flag (I5)');
+                    return;
+                }
+                // Attempts exhausted: flag the PR once (REST add-label is
+                // idempotent).
+                if ((ticket.labels || []).indexOf(
+                        validationLivenessModule.SILENT_UPDATE_DEGRADED_LABEL) === -1) {
+                    tracker.addLabel(ticket.prNumber,
+                        validationLivenessModule.SILENT_UPDATE_DEGRADED_LABEL);
+                }
+                console.error('  ❌ ' + key + ' silent-update DEGRADED after ' +
+                    validationLivenessModule.SILENT_UPDATE_MAX_FAILURES +
+                    ' consecutive clone failures — PR flagged silent-update-degraded (I5)');
+            } catch (eI5) {
+                console.warn('  ⚠️  ' + key + ' I5 failure bookkeeping failed: ' +
+                             (eI5.message || eI5));
+            }
+        }
+
+        function silentUpdateBranchTracked(branchName) {
+            try {
+                silentUpdateBranch(branchName);
+            } catch (eClone) {
+                // I5: only CLONE/refresh failures get the marker trail —
+                // the caller's catch still reports the rule failure.
+                recordSilentUpdateFailure();
+                throw eClone;
+            }
+        }
+
+
         // Validation trigger (dispatch-only CI): no push ever fires CI on
         // its own — the SM is the only trigger. The PAT update-branch dance
         // (a source-token push DOES fire CI) is retired: a workflow_dispatch
@@ -2224,7 +2281,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         console.warn('  ⚠️  ' + key +
                             ' head-run probe failed — branch refresh deferred (fail closed, gh-798)');
                     } else {
-                        silentUpdateBranch(ticket.branch);
+                        silentUpdateBranchTracked(ticket.branch);
                         console.log('  ✅ ' + key + ' branch silently updated (no CI)');
                         cancelStaleAfterRefreshUb();
                     }
@@ -2239,7 +2296,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // unresolvable-but-existing head would close the hole
                     // for one tick of delay; the heal backstop was chosen
                     // instead so a flaky API never freezes freshness.
-                    silentUpdateBranch(ticket.branch);
+                    silentUpdateBranchTracked(ticket.branch);
                     console.log('  ✅ ' + key + ' branch silently updated (no CI)');
                     cancelStaleAfterRefreshUb();
                 }
@@ -2809,7 +2866,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             continue;
                         }
                         try {
-                            silentUpdateBranch(ticket.branch);
+                            silentUpdateBranchTracked(ticket.branch);
                         } catch (ePhUp) {
                             console.warn('  ⚠️  ' + key + ' placeholder fresh-sha refresh failed: ' +
                                          (ePhUp.message || ePhUp) + ' — head unchanged, retry next tick');

@@ -10317,6 +10317,86 @@ suite('smAgent: ghost-cancel re-dispatch (gh-1000 AC3 — IT-2)', function () {
     });
 });
 
+suite('smAgent: silent-update failure bookkeeping (gh-1000 I5)', function () {
+    // The rework thread pinned the I5 helpers as dead code — nothing
+    // called them. The wiring (recordSilentUpdateFailure via
+    // silentUpdateBranchTracked) posts the failure marker on every clone
+    // failure and flags the PR 'silent-update-degraded' once the attempts
+    // are exhausted (visible state instead of a silent retry-forever).
+
+    var RULE_I5 = { source: 'github', query: { type: 'pr', labels: ['pr_approved'], mergeState: 'BEHIND' },
+                    localAction: 'update_branch', limit: 5, id: 'silent-update-behind' };
+
+    function i5Item(extra) {
+        var it = { key: 'pr-983', labels: ['pr_approved'], issueNumber: null,
+                   prNumber: 983, draft: false, branch: 'ai/gh-983' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function i5Sm(prComments, itemExtra) {
+        return makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: { items: [i5Item(itemExtra)], prComments: prComments || [] },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('gh repo clone') === 0) {
+                    throw new Error('gh: error 502 — clone failed (live 19:14Z shape)');
+                }
+                return '';
+            }
+        });
+    }
+
+    function i5Params() {
+        return { jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness', rules: [RULE_I5] } };
+    }
+
+    test('first clone failure -> attempt-1 marker on the PR, no degraded flag, retry path intact', function () {
+        var sm = i5Sm([]);
+
+        sm.action(i5Params());
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone') === 0;
+        }).length, 1, 'the clone was attempted');
+        assert.equal(sm.capturedPrComments.length, 1, 'exactly one failure marker posted');
+        var body = sm.capturedPrComments[0].body;
+        assert.ok(body.indexOf('silent-update failure — attempt 1 at ') !== -1,
+            'marker line carries the attempt number and ISO timestamp');
+        assert.equal(sm.capturedPrComments[0].number, 983, 'marker on the PR');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no degraded flag on attempt 1');
+    });
+
+    test('attempts exhausted (3 failures on record) -> final marker + silent-update-degraded label applied', function () {
+        var prior = [
+            { body: '⚠️ silent-update failure — attempt 1 at 2026-10-17T19:14:00Z' },
+            { body: '⚠️ silent-update failure — attempt 2 at 2026-10-17T19:16:00Z' }
+        ];
+        var sm = i5Sm(prior);
+
+        sm.action(i5Params());
+
+        assert.equal(sm.capturedPrComments.length, 1, 'the third marker still posts (the trail stops AT the cap)');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('attempt 3 at ') !== -1);
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'degraded flag applied once');
+        assert.equal(sm.capturedPrLabelAdds[0].label, 'silent-update-degraded');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 983, 'flag on the failing PR');
+    });
+
+    test('already degraded -> no comment spam, no duplicate label; the clone error still surfaces', function () {
+        var prior = [
+            { body: '⚠️ silent-update failure — attempt 1 at 2026-10-17T19:14:00Z' },
+            { body: '⚠️ silent-update failure — attempt 2 at 2026-10-17T19:16:00Z' },
+            { body: '⚠️ silent-update failure — attempt 3 at 2026-10-17T19:18:00Z' }
+        ];
+        var sm = i5Sm(prior, { labels: ['pr_approved', 'silent-update-degraded'] });
+
+        sm.action(i5Params());
+
+        assert.equal(sm.capturedPrComments.length, 0, 'no marker beyond the cap — the label is the durable signal');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no duplicate degraded label');
+    });
+});
 suite('smAgent: mutex streak reset on clean ticks (gh-1000, rework thread 4)', function () {
     // The rework thread pinned two compounding defects: the tick event
     // omitted consecutivePhantomTicks (fixed in githubSource — the IT-1
