@@ -43,17 +43,26 @@ suite('reviewSpecClaims — detection (gh-1053)', function () {
         assert.ok(!rsc.isExternalSpecClaim(null), 'null body');
     });
 
-    test('verifiable citation = file:line reference or doc URL', function () {
+    test('verifiable citation = file:line / #L anchor or trusted-host doc URL', function () {
         assert.ok(rsc.hasVerifiableCitation('see JsEnvPolicy.java:61-66 for the exemption list'), 'file:line');
-        assert.ok(rsc.hasVerifiableCitation('per https://example.com/docs/retry the default is 3'), 'doc URL');
+        assert.ok(rsc.hasVerifiableCitation('deviation from the reference (Policy.java#L61)'), '#L line anchor');
+        assert.ok(rsc.hasVerifiableCitation('see Policy.java#L61-L66'), '#L-L range anchor');
+        assert.ok(rsc.hasVerifiableCitation('per https://github.com/acme/docs#retries the default is 3'), 'trusted doc URL');
+        assert.ok(rsc.hasVerifiableCitation('per https://docs.internal.example.com/spec the default is 3',
+            { trustedDocHosts: ['docs.internal.example.com'] }), 'deployment override wins');
         assert.ok(rsc.hasVerifiableCitation('ticket.md:12 requires a timeout'), 'markdown file:line');
         assert.ok(!rsc.hasVerifiableCitation('the spec says a timeout is required'), 'bare assertion');
         assert.ok(!rsc.hasVerifiableCitation('the file policy.java does X without any line'), 'bare filename is not a citation');
+        assert.ok(!rsc.hasVerifiableCitation('per https://example.com/anything the spec is quoted'), 'untrusted host URL is not a citation');
     });
 
     test('isUncitedSpecClaim = spec claim AND no citation', function () {
         assert.ok(rsc.isUncitedSpecClaim('the spec says only *_MAX_TOKENS is exempt'));
         assert.ok(!rsc.isUncitedSpecClaim('the spec says X (Policy.java:61)'));
+        assert.ok(!rsc.isUncitedSpecClaim('the spec says X (Policy.java#L61)'), '#L anchor counts');
+        assert.ok(!rsc.isUncitedSpecClaim('the spec says X (https://github.com/acme/spec)'), 'trusted doc URL counts');
+        assert.ok(rsc.isUncitedSpecClaim('the spec says X is forbidden (see https://example.com/anything)'),
+            'arbitrary pasted URL does NOT count');
         assert.ok(!rsc.isUncitedSpecClaim('missing null-check causes NPE'));
     });
 });
@@ -84,10 +93,19 @@ suite('reviewSpecClaims — severity classification (gh-1053 AC2/AC3/AC4)', func
     });
 
     test('AC4: spec claim WITH a doc URL keeps full BLOCKING force', function () {
-        var body = 'BLOCKING: per the API docs (https://example.com/spec#retries) retries must be bounded — they are not.';
+        var body = 'BLOCKING: per the API docs (https://github.com/acme/spec#retries) retries must be bounded — they are not.';
         var result = rsc.classifyFindingSeverity(body, 'BLOCKING');
         assert.equal(result.severity, 'blocking');
         assert.ok(!result.downgraded);
+    });
+
+    test('incidental spec mention does NOT demote a code-level defect blocker', function () {
+        var body = '🚨 BLOCKING: SQL injection via raw string interpolation — user input reaches ' +
+            'the DB unescaped. (Also, the spec says prepared statements are required.)';
+        var result = rsc.classifyFindingSeverity(body, 'BLOCKING');
+        assert.equal(result.severity, 'blocking', 'stays blocking — the spec phrase is not the core claim');
+        assert.ok(result.blocking);
+        assert.ok(!result.downgraded, 'not downgraded');
     });
 
     test('non-spec blocking findings keep full BLOCKING force (no strictness cut)', function () {
@@ -111,6 +129,13 @@ suite('reviewSpecClaims — severity classification (gh-1053 AC2/AC3/AC4)', func
     test('downgradeBody never touches "non-blocking" hyphenated prose', function () {
         var down = rsc.downgradeBody('🚨 BLOCKING: the spec says X.\nSide note: the retry path is non-blocking.');
         assert.ok(down.indexOf('non-blocking') !== -1, 'hyphenated word intact');
+    });
+
+    test('downgrade note asks to confirm against the source the finding references (not "the cited source")', function () {
+        var down = rsc.downgradeBody('🚨 BLOCKING: the spec says X is forbidden.');
+        assert.ok(down.indexOf('the cited source') === -1, 'no phantom-citation wording');
+        assert.ok(/confirm against the source the finding references/i.test(down), 'points at the referenced source');
+        assert.ok(down.indexOf('"the spec says') !== -1, 'interpolates the matched spec-claim phrase');
     });
 });
 
@@ -189,6 +214,62 @@ suite('reviewSpecClaims — sanitizeReviewData (machine-side guard)', function (
         assert.equal(review.issueCounts.important, 1);
         assert.equal(review.recommendation, 'REQUEST_CHANGES', 'still changes-requested');
         assert.equal(review.inlineComments[1].body.indexOf('\uD83D\uDEA8'), 0, 'real blocker untouched');
+    });
+
+    test('a real blocker with an incidental spec mention keeps REQUEST_CHANGES (no verdict collapse)', function () {
+        var review = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+            inlineComments: [
+                { path: 'src/db.js', line: 7, severity: 'BLOCKING',
+                  body: '🚨 BLOCKING: SQL injection via raw string interpolation — user input reaches ' +
+                        'the DB unescaped. (Also, the spec says prepared statements are required.)' }
+            ]
+        };
+        var result = rsc.sanitizeReviewData(review, null);
+        assert.equal(result.downgrades, 0, 'incidental spec mention is not the core claim');
+        assert.equal(review.issueCounts.blocking, 1, 'census unchanged');
+        assert.equal(review.recommendation, 'REQUEST_CHANGES', 'verdict stands — a real defect is outstanding');
+        assert.equal(review.inlineComments[0].body.indexOf('\uD83D\uDEA8'), 0, 'body untouched');
+    });
+
+    test('two inline entries referencing the same comment file demote it once (one census move, one rewrite)', function () {
+        var files = { 'outputs/pr_review_comments/dup.md': '🚨 BLOCKING: the spec says X is forbidden.' };
+        var review = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 2, important: 0, suggestions: 0 },
+            inlineComments: [
+                { path: 'src/a.js', line: 1, comment: 'outputs/pr_review_comments/dup.md' },
+                { path: 'src/a.js', line: 9, comment: 'outputs/pr_review_comments/dup.md' }
+            ]
+        };
+        var result = rsc.sanitizeReviewData(review, function (p) { return files[p] || ''; });
+        assert.equal(result.downgrades, 2, 'both findings demoted');
+        assert.equal(result.rewrites.length, 1, 'one physical comment file → one rewrite');
+        assert.equal(result.census, 1, 'one census move for one physical comment');
+        assert.equal(review.issueCounts.blocking, 1, 'blocking decremented once');
+        assert.equal(review.issueCounts.important, 1, 'important incremented once');
+        assert.equal(review.inlineComments[0].severity, 'IMPORTANT');
+        assert.equal(review.inlineComments[1].severity, 'IMPORTANT');
+        assert.equal(review.recommendation, 'REQUEST_CHANGES', 'second entry keeps blocking force in census');
+    });
+
+    test('a comment-file body with an incidental spec mention is not demoted', function () {
+        var files = {
+            'outputs/pr_review_comments/sec.md':
+                '🚨 BLOCKING: SQL injection via raw interpolation. (Also, the spec says prepared statements are required.)'
+        };
+        var review = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+            inlineComments: [
+                { path: 'src/db.js', line: 7, comment: 'outputs/pr_review_comments/sec.md' }
+            ]
+        };
+        var result = rsc.sanitizeReviewData(review, function (p) { return files[p] || ''; });
+        assert.equal(result.downgrades, 0);
+        assert.equal(result.rewrites.length, 0, 'file untouched');
+        assert.equal(review.recommendation, 'REQUEST_CHANGES');
     });
 
     test('APPROVE and clean reviews pass through untouched', function () {

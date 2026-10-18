@@ -14,11 +14,24 @@
  * The discipline (ticket ACs):
  *   AC1 — a finding may assert "spec/reference/tool X does/does not Y" at
  *         BLOCKING only when it quotes the exact source the leg actually
- *         read during the run (file:line / doc URL);
+ *         read during the run (file:line / `#L` anchor / trusted doc URL);
  *   AC2 — an uncited spec claim is downgraded to a non-blocking question
  *         ("please confirm against <source>");
  *   AC4 — verified findings WITH citations keep full BLOCKING force — this
  *         is not a strictness cut.
+ *
+ * Precision guards (review feedback on the first cut):
+ *   - the spec-claim phrase must be the finding's CORE claim — the first
+ *     sentence after the severity marker. An incidental "the spec says …"
+ *     mention in a body whose core claim is a code-level defect (verified
+ *     example: a real SQL-injection blocker with a parenthetical spec
+ *     mention) must NOT be demoted: a missed real BLOCKING ships a defect,
+ *     which is worse than a false BLOCKING costing rework cycles;
+ *   - a doc URL counts as a citation only on a host the deployment trusts
+ *     (default: public source hosts; override via opts.trustedDocHosts) —
+ *     an arbitrary pasted URL must not satisfy the guard;
+ *   - a comment file referenced by two inline entries is demoted and
+ *     rewritten once — the census moves once per physical comment.
  *
  * This module is the machine-side half of that discipline (the prompt-side
  * rule lives in instructions/pr_review/general_guidelines.md). postPRReview
@@ -32,12 +45,23 @@
 'use strict';
 
 // A verifiable citation: a file:line reference (Policy.java:61-66,
-// ticket.md:12) or a doc URL. A bare filename or a bare "the spec" mention
+// ticket.md:12) or a `#L`-style line anchor (Policy.java#L61,
+// Policy.java#L61-L66). A bare filename or a bare "the spec" mention
 // is NOT a citation — the reader cannot check the claim against it.
-var CITATION_RES = [
-    /[A-Za-z0-9_.\-\/]+\.(?:java|kt|kts|js|jsx|ts|tsx|dart|py|go|rs|rb|cs|cpp|c|h|hpp|swift|m|md|markdown|json|ya?ml|xml|gradle|toml|sh|sql|log):\d+/,
-    /https?:\/\/[^\s)<>\]]+/
-];
+var FILE_CITATION_RE = new RegExp(
+    '[A-Za-z0-9_.\\-/]+\\.(?:java|kt|kts|js|jsx|ts|tsx|dart|py|go|rs|rb|cs|cpp|c|h|hpp' +
+    '|swift|m|md|markdown|json|ya?ml|xml|gradle|toml|sh|sql|log)' +
+    '(?::\\d+(?:-\\d+)?|#[LA]?\\d+(?:-[LA]?\\d+)?)');
+
+// A doc URL counts only when its host is trusted (see trustedDocHosts) —
+// an arbitrary pasted link is not evidence the source was read.
+var DOC_URL_HOST_RE = /https?:\/\/([^\s\/)<>\]]+)/g;
+
+// Hosts whose URLs are accepted as doc citations by default: public
+// source-forge hosts a review can actually point at a spec/reference with.
+// Deployments with internal doc hosts pass opts.trustedDocHosts through
+// sanitizeReviewData / classifyFindingSeverity / hasVerifiableCitation.
+var DEFAULT_TRUSTED_DOC_HOSTS = ['github.com', 'gitlab.com', 'bitbucket.org'];
 
 // External-spec assertion families: the finding's core claim is what some
 // spec / documentation / reference implementation / external tool says or
@@ -57,13 +81,62 @@ var SPEC_CLAIM_RES = [
 // that is NOT a hyphen or word char, so "non-blocking" prose is untouched.
 var BLOCKING_MARKER_RE = /(\uD83D\uDEA8)|((?:^|[^\w-])BLOCKING\b)/i;
 
-function hasVerifiableCitation(body) {
-    var text = String(body || '');
-    if (!text) return false;
-    for (var i = 0; i < CITATION_RES.length; i++) {
-        if (CITATION_RES[i].test(text)) return true;
+// Leading "🚨 BLOCKING"-style marker of a finding body (bold-tolerant).
+var LEADING_MARKER_RES = [
+    /^\s*\uD83D\uDEA8\s*/,
+    /^\s*\**\s*BLOCKING\b\**\s*[:\-–—.)]?\s*/i
+];
+
+function trustedDocHosts(opts) {
+    var list = Array.isArray(opts) ? opts : (opts && opts.trustedDocHosts);
+    if (Array.isArray(list) && list.length > 0) return list;
+    return DEFAULT_TRUSTED_DOC_HOSTS;
+}
+
+function hostIsTrusted(host, hosts) {
+    var h = String(host || '').toLowerCase();
+    if (!h) return false;
+    for (var i = 0; i < hosts.length; i++) {
+        var t = String(hosts[i]).toLowerCase();
+        if (h === t || h.substring(h.length - t.length - 1) === '.' + t) return true;
     }
     return false;
+}
+
+function hasTrustedDocUrl(text, hosts) {
+    var m = DOC_URL_HOST_RE.exec(text);
+    while (m !== null) {
+        if (hostIsTrusted(m[1], hosts)) return true;
+        m = DOC_URL_HOST_RE.exec(text);
+    }
+    return false;
+}
+
+/**
+ * A verifiable citation: a `file:line` / `#L`-anchor reference anywhere in
+ * the text, or a doc URL on a trusted host. opts.trustedDocHosts (array or
+ * { trustedDocHosts: [...] }) overrides the default host list.
+ */
+function hasVerifiableCitation(body, opts) {
+    var text = String(body || '');
+    if (!text) return false;
+    if (FILE_CITATION_RE.test(text)) return true;
+    return hasTrustedDocUrl(text, trustedDocHosts(opts));
+}
+
+/**
+ * The finding's core claim: the first sentence after the leading severity
+ * marker. A spec-claim phrase buried in a later sentence / parenthetical
+ * is context, not the claim under review (see module header — an
+ * incidental spec mention must not demote a code-level defect blocker).
+ */
+function coreClaimText(body) {
+    var text = String(body || '');
+    for (var i = 0; i < LEADING_MARKER_RES.length; i++) {
+        text = text.replace(LEADING_MARKER_RES[i], '');
+    }
+    var m = /[^.!?\n]+/.exec(text);
+    return m ? m[0] : '';
 }
 
 function isExternalSpecClaim(body) {
@@ -76,31 +149,49 @@ function isExternalSpecClaim(body) {
 }
 
 /**
- * gh-1053 core predicate: the finding asserts external-spec behavior AND
- * quotes no source the reader can check.
+ * gh-1053 core predicate: the finding's CORE claim asserts external-spec
+ * behavior AND quotes no source the reader can check.
  */
-function isUncitedSpecClaim(body) {
-    return isExternalSpecClaim(body) && !hasVerifiableCitation(body);
+function isUncitedSpecClaim(body, opts) {
+    var text = String(body || '');
+    if (!text) return false;
+    if (!isExternalSpecClaim(coreClaimText(text))) return false;
+    return !hasVerifiableCitation(text, opts);
+}
+
+/** The spec-claim phrase that matched (trimmed) — '' when none. */
+function findSpecClaimPhrase(text) {
+    for (var i = 0; i < SPEC_CLAIM_RES.length; i++) {
+        var m = SPEC_CLAIM_RES[i].exec(text);
+        if (m) return m[0].trim();
+    }
+    return '';
 }
 
 /**
  * Rewrites a downgraded comment body: 🚨 → ⚠, the BLOCKING word → IMPORTANT
  * (hyphen/word-boundary safe), original claim text preserved, and a note
- * appended that asks the author to confirm against the source and re-raise
- * with a citation if confirmed.
+ * appended that asks the author to confirm against the source the finding
+ * actually references and to re-raise with a citation if confirmed.
  */
-var DOWNGRADE_NOTE = '---\n' +
-    '\u26A0\uFE0F **Severity demoted: unverified external-spec claim (gh-1053)** \u2014 this ' +
-    'finding asserts what an external spec/reference says without quoting the ' +
-    'exact source (file:line or doc URL) read during the review. Please ' +
-    'confirm against the cited source; if confirmed, re-raise with a ' +
-    'verifiable citation and it regains blocking force.';
+function downgradeNote(originalBody) {
+    var phrase = findSpecClaimPhrase(coreClaimText(originalBody));
+    var target = phrase
+        ? 'the source the finding references ("' + phrase + '")'
+        : 'the source the finding references';
+    return '---\n' +
+        '\u26A0\uFE0F **Severity demoted: unverified external-spec claim (gh-1053)** \u2014 this ' +
+        'finding asserts what an external spec/reference says without quoting the ' +
+        'exact source (file:line, `#L` anchor, or trusted doc URL) read during the ' +
+        'review. Please confirm against ' + target + '; if confirmed, re-raise with ' +
+        'a verifiable citation and it regains blocking force.';
+}
 
 function downgradeBody(body) {
     var text = String(body || '');
     var out = text.replace(/\uD83D\uDEA8/g, '\u26A0\uFE0F');
     out = out.replace(/(^|[^\w-])BLOCKING\b/gi, '$1IMPORTANT');
-    return out + '\n' + DOWNGRADE_NOTE;
+    return out + '\n' + downgradeNote(text);
 }
 
 /**
@@ -111,19 +202,89 @@ function downgradeBody(body) {
  * instructions/pr_review/review_verdict_rules.md).
  *
  * Returns { severity, blocking, downgraded }:
- *   - uncited external-spec claim  → severity 'important', blocking false,
- *     downgraded true (AC2/AC3);
- *   - anything else                → unchanged (AC4 — cited spec claims and
- *     ordinary findings keep full BLOCKING force).
+ *   - uncited external-spec claim as the core claim → severity
+ *     'important', blocking false, downgraded true (AC2/AC3);
+ *   - anything else → unchanged (AC4 — cited spec claims and ordinary
+ *     findings keep full BLOCKING force; incidental spec mentions in a
+ *     code-level defect finding keep blocking force too).
  */
-function classifyFindingSeverity(body, severity) {
+function classifyFindingSeverity(body, severity, opts) {
     var text = String(body || '');
     var sev = String(severity || '').toLowerCase();
     var blocking = sev === 'blocking' || BLOCKING_MARKER_RE.test(text);
-    if (blocking && isUncitedSpecClaim(text)) {
+    if (blocking && isUncitedSpecClaim(text, opts)) {
         return { severity: 'important', blocking: false, downgraded: true };
     }
     return { severity: blocking ? 'blocking' : sev, blocking: blocking, downgraded: false };
+}
+
+/**
+ * Resolves the effective body of one inlineComments entry: the inline
+ * `body` wins; otherwise a file-referenced comment (`comment` path) is read
+ * through readText when provided.
+ */
+function resolveCommentBody(c, readText) {
+    if (typeof c.body === 'string' && c.body) {
+        return { body: c.body, inline: true, fromFile: false };
+    }
+    if (c.comment && typeof readText === 'function') {
+        return { body: readText(c.comment) || '', inline: false, fromFile: true };
+    }
+    if (typeof c.body === 'string') return { body: c.body, inline: true, fromFile: false };
+    return { body: '', inline: false, fromFile: false };
+}
+
+/** First demotion of a comment file wins; later same-file entries reuse it. */
+function planRewrite(out, commentPath, content) {
+    for (var i = 0; i < out.rewrites.length; i++) {
+        if (out.rewrites[i].path === commentPath) return false;
+    }
+    out.rewrites.push({ path: commentPath, content: content });
+    return true;
+}
+
+function applyDemotion(c, resolved, out) {
+    var newBody = downgradeBody(resolved.body);
+    c.severity = 'IMPORTANT';
+    var censusMove = false;
+    if (resolved.inline) {
+        if (resolved.body) c.body = newBody;
+        censusMove = true;
+    } else if (resolved.fromFile && c.comment) {
+        censusMove = planRewrite(out, c.comment, newBody);
+    }
+    if (censusMove) out.census++;
+    out.notes.push('inline comment on ' + String(c.path || c.file || '?') +
+        ' downgraded BLOCKING → IMPORTANT: uncited external-spec claim (gh-1053)');
+}
+
+function sanitizeOneComment(c, readText, opts, out) {
+    var entry = c || {};
+    var resolved = resolveCommentBody(entry, readText);
+    var verdict = classifyFindingSeverity(resolved.body, entry.severity, opts);
+    if (!verdict.downgraded) return;
+    out.downgrades++;
+    applyDemotion(entry, resolved, out);
+}
+
+function collapseVerdictIfClean(reviewData, counts, out) {
+    if (counts.blocking !== 0) return;
+    if (!/^(REQUEST_CHANGES|BLOCK)$/.test(String(reviewData.recommendation || ''))) return;
+    out.notes.push('recommendation ' + reviewData.recommendation +
+        ' → APPROVE: no cited BLOCKING finding remains after gh-1053 downgrade');
+    reviewData.recommendation = 'APPROVE';
+}
+
+/** Rebalances the census once per demoted PHYSICAL comment (not per entry). */
+function rebalanceReviewData(reviewData, out) {
+    if (out.census <= 0) return;
+    var counts = reviewData.issueCounts ||
+        (reviewData.issueCounts = { blocking: 0, important: 0, suggestions: 0 });
+    counts.blocking = Math.max(0, (Number(counts.blocking) || 0) - out.census);
+    counts.important = (Number(counts.important) || 0) + out.census;
+    out.notes.push('issueCounts rebalanced: blocking=' + counts.blocking +
+        ', important=' + counts.important + ' (gh-1053)');
+    collapseVerdictIfClean(reviewData, counts, out);
 }
 
 /**
@@ -134,62 +295,34 @@ function classifyFindingSeverity(body, severity) {
  * readText — OPTIONAL resolver for comment-file references
  *   (inlineComment.comment → markdown text); when omitted, file-referenced
  *   comments are inspected by their reference string only.
+ * opts — OPTIONAL { trustedDocHosts: [...] } overriding the default doc
+ *   URL hosts accepted as citations.
  *
- * For every inline finding whose body carries blocking force (severity
- * field or 🚨/BLOCKING marker) and whose core claim is an uncited
- * external-spec assertion:
+ * For every inline finding whose core claim is an uncited external-spec
+ * assertion:
  *   - severity field demoted to IMPORTANT;
  *   - inline bodies rewritten in place; file-referenced comments are NOT
  *     written here (pure module) — a rewrite { path, content } is returned
- *     for the caller to apply;
- *   - issueCounts rebalanced (blocking −1, important +1, floor 0);
+ *     for the caller to apply (once per physical comment file);
+ *   - issueCounts rebalanced once per demoted comment (blocking −1,
+ *     important +1, floor 0);
  *   - when no cited blocking finding remains, REQUEST_CHANGES/BLOCK
  *     collapses to APPROVE — matching the verdict-mapping table (no 🚨
  *     BLOCKING ⇒ APPROVE) so an uncited claim cannot arm rework.
  *
- * Returns { downgrades, notes, rewrites } — notes are human-readable,
- * observable in the workflow log.
+ * Returns { downgrades, census, notes, rewrites } — downgrades counts
+ * demoted findings, census the census moves applied (≤ downgrades when one
+ * file is referenced twice); notes are human-readable, observable in the
+ * workflow log.
  */
-function sanitizeReviewData(reviewData, readText) {
-    var out = { downgrades: 0, notes: [], rewrites: [] };
+function sanitizeReviewData(reviewData, readText, opts) {
+    var out = { downgrades: 0, census: 0, notes: [], rewrites: [] };
     if (!reviewData) return out;
     var list = Array.isArray(reviewData.inlineComments) ? reviewData.inlineComments : [];
     for (var i = 0; i < list.length; i++) {
-        var c = list[i] || {};
-        var inlineBody = typeof c.body === 'string' ? c.body : '';
-        var body = inlineBody;
-        var fromFile = false;
-        if (!body && c.comment && typeof readText === 'function') {
-            body = readText(c.comment) || '';
-            fromFile = true;
-        }
-        var verdict = classifyFindingSeverity(body, c.severity);
-        if (!verdict.downgraded) continue;
-        out.downgrades++;
-        var newBody = downgradeBody(body);
-        c.severity = 'IMPORTANT';
-        if (inlineBody) {
-            c.body = newBody;
-        } else if (fromFile && c.comment) {
-            out.rewrites.push({ path: c.comment, content: newBody });
-        }
-        out.notes.push('inline comment on ' + String(c.path || c.file || '?') +
-            ' downgraded BLOCKING → IMPORTANT: uncited external-spec claim (gh-1053)');
+        sanitizeOneComment(list[i], readText, opts, out);
     }
-    if (out.downgrades > 0) {
-        var counts = reviewData.issueCounts ||
-            (reviewData.issueCounts = { blocking: 0, important: 0, suggestions: 0 });
-        counts.blocking = Math.max(0, (Number(counts.blocking) || 0) - out.downgrades);
-        counts.important = (Number(counts.important) || 0) + out.downgrades;
-        out.notes.push('issueCounts rebalanced: blocking=' + counts.blocking +
-            ', important=' + counts.important + ' (gh-1053)');
-        if (counts.blocking === 0 &&
-            /^(REQUEST_CHANGES|BLOCK)$/.test(String(reviewData.recommendation || ''))) {
-            out.notes.push('recommendation ' + reviewData.recommendation +
-                ' → APPROVE: no cited BLOCKING finding remains after gh-1053 downgrade');
-            reviewData.recommendation = 'APPROVE';
-        }
-    }
+    rebalanceReviewData(reviewData, out);
     return out;
 }
 
@@ -198,6 +331,7 @@ if (typeof module !== 'undefined' && module.exports) {
         hasVerifiableCitation: hasVerifiableCitation,
         isExternalSpecClaim: isExternalSpecClaim,
         isUncitedSpecClaim: isUncitedSpecClaim,
+        coreClaimText: coreClaimText,
         classifyFindingSeverity: classifyFindingSeverity,
         downgradeBody: downgradeBody,
         sanitizeReviewData: sanitizeReviewData

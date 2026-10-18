@@ -38,31 +38,52 @@ function makeTrackersModule(toolMocks) {
     };
 }
 
-function loadPostPRReviewComments(mocks) {
-    var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
-            './common/commentMarkup.js': commentMarkupModule
-        }), {
-        file_read: (mocks && mocks.file_read) || function() { return null; }
+/**
+ * Shared outputFiles loader for postPRReviewComments harnesses — the real
+ * js/common/outputFiles.js wired against the given file_read mock.
+ */
+function prReviewOutputFiles(fileReadMock) {
+    return loadModule('js/common/outputFiles.js', makeRequire({
+        './common/commentMarkup.js': commentMarkupModule
+    }), {
+        file_read: fileReadMock
     });
+}
+
+/**
+ * Shared require map for loading js/postPRReviewComments.js in tests — the
+ * real module wiring with every common/* collaborator resolved, including
+ * the gh-1053 reviewSpecClaims mapping (previously duplicated inline in
+ * ~8 loaders, which pushed loadWithFileMap's CRAP over the ratchet).
+ * Callers pass overrides for the collaborators a suite needs to double
+ * (scm, configLoader, outputFiles, githubHelpers, trackers, autoStart, ...).
+ */
+function prReviewRequireMap(overrides) {
+    var map = {
+        './common/machineAuthor.js': machineAuthorModule,
+        './config.js': configModule,
+        './common/scm.js': { createScm: function() { return {}; } },
+        './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
+        './configLoader.js': configLoaderModule,
+        './common/githubHelpers.js': githubHelpersStub,
+        './common/trackers.js': makeTrackersModule({}),
+        './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+        './common/commentMarkup.js': commentMarkupModule,
+        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+        './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
+    };
+    return Object.assign(map, overrides || {});
+}
+
+function loadPostPRReviewComments(mocks) {
+    var fileRead = (mocks && mocks.file_read) || function() { return null; };
     return loadModule(
         'js/postPRReviewComments.js',
-        makeRequire({
-            './common/machineAuthor.js': machineAuthorModule,
-            './config.js': configModule,
-            './common/scm.js': { createScm: function() { return {}; } },
-            './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
-            './configLoader.js': configLoaderModule,
-            './common/outputFiles.js': outputFiles,
-            './common/githubHelpers.js': githubHelpersStub,
-            './common/trackers.js': makeTrackersModule({}),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
-        ,
-            './common/commentMarkup.js': commentMarkupModule,
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
-                './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
-        }),
+        makeRequire(prReviewRequireMap({
+            './common/outputFiles.js': prReviewOutputFiles(fileRead)
+        })),
         {
-            file_read: (mocks && mocks.file_read) || function() { return null; }
+            file_read: fileRead
         }
     );
 }
@@ -372,7 +393,7 @@ suite('postPRReviewComments', function() {
                     './common/tokenUsageComment.js': opts.tokenUsage || { postTokenUsageComments: function() {} },
                     './common/commentMarkup.js': commentMarkupModule,
                     './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
-                        './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
+                    './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
                 }),
                 mergedMocks
             );
@@ -666,7 +687,7 @@ suite('postPRReviewComments', function() {
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
                     './common/commentMarkup.js': commentMarkupModule,
                     './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
-                        './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
+                    './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
                 }),
                 formalMocks
             );
@@ -976,7 +997,7 @@ suite('postPRReviewComments', function() {
                 ,
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
-                './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
+            './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
         }),
                 {
                     file_read: function(args) {
@@ -1356,7 +1377,7 @@ function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged
             },
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
-                './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
+            './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
         }),
         merged
     );
@@ -2049,7 +2070,7 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
-                './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
+            './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
         }), {});
 
         assert.equal(bad.readReviewJson('PROJ-1', null), null);
@@ -2137,7 +2158,7 @@ function gh926ResumeRequire(opts) {
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './common/commentMarkup.js': commentMarkupModule,
         './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
-            './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
+        './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
     });
 }
 
@@ -2470,7 +2491,7 @@ function loadForPrSearch(foundPr) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/commentMarkup.js': commentMarkupModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
-                './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
+            './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
         }),
         {
             file_read: function() { return null; }
@@ -2480,33 +2501,21 @@ function loadForPrSearch(foundPr) {
 }
 
 suite('postPRReviewComments — gh-1053 spec-claim guard wiring', function () {
+    function mapReadingFileRead(fileMap) {
+        return function (opts) {
+            var p = opts && (opts.path || opts);
+            if (fileMap[p] !== undefined) return fileMap[p];
+            if (p && p.indexOf('.dmtools/config') !== -1) return null;
+            return null;
+        };
+    }
+
     function loadWithFileMap(fileMap, writes) {
-        var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
-            './common/commentMarkup.js': commentMarkupModule
-        }), {
-            file_read: function (opts) {
-                var p = opts && (opts.path || opts);
-                if (fileMap[p] !== undefined) return fileMap[p];
-                if (p && p.indexOf('.dmtools/config') !== -1) return null;
-                return null;
-            }
-        });
         return loadModule(
             'js/postPRReviewComments.js',
-            makeRequire({
-                './common/machineAuthor.js': machineAuthorModule,
-                './config.js': configModule,
-                './common/scm.js': { createScm: function () { return {}; } },
-                './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function () { return false; } },
-                './configLoader.js': configLoaderModule,
-                './common/outputFiles.js': outputFiles,
-                './common/githubHelpers.js': githubHelpersStub,
-                './common/trackers.js': makeTrackersModule({}),
-                './common/tokenUsageComment.js': { postTokenUsageComments: function () {} },
-                './common/commentMarkup.js': commentMarkupModule,
-                './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
-                './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
-            }),
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': prReviewOutputFiles(mapReadingFileRead(fileMap))
+            })),
             {
                 file_read: function (opts) {
                     var p = opts && (opts.path || opts);

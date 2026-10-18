@@ -43,7 +43,7 @@ and must **not** trigger another rework round.
 - ❌ Verdict-by-prose: never phrase the verdict only in the summary text.
   The `recommendation` field of `outputs/pr_review.json` is the verdict.
 - ❌ 🚨 BLOCKING driven by an uncited external-spec claim ("the spec says X"
-  without a `file:line` / doc URL the leg actually read — gh-1053).
+  without a `file:line` / doc URL the leg actually read).
   Downgrade it to a ⚠️ question; the machine treats BLOCKING threads as
   ground truth and arms rework on them. (Note: the post-action also
   downgrades such findings mechanically — keep the JSON consistent with
