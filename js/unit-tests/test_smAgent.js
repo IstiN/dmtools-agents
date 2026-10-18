@@ -112,19 +112,22 @@ function makeSmAgent(opts) {
             return (typeof github_list_prs !== 'undefined') ? github_list_prs(args) : '[]';
         },
         github_list_workflow_runs: function(args) {
-            if (opts.github && opts.github.workflowApiRuns) {
+            // Inverted guard order (CRAP budget: the same branch count as
+            // the pre-rework shape — a third flat if pushed makeSmAgent
+            // from CC 63 to 64 and redlined the released ratchet):
+            // tests that set opts.github but no workflowApiRuns get an
+            // EMPTY rollup — never the real bridge (the harness network
+            // guard replaced that global with a throwing stub, and a real
+            // api.github.com read was never a legitimate unit-test dep).
+            if (!opts.github) {
+                return (typeof github_list_workflow_runs !== 'undefined')
+                    ? github_list_workflow_runs(args)
+                    : '{"workflow_runs":[]}';
+            }
+            if (opts.github.workflowApiRuns) {
                 return JSON.stringify({ workflow_runs: opts.github.workflowApiRuns });
             }
-            // Tests that set opts.github but no workflowApiRuns get an EMPTY
-            // rollup — never the real bridge: the harness network guard
-            // replaced that global with a throwing stub (GraalJS canonical
-            // run), and a real api.github.com read was never a legitimate
-            // unit-test dependency (rework thread: the delegation wrote
-            // for a host bridge the guard has since replaced).
-            if (opts.github) return '{"workflow_runs":[]}';
-            return (typeof github_list_workflow_runs !== 'undefined')
-                ? github_list_workflow_runs(args)
-                : '{"workflow_runs":[]}';
+            return '{"workflow_runs":[]}';
         },
         // Backlog source for the statePublish block (gh-769): safe default —
         // without it the block hits the real bridge (dmtools runtime) or a
@@ -13724,23 +13727,25 @@ suite('smAgent: gh-998 neutral sweep — rework thread regression (the main-merg
             localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
             skipIfGreenCi: true };
     }
-    function cli(prev) {
+    function cliRouter(prev, headRollup, dispatchedRuns) {
+        // Table-driven command router: a flat chain of ifs here minted a
+        // fresh over-threshold function under the CRAP ratchet; the table
+        // keeps every responder at CC 1 and the loop at CC 3. Order is
+        // precedence — the ci.yml-scoped query must be checked before the
+        // whole-head 'runs?head_sha=' pattern it contains.
+        var routes = [
+            { match: PREV_GET,
+              respond: function () { return { output: JSON.stringify(prev) }; } },
+            { match: 'workflows/ci.yml/runs?head_sha=',
+              respond: function () { return { workflow_runs: dispatchedRuns }; } },
+            { match: 'runs?head_sha=',
+              respond: function () { return { workflow_runs: headRollup }; } },
+            { match: 'runs?event=workflow_dispatch',
+              respond: function () { return { workflow_runs: [] }; } }
+        ];
         return function (cmdOpts) {
-            var c = cmdOpts.command;
-            if (c === PREV_GET) {
-                // the real command pipes through `base64 -d` in the shell —
-                // the mock serves the DECODED body (branchServes parity)
-                return { output: JSON.stringify(prev) };
-            }
-            if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1) {
-                return { workflow_runs: [] };   // no dispatched run on the head
-            }
-            if (c.indexOf('runs?head_sha=') !== -1) {
-                // whole-head rollup: the terminal-owner run ONLY — nothing active
-                return { workflow_runs: [DEAD_RUN] };
-            }
-            if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
-                return { workflow_runs: [] };
+            for (var i = 0; i < routes.length; i++) {
+                if (cmdOpts.command.indexOf(routes[i].match) !== -1) return routes[i].respond();
             }
             return undefined;
         };
@@ -13759,7 +13764,7 @@ suite('smAgent: gh-998 neutral sweep — rework thread regression (the main-merg
                       commitCheckRuns: { check_runs: [ZOMBIE] },
                       prComments: [],
                       workflowApiRuns: [] },
-            onCliExecute: cli(makePrev())
+            onCliExecute: cliRouter(makePrev(), [DEAD_RUN], [])
         }));
         sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
             ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
@@ -13812,20 +13817,7 @@ suite('smAgent: gh-998 neutral sweep — rework thread regression (the main-merg
                             details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38157999999' }] },
                       prComments: [],
                       workflowApiRuns: [] },
-            onCliExecute: function (cmdOpts) {
-                var c = cmdOpts.command;
-                if (c === PREV_GET) return { output: JSON.stringify(makePrev()) };
-                if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1) {
-                    return { workflow_runs: [GREEN_RUN] };
-                }
-                if (c.indexOf('runs?head_sha=') !== -1) {
-                    return { workflow_runs: [DEAD_RUN, GREEN_RUN] };
-                }
-                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
-                    return { workflow_runs: [] };
-                }
-                return undefined;
-            }
+            onCliExecute: cliRouter(makePrev(), [DEAD_RUN, GREEN_RUN], [GREEN_RUN])
         }));
         sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
             ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',

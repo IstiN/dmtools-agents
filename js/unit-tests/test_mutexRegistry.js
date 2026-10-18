@@ -325,3 +325,35 @@ suite('mutexRegistry holder normalization — object shapes (AC1 edge)', functio
         assert.deepEqual(out.holders, [997], 'armed layer first — the live label still counts');
     });
 });
+
+suite('mutexRegistry phantomAlarmOf — full branch coverage (CRAP ratchet)', function () {
+    // The rework-added alarm builder resolved label/repo/at through
+    // || / && chains (CC 10) — partially covered by the IT suites it
+    // redlined the released CRAP ratchet as a NEW > 8 function. These
+    // direct tests pin every operand branch so the function's CRAP stays
+    // at 0 under any future coverage variance.
+    var MOD = 'js/common/mutexRegistry.js';
+    function load() { return loadModule(MOD, makeRequire({}), {}); }
+
+    test('label resolution: live wins; then cached; then the default', function () {
+        var m = load();
+        var a = m.phantomAlarmOf({ label: 'live_label', repo: 'o/r', at: 'T1' },
+                                 { label: 'cached_label', repo: 'o/c' }, [1], [2]);
+        assert.equal(a.label, 'live_label');
+        assert.equal(a.repo, 'o/r');
+        assert.equal(a.at, 'T1');
+        var b = m.phantomAlarmOf({ holders: [] },
+                                 { label: 'cached_label', repo: 'o/c', at: 'T0' }, [1], [2]);
+        assert.equal(b.label, 'cached_label');
+        assert.equal(b.repo, 'o/c');
+        assert.equal(b.at, null, 'no live at → null even when cached carries one');
+        var c = m.phantomAlarmOf(null, { holders: [] }, [1], [2]);
+        assert.equal(c.label, 'ai_validating', 'both snapshots label-less → DEFAULT_MUTEX_LABEL');
+        assert.equal(c.repo, null, 'the builder coerces an absent repo to null');
+        assert.equal(c.at, null);
+        var d = m.phantomAlarmOf(null, null, [1], [2]);
+        assert.equal(d.label, 'ai_validating');
+        assert.equal(d.holders.cached.length, 1);
+        assert.equal(d.holders.live.length, 1);
+    });
+});

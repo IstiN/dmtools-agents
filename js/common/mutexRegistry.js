@@ -391,6 +391,7 @@ module.exports = {
     FRESH_CANCEL_GRACE_MS: FRESH_CANCEL_GRACE_MS,
     derive: derive,
     reconcile: reconcile,
+    phantomAlarmOf: phantomAlarmOf,
     recordPhantomHeal: recordPhantomHeal,
     mergeSnapshot: mergeSnapshot,
     conclusionMapping: conclusionMapping,

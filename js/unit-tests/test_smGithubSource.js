@@ -2781,6 +2781,43 @@ suite('sm github source: gh-1000 phantom-heal helpers', function () {
             'mutexAmong scopes WHO counts');
     });
 
+    test('logPhantomHeal: full branch coverage (CRAP ratchet)', function () {
+        // The rework-added log helper resolves its holder lists through
+        // || / && chains (CC 9) — partially covered by the IT suites it
+        // redlined the released CRAP ratchet as a NEW > 8 function. These
+        // direct calls pin every operand branch so its CRAP stays at 0
+        // under any future coverage variance.
+        var mod = loadBare();
+        var logged = [];
+        var realLog = console.log;
+        console.log = function (msg) { logged.push(String(msg)); };
+        try {
+            mod.logPhantomHeal(
+                { title: 'phantom_mutex_holder', detail: 'diverged',
+                  holders: { cached: [1, 2], live: [3] } }, null, null);
+            mod.logPhantomHeal(
+                { title: 'phantom_mutex_holder', detail: 'diverged',
+                  holders: null }, [7], [8]);
+            mod.logPhantomHeal(
+                { title: 'phantom_mutex_holder', detail: 'diverged',
+                  holders: {} }, null, null);
+            mod.logPhantomHeal(
+                { title: 'phantom_mutex_holder', detail: 'diverged',
+                  holders: { cached: null, live: [] } }, [9], []);
+        } finally {
+            console.log = realLog;
+        }
+        assert.equal(logged.length, 4);
+        assert.ok(logged[0].indexOf('[1, 2]') !== -1 && logged[0].indexOf('[3]') !== -1,
+            'alarm holders win when present');
+        assert.ok(logged[1].indexOf('[7]') !== -1 && logged[1].indexOf('[8]') !== -1,
+            'argument fallbacks used when the alarm carries no holders');
+        assert.ok(logged[2].indexOf('[]') !== -1,
+            'empty holders + null args degrade to empty lists, never throws');
+        assert.ok(logged[3].indexOf('[9]') !== -1,
+            'a null cached list falls back to the cachedHolders argument');
+    });
+
     test('rederiveHoldersLive: no listOpenPrsLive hook → cached holders kept (fail-closed, E4)', function () {
         var mod = loadBare();
         var out = mod.rederiveHoldersLive([97], [pr(97, ['ai_validating'])], {}, { owner: 'o', repo: 'r' },
