@@ -323,6 +323,110 @@ function getPRDiff(baseBranch, headBranch, workingDir) {
  * @param {string} inputFolder - input/{ticketKey} path
  * @returns {string[]} list of conflicting file paths (empty when clean)
  */
+// Extracted verbatim from the former detectMergeConflicts monolith
+// (gh-1011 CRAP rework). The git command strings, log/warn lines, fallback
+// order and return shapes are byte-identical to the inline code they
+// replace — pinned by the characterization suites in
+// js/unit-tests/test_gitOps.js (gh-802 AC3a + gh-1011 conflict handling).
+
+// The host surfaces CLI exit codes as a COMMAND_EXIT_CODE=N trailer in the
+// thrown message — parse it back out.
+function _commandExitCode(error) {
+    var msg = error && error.message ? error.message : String(error);
+    var m = String(msg).match(/COMMAND_EXIT_CODE=(\d+)/);
+    return m ? parseInt(m[1], 10) : null;
+}
+
+// Unshallow if needed so there is a full merge base available. A failing
+// probe (or a failing unshallow) stays silent — the repository is already
+// complete or unshallow is not supported (same swallow as the original
+// inline block).
+function _unshallowIfNeeded(cmd) {
+    try {
+        var isShallow = cleanCommandOutput(cmd('git rev-parse --is-shallow-repository') || 'false');
+        if (isShallow.trim() === 'true') {
+            cmd('git fetch --unshallow');
+            console.log('Unshallowed repository for full merge base detection');
+        }
+    } catch (e) {
+        // ignore — already complete or unshallow not supported
+    }
+}
+
+// Detect whether the just-completed merge staged base changes. gh-802 AC3a:
+// only claim "staged" when the merge actually staged something — an
+// up-to-date branch merges as a no-op. Exit 1 from the quiet diff is the
+// expected staged signal; any other failure keeps the conservative "staged"
+// assumption but is announced.
+function _mergeStagedChanges(cmd) {
+    try {
+        cmd('git diff --cached --quiet HEAD'); // exit 0 → nothing staged
+        return false;
+    } catch (eQuiet) {
+        var quietExitCode = _commandExitCode(eQuiet);
+        if (quietExitCode !== 1) {
+            console.warn('git diff --cached --quiet failed (assuming staged):',
+                eQuiet && eQuiet.message ? eQuiet.message : String(eQuiet));
+        }
+        return true;
+    }
+}
+
+// Lines prefixed UU, AA, DD, AU, UA, DU, UD are conflict markers — map them
+// to their file names, trimmed.
+function _extractConflictFiles(statusRaw) {
+    return String(statusRaw || '').split('\n').filter(function(line) {
+        return /^(UU|AA|DD|AU|UA|DU|UD) /.test(line.trim());
+    }).map(function(l) {
+        return l.trim().substring(3).trim();
+    });
+}
+
+function _buildMergeConflictsMarkdown(baseBranch, conflictFiles) {
+    var md = '# ⚠️ Merge Conflicts — Resolve Before Rework\n\n';
+    md += 'This branch has conflicts with `' + baseBranch + '`. ';
+    md += conflictFiles.length + ' file(s) contain conflict markers:\n\n';
+    conflictFiles.forEach(function(f) { md += '- `' + f + '`\n'; });
+    md += '\n## Resolution Steps\n\n';
+    md += '1. Open each conflicting file and resolve the `<<<<<<<` / `=======` / `>>>>>>>` markers\n';
+    md += '2. Stage each resolved file: `git add <file>`\n';
+    md += '3. Once all conflicts are resolved, proceed with fixes from `pr_discussions.md`\n\n';
+    md += '**Do NOT run `git commit` or `git merge --abort`** — the commit and push are handled automatically.\n';
+    return md;
+}
+
+function _writeMergeConflictsFile(inputFolder, baseBranch, conflictFiles) {
+    file_write({ path: inputFolder + '/merge_conflicts.md', content: _buildMergeConflictsMarkdown(baseBranch, conflictFiles) });
+    console.log('✅ Wrote merge_conflicts.md');
+}
+
+// git merge exits non-zero when there are unresolved conflicts. Inspect the
+// short status for conflict markers; write merge_conflicts.md and leave the
+// working directory in the conflicted merge state so the agent can resolve
+// it. Every failure fallback returns [] exactly like the original inline
+// catch block.
+function _handleMergeError(cmd, inputFolder, baseBranch, mergeError) {
+    try {
+        var statusRaw = cleanCommandOutput(cmd('git status --short') || '');
+        var conflictFiles = _extractConflictFiles(statusRaw);
+
+        if (conflictFiles.length === 0) {
+            // Not a conflict error — abort and move on
+            try { cmd('git merge --abort'); } catch (e) {}
+            console.warn('Merge failed (non-conflict reason):', mergeError.message || mergeError);
+            return [];
+        }
+
+        console.warn('⚠️ Merge conflicts in ' + conflictFiles.length + ' file(s):', conflictFiles.join(', '));
+        _writeMergeConflictsFile(inputFolder, baseBranch, conflictFiles);
+        return conflictFiles;
+    } catch (statusError) {
+        console.warn('Could not determine merge state after conflict:', statusError);
+        try { cmd('git merge --abort'); } catch (e) {}
+        return [];
+    }
+}
+
 function detectMergeConflicts(baseBranch, inputFolder, workingDir) {
     var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
     var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
@@ -334,15 +438,7 @@ function detectMergeConflicts(baseBranch, inputFolder, workingDir) {
         // origin/<baseBranch>.
         prHelper.ensureRemoteBranchRef(cmd, workingDir, baseBranch);
 
-        try {
-            var isShallow = cleanCommandOutput(cmd('git rev-parse --is-shallow-repository') || 'false');
-            if (isShallow.trim() === 'true') {
-                cmd('git fetch --unshallow');
-                console.log('Unshallowed repository for full merge base detection');
-            }
-        } catch (e) {
-            // ignore — already complete or unshallow not supported
-        }
+        _unshallowIfNeeded(cmd);
 
         cmd('git merge origin/' + baseBranch + ' --no-commit --no-ff');
 
@@ -350,24 +446,7 @@ function detectMergeConflicts(baseBranch, inputFolder, workingDir) {
         // gh-802 AC3a: only claim "base branch changes staged" when the merge
         // actually staged something — an up-to-date branch merges as a no-op
         // and the old unconditional line was a false statement in the log.
-        var stagedChanges = true;
-        try {
-            cmd('git diff --cached --quiet HEAD'); // exit 0 → nothing staged
-            stagedChanges = false;
-        } catch (eQuiet) {
-            // exit 1 → the merge staged base changes (the expected signal).
-            // Any other failure is a git error, not evidence of staged
-            // content — keep the conservative "staged" assumption but say so.
-            // The host surfaces exit codes as COMMAND_EXIT_CODE=N in the
-            // thrown message (see the test mocks).
-            var quietMsg = eQuiet && eQuiet.message ? eQuiet.message : String(eQuiet);
-            var exitMatch = String(quietMsg).match(/COMMAND_EXIT_CODE=(\d+)/);
-            var quietExitCode = exitMatch ? parseInt(exitMatch[1], 10) : null;
-            if (quietExitCode !== 1) {
-                console.warn('git diff --cached --quiet failed (assuming staged):', quietMsg);
-            }
-            stagedChanges = true;
-        }
+        var stagedChanges = _mergeStagedChanges(cmd);
         console.log(stagedChanges
             ? 'No merge conflicts — base branch changes staged'
             : 'No merge conflicts — branch already up to date with origin/' + baseBranch);
@@ -375,47 +454,7 @@ function detectMergeConflicts(baseBranch, inputFolder, workingDir) {
 
     } catch (mergeError) {
         // git merge exits non-zero when there are unresolved conflicts
-        try {
-            var statusRaw = cleanCommandOutput(cmd('git status --short') || '');
-
-            // Lines prefixed UU, AA, DD, AU, UA, DU, UD are conflict markers
-            var conflictLines = statusRaw.split('\n').filter(function(line) {
-                return /^(UU|AA|DD|AU|UA|DU|UD) /.test(line.trim());
-            });
-
-            if (conflictLines.length === 0) {
-                // Not a conflict error — abort and move on
-                try { cmd('git merge --abort'); } catch (e) {}
-                console.warn('Merge failed (non-conflict reason):', mergeError.message || mergeError);
-                return [];
-            }
-
-            var conflictFiles = conflictLines.map(function(l) {
-                return l.trim().substring(3).trim();
-            });
-            console.warn('⚠️ Merge conflicts in ' + conflictFiles.length + ' file(s):', conflictFiles.join(', '));
-
-            var md = '# ⚠️ Merge Conflicts — Resolve Before Rework\n\n';
-            md += 'This branch has conflicts with `' + baseBranch + '`. ';
-            md += conflictFiles.length + ' file(s) contain conflict markers:\n\n';
-            conflictFiles.forEach(function(f) { md += '- `' + f + '`\n'; });
-            md += '\n## Resolution Steps\n\n';
-            md += '1. Open each conflicting file and resolve the `<<<<<<<` / `=======` / `>>>>>>>` markers\n';
-            md += '2. Stage each resolved file: `git add <file>`\n';
-            md += '3. Once all conflicts are resolved, proceed with fixes from `pr_discussions.md`\n\n';
-            md += '**Do NOT run `git commit` or `git merge --abort`** — the commit and push are handled automatically.\n';
-
-            file_write({ path: inputFolder + '/merge_conflicts.md', content: md });
-            console.log('✅ Wrote merge_conflicts.md');
-
-            // Leave the working directory in the conflicted merge state so the agent can resolve it
-            return conflictFiles;
-
-        } catch (statusError) {
-            console.warn('Could not determine merge state after conflict:', statusError);
-            try { cmd('git merge --abort'); } catch (e) {}
-            return [];
-        }
+        return _handleMergeError(cmd, inputFolder, baseBranch, mergeError);
     }
 }
 

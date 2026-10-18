@@ -5,6 +5,7 @@
     "jobParams": {
       "testFiles": [
         "js/unit-tests/test_commentMarkup.js",
+        "js/unit-tests/test_aiChat.js",
         "js/unit-tests/test_scmGitlabReview.js",
         "js/unit-tests/test_scmGitlabDiscussions.js",
         "js/unit-tests/test_scmAdoProvider.js",
