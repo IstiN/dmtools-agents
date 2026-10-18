@@ -539,3 +539,76 @@ suite('checkRunZombies — #1457 timeline replay', function () {
         assert.equal(out.settled, 3, 'the green 13:58 terminal entries are settled evidence');
     });
 });
+
+// ── gh-998: placeholder lifecycle state machine + sweper ────────────────────
+//
+// Live fa #1563 (2026-10-17, head f3d58647): the SM-registered placeholder
+// `Quality gate` (check-run 117469671401, kicker suite 105847141092) stayed
+// in_progress 40+ minutes past its cycle and held mergeStateStatus=BLOCKED
+// with 58 green sibling checks (incl. a genuine Quality gate success). The
+// gh-857 close path only covers the SUCCESS row (and only with a green
+// cover); failure/superseded/cancelled/died rows and pre-fix leaks had no
+// close path at all. AC1: the lifecycle state machine; the sweper detection
+// reuses the gh-865 orphan rule (terminal owner) — covered above.
+
+suite('checkRunZombies cycle lifecycle — conclusion mapping (gh-998 AC1)', function () {
+    test('the capability table: success→success, failure→failure, superseded/cancelled/died→neutral', function () {
+        assert.equal(cz.conclusionForOutcome('success'), 'success');
+        assert.equal(cz.conclusionForOutcome('failure'), 'failure');
+        assert.equal(cz.conclusionForOutcome('superseded'), 'neutral');
+        assert.equal(cz.conclusionForOutcome('cancelled'), 'neutral');
+        assert.equal(cz.conclusionForOutcome('died'), 'neutral');
+    });
+
+    test('an UNKNOWN outcome maps to null (no verdict is invented)', function () {
+        assert.equal(cz.conclusionForOutcome('bogus'), null);
+        assert.equal(cz.conclusionForOutcome(null), null);
+        assert.equal(cz.conclusionForOutcome(undefined), null);
+    });
+});
+
+suite('checkRunZombies cycle lifecycle — state machine (gh-998 AC1)', function () {
+    test('register → open; each of the five outcomes closes with the mapped conclusion — no transition leaves the object open', function () {
+        ['success', 'failure', 'superseded', 'cancelled', 'died'].forEach(function (outcome) {
+            var cycle = cz.openCycle([{ name: 'Quality gate' }, { name: 'Binaries smoke gate' }]);
+            assert.equal(cycle.state, 'open');
+            var closed = cz.closePlaceholderCycle(cycle, outcome);
+            assert.ok(closed, outcome + ' closes the cycle');
+            assert.equal(closed.state, 'closed');
+            assert.equal(closed.conclusion, cz.conclusionForOutcome(outcome));
+            assert.equal(closed.placeholders.length, 2, 'the close obligation covers EVERY registered placeholder');
+        });
+    });
+
+    test('MULTI-ITEM: one close call concludes a whole 3-placeholder cycle (no per-item leak)', function () {
+        var cycle = cz.openCycle([{ name: 'P1' }, { name: 'P2' }, { name: 'P3' }]);
+        var closed = cz.closePlaceholderCycle(cycle, 'superseded');
+        assert.equal(closed.conclusion, 'neutral');
+        assert.equal(closed.placeholders.length, 3);
+    });
+
+    test('an UNKNOWN outcome leaves the cycle OPEN (fail safe — the close obligation is retried, never dropped)', function () {
+        var cycle = cz.openCycle([{ name: 'Quality gate' }]);
+        assert.equal(cz.closePlaceholderCycle(cycle, 'bogus'), null);
+        assert.equal(cycle.state, 'open');
+    });
+
+    test('closing a CLOSED cycle is rejected (idempotence — no double close, no double metric count, gh-998 E1)', function () {
+        var cycle = cz.openCycle([{ name: 'Quality gate' }]);
+        var closed = cz.closePlaceholderCycle(cycle, 'cancelled');
+        assert.equal(cz.closePlaceholderCycle(closed, 'success'), null,
+            'a second close of the same cycle is a no-op');
+    });
+
+    test('closing a null / non-open cycle is rejected', function () {
+        assert.equal(cz.closePlaceholderCycle(null, 'success'), null);
+        assert.equal(cz.closePlaceholderCycle({ state: 'closed' }, 'success'), null);
+    });
+});
+
+suite('checkRunZombies sweper — observability (gh-998 I5)', function () {
+    test('zombie-swept machine-log line: `zombie-swept: <check-run-id> head <sha>`', function () {
+        assert.equal(cz.zombieSweptLine(117469671401, 'f3d58647'),
+                     'zombie-swept: 117469671401 head f3d58647');
+    });
+});
