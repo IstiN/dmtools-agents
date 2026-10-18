@@ -23,6 +23,12 @@ function str(v) {
     return (typeof v === 'string' && v) ? v : '';
 }
 
+// The factory's mutex label today (and the default for call sites that do
+// not name one) — the reconciliation path is generic over the RULE's mutex
+// label (q.mutex), so every label-layer read takes the label as a parameter
+// instead of closing over this constant (rework review thread).
+var DEFAULT_MUTEX_LABEL = 'ai_validating';
+
 // ── I1 — derive(M): reconciliation from the label layer ─────────────────────
 
 function holderFromObject(h) {
@@ -65,11 +71,12 @@ function uniquePositive(list) {
  * The armed layer counts first: a PR whose label layer shows the mutex
  * armed is a holder even if missing from the candidate list.
  */
-function labelHoldersOf(liveItems) {
+function labelHoldersOf(liveItems, mutexLabel) {
+    var label = str(mutexLabel) || DEFAULT_MUTEX_LABEL;
     var out = [];
     (liveItems || []).forEach(function (it) {
         var labels = (it && it.labels) || [];
-        if (labels.indexOf('ai_validating') !== -1) {
+        if (labels.indexOf(label) !== -1) {
             // Tolerant of both payload shapes: the github_list_prs carrier
             // uses `number`, the githubSource query items use `prNumber` —
             // a strict `it.number` read silently emptied the cached leg in
@@ -157,19 +164,32 @@ function noDivergenceResult(live) {
     };
 }
 
-function phantomAlarmOf(liveSnapshot, cachedSnapshot, cached, live) {
+// Single alarm-record builder — the rework thread pinned the two shapes
+// (this builder vs the inline push in recordPhantomHeal) drifting once
+// already ("undefined — undefined"); every consumer builds HERE.
+// `label` is the rule's actual mutex label (q.mutex) — never hardcoded.
+function buildPhantomAlarm(label, cached, live, repo, atIso) {
     return {
         type: 'phantom_mutex_holder',
         // Human-readable pair for log lines and factory-state consumers
         // (the rework thread pinned the self-heal alarm logging as
         // "undefined — undefined" — every alarm record carries them).
         title: 'phantom_mutex_holder',
-        detail: 'cached ai_validating holders diverge from the live label layer',
-        label: 'ai_validating',
-        repo: (liveSnapshot && liveSnapshot.repo) || (cachedSnapshot && cachedSnapshot.repo) || null,
+        detail: 'cached ' + label + ' holders diverge from the live label layer',
+        label: label,
+        repo: repo || null,
         holders: { cached: cached, live: live },
-        at: (liveSnapshot && liveSnapshot.at) || null
+        at: atIso || null
     };
+}
+
+function phantomAlarmOf(liveSnapshot, cachedSnapshot, cached, live) {
+    return buildPhantomAlarm(
+        (liveSnapshot && liveSnapshot.label) ||
+            (cachedSnapshot && cachedSnapshot.label) || DEFAULT_MUTEX_LABEL,
+        cached, live,
+        (liveSnapshot && liveSnapshot.repo) || (cachedSnapshot && cachedSnapshot.repo),
+        (liveSnapshot && liveSnapshot.at) || null);
 }
 
 function reconcile(cachedSnapshot, liveSnapshot) {
@@ -187,10 +207,6 @@ function reconcile(cachedSnapshot, liveSnapshot) {
 }
 
 // ── Per-tick events + factory-state carry (second tier) ─────────────────────
-
-function emptyTickEvents() {
-    return { mutexSelfHeals: 0, phantomHolderTicks: 0, consecutivePhantomTicks: 0, alarm: null };
-}
 
 /**
  * Record one self-heal event for the current tick. Alarm records cap at
@@ -220,18 +236,15 @@ function capAlarmsPerSignature(alarms) {
 
 function recordPhantomHeal(state, label, cachedHolders, liveHolders, atIso) {
     var s = state || defaultState();
+    var alarmLabel = str(label) || DEFAULT_MUTEX_LABEL;
     var sig = uniquePositive(cachedHolders).join(',');
     var alarms = (s.alarms || []).filter(function (a) {
         return !((a.holders && String(a.holders.cached || '') === sig));
     });
-    alarms.push({
-        type: 'phantom_mutex_holder',
-        title: 'phantom_mutex_holder',
-        detail: 'cached ai_validating holders diverge from the live label layer',
-        label: str(label) || 'ai_validating',
-        holders: { cached: uniquePositive(cachedHolders), live: uniquePositive(liveHolders) },
-        at: str(atIso)
-    });
+    // The shared builder (rework thread): one alarm shape for the reconcile
+    // path and the state-carry path, so the two can never drift again.
+    alarms.push(buildPhantomAlarm(alarmLabel, uniquePositive(cachedHolders),
+        uniquePositive(liveHolders), null, str(atIso)));
     alarms = capAlarmsPerSignature(alarms);
     while (alarms.length > MAX_ALARMS) alarms.shift();
     return {
