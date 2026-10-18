@@ -333,9 +333,19 @@ function silentUpdateAttemptsLeft(count) {
 // repo, null otherwise (same-repo, missing headRepo from a legacy payload,
 // deleted fork, malformed name) — those keep the base path.
 function forkHeadFull(headRepoFull, baseOwner, baseRepo) {
+    // gh-1070 rework: the same-repo comparison is CASE-INSENSITIVE. The
+    // base side comes from config (effectiveRepoInfo.owner/repo) while
+    // headRepoFull comes from the API's head.repo.full_name, and GitHub
+    // repo names are case-insensitive — a casing drift (config
+    // 'istin/dmtools-agents' vs API 'IstiN/dmtools-agents') must NOT
+    // classify a same-repo PR as a fork (AC4 silently violated, or a
+    // false guest park when maintainer_can_modify=false — the exact
+    // silent-misroute class gh-1059 eliminated). The fork's own casing
+    // is preserved: the push URL is built from it.
     var full = String(headRepoFull || '');
-    var baseFull = String(baseOwner || '') + '/' + String(baseRepo || '');
-    return (full.indexOf('/') !== -1 && full !== baseFull) ? full : null;
+    if (full.indexOf('/') === -1) return null;
+    var baseFull = (String(baseOwner || '') + '/' + String(baseRepo || '')).toLowerCase();
+    return full.toLowerCase() !== baseFull ? full : null;
 }
 
 // Three-path dispatch (UT-1). maintainerCanModify === true routes the

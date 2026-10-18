@@ -3339,7 +3339,6 @@ suite('githubSource — gh-1070 maintainer-edits probe on the PR item', function
                     return { branchExists: function () { return true; } };
                 },
                 ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
-                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify,
                 ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': loadModule('js/common/smAsync.js', makeRequire({

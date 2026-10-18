@@ -14013,10 +14013,30 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
             'one marker per failed attempt, capped at MAX (no comment spam beyond it)');
         assert.deepEqual(labelAdds, ['validation_failed'],
             'after MAX consecutive failures the PR parks GUEST-STYLE');
-        assert.ok(labelAdsDegraded(labelAdds) === false, 'NEVER silent-update-degraded (the workspace is not dead — the permission is gone)');
+        assert.ok(labelAddsDegraded(labelAdds) === false, 'NEVER silent-update-degraded (the workspace is not dead — the permission is gone)');
         assert.equal(thread.length, 4, '3 markers + 1 park comment, nothing more on the 4th tick');
 
-        function labelAdsDegraded(adds) { return adds.indexOf('silent-update-degraded') !== -1; }
+        function labelAddsDegraded(adds) { return adds.indexOf('silent-update-degraded') !== -1; }
+    });
+
+    test('same-tick double park: the red-head park already fired → the fork gate adds NO second park comment', function () {
+        // Corner: a guest fork whose head checks are red AND whose author
+        // disabled maintainer edits. The red-head park (the gh-757 sticky
+        // SET above) fires earlier in THIS pass — ticket.labels is the
+        // tick-start snapshot and does not reflect it — so the fork gate
+        // must thread that same-pass state and skip its own park, or the
+        // PR receives two different park comments in one tick.
+        var sm = forkSm({ maintainerCanModify: false }, {
+            prStatus: { checkConclusion: 'red' }
+        });
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
+
+        assert.equal(clones(sm).length, 0, 'non-editable fork — no refresh attempt');
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'exactly ONE park label (idempotent add, no churn)');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['validation_failed']);
+        assert.equal(sm.capturedPrComments.length, 1, 'exactly ONE park comment in the tick — no same-tick double park');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('parked-head:') !== -1,
+            'the single comment is the guest-park record');
     });
 
     test('AC4: same-repo PRs — zero behavior change even with maintainerCanModify=false', function () {
@@ -14036,6 +14056,29 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
             'git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/x',
             'the base repush is byte-identical to the pre-gh-1070 form');
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no fork park on a same-repo PR');
+    });
+
+    test('AC4 (rework): casing drift between config and head.repo.full_name still rides the untouched base repush', function () {
+        // config owner/repo is lowercase here, the API's head.repo.full_name
+        // carries GitHub's canonical mixed casing — the SAME repo must not
+        // pay the probe, take the fork path, or get a false guest park.
+        var sm = makeSmAgent(Object.assign({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: { items: [{ key: 'pr-682', labels: ['pr_approved'], issueNumber: null,
+                                prNumber: 682, draft: false, branch: 'feat/y',
+                                headRepo: 'EPAM/Dmtools-Dart', maintainerCanModify: false }] }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
+
+        assert.equal(clones(sm).length, 1, 'one base-repush command — the fork paths never engaged');
+        var cmd = clones(sm)[0].command;
+        assert.ok(cmd.indexOf('refs/pull/') === -1, 'no refs/pull fetch on a same-repo head');
+        assert.equal(cmd.slice(-('git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/y').length),
+            'git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/y',
+            'the base repush is byte-identical to the pre-gh-1070 form');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'NO false guest park on a same-repo PR');
+        assert.equal(sm.capturedPrComments.length, 0, 'no park comment on a same-repo PR');
     });
 
     test('two fork PRs in one tick: the editable one refreshes, the non-editable one parks', function () {

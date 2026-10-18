@@ -1873,56 +1873,89 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // workflow-token pushes trigger no workflows, which is the whole
         // point of the silent path. The merge aborts on conflicts (a DIRTY
         // PR is skipped with an error, the correct semantics).
+        // gh-1070 rework: ONE silent-update command builder backs BOTH the
+        // classic base repush (silentUpdateBranch) and the maintainer-edit
+        // fork push (forkSilentUpdateBranch) — the clone → ancestor-check →
+        // merge → push skeleton exists exactly once, so the next
+        // silent-update hardening (timeout, depth, --no-edit flags, new
+        // skip conditions) lands in both paths by construction instead of
+        // being hand-copied (the rework thread's drift warning). The two
+        // parameterizable seams are:
+        //   headFlags  — the git clone flags that materialize the head:
+        //                '--single-branch --branch <b>' rides the clone
+        //                itself for a BASE head; a fork head clones
+        //                branchless and materializes the head separately
+        //   headSetup  — the post-clone chain that checks the head out
+        //                ('' for the base path; the refs/pull/<N>/head
+        //                fetch + checkout for a fork head)
+        //   pushTarget — the full push destination ('<base-url> <b>' vs
+        //                the maintainer-edit '<fork-url> HEAD:<b>')
+        // The reconcile job's working directory is the dmtools-agents
+        // engine checkout (live: `git fetch origin` there fetched
+        // dmtools-agents and every PR pathspec 404'd) — the builder clones
+        // the TARGET repo instead. `gh repo clone` rides GH_TOKEN; with
+        // the workflow token that push is silent (a PAT in its place
+        // would fire CI — do not point silent-token at a PAT).
+        function silentUpdateCommand(opts) {
+            return 'gh repo clone ' + effectiveRepoInfo.owner + '/' +
+                     effectiveRepoInfo.repo + ' ' + opts.dir +
+                     // The '--' separator is the documented `gh repo
+                     // clone` form (the fork path had dropped it —
+                     // incidental drift this unification also fixes).
+                     ' -- ' + opts.headFlags +
+                     ' && cd ' + opts.dir +
+                     opts.headSetup +
+                     ' && git fetch --no-tags --depth 200 origin main' +
+                     // Skip when main is already contained: two ticks racing
+                     // on the same branch produced a branch-into-itself
+                     // merge commit (dart gh-191, 14:08) that moved the head
+                     // past a green validation for no reason.
+                     //
+                     // ROOT FIX (fa 2026-10-01): the old form
+                     //   clone && fetch && ! ancestor || exit 0 && merge...
+                     // left-associates as
+                     //   (clone && fetch && !ancestor) || (exit 0 && merge...)
+                     // so a CLONE/NETWORK failure took the `|| exit 0`
+                     // branch, exited 0, and the reconcile logged
+                     // "branch silently updated" while the head NEVER
+                     // moved — the PR stayed BEHIND forever (live: fa
+                     // #1128 cohort parked since 2026-09-13; pr-1133's
+                     // visible clone failure was the rare case that
+                     // escaped the mask). The no-op skip must scope to
+                     // the ancestor check ONLY: failures now propagate,
+                     // the caller logs 'update_branch failed', and the
+                     // next tick retries (self-healing by design).
+                     ' && if git merge-base --is-ancestor FETCH_HEAD HEAD; then' +
+                     ' echo "silent-update: already up to date"' +
+                     ' && exit 0; fi' +
+                     ' && git -c user.name=sm-silent-update' +
+                     ' -c user.email=sm-silent-update@users.noreply.github.com' +
+                     ' merge --no-edit FETCH_HEAD' +
+                     // The anonymous clone of a public repo carries no
+                     // push credentials ("could not read Username" —
+                     // live). Push via a one-off token URL: sh expands
+                     // ${GH_TOKEN} from the child env (the workflow
+                     // token there), and the token never appears in
+                     // this script or the logged command line.
+                     ' && git push ' + opts.pushTarget;
+        }
+
+        // The classic same-repo refresh (AC4): the base-repush command
+        // stays BYTE-IDENTICAL to the pre-gh-1070 form (the regression
+        // test pins it) — this wrapper only parameterizes the builder.
         function silentUpdateBranch(branchName) {
-            // The reconcile job's working directory is the dmtools-agents
-            // engine checkout (live: `git fetch origin` there fetched
-            // dmtools-agents and every PR pathspec 404'd) — clone the
-            // TARGET repo instead. `gh repo clone` rides GH_TOKEN; with
-            // the workflow token that push is silent (a PAT in its place
-            // would fire CI — do not point silent-token at a PAT).
             var dir = '/tmp/sm-silent-update-' + Date.now() + '-' +
                       String(branchName).replace(/[^a-zA-Z0-9._-]/g, '_');
             cli_execute_command({
-                command: 'gh repo clone ' + effectiveRepoInfo.owner + '/' +
-                         effectiveRepoInfo.repo + ' ' + dir +
-                         ' -- --no-tags --single-branch --branch ' + branchName +
-                         ' --depth 200' +
-                         ' && cd ' + dir +
-                         ' && git fetch --no-tags --depth 200 origin main' +
-                         // Skip when main is already contained: two ticks racing
-                         // on the same branch produced a branch-into-itself
-                         // merge commit (dart gh-191, 14:08) that moved the head
-                         // past a green validation for no reason.
-                         //
-                         // ROOT FIX (fa 2026-10-01): the old form
-                         //   clone && fetch && ! ancestor || exit 0 && merge...
-                         // left-associates as
-                         //   (clone && fetch && !ancestor) || (exit 0 && merge...)
-                         // so a CLONE/NETWORK failure took the `|| exit 0`
-                         // branch, exited 0, and the reconcile logged
-                         // "branch silently updated" while the head NEVER
-                         // moved — the PR stayed BEHIND forever (live: fa
-                         // #1128 cohort parked since 2026-09-13; pr-1133's
-                         // visible clone failure was the rare case that
-                         // escaped the mask). The no-op skip must scope to
-                         // the ancestor check ONLY: failures now propagate,
-                         // the caller logs 'update_branch failed', and the
-                         // next tick retries (self-healing by design).
-                         ' && if git merge-base --is-ancestor FETCH_HEAD HEAD; then' +
-                         ' echo "silent-update: already up to date"' +
-                         ' && exit 0; fi' +
-                         ' && git -c user.name=sm-silent-update' +
-                         ' -c user.email=sm-silent-update@users.noreply.github.com' +
-                         ' merge --no-edit FETCH_HEAD' +
-                         // The anonymous clone of a public repo carries no
-                         // push credentials ("could not read Username" —
-                         // live). Push via a one-off token URL: sh expands
-                         // ${GH_TOKEN} from the child env (the workflow
-                         // token there), and the token never appears in
-                         // this script or the logged command line.
-                         ' && git push https://x-access-token:${GH_TOKEN}@github.com/' +
+                command: silentUpdateCommand({
+                    dir: dir,
+                    headFlags: '--no-tags --single-branch --branch ' + branchName +
+                               ' --depth 200',
+                    headSetup: '',
+                    pushTarget: 'https://x-access-token:[REDACTED:Connection String Password]@github.com/' +
                          effectiveRepoInfo.owner + '/' + effectiveRepoInfo.repo +
                          '.git ' + branchName
+                })
             });
         }
 
@@ -1937,30 +1970,45 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // marker trail makes the failure observable and the flag routes
         // it to a human before the queue burns more ticks on a dead
         // workspace. Bookkeeping failures never mask the clone error.
+        // gh-1070 rework: the marker-trail half of the failure bookkeeping
+        // is IDENTICAL for the classic base repush (gh-1000 I5) and the
+        // maintainer-edit fork push (gh-1070 AC3) — one marker per failed
+        // tick, capped at MAX (no comment spam). It lives here once; the
+        // two callers keep their deliberate divergence (the I5
+        // silent-update-degraded flag vs the AC3 guest park). Returns
+        // { attempt, left }.
+        function silentUpdateFailureTrail() {
+            var tracker = githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo);
+            var comments = tracker.getComments(ticket.prNumber) || [];
+            var count = validationLivenessModule.silentUpdateFailureCount(comments);
+            var attempt = count.count + 1;
+            var iso = new Date().toISOString();
+            // The marker trail covers attempts 1..MAX — the durable
+            // signal beyond the cap lives with the caller (no spam).
+            if (attempt <= validationLivenessModule.SILENT_UPDATE_MAX_FAILURES) {
+                tracker.postComment(ticket.prNumber,
+                    validationLivenessModule.silentUpdateFailureLine(attempt, iso));
+            }
+            return { attempt: attempt,
+                     left: validationLivenessModule.silentUpdateAttemptsLeft(attempt) };
+        }
+
         function recordSilentUpdateFailure() {
             try {
-                var tracker = githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo);
-                var comments = tracker.getComments(ticket.prNumber) || [];
-                var count = validationLivenessModule.silentUpdateFailureCount(comments);
-                var attempt = count.count + 1;
-                var iso = new Date().toISOString();
-                var left = validationLivenessModule.silentUpdateAttemptsLeft(attempt);
-                // The marker trail covers attempts 1..MAX — the label is
-                // the durable signal beyond the cap (no comment spam).
-                if (attempt <= validationLivenessModule.SILENT_UPDATE_MAX_FAILURES) {
-                    tracker.postComment(ticket.prNumber,
-                        validationLivenessModule.silentUpdateFailureLine(attempt, iso));
-                }
-                if (left > 0) {
+                var trail = silentUpdateFailureTrail();
+                var attempt = trail.attempt;
+                if (trail.left > 0) {
                     console.warn('  ⚠️  ' + key + ' silent-update clone failure #' + attempt +
-                        ' recorded on the PR — ' + left + ' attempt(s) left before the degraded flag (I5)');
+                        ' recorded on the PR — ' + trail.left +
+                        ' attempt(s) left before the degraded flag (I5)');
                     return;
                 }
                 // Attempts exhausted: flag the PR once (REST add-label is
                 // idempotent).
                 if ((ticket.labels || []).indexOf(
                         validationLivenessModule.SILENT_UPDATE_DEGRADED_LABEL) === -1) {
-                    tracker.addLabel(ticket.prNumber,
+                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(
+                        ticket.prNumber,
                         validationLivenessModule.SILENT_UPDATE_DEGRADED_LABEL);
                 }
                 console.error('  ❌ ' + key + ' silent-update DEGRADED after ' +
@@ -2049,54 +2097,39 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // (UT-2 — the base repo is never the push target). The head
             // move clears validation_failed through the existing gh-994
             // head-change reset and the standard validate lane resumes.
+            // gh-1070 rework: the chain is the shared silentUpdateCommand
+            // skeleton — only the head-obtainment seam and the push
+            // target differ from the base repush (see the builder).
             var dir = '/tmp/sm-silent-update-' + Date.now() + '-' +
                       String(branchName).replace(/[^a-zA-Z0-9._-]/g, '_');
             cli_execute_command({
-                command: 'gh repo clone ' + effectiveRepoInfo.owner + '/' +
-                         effectiveRepoInfo.repo + ' ' + dir +
-                         ' --no-tags --depth 200' +
-                         ' && cd ' + dir +
-                         ' && git fetch --no-tags --depth 200 origin refs/pull/' +
-                         ticket.prNumber + '/head' +
-                         ' && git checkout -B ' + branchName + ' FETCH_HEAD' +
-                         ' && git fetch --no-tags --depth 200 origin main' +
-                         // No-op skip scoped to the ancestor check ONLY
-                         // (fa 2026-10-01 root fix — a clone/network failure
-                         // must propagate, not ride the || exit 0 branch).
-                         ' && if git merge-base --is-ancestor FETCH_HEAD HEAD; then' +
-                         ' echo "silent-update: already up to date"' +
-                         ' && exit 0; fi' +
-                         ' && git -c user.name=sm-silent-update' +
-                         ' -c user.email=sm-silent-update@users.noreply.github.com' +
-                         ' merge --no-edit FETCH_HEAD' +
-                         ' && git push ' +
-                         validationLivenessModule.forkPushTokenUrl(forkFull) +
-                         ' HEAD:' + branchName
+                command: silentUpdateCommand({
+                    dir: dir,
+                    headFlags: '--no-tags --depth 200',
+                    headSetup: ' && git fetch --no-tags --depth 200 origin refs/pull/' +
+                               ticket.prNumber + '/head' +
+                               ' && git checkout -B ' + branchName + ' FETCH_HEAD',
+                    pushTarget: validationLivenessModule.forkPushTokenUrl(forkFull) +
+                                ' HEAD:' + branchName
+                })
             });
         }
 
         function recordForkSilentUpdateFailure() {
             // AC3: the maintainer-edit push failed DESPITE the probe (the
             // race: the author disabled edits mid-flight). Counted once
-            // per failed tick on the shared silent-update marker trail;
-            // the retry itself stays every-tick (self-healing). Once the
-            // attempts run out the PR parks GUEST-STYLE — NEVER
-            // silent-update-degraded: the workspace is not dead, the
-            // permission is gone.
+            // per failed tick on the shared silent-update marker trail
+            // (silentUpdateFailureTrail — the counting half is identical
+            // to gh-1000 I5); the retry itself stays every-tick
+            // (self-healing). Once the attempts run out the PR parks
+            // GUEST-STYLE — NEVER silent-update-degraded: the workspace
+            // is not dead, the permission is gone.
             try {
-                var tracker = githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo);
-                var comments = tracker.getComments(ticket.prNumber) || [];
-                var count = validationLivenessModule.silentUpdateFailureCount(comments);
-                var attempt = count.count + 1;
-                var iso = new Date().toISOString();
-                var left = validationLivenessModule.silentUpdateAttemptsLeft(attempt);
-                if (attempt <= validationLivenessModule.SILENT_UPDATE_MAX_FAILURES) {
-                    tracker.postComment(ticket.prNumber,
-                        validationLivenessModule.silentUpdateFailureLine(attempt, iso));
-                }
-                if (left > 0) {
+                var trail = silentUpdateFailureTrail();
+                var attempt = trail.attempt;
+                if (trail.left > 0) {
                     console.warn('  ⚠️  ' + key + ' fork silent-update push failure #' +
-                        attempt + ' recorded on the PR — ' + left +
+                        attempt + ' recorded on the PR — ' + trail.left +
                         ' attempt(s) left before the guest park (gh-1070 AC3)');
                     return;
                 }
@@ -2146,8 +2179,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // NO failure marker, NO silent-update-degraded label. A park
             // reset in THIS pass (the author just pushed — gh-994) yields
             // the tick to the re-query instead of re-parking a head the
-            // reset just freed.
-            if (!unparkedThisPass && !DRY &&
+            // reset just freed; a red-head park fired earlier in THIS
+            // pass (the tick-start labels snapshot predates it) likewise
+            // suppresses a second park comment (gh-1070 rework thread).
+            if (!unparkedThisPass && !parkedRedHeadThisPass && !DRY &&
                 (ticket.labels || []).indexOf('validation_failed') === -1) {
                 try {
                     parkForkGuest('this head lives on a fork where maintainer ' +
@@ -2263,6 +2298,13 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 var isMachinePrU = machineAuthorModule.isMachineAuthored(
                     ticket, prMachineAuthorU, effectiveRepoInfo.owner);
                 var unparkedThisPass = false;
+                // gh-1070 rework: the red-head park (SET block below) may
+                // fire earlier in THIS pass — ticket.labels is the
+                // tick-start snapshot and never reflects it. The fork
+                // gate threads this flag so a guest fork with red checks
+                // AND no maintainer edits receives ONE park comment, not
+                // two (the unparkedThisPass precedent, park direction).
+                var parkedRedHeadThisPass = false;
                 if (labelsVf.indexOf(parkLabelVf) !== -1) {
                     // gh-994 FIRST POSITION (owner reframe 2026-10-17, live:
                     // fa #156 kicker push + fa #1563 operator pushes — 4
@@ -2460,6 +2502,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         } catch (eParkVf) {
                             console.warn('  ⚠️  park label failed: ' + (eParkVf.message || eParkVf));
                         }
+                        parkedRedHeadThisPass = true;
                         try {
                             githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🛑 validation_failed — the current head `' + uHead + '` has failing checks. This GUEST PR is parked: no validation ' + 'CI is dispatched for it and the merge window skips it until the ' + 'head changes — ANY push that moves the head (yours, the kicker, a ' + 'silent main-merge) clears the park via the head-change reset; a ' + 'genuinely red new head is re-parked one validation cycle later. ' + 'The failure itself is reported separately. parked-head: ' + uHead);
                         } catch (eParkVfC) {
