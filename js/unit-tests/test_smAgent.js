@@ -10379,7 +10379,7 @@ suite('smAgent: silent-update failure bookkeeping (gh-1000 I5)', function () {
         assert.equal(sm.capturedPrComments.length, 1, 'the third marker still posts (the trail stops AT the cap)');
         assert.ok(sm.capturedPrComments[0].body.indexOf('attempt 3 at ') !== -1);
         assert.equal(sm.capturedPrLabelAdds.length, 1, 'degraded flag applied once');
-        assert.equal(sm.capturedPrLabelAdds[0].label, 'silent-update-degraded');
+        assert.equal(sm.capturedPrLabelAdds[0].labels.join(','), 'silent-update-degraded');
         assert.equal(sm.capturedPrLabelAdds[0].number, 983, 'flag on the failing PR');
     });
 

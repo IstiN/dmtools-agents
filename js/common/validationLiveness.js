@@ -261,10 +261,10 @@ function ghostGuardMarks(bodies) {
 // main under the head (no CI). A bare `exit 1` from that harness (live
 // 2026-10-17 ~19:14Z) skipped park-set/unpark bookkeeping silently and the
 // branch stayed stale forever. One marker line per failed attempt records
-// the event durably on the PR — bookkeeping only, same contract as the
-// markers above; nothing tick-side consumes them beyond the I5 bookkeeping
-// (retry with backoff + cleaned workspace, degraded flag after
-// SILENT_UPDATE_MAX_FAILURES):
+// the event durably on the PR — smAgent's recordSilentUpdateFailure (wired
+// via silentUpdateBranchTracked) is the consumer: it posts the marker on
+// every clone failure and applies the degraded flag once the attempts run
+// out (the every-tick retry itself stays self-healing):
 //
 //   ⚠️ silent-update failure — attempt <n> at <iso>
 

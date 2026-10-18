@@ -1872,11 +1872,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 var attempt = count.count + 1;
                 var iso = new Date().toISOString();
                 var left = validationLivenessModule.silentUpdateAttemptsLeft(attempt);
-                // Every failure lands a marker (attempt N at ISO) — the
-                // trail stops at the cap: no comment spam beyond it, the
-                // label becomes the durable signal.
-                tracker.postComment(ticket.prNumber,
-                    validationLivenessModule.silentUpdateFailureLine(attempt, iso));
+                // The marker trail covers attempts 1..MAX — the label is
+                // the durable signal beyond the cap (no comment spam).
+                if (attempt <= validationLivenessModule.SILENT_UPDATE_MAX_FAILURES) {
+                    tracker.postComment(ticket.prNumber,
+                        validationLivenessModule.silentUpdateFailureLine(attempt, iso));
+                }
                 if (left > 0) {
                     console.warn('  ⚠️  ' + key + ' silent-update clone failure #' + attempt +
                         ' recorded on the PR — ' + left + ' attempt(s) left before the degraded flag (I5)');
