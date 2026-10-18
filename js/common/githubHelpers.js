@@ -447,6 +447,152 @@ function _fetchJobLogs(scm, owner, repo, jobId) {
  * In SCM mode an optional jenkinsBasePath can be passed to fetch Jenkins console logs
  * for failed checks whose details_url points at the configured Jenkins instance.
  */
+// ─── Pure helpers extracted from detectFailedChecks (gh-1007) ────────────────
+
+/** Normalize a check-runs payload (object or JSON string) into a check-runs array. */
+function parseCheckRunsResult(rawResult) {
+    var parsed = rawResult;
+    if (typeof parsed === 'string') {
+        try { parsed = JSON.parse(parsed); } catch (e) {}
+    }
+    return Array.isArray(parsed) ? parsed
+        : (parsed && parsed.check_runs ? parsed.check_runs : []);
+}
+
+/** Unwrap a JSON { result: ... } tool response, passing everything else through. */
+function unwrapLogResult(rawLogs) {
+    var logs = rawLogs;
+    if (typeof rawLogs === 'string') {
+        try {
+            var parsedLogs = JSON.parse(rawLogs);
+            if (parsedLogs && parsedLogs.result) logs = parsedLogs.result;
+        } catch (e) { /* keep the raw string */ }
+    }
+    return logs;
+}
+
+/** Resolve a Jenkins details_url to { jobPath, buildNumber } under jenkinsBasePath, or null. */
+function extractJenkinsBuildTarget(detailsUrl, jenkinsBasePath) {
+    if (!jenkinsBasePath || !detailsUrl || detailsUrl.indexOf(jenkinsBasePath) !== 0) return null;
+    var relativePath = detailsUrl.substring(jenkinsBasePath.length).replace(/^[\/]+/, '');
+    var pathParts = relativePath.split('/').filter(function(p) { return p.length > 0; });
+    var buildNumber = null;
+    var jobPathParts = [];
+    for (var i = 0; i < pathParts.length; i++) {
+        if (/^\d+$/.test(pathParts[i])) {
+            buildNumber = parseInt(pathParts[i], 10);
+            break;
+        }
+        jobPathParts.push(pathParts[i]);
+    }
+    if (!buildNumber || jobPathParts.length === 0) return null;
+    return { jobPath: jobPathParts.join('/'), buildNumber: buildNumber };
+}
+
+/** Build the md snippet + full-log block for one failed check, or null when there are no logs. */
+function buildLogSections(check, logs, label) {
+    if (!logs) return null;
+    var lines = logs.split('\n');
+    var snippet = lines.slice(-500).join('\n');
+    return {
+        md: '**' + label + ' (last 500 lines)**:\n\n```\n' + snippet + '\n```\n\n',
+        full: '=== ' + label + ' for: ' + check.name + ' ===\n' +
+              'URL: ' + (check.details_url || 'N/A') + '\n' +
+              logs + '\n\n'
+    };
+}
+
+/** Fetch the raw GitHub job log for a check whose details_url contains /jobs/{id}. */
+function fetchGithubCheckLogs(check, scm, owner, repo) {
+    var jobIdMatch = check.details_url && check.details_url.match(/\/jobs?\/(\d+)/);
+    if (jobIdMatch) {
+        try {
+            var rawLogs = scm ? scm.getJobLogs(jobIdMatch[1]) : github_get_job_logs({
+                workspace: owner, repository: repo, jobId: jobIdMatch[1]
+            });
+            return unwrapLogResult(rawLogs);
+        } catch (e) {
+            console.warn('Could not fetch logs for job', jobIdMatch[1], ':', e.message || e);
+            return null;
+        }
+    }
+    // gh-982 (merge conflict resolution): check-run URLs shaped /actions/runs/N
+    // carry no job id — resolve the run's failed jobs and fetch each log.
+    return fetchGithubRunLogs(check, scm, owner, repo);
+}
+
+/** True for a run job whose logs matter: a failed/timed-out job with an id. */
+function isFailedRunJob(runJob) {
+    if (!runJob || runJob.id === undefined || runJob.id === null) return false;
+    return runJob.conclusion === 'failure' || runJob.conclusion === 'timed_out';
+}
+
+/** Extract the numeric workflow-run id from a details_url shaped /runs/{id}. */
+function extractGithubRunId(check) {
+    var runIdMatch = check.details_url && check.details_url.match(/\/runs\/(\d+)/);
+    return runIdMatch ? runIdMatch[1] : null;
+}
+
+/** Fetch the jobs payload of a workflow run via the scm provider or the gh tool. */
+function fetchWorkflowRunJobs(scm, owner, repo, runId) {
+    return (scm && typeof scm.getWorkflowRunJobs === 'function')
+        ? scm.getWorkflowRunJobs(runId)
+        : github_get_workflow_run_jobs({
+            workspace: owner, repository: repo, runId: runId
+        });
+}
+
+/** Concatenate the logs of a run's failed jobs, each under a `=== name ===` header. */
+function formatFailedRunJobLogs(scm, owner, repo, rawJobs) {
+    var out = '';
+    ciModule._jobsOf(rawJobs).forEach(function (runJob) {
+        if (!isFailedRunJob(runJob)) return;
+        var jobLogs = _fetchJobLogs(scm, owner, repo, runJob.id);
+        if (jobLogs) out += '=== ' + (runJob.name || 'job ' + runJob.id) + ' ===\n' + jobLogs + '\n';
+    });
+    return out || null;
+}
+
+/** Fetch the failed jobs' logs of a workflow RUN whose details_url contains /runs/{id}. */
+function fetchGithubRunLogs(check, scm, owner, repo) {
+    var runId = extractGithubRunId(check);
+    if (!runId) return null;
+    try {
+        return formatFailedRunJobLogs(scm, owner, repo, fetchWorkflowRunJobs(scm, owner, repo, runId));
+    } catch (e) {
+        console.warn('Could not fetch jobs/logs for run', runId, ':', e.message || e);
+        return null;
+    }
+}
+
+/** Fetch the raw Jenkins build log for a check whose details_url resolves to a build target. */
+function fetchJenkinsCheckLogs(check, jenkinsBasePath) {
+    var target = extractJenkinsBuildTarget(check.details_url, jenkinsBasePath);
+    if (!target) return null;
+    try {
+        jenkins_get_job_info({ jobPath: target.jobPath, buildNumber: target.buildNumber });
+        return unwrapLogResult(jenkins_get_build_log({ jobPath: target.jobPath, buildNumber: target.buildNumber }));
+    } catch (e) {
+        console.warn('Could not fetch Jenkins logs for', check.details_url, ':', e.message || e);
+        return null;
+    }
+}
+
+function buildCiFailuresHeader(failedChecks, headSha) {
+    var md = '# ⚠️ Failed CI Checks — Fix Before Completing Rework\n\n';
+    md += 'Full (untruncated) logs are available in `ci_failures_full.log`.\n\n';
+    md += failedChecks.length + ' check(s) failed on commit `' + headSha.substring(0, 8) + '`:\n\n';
+    return md;
+}
+
+function buildCiFailuresResolutionSection() {
+    return '---\n\n## Resolution\n\n' +
+           '1. Read the error log(s) above to identify the root cause\n' +
+           '2. For more context, open `ci_failures_full.log` with the complete logs\n' +
+           '3. Fix the underlying code issue(s)\n' +
+           '4. CI will re-run automatically after the push — all checks must pass\n';
+}
+
 function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt) {
     var scm = null;
     var owner, repo, headSha, inputFolder, jenkinsBasePath;
@@ -486,12 +632,7 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
             });
         }
 
-        if (typeof rawResult === 'string') {
-            try { rawResult = JSON.parse(rawResult); } catch (e) {}
-        }
-
-        var checkRuns = Array.isArray(rawResult) ? rawResult
-            : (rawResult && rawResult.check_runs ? rawResult.check_runs : []);
+        var checkRuns = parseCheckRunsResult(rawResult);
 
         if (!checkRuns || !checkRuns.length) {
             console.log('No CI checks found for commit');
@@ -511,21 +652,9 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
 
         console.warn('⚠️ ' + failedChecks.length + ' CI check(s) failed:', failedChecks.map(function(c) { return c.name; }).join(', '));
 
-        var md = '# ⚠️ Failed CI Checks — Fix Before Completing Rework\n\n';
-        md += 'Full (untruncated) logs are available in `ci_failures_full.log`.\n\n';
-        md += failedChecks.length + ' check(s) failed on commit `' + headSha.substring(0, 8) + '`:\n\n';
+        var md = buildCiFailuresHeader(failedChecks, headSha);
 
         var fullLogContent = '';
-
-        function appendLog(check, logs, label) {
-            if (!logs) return;
-            var lines = logs.split('\n');
-            var snippet = lines.slice(-500).join('\n');
-            md += '**' + label + ' (last 500 lines)**:\n\n```\n' + snippet + '\n```\n\n';
-            fullLogContent += '=== ' + label + ' for: ' + check.name + ' ===\n';
-            fullLogContent += 'URL: ' + (check.details_url || 'N/A') + '\n';
-            fullLogContent += logs + '\n\n';
-        }
 
         failedChecks.forEach(function(check) {
             md += '## ❌ ' + check.name + '\n\n';
@@ -535,80 +664,21 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
             }
             md += '\n';
 
-            var jobIdMatch = check.details_url && check.details_url.match(/\/jobs?\/(\d+)/);
-            if (jobIdMatch) {
-                try {
-                    appendLog(check, _fetchJobLogs(scm, owner, repo, jobIdMatch[1]), 'Error log');
-                } catch (e) {
-                    console.warn('Could not fetch logs for job', jobIdMatch[1], ':', e.message || e);
-                }
-            } else {
-                // gh-982: check-run URLs shaped /actions/runs/N carry no job id —
-                // resolve the run's failed jobs and fetch each job's log.
-                var runIdMatch = check.details_url && check.details_url.match(/\/runs\/(\d+)/);
-                if (runIdMatch) {
-                    try {
-                        var rawJobs = null;
-                        if (scm) {
-                            if (typeof scm.getWorkflowRunJobs === 'function') {
-                                rawJobs = scm.getWorkflowRunJobs(runIdMatch[1]);
-                            }
-                        } else {
-                            rawJobs = github_get_workflow_run_jobs({
-                                workspace: owner,
-                                repository: repo,
-                                runId: runIdMatch[1]
-                            });
-                        }
-                        var runJobs = ciModule._jobsOf(rawJobs);
-                        for (var ji = 0; ji < runJobs.length; ji++) {
-                            var runJob = runJobs[ji];
-                            if (!runJob || (runJob.conclusion !== 'failure' && runJob.conclusion !== 'timed_out')) {
-                                continue;
-                            }
-                            if (runJob.id === undefined || runJob.id === null) continue;
-                            var jobLogs = _fetchJobLogs(scm, owner, repo, runJob.id);
-                            var jobLabel = runJob.name ? 'Error log (' + runJob.name + ')' : 'Error log';
-                            appendLog(check, jobLogs, jobLabel);
-                        }
-                    } catch (e) {
-                        console.warn('Could not fetch jobs/logs for run', runIdMatch[1], ':', e.message || e);
-                    }
-                }
+            var ghSections = buildLogSections(check, fetchGithubCheckLogs(check, scm, owner, repo), 'Error log');
+            if (ghSections) {
+                md += ghSections.md;
+                fullLogContent += ghSections.full;
             }
 
             // Jenkins: failed check whose details_url points at the configured Jenkins instance
-            if (jenkinsBasePath && check.details_url && check.details_url.indexOf(jenkinsBasePath) === 0) {
-                try {
-                    var relativePath = check.details_url.substring(jenkinsBasePath.length).replace(/^[\/]+/, '');
-                    var pathParts = relativePath.split('/').filter(function(p) { return p.length > 0; });
-                    var jenkinsBuildNumber = null;
-                    var jenkinsJobPathParts = [];
-                    for (var i = 0; i < pathParts.length; i++) {
-                        if (/^\d+$/.test(pathParts[i])) {
-                            jenkinsBuildNumber = parseInt(pathParts[i], 10);
-                            break;
-                        }
-                        jenkinsJobPathParts.push(pathParts[i]);
-                    }
-                    if (jenkinsBuildNumber && jenkinsJobPathParts.length > 0) {
-                        var jenkinsJobPath = jenkinsJobPathParts.join('/');
-                        jenkins_get_job_info({ jobPath: jenkinsJobPath, buildNumber: jenkinsBuildNumber });
-                        var jenkinsRawLogs = jenkins_get_build_log({ jobPath: jenkinsJobPath, buildNumber: jenkinsBuildNumber });
-                        var jenkinsLogs = _unwrapToolResult(jenkinsRawLogs);
-                        appendLog(check, jenkinsLogs, 'Jenkins error log');
-                    }
-                } catch (e) {
-                    console.warn('Could not fetch Jenkins logs for', check.details_url, ':', e.message || e);
-                }
+            var jenkinsSections = buildLogSections(check, fetchJenkinsCheckLogs(check, jenkinsBasePath), 'Jenkins error log');
+            if (jenkinsSections) {
+                md += jenkinsSections.md;
+                fullLogContent += jenkinsSections.full;
             }
         });
 
-        md += '---\n\n## Resolution\n\n';
-        md += '1. Read the error log(s) above to identify the root cause\n';
-        md += '2. For more context, open `ci_failures_full.log` with the complete logs\n';
-        md += '3. Fix the underlying code issue(s)\n';
-        md += '4. CI will re-run automatically after the push — all checks must pass\n';
+        md += buildCiFailuresResolutionSection();
 
         file_write({ path: inputFolder + '/ci_failures.md', content: md });
         console.log('✅ Wrote ci_failures.md (' + failedChecks.length + ' failed check(s))');
@@ -636,6 +706,21 @@ module.exports = {
     getPRDetails: getPRDetails,
     fetchDiscussionsAndRawData: fetchDiscussionsAndRawData,
     detectFailedChecks: detectFailedChecks,
+
+    // Pure helpers extracted from detectFailedChecks (gh-1007) — exported for
+    // unit testing; detectFailedChecks behavior is unchanged.
+    parseCheckRunsResult: parseCheckRunsResult,
+    fetchGithubCheckLogs: fetchGithubCheckLogs,
+    fetchGithubRunLogs: fetchGithubRunLogs,
+    extractGithubRunId: extractGithubRunId,
+    fetchWorkflowRunJobs: fetchWorkflowRunJobs,
+    formatFailedRunJobLogs: formatFailedRunJobLogs,
+    isFailedRunJob: isFailedRunJob,
+    unwrapLogResult: unwrapLogResult,
+    extractJenkinsBuildTarget: extractJenkinsBuildTarget,
+    buildLogSections: buildLogSections,
+    buildCiFailuresHeader: buildCiFailuresHeader,
+    buildCiFailuresResolutionSection: buildCiFailuresResolutionSection,
 
     // Re-exported from ./gitOps.js for backward compatibility — these are
     // plain git-CLI operations, not GitHub-specific. New code should prefer
