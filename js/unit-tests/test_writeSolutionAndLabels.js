@@ -131,6 +131,98 @@ suite('writeSolutionAndLabels — buildMarkdownSection', function() {
         assert.equal(section.indexOf('```json') !== -1, true, 'json code block');
         assert.equal(section.indexOf('```mermaid') !== -1, true, 'mermaid block');
     });
+
+    // ── gh-1037 characterization: byte-identical golden outputs (CRAP refactor) ──
+    var GOLDEN_REPOS = [
+        { name: 'core-db', reason: 'DB migration' },
+        { name: 'service-api', reason: 'API', depends_on: ['core-db'] },
+        { name: 'web-ui', depends_on: ['service-api', 'core-db'] }
+    ];
+    var GOLDEN_MARKDOWN = [
+        '---',
+        '## Affected Repositories',
+        '',
+        '| # | Repository | Reason | Depends On |',
+        '|---|---|---|---|',
+        '| 1 | core-db | DB migration | \u2014 |',
+        '| 2 | service-api | API | core-db |',
+        '| 3 | web-ui |  | service-api, core-db |',
+        '',
+        '```mermaid',
+        'graph LR',
+        '    core-db --> service-api',
+        '    service-api --> web-ui',
+        '    core-db --> web-ui',
+        '```',
+        '',
+        '```json',
+        '[',
+        '  {',
+        '    "name": "core-db",',
+        '    "reason": "DB migration"',
+        '  },',
+        '  {',
+        '    "name": "service-api",',
+        '    "reason": "API",',
+        '    "depends_on": [',
+        '      "core-db"',
+        '    ]',
+        '  },',
+        '  {',
+        '    "name": "web-ui",',
+        '    "depends_on": [',
+        '      "service-api",',
+        '      "core-db"',
+        '    ]',
+        '  }',
+        ']',
+        '```',
+        '---'
+    ].join('\n');
+
+    test('multi-repo output with edges is byte-identical to the pre-refactor golden (gh-1037)', function() {
+        var mod = makeLabelsModule({});
+        var section = mod.buildMarkdownSection(mod.topologicalSort(GOLDEN_REPOS));
+        assert.equal(section, GOLDEN_MARKDOWN);
+    });
+
+    test('no-edge output omits the mermaid block entirely (gh-1037 golden)', function() {
+        var mod = makeLabelsModule({});
+        var section = mod.buildMarkdownSection([{ name: 'solo', reason: 'r' }]);
+        assert.equal(section.indexOf('```mermaid'), -1, 'no mermaid block when no edges');
+        assert.equal(section.indexOf('|---|---|---|---|') !== -1, true, 'table separator kept');
+        assert.equal(section.split('\n')[0], '---', 'leading delimiter');
+        assert.equal(section.split('\n').pop(), '---', 'trailing delimiter');
+        assert.equal(section.indexOf('| 1 | solo | r | \u2014 |') !== -1, true, 'em-dash for missing deps');
+    });
+
+    test('empty depends_on array renders the em-dash, not an empty cell', function() {
+        var mod = makeLabelsModule({});
+        var section = mod.buildMarkdownSection([{ name: 'a', reason: '', depends_on: [] }]);
+        assert.equal(section.indexOf('| 1 | a |  | \u2014 |') !== -1, true, 'empty deps array → em-dash');
+    });
+
+    test('extracted helpers buildRepoTableRows / buildDependencyEdges / formatRepoDeps are pure and byte-identical (gh-1037)', function() {
+        var mod = makeLabelsModule({});
+        assert.equal(typeof mod.buildRepoTableRows, 'function', 'buildRepoTableRows exported');
+        assert.equal(typeof mod.buildDependencyEdges, 'function', 'buildDependencyEdges exported');
+        assert.equal(typeof mod.formatRepoDeps, 'function', 'formatRepoDeps exported');
+        var sorted = mod.topologicalSort(GOLDEN_REPOS);
+        assert.deepEqual(mod.buildRepoTableRows(sorted), [
+            '| 1 | core-db | DB migration | \u2014 |',
+            '| 2 | service-api | API | core-db |',
+            '| 3 | web-ui |  | service-api, core-db |'
+        ]);
+        assert.deepEqual(mod.buildDependencyEdges(sorted), [
+            '    core-db --> service-api',
+            '    service-api --> web-ui',
+            '    core-db --> web-ui'
+        ]);
+        assert.equal(mod.formatRepoDeps({}), '\u2014');
+        assert.equal(mod.formatRepoDeps({ depends_on: [] }), '\u2014');
+        assert.equal(mod.formatRepoDeps({ depends_on: ['x', 'y'] }), 'x, y');
+        assert.equal(mod.formatRepoDeps({ depends_on: 'not-an-array' }), '\u2014');
+    });
 });
 
 
