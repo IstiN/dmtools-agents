@@ -52,7 +52,7 @@ function topologicalSort(repos) {
 function formatRepoDeps(r) {
     return (Array.isArray(r.depends_on) && r.depends_on.length > 0)
         ? r.depends_on.join(', ')
-        : '—';
+        : '\u2014';
 }
 
 /** GFM/wiki table rows: | # | name | reason | deps | */
