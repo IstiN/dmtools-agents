@@ -21,6 +21,7 @@
 const prHelper = require('./pullRequest.js');
 const gitOps = require('./gitOps.js');
 const reviewThreadInventory = require('./reviewThreadInventory.js');
+const ciModule = require('./ci.js');
 
 // Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
 // common/pullRequest.js once — this delegate keeps every local call site.
@@ -413,6 +414,31 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
 }
 
 /**
+ * Unwrap a dmtools tool result: when the raw value is a JSON string
+ * carrying a `.result` payload, return the payload; otherwise return
+ * the value as-is (plain logs pass through untouched).
+ */
+function _unwrapToolResult(raw) {
+    if (typeof raw !== 'string') return raw;
+    try {
+        var parsed = JSON.parse(raw);
+        return (parsed && parsed.result) ? parsed.result : raw;
+    } catch (e) { return raw; }
+}
+
+/**
+ * Fetch a workflow job's logs either through an SCM provider or the
+ * github_get_job_logs tool, with the JSON-string `.result` unwrapping
+ * applied. Shared by the /jobs/N and /runs/N details_url paths.
+ */
+function _fetchJobLogs(scm, owner, repo, jobId) {
+    var raw = scm
+        ? scm.getJobLogs(String(jobId))
+        : github_get_job_logs({ workspace: owner, repository: repo, jobId: String(jobId) });
+    return _unwrapToolResult(raw);
+}
+
+/**
  * Detect failed CI checks for the PR head commit.
  * Uses github_get_commit_check_runs to find failures, then fetches job logs.
  * Writes ci_failures.md to the input folder when failures are found.
@@ -479,14 +505,44 @@ function buildLogSections(check, logs, label) {
 /** Fetch the raw GitHub job log for a check whose details_url contains /jobs/{id}. */
 function fetchGithubCheckLogs(check, scm, owner, repo) {
     var jobIdMatch = check.details_url && check.details_url.match(/\/jobs?\/(\d+)/);
-    if (!jobIdMatch) return null;
+    if (jobIdMatch) {
+        try {
+            var rawLogs = scm ? scm.getJobLogs(jobIdMatch[1]) : github_get_job_logs({
+                workspace: owner, repository: repo, jobId: jobIdMatch[1]
+            });
+            return unwrapLogResult(rawLogs);
+        } catch (e) {
+            console.warn('Could not fetch logs for job', jobIdMatch[1], ':', e.message || e);
+            return null;
+        }
+    }
+    // gh-982 (merge conflict resolution): check-run URLs shaped /actions/runs/N
+    // carry no job id — resolve the run's failed jobs and fetch each log.
+    return fetchGithubRunLogs(check, scm, owner, repo);
+}
+
+/** Fetch the failed jobs' logs of a workflow RUN whose details_url contains /runs/{id}. */
+function fetchGithubRunLogs(check, scm, owner, repo) {
+    var runIdMatch = check.details_url && check.details_url.match(/\/runs\/(\d+)/);
+    if (!runIdMatch) return null;
     try {
-        var rawLogs = scm ? scm.getJobLogs(jobIdMatch[1]) : github_get_job_logs({
-            workspace: owner, repository: repo, jobId: jobIdMatch[1]
-        });
-        return unwrapLogResult(rawLogs);
+        var rawJobs = (scm && typeof scm.getWorkflowRunJobs === 'function')
+            ? scm.getWorkflowRunJobs(runIdMatch[1])
+            : github_get_workflow_run_jobs({
+                workspace: owner, repository: repo, runId: runIdMatch[1]
+            });
+        var runJobs = ciModule._jobsOf(rawJobs);
+        var out = '';
+        for (var ji = 0; ji < runJobs.length; ji++) {
+            var runJob = runJobs[ji];
+            if (!runJob || (runJob.conclusion !== 'failure' && runJob.conclusion !== 'timed_out')) continue;
+            if (runJob.id === undefined || runJob.id === null) continue;
+            var jobLogs = _fetchJobLogs(scm, owner, repo, runJob.id);
+            if (jobLogs) out += '=== ' + (runJob.name || 'job ' + runJob.id) + ' ===\n' + jobLogs + '\n';
+        }
+        return out || null;
     } catch (e) {
-        console.warn('Could not fetch logs for job', jobIdMatch[1], ':', e.message || e);
+        console.warn('Could not fetch jobs/logs for run', runIdMatch[1], ':', e.message || e);
         return null;
     }
 }

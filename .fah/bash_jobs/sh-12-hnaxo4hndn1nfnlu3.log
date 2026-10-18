@@ -1,3 +1,0 @@
-2:# Regenerate the factory board visual-check fixtures (site/factory/visual-check/).
-13:# Usage: bash site/factory/visual-check/capture.sh
-15:cd "$(dirname "$0")/.."   # site/factory — the board root (fixture URLs are relative to it)

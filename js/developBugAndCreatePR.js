@@ -86,14 +86,358 @@ function removeLabels(ticketKey, params, tracker) {
     }
 }
 
+/**
+ * gh-1003: `params.ticket ? params : (params.jobParams || params)` was
+ * evaluated twice in action; one named helper owns the actual-params
+ * resolution.
+ */
+function resolveActualParams(params) {
+    return params.ticket ? params : (params.jobParams || params);
+}
+
+/**
+ * gh-1003: Path 0 (PR already open) scan predicate extracted from action —
+ * same listPrs('open') shape, same head.ref match, null-tolerant.
+ */
+function findOpenPrForBranch(openPrs, expectedBranch) {
+    return (openPrs || []).filter(function(pr) {
+        return pr && pr.head && pr.head.ref === expectedBranch;
+    })[0];
+}
+
+/**
+ * gh-1003: Path 0 comment builder — pure markup assembly extracted so the
+ * comment contract is unit-testable.
+ */
+function buildPrAlreadyOpenComment(ticketKey, existingUrl) {
+    const m = commentMarkup.forTicket(ticketKey);
+    return m.h(3, 'ℹ️ PR Already Open') + '\n\n' +
+            'A pull/merge request already exists for this ticket: ' + existingUrl + '\n\n' +
+            'Moved ticket to ' + m.bold('In Review') + ' for review.';
+}
+
+/**
+ * gh-1003: Path 1 comment bodies extracted from action. The blocked comment
+ * keeps the reason/tried/needs assembly — a multi-item `tried` list renders
+ * one bullet per entry.
+ */
+function buildBlockedComment(ticketKey, blocked) {
+    const m = commentMarkup.forTicket(ticketKey);
+    let comment = m.h(3, '🚫 Bug Cannot Be Fixed Automatically') + '\n\n';
+    comment += m.bold('Reason') + ': ' + (blocked.reason || '(see details below)') + '\n\n';
+    if (blocked.tried && blocked.tried.length > 0) {
+        comment += m.bold('Attempted') + ':\n';
+        blocked.tried.forEach(function(t) { comment += '- ' + t + '\n'; });
+        comment += '\n';
+    }
+    if (blocked.needs) {
+        comment += m.bold('Needs from human') + ': ' + blocked.needs + '\n';
+    }
+    return comment;
+}
+
+/**
+ * gh-1003: the CodeGraph-rejection wording for a blocked.json without
+ * recorded CodeGraph usage (Path 1a).
+ */
+function buildBlockedWithoutCodeGraphComment(ticketKey) {
+    const m = commentMarkup.forTicket(ticketKey);
+    return m.h(3, '⚠️ Blocked Claim Needs CodeGraph Verification') + '\n\n' +
+            'The agent wrote `outputs/blocked.json`, but no CodeGraph usage was recorded. ' +
+            'Source-code bugs must use CodeGraph before declaring the work blocked.\n\n' +
+            'Resetting to ' + m.bold('Ready For Development') + ' for an automatic retry.';
+}
+
+/**
+ * gh-1003: Path 2 comment builder — rca/commit/description are optional; the
+ * CodeGraph-usage wording difference (with/without) is preserved verbatim.
+ */
+function buildAlreadyFixedComment(ticketKey, alreadyFixed, codeGraphUsed) {
+    const m = commentMarkup.forTicket(ticketKey);
+    let comment = m.h(3, '✅ Bug Already Fixed') + '\n\n';
+    if (alreadyFixed.rca) {
+        comment += m.bold('Root Cause') + ': ' + alreadyFixed.rca + '\n\n';
+    }
+    if (alreadyFixed.commit) {
+        comment += m.bold('Fixed in commit') + ': ' + m.code(alreadyFixed.commit) + '\n\n';
+    }
+    if (alreadyFixed.description) {
+        comment += alreadyFixed.description + '\n\n';
+    }
+    if (!codeGraphUsed) {
+        comment += 'No new PR required — fix is already in the codebase. No CodeGraph usage was recorded, but the ticket is being moved to *Done* as requested.\n\n';
+    } else {
+        comment += 'No new PR required — fix is already in the codebase. Moved to *Done*.';
+    }
+    return comment;
+}
+
+/**
+ * gh-1003: Path 3 interrupted-leg comment builder — the partial-work wording
+ * depends only on whether any git changes were found.
+ */
+function buildInterruptedComment(ticketKey, hasGitChanges) {
+    const m = commentMarkup.forTicket(ticketKey);
+    return m.h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to ' + m.bold('Ready For Development') + ' and will be automatically retried.\n\n' +
+            (hasGitChanges ? 'Partial analysis work was saved to the branch.' : 'No partial work was produced.');
+}
+
+/**
+ * gh-1003: the `git status --porcelain` line filter extracted from action's
+ * staging/status check — same four exclusions in the same order (factory-kit
+ * gitlink, machine-local runtime artifacts, script noise).
+ */
+function isMeaningfulStatusLine(line) {
+    return !!line.trim() &&
+           !/^(\?\?|A )\s+factory-kit(\/|$)/.test(line) &&
+           !gitStaging.isRuntimeArtifactStatusLine(line) &&
+           line.indexOf('Script started') === -1 &&
+           line.indexOf('Script done') === -1;
+}
+
+/**
+ * gh-1003: the staging + porcelain-status probe extracted from action.
+ * Receives the raw cli tool so both the untrack wrapper and the
+ * buildStagingPathspecs check-ignore probe keep their original call shapes.
+ * A staging failure degrades to "no changes" (as before), never a throw.
+ */
+function detectGitChanges(cliTool) {
+    const run = function (command) { return cliTool({ command: command }); };
+    try {
+        try {
+            // gh-628: untrack machine-local runtime logs carried by
+            // already-poisoned branches (the timer's broad add swept
+            // .dmtools/credential-helper.log onto ai/gh-628); the
+            // staging pathspec below keeps them out going forward.
+            // Shared canonical list: js/common/gitStaging.js.
+            gitStaging.untrackRuntimeArtifacts(run);
+        } catch (cleanupErr) {
+            console.warn('Could not remove tracked Copilot session cache before checking status:', cleanupErr);
+        }
+        // `:!factory-kit` — the factory workflow's kit step materializes a
+        // NESTED git repo at $GITHUB_WORKSPACE/factory-kit; staging that
+        // unstaged gitlink dies exit 128 and kills the whole bug/rework
+        // leg after a green dev run (same class as gh-1000 on the story
+        // flow, #648). Excluded like copilot-sessions; the status filter
+        // below skips its `?? factory-kit/` line too.
+        // `:!.dmtools/...` runtime logs (gh-628) — excluded by pathspec
+        // because they live next to COMMITTED .dmtools/ files.
+        // gh-683 (live fa run 37153405587): the check-ignore probe
+        // (via cli_execute_command) drops exclusions for paths git
+        // already ignores — naming an existing ignored-untracked path
+        // in an exclusion pathspec trips git add's ignored-files guard.
+        // gh-1164: `factory-kit` goes through the same check-ignore
+        // probe (inside buildStagingPathspecs' extraPaths) — a static
+        // exclusion trips the same ignored-pathspec guard when the kit
+        // is materialized AND gitignored.
+        run('git add . -- ' + gitStaging.buildStagingPathspecs(cliTool, ['factory-kit']));
+        const rawStatus = run('git status --porcelain') || '';
+        return rawStatus.split('\n').filter(isMeaningfulStatusLine).length > 0;
+    } catch (e) {
+        console.warn('Could not check git status:', e);
+        return false;
+    }
+}
+
+/**
+ * gh-1003: pure planner for the interrupted-leg partial-work push — decides
+ * the target branch (expected branch wins over the current one), whether a
+ * checkout switch is needed, and whether the push needs --force-with-lease
+ * (partial work rescued from a protected branch). Returns null when there is
+ * no branch to push at all.
+ */
+function decidePartialPush(currentBranch, expectedBranch, baseBranch) {
+    const partialBranch = expectedBranch || currentBranch;
+    if (!partialBranch) {
+        return null;
+    }
+    return {
+        branch: partialBranch,
+        needsCheckout: currentBranch !== partialBranch,
+        force: currentBranch === baseBranch || currentBranch === 'main' || currentBranch === 'master'
+    };
+}
+
+/**
+ * gh-1003: Path 0 completion extracted from action — posts the
+ * already-open-PR comment, moves the ticket to In Review, removes SM labels
+ * and returns the pr_already_open outcome. Tracker call order preserved.
+ */
+function handlePrAlreadyOpen(ticketKey, existingPr, tracker, statuses, params) {
+    const existingUrl = existingPr.html_url || existingPr.url || ('#' + existingPr.number);
+    console.log('⚠️  PR already open for', ticketKey, ':', existingUrl, '— skipping re-development');
+    try {
+        tracker.postComment(ticketKey, buildPrAlreadyOpenComment(ticketKey, existingUrl));
+    } catch (e) {}
+    try {
+        tracker.moveToStatus(ticketKey, statuses.IN_REVIEW);
+        console.log('✅ Moved', ticketKey, 'to In Review');
+    } catch (e) { console.warn('Failed to move to In Review:', e); }
+    removeLabels(ticketKey, params, tracker);
+    return { success: true, path: 'pr_already_open', ticketKey };
+}
+
+/**
+ * gh-1003: Path 1 completion extracted from action. Without recorded
+ * CodeGraph usage the blocked claim is rejected and the ticket resets for a
+ * retry; otherwise the blocked comment is posted and the ticket moves to
+ * Blocked. Tracker call order (comment → move → labels) preserved.
+ */
+function completeBlockedPath(ticketKey, blocked, hasCodeGraph, tracker, statuses, jiraConfig, params) {
+    if (!hasCodeGraph) {
+        console.warn('outputs/blocked.json rejected — no CodeGraph usage was recorded');
+        try {
+            tracker.postComment(ticketKey, buildBlockedWithoutCodeGraphComment(ticketKey));
+        } catch (e) {}
+        try {
+            tracker.moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
+            console.log('✅ Moved', ticketKey, 'to Ready For Development for CodeGraph retry');
+        } catch (e) {
+            console.warn('Failed to move ticket to Ready For Development:', e);
+        }
+        removeLabels(ticketKey, params, tracker);
+        return { success: true, path: 'blocked_without_codegraph', ticketKey };
+    }
+
+    try { tracker.postComment(ticketKey, buildBlockedComment(ticketKey, blocked)); } catch (e) {}
+
+    try {
+        tracker.moveToStatus(ticketKey, jiraConfig.statuses.BLOCKED);
+        console.log('✅ Moved', ticketKey, 'to Blocked');
+    } catch (e) {
+        console.warn('Failed to move to Blocked:', e);
+    }
+
+    removeLabels(ticketKey, params, tracker);
+    return { success: true, path: 'blocked', ticketKey };
+}
+
+/**
+ * gh-1003: Path 2 completion extracted from action — posts the
+ * already-fixed comment, moves the ticket to Done, stamps the
+ * AI_DEVELOPED label, removes SM labels. Tracker call order preserved.
+ */
+function completeAlreadyFixedPath(ticketKey, alreadyFixed, hasCodeGraph, tracker, jiraConfig, params) {
+    if (!hasCodeGraph) {
+        console.warn('outputs/already_fixed.json accepted without CodeGraph usage');
+    }
+    try { tracker.postComment(ticketKey, buildAlreadyFixedComment(ticketKey, alreadyFixed, hasCodeGraph)); } catch (e) {}
+
+    try {
+        tracker.moveToStatus(ticketKey, jiraConfig.statuses.DONE);
+        console.log('✅ Moved', ticketKey, 'to Done');
+    } catch (e) {
+        console.warn('Failed to move to Done:', e);
+    }
+
+    try { tracker.addLabel(ticketKey, LABELS.AI_DEVELOPED); } catch (e) {}
+
+    removeLabels(ticketKey, params, tracker);
+    return { success: true, path: 'already_fixed', ticketKey };
+}
+
+/**
+ * gh-1003: Path 3 interrupted-leg completion extracted from action — pushes
+ * any partial work (planned by decidePartialPush), posts the informational
+ * comment, resets the ticket for retry, removes SM labels and fails the run
+ * via the shared throwInterruptedReset marker. Command and tracker call
+ * order preserved.
+ */
+function completeInterruptedPath(ticketKey, hasGitChanges, cliTool, config, ticket, tracker, statuses, params) {
+    if (hasGitChanges) {
+        console.log('Partial git changes found — pushing to preserve analysis work...');
+        try {
+            const currentBranch = cleanCliOutput(cliTool({ command: 'git branch --show-current' }));
+            const expectedBranch = configLoader.resolveBranchName(config, ticket, 'development');
+            const baseBranch = (config.git && config.git.baseBranch) || 'main';
+            const plan = decidePartialPush(currentBranch, expectedBranch, baseBranch);
+            if (plan) {
+                if (plan.needsCheckout) {
+                    console.log('Switching partial work from ' + (currentBranch || '(unknown)') +
+                        ' to development branch: ' + plan.branch);
+                    cliTool({ command: 'git checkout -B ' + plan.branch });
+                }
+                pushPartialWork(cliTool, config, ticketKey, plan);
+            }
+        } catch (pushErr) {
+            console.warn('Could not push partial work:', pushErr);
+        }
+    } else {
+        console.log('No git changes — nothing to push.');
+    }
+
+    resetTicketForRetry(ticketKey, hasGitChanges, tracker, statuses);
+
+    removeLabels(ticketKey, params, tracker);
+    // gh-742: ticket is reset for retry — fail the RUN so this
+    // interrupted half-exit is a visible dead letter, not a green
+    // no-PR leg that arms review downstream. The marked
+    // throwInterruptedReset helper is shared from
+    // developTicketAndCreatePR (required above) so the
+    // marker/message contract lives in exactly one place.
+    developTicket.throwInterruptedReset(ticketKey);
+}
+
+/**
+ * gh-1003: the marked-failure rethrow predicate from action's catch block —
+ * the deliberate loud failures (fatal CLI environment, git-operations
+ * gh-683, PR-creation gh-729, interrupted-reset gh-742) must keep
+ * propagating so the RUN is RED.
+ */
+function isPropagatingFailure(error) {
+    return !!(error && (error.fatalCliEnvironment || error.gitOperationsFailure || error.prCreationFailure || error.interruptedReset));
+}
+
+/**
+ * gh-1003: the custom-params resolution from action's head — jobParams win,
+ * then the actual params' own customParams.
+ */
+function resolveCustomParams(params, actualParams) {
+    return (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+}
+
+/**
+ * gh-1003: the interrupted-leg partial-work push commands, planned by
+ * decidePartialPush — config/commit/push order preserved verbatim.
+ */
+function pushPartialWork(cliTool, config, ticketKey, plan) {
+    cliTool({ command: 'git config user.name "' + config.git.authorName + '"' });
+    cliTool({ command: 'git config user.email "' + config.git.authorEmail + '"' });
+    cliTool({ command: 'git commit -m "' + configLoader.formatTemplate(config.formats.commitMessage.wip, {ticketKey: ticketKey}) + '"' });
+    let pushCommand = 'git push -u origin ' + plan.branch;
+    if (plan.force) {
+        pushCommand += ' --force-with-lease';
+    }
+    cliTool({ command: pushCommand });
+    console.log('✅ Pushed partial analysis to branch:', plan.branch);
+}
+
+/**
+ * gh-1003: the interrupted-leg tracker side effects — informational comment
+ * first, then the Ready For Development reset (comment → move order
+ * preserved).
+ */
+function resetTicketForRetry(ticketKey, hasGitChanges, tracker, statuses) {
+    try {
+        tracker.postComment(ticketKey, buildInterruptedComment(ticketKey, hasGitChanges));
+    } catch (e) {}
+
+    try {
+        tracker.moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
+        console.log('✅ Moved', ticketKey, 'to Ready For Development for retry');
+    } catch (e) {
+        console.warn('Failed to move ticket to Ready For Development:', e);
+    }
+}
+
 function action(params) {
     try {
-        const actualParams = params.ticket ? params : (params.jobParams || params);
+        const actualParams = resolveActualParams(params);
         const ticketKey = actualParams.ticket.key;
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var jiraConfig = config.jira;
         var scm = configLoader.createScm(config);
-        const _customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+        const _customParams = resolveCustomParams(params, actualParams);
         const statuses = resolveStatuses(_customParams, jiraConfig && jiraConfig.statuses);
         var tracker = trackersModule.createTracker(config, _customParams || {});
 
@@ -105,24 +449,9 @@ function action(params) {
         // Move to In Review now and skip development entirely.
         const expectedBranch = configLoader.resolveBranchName(config, actualParams.ticket, 'development');
         try {
-            var existingPr = (scm.listPrs('open') || []).filter(function(pr) {
-                return pr && pr.head && pr.head.ref === expectedBranch;
-            })[0];
+            const existingPr = findOpenPrForBranch(scm.listPrs('open'), expectedBranch);
             if (existingPr) {
-                    var existingUrl = existingPr.html_url || existingPr.url || ('#' + existingPr.number);
-                    console.log('⚠️  PR already open for', ticketKey, ':', existingUrl, '— skipping re-development');
-                    try {
-                        tracker.postComment(ticketKey, commentMarkup.forTicket(ticketKey).h(3, 'ℹ️ PR Already Open') + '\n\n' +
-                                'A pull/merge request already exists for this ticket: ' + existingUrl + '\n\n' +
-                                'Moved ticket to ' + commentMarkup.forTicket(ticketKey).bold('In Review') + ' for review.'
-                        );
-                    } catch (e) {}
-                    try {
-                        tracker.moveToStatus(ticketKey, statuses.IN_REVIEW);
-                        console.log('✅ Moved', ticketKey, 'to In Review');
-                    } catch (e) { console.warn('Failed to move to In Review:', e); }
-                    removeLabels(ticketKey, params, tracker);
-                    return { success: true, path: 'pr_already_open', ticketKey };
+                return handlePrAlreadyOpen(ticketKey, existingPr, tracker, statuses, params);
             }
         } catch (prCheckErr) {
             console.warn('Could not check existing PRs (non-fatal):', prCheckErr);
@@ -132,87 +461,14 @@ function action(params) {
         const blocked = readJson('outputs/blocked.json');
         if (blocked) {
             console.log('outputs/blocked.json found — bug cannot be fixed automatically');
-
-            if (!hasCodeGraphUsage()) {
-                console.warn('outputs/blocked.json rejected — no CodeGraph usage was recorded');
-                try {
-                    tracker.postComment(ticketKey, commentMarkup.forTicket(ticketKey).h(3, '⚠️ Blocked Claim Needs CodeGraph Verification') + '\n\n' +
-                            'The agent wrote `outputs/blocked.json`, but no CodeGraph usage was recorded. ' +
-                            'Source-code bugs must use CodeGraph before declaring the work blocked.\n\n' +
-                            'Resetting to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' for an automatic retry.'
-                    );
-                } catch (e) {}
-                try {
-                    tracker.moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
-                    console.log('✅ Moved', ticketKey, 'to Ready For Development for CodeGraph retry');
-                } catch (e) {
-                    console.warn('Failed to move ticket to Ready For Development:', e);
-                }
-                removeLabels(ticketKey, params, tracker);
-                return { success: true, path: 'blocked_without_codegraph', ticketKey };
-            }
-
-            const m = commentMarkup.forTicket(ticketKey);
-            let comment = m.h(3, '🚫 Bug Cannot Be Fixed Automatically') + '\n\n';
-            comment += m.bold('Reason') + ': ' + (blocked.reason || '(see details below)') + '\n\n';
-            if (blocked.tried && blocked.tried.length > 0) {
-                comment += m.bold('Attempted') + ':\n';
-                blocked.tried.forEach(function(t) { comment += '- ' + t + '\n'; });
-                comment += '\n';
-            }
-            if (blocked.needs) {
-                comment += m.bold('Needs from human') + ': ' + blocked.needs + '\n';
-            }
-
-            try { tracker.postComment(ticketKey, comment); } catch (e) {}
-
-            try {
-                tracker.moveToStatus(ticketKey, jiraConfig.statuses.BLOCKED);
-                console.log('✅ Moved', ticketKey, 'to Blocked');
-            } catch (e) {
-                console.warn('Failed to move to Blocked:', e);
-            }
-
-            removeLabels(ticketKey, params, tracker);
-            return { success: true, path: 'blocked', ticketKey };
+            return completeBlockedPath(ticketKey, blocked, hasCodeGraphUsage(), tracker, statuses, jiraConfig, params);
         }
 
         // ── Path 2: Already Fixed ────────────────────────────────────────────
         const alreadyFixed = readJson('outputs/already_fixed.json');
         if (alreadyFixed) {
             console.log('outputs/already_fixed.json found — bug already resolved in codebase');
-
-            const mFixed = commentMarkup.forTicket(ticketKey);
-            let comment = mFixed.h(3, '✅ Bug Already Fixed') + '\n\n';
-            if (alreadyFixed.rca) {
-                comment += mFixed.bold('Root Cause') + ': ' + alreadyFixed.rca + '\n\n';
-            }
-            if (alreadyFixed.commit) {
-                comment += mFixed.bold('Fixed in commit') + ': ' + mFixed.code(alreadyFixed.commit) + '\n\n';
-            }
-            if (alreadyFixed.description) {
-                comment += alreadyFixed.description + '\n\n';
-            }
-            if (!hasCodeGraphUsage()) {
-                comment += 'No new PR required — fix is already in the codebase. No CodeGraph usage was recorded, but the ticket is being moved to *Done* as requested.\n\n';
-                console.warn('outputs/already_fixed.json accepted without CodeGraph usage');
-            } else {
-                comment += 'No new PR required — fix is already in the codebase. Moved to *Done*.';
-            }
-
-            try { tracker.postComment(ticketKey, comment); } catch (e) {}
-
-            try {
-                tracker.moveToStatus(ticketKey, jiraConfig.statuses.DONE);
-                console.log('✅ Moved', ticketKey, 'to Done');
-            } catch (e) {
-                console.warn('Failed to move to Done:', e);
-            }
-
-            try { tracker.addLabel(ticketKey, LABELS.AI_DEVELOPED); } catch (e) {}
-
-            removeLabels(ticketKey, params, tracker);
-            return { success: true, path: 'already_fixed', ticketKey };
+            return completeAlreadyFixedPath(ticketKey, alreadyFixed, hasCodeGraphUsage(), tracker, jiraConfig, params);
         }
 
         // ── Path 3: Normal Fix — code changes present ────────────────────────
@@ -228,55 +484,11 @@ function action(params) {
         // Before delegating, check if the CLI agent was interrupted (no response.md, no code changes).
         // If there ARE git changes (e.g. outputs/rca.md written) but no response.md, the agent
         // was interrupted mid-way. Push partial work and reset ticket for retry.
-        const actualParamsForCheck = params.ticket ? params : (params.jobParams || params);
-        const ticketKeyForCheck = actualParamsForCheck.ticket.key;
+        // gh-1003: the staging + porcelain-status probe (with the gh-628 /
+        // gh-683 / gh-1164 exclusion comments) lives in detectGitChanges.
+        const hasGitChanges = detectGitChanges(cli_execute_command);
 
-        let hasGitChanges = false;
-        try {
-            try {
-                // gh-628: untrack machine-local runtime logs carried by
-                // already-poisoned branches (the timer's broad add swept
-                // .dmtools/credential-helper.log onto ai/gh-628); the
-                // staging pathspec below keeps them out going forward.
-                // Shared canonical list: js/common/gitStaging.js.
-                gitStaging.untrackRuntimeArtifacts(function (command) { return cli_execute_command({ command: command }); });
-            } catch (cleanupErr) {
-                console.warn('Could not remove tracked Copilot session cache before checking status:', cleanupErr);
-            }
-            // `:!factory-kit` — the factory workflow's kit step materializes a
-            // NESTED git repo at $GITHUB_WORKSPACE/factory-kit; staging that
-            // unstaged gitlink dies exit 128 and kills the whole bug/rework
-            // leg after a green dev run (same class as gh-1000 on the story
-            // flow, #648). Excluded like copilot-sessions; the status filter
-            // below skips its `?? factory-kit/` line too.
-            // `:!.dmtools/...` runtime logs (gh-628) — excluded by pathspec
-            // because they live next to COMMITTED .dmtools/ files.
-            // gh-683 (live fa run 37153405587): the check-ignore probe
-            // (via cli_execute_command) drops exclusions for paths git
-            // already ignores — naming an existing ignored-untracked path
-            // in an exclusion pathspec trips git add's ignored-files guard.
-            // gh-1164: `factory-kit` goes through the same check-ignore
-            // probe (inside buildStagingPathspecs' extraPaths) — a static
-            // exclusion trips the same ignored-pathspec guard when the kit
-            // is materialized AND gitignored.
-            cli_execute_command({ command: 'git add . -- ' + gitStaging.buildStagingPathspecs(cli_execute_command, ['factory-kit']) });
-            const rawStatus = cli_execute_command({ command: 'git status --porcelain' }) || '';
-            const statusLines = rawStatus.split('\n').filter(function(l) {
-                return l.trim() &&
-                       !/^(\?\?|A )\s+factory-kit(\/|$)/.test(l) &&
-                       // gh-628: `--cached` untracking leaves the runtime logs
-                       // on disk as untracked files — never the agent's work,
-                       // so they must not flip hasGitChanges (round 1 review).
-                       !gitStaging.isRuntimeArtifactStatusLine(l) &&
-                       l.indexOf('Script started') === -1 &&
-                       l.indexOf('Script done') === -1;
-            });
-            hasGitChanges = statusLines.length > 0;
-        } catch (e) {
-            console.warn('Could not check git status:', e);
-        }
-
-        let hasResponseMd = readHasResponseMd(ticketKeyForCheck);
+        let hasResponseMd = readHasResponseMd(ticketKey);
 
         console.log('Working tree check: git changes present = ' + hasGitChanges +
             '; outputs/response.md = ' + (hasResponseMd ? 'present' : 'MISSING') +
@@ -291,77 +503,21 @@ function action(params) {
         // the doomed attempt exactly like the story leg.
         if (!hasResponseMd) {
             const recovered = developTicket.recoverMissingResponse(
-                ticketKeyForCheck,
+                ticketKey,
                 _customParams,
-                actualParamsForCheck.response || '',
-                actualParamsForCheck.currentCliHasFatalError === true,
-                actualParamsForCheck.currentCliErrorMessage || null);
+                actualParams.response || '',
+                actualParams.currentCliHasFatalError === true,
+                actualParams.currentCliErrorMessage || null);
             hasResponseMd = !!(recovered && recovered.trim());
         }
 
         if (!hasResponseMd) {
             // CLI agent did not finish (rate limit / crash). Push whatever partial work exists
             // (e.g. outputs/rca.md) and reset the ticket so SM can retry.
+            // gh-1003: the partial-work push + comment + reset sequence lives
+            // in completeInterruptedPath (planned by decidePartialPush).
             console.log('outputs/response.md missing — CLI agent was interrupted. Resetting ticket for retry.');
-
-            if (hasGitChanges) {
-                console.log('Partial git changes found — pushing to preserve analysis work...');
-                try {
-                    const rawBranch = cli_execute_command({ command: 'git branch --show-current' }) || '';
-                    const currentBranch = cleanCliOutput(rawBranch);
-                    const expectedBranch = configLoader.resolveBranchName(
-                        config,
-                        actualParamsForCheck.ticket,
-                        'development'
-                    );
-                    const baseBranch = (config.git && config.git.baseBranch) || 'main';
-                    const partialBranch = expectedBranch || currentBranch;
-                    if (partialBranch) {
-                        if (currentBranch !== partialBranch) {
-                            console.log('Switching partial work from ' + (currentBranch || '(unknown)') +
-                                ' to development branch: ' + partialBranch);
-                            cli_execute_command({ command: 'git checkout -B ' + partialBranch });
-                        }
-                        cli_execute_command({ command: 'git config user.name "' + config.git.authorName + '"' });
-                        cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
-                        cli_execute_command({ command: 'git commit -m "' + configLoader.formatTemplate(config.formats.commitMessage.wip, {ticketKey: ticketKeyForCheck}) + '"' });
-                        var pushCommand = 'git push -u origin ' + partialBranch;
-                        if (currentBranch === baseBranch || currentBranch === 'main' || currentBranch === 'master') {
-                            pushCommand += ' --force-with-lease';
-                        }
-                        cli_execute_command({ command: pushCommand });
-                        console.log('✅ Pushed partial analysis to branch:', partialBranch);
-                    }
-                } catch (pushErr) {
-                    console.warn('Could not push partial work:', pushErr);
-                }
-            } else {
-                console.log('No git changes — nothing to push.');
-            }
-
-            // Post informational comment
-            try {
-                tracker.postComment(ticketKeyForCheck, commentMarkup.forTicket(ticketKeyForCheck).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to ' + commentMarkup.forTicket(ticketKeyForCheck).bold('Ready For Development') + ' and will be automatically retried.\n\n' +
-                        (hasGitChanges ? 'Partial analysis work was saved to the branch.' : 'No partial work was produced.')
-                );
-            } catch (e) {}
-
-            // Move ticket back to Ready For Development for retry
-            try {
-                tracker.moveToStatus(ticketKeyForCheck, statuses.READY_FOR_DEVELOPMENT);
-                console.log('✅ Moved', ticketKeyForCheck, 'to Ready For Development for retry');
-            } catch (e) {
-                console.warn('Failed to move ticket to Ready For Development:', e);
-            }
-
-            removeLabels(ticketKeyForCheck, params, tracker);
-            // gh-742: ticket is reset for retry — fail the RUN so this
-            // interrupted half-exit is a visible dead letter, not a green
-            // no-PR leg that arms review downstream. The marked
-            // throwInterruptedReset helper is shared from
-            // developTicketAndCreatePR (required above) so the
-            // marker/message contract lives in exactly one place.
-            developTicket.throwInterruptedReset(ticketKeyForCheck);
+            return completeInterruptedPath(ticketKey, hasGitChanges, cli_execute_command, config, actualParams.ticket, tracker, statuses, params);
         }
 
         const result = developTicket.action(params);
@@ -379,7 +535,7 @@ function action(params) {
         // interrupted-reset gh-742) must keep propagating so the RUN is RED —
         // swallowing them here would turn a deliberate loud failure back into
         // a returned result.
-        if (error && (error.fatalCliEnvironment || error.gitOperationsFailure || error.prCreationFailure || error.interruptedReset)) {
+        if (isPropagatingFailure(error)) {
             throw error;
         }
         try {
@@ -394,5 +550,27 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action,
+        // gh-1003: pure helpers extracted from action — exported for direct
+        // characterization tests.
+        resolveActualParams,
+        findOpenPrForBranch,
+        buildPrAlreadyOpenComment,
+        buildBlockedComment,
+        buildBlockedWithoutCodeGraphComment,
+        buildAlreadyFixedComment,
+        buildInterruptedComment,
+        isMeaningfulStatusLine,
+        detectGitChanges,
+        decidePartialPush,
+        isPropagatingFailure,
+        resolveCustomParams,
+        pushPartialWork,
+        resetTicketForRetry,
+        handlePrAlreadyOpen,
+        completeBlockedPath,
+        completeAlreadyFixedPath,
+        completeInterruptedPath
+    };
 }

@@ -1991,3 +1991,244 @@ suite('developTicketAndCreatePR > leg outcome characterization (gh-930)', functi
     });
 
 });
+
+// ── gh-1003: performGitOperations extraction ─────────────────────────
+// The CRAP refactor (gh-1003) splits pure parse/detect helpers out of
+// performGitOperations (CC 29, CRAP 144.6). These tests pin the helpers'
+// behaviour directly and characterize the previously-uncovered commit/push/
+// verify tail through the full action() flow.
+suite('developTicketAndCreatePR > performGitOperations helpers (gh-1003)', function () {
+
+    test('sanitizeCommitMessage keeps plain messages and escapes shell metacharacters', function () {
+        var mod = loadDevelopTicketAndCreatePR({});
+        assert.equal(typeof mod.sanitizeCommitMessage, 'function',
+            'gh-1003 extracts the commit-message sanitizer for direct characterization');
+        assert.equal(mod.sanitizeCommitMessage('gh-1003 Work on TS-1'), 'gh-1003 Work on TS-1');
+        assert.equal(mod.sanitizeCommitMessage('say "hi"'), 'say \\"hi\\"');
+        assert.equal(mod.sanitizeCommitMessage('a>b|c;d`e$f\ng'), 'a b c d e f g',
+            'shell metacharacters become spaces, whitespace collapses');
+        assert.equal(mod.sanitizeCommitMessage('  x\ny\tz  '), 'x y z',
+            'newlines/tabs collapse into single spaces and the result is trimmed');
+    });
+
+    test('parseAheadCount parses rev-list counts and defaults junk to zero', function () {
+        var mod = loadDevelopTicketAndCreatePR({});
+        assert.equal(typeof mod.parseAheadCount, 'function',
+            'gh-1003 extracts the ahead-count parser for direct characterization');
+        assert.equal(mod.parseAheadCount('2'), 2);
+        assert.equal(mod.parseAheadCount(' 3\n'), 3);
+        assert.equal(mod.parseAheadCount('0'), 0);
+        assert.equal(mod.parseAheadCount(''), 0);
+        assert.equal(mod.parseAheadCount('abc'), 0);
+        assert.equal(mod.parseAheadCount(undefined), 0);
+        assert.equal(mod.parseAheadCount(null), 0);
+    });
+
+    test('hasStagedChanges treats blank or missing diff-stat as nothing staged', function () {
+        var mod = loadDevelopTicketAndCreatePR({});
+        assert.equal(typeof mod.hasStagedChanges, 'function',
+            'gh-1003 extracts the staged-changes predicate for direct characterization');
+        assert.equal(mod.hasStagedChanges(' js/foo.js | 2 +-\n 1 file changed'), true);
+        assert.equal(mod.hasStagedChanges(' '), false);
+        assert.equal(mod.hasStagedChanges(''), false);
+        assert.equal(mod.hasStagedChanges(null), false);
+        assert.equal(mod.hasStagedChanges(undefined), false);
+    });
+
+    test('detectPushFailure: a thrown push fails, soft-rejection markers fail, clean output passes', function () {
+        var mod = loadDevelopTicketAndCreatePR({});
+        assert.equal(typeof mod.detectPushFailure, 'function',
+            'gh-1003 extracts the push-failure detector for direct characterization');
+        var markers = ['remote rejected', 'GH013', 'error: failed to push', 'push declined', 'non-fast-forward', 'rejected'];
+        for (var i = 0; i < markers.length; i++) {
+            assert.equal(mod.detectPushFailure('remote: ' + markers[i] + ' (more text)', false), true,
+                'marker must be detected: ' + markers[i]);
+        }
+        assert.equal(mod.detectPushFailure('GH013 + non-fast-forward in one output', false), true,
+            'multi-marker output still fails (loop case)');
+        assert.equal(mod.detectPushFailure('Everything up-to-date', false), false);
+        assert.equal(mod.detectPushFailure('Everything up-to-date', true), true,
+            'thrown push short-circuits true before the marker scan');
+        assert.equal(mod.detectPushFailure(undefined, true), true,
+            'thrown push stays true even without output (original || chain short-circuit)');
+        assert.throws(function () { mod.detectPushFailure(undefined, false); },
+            'undefined output without a thrown exception throws, exactly like the original indexOf chain');
+    });
+
+    test('branchMissingOnRemote detects a missing refs/heads entry', function () {
+        var mod = loadDevelopTicketAndCreatePR({});
+        assert.equal(typeof mod.branchMissingOnRemote, 'function',
+            'gh-1003 extracts the remote-branch presence probe for direct characterization');
+        assert.equal(mod.branchMissingOnRemote('abc123\trefs/heads/ai/TS-9', 'ai/TS-9'), false);
+        assert.equal(mod.branchMissingOnRemote('', 'ai/TS-9'), true);
+        assert.equal(mod.branchMissingOnRemote(undefined, 'ai/TS-9'), true);
+        assert.equal(mod.branchMissingOnRemote('abc123\trefs/heads/main', 'ai/TS-9'), true);
+    });
+
+    // Full-flow git mock for the commit/push/verify tail: staged changes are
+    // present (diff --cached --stat non-empty), so performGitOperations takes
+    // the commit path instead of the nothing-staged path the other mocks drive.
+    // Respond closure factory: throws the precomputed failure when set,
+    // otherwise returns the canned value — keeps every respond closure
+    // operator-free (gh-1003 CRAP ratchet measures test helpers too).
+    function throwOrReturn(err, value) {
+        return function () {
+            if (err) {
+                throw err;
+            }
+            return value;
+        };
+    }
+
+    function gh1003CommitPathMock(branchName, prUrl, opts) {
+        opts = opts || {};
+        // Precompute every variant payload so the respond closures stay
+        // operator-free — the CRAP ratchet measures test helpers too and
+        // nested-closure complexity aggregates into the factory (gh-1003).
+        var statOutput = ' js/foo.js | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n';
+        var notIgnoredProbe = new Error('Command execution failed (exit code 1)');
+        var commitFailure = null;
+        var pushFailure = null;
+        var pushOutput = '';
+        var branchRefLine = 'abc123\trefs/heads/' + branchName;
+        if (opts.commitThrows) {
+            commitFailure = new Error('cannot run git commit');
+        }
+        if (opts.pushThrows) {
+            // Note: retryAfterPushFailure recognizes only 'remote rejected' /
+            // 'GH013' / 'error: failed to push' / 'push declined' — a thrown
+            // message containing one of those keeps the retry honest; a bare
+            // 'non-fast-forward' would make the force-retry read as success
+            // (pre-existing behaviour).
+            pushFailure = new Error('remote rejected (non-fast-forward), index packed failed');
+        }
+        if (opts.pushError) {
+            pushOutput = opts.pushError;
+        }
+        var mergeBaseFailure = null;
+        if (opts.mergeBaseThrows) {
+            mergeBaseFailure = new Error('no merge base');
+        }
+        if (opts.branchOnRemote === false) {
+            branchRefLine = '';
+        }
+        var table = [
+            { match: 'gh pr list --head ' + branchName, respond: function () { return ''; } },
+            { match: 'git branch --show-current', respond: function () { return branchName; } },
+            { match: 'git ls-files -- ', respond: function () { return ''; } },
+            { match: 'git check-ignore', respond: function () { throw notIgnoredProbe; } },
+            { match: 'git add . --', respond: function () { return ''; } },
+            { match: 'git diff --cached --stat', respond: function () { return statOutput; } },
+            { match: 'git commit', respond: throwOrReturn(commitFailure, '') },
+            { match: 'git rev-list --count', respond: function () { return '0'; } },
+            { match: 'git fetch', respond: function () { return ''; } },
+            { match: 'git rev-parse origin/', respond: function () { return 'basesha123'; } },
+            { match: 'git merge-base', respond: throwOrReturn(mergeBaseFailure, 'basesha123') },
+            { match: 'git push', respond: throwOrReturn(pushFailure, pushOutput) },
+            { match: 'git ls-remote --heads origin main', respond: function () { return 'sha9\trefs/heads/main'; } },
+            { match: 'git ls-remote --heads origin ' + branchName, respond: function () { return branchRefLine; } },
+            { match: 'gh pr create', respond: function () { return prUrl; } }
+        ];
+        return dispatchGitMock(table);
+    }
+
+    // Shared first-prefix-match dispatcher for table-driven git mocks —
+    // hoisted so its loop does not aggregate into the factory's CRAP (gh-1003).
+    function dispatchGitMock(table) {
+        return function (args) {
+            var command = args.command;
+            for (var i = 0; i < table.length; i++) {
+                if (command.indexOf(table[i].match) === 0) {
+                    return table[i].respond();
+                }
+            }
+            return '';
+        };
+    }
+
+    function runCommitPathAction(opts, prUrl) {
+        var movedTo = [];
+        var comments = [];
+        var loaded = loadForPrTail({
+            cli_execute_command: gh1003CommitPathMock('ai/TS-40', prUrl || '', opts),
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+            jira_remove_label: function () { }
+        }, { responseMd: '### What changed\n- Fixed the parser.\n' });
+        var caught = null;
+        var result = null;
+        try {
+            result = loaded.mod.action({
+                ticket: { key: 'TS-40', fields: { summary: 'commit path', description: '', labels: [] } },
+                metadata: { contextId: 'sm_story_development' },
+                customParams: {},
+                response: '### What changed\n- Fixed the parser.\n'
+            });
+        } catch (e) {
+            caught = e;
+        }
+        return { result: result, caught: caught, movedTo: movedTo, comments: comments };
+    }
+
+    test('commit path + soft-rejected push (GH013 text, exit 0) → push-failure reset for retry, no PR, no silent green', function () {
+        var run = runCommitPathAction({ pushError: 'remote rejected (GH013: push declined, non-fast-forward)' });
+        assert.equal(run.caught, null, 'a retryable push failure must not fail the run RED');
+        assert.equal(run.result.path, 'development-reset-for-retry',
+            'soft-rejected push lands in the retryable reset path');
+        assert.deepEqual(run.movedTo, ['Ready For Development']);
+        assert.equal(run.comments.length, 1, 'the push-failure stage comment is posted');
+        assert.contains(run.comments[0].comment, 'Push');
+    });
+
+    test('commit path + thrown push (non-fast-forward exception) → same push-failure reset for retry', function () {
+        var run = runCommitPathAction({ pushThrows: true });
+        assert.equal(run.caught, null);
+        assert.equal(run.result.path, 'development-reset-for-retry');
+        assert.deepEqual(run.movedTo, ['Ready For Development']);
+    });
+
+    test('commit path + push ok + branch missing on remote → push-failure reset (branch was not found after push)', function () {
+        var run = runCommitPathAction({ branchOnRemote: false });
+        assert.equal(run.caught, null);
+        assert.equal(run.result.path, 'development-reset-for-retry');
+        assert.deepEqual(run.movedTo, ['Ready For Development']);
+    });
+
+    test('commit path + merge sync failure (no merge base) → leg fails RED with gitOperationsFailure marker', function () {
+        // syncBranchWithBase (real prHelper) returns its unrecoverable failure
+        // when HEAD has no merge base with origin/main: merge-base keeps
+        // failing (even after the deepen fetches) → isMergeSyncFailure.
+        var movedTo = [];
+        var loaded = loadForPrTail({
+            cli_execute_command: gh1003CommitPathMock('ai/TS-41', '', { mergeBaseThrows: true }),
+            jira_post_comment: function () { },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+            jira_remove_label: function () { }
+        }, { responseMd: '### What changed\n- Fixed.\n' });
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-41', fields: { summary: 'sync failure', description: '', labels: [] } },
+                metadata: { contextId: 'sm_story_development' },
+                customParams: {},
+                response: '### What changed\n- Fixed.\n'
+            });
+        } catch (e) {
+            caught = e;
+        }
+        assert.ok(caught, 'an unrecoverable merge-sync failure must fail the run RED');
+        assert.equal(caught && caught.gitOperationsFailure, true,
+            'thrown error carries the gitOperationsFailure marker');
+        assert.deepEqual(movedTo, ['Ready For Development'],
+            'ticket is still reset for retry before the leg fails');
+    });
+
+    test('commit path + git commit throws → generic git-operations failure fails the run RED (marked)', function () {
+        var run = runCommitPathAction({ commitThrows: true });
+        assert.ok(run.caught, 'an unexpected git failure must fail the run RED');
+        assert.equal(run.caught && run.caught.gitOperationsFailure, true,
+            'thrown error carries the gitOperationsFailure marker');
+        assert.deepEqual(run.movedTo, ['Ready For Development'],
+            'ticket is still reset for retry before the leg fails');
+    });
+});
