@@ -144,6 +144,47 @@ suite('mutexRegistry tick events — factory-state counter carry (second tier)',
         assert.ok(snap.alarms.length <= registry.MAX_ALARMS);
         assert.equal(snap.alarms.length, registry.MAX_ALARMS);
     });
+
+    test('PHANTOM_ALARM_CAP is enforced per holder signature (newest kept), total cap still MAX_ALARMS', function () {
+        // The rework thread pinned PHANTOM_ALARM_CAP as dead: declared,
+        // documented, never used. One signature flapping 5× must keep only
+        // the newest 3 records FOR THAT SIGNATURE — and the per-signature
+        // cap must also hold on the mergeSnapshot (published tail) path.
+        var snap = null;
+        for (var i = 1; i <= 5; i++) {
+            var st = registry.recordPhantomHeal(snap, 'ai_validating', [997], [], '2026-10-17T19:0' + i + ':00Z');
+            snap = registry.mergeSnapshot(snap, { mutexSelfHeals: 1, phantomHolderTicks: 1, consecutivePhantomTicks: 1, alarm: st.alarms[st.alarms.length - 1] });
+        }
+        var sigAlarms = snap.alarms.filter(function (a) {
+            return String(a.holders && a.holders.cached) === '997';
+        });
+        assert.equal(sigAlarms.length, registry.PHANTOM_ALARM_CAP,
+            'at most PHANTOM_ALARM_CAP records for one holder signature');
+        assert.equal(sigAlarms[sigAlarms.length - 1].at, '2026-10-17T19:05:00Z',
+            'the NEWEST records survive the cap');
+    });
+
+    test('reconcile alarms carry a human-readable title/detail pair (no "undefined — undefined")', function () {
+        var cached = registry.derive([997], [item(997, ['ai_validating'])], registry.noCompletedRuns, 'o/r', T0);
+        var live = registry.derive([997], [item(997, [])], registry.noCompletedRuns, 'o/r', T1);
+        var out = registry.reconcile(cached, live);
+        assert.equal(out.selfHealed, true);
+        assert.equal(typeof out.alarm.title, 'string');
+        assert.ok(out.alarm.title.length > 0);
+        assert.equal(typeof out.alarm.detail, 'string');
+        assert.ok(out.alarm.detail.length > 0);
+    });
+
+    test('derive reads the holder number from prNumber-shaped items too (githubSource query items)', function () {
+        // queryPrs items carry prNumber (not number) — a strict it.number
+        // read silently emptied the cached leg in production (pinned by the
+        // IT-1 rework tests driving the real queryPrs path).
+        var items = [{ prNumber: 997, labels: ['ai_validating'] }];
+        var out = registry.derive([997], items, registry.noCompletedRuns, 'o/r', T0);
+        assert.deepEqual(out.holders, [997], 'prNumber-shaped items confirm the holder');
+        var noHolder = registry.derive([997], [{ prNumber: 997, labels: ['other'] }], registry.noCompletedRuns, 'o/r', T0);
+        assert.deepEqual(noHolder.holders, [], 'prNumber-shaped item WITHOUT the label does not confirm');
+    });
 });
 
 suite('mutexRegistry conclusionMapping — CANCELLED carries no verdict (I3, gh-755 parity)', function () {

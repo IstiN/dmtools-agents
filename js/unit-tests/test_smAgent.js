@@ -10108,6 +10108,178 @@ suite('smAgent: rerun_cancelled_checks ANY mode (gh-755)', function () {
         assert.equal(sm.capturedPrComments.length, 0, 'no duplicate marker');
     });
 });
+
+suite('smAgent: ghost-cancel re-dispatch (gh-1000 AC3 — IT-2)', function () {
+    // The rework review thread pinned the AC3 wiring as untested: nothing
+    // drove a cancelled-pre-materialization run through rerun_cancelled_checks
+    // (that is exactly how the BLOCKING provider.githubApi guard rotted).
+    // These tests drive the full ghost branch through the production-shaped
+    // rule: newest dispatched run concluded CANCELLED before its check runs
+    // materialized -> NO contexts on the head -> the merge gate waits on a
+    // required context that will never re-report (live gh-757).
+    var GHOST_HEAD = '757abc9';
+    var GHOST_MARKER = '🔁 Ghost-cancelled validation re-dispatched';
+
+    var RULE_GHOST = {
+        description: 'ghost-cancelled validation -> re-dispatch fresh CI',
+        source: 'github',
+        query: { type: 'pr', labels: ['ai_validating'], draft: false },
+        localAction: 'rerun_cancelled_checks',
+        requiredContexts: ['crap'],
+        limit: 1,
+        id: 'rerun-ghost-cancel'
+    };
+
+    function ghostItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['ai_validating'], issueNumber: null,
+                   prNumber: n, draft: false, branch: 'ai/gh-757',
+                   pr: { headSha: GHOST_HEAD } };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    // The gh-757 shape: the run died CANCELLED before materializing — its
+    // updated_at is hours old (outside the gh-755 fresh-cancel grace), and
+    // the head carries NO check runs at all.
+    function ghostRuns(updatedAt) {
+        return [{ id: 777001, status: 'completed', conclusion: 'cancelled',
+                  head_sha: GHOST_HEAD, run_attempt: 1,
+                  created_at: '2026-10-17T18:00:00Z',
+                  updated_at: updatedAt || '2026-10-17T18:00:02Z' }];
+    }
+
+    function cliGhost(opts) {
+        return function (cmdOpts) {
+            var c = cmdOpts.command;
+            if (c.indexOf('runs?head_sha=') !== -1) {
+                return JSON.stringify({ workflow_runs: opts.headRuns || [] });
+            }
+            return '';
+        };
+    }
+
+    function paramsGhost(overrides) {
+        var p = { jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            rules: [RULE_GHOST] } };
+        return Object.assign(p, overrides || {});
+    }
+
+    function smGhost(opts) {
+        opts = opts || {};
+        return makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [ghostItem(757)],
+                // NO check runs materialized on the head — the gate waits
+                // on a missing required context (ghostGateHeld).
+                commitCheckRuns: { check_runs: [] },
+                prComments: opts.prComments || []
+            },
+            onCliExecute: cliGhost({ headRuns: opts.headRuns !== undefined ? opts.headRuns : ghostRuns() })
+        });
+    }
+
+    test('IT-2: ghost cancel + gate held by a missing required context -> gh workflow run + marker (AC3)', function () {
+        var sm = smGhost();
+
+        sm.action(paramsGhost());
+
+        var dispatches = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        });
+        assert.equal(dispatches.length, 1, 'fresh CI re-dispatched on the same head');
+        assert.equal(dispatches[0].command,
+            'gh workflow run quality.yml --repo IstiN/flutter_agent_harness --ref \'ai/gh-757\'',
+            'the --ref value is single-quoted (guest-controlled branch, rework thread)');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh run rerun') === 0;
+        }).length, 0, 'a cancelled-PRE-materialization run has no run to rerun — a fresh dispatch instead');
+        assert.equal(sm.capturedPrComments.length, 1, 'once-per-head marker posted');
+        var body = sm.capturedPrComments[0].body;
+        assert.ok(body.indexOf(GHOST_MARKER) !== -1, 'stable marker prefix (per-head dedup key)');
+        assert.ok(body.indexOf(GHOST_HEAD) !== -1, 'marker carries the head sha');
+        assert.ok(body.indexOf('777001') !== -1, 'marker cites the dead run');
+    });
+
+    test('IT-2 gh-748 dedupe + E3 flap: marker on this head -> no second dispatch, ONE escalating flap alarm, then quiet', function () {
+        var liveComments = [{ body: GHOST_MARKER + ': head `' + GHOST_HEAD + '` remedied' }];
+        var sm = smGhost({ prComments: liveComments });
+
+        sm.action(paramsGhost());
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        }).length, 0, 'marker on this head -> one-shot re-dispatch never repeats');
+        assert.equal(sm.capturedPrComments.length, 1, 'the re-wedge is not silent: one flap alarm comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Ghost-cancel flap') !== -1, 'flap marker');
+        assert.ok(sm.capturedPrComments[0].body.indexOf(GHOST_HEAD) !== -1, 'flap alarm keyed to the head');
+
+        // The posted alarm persists (production shape): the next tick must
+        // NOT spam another one for the same flap level.
+        liveComments.push({ body: sm.capturedPrComments[0].body });
+        sm.capturedPrComments.length = 0;
+        sm.action(paramsGhost());
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        }).length, 0, 'still one-shot');
+        assert.equal(sm.capturedPrComments.length, 0, 'no flap-comment spam on the next tick');
+    });
+
+    test('guest-controlled branch with shell metacharacters/quote -> --ref fully quoted and escaped', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [ghostItem(757, { branch: 'ai/g\'h-757;touch /tmp/pwn' })],
+                commitCheckRuns: { check_runs: [] },
+                prComments: []
+            },
+            onCliExecute: cliGhost({ headRuns: ghostRuns() })
+        });
+
+        sm.action(paramsGhost());
+
+        var dispatches = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        });
+        assert.equal(dispatches.length, 1);
+        assert.equal(dispatches[0].command,
+            'gh workflow run quality.yml --repo IstiN/flutter_agent_harness ' +
+            '--ref \'ai/g\'\\\'\'h-757;touch /tmp/pwn\'',
+            'embedded quote escaped, metacharacters inside single quotes');
+    });
+
+    test('fresh cancel still inside the gh-755 visibility grace -> probe stays quiet (no dispatch churn)', function () {
+        var fresh = new Date(Date.now() - 60 * 1000).toISOString();
+        var sm = smGhost({ headRuns: ghostRuns(fresh) });
+
+        sm.action(paramsGhost());
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        }).length, 0, 'a 1-minute-old cancel may still materialize — wait');
+        assert.equal(sm.capturedPrComments.length, 0, 'no marker inside the grace');
+    });
+
+    test('all-terminal required contexts (green) -> the ghost gate is NOT held, no dispatch (fail_validation owns red)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [ghostItem(757)],
+                commitCheckRuns: { check_runs: [
+                    { name: 'crap', conclusion: 'success', status: 'completed' }
+                ] },
+                prComments: []
+            },
+            onCliExecute: cliGhost({ headRuns: ghostRuns() })
+        });
+
+        sm.action(paramsGhost());
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        }).length, 0, 'green terminal contexts mean the gate is not blocked-by-absence');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment');
+    });
+});
 suite('smAgent: cancelled-only red is no-verdict — fail path skips (gh-755)', function () {
     // gh-755 ask 2: fail-validation / rework armers must treat a
     // cancelled-only rollup as NO verdict (skip, wait for the rerun) —

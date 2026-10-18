@@ -69,7 +69,13 @@ function labelHoldersOf(liveItems) {
     var out = [];
     (liveItems || []).forEach(function (it) {
         var labels = (it && it.labels) || [];
-        if (labels.indexOf('ai_validating') !== -1) out.push(it.number);
+        if (labels.indexOf('ai_validating') !== -1) {
+            // Tolerant of both payload shapes: the github_list_prs carrier
+            // uses `number`, the githubSource query items use `prNumber` —
+            // a strict `it.number` read silently emptied the cached leg in
+            // production (pinned by the IT-1 rework tests).
+            out.push(it.number !== undefined ? it.number : it.prNumber);
+        }
     });
     return out;
 }

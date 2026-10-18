@@ -761,15 +761,18 @@ function rederiveHoldersLive(holders, items, provider, repoInfo, q) {
     var liveItems = livePrItems(provider, repoInfo);
     if (!liveItems) return holders;
     var repoName = repoInfo.owner + '/' + repoInfo.repo;
+    // The cached leg in NUMBER shape (matches the live leg) — `holders`
+    // here is the query's item-object array, not numbers.
+    var cachedHolders = mutexHoldersOf(items, q);
     var liveHolderSet = mutexRegistryModule.derive(
         mutexHoldersOf(liveItems, q), liveItems,
         mutexRegistryModule.noCompletedRuns, repoName, nowIso());
     var cachedSet = mutexRegistryModule.derive(
-        holders, items, mutexRegistryModule.noCompletedRuns, repoName, nowIso());
+        cachedHolders, items, mutexRegistryModule.noCompletedRuns, repoName, nowIso());
     var divergent = mutexRegistryModule.reconcile(cachedSet, liveHolderSet);
     if (divergent.selfHealed) {
         dropOpenPrsCache(repoInfo);
-        logPhantomHeal(divergent.alarm, holders, liveHolderSet.holders);
+        logPhantomHeal(divergent.alarm, cachedHolders, liveHolderSet.holders);
         recordMutexTickEvent({
             mutexSelfHeals: 1,
             phantomHolderTicks: 1,
