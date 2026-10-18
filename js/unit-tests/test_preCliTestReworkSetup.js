@@ -793,7 +793,36 @@ suite('preCliTestReworkSetup — extracted helpers (gh-1042)', function() {
         assert.equal(title, 'PROJ-12 Fix flaky login test');
         var nullTracker = makeTrackerMock();
         nullTracker.getIssue = function() { return null; };
-        assert.equal(ctx.module.buildPrTitle(REWORK_SETUP_CONFIG, nullTracker, 'PROJ-12'), 'PROJ-12');
+        assert.equal(ctx.module.buildPrTitle(REWORK_SETUP_CONFIG, nullTracker, 'PROJ-12'), 'PROJ-12 PROJ-12',
+            'a null ticket falls back to the bare key as its own summary');
+    });
+
+});
+
+suite('preCliTestReworkSetup — error-reporting helpers (gh-1042)', function() {
+
+    test('parseErrorTicketKey: direct, jobParams, and absent folders', function() {
+        var mod = loadPreCliTestReworkSetup().module;
+        assert.equal(mod.parseErrorTicketKey({ inputFolderPath: 'input/PROJ-12' }), 'PROJ-12');
+        assert.equal(mod.parseErrorTicketKey({ jobParams: { inputFolderPath: 'input/PROJ-12' } }), 'PROJ-12');
+        assert.equal(mod.parseErrorTicketKey({}), '', 'no folder anywhere → empty key → no comment');
+    });
+
+    test('createErrorTracker: keeps the action tracker, falls back to the factory', function() {
+        var mod = loadPreCliTestReworkSetup().module;
+        var actionTracker = makeTrackerMock();
+        assert.equal(mod.createErrorTracker({}, actionTracker), actionTracker, 'existing tracker wins');
+        var fallback = mod.createErrorTracker({}, null);
+        assert.ok(fallback.postComment, 'the factory tracker exposes postComment');
+    });
+
+    test('reportActionError: posts the wiki error comment and returns the failure shape', function() {
+        var ctx = loadPreCliTestReworkSetup({ tracker: null });
+        var result = ctx.module.reportActionError({ inputFolderPath: 'input/PROJ-12' }, ctx.tracker, new Error('kaboom'));
+        assert.deepEqual(result, { success: false, error: 'Error: kaboom' });
+        assert.equal(ctx.tracker.calls.postComment.length, 1);
+        assert.contains(ctx.tracker.calls.postComment[0].body, 'h3. ❌ Test Rework Setup Error');
+        assert.contains(ctx.tracker.calls.postComment[0].body, '{code}Error: kaboom{code}');
     });
 
 });

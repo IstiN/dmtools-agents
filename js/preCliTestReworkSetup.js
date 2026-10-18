@@ -235,13 +235,24 @@ function postReworkStartedComment(tracker, ticketKey, prDetails, branchName, con
     }
 }
 
+/** Ticket key for the outer-catch error comment — '' when no folder is known. */
+function parseErrorTicketKey(params) {
+    return (params.inputFolderPath ||
+        (params.jobParams && params.jobParams.inputFolderPath) || '').split('/').pop();
+}
+
+/** The tracker for the error comment: the action's own, or a fallback factory. */
+function createErrorTracker(params, tracker) {
+    if (tracker) return tracker;
+    return trackersModule.createTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+}
+
 /** Outer-catch reporter: best-effort error comment via a fallback tracker. */
 function reportActionError(params, tracker, error) {
     console.error('❌ Error in preCliTestReworkSetup:', error);
     try {
-        if (!tracker) tracker = trackersModule.createTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
-        const ticketKey = (params.inputFolderPath ||
-            (params.jobParams && params.jobParams.inputFolderPath) || '').split('/').pop();
+        tracker = createErrorTracker(params, tracker);
+        const ticketKey = parseErrorTicketKey(params);
         if (ticketKey) {
             tracker.postComment(ticketKey, 'h3. ❌ Test Rework Setup Error\n\n{code}' + error.toString() + '{code}');
         }
@@ -373,6 +384,8 @@ if (typeof module !== 'undefined' && module.exports) {
         checkoutPrBranchOrFail,
         fetchExtras,
         postReworkStartedComment,
+        parseErrorTicketKey,
+        createErrorTracker,
         reportActionError
     };
 }

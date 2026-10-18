@@ -1097,3 +1097,113 @@ suite('preCliDevelopmentSetup.action — branch-coverage characterization (gh-10
     });
 
 });
+
+suite('preCliDevelopmentSetup — extracted helpers (gh-1042)', function() {
+
+    // Direct tests for the parse*/build*/decide* helpers extracted from
+    // action() — pins their contracts so action()'s CRAP stays low with
+    // full coverage on the helpers.
+
+    function loadHelpersOnly(globals) {
+        return loadPreCliDevelopmentSetup({
+            loadProjectConfig: function () { return makeConfig(); },
+            paramsForConfigLoad: function (p) { return p; }
+        }, globals || {});
+    }
+
+    test('parseActualParams: direct params vs jobParams vs bare params', function() {
+        var mod = loadHelpersOnly();
+        var direct = { inputFolderPath: 'input/PROJ-1' };
+        assert.equal(mod.parseActualParams(direct), direct);
+        var wrapped = { jobParams: { inputFolderPath: 'input/PROJ-1' } };
+        assert.equal(mod.parseActualParams(wrapped), wrapped.jobParams);
+        var bare = { customParams: {} };
+        assert.equal(mod.parseActualParams(bare), bare);
+    });
+
+    test('parseCustomParams: jobParams wins over actualParams', function() {
+        var mod = loadHelpersOnly();
+        assert.deepEqual(mod.parseCustomParams({ jobParams: { customParams: { a: 1 } } }, { customParams: { b: 2 } }), { a: 1 });
+        assert.deepEqual(mod.parseCustomParams({}, { customParams: { b: 2 } }), { b: 2 });
+        assert.equal(mod.parseCustomParams({}, {}), undefined,
+            'no customParams anywhere stays undefined (tracker factory tolerates it)');
+    });
+
+    test('parseTicketKeyOf: folder basename', function() {
+        var mod = loadHelpersOnly();
+        assert.equal(mod.parseTicketKeyOf('input/PROJ-1'), 'PROJ-1');
+        assert.equal(mod.parseTicketKeyOf('input/gh-1042'), 'gh-1042');
+    });
+
+    test('decideErrorMessage: Error objects and plain values', function() {
+        var mod = loadHelpersOnly();
+        assert.equal(mod.decideErrorMessage(new Error('boom')), 'Error: boom');
+        assert.equal(mod.decideErrorMessage('plain'), 'plain');
+        assert.equal(mod.decideErrorMessage(null), 'null');
+    });
+
+    test('checkoutBranchOrReport: failure posts the Git Branch Setup comment and rethrows', function() {
+        var comments = [];
+        var posted = [];
+        var mod = loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRequire({
+                './configLoader.js': {
+                    loadProjectConfig: function () { return makeConfig(); },
+                    paramsForConfigLoad: function (p) { return p; }
+                },
+                './common/pullRequest.js': PR_HELPER_REAL,
+                './config.js': NOOP_CONFIG_JS,
+                './fetchQuestionsToInput.js': NOOP_MODULE,
+                './fetchLinkedTestsToInput.js': NOOP_MODULE,
+                './fetchParentContextToInput.js': NOOP_MODULE,
+                './restoreFromReleases.js': NOOP_MODULE,
+                './common/setupCommands.js': devSetupCommandsReal,
+                './common/commentMarkup.js': devCommentMarkupModule,
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
+                './common/trackers.js': {
+                    createTracker: function () {
+                        return {
+                            provider: function () { return 'stub'; },
+                            postComment: function (ticketKey, text) { posted.push({ key: ticketKey, text: text }); }
+                        };
+                    }
+                }
+            }),
+            {
+                cli_execute_command: function (opts) {
+                    if (opts.command === 'git branch --list "ai/PROJ-9"') { throw new Error('git exploded'); }
+                    return '';
+                }
+            }
+        );
+
+        // configLoader stub without resolveBranchName → checkoutBranch throws.
+        var threw = null;
+        try {
+            mod.checkoutBranchOrReport(makeConfig(), {}, 'PROJ-9', { inputFolderPath: 'input/PROJ-9' }, {});
+        } catch (e) {
+            threw = e;
+        }
+
+        assert.ok(threw, 'checkout failure must rethrow');
+        assert.contains(threw.toString(), 'Git branch setup failed');
+        assert.equal(posted.length, 1, 'the setup error comment went through the probed tracker');
+        assert.equal(posted[0].key, 'PROJ-9');
+        assert.contains(posted[0].text, 'Git Branch Setup');
+    });
+
+    test('moveTicketToInDevelopment: tracker failure is a warning only', function() {
+        var mod = loadHelpersOnly();
+        // tracker factory (real trackers module, no provider configured) throws
+        // on unknown provider — the step must swallow it.
+        var threw = null;
+        try {
+            mod.moveTicketToInDevelopment({}, null, 'PROJ-1', { IN_DEVELOPMENT: 'In Development' });
+        } catch (e) {
+            threw = e;
+        }
+        assert.equal(threw, null, 'a failing status move must not propagate');
+    });
+
+});
