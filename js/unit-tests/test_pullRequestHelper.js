@@ -482,6 +482,279 @@ suite('pullRequest helper > Closes line (gh-737)', function() {
 
 });
 
+// ── gh-1041: createPullRequest branch characterization (CRAP split) ──────────
+// Pins every remaining branch of the PR-creation seam before the function is
+// split into pure build/decide helpers: missing branchName, the SCM-provider
+// path (success / failure result / no result / already-exists error / other
+// error) and the gh-cli path (existing-PR lookup failure, create failure with
+// and without a recoverable existing PR, temp-body cleanup on every outcome).
+
+suite('pullRequest helper > createPullRequest branches (gh-1041)', function() {
+
+    test('requires branchName before either creation path runs', function() {
+        var cliCalls = 0;
+        var pr = loadPullRequestHelper({
+            cli_execute_command: function() { cliCalls++; return ''; }
+        });
+
+        var result = pr.createPullRequest({
+            title: 'x',
+            scm: null
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'branchName is required');
+        assert.equal(cliCalls, 0, 'no creation path may run without a branch');
+    });
+
+    test('SCM-provider path returns a failure result as-is', function() {
+        var pr = loadPullRequestHelper();
+        var failure = { success: false, error: 'validation failed' };
+
+        var result = pr.createPullRequest({
+            title: 'x',
+            branchName: 'feature/DMC-10',
+            scm: { createPr: function() { return failure; } }
+        });
+
+        assert.deepEqual(result, failure);
+    });
+
+    test('SCM-provider path synthesizes an error when createPr returns nothing', function() {
+        var pr = loadPullRequestHelper();
+
+        var result = pr.createPullRequest({
+            title: 'x',
+            branchName: 'feature/DMC-10',
+            scm: { createPr: function() { return null; } }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'SCM provider returned no result from createPr');
+    });
+
+    test('SCM-provider path reports an already-existing PR/MR as a warning, not a success', function() {
+        var pr = loadPullRequestHelper();
+
+        var result = pr.createPullRequest({
+            title: 'x',
+            branchName: 'feature/DMC-10',
+            scm: {
+                createPr: function() { throw new Error('A pull request already exists for this branch'); }
+            }
+        });
+
+        assert.equal(result.success, false, 'provider-side already-exists is surfaced as a failure for the caller to retry-idempotently');
+        assert.contains(result.error, 'already exists');
+    });
+
+    test('SCM-provider path surfaces any other provider error', function() {
+        var pr = loadPullRequestHelper();
+
+        var result = pr.createPullRequest({
+            title: 'x',
+            branchName: 'feature/DMC-10',
+            scm: { createPr: function() { throw new Error('boom'); } }
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'boom');
+    });
+
+    test('SCM-provider path reads the body from the first readable candidate file', function() {
+        var pr = loadPullRequestHelper({
+            file_read: function() { return 'response body'; }
+        });
+        var captured = null;
+
+        var result = pr.createPullRequest({
+            title: 'x',
+            branchName: 'feature/DMC-10',
+            scm: {
+                createPr: function(options) {
+                    captured = options;
+                    return { success: true, prUrl: 'https://gitlab.example.com/org/repo/merge_requests/10' };
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(captured.body, 'response body', 'body resolved from the default candidate file');
+    });
+
+    test('SCM-provider path falls back to the default body when no candidate file reads', function() {
+        var pr = loadPullRequestHelper();
+        var captured = null;
+
+        pr.createPullRequest({
+            title: 'x',
+            branchName: 'feature/DMC-10',
+            defaultBody: 'fallback body',
+            scm: {
+                createPr: function(options) {
+                    captured = options;
+                    return { success: true, prUrl: 'u' };
+                }
+            }
+        });
+
+        assert.equal(captured.body, 'fallback body');
+    });
+
+    test('gh path tolerates a failing existing-PR lookup and creates anyway', function() {
+        var commands = [];
+        var pr = loadPullRequestHelper({
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command.indexOf('gh pr list --head feature/DMC-11') === 0) {
+                    throw new Error('gh not authenticated');
+                }
+                if (args.command.indexOf('gh pr create') === 0) return 'https://github.com/org/repo/pull/11';
+                return '';
+            }
+        });
+
+        var result = pr.createPullRequest({
+            title: 'DMC-11 Example',
+            branchName: 'feature/DMC-11',
+            baseBranch: 'main',
+            bodyContent: 'body'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, 'https://github.com/org/repo/pull/11');
+        assert.ok(commands.some(function(c) { return c.indexOf('gh pr create') === 0; }), 'create still runs after lookup failure');
+    });
+
+    test('gh path recovers the existing PR URL when create reports already-exists', function() {
+        var pr = loadPullRequestHelper();
+        var listCalls = 0;
+
+        var result = pr.createPullRequest({
+            title: 'DMC-12 Example',
+            branchName: 'feature/DMC-12',
+            baseBranch: 'main',
+            bodyContent: 'body',
+            runCommand: function(command) {
+                if (command.indexOf('gh pr list --head feature/DMC-12') === 0) {
+                    listCalls++;
+                    // first call (pre-check) empty; second call (recovery) returns the URL
+                    return listCalls > 1 ? 'https://github.com/org/repo/pull/12' : '';
+                }
+                if (command.indexOf('gh pr create') === 0) {
+                    throw new Error('a pull request for branch feature/DMC-12 already exists');
+                }
+                return '';
+            },
+            writeFile: function() {},
+            deleteFile: function() {}
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.alreadyExisted, true);
+        assert.equal(result.prUrl, 'https://github.com/org/repo/pull/12');
+    });
+
+    test('gh path returns the create error when no existing PR can be recovered', function() {
+        var deleted = [];
+        var pr = loadPullRequestHelper();
+
+        var result = pr.createPullRequest({
+            title: 'DMC-13 Example',
+            branchName: 'feature/DMC-13',
+            baseBranch: 'main',
+            workingDir: 'repo',
+            bodyContent: 'body',
+            runCommand: function(command) {
+                if (command.indexOf('gh pr list') === 0) return '';
+                if (command.indexOf('gh pr create') === 0) {
+                    throw new Error('a pull request for branch feature/DMC-13 already exists');
+                }
+                return '';
+            },
+            writeFile: function() {},
+            deleteFile: function(path) { deleted.push(path); }
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'already exists');
+        assert.deepEqual(deleted, ['repo/pr_body_tmp.md'], 'temp body file cleaned up on failure');
+    });
+
+    test('gh path returns an unrelated create error and still cleans the temp body file', function() {
+        var deleted = [];
+        var pr = loadPullRequestHelper();
+
+        var result = pr.createPullRequest({
+            title: 'DMC-14 Example',
+            branchName: 'feature/DMC-14',
+            baseBranch: 'main',
+            workingDir: 'repo/',
+            bodyContent: 'body',
+            runCommand: function(command) {
+                if (command.indexOf('gh pr list') === 0) return '';
+                if (command.indexOf('gh pr create') === 0) throw new Error('HTTP 500');
+                return '';
+            },
+            writeFile: function() {},
+            deleteFile: function(path) { deleted.push(path); }
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'HTTP 500');
+        assert.deepEqual(deleted, ['repo/pr_body_tmp.md'], 'trailing slash on workingDir must not double the path separator');
+    });
+
+    test('gh path deletes the temp body file after a successful create', function() {
+        var deleted = [];
+        var pr = loadPullRequestHelper();
+
+        var result = pr.createPullRequest({
+            title: 'DMC-15 Example',
+            branchName: 'feature/DMC-15',
+            baseBranch: 'main',
+            workingDir: 'repo',
+            bodyContent: 'body',
+            runCommand: function(command) {
+                if (command.indexOf('gh pr list') === 0) return '';
+                if (command.indexOf('gh pr create') === 0) return 'https://github.com/org/repo/pull/15';
+                return '';
+            },
+            writeFile: function() {},
+            deleteFile: function(path) { deleted.push(path); }
+        });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(deleted, ['repo/pr_body_tmp.md']);
+    });
+
+    test('gh path writes the body to a caller-provided temp file name', function() {
+        var writes = [];
+        var pr = loadPullRequestHelper();
+
+        pr.createPullRequest({
+            title: 'DMC-16 Example',
+            branchName: 'feature/DMC-16',
+            baseBranch: 'main',
+            workingDir: 'repo',
+            tempBodyFile: 'custom_body.md',
+            bodyContent: 'body',
+            runCommand: function(command) {
+                if (command.indexOf('gh pr list') === 0) return '';
+                if (command.indexOf('--body-file "custom_body.md"') !== -1) {
+                    return 'https://github.com/org/repo/pull/16';
+                }
+                return '';
+            },
+            writeFile: function(path, content) { writes.push({ path: path, content: content }); },
+            deleteFile: function() {}
+        });
+
+        assert.deepEqual(writes, [{ path: 'repo/custom_body.md', content: 'body' }]);
+    });
+
+});
+
 // ── gh-912: strict ls-remote ref-line parsing ────────────────────────────────
 // The JS bridge hands scripts stdout+stderr merged, so a `warning: redirecting
 // to …` line (git ≥ 2.54 against a redirecting server) survives output

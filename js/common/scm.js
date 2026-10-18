@@ -1469,6 +1469,8 @@ function createScm(config) {
 
 module.exports = {
     createScm: createScm,
+    // gh-1041: exposed as a testable helper (file_read bridge form tolerance)
+    _readFileMaybe: _readFileMaybe,
     _createGithubProvider: _createGithubProvider,
     _createGitLabProvider: _createGitLabProvider,
     _createAdoProvider: _createAdoProvider,

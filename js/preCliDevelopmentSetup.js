@@ -515,53 +515,167 @@ function postSetupErrorComment(config, customParams, ticketKey, stage, errorMess
     }
 }
 
+// ── gh-1042: helpers extracted from action() ────────────────────────────────
+// Same tracker/SCM/git/file calls in the same order; the pure parse/build/
+// decide helpers are exported for direct unit testing. Mirrors the
+// preCliReworkSetup.js extraction pattern (gh-1002).
+
+/**
+ * params resolution: Teammate workflow (inputFolderPath on params) vs
+ * standalone dmtools execution (JSRunner: params.jobParams.inputFolderPath).
+ */
+function parseActualParams(params) {
+    return params.inputFolderPath ? params : (params.jobParams || params);
+}
+
+/**
+ * customParams resolution — params.jobParams.customParams wins over
+ * actualParams.customParams (jobParams path is the real Teammate execution).
+ */
+function parseCustomParams(params, actualParams) {
+    return (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+}
+
+/** 'input/PROJ-1' → 'PROJ-1' (the ticket key is the input folder's basename). */
+function parseTicketKeyOf(folder) {
+    return folder.split('/').pop();
+}
+
+/** String form of an arbitrary thrown value (Error or plain value). */
+function decideErrorMessage(e) {
+    return e && e.toString ? e.toString() : String(e);
+}
+
+/** Restore configured artefacts (e.g. cosmo test reports) from GitHub Release — non-fatal. */
+function runRestoreFromReleasesStep(params) {
+    try { restoreFromReleases.action(params); } catch (e) { console.warn('⚠️ restoreFromReleases failed (non-fatal):', e); }
+}
+
+/** Move ticket to In Development — a tracker failure is a warning only. */
+function moveTicketToInDevelopment(config, customParams, ticketKey, statuses) {
+    try {
+        trackersModule.createTracker(config, customParams || {}).moveToStatus(ticketKey, statuses.IN_DEVELOPMENT);
+        console.log('Moved ' + ticketKey + ' to ' + statuses.IN_DEVELOPMENT);
+    } catch (e) {
+        console.warn('Failed to move ticket to ' + statuses.IN_DEVELOPMENT + ':', e);
+    }
+}
+
+/** gh-716 label assertion step (agent:dev ON, stale labels cleared) — non-fatal. */
+function runDevTransitionAssertion(ticketKey, config, customParams) {
+    try {
+        assertDevLegTransition(ticketKey, config, customParams);
+    } catch (e) {
+        console.warn('Failed to assert dev transition labels (non-fatal):', e);
+    }
+}
+
+/**
+ * Checkout or create the dev branch (step 2). On failure posts the setup
+ * error comment (Git Branch Setup) and rethrows — the leg cannot start
+ * without a prepared branch.
+ */
+function checkoutBranchOrReport(config, customParams, ticketKey, actualParams, params) {
+    try {
+        var ticket = params.ticket || actualParams.ticket || { key: ticketKey, fields: {} };
+        checkoutBranch(ticketKey, config, ticket, customParams);
+    } catch (e) {
+        var branchError = decideErrorMessage(e);
+        console.error('Branch checkout failed:', branchError);
+        postSetupErrorComment(config, customParams, ticketKey, 'Git Branch Setup', branchError);
+        throw new Error('Git branch setup failed: ' + branchError);
+    }
+}
+
+/** gh-1164 existing-remote-work report step — non-fatal. */
+function runExistingWorkReportStep(ticketKey, config, actualParams, params, folder) {
+    try {
+        var ticketForReport = params.ticket || actualParams.ticket || { key: ticketKey, fields: {} };
+        reportExistingDevBranch(ticketKey, config, ticketForReport, folder);
+    } catch (e) {
+        console.warn('reportExistingDevBranch failed (non-fatal):', e);
+    }
+}
+
+/** Write setup_warnings.md (best-effort — an unwritable file must not fail the leg). */
+function writeSetupWarningsFile(folder, setupWarnings) {
+    try {
+        file_write({ path: folder + '/setup_warnings.md', content: setupWarnings });
+        console.log('⚠️ Wrote setup_warnings.md (non-fatal setup command failure(s))');
+    } catch (writeErr) {
+        console.warn('Failed to write setup_warnings.md:', writeErr);
+    }
+}
+
+/**
+ * Project-specific prerequisite/setup commands (step 3.5, e.g. install
+ * JDK/Maven, verify build credentials). On failure posts the setup error
+ * comment (Environment Setup) and rethrows — the leg cannot code without the
+ * environment.
+ */
+function runSetupCommandsStep(customParams, config, folder, ticketKey) {
+    try {
+        var setupResult = setupCommands.runSetupCommands(customParams, config.workingDir);
+        var setupWarnings = setupCommands.buildSetupWarningsMarkdown(setupResult);
+        if (setupWarnings) {
+            writeSetupWarningsFile(folder, setupWarnings);
+        }
+    } catch (e) {
+        var setupError = decideErrorMessage(e);
+        console.error('Setup commands failed:', setupError);
+        postSetupErrorComment(config, customParams, ticketKey, 'Environment Setup', setupError);
+        throw new Error('Environment setup failed: ' + setupError);
+    }
+}
+
+/** Fetch linked test cases (step 4) — non-fatal extra context. */
+function runFetchLinkedTestsStep(actualParams) {
+    try {
+        fetchLinkedTestsToInput.action(actualParams);
+    } catch (e) {
+        console.warn('fetchLinkedTestsToInput failed (non-fatal):', e);
+    }
+}
+
+/** Fetch [BA]/[SA]/[VD] parent context (step 5) — non-fatal extra context. */
+function runFetchParentContextStep(actualParams) {
+    try {
+        fetchParentContextToInput.action(actualParams);
+    } catch (e) {
+        console.warn('fetchParentContextToInput failed (non-fatal):', e);
+    }
+}
+
 function action(params) {
     try {
         // Handle both Teammate workflow and standalone dmtools execution
         // - Teammate workflow: params.inputFolderPath exists directly
         // - Standalone dmtools (JSRunner): params.jobParams.inputFolderPath
-        var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
+        var actualParams = parseActualParams(params);
         // paramsForConfigLoad re-attaches params.ticket (sibling of jobParams in the
         // real Teammate execution path) so baseBranchResolverFnPath/snapshotBranchResolverFnPath
         // can key off the ticket's fixVersion — see configLoader.js for details.
         var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
-        var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+        var customParams = parseCustomParams(params, actualParams);
         var statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
 
         // Restore configured artefacts (e.g. cosmo test reports) from GitHub Release — non-fatal
-        try { restoreFromReleases.action(params); } catch (e) { console.warn('⚠️ restoreFromReleases failed (non-fatal):', e); }
+        runRestoreFromReleasesStep(params);
 
         var folder = actualParams.inputFolderPath;
-        var ticketKey = folder.split('/').pop();
+        var ticketKey = parseTicketKeyOf(folder);
 
         // 1. Move ticket to In Development
-        try {
-            trackersModule.createTracker(config, customParams || {}).moveToStatus(ticketKey, statuses.IN_DEVELOPMENT);
-            console.log('Moved ' + ticketKey + ' to ' + statuses.IN_DEVELOPMENT);
-        } catch (e) {
-            console.warn('Failed to move ticket to ' + statuses.IN_DEVELOPMENT + ':', e);
-        }
+        moveTicketToInDevelopment(config, customParams, ticketKey, statuses);
 
         // 1.5. Assert the dev-leg transition labels (gh-716): agent:dev ON,
         // stale agent:review / ai_developed cleared — so ANY dispatch path
         // (SM-armed or manual) shows the card on the factory board's
         // Development lane. GitHub deployments only; non-fatal.
-        try {
-            assertDevLegTransition(ticketKey, config, customParams);
-        } catch (e) {
-            console.warn('Failed to assert dev transition labels (non-fatal):', e);
-        }
+        runDevTransitionAssertion(ticketKey, config, customParams);
 
         // 2. Checkout or create feature branch
-        try {
-            var ticket = params.ticket || actualParams.ticket || { key: ticketKey, fields: {} };
-            checkoutBranch(ticketKey, config, ticket, customParams);
-        } catch (e) {
-            var branchError = e && e.toString ? e.toString() : String(e);
-            console.error('Branch checkout failed:', branchError);
-            postSetupErrorComment(config, customParams, ticketKey, 'Git Branch Setup', branchError);
-            throw new Error('Git branch setup failed: ' + branchError);
-        }
+        checkoutBranchOrReport(config, customParams, ticketKey, actualParams, params);
 
         // Persist the resolved base branch to outputs/pr_base_branch.txt so that
         // quality-gate shell commands (static strings in the job's JSON config, unable
@@ -579,50 +693,21 @@ function action(params) {
         // a resumed leg must see previous rounds' commits instead of mistaking the
         // base branch tip for its own work. Cheap: one ls-remote (+ one log/diff when
         // the branch exists); never fatal.
-        try {
-            var ticketForReport = params.ticket || actualParams.ticket || { key: ticketKey, fields: {} };
-            reportExistingDevBranch(ticketKey, config, ticketForReport, folder);
-        } catch (e) {
-            console.warn('reportExistingDevBranch failed (non-fatal):', e);
-        }
+        runExistingWorkReportStep(ticketKey, config, actualParams, params, folder);
 
         // 3. Fetch questions with answers into input folder
         fetchQuestionsToInput.action(actualParams);
 
         // 3.5. Run project-specific prerequisite/setup commands (e.g. install JDK/Maven,
         // verify build credentials) before the CLI agent starts coding.
-        try {
-            var setupResult = setupCommands.runSetupCommands(customParams, config.workingDir);
-            var setupWarnings = setupCommands.buildSetupWarningsMarkdown(setupResult);
-            if (setupWarnings) {
-                try {
-                    file_write({ path: folder + '/setup_warnings.md', content: setupWarnings });
-                    console.log('⚠️ Wrote setup_warnings.md (non-fatal setup command failure(s))');
-                } catch (writeErr) {
-                    console.warn('Failed to write setup_warnings.md:', writeErr);
-                }
-            }
-        } catch (e) {
-            var setupError = e && e.toString ? e.toString() : String(e);
-            console.error('Setup commands failed:', setupError);
-            postSetupErrorComment(config, customParams, ticketKey, 'Environment Setup', setupError);
-            throw new Error('Environment setup failed: ' + setupError);
-        }
+        runSetupCommandsStep(customParams, config, folder, ticketKey);
 
         // 4. Fetch linked test cases (with failure comments) into input folder
         // Gives the bug agent context about what the test asserts and why it's failing
-        try {
-            fetchLinkedTestsToInput.action(actualParams);
-        } catch (e) {
-            console.warn('fetchLinkedTestsToInput failed (non-fatal):', e);
-        }
+        runFetchLinkedTestsStep(actualParams);
 
         // 5. Fetch [BA]/[SA]/[VD] context from parent siblings into input folder
-        try {
-            fetchParentContextToInput.action(actualParams);
-        } catch (e) {
-            console.warn('fetchParentContextToInput failed (non-fatal):', e);
-        }
+        runFetchParentContextStep(actualParams);
 
     } catch (error) {
         console.error('Error in preCliDevelopmentSetup:', error);
@@ -637,6 +722,22 @@ if (typeof module !== 'undefined' && module.exports) {
         reportExistingDevBranch,
         assertDevLegTransition,
         buildSetupErrorComment,
-        postSetupErrorComment
+        postSetupErrorComment,
+        // gh-1042: helpers extracted from action() to bring its CRAP under the
+        // quality-gate threshold — exported for direct unit testing (mirrors
+        // the preCliReworkSetup.js gh-1002 pattern).
+        parseActualParams,
+        parseCustomParams,
+        parseTicketKeyOf,
+        decideErrorMessage,
+        runRestoreFromReleasesStep,
+        moveTicketToInDevelopment,
+        runDevTransitionAssertion,
+        checkoutBranchOrReport,
+        runExistingWorkReportStep,
+        writeSetupWarningsFile,
+        runSetupCommandsStep,
+        runFetchLinkedTestsStep,
+        runFetchParentContextStep
     };
 }

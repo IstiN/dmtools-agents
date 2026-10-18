@@ -1563,7 +1563,12 @@ function buildUnaddressedThreadsFold(unaddressed, unaddressable) {
         lines.push('…and ' + (unaddressed.length - 3) + ' more:');
         lines.push('');
         unaddressed.slice(3).forEach(function(t) {
-            lines.push(threadShortLabel(t, 32));
+            // gh-1063 review follow-up (thread 6): the remainder lines carry
+            // the same bullet + <code> format as the 3 previews — the
+            // expanded full list no longer alternates between two formats.
+            // The label cap drops 32 -> 20 so the wrapper's 14 extra chars
+            // per line stay inside the AC2 ~2000-char comment budget.
+            lines.push('- <code>' + threadShortLabel(t, 20) + '</code>');
         });
     }
     if (unaddressable.length > 0) {
@@ -1612,7 +1617,8 @@ function blockedHeader(openCount, totalOpenCount, unaddressable) {
  */
 function buildBlockedReworkComment(openCount, unaddressed, unaddressable, reason, runUrl, totalOpenCount) {
     var message = blockedHeader(openCount, totalOpenCount, unaddressable) +
-        '. Threads were NOT resolved and the review labels were left as they are.';
+        '. Threads were NOT resolved; the PR is parked (`blocked` label, gh-1060) and the ' +
+        'rework/review arms are stripped from both carriers.';
     var summary = String(reason || '').trim();
     if (summary && summary !== '_(No fix summary generated)_') {
         message += '\n' + summary;
@@ -1629,19 +1635,99 @@ function buildBlockedReworkComment(openCount, unaddressed, unaddressable, reason
 }
 
 /**
+ * gh-1060 (live dart gh-395 / PR #420, 2026-10-18 18:55Z — leg run 39156398849
+ * concluded blocked, the issue sat at status:Blocked, the PR kept its
+ * agent:rework arm and every tick re-dispatched a rework leg until a human
+ * stripped the label): the BLOCKED conclusion must park the PR too. Two
+ * parallel "blocked" vocabularies existed with no bridge — the issue-side
+ * status:Blocked is read by NO SM rule, while the SM's park vocabulary is
+ * the PR-side `blocked` label (engine-level freeze: githubSource
+ * matchesGuards/_prSideBlockedLabel and queryPrs filter it for every rule).
+ * One atomic park closes the loop: label the PR `blocked` (freezes the pair
+ * for every lane) and strip the agent:rework / agent:review arms from BOTH
+ * carriers (a leftover arm would re-dispatch the moment a human unblocks).
+ * Unblocking is human-symmetric by construction (AC2): removing `blocked`
+ * from the PR — or moving the issue off status:Blocked — re-admits the pair
+ * to the standard lanes; no hidden second switch, no auto-unblock heuristic
+ * (non-goal). Every write is best-effort: a failed label write must not
+ * mask the Blocked move the caller already performed.
+ */
+/**
+ * gh-1060 CRAP split helpers (ratchet: parkBlockedPr measured CC 13 / CRAP
+ * 14.6 > CRAP_THRESHOLD — CRAP is bounded below by CC, so only splitting
+ * lowers it; same gh-957 pattern as the handleReworkBlocked area below).
+ * Each helper is best-effort: a failed label write must not mask the
+ * Blocked move the caller already performed.
+ */
+
+// Normalize a raw GitHub REST label list to plain names: the payload from
+// scm.listPrs('open') carries [{name}] objects, not strings
+// (githubSource.prLabels / prHasApproved pattern).
+function prLabelNames(pr) {
+    return (pr.labels || []).map(function(l) { return (l && l.name) || l; });
+}
+
+// Label the PR `blocked` — the SM park vocabulary (engine-level freeze in
+// githubSource matchesGuards/_prSideBlockedLabel/queryPrs).
+function labelPrBlocked(scm, pr) {
+    try {
+        scm.addLabel(pr.number, 'blocked');
+        console.log('✅ Labeled PR #' + pr.number + ' blocked (gh-1060 park — SM freeze vocabulary)');
+    } catch (e) {
+        console.warn('Failed to label PR #' + pr.number + ' blocked:', e.message || e);
+    }
+}
+
+// Strip one arm from the PR. A leftover arm would re-dispatch a leg the
+// moment a human unblocks, so strip unconditionally when the PR carries
+// labels at all (a 404 on an absent label is tolerated by the try/catch).
+function stripArmFromPr(scm, pr, arm) {
+    if (prLabelNames(pr).length === 0) return;
+    try {
+        scm.removeLabel(pr.number, arm);
+        console.log('✅ Stripped ' + arm + ' from PR #' + pr.number + ' (gh-1060 park)');
+    } catch (e) {
+        console.warn('Failed to strip ' + arm + ' from PR #' + pr.number + ':', e.message || e);
+    }
+}
+
+// Strip one arm from the issue carrier — best-effort, mirroring the PR side.
+function stripArmFromIssue(tracker, ticketKey, arm) {
+    try {
+        tracker.removeLabel(ticketKey, arm);
+        console.log('✅ Stripped ' + arm + ' from ' + ticketKey + ' (gh-1060 park)');
+    } catch (e) {
+        console.warn('Failed to strip ' + arm + ' from ' + ticketKey + ':', e.message || e);
+    }
+}
+
+function parkBlockedPr(scm, tracker, pr, ticketKey) {
+    var ARMS = ['agent:rework', 'agent:review'];
+    if (scm && pr && pr.number != null) {
+        labelPrBlocked(scm, pr);
+        ARMS.forEach(function(arm) { stripArmFromPr(scm, pr, arm); });
+    }
+    ARMS.forEach(function(arm) { stripArmFromIssue(tracker, ticketKey, arm); });
+}
+
+/**
  * agents#827 + gh-957: the rework pass produced no production change while
  * review threads are open AND reply coverage is incomplete (gh-957 tightens
  * the gate — full coverage takes the audit-resolve path instead). Posts the
  * blocked comment (gh-1061: response.md leads, thread dump folded), moves the
- * ticket to Blocked, leaves threads/labels alone, and stamps a no-op lap
- * marker (pushed 0, resolved 0) so the SM loop guard can bound consecutive
- * empty laps on this head.
+ * ticket to Blocked, parks the PR (gh-1060 — `blocked` label + arms stripped
+ * from both carriers), and stamps a no-op lap marker (pushed 0, resolved 0)
+ * so the SM loop guard can bound consecutive empty laps on this head.
+ * Review follow-up (gh-1063): the coverage snapshot arrives as ONE object —
+ * the buildReplyCoverage result — instead of four positional params, so the
+ * signature cannot grow a 12th argument on the next follow-up.
  */
-function handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, openCount, actualParams, unaddressed, unaddressable, totalOpenCount) {
-    var message = buildBlockedReworkComment(openCount, unaddressed || [], unaddressable || [],
-        fixSummary, reworkRunUrl(), totalOpenCount);
+function handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, coverage, actualParams) {
+    var openCount = coverage.openCount;
+    var message = buildBlockedReworkComment(openCount, coverage.unaddressed || [], coverage.unaddressable || [],
+        fixSummary, reworkRunUrl(), coverage.totalOpenCount);
     console.error('❌ Rework blocked (no code changes, ' + openCount + ' open addressable thread(s)' +
-        (totalOpenCount > openCount ? ', ' + totalOpenCount + ' open in total' : '') + ')');
+        (coverage.totalOpenCount > openCount ? ', ' + coverage.totalOpenCount + ' open in total' : '') + ')');
     try {
         scm.addComment(pr.number, message);
     } catch (e) {
@@ -1656,6 +1742,10 @@ function handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, 
     } catch (e) {
         console.warn('Failed to move ' + ticketKey + ' to ' + blocked + ':', e.message || e);
     }
+    // gh-1060: bridge the two blocked vocabularies — park the PR in the same
+    // breath as the Blocked move (blocked label + arms stripped, one atomic
+    // park), otherwise the armed PR loops rework legs on the blocked ticket.
+    parkBlockedPr(scm, tracker, pr, ticketKey);
     var wip = actualParams && actualParams.metadata && actualParams.metadata.contextId
         ? actualParams.metadata.contextId + '_wip' : null;
     if (wip) {
@@ -2094,11 +2184,13 @@ function runLapGate(ticketKey, config, codeChangesCommitted, actualParams, statu
             console.log('ℹ️ ' + (replyCoverage.totalOpenCount - replyCoverage.openCount) +
                 ' open thread(s) are null-id machine notices — excluded from the coverage gate denominator');
         }
+        // gh-1063 review follow-up: the whole buildReplyCoverage snapshot is
+        // passed as ONE coverage object — openCount/unaddressed/unaddressable/
+        // totalOpenCount stay together and the call site is self-documenting.
         return {
             blocked: true,
             result: handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary,
-                replyCoverage.openCount, actualParams, replyCoverage.unaddressed,
-                replyCoverage.unaddressable, replyCoverage.totalOpenCount)
+                replyCoverage, actualParams)
         };
     }
     // gh-957 audit-resolve is live when the gate above passed with zero
@@ -2339,5 +2431,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker };
+    module.exports = { action, hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked };
 }

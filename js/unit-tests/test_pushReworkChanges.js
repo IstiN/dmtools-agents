@@ -2041,6 +2041,7 @@ suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)'
     var BASE = 'b'.repeat(40);
     function run(diffOut) {
         var resolved = [], moved = [], comments = [], removed = [];
+        var prLabelsAdded = [], prLabelsRemoved = [];
         var loaded = loadPushReworkChangesForAction({
             cli_execute_command: function(a) {
                 if (a.command === 'git branch --show-current') return 'bug/PROJ-123\n';
@@ -2063,14 +2064,31 @@ suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)'
         }, { scm: {
             addComment: function(n, body) { comments.push(body); },
             resolveThread: function(n, t) { resolved.push(t); },
-            replyToThread: function() {}
+            replyToThread: function() {},
+            // gh-1060: the PR carries a rework arm when the leg concludes
+            // blocked — the park must label it blocked and strip the arms.
+            // Mock the production REST list payload shape: labels are
+            // [{name}] objects, not plain strings (githubSource.prLabels,
+            // prHasApproved and bug_done_and_test_pr_merge use the same).
+            listPrs: function() {
+                return [{
+                    number: 123,
+                    title: 'PROJ-123: rework fix',
+                    head: { ref: 'bug/PROJ-123' },
+                    html_url: 'https://github.com/IstiN/dmtools-agents/pull/123',
+                    labels: [{ name: 'agent:rework' }, { name: 'agent:review' }]
+                }];
+            },
+            addLabel: function(n, l) { prLabelsAdded.push({ number: n, label: l }); },
+            removeLabel: function(n, l) { prLabelsRemoved.push({ number: n, label: l }); }
         } });
         var result = loaded.mod.action({
             ticket: { key: 'PROJ-123', fields: { labels: [] } },
             response: 'Fix summary long enough to be a meaningful rework completion summary.',
             customParams: {}
         });
-        return { result: result, resolved: resolved, moved: moved, comments: comments, removed: removed };
+        return { result: result, resolved: resolved, moved: moved, comments: comments, removed: removed,
+            prLabelsAdded: prLabelsAdded, prLabelsRemoved: prLabelsRemoved };
     }
 
     test('open threads + no production change: BLOCKED — nothing resolved, ticket moved to Blocked, response.md posted', function() {
@@ -2081,6 +2099,31 @@ suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)'
         assert.deepEqual(r.moved.map(function(m) { return m.statusName; }), ['Blocked'], 'only the Blocked move, never In Review');
         assert.ok(r.comments.some(function(c) { return c.indexOf('blocked') !== -1 && c.indexOf('NOT resolved') !== -1; }), JSON.stringify(r.comments));
         assert.ok(r.comments.some(function(c) { return c.indexOf('Fix summary long enough') !== -1; }), 'the agent response.md is the explanation');
+    });
+
+    // gh-1060 (live dart gh-395 / PR #420, 2026-10-18): the issue-side
+    // status:Blocked is read by NO SM rule — the SM's park vocabulary is the
+    // PR-side `blocked` label (engine-level freeze in githubSource). A blocked
+    // conclusion that only moves the issue leaves the PR armed (agent:rework)
+    // and every tick re-dispatches a rework leg on the blocked ticket. The
+    // post-action must do ONE atomic park: PR labeled blocked + the
+    // agent:rework / agent:review arms stripped from BOTH carriers. With the
+    // park in place the next tick dispatches nothing for the pair (the engine
+    // filters `blocked` PRs in matchesGuards/queryPrs — AC3).
+    test('gh-1060: BLOCKED parks the PR — `blocked` label on the PR, arms stripped from PR and issue (one atomic park)', function() {
+        var r = run('');
+        assert.equal(r.result.blocked, true);
+        assert.deepEqual(r.prLabelsAdded, [{ number: 123, label: 'blocked' }],
+            'PR must carry the SM park label');
+        assert.deepEqual(r.prLabelsRemoved, [
+            { number: 123, label: 'agent:rework' },
+            { number: 123, label: 'agent:review' }
+        ], 'both arms stripped from the PR so no rule re-arms a leg');
+        var issueArms = r.removed.filter(function(a) {
+            return a.label === 'agent:rework' || a.label === 'agent:review';
+        }).map(function(a) { return a.label; });
+        assert.deepEqual(issueArms.sort(), ['agent:review', 'agent:rework'],
+            'both arms stripped from the issue carrier too');
     });
 
     test('a real production change keeps the normal flow (guard does not fire)', function() {
@@ -2124,6 +2167,22 @@ suite('pushReworkChanges.buildBlockedReworkComment — comment composition (gh-1
         assert.contains(c, 'PRRT_39', 'the full list is inside the fold');
         var beforeMore = c.substring(0, c.indexOf('…and'));
         assert.equal(beforeMore.split('- <code>').length - 1, 3, 'exactly 3 inline previews before "…and N more"');
+    });
+
+    test('review follow-up (gh-1063 thread 6): the fold remainder lines use the same bullet+<code> format as the 3 previews', function() {
+        var threads = [];
+        for (var i = 1; i <= 5; i++) {
+            threads.push(ghThread('PRRT_' + i, i, { body: 'Finding number ' + i + ' needs a fix' }));
+        }
+        var c = commentFor(threads, [], 'reason text', null);
+        var afterMore = c.substring(c.indexOf('…and'));
+        assert.equal(afterMore.split('- <code>').length - 1, 2,
+            'the 2 remainder lines after "…and N more" carry the same "- <code>…</code>" format as the 3 previews');
+        var remainderLines = c.split('\n').filter(function(l) { return l.indexOf('PRRT_4') !== -1 || l.indexOf('PRRT_5') !== -1; });
+        assert.equal(remainderLines.length, 2, 'both remainder threads are listed inside the fold');
+        remainderLines.forEach(function(l) {
+            assert.equal(l.indexOf('- <code>'), 0, 'remainder line is bulleted + code-formatted, got: ' + l);
+        });
     });
 
     test('AC4: missing response.md — explicit placeholder with the run log url', function() {
@@ -2341,6 +2400,65 @@ suite('pushReworkChanges.action — gh-1061 blocked-loop gate (UT-1/UT-2/UT-4/AC
         var c = blockedComment(r);
         assert.contains(c, 'agent wrote no response.md',
             'a silent omission re-arms the loop — the missing file must be called out');
+    });
+});
+
+suite('pushReworkChanges.handleReworkBlocked — coverage-object snapshot (gh-1063 review thread 5)', function() {
+    // The 11-positional-arg signature grew once per follow-up; the coverage
+    // snapshot (open/unaddressed/unaddressable/total) now travels as ONE
+    // buildReplyCoverage result — the same object the lap gate evaluates.
+    function runBlocked(coverage) {
+        var comments = [], moved = [], prLabelsAdded = [], prLabelsRemoved = [];
+        var mod = loadPushReworkChangesModule({}).mod;
+        var scm = {
+            addComment: function(n, body) { comments.push(body); },
+            addLabel: function(n, l) { prLabelsAdded.push(l); },
+            removeLabel: function(n, l) { prLabelsRemoved.push(l); }
+        };
+        var tracker = {
+            moveToStatus: function(key, status) { moved.push({ statusName: status }); },
+            removeLabel: function() {}
+        };
+        var result = mod.handleReworkBlocked(scm, tracker,
+            { number: 7, labels: [{ name: 'agent:rework' }, { name: 'agent:review' }] }, 'PROJ-9',
+            { BLOCKED: 'Blocked' }, 'the agent reason', coverage, { metadata: {} });
+        return { result: result, comments: comments, moved: moved,
+            prLabelsAdded: prLabelsAdded, prLabelsRemoved: prLabelsRemoved };
+    }
+
+    function coverageOf(openThreads, unaddressed, unaddressable) {
+        return {
+            openCount: openThreads,
+            targetedCount: openThreads - unaddressed.length,
+            unaddressed: unaddressed,
+            unaddressable: unaddressable,
+            totalOpenCount: openThreads + unaddressable.length
+        };
+    }
+
+    test('takes ONE coverage object: header count, fold, Blocked move and gh-1060 park all derive from it', function() {
+        var r = runBlocked(coverageOf(1, [ghThread('PRRT_x', 5, { body: 'a real finding' })],
+            [ghThread(null, null, { body: 'machine notice' })]));
+        assert.equal(r.result.blocked, true);
+        assert.equal(r.result.success, false);
+        var c = r.comments.filter(function(x) { return x.indexOf('Rework is **blocked**') !== -1; })[0] || '';
+        assert.contains(c, '1 review thread(s) are still open',
+            'the header count comes from coverage.openCount — a positional openCount can no longer drift from the fold');
+        assert.contains(c, '2 open in total', 'coverage.totalOpenCount reconciles the header');
+        assert.contains(c, 'PRRT_x', 'coverage.unaddressed feeds the fold');
+        assert.contains(c, 'excluded from the coverage gate', 'coverage.unaddressable is reported as informational');
+        assert.deepEqual(r.moved.map(function(m) { return m.statusName; }), ['Blocked'],
+            'the ticket still moves to Blocked');
+        assert.deepEqual(r.prLabelsAdded, ['blocked'], 'the gh-1060 park still labels the PR blocked');
+        assert.deepEqual(r.prLabelsRemoved.sort(), ['agent:review', 'agent:rework'],
+            'both arms are stripped from the PR');
+    });
+
+    test('a no-notice coverage object renders the plain header with no reconciliation clause', function() {
+        var r = runBlocked(coverageOf(2, [ghThread('PRRT_a', 1), ghThread('PRRT_b', 2)], []));
+        var c = r.comments.filter(function(x) { return x.indexOf('Rework is **blocked**') !== -1; })[0] || '';
+        assert.contains(c, '2 review thread(s) are still open');
+        assert.notContains(c, 'open in total');
     });
 });
 
