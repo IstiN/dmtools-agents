@@ -874,3 +874,479 @@ suite('mergeBot: externally-merged slot holder releases the merge window (gh-952
         assert.ok(result.log.some(function (l) { return l.indexOf('FIFO-queued') !== -1; }));
     });
 });
+
+suite('mergeBot: repo resolution edge paths (gh-1040 characterization)', function () {
+    // resolveRepoTarget(): every branch of the owner/name derivation is
+    // pinned here — the throws and the GH_REPO fallback are load-bearing
+    // operator feedback, and the multi-segment join must keep working.
+
+    function bareFixture(mods) {
+        var captured = { lists: [] };
+        var allMods = {
+            github_list_workflow_runs: function () { return JSON.stringify({ workflow_runs: [] }); },
+            github_list_prs: function (a) { captured.lists.push(a); return '[]'; },
+            github_get_pr: function () { return '{}'; },
+            github_get_commit_check_runs: function () { return JSON.stringify({ check_runs: [] }); },
+            github_merge_pr: function () { return JSON.stringify({ merged: true }); },
+            github_add_labels: function () { return '{}'; },
+            github_remove_label: function () { return '{}'; },
+            cli_execute_command: function () { return ''; }
+        };
+        for (var k in (mods || {})) allMods[k] = mods[k];
+        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), allMods);
+        return { bot: bot, captured: captured };
+    }
+
+    test('no repo in jobParams and no GH_REPO -> throws the no-repo error', function () {
+        var fx = bareFixture();
+        var old = globalThis.GH_REPO;
+        delete globalThis.GH_REPO;
+        try {
+            fx.bot.action({ jobParams: {} });
+        } catch (e) {
+            assert.ok(e.message.indexOf('mergeBot: no repo') !== -1,
+                'the no-repo error names the fix: ' + e.message);
+            return;
+        } finally {
+            if (old !== undefined) globalThis.GH_REPO = old;
+        }
+        assert.ok(false, 'action must throw when no repo is resolvable');
+    });
+
+    test('repo without a slash -> throws the owner/name error, verbatim', function () {
+        var fx = bareFixture();
+        try {
+            fx.bot.action({ jobParams: { repo: 'solo' } });
+        } catch (e) {
+            assert.ok(e.message.indexOf('mergeBot: repo must be owner/name, got solo') !== -1,
+                'the error echoes the bad value: ' + e.message);
+            return;
+        }
+        assert.ok(false, 'action must throw on a repo without owner/name');
+    });
+
+    test('GH_REPO global is the fallback when jobParams.repo is absent', function () {
+        var fx = bareFixture();
+        var old = globalThis.GH_REPO;
+        globalThis.GH_REPO = 'fallback/repo';
+        try {
+            fx.bot.action({ jobParams: {} });
+        } finally {
+            if (old !== undefined) globalThis.GH_REPO = old; else delete globalThis.GH_REPO;
+        }
+        assert.equal(fx.captured.lists[0].workspace, 'fallback');
+        assert.equal(fx.captured.lists[0].repository, 'repo');
+    });
+
+    test('multi-segment repo keeps the tail as the repository name', function () {
+        var fx = bareFixture();
+        fx.bot.action({ jobParams: { repo: 'org/sub/tool' } });
+        assert.equal(fx.captured.lists[0].workspace, 'org');
+        assert.equal(fx.captured.lists[0].repository, 'sub/tool',
+            'name is everything after the first slash');
+    });
+});
+
+suite('mergeBot: rollupDetail evidence edge paths (gh-1040 characterization)', function () {
+    // The evidence ladder (check runs -> PR statusCheckRollup -> CI workflow
+    // runs on the sha) and the per-run classification are pinned here branch
+    // by branch — a silent shape change would starve or force merges.
+
+    function rollupFixture(checkRunsRaw, wfRaw) {
+        var captured = { cr: [], wf: [] };
+        var mods = {
+            github_get_commit_check_runs: function (a) { captured.cr.push(a); return checkRunsRaw; },
+            github_list_workflow_runs: function (a) { captured.wf.push(a); return wfRaw; }
+        };
+        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        return { bot: bot, captured: captured };
+    }
+
+    function detailOf(fx, pr, job) {
+        return fx.bot.rollupDetail('shaX', pr || {}, job || { ciWorkflow: 'ci.yml' }, 'o', 'r');
+    }
+
+    test('{total_count} without a check_runs array reads as empty evidence -> workflow fallback', function () {
+        var fx = rollupFixture(JSON.stringify({ total_count: 2 }),
+            JSON.stringify({ workflow_runs: [] }));
+        var d = detailOf(fx);
+        assert.deepEqual(d, { state: 'none', pendingSince: null });
+        assert.equal(fx.captured.wf.length, 1, 'the CI-workflow fallback fired');
+        assert.equal(fx.captured.wf[0].workflowId, 'ci.yml', 'the fallback uses job.ciWorkflow');
+    });
+
+    test('statusCheckRollup that is not an array is not evidence -> workflow fallback', function () {
+        var fx = rollupFixture(JSON.stringify({ check_runs: [] }),
+            JSON.stringify({ workflow_runs: [{ head_sha: 'shaX', conclusion: 'success', status: 'completed' }] }));
+        var pr = { statusCheckRollup: { some: 'object-not-array' } };
+        var d = detailOf(fx, pr);
+        assert.equal(d.state, 'green', 'non-array rollup is ignored, the CI run decides');
+    });
+
+    test('workflow-runs payload wrapped as { runs: [...] } is recognized', function () {
+        var fx = rollupFixture(JSON.stringify({ check_runs: [] }),
+            JSON.stringify({ runs: [{ head_sha: 'shaX', conclusion: 'FAILURE', status: 'completed' }] }));
+        assert.equal(detailOf(fx).state, 'red');
+    });
+
+    test('in-flight workflow run without a timestamp: pending, pendingSince null (fails open)', function () {
+        var fx = rollupFixture(JSON.stringify({ check_runs: [] }),
+            JSON.stringify({ workflow_runs: [{ head_sha: 'shaX', conclusion: null, status: 'in_progress' }] }));
+        var d = detailOf(fx);
+        assert.equal(d.state, 'pending');
+        assert.equal(d.pendingSince, null, 'no usable timestamp — the stale-head probe stays silent');
+    });
+
+    test('newest matching workflow run decides over an older one', function () {
+        var fx = rollupFixture(JSON.stringify({ check_runs: [] }),
+            JSON.stringify({ workflow_runs: [
+                { head_sha: 'shaX', conclusion: 'FAILURE', status: 'completed' },
+                { head_sha: 'shaX', conclusion: 'SUCCESS', status: 'completed' }
+            ] }));
+        assert.equal(detailOf(fx).state, 'red', 'API order is newest-first; the freshest conclusion wins');
+    });
+
+    test('run classification: red beats pending; pendingSince is the OLDEST pending start', function () {
+        var fx = rollupFixture(JSON.stringify({ check_runs: [
+            { status: 'IN_PROGRESS', conclusion: null,
+              started_at: new Date(Date.now() - 2 * 3600000).toISOString() },
+            { status: 'QUEUED', conclusion: null,
+              started_at: new Date(Date.now() - 5 * 3600000).toISOString() },
+            { status: 'COMPLETED', conclusion: 'FAILURE' }
+        ] }), JSON.stringify({ workflow_runs: [] }));
+        var d = detailOf(fx);
+        assert.equal(d.state, 'red', 'any concluded-red run turns the head red');
+        var fx2 = rollupFixture(JSON.stringify({ check_runs: [
+            { status: 'IN_PROGRESS', conclusion: null,
+              started_at: new Date(Date.now() - 2 * 3600000).toISOString() },
+            { status: 'WAITING', conclusion: null,
+              started_at: new Date(Date.now() - 5 * 3600000).toISOString() }
+        ] }), JSON.stringify({ workflow_runs: [] }));
+        var d2 = detailOf(fx2);
+        assert.equal(d2.state, 'pending');
+        assert.ok(Math.abs(d2.pendingSince - (Date.now() - 5 * 3600000)) < 5000,
+            'the oldest pending start is the motionless-since evidence');
+    });
+
+    test('run classification: lowercase shapes, CANCELLED, and settled-neutral runs', function () {
+        var fx = rollupFixture(JSON.stringify({ check_runs: [
+            { status: 'completed', conclusion: 'cancelled' }
+        ] }), JSON.stringify({ workflow_runs: [] }));
+        assert.equal(detailOf(fx).state, 'red', 'cancelled is a red conclusion (any case)');
+        var fx2 = rollupFixture(JSON.stringify({ check_runs: [
+            { status: 'completed', conclusion: 'neutral' }
+        ] }), JSON.stringify({ workflow_runs: [] }));
+        assert.equal(detailOf(fx2).state, 'green', 'a concluded non-failure run is not pending');
+    });
+});
+
+suite('mergeBot: hasActiveSmRun probe edge paths via the self-tick gate (gh-1040 characterization)', function () {
+    // The active-SM probe guards the end-of-run self-tick. Each branch of
+    // the listing/fallback/zombie logic is pinned through action() — the
+    // only public surface that reaches it.
+
+    function smFixture(listResponses) {
+        var calls = { cli: [], list: [] };
+        var i = 0;
+        var mods = {
+            github_list_workflow_runs: function (a) {
+                calls.list.push(a);
+                var r = listResponses[Math.min(i++, listResponses.length - 1)];
+                if (r === 'THROW') throw new Error('workflow listing exploded');
+                return r;
+            },
+            github_list_prs: function () {
+                return JSON.stringify([{ number: 5, labels: [{ name: 'pr_approved' }, { name: 'ai_validated' }] }]);
+            },
+            github_get_pr: function () {
+                return JSON.stringify({
+                    number: 5, state: 'OPEN', draft: false, mergeable: true,
+                    mergeable_state: 'clean', head: { sha: 's5' },
+                    labels: [{ name: 'pr_approved' }, { name: 'ai_validated' }]
+                });
+            },
+            github_get_commit_check_runs: function () { return JSON.stringify({ check_runs: [] }); },
+            github_merge_pr: function () { return JSON.stringify({ merged: true }); },
+            github_add_labels: function () { return '{}'; },
+            github_remove_label: function () { return '{}'; },
+            cli_execute_command: function (c) { calls.cli.push(c); return ''; }
+        };
+        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        return { bot: bot, calls: calls };
+    }
+
+    function runProbe(fx) {
+        return fx.bot.action({ jobParams: { repo: 'a/b' } });
+    }
+
+    test('workflowId listing 404s (message payload) -> all-runs fallback filters by workflow path', function () {
+        var fx = smFixture([
+            JSON.stringify({ message: 'Not Found' }),
+            JSON.stringify({ workflow_runs: [
+                { path: '.github/workflows/machine-sm.yml', status: 'in_progress',
+                  updated_at: new Date().toISOString() },
+                { path: '.github/workflows/other.yml', status: 'in_progress',
+                  updated_at: new Date().toISOString() }
+            ] })
+        ]);
+        var result = runProbe(fx);
+        assert.equal(fx.calls.list.length, 2, 'the fallback listing fired');
+        assert.equal(fx.calls.list[1].workflowId, undefined, 'the fallback drops the workflowId (it 404s)');
+        assert.equal(fx.calls.cli.length, 0, 'an active machine-sm run filtered by path blocks the tick');
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('⏭️ self-tick skipped (SM already active)') !== -1;
+        }), 'the skip is logged: ' + JSON.stringify(result.log));
+    });
+
+    test('fallback finds only OTHER workflows -> the tick fires', function () {
+        var fx = smFixture([
+            JSON.stringify({ message: 'Not Found' }),
+            JSON.stringify({ workflow_runs: [
+                { path: '.github/workflows/ci.yml', status: 'in_progress',
+                  updated_at: new Date().toISOString() }
+            ] })
+        ]);
+        runProbe(fx);
+        assert.equal(fx.calls.cli.length, 1, 'a ci.yml run is not an SM run — dispatch');
+    });
+
+    test('workflow listing throws -> fail open, the self-heal still fires', function () {
+        var fx = smFixture(['THROW']);
+        var result = runProbe(fx);
+        assert.equal(fx.calls.cli.length, 1, 'unlistable repo must not disable the self-heal');
+        assert.ok(result.log.some(function (l) { return l.indexOf('SM tick dispatched') !== -1; }));
+    });
+
+    test('waiting/pending statuses count as active (fresh timestamps)', function () {
+        ['waiting', 'pending'].forEach(function (status) {
+            var fx = smFixture([JSON.stringify({ workflow_runs: [
+                { status: status, updated_at: new Date(Date.now() - 60 * 1000).toISOString() }
+            ] })]);
+            runProbe(fx);
+            assert.equal(fx.calls.cli.length, 0, status + ' is a live SM run — no tick');
+        });
+    });
+
+    test('queued run with NO parseable timestamp is not a zombie -> active', function () {
+        var fx = smFixture([JSON.stringify({ workflow_runs: [{ status: 'queued' }] })]);
+        runProbe(fx);
+        assert.equal(fx.calls.cli.length, 0, 'no timestamp means no zombie evidence — treat as live');
+    });
+
+    test('queued run 7h stale via created_at is a zombie -> tick fires', function () {
+        var fx = smFixture([JSON.stringify({ workflow_runs: [
+            { status: 'queued', created_at: new Date(Date.now() - 7 * 3600000).toISOString() }
+        ] })]);
+        var result = runProbe(fx);
+        assert.equal(fx.calls.cli.length, 1, 'a 7h-old queued run was superseded by its concurrency group');
+        assert.ok(result.log.some(function (l) { return l.indexOf('SM tick dispatched') !== -1; }));
+    });
+
+    test('in_progress has no zombie exemption expiry -> an old run still blocks the tick', function () {
+        var fx = smFixture([JSON.stringify({ workflow_runs: [
+            { status: 'in_progress', updated_at: new Date(Date.now() - 10 * 3600000).toISOString() }
+        ] })]);
+        runProbe(fx);
+        assert.equal(fx.calls.cli.length, 0, 'in_progress means genuinely working, regardless of age');
+    });
+
+    test('completed/failed runs are history -> they never gate the tick', function () {
+        var fx = smFixture([JSON.stringify({ workflow_runs: [
+            { status: 'completed', updated_at: new Date().toISOString() },
+            { status: 'failure', updated_at: new Date().toISOString() }
+        ] })]);
+        runProbe(fx);
+        assert.equal(fx.calls.cli.length, 1, 'only queued/in_progress/waiting/pending count');
+    });
+});
+
+suite('mergeBot: action loop edge paths (gh-1040 characterization)', function () {
+    // Every skipped/continued branch and both unarm failure lines of the
+    // FIFO loop, pinned verbatim — these are the paths a bad refactor
+    // silently drops.
+
+    function loopFixture(opts) {
+        opts = opts || {};
+        var calls = { merges: [], adds: [], removes: [], cli: [] };
+        var list = opts.list || [{ number: 7, labels: [{ name: 'pr_approved' }], head: { sha: 's7' } }];
+        var mods = {
+            github_list_workflow_runs: function () { return JSON.stringify({ workflow_runs: [] }); },
+            github_list_prs: function () { return JSON.stringify(list); },
+            github_get_pr: function () {
+                if (opts.getPrThrows) throw new Error(opts.getPrThrows);
+                return JSON.stringify(opts.prBody !== undefined ? opts.prBody : {
+                    number: 7, state: 'OPEN', draft: false, mergeable: true,
+                    mergeable_state: 'clean', head: { sha: 's7' },
+                    labels: [{ name: 'pr_approved' }]
+                });
+            },
+            github_get_commit_check_runs: function () {
+                return JSON.stringify({ check_runs: opts.checkRuns || [] });
+            },
+            github_merge_pr: function (m) {
+                calls.merges.push(m);
+                return JSON.stringify({ merged: true });
+            },
+            github_add_labels: function (a) { calls.adds.push(a); return '{}'; },
+            github_remove_label: function (r) {
+                if (opts.removeThrows) throw new Error(opts.removeThrows);
+                calls.removes.push(r); return '{}';
+            },
+            cli_execute_command: function (c) { calls.cli.push(c); return ''; }
+        };
+        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        return { bot: bot, calls: calls };
+    }
+
+    test('get_pr body without a number -> skipped silently, run completes', function () {
+        var fx = loopFixture({ prBody: { state: 'OPEN', head: { sha: 's7' }, labels: [] } });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(result.success, true);
+        assert.equal(result.acted, 0);
+        assert.equal(fx.calls.merges.length + fx.calls.adds.length + fx.calls.removes.length, 0);
+    });
+
+    test('get_pr body with a non-OPEN state -> skipped (stale list entry)', function () {
+        var fx = loopFixture({ prBody: { number: 7, state: 'MERGED', head: { sha: 's7' }, labels: [] } });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(result.acted, 0);
+        assert.equal(fx.calls.merges.length, 0);
+    });
+
+    test('get_pr body without a head sha -> skipped', function () {
+        var fx = loopFixture({
+            prBody: { number: 7, state: 'OPEN', labels: [{ name: 'pr_approved' }, { name: 'ai_validated' }] }
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(result.acted, 0);
+        assert.equal(result.log.filter(function (l) { return l.indexOf('FIFO-queued') !== -1; }).length, 0,
+            'a headless PR cannot even be queued');
+    });
+
+    test('stale-head unarm throws -> warning line, skip still counts, no acted credit', function () {
+        var fx = loopFixture({
+            removeThrows: 'label endpoint 500',
+            list: [{ number: 7, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }], head: { sha: 's7' } }],
+            prBody: {
+                number: 7, state: 'OPEN', draft: false, mergeable: true, mergeable_state: 'clean',
+                head: { sha: 's7' },
+                labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }]
+            },
+            checkRuns: [{ status: 'IN_PROGRESS', conclusion: null,
+                          started_at: new Date(Date.now() - 3 * 3600000).toISOString() }]
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('⚠️ pr-7 stale-head unarm failed:') !== -1 && l.indexOf('label endpoint 500') !== -1;
+        }), 'the verbatim failure is surfaced: ' + JSON.stringify(result.log));
+        assert.equal(result.acted, 0, 'a failed unarm is not motion');
+        assert.equal(result.skipped, 1, 'the dead head still counts as skipped');
+    });
+
+    test('BEHIND unarm throws -> warning line, acted unchanged, no merge', function () {
+        var fx = loopFixture({
+            removeThrows: 'no permission',
+            list: [{ number: 7, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }], head: { sha: 's7' } }],
+            prBody: {
+                number: 7, state: 'OPEN', draft: false, mergeable: true, mergeable_state: 'behind',
+                head: { sha: 's7' },
+                labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }]
+            },
+            checkRuns: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }]
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('⚠️ pr-7 unarm failed:') !== -1 && l.indexOf('no permission') !== -1;
+        }), 'the verbatim failure is surfaced: ' + JSON.stringify(result.log));
+        assert.equal(result.acted, 0);
+        assert.equal(fx.calls.merges.length, 0, 'a stale head never merges');
+    });
+
+    test('ai_validated latch throws -> latch-failed line, no acted credit', function () {
+        var fx = loopFixture({
+            list: [{ number: 7, labels: [{ name: 'ai_validating' }], head: { sha: 's7' } }],
+            prBody: {
+                number: 7, state: 'OPEN', draft: false, mergeable: true, mergeable_state: 'clean',
+                head: { sha: 's7' }, labels: [{ name: 'ai_validating' }]
+            },
+            checkRuns: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }]
+        });
+        // add_labels is not loopFixture-configurable; patch via removeThrows-style knob:
+        var modsFx = fx;
+        var result;
+        // Rebuild with a throwing add_labels:
+        var calls = { merges: [], adds: [], removes: [] };
+        var mods = {
+            github_list_workflow_runs: function () { return JSON.stringify({ workflow_runs: [] }); },
+            github_list_prs: function () {
+                return JSON.stringify([{ number: 7, labels: [{ name: 'ai_validating' }], head: { sha: 's7' } }]);
+            },
+            github_get_pr: function () {
+                return JSON.stringify({
+                    number: 7, state: 'OPEN', draft: false, mergeable: true, mergeable_state: 'clean',
+                    head: { sha: 's7' }, labels: [{ name: 'ai_validating' }]
+                });
+            },
+            github_get_commit_check_runs: function () {
+                return JSON.stringify({ check_runs: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] });
+            },
+            github_merge_pr: function (m) { calls.merges.push(m); return JSON.stringify({ merged: true }); },
+            github_add_labels: function (a) { calls.adds.push(a); throw new Error('labels endpoint down'); },
+            github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
+            cli_execute_command: function () { return ''; }
+        };
+        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        result = bot.action({ jobParams: { repo: 'a/b' } });
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('⚠️ pr-7 latch failed:') !== -1 && l.indexOf('labels endpoint down') !== -1;
+        }), 'the verbatim failure is surfaced: ' + JSON.stringify(result.log));
+        assert.equal(result.acted, 0, 'a failed latch is not motion');
+        assert.equal(calls.adds.length, 1, 'the latch was attempted exactly once');
+        assert.equal(calls.removes.length, 1, 'the unarm still ran before the latch attempt');
+        void modsFx;
+    });
+
+    test('advance candidate merge refused -> refusal line + deferral + self-tick', function () {
+        var calls = { merges: [], cli: [] };
+        var mods = {
+            github_list_workflow_runs: function () { return JSON.stringify({ workflow_runs: [] }); },
+            github_list_prs: function (a) {
+                if (a.state === 'merged') return '[]';
+                return JSON.stringify([
+                    { number: 1, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }, { name: 'blocked' }], head: { sha: 's1' } },
+                    { number: 2, labels: [{ name: 'pr_approved' }, { name: 'ai_validated' }], head: { sha: 's2' } }
+                ]);
+            },
+            github_get_pr: function (a) {
+                var n = a.pullRequestId;
+                return JSON.stringify({
+                    number: n, state: 'OPEN', draft: false, mergeable: true, mergeable_state: 'clean',
+                    head: { sha: 's' + n },
+                    labels: n === 1 ? [{ name: 'pr_approved' }, { name: 'ai_validating' }, { name: 'blocked' }]
+                                     : [{ name: 'pr_approved' }, { name: 'ai_validated' }]
+                });
+            },
+            github_get_commit_check_runs: function (a) {
+                return JSON.stringify({ check_runs: [{ name: a.commitSha, status: 'COMPLETED', conclusion: 'SUCCESS' }] });
+            },
+            github_merge_pr: function (m) {
+                calls.merges.push(m);
+                return JSON.stringify({ message: 'Base branch was modified. Review and try the merge again' });
+            },
+            github_add_labels: function () { return '{}'; },
+            github_remove_label: function () { return '{}'; },
+            cli_execute_command: function (c) { calls.cli.push(c); return ''; }
+        };
+        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        var result = bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(calls.merges.length, 2, 'one merge attempt + the single retry, both refused');
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('❌ pr-2 merge refused:') !== -1 && l.indexOf('Base branch was modified') !== -1;
+        }), 'the refusal is surfaced verbatim: ' + JSON.stringify(result.log));
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('⏳ pr-2 approved — FIFO-queued') !== -1;
+        }), 'a refused advance defers like any other not-ready candidate');
+        assert.equal(result.acted, 0);
+        assert.equal(calls.cli.length, 1, 'the deferral still arms the self-heal tick');
+    });
+});
