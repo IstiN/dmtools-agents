@@ -517,6 +517,114 @@ suite('configLoader.loadProjectConfig', function() {
             'resolver must fire even though ticket only exists as a sibling of jobParams');
     });
 
+    test('applies explicit params.repository from the SM rule over the config file repository', function() {
+        var cl = makeLoader({
+            '.dmtools/config.js':
+                'module.exports = { repository: { owner: "cfg-org", repo: "cfg-repo" } };'
+        });
+        var config = cl.loadProjectConfig({ repository: { owner: 'rule-org', repo: 'rule-repo' } });
+        assert.equal(config.repository.owner, 'rule-org');
+        assert.equal(config.repository.repo, 'rule-repo');
+    });
+
+    test('ignores params.repository when owner or repo is missing', function() {
+        var cl = makeLoader({});
+        var config = cl.loadProjectConfig({ repository: { owner: 'only-owner' } });
+        assert.equal(config.repository.owner, '');
+        var config2 = cl.loadProjectConfig({ repository: { repo: 'only-repo' } });
+        assert.equal(config2.repository.repo, '');
+    });
+
+    test('loads config from the agentConfigsDir convention {dir}/.dmtools/config.js', function() {
+        var cl = makeLoader({
+            'projects/demo/.dmtools/config.js':
+                'module.exports = { jira: { project: "DEMO" } };'
+        });
+        var config = cl.loadProjectConfig({ agentConfigsDir: 'projects/demo' });
+        assert.equal(config.jira.project, 'DEMO');
+        assert.equal(config._configPath, 'projects/demo/.dmtools/config.js');
+    });
+
+    test('agentConfigsDir convention is skipped when an earlier source already loaded config', function() {
+        var paths = [];
+        var loader = loadModule(
+            'js/configLoader.js',
+            makeRequire({ './config.js': configModule }),
+            {
+                file_read: function(opts) {
+                    paths.push(opts.path);
+                    if (opts.path === 'top.js') {
+                        return 'module.exports = { jira: { project: "TOP" } };';
+                    }
+                    return null;
+                }
+            }
+        );
+        var config = loader.loadProjectConfig({ configPath: 'top.js', agentConfigsDir: 'projects/demo' });
+        assert.equal(config.jira.project, 'TOP');
+        assert.equal(paths.indexOf('projects/demo/.dmtools/config.js'), -1, 'agentConfigsDir probe skipped');
+    });
+
+    test('baseBranchResolverFnPath with an unreadable hook file keeps the candidate baseBranch', function() {
+        var cl = makeLoader({
+            '.dmtools/config.js':
+                'module.exports = { git: { baseBranchResolverFnPath: "./.dmtools/missing.js" } };'
+        });
+        var config = cl.loadProjectConfig({ ticket: { key: 'PROJ-1' } });
+        assert.equal(config.git.baseBranch, 'main');
+    });
+
+    test('baseBranchResolverFnPath resolver returning a falsy value keeps the candidate baseBranch', function() {
+        var cl = makeLoader({
+            '.dmtools/config.js':
+                'module.exports = { git: { baseBranchResolverFnPath: "./.dmtools/resolver.js" } };',
+            './.dmtools/resolver.js':
+                'module.exports = function() { return null; };'
+        });
+        var config = cl.loadProjectConfig({ ticket: { key: 'PROJ-1' } });
+        assert.equal(config.git.baseBranch, 'main');
+    });
+
+    test('baseBranchResolverFnPath throwing resolver keeps the candidate baseBranch and warns', function() {
+        var cl = makeLoader({
+            '.dmtools/config.js':
+                'module.exports = { git: { baseBranchResolverFnPath: "./.dmtools/resolver.js" } };',
+            './.dmtools/resolver.js':
+                'module.exports = function() { throw new Error("boom"); };'
+        });
+        var config = cl.loadProjectConfig({ ticket: { key: 'PROJ-1' } });
+        assert.equal(config.git.baseBranch, 'main');
+    });
+
+    test('snapshotBranchResolverFnPath throwing resolver keeps the candidate snapshotBranch and warns', function() {
+        var cl = makeLoader({
+            '.dmtools/config.js':
+                'module.exports = { git: { snapshotBranchResolverFnPath: "./.dmtools/resolver.js" } };',
+            './.dmtools/resolver.js':
+                'module.exports = function() { throw new Error("boom"); };'
+        });
+        var config = cl.loadProjectConfig({ ticket: { key: 'PROJ-1' } });
+        assert.equal(config.git.snapshotBranch, '', 'snapshotBranch left at its default');
+        assert.equal(config.git.baseBranch, 'main', 'baseBranch untouched');
+    });
+
+    test('targetRepository with only some fields applies only the provided ones', function() {
+        var cl = makeLoader({});
+        var config = cl.loadProjectConfig({
+            customParams: { targetRepository: { owner: 'partial-org' } }
+        });
+        assert.equal(config.repository.owner, 'partial-org');
+        assert.equal(config.repository.repo, '');
+        assert.equal(config.git.baseBranch, 'main', 'baseBranch untouched');
+        assert.equal(config.workingDir, undefined, 'workingDir untouched');
+    });
+
+    test('scmProvider customParam overrides config.scm.provider', function() {
+        var cl = makeLoader({});
+        var config = cl.loadProjectConfig({ customParams: { scmProvider: 'gitlab' } });
+        assert.equal(config.scm.provider, 'gitlab');
+    });
+
     test('loads prSearchFn from customParams.prSearchFnPath', function() {
         var cl = makeLoader({
             '.dmtools/prSearch/custom.js':
@@ -1082,6 +1190,76 @@ suite('configLoader.loadHookFn', function() {
         assert.equal(fn({ branchName: 'release/rc_mobile_proj-1' }), 'created:release/rc_mobile_proj-1');
     });
 
+});
+
+// ── loadCustomParamFnHook ────────────────────────────────────────────────────
+
+suite('configLoader.loadCustomParamFnHook', function() {
+
+    test('installs the exported function on the target under exportKey', function() {
+        var cl = makeIsolatedConfigLoaderForHooks({
+            '.dmtools/branchNaming/naming.js': 'module.exports = function(ticket, role, config) { return "ai/" + ticket; };'
+        });
+        var target = {};
+        cl.loadCustomParamFnHook(target, '.dmtools/branchNaming/naming.js', 'branchNamingFnPath', 'branchNamingFn');
+        assert.equal(typeof target.branchNamingFn, 'function');
+        assert.equal(target.branchNamingFn('gh-1'), 'ai/gh-1');
+    });
+
+    test('returns without loading when the path is falsy', function() {
+        var cl = makeIsolatedConfigLoaderForHooks({});
+        var target = {};
+        cl.loadCustomParamFnHook(target, undefined, 'branchNamingFnPath', 'branchNamingFn');
+        cl.loadCustomParamFnHook(target, '', 'prSearchFnPath', 'prSearchFn');
+        assert.deepEqual(target, {});
+    });
+
+    test('warns and ignores when the file does not export a function', function() {
+        var cl = makeIsolatedConfigLoaderForHooks({
+            '.dmtools/prSearch/not_a_fn.js': 'module.exports = 42;'
+        });
+        var target = {};
+        cl.loadCustomParamFnHook(target, '.dmtools/prSearch/not_a_fn.js', 'prSearchFnPath', 'prSearchFn');
+        assert.equal(target.prSearchFn, undefined);
+    });
+
+});
+
+// ── agentDocGenerator static-analysis contract (docs-freshness) ──────────────
+
+suite('configLoader customParams visibility for agentDocGenerator', function() {
+
+    // js/agentDocGenerator.js discovers supported customParams keys with two
+    // literal-access regexes; a dynamic customParams[key] read is invisible to
+    // them and silently drops keys from every generated agent doc (red
+    // docs-freshness CI). Pin the two hook keys as literal member reads here.
+    function discoverCustomParamsKeys(src) {
+        var found = [];
+        var seen = {};
+        var patterns = [
+            /customParams\.([a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*)*)/g,
+            /customParams\[['"]([\w.]+)['"]\]/g
+        ];
+        patterns.forEach(function(re) {
+            var match;
+            while ((match = re.exec(src)) !== null) {
+                if (!seen[match[1]]) {
+                    seen[match[1]] = true;
+                    found.push(match[1]);
+                }
+            }
+        });
+        return found.sort();
+    }
+
+    test('configLoader.js keeps branchNamingFnPath and prSearchFnPath statically visible', function() {
+        var src = file_read({ path: 'js/configLoader.js' });
+        var keys = discoverCustomParamsKeys(src);
+        assert.ok(keys.indexOf('branchNamingFnPath') !== -1,
+            'branchNamingFnPath must be discoverable by agentDocGenerator literal regexes, got: ' + keys.join(', '));
+        assert.ok(keys.indexOf('prSearchFnPath') !== -1,
+            'prSearchFnPath must be discoverable by agentDocGenerator literal regexes, got: ' + keys.join(', '));
+    });
 });
 
 // ── {status.KEY[:Literal]} placeholders (agents#855) ──────────────────────────

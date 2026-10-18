@@ -41,6 +41,12 @@ function decode(encoded) {
 
 suite('buildEncodedConfig helper functions', function() {
 
+    test('buildEncodedConfig JSDoc summary appears exactly once (no orphaned duplicate)', function() {
+        var src = file_read({ path: 'js/common/buildEncodedConfig.js' });
+        var count = src.split('Build the encoded config payload for a workflow dispatch.').length - 1;
+        assert.equal(count, 1, 'found an orphaned duplicated buildEncodedConfig docblock');
+    });
+
     test('extractAgentName strips directories and .json extension', function() {
         var builder = loadBuilder({});
         assert.equal(builder.extractAgentName('agents/story_development.json'), 'story_development');
@@ -311,6 +317,37 @@ suite('buildEncodedConfig payload', function() {
         assert.notOk(decoded.params.customParams);
     });
 
+    test('metadata carries agentId and contextId derived from _configPath basename', function() {
+        var builder = loadBuilder({
+            'agents/test.json': JSON.stringify({ params: {} })
+        });
+        // Only a config file NOT named "config.js" contributes a project key
+        // (see resolveProjectKey: basename "config" is ignored).
+        var encoded = builder.buildEncodedConfig('T-1', { configFile: 'agents/test.json' },
+            { _configPath: 'projects/web/.dmtools/web.js' });
+        var decoded = decode(encoded);
+        assert.equal(decoded.params.metadata.agentId, 'test');
+        assert.equal(decoded.params.metadata.contextId, 'WEB');
+    });
+
+    test('metadata has no contextId when the config file is named config.js', function() {
+        var builder = loadBuilder({
+            'agents/test.json': JSON.stringify({ params: {} })
+        });
+        var encoded = builder.buildEncodedConfig('T-1', { configFile: 'agents/test.json' },
+            { _configPath: 'projects/web/.dmtools/config.js' });
+        var decoded = decode(encoded);
+        assert.equal(decoded.params.metadata.agentId, 'test');
+        assert.notOk(decoded.params.metadata.contextId);
+    });
+
+    test('metadata is omitted when both agentId and contextId are absent', function() {
+        var builder = loadBuilder({});
+        var encoded = builder.buildEncodedConfig('T-1', {}, {});
+        var decoded = decode(encoded);
+        assert.notOk(decoded.params.metadata);
+    });
+
     test('cliPromptsByTracker is not copied into encoded params (already flattened into cliPrompts)', function() {
         var builder = loadBuilder({
             'agents/test.json': JSON.stringify({
@@ -476,6 +513,56 @@ suite('resolveParentMerge — parent inheritance', function() {
         assert.deepEqual(decoded.params.cliPrompts, [
             'base-a.md', 'base-b.md', 'e2e-extra.md', 'project-specific.md'
         ]);
+    });
+
+    test('returns empty params object when agentJson has no params block', function() {
+        var builder = loadBuilder({});
+        assert.deepEqual(builder.resolveParentMerge({}, 'agents/child.json'), {});
+        assert.deepEqual(builder.resolveParentMerge(null, 'agents/child.json'), {});
+    });
+
+    test('keeps child params when the parent file is missing', function() {
+        var builder = loadBuilder({});
+        var childJson = { params: { a: 1 }, parent: { path: 'missing.json' } };
+        assert.deepEqual(builder.resolveParentMerge(childJson, 'agents/child.json'), { a: 1 });
+    });
+
+    test('merge directive tolerates non-array parent and child values', function() {
+        var builder = loadBuilder({
+            'agents/parent.json': JSON.stringify({ params: { cliPrompts: 'not-an-array' } })
+        });
+        var childJson = {
+            params: { cliPrompts: 42 },
+            parent: { path: 'parent.json', merge: ['params.cliPrompts'] }
+        };
+        var merged = builder.resolveParentMerge(childJson, 'agents/child.json');
+        assert.deepEqual(merged.cliPrompts, []);
+    });
+
+    test('recursion guard stops parent chains deeper than 10 levels', function() {
+        var fileMap = {};
+        for (var i = 0; i < 12; i++) {
+            var entry = { params: {} };
+            if (i === 11) {
+                entry.params.deepMarker = true;
+            } else {
+                entry.parent = { path: 'p' + (i + 1) + '.json' };
+            }
+            fileMap['agents/p' + i + '.json'] = JSON.stringify(entry);
+        }
+        var builder = loadBuilder(fileMap);
+        var childJson = { params: {}, parent: { path: 'p0.json' } };
+        var merged = builder.resolveParentMerge(childJson, 'agents/child.json');
+        assert.notOk(merged.deepMarker, 'level-11 parent params never merge in (depth guard)');
+        // Control: a chain within the guard does merge the deep marker.
+        var shallowMap = {
+            'agents/q0.json': JSON.stringify({ params: {}, parent: { path: 'q1.json' } }),
+            'agents/q1.json': JSON.stringify({ params: { deepMarker: true } })
+        };
+        var shallowBuilder = loadBuilder(shallowMap);
+        var shallowMerged = shallowBuilder.resolveParentMerge(
+            { params: {}, parent: { path: 'q0.json' } }, 'agents/child.json');
+        assert.ok(shallowMerged.deepMarker, 'within the guard the deep parent merges normally');
     });
 
     test('config.js strategy:replace discards parent cliPrompts and uses only config.js prompts', function() {
