@@ -1505,34 +1505,60 @@ function evaluateAuditResolveGate(realCodeChanges, codeChangesCommitted, openThr
  * (non-goal). Every write is best-effort: a failed label write must not
  * mask the Blocked move the caller already performed.
  */
+/**
+ * gh-1060 CRAP split helpers (ratchet: parkBlockedPr measured CC 13 / CRAP
+ * 14.6 > CRAP_THRESHOLD — CRAP is bounded below by CC, so only splitting
+ * lowers it; same gh-957 pattern as the handleReworkBlocked area below).
+ * Each helper is best-effort: a failed label write must not mask the
+ * Blocked move the caller already performed.
+ */
+
+// Label the PR `blocked` — the SM park vocabulary (engine-level freeze in
+// githubSource matchesGuards/_prSideBlockedLabel/queryPrs).
+function labelPrBlocked(scm, pr) {
+    try {
+        scm.addLabel(pr.number, 'blocked');
+        console.log('✅ Labeled PR #' + pr.number + ' blocked (gh-1060 park — SM freeze vocabulary)');
+    } catch (e) {
+        console.warn('Failed to label PR #' + pr.number + ' blocked:', e.message || e);
+    }
+}
+
+// Strip one arm from the PR. The pr payload is the raw GitHub REST list
+// shape (requirePrForTicket → findPRForTicket → scm.listPrs('open')), where
+// labels are [{name}] objects or strings — normalize before checking
+// presence (githubSource.prLabels / prHasApproved pattern). A leftover arm
+// would re-dispatch a leg the moment a human unblocks, so strip
+// unconditionally when the PR carries labels at all (a 404 on an absent
+// label is tolerated by the try/catch).
+function stripArmFromPr(scm, pr, arm) {
+    var names = (pr.labels || []).map(function(l) { return (l && l.name) || l; });
+    if (names.length === 0) return;
+    try {
+        scm.removeLabel(pr.number, arm);
+        console.log('✅ Stripped ' + arm + ' from PR #' + pr.number + ' (gh-1060 park)');
+    } catch (e) {
+        console.warn('Failed to strip ' + arm + ' from PR #' + pr.number + ':', e.message || e);
+    }
+}
+
+// Strip one arm from the issue carrier — best-effort, mirroring the PR side.
+function stripArmFromIssue(tracker, ticketKey, arm) {
+    try {
+        tracker.removeLabel(ticketKey, arm);
+        console.log('✅ Stripped ' + arm + ' from ' + ticketKey + ' (gh-1060 park)');
+    } catch (e) {
+        console.warn('Failed to strip ' + arm + ' from ' + ticketKey + ':', e.message || e);
+    }
+}
+
 function parkBlockedPr(scm, tracker, pr, ticketKey) {
     var ARMS = ['agent:rework', 'agent:review'];
     if (scm && pr && pr.number != null) {
-        try {
-            scm.addLabel(pr.number, 'blocked');
-            console.log('✅ Labeled PR #' + pr.number + ' blocked (gh-1060 park — SM freeze vocabulary)');
-        } catch (e) {
-            console.warn('Failed to label PR #' + pr.number + ' blocked:', e.message || e);
-        }
-        var prLabels = pr.labels || [];
-        ARMS.forEach(function(arm) {
-            if (prLabels.indexOf(arm) === -1 && prLabels.length > 0) return; // absent — nothing to strip
-            try {
-                scm.removeLabel(pr.number, arm);
-                console.log('✅ Stripped ' + arm + ' from PR #' + pr.number + ' (gh-1060 park)');
-            } catch (e) {
-                console.warn('Failed to strip ' + arm + ' from PR #' + pr.number + ':', e.message || e);
-            }
-        });
+        labelPrBlocked(scm, pr);
+        ARMS.forEach(function(arm) { stripArmFromPr(scm, pr, arm); });
     }
-    ARMS.forEach(function(arm) {
-        try {
-            tracker.removeLabel(ticketKey, arm);
-            console.log('✅ Stripped ' + arm + ' from ' + ticketKey + ' (gh-1060 park)');
-        } catch (e) {
-            console.warn('Failed to strip ' + arm + ' from ' + ticketKey + ':', e.message || e);
-        }
-    });
+    ARMS.forEach(function(arm) { stripArmFromIssue(tracker, ticketKey, arm); });
 }
 
 /**

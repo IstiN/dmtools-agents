@@ -2067,13 +2067,16 @@ suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)'
             replyToThread: function() {},
             // gh-1060: the PR carries a rework arm when the leg concludes
             // blocked — the park must label it blocked and strip the arms.
+            // Mock the production REST list payload shape: labels are
+            // [{name}] objects, not plain strings (githubSource.prLabels,
+            // prHasApproved and bug_done_and_test_pr_merge use the same).
             listPrs: function() {
                 return [{
                     number: 123,
                     title: 'PROJ-123: rework fix',
                     head: { ref: 'bug/PROJ-123' },
                     html_url: 'https://github.com/IstiN/dmtools-agents/pull/123',
-                    labels: ['agent:rework', 'agent:review']
+                    labels: [{ name: 'agent:rework' }, { name: 'agent:review' }]
                 }];
             },
             addLabel: function(n, l) { prLabelsAdded.push({ number: n, label: l }); },
