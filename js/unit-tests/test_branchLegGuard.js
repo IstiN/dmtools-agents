@@ -128,6 +128,19 @@ suite('branchLegGuard — hasActiveLegRunOnBranch', function () {
 // ── predicates ──────────────────────────────────────────────────────────────
 
 suite('branchLegGuard — predicates', function () {
+    test('a queued run with NO timestamps is never stale (runTimestampMs null path)', function () {
+        var runs = [{ status: 'queued', path: 'x/ai-teammate.yml', head_branch: BRANCH }];
+        assert.notOk(guard.hasActiveLegRunOnBranch(runs, BRANCH, { nowMs: NOW_MS }) === false,
+            'no timestamp -> not stale -> still owns the branch');
+    });
+
+    test('isStaleNonRunning direct guards: in_progress and null nowMs short-circuit to false', function () {
+        assert.equal(guard.isStaleNonRunning({ status: 'in_progress' }, NOW_MS, 1000), false);
+        assert.equal(guard.isStaleNonRunning(
+            { status: 'queued', updated_at: '2020-01-01T00:00:00Z' }, null, 1000), false,
+            'caller-side nowMs gate parity (defensive line stays covered)');
+    });
+
     test('isLegRun matches the ai-teammate.yml path suffix and rejects other workflows', function () {
         assert.ok(guard.isLegRun(run('in_progress'), 'ai-teammate.yml'));
         assert.ok(guard.isLegRun({ path: 'x/y/ai-teammate.yml' }, 'ai-teammate.yml'));

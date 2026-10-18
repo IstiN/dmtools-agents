@@ -112,21 +112,31 @@ function matchesBranch(run, branch) {
  * degrades to fail-closed: without nowMs no run can be proven stale, so
  * every active run counts — one deferred dispatch beats a stacked leg.
  */
+function staleMsOf(opts) {
+    return (opts && typeof opts.staleNonRunningMs === 'number' && opts.staleNonRunningMs > 0)
+        ? opts.staleNonRunningMs : DEFAULT_STALE_NON_RUNNING_MS;
+}
+
+function nowMsOf(opts) {
+    return (opts && typeof opts.nowMs === 'number' && !isNaN(opts.nowMs))
+        ? opts.nowMs : null;
+}
+
+/** One run owns the branch: active, non-stale, the leg workflow, on-branch. */
+function legRunOwnsBranch(run, branch, workflowFile, nowMs, staleMs) {
+    if (!run || !isActiveStatus(run.status)) return false;
+    if (run.status !== 'in_progress' && nowMs !== null &&
+        isStaleNonRunning(run, nowMs, staleMs)) return false;
+    return isLegRun(run, workflowFile) && matchesBranch(run, branch);
+}
+
 function hasActiveLegRunOnBranch(runs, branch, opts) {
     if (!branch || typeof branch !== 'string' || !Array.isArray(runs)) return false;
     var workflowFile = workflowFileOf(opts);
-    var staleMs = (opts && typeof opts.staleNonRunningMs === 'number' && opts.staleNonRunningMs > 0)
-        ? opts.staleNonRunningMs : DEFAULT_STALE_NON_RUNNING_MS;
-    var nowMs = (opts && typeof opts.nowMs === 'number' && !isNaN(opts.nowMs))
-        ? opts.nowMs : null;
+    var staleMs = staleMsOf(opts);
+    var nowMs = nowMsOf(opts);
     for (var i = 0; i < runs.length; i++) {
-        var run = runs[i];
-        if (!run || !isActiveStatus(run.status)) continue;
-        if (run.status !== 'in_progress' && nowMs !== null &&
-            isStaleNonRunning(run, nowMs, staleMs)) continue;
-        if (!isLegRun(run, workflowFile)) continue;
-        if (!matchesBranch(run, branch)) continue;
-        return true;
+        if (legRunOwnsBranch(runs[i], branch, workflowFile, nowMs, staleMs)) return true;
     }
     return false;
 }
@@ -139,5 +149,6 @@ module.exports = {
     isActiveStatus: isActiveStatus,
     isStaleNonRunning: isStaleNonRunning,
     matchesBranch: matchesBranch,
+    legRunOwnsBranch: legRunOwnsBranch,
     hasActiveLegRunOnBranch: hasActiveLegRunOnBranch
 };
