@@ -167,6 +167,14 @@ var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
 // ⚠️ trigger-failed marker math and the dead-head park cap. The pure
 // half lives in the module; recordDispatchFailure below wires transport.
 var triggerFailuresModule = require('./common/triggerFailures.js');
+// gh-1028 (hoisted, never lazy — the gh-823 pack-require rule): the
+// branch-keyed in-flight leg probe — an ACTIVE ai-teammate run whose
+// head_branch IS the dispatch branch keeps a second leg off that branch
+// regardless of head_sha (the (pr, head) latch and the title guards both
+// missed the duplicate-concurrent-rework pathology, live PR #1017
+// 2026-10-18 08:04–08:09Z). Pure half here; the probe fan-out lives in
+// hasActiveLegRunOnBranch below.
+var branchLegGuardModule = require('./common/branchLegGuard.js');
 // gh-922 (same-tick dedup, review): PR numbers whose dispatch failure was
 // already recorded THIS tick. The already-parked guard in
 // recordDispatchFailure reads the query-time label snapshot — within one
@@ -360,6 +368,35 @@ function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
         }
     }
 
+    return false;
+}
+
+// gh-1028: the branch-keyed in-flight leg probe (transport half — the
+// match itself is the pure branchLegGuardModule.hasActiveLegRunOnBranch).
+// Fan-out parity with hasActiveTargetWorkflowRun: the four active statuses
+// via scm.listWorkflowRuns, stale non-running zombies aged out by the same
+// 6h bound, per-status probe errors logged and skipped. FAIL-OPEN: a probe
+// error must not wedge the rework loop — one stacked leg is the same worst
+// case the title guards already accept on a broken read.
+function hasActiveLegRunOnBranch(scm, workflowFile, branch) {
+    if (!scm || typeof scm.listWorkflowRuns !== 'function' || !branch) return false;
+    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
+    for (var i = 0; i < statuses.length; i++) {
+        var runs = [];
+        try {
+            runs = parseWorkflowRuns(scm.listWorkflowRuns(statuses[i], workflowFile, 50));
+        } catch (eBranchLeg) {
+            console.warn('  ⚠️  Could not inspect active workflow runs (' + statuses[i] + '): ' + (eBranchLeg.message || eBranchLeg));
+            continue;
+        }
+        if (branchLegGuardModule.hasActiveLegRunOnBranch(runs, branch, {
+                workflowFile: workflowFile,
+                staleNonRunningMs: STALE_NON_RUNNING_WORKFLOW_MS,
+                nowMs: Date.now()
+            })) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -588,6 +625,32 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
                 if (skipInfo) skipInfo.crossAnchorActive = altKeys[altIx];
                 return false;
             }
+        }
+        // gh-1028 branch-keyed leg guard: BOTH rework dispatch arms
+        // (issue-anchored rework-on-red-ci AND PR-anchored
+        // rework-on-label) land the leg ON the PR branch
+        // (workflowRef={branch}), and the leg is the branch's SINGLE
+        // WRITER — two concurrent legs on one branch race every push
+        // (live PR #1017 / gh-1000, 2026-10-18 08:04–08:09Z: TWO
+        // concurrent rework legs for ONE rework cycle — the first leg's
+        // push moved the head c2e0d28f → 94988905, so the gh-806
+        // (pr, head) latch keyed a NEW head and never suppressed the
+        // second arm, and the PR-armed factory run titled
+        // 'workflow_dispatch # rework' carries no '· gh-N'/'#N' anchor
+        // token, so the title guards above were blind to it). This probe
+        // keys on the BRANCH, not the head: an ACTIVE ai-teammate run
+        // whose head_branch IS the dispatch branch — regardless of
+        // head_sha — owns the branch, and the dispatch is suppressed.
+        // The arm survives (no consumeLabels bookkeeping here, unlike
+        // the gh-715 cross-anchor path): a leg that dies silently leaves
+        // the arm armed, and the next quiet tick re-fires it — the
+        // dead-letter recovery the machine loop is built on.
+        if (it0.branch && workflowRef === String(it0.branch) &&
+                hasActiveLegRunOnBranch(scm, workflowFile, it0.branch)) {
+            console.log('  ⏭️  ' + ticketKey + ' skipped (leg already in flight on branch ' +
+                it0.branch + ' — gh-1028: the branch is the leg\'s single writer, ' +
+                'a second leg would race its push)');
+            return false;
         }
         var inputs;
         if (rule.inputs) {
