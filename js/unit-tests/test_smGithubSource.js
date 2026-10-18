@@ -2444,9 +2444,10 @@ suite('sm github source: trigger fail-open overfetch (gh-922)', function () {
         }), tools);
     };
 
-    function listPr(n, labels, ref) {
+    function listPr(n, labels, ref, headFull) {
         return { number: n, state: 'open', draft: false, body: '',
-                 head: { sha: 'ovsha' + n, ref: ref || ('feat/ov-' + n) },
+                 head: { sha: 'ovsha' + n, ref: ref || ('feat/ov-' + n),
+                         repo: headFull ? { full_name: headFull } : null },
                  labels: (labels || []).map(function (l) { return { name: l }; }),
                  user: { login: 'ai-teammate' } };
     }
@@ -2516,6 +2517,76 @@ suite('sm github source: trigger fail-open overfetch (gh-922)', function () {
         assert.ok(logs.some(function (l) {
             return l.indexOf('\uD83E\uDD47') !== -1 && l.indexOf('pr-302') !== -1;
         }), 'the blocker taking the limit:1 slot over a cut medium still logs the preemption line');
+    });
+
+    test('gh-1057: a FORK dead-head park whose branch lives on the fork (404 in base) is NOT benched', function () {
+        // Live fa pr-1591: the gh-922 oracle probed the head branch in the
+        // BASE repo, where a fork branch is always 404 — a restored fork
+        // stayed parked forever. The bench must consult the PR's head
+        // repository (head.repo.full_name) instead.
+        var calls = [];
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review', 'validation_failed'], 'fix/fork-branch', 'forko/forkr'),
+                    listPr(301, ['agent:review'], 'feat/alive')
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 5
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate',
+             provider: { branchExists: function (name, headFull) {
+                 calls.push(name + '@' + headFull);
+                 // base repo never holds a fork branch; the fork does
+                 if (!headFull || headFull === 'o/r') return false;
+                 return name !== 'gone/everywhere';
+             } } });
+
+        assert.deepEqual(items.map(function (i) { return i.prNumber; }), [301, 302],
+            'the restored fork head re-enters the queue — parked label + LIVE fork branch stays a candidate');
+        assert.equal(calls.indexOf('fix/fork-branch@forko/forkr') !== -1, true,
+            'the oracle was asked against the FORK repo, not the base');
+        assert.equal(items[1].headRepo, 'forko/forkr',
+            'the item carries the head repo for the bench oracle');
+    });
+
+    test('gh-1057: a fork PR whose branch is gone from BOTH repos stays benched', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review', 'validation_failed'], 'gone/everywhere', 'forko/forkr'),
+                    listPr(301, ['agent:review'], 'feat/alive')
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 5
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate',
+             provider: { branchExists: function (name, headFull) {
+                 if (!headFull || headFull === 'o/r') return false;
+                 return name !== 'gone/everywhere';
+             } } });
+
+        assert.deepEqual(items.map(function (i) { return i.prNumber; }), [301],
+            'a fork branch deleted everywhere is still a dead head — the bench verdict holds');
+    });
+
+    test('gh-1057: fail-open preserved — a fork probe error keeps the parked item', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review', 'validation_failed'], 'fix/fork-branch', 'forko/forkr')
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 5
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate',
+             provider: { branchExists: function () { throw new Error('fork probe denied'); } } });
+
+        assert.equal(items.length, 1,
+            'a throwing fork probe never strands the candidate (fail-open, today\'s contract)');
     });
 
     test('a dead-head park (validation_failed + gone head ref) is benched from the candidate list', function () {

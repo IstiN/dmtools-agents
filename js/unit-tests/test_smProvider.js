@@ -358,6 +358,74 @@ suite('smProvider', function () {
             'an empty ref fails closed (nothing to dispatch against)');
     });
 
+    test('github: branchExists redirects the probe to the head repo for fork PRs (gh-1057)', function () {
+        // gh-1057 (live fa pr-1591): a fork's branch can never exist in
+        // the base repo — probing the base is a guaranteed 404 that parks
+        // a restored fork forever. branchExists(name, headFull) aims the
+        // same snapshot + #639 probe machinery at the fork; an absent,
+        // same-repo, or malformed spec keeps the base probe (fail-safe).
+        var listed = [];
+        var p = loadProvider('github', {
+            github_list_branches: function (args) {
+                var full = args.workspace + '/' + args.repository;
+                listed.push(full);
+                if (args.repository === 'my-repo') {
+                    return [{ name: 'main', commit: { sha: 'm' } }]; // fork branch NOT here
+                }
+                return [{ name: 'fix/fork-branch', commit: { sha: 'f' } }];
+            },
+            cli_execute_command: function (args) {
+                throw new Error('404 Not Found');
+            }
+        });
+        assert.equal(p.branchExists('fix/fork-branch', 'forko/forkr'), true,
+            'fork branch present in the FORK, 404 in base — the fork snapshot answers, never the base 404');
+        assert.equal(listed.indexOf('forko/forkr') !== -1, true,
+            'the branch listing ran against the head repo');
+        assert.equal(p.branchExists('gone/everywhere', 'forko/forkr'), false,
+            'a fork probe 404 keeps the bench verdict for a really-dead head');
+        assert.equal(p.branchExists('gone/everywhere'), false,
+            'no head spec — the base probe, unchanged legacy behavior');
+        assert.equal(p.branchExists('main', 'mygroup/my-repo'), true,
+            'a same-repo head spec keeps the base snapshot answer (no redirect)');
+        assert.equal(p.branchExists('main', 'not-a-repo-spec'), true,
+            'a malformed head spec falls back to the base probe (fail-safe)');
+    });
+
+    test('github: prStatus carries the head repo full name for the bench oracle (gh-1057)', function () {
+        function mkProvider(pr) {
+            return loadProvider('github', {
+                github_get_pr: function () { return pr; },
+                github_get_commit_check_runs: function () { return { check_runs: [] }; },
+                github_list_branches: function () {
+                    return [{ name: 'main', commit: { sha: 'aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00' } }];
+                }
+            });
+        }
+        var forkPr = mkProvider({
+            state: 'OPEN', mergeable: true, mergeable_state: 'clean',
+            base: { ref: 'main', sha: 'aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00' },
+            head: { sha: 'h', ref: 'fix/x', repo: { full_name: 'forko/forkr' } }
+        });
+        assert.equal(forkPr.prStatus(41).headRepo, 'forko/forkr',
+            'REST head.repo.full_name rides the status the bench oracle reads');
+        var ownerNamePr = mkProvider({
+            state: 'OPEN', mergeable: true, mergeable_state: 'clean',
+            base: { ref: 'main', sha: 'aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00' },
+            head: { sha: 'h', ref: 'fix/x',
+                    repo: { owner: { login: 'forko' }, name: 'forkr' } }
+        });
+        assert.equal(ownerNamePr.prStatus(42).headRepo, 'forko/forkr',
+            'owner+name spelling resolves the same full name');
+        var noRepoPr = mkProvider({
+            state: 'OPEN', mergeable: true, mergeable_state: 'clean',
+            base: { ref: 'main', sha: 'aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00' },
+            head: { sha: 'h', ref: 'fix/y' }
+        });
+        assert.equal(noRepoPr.prStatus(43).headRepo, null,
+            'a missing head.repo (deleted fork) resolves to null — base probe, fail-open');
+    });
+
     test('github: prStatus preserves BLOCKED on a fresh base (dart #195 deadlock)', function () {
         // Live: dart #195 sat armed (ai_validating) on a fresh head whose
         // required checks were pending — REST reported mergeable_state
