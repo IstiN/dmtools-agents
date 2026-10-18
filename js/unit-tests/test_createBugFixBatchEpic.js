@@ -247,3 +247,48 @@ suite('createBugFixBatchEpic', function() {
     });
 
 });
+
+suite('createBugFixBatchEpic.extractIssues', function() {
+    function loadModule_() {
+        return loadCreateBugFixBatchEpic({});
+    }
+
+    test('returns [] for null, undefined and empty input', function() {
+        var extractIssues = loadModule_().extractIssues;
+        assert.deepEqual(extractIssues(null), []);
+        assert.deepEqual(extractIssues(undefined), []);
+        assert.deepEqual(extractIssues(''), []);
+    });
+
+    test('returns the input array as-is', function() {
+        var arr = [{ key: 'BUG-1' }, { key: 'BUG-2' }];
+        assert.deepEqual(loadModule_().extractIssues(arr), arr);
+    });
+
+    test('parses a JSON string holding an array', function() {
+        assert.deepEqual(loadModule_().extractIssues('[{"key":"BUG-1"}]'), [{ key: 'BUG-1' }]);
+    });
+
+    test('returns [] for an invalid JSON string', function() {
+        assert.deepEqual(loadModule_().extractIssues('not-json{'), []);
+    });
+
+    test('extracts issues, results and data containers from an object', function() {
+        var extractIssues = loadModule_().extractIssues;
+        assert.deepEqual(extractIssues({ issues: ['i1', 'i2'] }), ['i1', 'i2']);
+        assert.deepEqual(extractIssues({ results: ['r1'] }), ['r1']);
+        assert.deepEqual(extractIssues({ data: ['d1', 'd2'] }), ['d1', 'd2']);
+    });
+
+    test('prefers results over data when both are present (pinned order)', function() {
+        var value = { data: ['d'], results: ['r'] };
+        assert.deepEqual(loadModule_().extractIssues(value), ['r']);
+    });
+
+    test('returns [] when no known container key holds an array', function() {
+        var extractIssues = loadModule_().extractIssues;
+        assert.deepEqual(extractIssues({ total: 5 }), []);
+        assert.deepEqual(extractIssues('{"total":5}'), []);
+        assert.deepEqual(extractIssues(42), []);
+    });
+});

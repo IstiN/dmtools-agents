@@ -326,3 +326,55 @@ suite('dfManager', function() {
         assert.equal(report.anomalies[0].prNumber, 42);
     });
 });
+
+suite('dfManager.asArray', function() {
+    function loadDf() {
+        return makeDfManager().module;
+    }
+
+    test('returns [] for falsy input', function() {
+        var asArray = loadDf().asArray;
+        assert.deepEqual(asArray(null), []);
+        assert.deepEqual(asArray(undefined), []);
+        assert.deepEqual(asArray(0), []);
+        assert.deepEqual(asArray(''), []);
+        assert.deepEqual(asArray(false), []);
+    });
+
+    test('returns the input array as-is', function() {
+        var arr = [{ key: 'TS-1' }, { key: 'TS-2' }];
+        assert.deepEqual(loadDf().asArray(arr), arr);
+    });
+
+    test('unwraps a values container', function() {
+        assert.deepEqual(loadDf().asArray({ values: ['a', 'b'] }), ['a', 'b']);
+    });
+
+    test('unwraps an items container', function() {
+        assert.deepEqual(loadDf().asArray({ items: ['x'] }), ['x']);
+    });
+
+    test('unwraps a workflow_runs container', function() {
+        assert.deepEqual(loadDf().asArray({ workflow_runs: [{ id: 1 }] }), [{ id: 1 }]);
+    });
+
+    test('unwraps a result container', function() {
+        assert.deepEqual(loadDf().asArray({ result: ['r1', 'r2'] }), ['r1', 'r2']);
+    });
+
+    test('prefers values over later container keys', function() {
+        var value = { values: ['v'], items: ['i'], workflow_runs: ['w'], result: ['r'] };
+        assert.deepEqual(loadDf().asArray(value), ['v']);
+    });
+
+    test('skips container keys that do not hold arrays', function() {
+        assert.deepEqual(loadDf().asArray({ values: 'nope', items: ['i'] }), ['i']);
+        assert.deepEqual(loadDf().asArray({ values: { nested: true }, items: 42 }), []);
+    });
+
+    test('returns [] when no known container key holds an array', function() {
+        assert.deepEqual(loadDf().asArray({ total: 3 }), []);
+        assert.deepEqual(loadDf().asArray('plain-string'), []);
+        assert.deepEqual(loadDf().asArray(42), []);
+    });
+});
