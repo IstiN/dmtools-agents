@@ -682,6 +682,22 @@ function firstAssignee(it) {
  * published snapshot (parsed) or null — the timestamp AND history
  * accumulation source (see the schema 2 note above).
  */
+
+// gh-998 (I5): the zombie-swept leak counter — cumulative across snapshots
+// so operators see the leak rate, not just the fix. Always present (0 when
+// the sweeper never fired or the carry is absent) so snapshots keep a stable
+// shape; a malformed carry restarts at this tick's count rather than
+// NaN-poisoning the payload. The whole computation lives in its own helper so
+// buildFactoryState's complexity budget (quality.yml CRAP ratchet — CRAP may
+// only decrease) is not spent on bookkeeping guards.
+function zombiesSweptTotal(input) {
+    function saneCount(n) {
+        return typeof n === 'number' && !isNaN(n) ? n : 0;
+    }
+    var prevSwept = input.prev && input.prev.zombiesSwept;
+    return saneCount(prevSwept) + saneCount(input.zombiesSwept);
+}
+
 function buildFactoryState(input) {
     var prs = input.prs || [];
     var mergedPrs = input.mergedPrs || [];
@@ -960,6 +976,9 @@ function buildFactoryState(input) {
             workflowFile: input.legWorkflow
         }).map;
 
+    // gh-998 (I5): cumulative zombie-swept leak counter — see zombiesSweptTotal.
+    var sweptTotal = zombiesSweptTotal(input);
+
     var state = {
         schema: 2,
         factory: input.factory || (input.repoInfo && input.repoInfo.repo) || 'unknown',
@@ -971,6 +990,7 @@ function buildFactoryState(input) {
         },
         checks: checkNames,
         reworkInFlight: reworkInFlight,
+        zombiesSwept: sweptTotal,
         lanes: lanes,
         counts: LANE_ORDER.reduce(function (m, l) {
             m[l] = (lanes[l] || []).length; return m;
