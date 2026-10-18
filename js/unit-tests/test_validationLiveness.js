@@ -292,3 +292,55 @@ suite('validationLiveness silent-update failure markers (gh-1000 bookkeeping)', 
         assert.deepEqual(out, { count: 2, newest: '2026-10-17T19:10:00Z' });
     });
 });
+
+// ── gh-1070: fork-aware silent-update routing ────────────────────────────────
+// Live fa PR #1591 (YuryBY fork): silent-update pushed against the BASE repo
+// for a fork head 3× and flagged silent-update-degraded, then the gh-757
+// guest park waited on the human author. GitHub already grants the base
+// token a push to the fork's PR branch when maintainer edits are allowed
+// (probe: maintainer_can_modify). Pure dispatch — three paths (UT-1), the
+// fork push URL (UT-2), zero same-repo drift (AC4).
+
+suite('validationLiveness fork-aware silent-update routing (gh-1070)', function () {
+
+    test('UT-1: probe routing — editable fork / non-editable fork / same-repo → three distinct paths', function () {
+        // editable fork → the machine refreshes the fork head itself (AC1)
+        assert.deepEqual(
+            live.forkSilentUpdateRoute('forko/forkr', 'epam', 'base', true),
+            { route: 'fork', forkFull: 'forko/forkr' });
+        // non-editable fork → guest park, NO silent-update attempt (AC2)
+        assert.deepEqual(
+            live.forkSilentUpdateRoute('forko/forkr', 'epam', 'base', false),
+            { route: 'park', forkFull: 'forko/forkr' });
+        // same-repo → the untouched base-repush path (AC4)
+        assert.deepEqual(
+            live.forkSilentUpdateRoute('epam/base', 'epam', 'base', false),
+            { route: 'base', forkFull: null });
+    });
+
+    test('UT-1: an UNKNOWN probe on a fork fails closed to the park path (never an unprobed attempt)', function () {
+        assert.equal(
+            live.forkSilentUpdateRoute('forko/forkr', 'epam', 'base', null).route, 'park');
+        assert.equal(
+            live.forkSilentUpdateRoute('forko/forkr', 'epam', 'base', undefined).route, 'park');
+    });
+
+    test('forkHeadFull: only a well-formed FOREIGN full name resolves to a fork', function () {
+        assert.equal(live.forkHeadFull('forko/forkr', 'epam', 'base'), 'forko/forkr');
+        assert.equal(live.forkHeadFull('epam/base', 'epam', 'base'), null, 'same-repo is not a fork');
+        assert.equal(live.forkHeadFull('', 'epam', 'base'), null, 'missing headRepo (legacy payload) is not a fork');
+        assert.equal(live.forkHeadFull(null, 'epam', 'base'), null, 'deleted fork (null head.repo) is not a fork');
+        assert.equal(live.forkHeadFull('noslash', 'epam', 'base'), null, 'a repo name without owner is malformed');
+        // a same-repo verdict never consults the probe: false MUST NOT
+        // reroute a base head into the park path (AC4)
+        assert.equal(live.forkSilentUpdateRoute(null, 'epam', 'base', false).route, 'base');
+    });
+
+    test('UT-2: the fork push URL is built from head.repo.full_name and never targets the base', function () {
+        var url = live.forkPushTokenUrl('forko/forkr');
+        assert.equal(url,
+            'https://x-access-token:[REDACTED:Connection String Password]@github.com/forko/forkr.git');
+        assert.notOk(url.indexOf('epam/base') !== -1, 'the base repo is never the push target');
+        assert.ok(url.indexOf('${GH_TOKEN}') !== -1, 'the token rides the child env, never the source');
+    });
+});
