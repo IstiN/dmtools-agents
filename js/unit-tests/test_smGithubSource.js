@@ -3131,3 +3131,48 @@ suite('sm github source: gh-1000 IT-1 phantom self-heal through queryPrs (AC2)',
         assert.equal(mod.takeMutexTickSnapshot(), null);
     });
 });
+
+suite('sm github source: gh-807 latestVerdict receiver binding (fa tick crash 2026-10-18)', function () {
+    // Live: FAH SM ticks died with TypeError "not a function" the moment an
+    // agent:rework PR reached the verdict probe — _latestVerdictRec extracted
+    // provider.latestVerdictRecord into a bare variable and the unbound call
+    // lost `this` (the method body rides this.verdictRecords). This test
+    // drives the guard through the REAL createSmProvider: an unbound
+    // extraction crashes here.
+    test('latestVerdict guard evaluates through the real provider without crashing', function () {
+        var commentsPayload = JSON.stringify([
+            { body: '<!-- dmtools:review-verdict {"verdict":"APPROVE","headSha":"abc","at":"2026-10-18T12:00:00Z"} -->\napproved',
+              author: { login: 'ai-teammate' }, created_at: '2026-10-18T12:00:00Z' }
+        ]);
+        var tools = {
+            github_list_prs: function () {
+                return [{ number: 1687, labels: [{ name: 'agent:rework' }],
+                          head: { ref: 'x', sha: 'abc' }, draft: false }];
+            },
+            github_get_pr_comments: function () { return commentsPayload; },
+            github_get_pr: function () { return { number: 1687, head: { sha: 'abc' } }; },
+            github_get_commit_check_runs: function () { return []; },
+            github_get_pr_review_threads: function () {
+                return JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+            }
+        };
+        var machineAuthor = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+        var reviewVerdicts = loadModule('js/common/reviewVerdicts.js',
+            makeRequire({ './machineAuthor.js': machineAuthor }), tools);
+        var provider = loadModule('js/common/smProvider.js', makeRequire({
+            './machineAuthor.js': machineAuthor,
+            './reviewVerdicts.js': reviewVerdicts
+        }), tools);
+        var srcMod = loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': machineAuthor,
+            '../../common/smAsync.js': {},
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), tools),
+            '../../common/smProvider.js': provider
+        }), tools);
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:rework'], latestVerdict: ['APPROVE'], draft: false }
+        }, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
+        assert.ok(Array.isArray(items),
+            'the verdict probe ran through the bound provider method (pre-fix: TypeError "not a function" killed the tick)');
+    });
+});

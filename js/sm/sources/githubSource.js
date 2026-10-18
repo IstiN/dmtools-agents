@@ -403,10 +403,13 @@ function _latestVerdictRec(provider, prNumber, headSha, machineAuthor) {
     // gh-807: pins the gh-728 machine-author allowlist (gh-828 review
     // round 2) — the marker format is public, so only machine-authored
     // markers count. Fail-open: no probe → null → guards inert.
-    var probe = (provider && typeof provider.latestVerdictRecord === 'function')
-        ? provider.latestVerdictRecord : null;
-    if (!probe) return null;
-    return probe(prNumber, headSha,
+    // Call THROUGH the provider: latestVerdictRecord's body rides
+    // `this.verdictRecords` — an extracted unbound probe crashes with
+    // TypeError "not a function" the moment a real candidate reaches the
+    // verdict probe (live: fa SM ticks died on the gh-807 shape-1 query,
+    // 2026-10-18).
+    if (!provider || typeof provider.latestVerdictRecord !== 'function') return null;
+    return provider.latestVerdictRecord(prNumber, headSha,
         { authorLogins: machineAuthorModule.machineAuthorLogins(machineAuthor) });
 }
 
