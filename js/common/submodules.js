@@ -147,6 +147,171 @@ function prepareDirtySubmoduleBranch(run, cleanOutput, path, branch) {
     return cleanOutput(run('git -C ' + path + ' status --porcelain') || '');
 }
 
+// ── gh-1041: publish decision helpers ────────────────────────────────────────
+// Extraction of the per-module publish body of pushManagedSubmodules into
+// small helpers (CRAP 50.5 → split). Behaviour-preserving: the same git
+// commands run in the same order with the same log lines — pinned by
+// test_submodules.js characterization tests.
+
+// branch wins over targetBranch; both missing falls back to 'main'.
+function resolveModuleBranch(module) {
+    return module.branch || module.targetBranch || 'main';
+}
+
+// The three publish guards: an unsafe path/branch/tagPrefix throws BEFORE any
+// git command runs (same messages as the original inline checks).
+function assertSafeManagedSubmoduleSpec(path, branch, tagPrefix) {
+    if (!isSafeRelativePath(path)) {
+        throw new Error('Unsafe managed submodule path: ' + path);
+    }
+    if (!isSafeRefName(branch)) {
+        throw new Error('Unsafe managed submodule branch for ' + path + ': ' + branch);
+    }
+    if (tagPrefix && !isSafeRefName(tagPrefix)) {
+        throw new Error('Unsafe managed submodule tag prefix for ' + path + ': ' + tagPrefix);
+    }
+}
+
+// Pure parse of the `git config --file .gitmodules --get-regexp` capture into
+// the list of registered submodule paths (second whitespace field per line).
+function parseRegisteredSubmodulePaths(gitConfigOutput) {
+    return (gitConfigOutput || '')
+        .split('\n')
+        .map(function(line) { return line.trim().split(/\s+/)[1]; })
+        .filter(function(path) { return !!path; });
+}
+
+// Fetch failure is non-fatal: the publish decision works off local state.
+function tryFetchManagedSubmoduleBranch(run, path, branch) {
+    try {
+        run('git -C ' + path + ' fetch origin ' + branch);
+    } catch (e) {
+        console.warn('Could not fetch managed submodule branch ' + path + ' origin/' + branch + ':', e.message || e);
+    }
+}
+
+// Count of local commits not on origin/<branch>; a failing probe counts as 0.
+function countCommitsAhead(run, cleanOutput, path, branch) {
+    try {
+        var aheadOutput = cleanOutput(run('git -C ' + path + ' rev-list --count origin/' + branch + '..HEAD') || '');
+        return parseInt(aheadOutput, 10) || 0;
+    } catch (e) {
+        console.warn('Could not check managed submodule commits ahead for ' + path + ':', e.message || e);
+        return 0;
+    }
+}
+
+// Pure-ish publish decision: returns 'none' | 'included' | 'divergent' |
+// 'publish' and logs the skip reason. The two ancestor probes run ONLY for a
+// clean tree with commits ahead, in the original order (HEAD→remote, then
+// remote→HEAD).
+function decideSubmodulePublish(run, cleanOutput, path, branch, hasDirtyChanges, aheadCount) {
+    if (!hasDirtyChanges && aheadCount === 0) {
+        console.log('No managed submodule changes detected in', path);
+        return 'none';
+    }
+    if (!hasDirtyChanges) {
+        var remoteRef = 'origin/' + branch;
+        var localIncludedInRemote = isAncestor(run, cleanOutput, path, 'HEAD', remoteRef);
+        var remoteIncludedInLocal = isAncestor(run, cleanOutput, path, remoteRef, 'HEAD');
+
+        if (localIncludedInRemote) {
+            console.log('Managed submodule HEAD is already included in origin/' + branch + ', skipping publish:', path);
+            return 'included';
+        }
+
+        if (aheadCount > 0 && !remoteIncludedInLocal) {
+            console.log('Managed submodule has clean divergent gitlink state; skipping publish to avoid rebasing stale generated commits:', path);
+            return 'divergent';
+        }
+    }
+    return 'publish';
+}
+
+// Optional author identity for the generated commit; absent config → no calls.
+function configureSubmoduleAuthor(run, path, config) {
+    if (config.git && config.git.authorName) {
+        run('git -C ' + path + ' config user.name ' + quoteCommitMessage(config.git.authorName));
+    }
+    if (config.git && config.git.authorEmail) {
+        run('git -C ' + path + ' config user.email ' + quoteCommitMessage(config.git.authorEmail));
+    }
+}
+
+// Stage everything and commit when staging produced committable changes.
+function stageAndCommitIfNeeded(run, cleanOutput, path, commitMessage) {
+    run('git -C ' + path + ' add .');
+    var stagedStatus = cleanOutput(run('git -C ' + path + ' status --porcelain') || '');
+    if (!stagedStatus.trim()) {
+        console.log('Managed submodule had no committable changes after staging:', path);
+        return;
+    }
+    run('git -C ' + path + ' commit -m ' + quoteCommitMessage(commitMessage));
+}
+
+// Force-tag HEAD with <tagPrefix>-<short HEAD sha> and push the tag.
+function publishSubmoduleTag(run, cleanOutput, path, tagPrefix) {
+    var headSha = cleanOutput(run('git -C ' + path + ' rev-parse --short=12 HEAD') || '').trim();
+    if (!headSha) {
+        throw new Error('Could not resolve managed submodule HEAD for tag publishing: ' + path);
+    }
+    var tagName = tagPrefix + '-' + headSha;
+    if (!isSafeRefName(tagName)) {
+        throw new Error('Unsafe managed submodule tag name for ' + path + ': ' + tagName);
+    }
+    run('git -C ' + path + ' tag -f ' + tagName + ' HEAD');
+    run('git -C ' + path + ' push origin refs/tags/' + tagName + ':refs/tags/' + tagName + ' --force');
+    console.log('Managed submodule tag pushed:', path, '->', tagName);
+}
+
+// Per-module publish body — same git commands, same order, same log lines as
+// the original pushManagedSubmodules forEach body.
+function pushOneManagedSubmodule(run, cleanOutput, config, ticketKey, module) {
+    var path = module.path;
+    var branch = resolveModuleBranch(module);
+    var tagPrefix = module.tagPrefix || null;
+
+    assertSafeManagedSubmoduleSpec(path, branch, tagPrefix);
+
+    var registeredPaths = parseRegisteredSubmodulePaths(
+        cleanOutput(run('git config --file .gitmodules --get-regexp "^submodule\\..*\\.path$"') || '')
+    );
+    if (registeredPaths.indexOf(path) === -1) {
+        throw new Error('Managed submodule path is not registered in .gitmodules: ' + path);
+    }
+
+    tryFetchManagedSubmoduleBranch(run, path, branch);
+
+    var status = cleanOutput(run('git -C ' + path + ' status --porcelain') || '');
+    var aheadCount = countCommitsAhead(run, cleanOutput, path, branch);
+    var hasDirtyChanges = !!status.trim();
+
+    if (decideSubmodulePublish(run, cleanOutput, path, branch, hasDirtyChanges, aheadCount) !== 'publish') {
+        return;
+    }
+
+    console.log('Publishing managed submodule changes:', path, '-> origin/' + branch);
+    if (hasDirtyChanges) {
+        status = prepareDirtySubmoduleBranch(run, cleanOutput, path, branch);
+    } else if (aheadCount > 0) {
+        run('git -C ' + path + ' checkout -B ' + branch + ' HEAD');
+    }
+
+    configureSubmoduleAuthor(run, path, config);
+
+    if (status.trim()) {
+        var commitMessage = module.commitMessage || (ticketKey + ' Update ' + path + ' assets');
+        stageAndCommitIfNeeded(run, cleanOutput, path, commitMessage);
+    }
+
+    run('git -C ' + path + ' push origin HEAD:' + branch);
+    console.log('Managed submodule pushed:', path, '-> origin/' + branch);
+
+    if (tagPrefix) {
+        publishSubmoduleTag(run, cleanOutput, path, tagPrefix);
+    }
+}
+
 function pushManagedSubmodules(options) {
     var run = options.run;
     var cleanOutput = options.cleanOutput || function(output) { return output || ''; };
@@ -155,108 +320,7 @@ function pushManagedSubmodules(options) {
     var ticketKey = options.ticketKey || 'Agent';
 
     collectManagedSubmodules(config, customParams).forEach(function(module) {
-        var path = module.path;
-        var branch = module.branch || module.targetBranch || 'main';
-        var tagPrefix = module.tagPrefix || null;
-
-        if (!isSafeRelativePath(path)) {
-            throw new Error('Unsafe managed submodule path: ' + path);
-        }
-        if (!isSafeRefName(branch)) {
-            throw new Error('Unsafe managed submodule branch for ' + path + ': ' + branch);
-        }
-        if (tagPrefix && !isSafeRefName(tagPrefix)) {
-            throw new Error('Unsafe managed submodule tag prefix for ' + path + ': ' + tagPrefix);
-        }
-
-        var registeredPath = cleanOutput(run('git config --file .gitmodules --get-regexp "^submodule\\..*\\.path$"') || '')
-            .split('\n')
-            .some(function(line) {
-                return line.trim().split(/\s+/)[1] === path;
-            });
-        if (!registeredPath) {
-            throw new Error('Managed submodule path is not registered in .gitmodules: ' + path);
-        }
-
-        try {
-            run('git -C ' + path + ' fetch origin ' + branch);
-        } catch (e) {
-            console.warn('Could not fetch managed submodule branch ' + path + ' origin/' + branch + ':', e.message || e);
-        }
-
-        var status = cleanOutput(run('git -C ' + path + ' status --porcelain') || '');
-        var aheadCount = 0;
-        try {
-            var aheadOutput = cleanOutput(run('git -C ' + path + ' rev-list --count origin/' + branch + '..HEAD') || '');
-            aheadCount = parseInt(aheadOutput, 10) || 0;
-        } catch (e) {
-            console.warn('Could not check managed submodule commits ahead for ' + path + ':', e.message || e);
-        }
-
-        var hasDirtyChanges = !!status.trim();
-
-        if (!hasDirtyChanges && aheadCount === 0) {
-            console.log('No managed submodule changes detected in', path);
-            return;
-        }
-
-        if (!hasDirtyChanges) {
-            var remoteRef = 'origin/' + branch;
-            var localIncludedInRemote = isAncestor(run, cleanOutput, path, 'HEAD', remoteRef);
-            var remoteIncludedInLocal = isAncestor(run, cleanOutput, path, remoteRef, 'HEAD');
-
-            if (localIncludedInRemote) {
-                console.log('Managed submodule HEAD is already included in origin/' + branch + ', skipping publish:', path);
-                return;
-            }
-
-            if (aheadCount > 0 && !remoteIncludedInLocal) {
-                console.log('Managed submodule has clean divergent gitlink state; skipping publish to avoid rebasing stale generated commits:', path);
-                return;
-            }
-        }
-
-        console.log('Publishing managed submodule changes:', path, '-> origin/' + branch);
-        if (hasDirtyChanges) {
-            status = prepareDirtySubmoduleBranch(run, cleanOutput, path, branch);
-        } else if (aheadCount > 0) {
-            run('git -C ' + path + ' checkout -B ' + branch + ' HEAD');
-        }
-
-        if (config.git && config.git.authorName) {
-            run('git -C ' + path + ' config user.name ' + quoteCommitMessage(config.git.authorName));
-        }
-        if (config.git && config.git.authorEmail) {
-            run('git -C ' + path + ' config user.email ' + quoteCommitMessage(config.git.authorEmail));
-        }
-
-        if (status.trim()) {
-            run('git -C ' + path + ' add .');
-            var stagedStatus = cleanOutput(run('git -C ' + path + ' status --porcelain') || '');
-            if (!stagedStatus.trim()) {
-                console.log('Managed submodule had no committable changes after staging:', path);
-            } else {
-                var commitMessage = module.commitMessage || (ticketKey + ' Update ' + path + ' assets');
-                run('git -C ' + path + ' commit -m ' + quoteCommitMessage(commitMessage));
-            }
-        }
-
-        run('git -C ' + path + ' push origin HEAD:' + branch);
-        console.log('Managed submodule pushed:', path, '-> origin/' + branch);
-
-        if (tagPrefix) {
-            var headSha = cleanOutput(run('git -C ' + path + ' rev-parse --short=12 HEAD') || '').trim();
-            if (!headSha) {
-                throw new Error('Could not resolve managed submodule HEAD for tag publishing: ' + path);
-            }
-            var tagName = tagPrefix + '-' + headSha;
-            if (!isSafeRefName(tagName)) {
-                throw new Error('Unsafe managed submodule tag name for ' + path + ': ' + tagName);
-            }
-            run('git -C ' + path + ' tag -f ' + tagName + ' HEAD');
-            run('git -C ' + path + ' push origin refs/tags/' + tagName + ':refs/tags/' + tagName + ' --force');
-            console.log('Managed submodule tag pushed:', path, '->', tagName);
-        }
+        pushOneManagedSubmodule(run, cleanOutput, config, ticketKey, module);
     });
 }
 
@@ -264,5 +328,16 @@ module.exports = {
     collectManagedSubmodules: collectManagedSubmodules,
     pushManagedSubmodules: pushManagedSubmodules,
     isSafeRelativePath: isSafeRelativePath,
-    isSafeSubmoduleFilePath: isSafeSubmoduleFilePath
+    isSafeSubmoduleFilePath: isSafeSubmoduleFilePath,
+    // gh-1041: publish decision helpers exposed as testable pure helpers
+    resolveModuleBranch: resolveModuleBranch,
+    parseRegisteredSubmodulePaths: parseRegisteredSubmodulePaths,
+    decideSubmodulePublish: decideSubmodulePublish,
+    countCommitsAhead: countCommitsAhead,
+    configureSubmoduleAuthor: configureSubmoduleAuthor,
+    stageAndCommitIfNeeded: stageAndCommitIfNeeded,
+    publishSubmoduleTag: publishSubmoduleTag,
+    tryFetchManagedSubmoduleBranch: tryFetchManagedSubmoduleBranch,
+    assertSafeManagedSubmoduleSpec: assertSafeManagedSubmoduleSpec,
+    pushOneManagedSubmodule: pushOneManagedSubmodule
 };

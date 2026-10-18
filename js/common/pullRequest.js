@@ -631,59 +631,14 @@ function resolveBodyContent(options) {
     return options.defaultBody || 'Automated changes.';
 }
 
-function createPullRequest(options) {
-    options = options || {};
-    var branchName = options.branchName;
-    var baseBranch = options.baseBranch || 'main';
-    var workingDir = options.workingDir || null;
-    var runCommand = options.runCommand || defaultRunCommand;
-    var writeFile = options.writeFile || defaultWriteFile;
-    var deleteFile = options.deleteFile || defaultDeleteFile;
-    var scm = options.scm || null;
+// ── gh-1041: PR creation seam split ──────────────────────────────────────────
+// Extraction of createPullRequest (CRAP 46.4) into the orchestrator plus
+// small build/decide helpers. Behaviour-preserving: same gh/scm calls in the
+// same order, same log lines, same return shapes — pinned by
+// test_pullRequestHelper.js characterization tests.
 
-    if (!branchName) return { success: false, error: 'branchName is required' };
-
-    if (scm && typeof scm.createPr === 'function') {
-        var body = resolveBodyContent(options);
-        // gh-737: guarantee the canonical 'Closes #N' line so the merge bot
-        // can link this PR to the ticket by construction.
-        if (options.ticketKey) body = ensureClosesLine(body, options.ticketKey);
-        try {
-            var created = scm.createPr({
-                title: sanitizeTitle(options.title),
-                branchName: branchName,
-                baseBranch: baseBranch,
-                body: body,
-                removeSourceBranch: options.removeSourceBranch
-            });
-            if (created && created.success) {
-                console.log('✅ Pull/Merge Request created:', created.prUrl || '(URL not found)');
-                return created;
-            }
-            return created || { success: false, error: 'SCM provider returned no result from createPr' };
-        } catch (error) {
-            var errMsg = error && error.toString ? error.toString() : String(error);
-            if (errMsg.indexOf('already exists') !== -1 || errMsg.indexOf('Another open merge request') !== -1) {
-                console.warn('SCM provider reported an existing PR/MR for branch ' + branchName + ': ' + errMsg);
-            }
-            return { success: false, error: errMsg };
-        }
-    }
-
-    try {
-        var existingPr = cleanCommandOutput(
-            runCommand('gh pr list --head ' + branchName + ' --json url --jq ".[0].url"', workingDir) || ''
-        );
-        if (existingPr && existingPr.startsWith('https://')) {
-            console.log('✅ PR already exists for branch ' + branchName + ': ' + existingPr);
-            return { success: true, prUrl: existingPr, alreadyExisted: true };
-        }
-    } catch (e) {
-        console.warn('Could not check for existing PR (non-fatal):', e);
-    }
-
-    var tempBodyFile = options.tempBodyFile || 'pr_body_tmp.md';
-    var tempBodyPath = workingDir ? workingDir.replace(/\/$/, '') + '/' + tempBodyFile : tempBodyFile;
+// The canonical Closes-line body resolution shared by both creation paths.
+function buildPrBodyContent(options) {
     var bodyContent = resolveBodyContent(options);
     // gh-737: guarantee the canonical 'Closes #N' line so the merge bot can
     // link this PR to the ticket by construction (applies to defaultBody too).
@@ -693,12 +648,91 @@ function createPullRequest(options) {
         var truncationNotice = '\n\n_…PR body truncated by automation; original full content was ' + bodyContent.length + ' characters._';
         bodyContent = bodyContent.substring(0, MAX_GH_PR_BODY_LENGTH - truncationNotice.length) + truncationNotice;
     }
-    writeFile(tempBodyPath, bodyContent);
+    return bodyContent;
+}
 
-    var command = 'gh pr create --title "' + sanitizeTitle(options.title) + '"' +
+// Pure builder for the `gh pr create` invocation (title sanitized the same
+// way for both the command line and the SCM-provider payload).
+function buildGhPrCreateCommand(title, tempBodyFile, baseBranch, branchName) {
+    return 'gh pr create --title "' + sanitizeTitle(title) + '"' +
         ' --body-file "' + tempBodyFile + '"' +
         ' --base ' + baseBranch +
         ' --head ' + branchName;
+}
+
+// True when a gh-cli create failure means an equivalent PR already exists
+// (the recoverable shape — the existing URL is looked up afterwards).
+function isExistingGhPrError(errMsg) {
+    return errMsg.indexOf('already exists') !== -1 || errMsg.indexOf('pull request for branch') !== -1;
+}
+
+// True when an SCM-provider create failure means an equivalent PR/MR already
+// exists ('Another open merge request' is the GitLab wording).
+function isExistingScmPrError(errMsg) {
+    return errMsg.indexOf('already exists') !== -1 || errMsg.indexOf('Another open merge request') !== -1;
+}
+
+// Looks up an already-open PR for the branch; a failing lookup is non-fatal.
+function findExistingGhPr(runCommand, branchName, workingDir) {
+    try {
+        var existingPr = cleanCommandOutput(
+            runCommand('gh pr list --head ' + branchName + ' --json url --jq ".[0].url"', workingDir) || ''
+        );
+        if (existingPr && existingPr.startsWith('https://')) {
+            return existingPr;
+        }
+    } catch (e) {
+        console.warn('Could not check for existing PR (non-fatal):', e);
+    }
+    return null;
+}
+
+// The SCM-provider creation path (GitHub/GitLab/ADO providers exposing createPr).
+function createPrThroughScm(scm, options, branchName, baseBranch) {
+    var body = buildPrBodyContent(options);
+    try {
+        var created = scm.createPr({
+            title: sanitizeTitle(options.title),
+            branchName: branchName,
+            baseBranch: baseBranch,
+            body: body,
+            removeSourceBranch: options.removeSourceBranch
+        });
+        if (created && created.success) {
+            console.log('✅ Pull/Merge Request created:', created.prUrl || '(URL not found)');
+            return created;
+        }
+        return created || { success: false, error: 'SCM provider returned no result from createPr' };
+    } catch (error) {
+        var errMsg = error && error.toString ? error.toString() : String(error);
+        if (isExistingScmPrError(errMsg)) {
+            console.warn('SCM provider reported an existing PR/MR for branch ' + branchName + ': ' + errMsg);
+        }
+        return { success: false, error: errMsg };
+    }
+}
+
+// The gh-cli creation path: duplicate lookup → temp body file → gh pr create
+// → URL extraction, with already-exists recovery and guaranteed temp cleanup.
+function createGhPullRequest(options, branchName) {
+    var baseBranch = options.baseBranch || 'main';
+    var workingDir = options.workingDir || null;
+    var runCommand = options.runCommand || defaultRunCommand;
+    var writeFile = options.writeFile || defaultWriteFile;
+    var deleteFile = options.deleteFile || defaultDeleteFile;
+
+    var existingPr = findExistingGhPr(runCommand, branchName, workingDir);
+    if (existingPr) {
+        console.log('✅ PR already exists for branch ' + branchName + ': ' + existingPr);
+        return { success: true, prUrl: existingPr, alreadyExisted: true };
+    }
+
+    var tempBodyFile = options.tempBodyFile || 'pr_body_tmp.md';
+    var tempBodyPath = workingDir ? workingDir.replace(/\/$/, '') + '/' + tempBodyFile : tempBodyFile;
+    var bodyContent = buildPrBodyContent(options);
+    writeFile(tempBodyPath, bodyContent);
+
+    var command = buildGhPrCreateCommand(options.title, tempBodyFile, baseBranch, branchName);
 
     try {
         var output = runCommand(command, workingDir) || '';
@@ -707,7 +741,7 @@ function createPullRequest(options) {
         return { success: true, prUrl: prUrl, output: output };
     } catch (error) {
         var errMsg = error.toString();
-        if (errMsg.indexOf('already exists') !== -1 || errMsg.indexOf('pull request for branch') !== -1) {
+        if (isExistingGhPrError(errMsg)) {
             var existingUrl = extractPrUrl('', runCommand, branchName, workingDir);
             if (existingUrl) {
                 console.log('✅ Found existing PR:', existingUrl);
@@ -723,6 +757,19 @@ function createPullRequest(options) {
         // tree and blocks the dirty-tree guard on the very next ticket.
         deleteFile(tempBodyPath);
     }
+}
+
+function createPullRequest(options) {
+    options = options || {};
+    var branchName = options.branchName;
+
+    if (!branchName) return { success: false, error: 'branchName is required' };
+
+    var scm = options.scm || null;
+    if (scm && typeof scm.createPr === 'function') {
+        return createPrThroughScm(scm, options, branchName, options.baseBranch || 'main');
+    }
+    return createGhPullRequest(options, branchName);
 }
 
 module.exports = {
@@ -742,5 +789,13 @@ module.exports = {
     readTrackedStatus: readTrackedStatus,
     readStagedDiffStat: readStagedDiffStat,
     syncBranchWithBase: syncBranchWithBase,
-    createPullRequest: createPullRequest
+    createPullRequest: createPullRequest,
+    // gh-1041: creation-path helpers exposed as testable pure helpers
+    buildPrBodyContent: buildPrBodyContent,
+    buildGhPrCreateCommand: buildGhPrCreateCommand,
+    isExistingGhPrError: isExistingGhPrError,
+    isExistingScmPrError: isExistingScmPrError,
+    findExistingGhPr: findExistingGhPr,
+    createPrThroughScm: createPrThroughScm,
+    createGhPullRequest: createGhPullRequest
 };
