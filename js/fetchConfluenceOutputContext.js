@@ -26,6 +26,57 @@ var contentOutput = require('./common/contentOutput.js');
 var CURRENT_CONTENT_FILE = 'confluence_output_current.md';
 var TARGET_MARKER_FILE = 'confluence_output_target.json';
 
+// ── Pure helpers (gh-1043 CRAP split): storage-body extraction, anchor
+// injection and marker building extracted from action(). The Confluence
+// reads still happen in call order — only the decision logic moved.
+
+function storageBodyOf(page) {
+    return (page && page.body && page.body.storage && page.body.storage.value) || '';
+}
+
+/**
+ * Body of the existing page: the children-list value when present, otherwise
+ * a follow-up single-item GET (format 'md') — the list entry can be empty.
+ */
+function resolvePageBody(existing) {
+    var body = storageBodyOf(existing);
+    if (body) return body;
+    var full = confluence_content_by_id({ contentId: existing.id, format: 'md' });
+    return storageBodyOf(full);
+}
+
+/**
+ * Re-expose inline comment anchors: storage bodies carry them as
+ * <ac:inline-comment-marker> elements which the Markdown conversion strips;
+ * re-inject them as [[ic:REF]]...[[/ic]] placeholders so the agent can keep
+ * the anchors in its output. Returns the (possibly unchanged) body.
+ */
+function injectStoredCommentAnchors(body, pageId) {
+    var storage = confluence_content_by_id({ contentId: pageId });
+    var storageBody = storage && storage.body && storage.body.storage && storage.body.storage.value;
+    var anchors = contentOutput.extractInlineCommentMarkers(storageBody);
+    if (anchors.length === 0) return body;
+    var injected = contentOutput.injectCommentPlaceholders(body, anchors);
+    console.log('fetchConfluenceOutputContext: injected ' + injected.injected.length +
+        ' inline comment placeholder(s)' +
+        (injected.missed.length > 0 ? ', ' + injected.missed.length + ' anchor text(s) not found in Markdown' : ''));
+    return injected.content;
+}
+
+function buildTargetMarker(cfg, pageTitle) {
+    return {
+        target: cfg.target,
+        format: 'markdown',
+        pageTitle: pageTitle,
+        space: cfg.space,
+        parentPageId: cfg.parentPageId
+    };
+}
+
+function shouldFetchInlineComments(cfg, folder) {
+    return cfg.includeInlineComments !== false && !!folder;
+}
+
 function action(params) {
     var folder = params.inputFolderPath;
     var ticket = params.ticket || {};
@@ -48,13 +99,7 @@ function action(params) {
             (ticket.fields && ticket.fields.summary) || '');
         if (folder) {
             try {
-                file_write(folder + '/' + TARGET_MARKER_FILE, JSON.stringify({
-                    target: cfg.target,
-                    format: 'markdown',
-                    pageTitle: pageTitle,
-                    space: cfg.space,
-                    parentPageId: cfg.parentPageId
-                }, null, 2));
+                file_write(folder + '/' + TARGET_MARKER_FILE, JSON.stringify(buildTargetMarker(cfg, pageTitle), null, 2));
             } catch (markerError) {
                 console.warn('fetchConfluenceOutputContext: failed to write target marker:', markerError);
             }
@@ -78,28 +123,10 @@ function action(params) {
 
         // 1. Current page body
         try {
-            var body = (existing.body && existing.body.storage && existing.body.storage.value) || '';
-            if (!body) {
-                var full = confluence_content_by_id({ contentId: existing.id, format: 'md' });
-                body = (full && full.body && full.body.storage && full.body.storage.value) || '';
-            }
+            var body = resolvePageBody(existing);
             if (folder && body) {
-                // Preserve inline comment anchors: storage bodies carry them as
-                // <ac:inline-comment-marker> elements which the Markdown conversion
-                // strips. Re-expose them as [[ic:REF]]...[[/ic]] placeholders so the
-                // agent can keep the anchors in its output (publishPage converts them
-                // back after the sync).
                 try {
-                    var storage = confluence_content_by_id({ contentId: existing.id });
-                    var storageBody = storage && storage.body && storage.body.storage && storage.body.storage.value;
-                    var anchors = contentOutput.extractInlineCommentMarkers(storageBody);
-                    if (anchors.length > 0) {
-                        var injected = contentOutput.injectCommentPlaceholders(body, anchors);
-                        body = injected.content;
-                        console.log('fetchConfluenceOutputContext: injected ' + injected.injected.length +
-                            ' inline comment placeholder(s)' +
-                            (injected.missed.length > 0 ? ', ' + injected.missed.length + ' anchor text(s) not found in Markdown' : ''));
-                    }
+                    body = injectStoredCommentAnchors(body, existing.id);
                 } catch (markerError) {
                     console.warn('fetchConfluenceOutputContext: marker extraction failed (non-fatal):', markerError);
                 }
@@ -112,7 +139,7 @@ function action(params) {
 
         // 2. Inline comments
         var commentsCount = 0;
-        if (cfg.includeInlineComments !== false && folder) {
+        if (shouldFetchInlineComments(cfg, folder)) {
             var comments = contentOutput.fetchPageInlineComments(existing.id, pageTitle, 100);
             contentOutput.writeCommentsFiles(folder, comments, contentOutput.COMMENTS_BASE_NAME);
             commentsCount = comments.length;

@@ -350,5 +350,101 @@ suite('publishDiscoveryToConfluence', function() {
         assert.equal(result.commentRepliesPosted, 0);
     });
 
+    test('children lookup failure returns children_lookup_failed with the error', function() {
+        var mod = loadPublishDiscovery({
+            confluence_get_children_by_id: function() { throw new Error('confluence down'); }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.success, false);
+        assert.equal(result.action, 'children_lookup_failed');
+        assert.contains(result.error, 'confluence down');
+    });
+
+    test('non-JSON sync summary falls back to { raw } and reports 0 synced pages', function() {
+        var comments = [];
+        var mod = loadPublishDiscovery({
+            confluence_get_children_by_id: function() {
+                return [{ id: '456', title: 'PROJ-2 Some feature', body: { storage: { value: '' } } }];
+            },
+            confluence_sync_markdown_directory: function() { return 'not-json{{{'; },
+            jira_post_comment: function(args) { comments.push(args); }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.success, true);
+        assert.equal(result.syncedPages, 0);
+        assert.contains(comments[0].comment, 'Synced *0* page(s)');
+    });
+
+    test('page URL resolution failure publishes without the Page: link', function() {
+        var comments = [];
+        var mod = loadPublishDiscovery({
+            confluence_get_children_by_id: function() {
+                return [{ id: '456', title: 'PROJ-2 Some feature', body: { storage: { value: '' } }, _links: { webui: '/spaces/DISC/pages/456' } }];
+            },
+            confluence_content_by_id: function() { throw new Error('lookup down'); },
+            jira_post_comment: function(args) { comments.push(args); }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.success, true);
+        assert.equal(result.pageUrl, null);
+        assert.notContains(comments[0].comment, 'Page:');
+        assert.contains(comments[0].comment, 'Synced *2* page(s)');
+    });
+
+    test('failed inline-comment replies are reported in the published comment', function() {
+        var comments = [];
+        var mod = loadPublishDiscovery({
+            confluence_get_children_by_id: function() {
+                return [{ id: '456', title: 'PROJ-2 Some feature', body: { storage: { value: '' } } }];
+            },
+            file_read: function(opts) {
+                var path = opts && (opts.path || opts);
+                if (path === 'outputs/confluence_replies.json') {
+                    return JSON.stringify([
+                        { pageId: '457', commentId: 'c2', body: 'Addressed.' },
+                        { pageId: '457', commentId: 'c3', body: 'Declined.' }
+                    ]);
+                }
+                throw new Error('not found: ' + path);
+            },
+            confluence_reply_to_inline_comment: function(args) {
+                if (args.commentId === 'c3') throw new Error('reply rejected');
+            },
+            jira_post_comment: function(args) { comments.push(args); }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.success, true);
+        assert.equal(result.commentRepliesPosted, 1);
+        assert.equal(result.commentRepliesFailed, 1);
+        assert.contains(comments[0].comment, 'Replied to *1* inline comment');
+        assert.contains(comments[0].comment, '(1 reply attempt(s) failed — see job log.)');
+    });
+
+    test('rename falls back to an empty paragraph body when the listed page has none', function() {
+        var updateArgs = null;
+        var mod = loadPublishDiscovery({
+            confluence_get_children_by_id: function() {
+                return [{ id: '456', title: 'PROJ-2 Old' }];
+            },
+            confluence_update_page: function(args) {
+                updateArgs = args;
+                return { id: '456', title: args.title, _links: { webui: '/wiki/spaces/DISC/pages/1', base: 'https://confluence.example.com' } };
+            }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action(makeParams({ ticket: { key: 'PROJ-2', fields: { summary: 'New summary' } } }));
+
+        assert.equal(result.success, true);
+        assert.equal(updateArgs.body, '<p></p>');
+    });
+
 });
 

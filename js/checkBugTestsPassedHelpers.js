@@ -62,6 +62,9 @@ function buildBugDoneComment(totalTCs) {
 }
 
 function prMentionsTicket(pr, ticketKey) {
+    // A null/entry-less item previously aborted the whole scan via the action's
+    // catch — treat it as a non-match instead so the scan stays total.
+    if (!pr) return false;
     var titleMatch = pr.title && pr.title.indexOf(ticketKey) !== -1;
     var branchMatch = pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1;
     return !!(titleMatch || branchMatch);
