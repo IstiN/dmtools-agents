@@ -901,4 +901,16 @@ suite('pullRequest helper > body freeze (gh-960)', function() {
         assert.equal(pr.isPrBodyFrozen(undefined), false);
     });
 
+    test('isPrBodyFrozen covers ADO-shaped state: completed is frozen', function() {
+        var pr = loadPullRequestHelper();
+        // ADO closes work items/PRs as 'completed' — the closed/merged check
+        // alone would not freeze an ADO-shaped PR (review thread
+        // js/common/pullRequest.js:203).
+        assert.equal(pr.isPrBodyFrozen({ number: 956, state: 'completed' }), true);
+        assert.equal(pr.isPrBodyFrozen({ id: 956, state: 'Completed' }), true,
+            'state match is case-insensitive');
+        assert.equal(pr.isPrBodyFrozen({ number: 956, state: 'active' }), false,
+            'an active ADO PR is not frozen');
+    });
+
 });

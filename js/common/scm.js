@@ -577,6 +577,9 @@ function _createGithubProvider(workspace, repository) {
         getCommitCheckRuns: function(sha) {
             return _githubGetCommitCheckRuns(workspace, repository, sha);
         },
+        getWorkflowRunJobs: function(runId) {
+            return github_get_workflow_run_jobs({ workspace: workspace, repository: repository, runId: runId });
+        },
         getJobLogs: function(jobId) {
             return github_get_job_logs({ workspace: workspace, repository: repository, jobId: String(jobId) });
         },

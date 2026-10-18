@@ -276,9 +276,16 @@ function updatePullRequestBody(scm, prNumber, ticketKey, testStatus, bodyContent
             '---\n\n' + bodyContent;
         const body = prHelper.ensureClosesLine(refreshed, ticketKey);
         if (scm.updatePrBody) {
-            scm.updatePrBody(prNumber, body);
-            console.log('✅ Updated PR/MR body with latest test rework result');
-            return true;
+            // gh-960 rework (review thread js/postTestReworkResults.js:279):
+            // updatePrBody is a live seam — _githubUpdatePrBody returns null when
+            // the PATCH fails, so a null result must warn, not print a green check.
+            var ok = scm.updatePrBody(prNumber, body);
+            if (ok) {
+                console.log('✅ Updated PR/MR body with latest test rework result');
+            } else {
+                console.warn('PR body update failed — summary comment still posted');
+            }
+            return !!ok;
         }
         console.warn('SCM provider does not support updatePrBody — posting summary comment only');
         return false;
@@ -823,6 +830,7 @@ if (typeof module !== 'undefined' && module.exports) {
         runPublishGates,
         releaseReworkLock,
         postReworkBodyAndComment,
+        updatePullRequestBody,
         replyThreadIdOf,
         handleReplyItem,
         resumeOrReport,

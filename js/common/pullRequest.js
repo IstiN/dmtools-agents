@@ -200,9 +200,16 @@ function mergeQueueBodyLabelPresent(labels) {
  */
 function isPrBodyFrozen(pr) {
     if (!pr || typeof pr !== 'object') return false;
+    // Defensive only: github_list_prs (REST list) carries no `merged` field and
+    // lists only state:'open' PRs, so this branch never fires in production —
+    // the ai_validating label is the only live freeze signal (review thread
+    // js/common/pullRequest.js:203).
     if (pr.merged === true) return true;
     var state = String(pr.state || '').toLowerCase();
-    return state === 'closed' || state === 'merged' || mergeQueueBodyLabelPresent(pr.labels);
+    // 'completed' covers ADO-shaped state — ADO closes work items/PRs as
+    // 'completed', which a closed/merged-only check would miss.
+    return state === 'closed' || state === 'merged' || state === 'completed' ||
+        mergeQueueBodyLabelPresent(pr.labels);
 }
 
 // GitHub limits PR bodies to 65536 characters. Keep a safety margin so
