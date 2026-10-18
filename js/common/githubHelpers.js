@@ -521,6 +521,12 @@ function fetchGithubCheckLogs(check, scm, owner, repo) {
     return fetchGithubRunLogs(check, scm, owner, repo);
 }
 
+/** True for a run job whose logs matter: a failed/timed-out job with an id. */
+function isFailedRunJob(runJob) {
+    if (!runJob || runJob.id === undefined || runJob.id === null) return false;
+    return runJob.conclusion === 'failure' || runJob.conclusion === 'timed_out';
+}
+
 /** Fetch the failed jobs' logs of a workflow RUN whose details_url contains /runs/{id}. */
 function fetchGithubRunLogs(check, scm, owner, repo) {
     var runIdMatch = check.details_url && check.details_url.match(/\/runs\/(\d+)/);
@@ -531,15 +537,12 @@ function fetchGithubRunLogs(check, scm, owner, repo) {
             : github_get_workflow_run_jobs({
                 workspace: owner, repository: repo, runId: runIdMatch[1]
             });
-        var runJobs = ciModule._jobsOf(rawJobs);
         var out = '';
-        for (var ji = 0; ji < runJobs.length; ji++) {
-            var runJob = runJobs[ji];
-            if (!runJob || (runJob.conclusion !== 'failure' && runJob.conclusion !== 'timed_out')) continue;
-            if (runJob.id === undefined || runJob.id === null) continue;
+        ciModule._jobsOf(rawJobs).forEach(function (runJob) {
+            if (!isFailedRunJob(runJob)) return;
             var jobLogs = _fetchJobLogs(scm, owner, repo, runJob.id);
             if (jobLogs) out += '=== ' + (runJob.name || 'job ' + runJob.id) + ' ===\n' + jobLogs + '\n';
-        }
+        });
         return out || null;
     } catch (e) {
         console.warn('Could not fetch jobs/logs for run', runIdMatch[1], ':', e.message || e);
@@ -692,6 +695,9 @@ module.exports = {
     // Pure helpers extracted from detectFailedChecks (gh-1012) — exported for
     // unit testing; detectFailedChecks behavior is unchanged.
     parseCheckRunsResult: parseCheckRunsResult,
+    fetchGithubCheckLogs: fetchGithubCheckLogs,
+    fetchGithubRunLogs: fetchGithubRunLogs,
+    isFailedRunJob: isFailedRunJob,
     unwrapLogResult: unwrapLogResult,
     extractJenkinsBuildTarget: extractJenkinsBuildTarget,
     buildLogSections: buildLogSections,
