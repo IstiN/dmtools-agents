@@ -537,7 +537,7 @@ function fetchGithubJobLogsDetailed(jobId, scm, owner, repo) {
         return { reason: 'job log for ' + jobId + ' came back empty' };
     } catch (e) {
         console.warn('Could not fetch logs for job', jobId, ':', e.message || e);
-        return { reason: 'job log fetch failed: ' + (e && e.message ? e.message : String(e)) };
+        return { reason: 'job log fetch failed: ' + fetchFailureDetail(e) };
     }
 }
 
@@ -549,7 +549,7 @@ function fetchGithubCheckRunLogsDetailed(checkRunId, scm, owner, repo) {
         return { reason: 'check-run ' + checkRunId + ' log came back empty (check run is not backed by a GitHub Actions job?)' };
     } catch (e) {
         console.warn('Could not fetch logs for check-run', checkRunId, ':', e.message || e);
-        return { reason: 'check-run log fetch failed: ' + (e && e.message ? e.message : String(e)) };
+        return { reason: 'check-run log fetch failed: ' + fetchFailureDetail(e) };
     }
 }
 
@@ -620,7 +620,7 @@ function fetchGithubRunLogsDetailed(check, scm, owner, repo) {
         return { reason: runLogsFailureReason(rawJobs, runId) };
     } catch (e) {
         console.warn('Could not fetch jobs/logs for run', runId, ':', e.message || e);
-        return { reason: 'run ' + runId + ' jobs/logs fetch failed: ' + (e && e.message ? e.message : String(e)) };
+        return { reason: 'run ' + runId + ' jobs/logs fetch failed: ' + fetchFailureDetail(e) };
     }
 }
 
@@ -631,6 +631,11 @@ function runLogsFailureReason(rawJobs, runId) {
         return 'logs for ' + failedJobs.length + ' failed job(s) of run ' + runId + ' came back empty';
     }
     return 'no failed jobs resolved from workflow run ' + runId;
+}
+
+/** gh-1045: format a caught exception for a loud { reason }. */
+function fetchFailureDetail(e) {
+    return e && e.message ? e.message : String(e);
 }
 
 /** Fetch the failed jobs' logs of a workflow RUN whose details_url contains /runs/{id}. */
@@ -687,21 +692,26 @@ function buildCheckLogSections(check, scm, owner, repo, jenkinsBasePath) {
         full += jenkinsSections.full;
     }
     if (full) return { md: md, full: full };
-
-    // gh-1045 review: when the URL resolved to a Jenkins build target but
-    // the Jenkins fetch failed/emptied, the Jenkins reason must win — the
-    // GitHub resolver's "unsupported details_url shape" is misleading there
-    // (the shape IS supported). jenkinsResult.skipped pins the foreign-host
-    // case, where the GitHub reason is the correct one.
-    var reason = (jenkinsResult.reason && !jenkinsResult.skipped)
-        ? jenkinsResult.reason
-        : (ghResult.reason || jenkinsResult.reason || 'unknown fetch failure');
+    var reason = checkLogFailureReason(ghResult, jenkinsResult);
     return {
         md: '- ⚠️ **Log**: log fetch failed: ' + reason + '\n\n',
         full: '=== LOG FETCH FAILED for: ' + check.name + ' ===\n' +
               'URL: ' + (check.details_url || 'N/A') + '\n' +
               'Reason: ' + reason + '\n\n'
     };
+}
+
+/**
+ * gh-1045 review: pick the most accurate failure reason for a check whose
+ * log no resolver produced. When the URL resolved to a Jenkins build target
+ * but the Jenkins fetch failed/emptied, the Jenkins reason must win — the
+ * GitHub resolver's "unsupported details_url shape" is misleading there
+ * (the shape IS supported). jenkinsResult.skipped pins the foreign-host
+ * case, where the GitHub reason is the correct one.
+ */
+function checkLogFailureReason(ghResult, jenkinsResult) {
+    if (jenkinsResult.reason && !jenkinsResult.skipped) return jenkinsResult.reason;
+    return ghResult.reason || jenkinsResult.reason || 'unknown fetch failure';
 }
 
 function buildCiFailuresHeader(failedChecks, headSha, hasFullLog) {
@@ -863,8 +873,10 @@ module.exports = {
     fetchGithubRunLogs: fetchGithubRunLogs,
     fetchGithubRunLogsDetailed: fetchGithubRunLogsDetailed,
     runLogsFailureReason: runLogsFailureReason,
+    fetchFailureDetail: fetchFailureDetail,
     fetchJenkinsCheckLogsDetailed: fetchJenkinsCheckLogsDetailed,
     buildCheckLogSections: buildCheckLogSections,
+    checkLogFailureReason: checkLogFailureReason,
     extractGithubRunId: extractGithubRunId,
     extractGithubCheckRunId: extractGithubCheckRunId,
     fetchWorkflowRunJobs: fetchWorkflowRunJobs,
