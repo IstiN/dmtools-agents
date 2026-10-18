@@ -2760,6 +2760,133 @@ suite('sm github source: dev-on-assignment re-derive (gh-944)', function () {
     });
 });
 
+suite('sm github source — gh-1009 CRAP characterization (paths touched by the query split)', function () {
+
+    var providerStub = {
+        listOpenPrs: null, // set per-test; absence → direct github_list_prs fetch
+        branchExists: function () { return true; },
+        prStatus: function (n) { return providerStub._status[n] || null; },
+        _status: {}
+    };
+
+    function load(tools, statuses) {
+        providerStub._status = statuses || {};
+        providerStub.listOpenPrs = null;
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': {
+                createSmProvider: function () { return providerStub; }
+            },
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/smAsync.js': loadModule('js/common/smAsync.js', makeRequire({
+                './common/smProvider.js': { createSmProvider: function () { return providerStub; } }
+            }), tools || {})
+        }), tools || {});
+    }
+
+    test('mergeStateLatch: EVERY listed latch label must sit on the issue (array form, characterization)', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 301, labels: [], body: '', draft: false,
+                      head: { ref: 'ai/gh-301' }, user: { login: 'bot' } },
+                    { number: 302, labels: [], body: '', draft: false,
+                      head: { ref: 'ai/gh-302' }, user: { login: 'bot' } },
+                    { number: 303, labels: [], body: '', draft: false,
+                      head: { ref: 'ai/gh-303' }, user: { login: 'bot' } }
+                ];
+            },
+            github_get_issue: function (args) {
+                if (args.issueNumber === 301) return { labels: [{ name: 'ai_developed' }, { name: 'ai_validated' }] };
+                if (args.issueNumber === 302) return { labels: [{ name: 'ai_developed' }] };
+                return { labels: [] };
+            }
+        }, {
+            301: { number: 301, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', headSha: 's301' },
+            302: { number: 302, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', headSha: 's302' },
+            303: { number: 303, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', headSha: 's303' }
+        });
+        // linkedIssueNumber: no body refs → issueNumber null for all; give
+        // latch via PR-side only… the latch reads ISSUE labels, so link the
+        // PRs to issues via bodies instead:
+        var linked = srcMod.query({
+            query: {
+                type: 'pr', labels: [],
+                mergeStateLatch: { BLOCKED: ['ai_developed', 'ai_validated'] },
+                checks: 'green'
+            },
+            limit: 50
+        }, { repoInfo: { owner: 'o', repo: 'r' } });
+        // pr-301 links no issue (empty body) → latch fails closed (no issue labels)
+        assert.equal(linked.some(function (i) { return i.prNumber === 301; }), false);
+        assert.equal(linked.length, 0);
+    });
+
+    test('mergeStateLatch: multi-label array — issue carrying ALL listed labels matches', function () {
+        var prs = [
+            { number: 401, labels: [{ name: 'review-me' }], body: 'Closes #51', draft: false, head: { ref: 'ai/gh-401' }, user: { login: 'bot' } },
+            { number: 402, labels: [{ name: 'review-me' }], body: 'Closes #52', draft: false, head: { ref: 'ai/gh-402' }, user: { login: 'bot' } }
+        ];
+        var srcMod = load({
+            github_list_prs: function () { return prs; },
+            github_get_issue: function (args) {
+                if (args.issueNumber === 51) return { labels: [{ name: 'ai_developed' }, { name: 'ai_validated' }] };
+                if (args.issueNumber === 52) return { labels: [{ name: 'ai_developed' }] };
+                return { labels: [] };
+            }
+        }, {
+            401: { number: 401, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', headSha: 's401' },
+            402: { number: 402, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', headSha: 's402' }
+        });
+        var matched = srcMod.query({
+            query: {
+                type: 'pr', labels: ['review-me'],
+                mergeStateLatch: { BLOCKED: ['ai_developed', 'ai_validated'] },
+                checks: 'green'
+            },
+            limit: 50
+        }, { repoInfo: { owner: 'o', repo: 'r' } });
+        assert.deepEqual(matched.map(function (i) { return i.prNumber; }), [401]);
+    });
+
+    test('pr rules: item mapping fallbacks — headRefName, author.name, empty title/branch (characterization)', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 501, headRefName: 'feature/x', author: { name: 'Named Author' },
+                      labels: ['x'], body: '', draft: false },
+                    { number: 502, labels: ['x'] } // no head/headRefName/author/title at all
+                ];
+            }
+        }, {});
+        var matched = srcMod.query({
+            query: { type: 'pr', labels: ['x'] }, limit: 50
+        }, { repoInfo: { owner: 'o', repo: 'r' } });
+        assert.equal(matched.length, 2);
+        assert.equal(matched[0].branch, 'feature/x');
+        assert.equal(matched[0].author, 'Named Author');
+        assert.equal(matched[0].title, '');
+        assert.equal(matched[1].branch, '');
+        assert.equal(matched[1].author, '');
+        assert.equal(matched[1].title, '');
+    });
+
+    test('pr rules: authors allowlist — only listed authors match (characterization)', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 601, head: { ref: 'a' }, user: { login: 'ann' }, labels: ['x'], body: '' },
+                    { number: 602, head: { ref: 'b' }, user: { login: 'bob' }, labels: ['x'], body: '' }
+                ];
+            }
+        }, {});
+        var matched = srcMod.query({
+            query: { type: 'pr', labels: ['x'], authors: ['ann'] }, limit: 50
+        }, { repoInfo: { owner: 'o', repo: 'r' } });
+        assert.deepEqual(matched.map(function (i) { return i.prNumber; }), [601]);
+    });
+});
+
 suite('sm github source: gh-1000 phantom-heal helpers', function () {
     function loadBare() {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({

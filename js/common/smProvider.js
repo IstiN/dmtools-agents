@@ -162,535 +162,692 @@ var BOOKKEEPING_CHECK_PREFIXES = ['kicker /', 'Wake-up probe', 'merge /'];
 // require in this module, and the pack runtime LOAD self-test loads it.
 var reviewVerdicts = require('./reviewVerdicts.js');
 
+// ── GitHub provider helpers (gh-1009) ─────────────────────────────────────
+// The githubProvider closure below is an orchestration shell only: every
+// decision branch lives in one of these module-level helpers so the provider
+// method bodies stay trivial and the CRAP ratchet holds. Behaviour is
+// byte-identical to the pre-split closure — same tool calls, same args,
+// same order, same log lines. Named declarations (not anonymous closures)
+// keep each helper out of the provider's own complexity count.
+
+// Default-branch HEAD cache (one SM tick). REST mergeable_state
+// lazily recomputes to `unknown` right after a base push, so
+// behind/CLEAN is computed deterministically from base.sha vs the
+// live branch head (github_list_branches is always current). The full
+// name→sha map rides the shared per-tick ioCache: one
+// github_list_branches call per repo per tick instead of one per
+// unknown base branch.
+function branchHeadsMap(owner, repo) {
+    var cached = ioCacheGet(owner, repo, 'branches', null);
+    if (cached) return cached;
+    var map = {};
+    if (typeof github_list_branches === 'function') {
+        try {
+            var branches = parseMcp(github_list_branches({
+                workspace: owner, repository: repo
+            })) || [];
+            for (var i = 0; i < branches.length; i++) {
+                var b = branches[i];
+                if (b && b.name) {
+                    map[b.name] = b.commit && b.commit.sha;
+                }
+            }
+        } catch (e) { /* older runtime without the tool */ }
+    }
+    ioCachePut(owner, repo, 'branches', null, map);
+    return map;
+}
+
+function branchHead(owner, repo, name) {
+    var head = branchHeadsMap(owner, repo)[name];
+    if (head !== undefined) return head;
+    // dmtools-agents#639 (live fa pr-1174, 2026-10-03): github_list_branches
+    // returns only page 1 (GitHub default 30; the tool has no perPage —
+    // Java parity). On repos with more branches than that (one
+    // 'ai/gh-*' per PR) 'main' falls off the page, this probe returns
+    // null, the deterministic mergeState override NEVER runs, and
+    // mergeState stays raw REST ('UNSTABLE') — merge-validated
+    // (mergeState CLEAN) could not match ANYTHING. Single-branch probe
+    // via gh api (cli_execute_command is whitelisted; the SM's own
+    // probes already ride it). Fail-null keeps the old behavior.
+    var cached = ioCacheGet(owner, repo, 'branchHead:' + name, null);
+    if (cached !== null && cached !== undefined) return cached;
+    try {
+        var res = cli_execute_command({
+            command: 'gh api "repos/' + owner + '/' + repo +
+                     '/branches/' + encodeURIComponent(name) +
+                     '" --jq .commit.sha'
+        });
+        var out = String((res || {}).output || (res || {}).stdout || res || '')
+            .trim().replace(/^"|"$/g, '');
+        if (/^[0-9a-f]{40}$/.test(out)) {
+            ioCachePut(owner, repo, 'branchHead:' + name, null, out);
+            return out;
+        }
+    } catch (eHeadProbe) { /* probe failed — null (override skips, pre-#639 behavior) */ }
+    return null;
+}
+
+// Open / merged PR lists ride the same per-tick cache (kind openPrs /
+// mergedPrs) — findPr is called per candidate issue and per rule, and
+// each call used to re-fetch both lists (measured: 18 github_list_prs
+// in one idle tick, all returning the same empty payload).
+function listOpenPrs(owner, repo) {
+    var cached = ioCacheGet(owner, repo, 'openPrs', null);
+    if (cached) return cached;
+    var list = asList(parseMcp(github_list_prs({
+        workspace: owner, repository: repo, state: 'open'
+    })));
+    ioCachePut(owner, repo, 'openPrs', null, list);
+    return list;
+}
+
+// gh-1000 — LIVE open-PR re-read for the phantom-mutex self-heal probe
+// (githubSource rederiveHoldersLive): the per-tick ioCache is exactly the
+// stale layer a phantom holder rides on, so the probe must bypass it. The
+// fresh list also REFRESHES the cache entry — after a self-heal the rest
+// of the tick reads the corrected layer instead of re-fetching.
+function listOpenPrsLive(owner, repo) {
+    var list = asList(parseMcp(github_list_prs({
+        workspace: owner, repository: repo, state: 'open'
+    })));
+    ioCachePut(owner, repo, 'openPrs', null, list);
+    return list;
+}
+
+function listMergedPrs(owner, repo) {
+    var cached = ioCacheGet(owner, repo, 'mergedPrs', null);
+    if (cached) return cached;
+    var list = asList(parseMcp(github_list_prs({
+        workspace: owner, repository: repo, state: 'merged'
+    })));
+    ioCachePut(owner, repo, 'mergedPrs', null, list);
+    return list;
+}
+
+function ghIssueToState(it) {
+    return {
+        number: it.number,
+        title: it.title,
+        labels: (it.labels || []).map(function (l) { return l.name || l; }),
+        assignees: (it.assignees || []).map(function (a) { return a.login || a; })
+    };
+}
+
+// ── computePrStatus pieces (gh-1009 split; the named function stays the
+// public orchestrator so the CRAP ratchet tracks it under its old key) ──
+
+// Bookkeeping check prefixes ride the exported BOOKKEEPING_CHECK_PREFIXES.
+
+function _ghIsBookeepingCheck(cname) {
+    for (var bi = 0; bi < BOOKKEEPING_CHECK_PREFIXES.length; bi++) {
+        if (cname.indexOf(BOOKKEEPING_CHECK_PREFIXES[bi]) === 0) return true;
+    }
+    return false;
+}
+
+var GH_RED_CHECK_CONCLUSIONS = ['FAILURE', 'TIMED_OUT'];
+var GH_PENDING_CHECK_STATUSES = ['QUEUED', 'IN_PROGRESS', 'WAITING', 'PENDING'];
+
+// Classify ONE rollup entry. CANCELLED is NOT a verdict: a cancelled
+// validation run says nothing about the head (stale-run cleanup, quota
+// sweeps, re-dispatches all cancel runs) — same handling as the
+// bookkeeping checks below (dmtools-agents#628/#635, live dart gh-191).
+// 'neutral' = a conclusive non-verdict entry (SUCCESS next to nothing
+// pending, SKIPPED, …) — it neither reddens nor pendings the rollup.
+function _ghCheckBookeepingOutcome(c) {
+    var cname = String((c && (c.name || c.context)) || '');
+    if (_ghIsBookeepingCheck(cname)) return 'bookeeping';
+    if (c.conclusion === 'CANCELLED') return 'canceled';
+    return null;
+}
+
+function _ghCheckOutcome(c) {
+    var early = _ghCheckBookeepingOutcome(c);
+    if (early) return early;
+    if (c.conclusion && GH_RED_CHECK_CONCLUSIONS.indexOf(c.conclusion) !== -1) return 'red';
+    if (!c.conclusion || GH_PENDING_CHECK_STATUSES.indexOf(c.status) !== -1) return 'pending';
+    return 'neutral';
+}
+
+function _ghAccumulateCheck(acc, c) {
+    var outcome = _ghCheckOutcome(c);
+    if (outcome === 'bookeeping') { acc.bookept++; return; }
+    if (outcome === 'canceled') { acc.ignored++; return; }
+    if (outcome === 'red') acc.red = true;
+    else if (outcome === 'pending') acc.pending = true;
+}
+
+// Rollup tally. Cancelled still forces 'no verdict yet' even next to
+// green (a cancelled validation IS the missing verdict); bookkeeping
+// checks must NOT: green validation + kicker noise stays green, or
+// every pushed-branch PR would re-validate forever. A head with ONLY
+// bookkeeping checks has no verdict at all → pending, which is exactly
+// what validate-fresh (none|pending) arms on.
+function _ghTallyRollup(rollup) {
+    var acc = { red: false, pending: false, ignored: 0, bookept: 0 };
+    rollup.forEach(function (c) { _ghAccumulateCheck(acc, c); });
+    var realCount = rollup.length - acc.ignored - acc.bookept;
+    if (acc.ignored > 0 || (realCount === 0 && acc.bookept > 0)) acc.pending = true;
+    return acc;
+}
+
+function _ghNormalizeCheckRun(r) {
+    return {
+        name: r.name || null,
+        conclusion: r.conclusion ? String(r.conclusion).toUpperCase() : null,
+        status: r.status ? String(r.status).toUpperCase() : null
+    };
+}
+
+// The rollup source: GraphQL statusCheckRollup when present, else the
+// REST check-runs tool on the head sha (the pull body has no rollup —
+// that is the GraphQL spelling; the Java-parity check-runs tool is the
+// REST path). Conclusions arrive lowercase — normalize before the
+// red/pending comparisons.
+function _ghFetchRollup(owner, repo, pr) {
+    var rollup = pr.statusCheckRollup || [];
+    if (!rollup.length && pr.head && pr.head.sha) {
+        var cr = parseMcp(github_get_commit_check_runs({
+            workspace: owner, repository: repo, commitSha: pr.head.sha
+        })) || {};
+        rollup = (cr.check_runs || []).map(_ghNormalizeCheckRun);
+    }
+    return rollup;
+}
+
+// REST mergeable_state (uppercased) with the GraphQL passthrough, then
+// the coarse mergeable bool fallback when the body carries no verdict.
+function _ghRestMergeState(pr) {
+    var ms = pr.mergeStateStatus ||
+        (pr.mergeable_state ? String(pr.mergeable_state).toUpperCase() : '') || '';
+    if (!ms) ms = pr.mergeable === true ? 'CLEAN' : 'UNKNOWN';
+    return ms;
+}
+
+// Deterministic override (see branchHead): DIRTY on real conflicts,
+// BEHIND when the base moved, else the REST verdict — preserving
+// BLOCKED for fresh heads whose required checks are pending/red.
+// Masking BLOCKED as CLEAN deadlocked unarm-stale-validation on armed
+// fresh PRs (live: dart #195). Falls back to the REST verdict when the
+// base ref is unknown or the head probe fails.
+function _ghOverrideMergeState(pr, ms, resolveBranchHead) {
+    if (pr.mergeable === false) return 'DIRTY';
+    if (pr.base && pr.base.ref) {
+        var head = resolveBranchHead(pr.base.ref);
+        if (head) {
+            if (pr.base.sha !== head) return 'BEHIND';
+            // Base fresh: a REST BLOCKED is real (required checks
+            // pending/red on the current head) and must survive; any
+            // other REST verdict on a fresh base ('behind', 'unknown')
+            // is a recompute lie — deterministically CLEAN.
+            return ms === 'BLOCKED' ? 'BLOCKED' : 'CLEAN';
+        }
+    }
+    return ms;
+}
+
+function _ghPrState(pr) {
+    // REST reports `state` lowercase ('open'); guards compare against
+    // 'OPEN'/'MERGED' — normalize like the check-run conclusions.
+    return pr.state ? String(pr.state).toUpperCase() : 'OPEN';
+}
+
+function _ghCheckConclusionLabel(rollup, tally) {
+    if (!rollup.length) return 'none';
+    if (tally.red) return 'red';
+    return tally.pending ? 'pending' : 'green';
+}
+
+function _ghPrAuthor(pr) {
+    // Creator login — the prMachineAuthor gate keys on it. REST body
+    // spells it `user`; GraphQL/tests use `author` (same dual read as
+    // the PR list path).
+    if (pr.user && pr.user.login) return pr.user.login;
+    if (pr.author && pr.author.login) return pr.author.login;
+    if (pr.author && pr.author.name) return pr.author.name;
+    return '';
+}
+
+function _ghPrLabelNames(pr) {
+    // PR-side labels (REST body): issue-anchored SM rules read them via
+    // prLabels/notPrLabels guards — the machine loop keeps
+    // ai_pr_reviewed/agent:review on the PR, not the issue.
+    return (pr.labels || []).map(function (l) { return (l && l.name) || l; });
+}
+
+function _ghBuildPrStatus(pr, rollup, tally, ms) {
+    return {
+        state: _ghPrState(pr),
+        checkConclusion: _ghCheckConclusionLabel(rollup, tally),
+        mergeState: ms,
+        mergeable: pr.mergeable,
+        // Head sha pins the review-verdict comparison: a verdict
+        // rendered on an older commit is stale after pushes.
+        headSha: (pr.head && pr.head.sha) || null,
+        // Head ref — SM legs dispatched on the PR branch link their
+        // workflow runs to the PR (checks area + timeline).
+        branch: (pr.head && pr.head.ref) || '',
+        labels: _ghPrLabelNames(pr),
+        author: _ghPrAuthor(pr)
+    };
+}
+
+// (was the computePrStatus closure — hoisted to module scope by gh-1009;
+// resolveBranchHead injects the per-provider branchHead so the merge-state
+// override keeps its deterministic base check; every step is one of the
+// pure helpers above, tested directly through prStatus.)
+function computePrStatus(owner, repo, prNumber, resolveBranchHead) {
+    var pr = parseMcp(github_get_pr({
+        workspace: owner, repository: repo, pullRequestId: prNumber
+    })) || {};
+    var rollup = _ghFetchRollup(owner, repo, pr);
+    var tally = _ghTallyRollup(rollup);
+    var ms = _ghOverrideMergeState(pr, _ghRestMergeState(pr), resolveBranchHead);
+    return _ghBuildPrStatus(pr, rollup, tally, ms);
+}
+
+// ── remaining github method bodies (gh-1009) ──────────────────────────────
+
+// gh-922 dead-head park bench oracle: does this head ref exist on the
+// repo right now? The branchHeads snapshot answers the common case;
+// the #639 single-branch probe rescues a page-1 listing miss. Empty
+// ref fails closed; probe failure reads as absent.
+function _ghBranchExists(owner, repo, name) {
+    if (!name) return false;
+    if (branchHeadsMap(owner, repo)[name] !== undefined) return true;
+    return branchHead(owner, repo, name) !== null;
+}
+
+// snapshot(kinds?) — kinds limits which cache legs to materialize:
+// the queryPrs batch only needs openPrs + branchHeads, and the
+// merged-PR list was measured at ~1.8s on a busy repo for ZERO uses in
+// that path. Omitted kinds stay out of the preseed.
+function _ghSnapshot(owner, repo, kinds) {
+    var want = {};
+    (kinds || ['openPrs', 'mergedPrs', 'branchHeads', 'prStatus'])
+        .forEach(function (k) { want[k] = true; });
+    var out = {};
+    if (want.openPrs) out.openPrs = listOpenPrs(owner, repo);
+    if (want.mergedPrs) out.mergedPrs = listMergedPrs(owner, repo);
+    if (want.branchHeads) out.branchHeads = branchHeadsMap(owner, repo);
+    if (want.prStatus) out.prStatus = ioCacheCollect(owner, repo, 'prStatus');
+    return out;
+}
+
+function _ghMergeIssueItem(seen, out, it) {
+    if (seen[it.number]) return;
+    seen[it.number] = true;
+    out.push(ghIssueToState(it));
+}
+
+function _ghListMachineIssues(owner, repo, full, machineLabels, agentHandle, limit) {
+    // GitHub search ANDs multiple label: qualifiers — run one
+    // search per label (OR semantics), merge unique by number.
+    var seen = {};
+    var out = [];
+    machineLabels.forEach(function (ml) {
+        var res = parseMcp(github_search_issues({
+            query: 'repo:' + full + ' is:issue is:open label:"' + ml + '"'
+        }));
+        asList(res).forEach(function (it) { _ghMergeIssueItem(seen, out, it); });
+        if (out.length >= (limit || 50)) return; // forEach: enough
+    });
+    var extra = parseMcp(github_search_issues({
+        query: 'repo:' + full + ' is:issue is:open assignee:' + agentHandle
+    }));
+    asList(extra).forEach(function (it) { _ghMergeIssueItem(seen, out, it); });
+    return out.slice(0, limit || 50);
+}
+
+function _prHeadLabel(p) {
+    return (p.head && p.head.label);
+}
+
+function _prBodyRefsIssue(p, bodyRe) {
+    return bodyRe.test(String(p.body || ''));
+}
+
+function _ghFindOpenPr(owner, repo, issueNumber, headFilter, branch) {
+    var list = listOpenPrs(owner, repo);
+    var open = list.filter(function (p) {
+        return _prHeadLabel(p) === headFilter;
+    });
+    var bodyRe = new RegExp('(^|[^0-9])#' + issueNumber + '([^0-9]|$)');
+    if (!open.length) {
+        open = list.filter(function (p) { return _prBodyRefsIssue(p, bodyRe); });
+    }
+    if (!open.length) return null;
+    return { number: open[0].number, state: 'OPEN',
+             branch: (open[0].head && open[0].head.ref) || branch };
+}
+
+function _ghFindMergedPr(owner, repo, headFilter, branch) {
+    var merged = listMergedPrs(owner, repo).filter(function (p) {
+        return _prHeadLabel(p) === headFilter;
+    });
+    if (merged.length) {
+        return { number: merged[0].number, state: 'MERGED', branch: branch };
+    }
+    return null;
+}
+
+function _ghFindPr(owner, repo, issueNumber, branchPrefix) {
+    // OPEN first (branch match <prefix><n> or body references #n), then
+    // MERGED on the branch (close-issue safety net).
+    var branch = branchPrefix + issueNumber;
+    var headFilter = owner + ':' + branch;
+    var open = _ghFindOpenPr(owner, repo, issueNumber, headFilter, branch);
+    if (open) return open;
+    return _ghFindMergedPr(owner, repo, headFilter, branch);
+}
+
+// Per-tick memo (kind prStatus, key = PR number): measured on a busy
+// tick — three rules re-fetched prStatus 23× for the same 7 PRs.
+// Results are read-only for callers (githubSource assigns item.pr;
+// matchesGuards only reads), so sharing the cached reference is safe.
+function _ghPrStatusMemo(owner, repo, prNumber, resolveBranchHead) {
+    var memo = ioCacheGet(owner, repo, 'prStatus', prNumber);
+    if (memo) return memo;
+    var out = computePrStatus(owner, repo, prNumber, resolveBranchHead);
+    ioCachePut(owner, repo, 'prStatus', prNumber, out);
+    return out;
+}
+
+function _ghMemoPrStatus(owner, repo, prNumber, data) {
+    // Main-engine write-back for the runAsync fan-out: worker engines
+    // compute prStatus in their own isolates and hand the result back
+    // through smAsync's ordered results — absorbing it here makes the
+    // NEXT batch's snapshot preseed hit instead of re-fetching.
+    if (data) ioCachePut(owner, repo, 'prStatus', prNumber, data);
+}
+
+function _ghLastReview(owner, repo, prNumber) {
+    // REST: reviews arrive chronological, the last entry is the
+    // latest verdict; commit_id pins the head it was rendered on
+    // (GraphQL spelling commitId kept as a fallback).
+    var list = asList(parseMcp(github_list_pr_reviews({
+        workspace: owner, repository: repo, pullRequestId: String(prNumber)
+    })));
+    if (!list.length) return null;
+    var r = list[list.length - 1];
+    return {
+        state: r.state || null,
+        commitId: r.commit_id || r.commitId || null,
+        author: (r.user && r.user.login) || null
+    };
+}
+
+function _ghParseCommentList(raw) {
+    var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
+    return Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+}
+
+function _ghFetchPrComments(owner, repo, prNumber) {
+    // The COMMENT FETCH is memoized per tick (kind prVerdicts) — the
+    // verdict guards may evaluate per rule and must not re-fetch.
+    var memoId = String(prNumber);
+    var memo = ioCacheGet(owner, repo, 'prVerdicts', memoId);
+    if (memo) return memo;
+    var list = [];
+    try {
+        var raw = parseMcp(github_get_pr_comments({
+            workspace: owner, repository: repo, pullRequestId: String(prNumber)
+        }));
+        list = _ghParseCommentList(raw);
+    } catch (e) {
+        console.warn('  ⚠️ verdict-record read failed (fail-open): ' + (e.message || e));
+        list = [];
+    }
+    ioCachePut(owner, repo, 'prVerdicts', memoId, list);
+    return list;
+}
+
+function _ghVerdictRecords(owner, repo, prNumber, opts) {
+    // The parse runs per call: opts.authorLogins (gh-828) is the
+    // gh-728 machine-identity allowlist, and each caller may pin a
+    // different one. Probe failure fails OPEN (empty list → guards
+    // inert → legacy behavior).
+    var allow = (opts && Array.isArray(opts.authorLogins)) ? opts.authorLogins : null;
+    return reviewVerdicts.parseVerdictRecords(_ghFetchPrComments(owner, repo, prNumber),
+        allow ? { authorLogins: allow } : undefined);
+}
+
+function _ghLatestVerdictRecord(provider, prNumber, headSha, opts) {
+    // Newest verdict record for one head, or null when the head has
+    // none — the null is what makes the query guards fail-open for
+    // pre-gh-807 PRs.
+    if (!headSha) return null;
+    return reviewVerdicts.latestVerdictForHead(
+        provider.verdictRecords(prNumber, opts), headSha);
+}
+
+// GraphQL-only surface (REST has no threads endpoint): navigate the
+// {data:{repository:{pullRequest:{reviewThreads:{nodes:[…]}}}}} envelope
+// by hand — parseMcp only unwraps the JSON string.
+function _ghThreadNodes(res) {
+    return (res && res.data && res.data.repository &&
+            res.data.repository.pullRequest &&
+            res.data.repository.pullRequest.reviewThreads &&
+            res.data.repository.pullRequest.reviewThreads.nodes) || [];
+}
+
+function _ghReviewThreads(owner, repo, prNumber) {
+    var res = parseMcp(github_get_pr_review_threads({
+        workspace: owner, repository: repo, pullRequestId: String(prNumber)
+    }));
+    var nodes = _ghThreadNodes(res);
+    var resolved = 0;
+    nodes.forEach(function (t) { if (t && t.isResolved) resolved++; });
+    return { total: nodes.length, resolved: resolved,
+             unresolved: nodes.length - resolved };
+}
+
+function _ghThreadFirstComment(t) {
+    return (t.comments && t.comments.nodes &&
+            t.comments.nodes[0]) || {};
+}
+
+// reviewThreadList: the DETAILED thread list (vs the counts above) —
+// each node mapped to its GraphQL resolve id, the root REST comment id
+// (the reply anchor), the root author and body (the machine-auth and
+// severity classification inputs) and the resolved flag. Fail OPEN to
+// []: a broken threads read means "nothing eligible", never a throw.
+function _ghThreadAuthor(first) {
+    return (first.author && (first.author.login || first.author.name)) || '';
+}
+
+function _ghThreadLine(t) {
+    return (t.line === 0 || t.line) ? t.line : null;
+}
+
+function _ghReviewThreadRow(t) {
+    var first = _ghThreadFirstComment(t);
+    return {
+        threadId: t.id || null,
+        rootCommentId: first.databaseId || null,
+        resolved: t.isResolved === true,
+        author: _ghThreadAuthor(first),
+        body: first.body || '',
+        path: t.path || null,
+        line: _ghThreadLine(t)
+    };
+}
+
+function _ghReviewThreadList(owner, repo, prNumber) {
+    try {
+        var res = parseMcp(github_get_pr_review_threads({
+            workspace: owner, repository: repo, pullRequestId: String(prNumber)
+        }));
+        var nodes = _ghThreadNodes(res);
+        var out = [];
+        nodes.forEach(function (t) { if (t) out.push(_ghReviewThreadRow(t)); });
+        return out;
+    } catch (e) {
+        console.warn('  ⚠️ review-thread list failed (fail-open): ' + (e.message || e));
+        return [];
+    }
+}
+
+function _ghReplyToThread(owner, repo, prNumber, thread, text) {
+    // The ack reply rides the REST reply endpoint anchored on the root
+    // comment id; a thread-shaped item without one degrades to a PR-level
+    // comment so the ack is never lost silently.
+    if (thread && thread.rootCommentId) {
+        return github_reply_to_pr_thread({
+            workspace: owner, repository: repo,
+            pullRequestId: String(prNumber),
+            inReplyToId: String(thread.rootCommentId), text: String(text || '')
+        });
+    }
+    return github_add_pr_comment({
+        workspace: owner, repository: repo,
+        pullRequestId: String(prNumber), text: String(text || '')
+    });
+}
+
+function _ghResolveThread(owner, repo, prNumber, thread) {
+    if (thread && thread.threadId) {
+        return github_resolve_pr_thread({
+            workspace: owner, repository: repo,
+            pullRequestId: String(prNumber), threadId: String(thread.threadId)
+        });
+    }
+    console.warn('smProvider(github): no threadId to resolve on PR #' + prNumber);
+}
+
+function _ghRunIssueNumber(r) {
+    var m = /gh-(\d+)/.exec(String(r.display_title || r.displayTitle || r.name || ''));
+    return m ? parseInt(m[1], 10) : null;
+}
+
+function _ghActiveMachineRuns(workflowFile) {
+    var runs = parseMcp(github_list_workflow_runs({
+        workflowId: workflowFile, status: 'in_progress', perPage: 30
+    })) || {};
+    var queued = parseMcp(github_list_workflow_runs({
+        workflowId: workflowFile, status: 'queued', perPage: 30
+    })) || {};
+    var all = (runs.workflow_runs || runs.workflowRuns || [])
+        .concat(queued.workflow_runs || queued.workflowRuns || []);
+    var issues = [];
+    all.forEach(function (r) {
+        var n = _ghRunIssueNumber(r);
+        if (n !== null) issues.push(n);
+    });
+    return issues;
+}
+
+function _ghCloseIssue(owner, repo, issueNumber, comment) {
+    if (comment) {
+        try { github_create_comment({ workspace: owner, repository: repo, number: issueNumber, body: comment }); }
+        catch (e) { console.warn('  ⚠️ close-issue comment failed: ' + (e.message || e)); }
+    }
+    return github_close_issue({ workspace: owner, repository: repo, number: issueNumber });
+}
+
+function _ghRemovePrLabel(owner, repo, prNumber, label) {
+    // Absent label → 404; treat as an idempotent no-op.
+    try {
+        return github_remove_label({ workspace: owner, repository: repo, number: prNumber, label: label });
+    } catch (e) {
+        console.warn('  ⚠️ remove "' + label + '" from PR #' + prNumber + ': ' + (e.message || e));
+        return null;
+    }
+}
+
+function _ghSilentUpdateBranch(full, prNumber, silentToken, restoreToken) {
+    // Silent refresh of an armed PR: pushes made with the workflow's
+    // own github.token trigger NO workflows, so the branch updates
+    // without re-running the CI matrix (issue #687 — test once per
+    // state, update for free).
+    var update = function () {
+        return cli_execute_command({
+            command: 'gh pr update-branch ' + prNumber + ' --repo ' + full
+        });
+    };
+    if (!silentToken) return update();
+    try {
+        set_env_variable('GH_TOKEN', silentToken);
+        return update();
+    } finally {
+        set_env_variable('GH_TOKEN', restoreToken || silentToken);
+    }
+}
+
+
 function githubProvider(cfg) {
     var owner = cfg.repository.owner;
     var repo = cfg.repository.repo;
-
-    // Default-branch HEAD cache (one SM tick). REST mergeable_state
-    // lazily recomputes to `unknown` right after a base push, so
-    // behind/CLEAN is computed deterministically from base.sha vs the
-    // live branch head (github_list_branches is always current). The full
-    // name→sha map rides the shared per-tick ioCache: one
-    // github_list_branches call per repo per tick instead of one per
-    // unknown base branch.
-    function branchHeadsMap() {
-        var cached = ioCacheGet(owner, repo, 'branches', null);
-        if (cached) return cached;
-        var map = {};
-        if (typeof github_list_branches === 'function') {
-            try {
-                var branches = parseMcp(github_list_branches({
-                    workspace: owner, repository: repo
-                })) || [];
-                for (var i = 0; i < branches.length; i++) {
-                    var b = branches[i];
-                    if (b && b.name) {
-                        map[b.name] = b.commit && b.commit.sha;
-                    }
-                }
-            } catch (e) { /* older runtime without the tool */ }
-        }
-        ioCachePut(owner, repo, 'branches', null, map);
-        return map;
-    }
-    function branchHead(name) {
-        var head = branchHeadsMap()[name];
-        if (head !== undefined) return head;
-        // dmtools-agents#639 (live fa pr-1174, 2026-10-03): github_list_branches
-        // returns only page 1 (GitHub default 30; the tool has no perPage —
-        // Java parity). On repos with more branches than that (one
-        // 'ai/gh-*' per PR) 'main' falls off the page, this probe returns
-        // null, the deterministic mergeState override NEVER runs, and
-        // mergeState stays raw REST ('UNSTABLE') — merge-validated
-        // (mergeState CLEAN) could not match ANYTHING. Single-branch probe
-        // via gh api (cli_execute_command is whitelisted; the SM's own
-        // probes already ride it). Fail-null keeps the old behavior.
-        var cached = ioCacheGet(owner, repo, 'branchHead:' + name, null);
-        if (cached !== null && cached !== undefined) return cached;
-        try {
-            var res = cli_execute_command({
-                command: 'gh api "repos/' + owner + '/' + repo +
-                         '/branches/' + encodeURIComponent(name) +
-                         '" --jq .commit.sha'
-            });
-            var out = String((res || {}).output || (res || {}).stdout || res || '')
-                .trim().replace(/^"|"$/g, '');
-            if (/^[0-9a-f]{40}$/.test(out)) {
-                ioCachePut(owner, repo, 'branchHead:' + name, null, out);
-                return out;
-            }
-        } catch (eHeadProbe) { /* probe failed — null (override skips, pre-#639 behavior) */ }
-        return null;
-    }
-
-    // Open / merged PR lists ride the same per-tick cache (kind openPrs /
-    // mergedPrs) — findPr is called per candidate issue and per rule, and
-    // each call used to re-fetch both lists (measured: 18 github_list_prs
-    // in one idle tick, all returning the same empty payload).
-    function listOpenPrs() {
-        var cached = ioCacheGet(owner, repo, 'openPrs', null);
-        if (cached) return cached;
-        var list = asList(parseMcp(github_list_prs({
-            workspace: owner, repository: repo, state: 'open'
-        })));
-        ioCachePut(owner, repo, 'openPrs', null, list);
-        return list;
-    }
-
-    // gh-1000 — LIVE open-PR re-read for the phantom-mutex self-heal probe
-    // (githubSource.queryPrs): the per-tick ioCache is exactly the stale
-    // layer a phantom holder rides on, so the probe must bypass it. The
-    // fresh list also REFRESHES the cache entry — after a self-heal the
-    // rest of the tick reads the corrected layer instead of re-fetching.
-    function listOpenPrsLive() {
-        var list = asList(parseMcp(github_list_prs({
-            workspace: owner, repository: repo, state: 'open'
-        })));
-        ioCachePut(owner, repo, 'openPrs', null, list);
-        return list;
-    }
-
-    function listMergedPrs() {
-        var cached = ioCacheGet(owner, repo, 'mergedPrs', null);
-        if (cached) return cached;
-        var list = asList(parseMcp(github_list_prs({
-            workspace: owner, repository: repo, state: 'merged'
-        })));
-        ioCachePut(owner, repo, 'mergedPrs', null, list);
-        return list;
-    }
     var full = owner + '/' + repo;
-
-    function ghIssueToState(it) {
-        return {
-            number: it.number,
-            title: it.title,
-            labels: (it.labels || []).map(function (l) { return l.name || l; }),
-            assignees: (it.assignees || []).map(function (a) { return a.login || a; })
-        };
-    }
-
-    // (prStatus computation hoisted — see the memo wrapper in the contract below)
-    function computePrStatus(prNumber) {
-            var pr = parseMcp(github_get_pr({
-                workspace: owner, repository: repo, pullRequestId: prNumber
-            })) || {};
-            var rollup = pr.statusCheckRollup || [];
-            if (!rollup.length && pr.head && pr.head.sha) {
-                // REST reality: the pull body has no rollup (that is the
-                // GraphQL spelling); the Java-parity check-runs tool is
-                // the REST path. Conclusions arrive lowercase — normalize
-                // before the red/pending comparisons below.
-                var cr = parseMcp(github_get_commit_check_runs({
-                    workspace: owner, repository: repo, commitSha: pr.head.sha
-                })) || {};
-                rollup = (cr.check_runs || []).map(function (r) {
-                    return {
-                        name: r.name || null,
-                        conclusion: r.conclusion ? String(r.conclusion).toUpperCase() : null,
-                        status: r.status ? String(r.status).toUpperCase() : null
-                    };
-                });
-            }
-            // CANCELLED is NOT a verdict: a cancelled validation run says
-            // nothing about the head (stale-run cleanup, quota sweeps,
-            // re-dispatches all cancel runs). Treating it as red made the
-            // engine dispatch rework legs on perfectly good PRs (live:
-            // dart gh-191, twice on 2026-09-22 after manual run cleanups).
-            // A cancelled check is ignored; if nothing conclusive remains,
-            // the rollup reads pending/none and validate-fresh re-runs CI.
-            var red = false, pending = false, ignored = 0, bookkept = 0;
-            // Bookkeeping checks are NOT verdicts (dmtools-agents#628):
-            // sm-kicker fires on EVERY non-main push (timer auto-commit,
-            // silent refresh) and the runner wake-up probe stamps its own
-            // success — a head carrying only these folds 'green', so the
-            // validation lane (checks none|pending) never fires and the PR
-            // dead-zones (live: dart #332, born green from a timer-pushed
-            // branch, 3 ticks processed 0). Same handling as CANCELLED:
-            // ignore; the trailing rule then reports 'pending' and
-            // validate-fresh dispatches the real CI on the head.
-            // 'merge /' joined the list for dmtools-agents#635 (live fa
-            // pr-1174, 2026-10-02): the Machine Merge Bot stamps its own
-            // check-run on the head it is EVALUATING — a queued/in-flight
-            // 'merge / merge' made the rollup read pending, so the bot
-            // waited on itself and merge-validated (checks:green) never
-            // matched either: armed → sweep → re-arm loop with a green,
-            // merge-ready head. The merge lane's check is machine
-            // bookkeeping, not a validation verdict.
-            // (hoisted to module scope + exported: smAgent.js's gh-755
-            // arm-time red-verdict probe must skip the same set — a
-            // bookkeeping FAILURE is no more a verdict than a cancelled
-            // one, and a drifted copy here would let the fail path arm
-            // rework on rollups computePrStatus itself never calls red.)
-            rollup.forEach(function (c) {
-                var concl = c.conclusion;
-                var status = c.status;
-                var cname = String((c && (c.name || c.context)) || '');
-                for (var bi = 0; bi < BOOKKEEPING_CHECK_PREFIXES.length; bi++) {
-                    if (cname.indexOf(BOOKKEEPING_CHECK_PREFIXES[bi]) === 0) { bookkept++; return; }
-                }
-                if (concl === 'CANCELLED') { ignored++; return; }
-                if (concl === 'FAILURE' || concl === 'TIMED_OUT') red = true;
-                else if (!concl || status === 'QUEUED' || status === 'IN_PROGRESS' ||
-                         status === 'WAITING' || status === 'PENDING') pending = true;
-            });
-            // Cancelled still forces 'no verdict yet' even next to green
-            // (a cancelled validation IS the missing verdict). Bookkeeping
-            // checks must NOT: green validation + kicker noise stays green,
-            // or every pushed-branch PR would re-validate forever. A head
-            // with ONLY bookkeeping checks has no verdict at all → pending,
-            // which is exactly what validate-fresh (none|pending) arms on.
-            var realCount = rollup.length - ignored - bookkept;
-            if (ignored > 0) pending = true;
-            if (realCount === 0 && bookkept > 0) pending = true;
-            // Live shape: github_get_pr returns the REST body, where the
-            // field is `mergeable_state` with lowercase values (clean,
-            // dirty, blocked, behind, has_hooks, draft, unknown) — the
-            // GraphQL `mergeStateStatus` spelling never appears. Map REST
-            // first (uppercase), keep the GraphQL passthrough, and only
-            // then fall back to the coarse mergeable bool.
-            var ms = pr.mergeStateStatus ||
-                (pr.mergeable_state ? String(pr.mergeable_state).toUpperCase() : '') || '';
-            // Deterministic override (see branchHead): DIRTY on real
-            // conflicts, BEHIND when the base moved, else the REST verdict
-            // — preserving BLOCKED for fresh heads whose required checks
-            // are pending/red. Masking BLOCKED as CLEAN deadlocked
-            // unarm-stale-validation on armed fresh PRs (live: dart #195 —
-            // ai_validating stuck for hours while this override reported
-            // CLEAN to every mergeState:[BEHIND,BLOCKED] rule). Falls back
-            // to CLEAN/UNKNOWN only when the REST body has no verdict.
-            if (pr.mergeable === false) {
-                ms = 'DIRTY';
-            } else if (pr.base && pr.base.ref) {
-                var head = branchHead(pr.base.ref);
-                if (head) {
-                    if (pr.base.sha !== head) {
-                        ms = 'BEHIND';
-                    } else {
-                        // Base fresh: a REST BLOCKED is real (required checks
-                        // pending/red on the current head — branch protection
-                        // unmet) and must survive; any other REST verdict on a
-                        // fresh base ('behind', 'unknown') is a recompute lie —
-                        // deterministically CLEAN.
-                        ms = ms === 'BLOCKED' ? 'BLOCKED' : 'CLEAN';
-                    }
-                }
-            }
-            if (!ms) ms = pr.mergeable === true ? 'CLEAN' : 'UNKNOWN';
-            return {
-                // REST reports `state` lowercase ('open'); guards compare
-                // against 'OPEN'/'MERGED' — normalize like the check-run
-                // conclusions and mergeable_state above.
-                state: pr.state ? String(pr.state).toUpperCase() : 'OPEN',
-                checkConclusion: rollup.length === 0 ? 'none' : (red ? 'red' : (pending ? 'pending' : 'green')),
-                mergeState: ms,
-                mergeable: pr.mergeable,
-                // Head sha pins the review-verdict comparison: a verdict
-                // rendered on an older commit is stale after pushes.
-                headSha: (pr.head && pr.head.sha) || null,
-                // Head ref — SM legs dispatched on the PR branch link their
-                // workflow runs to the PR (checks area + timeline).
-                branch: (pr.head && pr.head.ref) || '',
-                // PR-side labels (REST body): issue-anchored SM rules read
-                // them via prLabels/notPrLabels guards — the machine loop
-                // keeps ai_pr_reviewed/agent:review on the PR, not the issue.
-                labels: (pr.labels || []).map(function (l) {
-                    return (l && l.name) || l;
-                }),
-                // Creator login — the prMachineAuthor gate keys auto legs
-                // on it. REST body spells it `user`; GraphQL/tests use
-                // `author` (same dual read as the PR list path).
-                author: (pr.user && pr.user.login) ||
-                    (pr.author && (pr.author.login || pr.author.name)) || ''
-            };
-    }
+    // gh-1009: the closure is an orchestration shell; every method body
+    // delegates to a module-level helper above (same calls, same order,
+    // same log lines). The merge-state override's branchHead resolver is
+    // the one closure the helpers cannot own.
+    var resolveBranchHead = function (name) { return branchHead(owner, repo, name); };
 
     return {
         provider: 'github',
 
-        listOpenPrs: listOpenPrs,
-        listOpenPrsLive: listOpenPrsLive,
-        listMergedPrs: listMergedPrs,
+        listOpenPrs: function () { return listOpenPrs(owner, repo); },
+        listOpenPrsLive: function () { return listOpenPrsLive(owner, repo); },
+        listMergedPrs: function () { return listMergedPrs(owner, repo); },
 
-        // branchExists(name) — gh-922 dead-head park bench oracle: does
-        // this head ref exist on the repo right now? The branchHeads
-        // snapshot answers the common case; the #639 single-branch probe
-        // rescues a page-1 listing miss (30-branch cutoff) so a LIVE
-        // parked PR is never benched. Empty ref fails closed (nothing to
-        // dispatch against), probe failure reads as absent — the bench
-        // caller fails open on any throw.
-        branchExists: function (name) {
-            if (!name) return false;
-            if (branchHeadsMap()[name] !== undefined) return true;
-            return branchHead(name) !== null;
-        },
+        // branchExists(name) — gh-922 dead-head park bench oracle.
+        branchExists: function (name) { return _ghBranchExists(owner, repo, name); },
 
-        // snapshot(kinds?) — kinds limits which cache legs to materialize:
-        // the queryPrs batch only needs openPrs + branchHeads, and the
-        // merged-PR list was measured at ~1.8s on a busy repo for ZERO
-        // uses in that path. Omitted kinds stay out of the preseed; a
-        // worker that then actually needs one fetches it on demand.
-        snapshot: function (kinds) {
-            // Args-carried cache snapshot for the runAsync worker engines:
-            // every worker is a FRESH isolate with an empty module cache,
-            // so it cannot see this holder. The fan-out in
-            // sm/sources/githubSource.js fetches this ONCE per batch and
-            // hands it to each worker via createSmProvider({ preseed }) —
-            // a worker's first cache read then hits instead of re-fetching
-            // the same lists over the bridge. prStatus rides along so a
-            // later rule's batch inherits every status an earlier rule's
-            // workers already paid for (workers cannot write back — the
-            // main engine absorbs results via memoPrStatus, see
-            // githubSource.js — and ships them onward in the next
-            // snapshot).
-            var want = {};
-            (kinds || ['openPrs', 'mergedPrs', 'branchHeads', 'prStatus'])
-                .forEach(function (k) { want[k] = true; });
-            var out = {};
-            if (want.openPrs) out.openPrs = listOpenPrs();
-            if (want.mergedPrs) out.mergedPrs = listMergedPrs();
-            if (want.branchHeads) out.branchHeads = branchHeadsMap();
-            if (want.prStatus) out.prStatus = ioCacheCollect(owner, repo, 'prStatus');
-            return out;
-        },
+        // snapshot(kinds?) — args-carried cache snapshot for the
+        // runAsync worker engines (see the helper for the contract).
+        snapshot: function (kinds) { return _ghSnapshot(owner, repo, kinds); },
 
         listMachineIssues: function (machineLabels, agentHandle, limit) {
-            // GitHub search ANDs multiple label: qualifiers — run one
-            // search per label (OR semantics), merge unique by number.
-            var seen = {};
-            var out = [];
-            machineLabels.forEach(function (ml) {
-                var res = parseMcp(github_search_issues({
-                    query: 'repo:' + full + ' is:issue is:open label:"' + ml + '"'
-                }));
-                asList(res).forEach(function (it) {
-                    if (seen[it.number]) return;
-                    seen[it.number] = true;
-                    out.push(ghIssueToState(it));
-                });
-                if (out.length >= (limit || 50)) return; // forEach: enough
-            });
-            var extra = parseMcp(github_search_issues({
-                query: 'repo:' + full + ' is:issue is:open assignee:' + agentHandle
-            }));
-            asList(extra).forEach(function (it) {
-                if (seen[it.number]) return;
-                seen[it.number] = true;
-                out.push(ghIssueToState(it));
-            });
-            return out.slice(0, limit || 50);
+            return _ghListMachineIssues(owner, repo, full, machineLabels, agentHandle, limit);
         },
 
         findPr: function (issueNumber, branchPrefix) {
-            var branch = branchPrefix + issueNumber;
-            var headFilter = owner + ':' + branch;
-            var list = listOpenPrs();
-            var open = list.filter(function (p) {
-                return (p.head && p.head.label) === headFilter;
-            });
-            var bodyRe = new RegExp('(^|[^0-9])#' + issueNumber + '([^0-9]|$)');
-            if (!open.length) {
-                open = list.filter(function (p) {
-                    return bodyRe.test(String(p.body || ''));
-                });
-            }
-            if (open.length) {
-                return { number: open[0].number, state: 'OPEN',
-                         branch: (open[0].head && open[0].head.ref) || branch };
-            }
-            var merged = listMergedPrs().filter(function (p) {
-                return (p.head && p.head.label) === headFilter;
-            });
-            if (merged.length) {
-                return { number: merged[0].number, state: 'MERGED', branch: branch };
-            }
-            return null;
+            return _ghFindPr(owner, repo, issueNumber, branchPrefix);
         },
 
         prStatus: function (prNumber) {
-            // Per-tick memo (kind prStatus, key = PR number): measured on a
-            // busy tick — three rules re-fetched prStatus 23× for the same
-            // 7 PRs (23× github_get_pr + 23× github_get_commit_check_runs,
-            // all sequential). Results are read-only for callers
-            // (githubSource assigns item.pr; matchesGuards only reads), so
-            // sharing the cached reference is safe.
-            var memo = ioCacheGet(owner, repo, 'prStatus', prNumber);
-            if (memo) return memo;
-            var out = computePrStatus(prNumber);
-            ioCachePut(owner, repo, 'prStatus', prNumber, out);
-            return out;
+            return _ghPrStatusMemo(owner, repo, prNumber, resolveBranchHead);
         },
 
         memoPrStatus: function (prNumber, data) {
-            // Main-engine write-back for the runAsync fan-out: worker
-            // engines compute prStatus in their own isolates and hand the
-            // result back through smAsync's ordered results — absorbing it
-            // here (same per-tick ioCache) makes the NEXT batch's snapshot
-            // preseed hit instead of re-fetching the same PR across rules
-            // (measured: 3 rules × 6 PRs re-fetched identically per tick
-            // without this). Read-only callers make sharing the reference
-            // safe, same as the memo itself.
-            if (data) ioCachePut(owner, repo, 'prStatus', prNumber, data);
+            return _ghMemoPrStatus(owner, repo, prNumber, data);
         },
+
         lastReview: function (prNumber) {
-            // REST: reviews arrive chronological, the last entry is the
-            // latest verdict; commit_id pins the head it was rendered on
-            // (GraphQL spelling commitId kept as a fallback).
-            var list = asList(parseMcp(github_list_pr_reviews({
-                workspace: owner, repository: repo, pullRequestId: String(prNumber)
-            })));
-            if (!list.length) return null;
-            var r = list[list.length - 1];
-            return {
-                state: r.state || null,
-                commitId: r.commit_id || r.commitId || null,
-                author: (r.user && r.user.login) || null
-            };
+            return _ghLastReview(owner, repo, prNumber);
         },
 
         // ── gh-807 machine verdict records (js/common/reviewVerdicts.js) ──
-        // verdictRecords: every machine-parseable record on the PR, oldest
-        // first. The COMMENT FETCH is memoized per tick (kind prVerdicts) —
-        // the verdict guards may evaluate per rule and must not re-fetch —
-        // while the parse runs per call: opts.authorLogins (gh-828 review
-        // round 2, forge hardening) is the gh-728 machine-identity
-        // allowlist, and each caller may pin a different one (the marker
-        // format is public, so an unauthenticated APPROVE/REQUEST_CHANGES
-        // must be invisible to machine-trusting readers). Probe failure
-        // fails OPEN (empty list → guards inert → legacy behavior): a
-        // broken comment read must never strand a PR.
         verdictRecords: function (prNumber, opts) {
-            var allow = (opts && Array.isArray(opts.authorLogins)) ? opts.authorLogins : null;
-            var memoId = String(prNumber);
-            var memo = ioCacheGet(owner, repo, 'prVerdicts', memoId);
-            var list = memo;
-            if (!memo) {
-                list = [];
-                try {
-                    var raw = parseMcp(github_get_pr_comments({
-                        workspace: owner, repository: repo, pullRequestId: String(prNumber)
-                    }));
-                    var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
-                    list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
-                } catch (e) {
-                    console.warn('  ⚠️ verdict-record read failed (fail-open): ' + (e.message || e));
-                    list = [];
-                }
-                ioCachePut(owner, repo, 'prVerdicts', memoId, list);
-            }
-            return reviewVerdicts.parseVerdictRecords(list,
-                allow ? { authorLogins: allow } : undefined);
+            return _ghVerdictRecords(owner, repo, prNumber, opts);
         },
 
-        // Newest verdict record for one head (+ conflict detection with the
-        // AC1 WARN inside reviewVerdicts.latestVerdictForHead), or null when
-        // the head has none — the null is what makes the query guards
-        // fail-open for pre-gh-807 PRs. opts.authorLogins rides through to
-        // verdictRecords (the query guards pin the gh-728 machine logins).
         latestVerdictRecord: function (prNumber, headSha, opts) {
-            if (!headSha) return null;
-            return reviewVerdicts.latestVerdictForHead(
-                this.verdictRecords(prNumber, opts), headSha);
+            return _ghLatestVerdictRecord(this, prNumber, headSha, opts);
         },
 
         reviewThreads: function (prNumber) {
-            // GraphQL-only surface (REST has no threads endpoint):
-            // {data:{repository:{pullRequest:{reviewThreads:{nodes:[
-            // {id,isResolved,...}]}}}}} — navigate the envelope by hand,
-            // parseMcp only unwraps the JSON string.
-            var res = parseMcp(github_get_pr_review_threads({
-                workspace: owner, repository: repo, pullRequestId: String(prNumber)
-            }));
-            var nodes = (res && res.data && res.data.repository &&
-                         res.data.repository.pullRequest &&
-                         res.data.repository.pullRequest.reviewThreads &&
-                         res.data.repository.pullRequest.reviewThreads.nodes) || [];
-            var resolved = 0;
-            nodes.forEach(function (t) { if (t && t.isResolved) resolved++; });
-            return { total: nodes.length, resolved: resolved,
-                     unresolved: nodes.length - resolved };
+            return _ghReviewThreads(owner, repo, prNumber);
         },
 
         // ── gh-828 post-APPROVE thread resolution primitives ──
-        // reviewThreadList: the DETAILED thread list (vs the counts above) —
-        // each node mapped to its GraphQL resolve id, the root REST comment
-        // id (the reply anchor), the root author and body (the machine-auth
-        // and severity classification inputs) and the resolved flag. Fail
-        // OPEN to []: a broken threads read means "nothing eligible", never
-        // a throw — the resolve leg then no-ops for this PR this tick.
         reviewThreadList: function (prNumber) {
-            try {
-                var res = parseMcp(github_get_pr_review_threads({
-                    workspace: owner, repository: repo, pullRequestId: String(prNumber)
-                }));
-                var nodes = (res && res.data && res.data.repository &&
-                             res.data.repository.pullRequest &&
-                             res.data.repository.pullRequest.reviewThreads &&
-                             res.data.repository.pullRequest.reviewThreads.nodes) || [];
-                var out = [];
-                nodes.forEach(function (t) {
-                    if (!t) return;
-                    var first = (t.comments && t.comments.nodes &&
-                                 t.comments.nodes[0]) || {};
-                    out.push({
-                        threadId: t.id || null,
-                        rootCommentId: first.databaseId || null,
-                        resolved: t.isResolved === true,
-                        author: (first.author && (first.author.login || first.author.name)) || '',
-                        body: first.body || '',
-                        path: t.path || null,
-                        line: (t.line === 0 || t.line) ? t.line : null
-                    });
-                });
-                return out;
-            } catch (e) {
-                console.warn('  ⚠️ review-thread list failed (fail-open): ' + (e.message || e));
-                return [];
-            }
+            return _ghReviewThreadList(owner, repo, prNumber);
         },
 
-        // The ack reply rides the REST reply endpoint anchored on the root
-        // comment id; a thread-shaped item without one degrades to a PR-level
-        // comment so the ack is never lost silently.
         replyToThread: function (prNumber, thread, text) {
-            if (thread && thread.rootCommentId) {
-                return github_reply_to_pr_thread({
-                    workspace: owner, repository: repo,
-                    pullRequestId: String(prNumber),
-                    inReplyToId: String(thread.rootCommentId), text: String(text || '')
-                });
-            }
-            return github_add_pr_comment({
-                workspace: owner, repository: repo,
-                pullRequestId: String(prNumber), text: String(text || '')
-            });
+            return _ghReplyToThread(owner, repo, prNumber, thread, text);
         },
 
         resolveThread: function (prNumber, thread) {
-            if (thread && thread.threadId) {
-                return github_resolve_pr_thread({
-                    workspace: owner, repository: repo,
-                    pullRequestId: String(prNumber), threadId: String(thread.threadId)
-                });
-            }
-            console.warn('smProvider(github): no threadId to resolve on PR #' + prNumber);
+            return _ghResolveThread(owner, repo, prNumber, thread);
         },
 
         activeMachineRuns: function (workflowFile) {
-            var runs = parseMcp(github_list_workflow_runs({
-                workflowId: workflowFile, status: 'in_progress', perPage: 30
-            })) || {};
-            var queued = parseMcp(github_list_workflow_runs({
-                workflowId: workflowFile, status: 'queued', perPage: 30
-            })) || {};
-            var all = (runs.workflow_runs || runs.workflowRuns || [])
-                .concat(queued.workflow_runs || queued.workflowRuns || []);
-            var issues = [];
-            all.forEach(function (r) {
-                var m = /gh-(\d+)/.exec(String(r.display_title || r.displayTitle || r.name || ''));
-                if (m) issues.push(parseInt(m[1], 10));
-            });
-            return issues;
+            return _ghActiveMachineRuns(workflowFile);
         },
 
         dispatchLeg: function (issueNumber, leg, reason, workflowFile) {
@@ -719,11 +876,7 @@ function githubProvider(cfg) {
         },
 
         closeIssue: function (issueNumber, comment) {
-            if (comment) {
-                try { github_create_comment({ workspace: owner, repository: repo, number: issueNumber, body: comment }); }
-                catch (e) { console.warn('  ⚠️ close-issue comment failed: ' + (e.message || e)); }
-            }
-            return github_close_issue({ workspace: owner, repository: repo, number: issueNumber });
+            return _ghCloseIssue(owner, repo, issueNumber, comment);
         },
 
         addIssueLabel: function (issueNumber, label) {
@@ -738,13 +891,7 @@ function githubProvider(cfg) {
         },
 
         removePrLabel: function (prNumber, label) {
-            // Absent label → 404; treat as an idempotent no-op.
-            try {
-                return github_remove_label({ workspace: owner, repository: repo, number: prNumber, label: label });
-            } catch (e) {
-                console.warn('  ⚠️ remove "' + label + '" from PR #' + prNumber + ': ' + (e.message || e));
-                return null;
-            }
+            return _ghRemovePrLabel(owner, repo, prNumber, label);
         },
 
         dispatchPrLeg: function (prNumber, leg, reason, workflowFile) {
@@ -760,24 +907,152 @@ function githubProvider(cfg) {
         },
 
         silentUpdateBranch: function (prNumber, silentToken, restoreToken) {
-            // Silent refresh of an armed PR: pushes made with the workflow's
-            // own github.token trigger NO workflows, so the branch updates
-            // without re-running the CI matrix (issue #687 — test once per
-            // state, update for free).
-            var update = function () {
-                return cli_execute_command({
-                    command: 'gh pr update-branch ' + prNumber + ' --repo ' + full
-                });
-            };
-            if (!silentToken) return update();
-            try {
-                set_env_variable('GH_TOKEN', silentToken);
-                return update();
-            } finally {
-                set_env_variable('GH_TOKEN', restoreToken || silentToken);
-            }
+            return _ghSilentUpdateBranch(full, prNumber, silentToken, restoreToken);
         }
     };
+}
+
+// ── GitLab provider helpers (gh-1009) ─────────────────────────────────────
+// Same split as the github side: gitlabProvider is an orchestration shell
+// over these module-level helpers; same gitlab_* tool calls, same order.
+
+function _glIssueToState(it) {
+    return {
+        number: it.iid,
+        title: it.title,
+        labels: it.labels || [],
+        assignees: (it.assignees || []).map(function (a) { return a.username || a; })
+    };
+}
+
+function _glAssigneeLogins(it) {
+    return (it.assignees || []).map(function (a) { return a.username || a; });
+}
+
+function _glIssueMatches(it, machineLabels, agentHandle) {
+    // Machine labels are OR semantics: the assignee match wins, else any
+    // single machine label on the issue qualifies it.
+    if (_glAssigneeLogins(it).indexOf(agentHandle) !== -1) return true;
+    var labels = it.labels || [];
+    return machineLabels.some(function (ml) { return labels.indexOf(ml) !== -1; });
+}
+
+// gitlab_list_issues accepts comma-separated labels (AND on GitLab);
+// machine labels are OR semantics, so list open issues once and filter
+// client-side.
+function _glListMachineIssues(owner, repo, machineLabels, agentHandle, limit) {
+    var res = gitlab_list_issues({ workspace: owner, repository: repo, state: 'opened', perPage: limit || 50 }) || [];
+    return (res.issues || res || []).filter(function (it) {
+        return _glIssueMatches(it, machineLabels, agentHandle);
+    }).map(_glIssueToState);
+}
+
+function _glMrMatches(mr, branch, bodyRe) {
+    return mr.source_branch === branch || bodyRe.test(String(mr.description || ''));
+}
+
+function _glFindOpenMr(owner, repo, issueNumber, branch) {
+    var bodyRe = new RegExp('(^|[^0-9])#' + issueNumber + '([^0-9]|$)');
+    var open = (gitlab_list_mrs({ workspace: owner, repository: repo, state: 'opened' }) || [])
+        .filter(function (mr) { return _glMrMatches(mr, branch, bodyRe); });
+    if (!open.length) return null;
+    return { number: open[0].iid, state: 'OPEN', branch: open[0].source_branch || branch };
+}
+
+function _glFindPr(owner, repo, issueNumber, branchPrefix) {
+    var branch = branchPrefix + issueNumber;
+    var open = _glFindOpenMr(owner, repo, issueNumber, branch);
+    if (open) return open;
+    var merged = (gitlab_list_mrs({ workspace: owner, repository: repo, state: 'merged' }) || [])
+        .filter(function (mr) { return mr.source_branch === branch; });
+    if (merged.length) {
+        return { number: merged[0].iid, state: 'MERGED', branch: branch };
+    }
+    return null;
+}
+
+var GL_PENDING_PIPELINE_STATUSES = ['running', 'pending', 'created', 'waiting_for_resource'];
+
+// gh-755 (owner directive 2026-10-05): CANCELLED is not a verdict — a
+// cancelled pipeline says nothing about the head (superseded concurrency,
+// quota sweeps). Fold to 'no verdict yet' exactly like the GitHub rollup.
+function _glPipelineOutcome(p) {
+    var st = p.status || p.detailed_status;
+    if (st === 'canceled') return 'canceled';
+    if (st === 'failed') return 'red';
+    if (GL_PENDING_PIPELINE_STATUSES.indexOf(st) !== -1) return 'pending';
+    return 'green';
+}
+
+function _glTallyPipelines(list) {
+    var acc = { red: false, pending: false, any: false, cancelled: 0 };
+    list.forEach(function (p) {
+        acc.any = true;
+        var outcome = _glPipelineOutcome(p);
+        if (outcome === 'canceled') { acc.cancelled++; return; }
+        if (outcome === 'red') acc.red = true;
+        else if (outcome === 'pending') acc.pending = true;
+    });
+    if (acc.cancelled > 0) acc.pending = true;
+    return acc;
+}
+
+function _glMrMergeState(mr) {
+    if (mr.merge_status === 'can_be_merged' && !mr.has_conflicts) return 'CLEAN';
+    if (mr.has_conflicts) return 'BEHIND'; // conflicts ⇒ needs rebase
+    return 'UNKNOWN'; // incl. merge_status 'checking' (still computing)
+}
+
+function _glCheckConclusionLabel(tally) {
+    if (!tally.any) return 'none';
+    if (tally.red) return 'red';
+    return tally.pending ? 'pending' : 'green';
+}
+
+function _glMrAuthor(mr) {
+    // MR author login — the prMachineAuthor gate (GitHub twin reads
+    // `user.login`; GitLab spells it `author.username`).
+    return (mr.author && mr.author.username) || '';
+}
+
+function _glBuildMrStatus(mr, tally, mergeState) {
+    return {
+        state: mr.state ? String(mr.state).toUpperCase() : 'OPEN',
+        checkConclusion: _glCheckConclusionLabel(tally),
+        mergeState: mergeState,
+        mergeable: mr.merge_status === 'can_be_merged' && !mr.has_conflicts,
+        author: _glMrAuthor(mr)
+    };
+}
+
+function _glPrStatus(owner, repo, mrNumber) {
+    var mr = gitlab_get_mr({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) }) || {};
+    // Pipelines for the MR head — the CI verdict.
+    var pipes = (gitlab_get_mr_pipelines({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) }) || {});
+    var list = pipes.pipelines || pipes || [];
+    return _glBuildMrStatus(mr, _glTallyPipelines(list), _glMrMergeState(mr));
+}
+
+function _glActiveMachineRuns(owner, repo) {
+    // Pipelines do not expose trigger variables, so an API-sourced
+    // running pipeline is conservatively "the machine is busy".
+    var res = gitlab_list_pipeline_runs({ workspace: owner, repository: repo, status: 'running' }) || [];
+    var runs = res.pipelines || res || [];
+    var api = runs.filter(function (p) { return p.source === 'api' || p.source === 'trigger'; });
+    return api.length ? ['unknown'] : [];
+}
+
+function _glCloseIssue(owner, repo, issueNumber, comment) {
+    // No native close-issue tool in the GitLab catalog yet — document
+    // the gap, stay non-fatal.
+    console.warn('  ⚠️ gitlab close-issue tool not available — issue !' +
+        issueNumber + ' left open (comment-only).');
+    if (comment) {
+        // Issue notes ride the generic note path when present.
+        try { gitlab_create_mr_note({ workspace: owner, repository: repo, pullRequestId: String(issueNumber), text: comment }); }
+        catch (e) { console.warn('  ⚠️ close-issue comment failed: ' + (e.message || e)); }
+    }
+    return null;
 }
 
 function gitlabProvider(cfg) {
@@ -785,15 +1060,6 @@ function gitlabProvider(cfg) {
     var repo = cfg.repository.repo;
 
     function projectPath() { return owner + '/' + repo; }
-
-    function glIssueToState(it) {
-        return {
-            number: it.iid,
-            title: it.title,
-            labels: it.labels || [],
-            assignees: (it.assignees || []).map(function (a) { return a.username || a; })
-        };
-    }
 
     return {
         provider: 'gitlab',
@@ -811,80 +1077,19 @@ function gitlabProvider(cfg) {
         },
 
         listMachineIssues: function (machineLabels, agentHandle, limit) {
-            // gitlab_list_issues accepts comma-separated labels (AND on
-            // GitLab); machine labels are OR semantics, so list open issues
-            // once and filter client-side.
-            var res = gitlab_list_issues({ workspace: owner, repository: repo, state: 'opened', perPage: limit || 50 }) || [];
-            return (res.issues || res || []).filter(function (it) {
-                var labels = it.labels || [];
-                var assignees = (it.assignees || []).map(function (a) { return a.username || a; });
-                if (assignees.indexOf(agentHandle) !== -1) return true;
-                return machineLabels.some(function (ml) { return labels.indexOf(ml) !== -1; });
-            }).map(glIssueToState);
+            return _glListMachineIssues(owner, repo, machineLabels, agentHandle, limit);
         },
 
         findPr: function (issueNumber, branchPrefix) {
-            var branch = branchPrefix + issueNumber;
-            var bodyRe = new RegExp('(^|[^0-9])#' + issueNumber + '([^0-9]|$)');
-            var open = (gitlab_list_mrs({ workspace: owner, repository: repo, state: 'opened' }) || []).filter(function (mr) {
-                return mr.source_branch === branch || bodyRe.test(String(mr.description || ''));
-            });
-            if (open.length) {
-                return { number: open[0].iid, state: 'OPEN', branch: open[0].source_branch || branch };
-            }
-            var merged = (gitlab_list_mrs({ workspace: owner, repository: repo, state: 'merged' }) || []).filter(function (mr) {
-                return mr.source_branch === branch;
-            });
-            if (merged.length) {
-                return { number: merged[0].iid, state: 'MERGED', branch: branch };
-            }
-            return null;
+            return _glFindPr(owner, repo, issueNumber, branchPrefix);
         },
 
         prStatus: function (mrNumber) {
-            var mr = gitlab_get_mr({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) }) || {};
-            // Pipelines for the MR head — the CI verdict.
-            var pipes = (gitlab_get_mr_pipelines({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) }) || {});
-            var list = pipes.pipelines || pipes || [];
-            var red = false, pending = false, any = false, cancelled = 0;
-            list.forEach(function (p) {
-                any = true;
-                var st = p.status || p.detailed_status;
-                // gh-755 (owner directive 2026-10-05): CANCELLED is not a
-                // verdict — a cancelled pipeline says nothing about the
-                // head (superseded concurrency, quota sweeps). Counting it
-                // red armed fail_validation/rework legs on heads whose only
-                // red was a cancel (GitHub twin: dart gh-191). Fold to 'no
-                // verdict yet' exactly like the GitHub rollup: cancelled
-                // forces pending even next to green; a genuine failure
-                // elsewhere still reads red.
-                if (st === 'canceled') { cancelled++; return; }
-                if (st === 'failed') red = true;
-                else if (st === 'running' || st === 'pending' || st === 'created' || st === 'waiting_for_resource') pending = true;
-            });
-            if (cancelled > 0) pending = true;
-            var mergeState = 'UNKNOWN';
-            if (mr.merge_status === 'can_be_merged' && !mr.has_conflicts) mergeState = 'CLEAN';
-            else if (mr.has_conflicts) mergeState = 'BEHIND'; // conflicts ⇒ needs rebase
-            else if (mr.merge_status === 'checking') mergeState = 'UNKNOWN';
-            return {
-                state: mr.state ? String(mr.state).toUpperCase() : 'OPEN',
-                checkConclusion: any ? (red ? 'red' : (pending ? 'pending' : 'green')) : 'none',
-                mergeState: mergeState,
-                mergeable: mr.merge_status === 'can_be_merged' && !mr.has_conflicts,
-                // MR author login — the prMachineAuthor gate (GitHub twin
-                // reads `user.login`; GitLab spells it `author.username`).
-                author: (mr.author && mr.author.username) || ''
-            };
+            return _glPrStatus(owner, repo, mrNumber);
         },
 
         activeMachineRuns: function () {
-            // Pipelines do not expose trigger variables, so an API-sourced
-            // running pipeline is conservatively "the machine is busy".
-            var res = gitlab_list_pipeline_runs({ workspace: owner, repository: repo, status: 'running' }) || [];
-            var runs = res.pipelines || res || [];
-            var api = runs.filter(function (p) { return p.source === 'api' || p.source === 'trigger'; });
-            return api.length ? ['unknown'] : [];
+            return _glActiveMachineRuns(owner, repo);
         },
 
         dispatchLeg: function (issueNumber, leg, reason, workflowFile) {
@@ -911,16 +1116,7 @@ function gitlabProvider(cfg) {
         },
 
         closeIssue: function (issueNumber, comment) {
-            // No native close-issue tool in the GitLab catalog yet —
-            // document the gap, stay non-fatal.
-            console.warn('  ⚠️ gitlab close-issue tool not available — issue !' +
-                issueNumber + ' left open (comment-only).');
-            if (comment) {
-                // Issue notes ride the generic note path when present.
-                try { gitlab_create_mr_note({ workspace: owner, repository: repo, pullRequestId: String(issueNumber), text: comment }); }
-                catch (e) { console.warn('  ⚠️ close-issue comment failed: ' + (e.message || e)); }
-            }
-            return null;
+            return _glCloseIssue(owner, repo, issueNumber, comment);
         },
 
         addIssueLabel: function (issueNumber, label) {
