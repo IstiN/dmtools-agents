@@ -50,6 +50,7 @@
         "js/unit-tests/test_gitOps.js",
         "js/unit-tests/test_gitStaging.js",
         "js/unit-tests/test_submodules.js",
+        "js/unit-tests/test_scmReadFileMaybe.js",
         "js/unit-tests/test_pullRequestHelper.js",
         "js/unit-tests/test_developTicketAndCreatePR.js",
         "js/unit-tests/test_pushReworkChanges.js",
