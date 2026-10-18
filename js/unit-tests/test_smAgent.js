@@ -310,7 +310,8 @@ function makeSmAgent(opts) {
             makeRequire({
                 '../../common/machineAuthor.js': machineAuthorModule,
                 '../../common/smProvider.js': smProviderStub,
-                '../../common/smAsync.js': smAsyncForSource
+                '../../common/smAsync.js': smAsyncForSource,
+                '../../common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {})
             }),
             smMocks
         );
@@ -343,6 +344,7 @@ function makeSmAgent(opts) {
             './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
             './common/triggerFailures.js': loadModule('js/common/triggerFailures.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
+            './common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {
                     return {
@@ -9150,6 +9152,120 @@ suite('smAgent: conflict_rework re-arm reliability (gh-683 bug C)', function () 
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'already armed — no duplicate');
         assert.equal(sm.capturedPrComments.length, 0, 'no duplicate marker report');
         assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
+});
+
+suite('smAgent: conflict_rework over-scan — already-reported PRs do not consume the limit (gh-1027)', function () {
+
+    var RULE_LIMIT5 = {
+        description: 'branch conflicts with main -> report + machine re-arm',
+        source: 'github',
+        query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+        localAction: 'conflict_rework',
+        limit: 5,
+        id: 'conflict-rework'
+    };
+
+    function guestItem(n) {
+        return { key: 'pr-' + n, labels: [], issueNumber: null, prNumber: n,
+                 branch: 'fix/' + n + '-thing', author: 'someguest',
+                 pr: { headSha: 'sha' + n } };
+    }
+
+    function reportedMarkers(count) {
+        var out = [];
+        for (var i = 1; i <= count; i++) {
+            out.push({ body: '⚠️ Merge conflict with main — cannot merge (head `sha' + i + '`)' });
+        }
+        return out;
+    }
+
+    function params(rules) {
+        var p = baseParams('epam', 'dmtools-dart', rules);
+        p.jobParams.machineAuthor = 'ai-teammate';
+        return p;
+    }
+
+    test('AC1: N already-reported DIRTY PRs parked ahead — the unreported ones behind them still evaluate in the SAME tick', function () {
+        // gh-1025 raised the limit 1 -> 5, which only pushed the starvation
+        // class out to 5+ parked markers (live 2026-10-18: #983 parked every
+        // tick while unreported PRs were never evaluated). gh-1027: reported
+        // candidates cost one comments fetch but NO rule-limit slot.
+        var items = [];
+        var i;
+        for (i = 1; i <= 6; i++) items.push(guestItem(i)); // all reported
+        items.push(guestItem(7));                           // unreported
+        items.push(guestItem(8));                           // unreported
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: items,
+                prComments: reportedMarkers(6)
+            }
+        });
+
+        sm.action(params([RULE_LIMIT5]));
+
+        assert.equal(sm.capturedPrComments.length, 2, 'both unreported PRs report despite limit 5 with 6 parked markers ahead');
+        assert.ok(sm.capturedPrComments.some(function (c) { return c.body.indexOf('sha7') !== -1; }), 'pr-7 reported');
+        assert.ok(sm.capturedPrComments.some(function (c) { return c.body.indexOf('sha8') !== -1; }), 'pr-8 reported');
+        assert.equal(sm.capturedTriggers.length, 0, 'guests never dispatch rework');
+    });
+
+    test('the gh-683 self-heal behind parked markers still fires — a reported machine corpse re-arms under limit 1', function () {
+        // The corpse (marker present, linked OPEN issue UNLABELLED) sat at
+        // position 2 behind an already-reported guest. Pre-gh-1027 with
+        // limit 1 the guest consumed the only slot and the corpse starved;
+        // reported candidates must not consume slots, so the self-heal runs.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    guestItem(1),
+                    { key: 'pr-42', labels: [], issueNumber: null, prNumber: 42,
+                      branch: 'ai/gh-42', author: 'ai-teammate', pr: { headSha: 'sha42' } }
+                ],
+                pr: { number: 42, body: 'Closes #42', head: { sha: 'sha42' } },
+                prComments: reportedMarkers(1).concat([{ body: '⚠️ Merge conflict with main — cannot merge (head `sha42`)' }]),
+                issue: { number: 42, state: 'open', labels: [] }
+            }
+        });
+
+        sm.action(params([{
+            description: 'branch conflicts with main -> report + machine re-arm',
+            source: 'github',
+            query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework',
+            limit: 1,
+            id: 'conflict-rework'
+        }]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the corpse self-heals even under limit 1 with a parked marker ahead');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 42);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.equal(sm.capturedPrComments.length, 0, 'no duplicate marker report');
+    });
+
+    test('the scan is bounded: a candidate past the over-scan budget waits for the next tick', function () {
+        // Bounded, not eliminated (same tradeoff as gh-922's reserve): the
+        // per-tick comments-fetch fan-out is capped at limit + 15, so a
+        // candidate parked behind 16+ reported markers is one tick late,
+        // never a runaway fetch loop.
+        var items = [];
+        var i;
+        for (i = 1; i <= 20; i++) items.push(guestItem(i)); // all reported
+        items.push(guestItem(21));                          // unreported, position 21
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: items,
+                prComments: reportedMarkers(20)
+            }
+        });
+
+        sm.action(params([RULE_LIMIT5]));
+
+        assert.equal(sm.capturedPrComments.length, 0, 'position 21 is past the limit-5 over-scan budget (20) — waits one tick');
     });
 });
 

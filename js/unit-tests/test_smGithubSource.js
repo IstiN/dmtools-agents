@@ -48,7 +48,8 @@ suite('sm github source', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return providerStub; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {})
         }), tools);
     }
 
@@ -393,6 +394,48 @@ suite('sm github source', function () {
         }, { repoInfo: { owner: 'a', repo: 'b' } });
         assert.equal(items.length, 1);
         assert.equal(items[0].key, 'pr-12', 'conflicted 10 and behind 11 skipped; fresh 12 flows');
+    });
+
+    test('pr rules: conflict-rework over-scan slice — parked markers do not re-cut the queue (gh-1027)', function () {
+        // gh-1027: already-reported DIRTY PRs don't consume rule-limit
+        // slots, so the query must hand the engine enough candidates to
+        // reach `limit` actionable ones behind parked markers. The slice
+        // widens from limit + 3 (gh-922 reserve) to the shared over-scan
+        // budget (limit + 15) for the conflict_rework rule ONLY — other
+        // rules keep the plain reserve.
+        function mkPrs(count) {
+            var prs = [];
+            for (var i = 1; i <= count; i++) {
+                prs.push({ number: i, labels: [], head: { ref: 'fix/x' + i }, draft: false });
+            }
+            return prs;
+        }
+        function mkStatuses(count) {
+            var st = {};
+            for (var i = 1; i <= count; i++) {
+                st[i] = { number: i, state: 'OPEN', checks: 'none', mergeState: 'DIRTY', mergeable: false };
+            }
+            return st;
+        }
+        var dirtyQuery = { type: 'pr', mergeState: ['DIRTY'], draft: false };
+
+        var ten = load({ github_list_prs: function () { return mkPrs(10); } }, {}, mkStatuses(10));
+        var items = ten.query({
+            query: dirtyQuery, localAction: 'conflict_rework', limit: 5
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 10, 'limit 5 + over-scan 15 keeps all 10 candidates');
+
+        var twentyFive = load({ github_list_prs: function () { return mkPrs(25); } }, {}, mkStatuses(25));
+        var capped = twentyFive.query({
+            query: dirtyQuery, localAction: 'conflict_rework', limit: 5
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(capped.length, 20, 'the over-scan budget bounds the slice at limit + 15');
+
+        var plain = load({ github_list_prs: function () { return mkPrs(10); } }, {}, mkStatuses(10));
+        var other = plain.query({
+            query: dirtyQuery, limit: 5
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(other.length, 8, 'non-conflict rules keep the plain limit + 3 reserve');
     });
 
     test('pr rules: mutex — rule defers while another PR holds the label', function () {

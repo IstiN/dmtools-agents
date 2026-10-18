@@ -167,6 +167,13 @@ var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
 // ⚠️ trigger-failed marker math and the dead-head park cap. The pure
 // half lives in the module; recordDispatchFailure below wires transport.
 var triggerFailuresModule = require('./common/triggerFailures.js');
+// gh-1027 (hoisted, never lazy — the gh-823 pack-require rule): the
+// conflict-rework over-scan budget — already-reported DIRTY PRs must not
+// consume per-tick rule-limit slots (the gh-1025 1 -> 5 raise only pushed
+// the starvation class out to 5+ parked markers). Shared with
+// githubSource's query slice so the query never re-cuts the queue ahead
+// of the loop.
+var conflictReworkScanModule = require('./common/conflictReworkScan.js');
 // gh-922 (same-tick dedup, review): PR numbers whose dispatch failure was
 // already recorded THIS tick. The already-parked guard in
 // recordDispatchFailure reads the query-time label snapshot — within one
@@ -1399,11 +1406,24 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     var processedKeys = [];
     var skippedKeys   = [];
 
+    // gh-1027: conflict_rework over-scan counters. An already-reported
+    // candidate costs one comments fetch but must NOT consume a rule-limit
+    // slot — the loop scans until `limit` ACTIONABLE (unreported) candidates
+    // were processed, bounded by conflictReworkScanModule.scanLimit().
+    var conflictScanned = 0;
+    var conflictActionable = 0;
+
     for (var idx = 0; idx < tickets.length; idx++) {
         if (!rule.localTeammate && !rule.localAction && workflowBudget && workflowBudget.remaining <= 0) {
             break;
         }
-        if (effectiveLimit !== null && processedKeys.length >= effectiveLimit) {
+        if (rule.localAction === 'conflict_rework' && effectiveLimit !== null) {
+            // gh-1027: the limit counts ACTIONABLE candidates only (the
+            // action maintains the counters); the scan itself stays bounded
+            // so parked markers cannot fan the per-tick comments fetches.
+            if (conflictActionable >= effectiveLimit) break;
+            if (conflictScanned >= conflictReworkScanModule.scanLimit(effectiveLimit)) break;
+        } else if (effectiveLimit !== null && processedKeys.length >= effectiveLimit) {
             break;
         }
         var ticket = tickets[idx];
@@ -3129,7 +3149,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // landed (label absent on the linked issue) re-arms instead of
             // suppressing: suppression keys on the LABEL, the comment is
             // only the once-per-head pacing for the REPORT.
+            //
+            // gh-1027: an already-reported candidate is scanned (one
+            // comments fetch) but does NOT consume a rule-limit slot —
+            // conflictScanned/conflictActionable below feed the loop-head
+            // break condition. Marker dedup and the gh-683 self-heal are
+            // untouched.
             try {
+                conflictScanned++;
                 var headSha = (ticket.pr && ticket.pr.headSha) || null;
                 if (!headSha) {
                     try {
