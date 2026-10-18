@@ -687,6 +687,12 @@ function findExistingGhPr(runCommand, branchName, workingDir) {
     return null;
 }
 
+// Stringifies a thrown value the way the original seam did (Error → message
+// via toString, anything else → String()).
+function toErrorString(error) {
+    return error && error.toString ? error.toString() : String(error);
+}
+
 // The SCM-provider creation path (GitHub/GitLab/ADO providers exposing createPr).
 function createPrThroughScm(scm, options, branchName, baseBranch) {
     var body = buildPrBodyContent(options);
@@ -704,7 +710,7 @@ function createPrThroughScm(scm, options, branchName, baseBranch) {
         }
         return created || { success: false, error: 'SCM provider returned no result from createPr' };
     } catch (error) {
-        var errMsg = error && error.toString ? error.toString() : String(error);
+        var errMsg = toErrorString(error);
         if (isExistingScmPrError(errMsg)) {
             console.warn('SCM provider reported an existing PR/MR for branch ' + branchName + ': ' + errMsg);
         }
@@ -712,28 +718,16 @@ function createPrThroughScm(scm, options, branchName, baseBranch) {
     }
 }
 
-// The gh-cli creation path: duplicate lookup → temp body file → gh pr create
-// → URL extraction, with already-exists recovery and guaranteed temp cleanup.
-function createGhPullRequest(options, branchName) {
-    var baseBranch = options.baseBranch || 'main';
-    var workingDir = options.workingDir || null;
-    var runCommand = options.runCommand || defaultRunCommand;
-    var writeFile = options.writeFile || defaultWriteFile;
-    var deleteFile = options.deleteFile || defaultDeleteFile;
+// Temp body-file location: inside the working dir when one is set (trailing
+// slash collapsed), next to the caller's cwd otherwise.
+function resolveGhTempBodyPath(workingDir, tempBodyFile) {
+    return workingDir ? workingDir.replace(/\/$/, '') + '/' + tempBodyFile : tempBodyFile;
+}
 
-    var existingPr = findExistingGhPr(runCommand, branchName, workingDir);
-    if (existingPr) {
-        console.log('✅ PR already exists for branch ' + branchName + ': ' + existingPr);
-        return { success: true, prUrl: existingPr, alreadyExisted: true };
-    }
-
-    var tempBodyFile = options.tempBodyFile || 'pr_body_tmp.md';
-    var tempBodyPath = workingDir ? workingDir.replace(/\/$/, '') + '/' + tempBodyFile : tempBodyFile;
-    var bodyContent = buildPrBodyContent(options);
-    writeFile(tempBodyPath, bodyContent);
-
-    var command = buildGhPrCreateCommand(options.title, tempBodyFile, baseBranch, branchName);
-
+// Runs `gh pr create` and shapes the outcome: URL extraction on success,
+// already-exists recovery via `gh pr list`, the error otherwise; the temp
+// body file is ALWAYS cleaned up (finally).
+function runGhPrCreate(command, runCommand, deleteFile, tempBodyPath, branchName, workingDir) {
     try {
         var output = runCommand(command, workingDir) || '';
         var prUrl = extractPrUrl(output, runCommand, branchName, workingDir);
@@ -757,6 +751,30 @@ function createGhPullRequest(options, branchName) {
         // tree and blocks the dirty-tree guard on the very next ticket.
         deleteFile(tempBodyPath);
     }
+}
+
+// The gh-cli creation path: duplicate lookup → temp body file → gh pr create
+// → URL extraction, with already-exists recovery and guaranteed temp cleanup.
+function createGhPullRequest(options, branchName) {
+    var baseBranch = options.baseBranch || 'main';
+    var workingDir = options.workingDir || null;
+    var runCommand = options.runCommand || defaultRunCommand;
+    var writeFile = options.writeFile || defaultWriteFile;
+    var deleteFile = options.deleteFile || defaultDeleteFile;
+
+    var existingPr = findExistingGhPr(runCommand, branchName, workingDir);
+    if (existingPr) {
+        console.log('✅ PR already exists for branch ' + branchName + ': ' + existingPr);
+        return { success: true, prUrl: existingPr, alreadyExisted: true };
+    }
+
+    var tempBodyFile = options.tempBodyFile || 'pr_body_tmp.md';
+    var tempBodyPath = resolveGhTempBodyPath(workingDir, tempBodyFile);
+    var bodyContent = buildPrBodyContent(options);
+    writeFile(tempBodyPath, bodyContent);
+
+    var command = buildGhPrCreateCommand(options.title, tempBodyFile, baseBranch, branchName);
+    return runGhPrCreate(command, runCommand, deleteFile, tempBodyPath, branchName, workingDir);
 }
 
 function createPullRequest(options) {
@@ -797,5 +815,8 @@ module.exports = {
     isExistingScmPrError: isExistingScmPrError,
     findExistingGhPr: findExistingGhPr,
     createPrThroughScm: createPrThroughScm,
-    createGhPullRequest: createGhPullRequest
+    createGhPullRequest: createGhPullRequest,
+    resolveGhTempBodyPath: resolveGhTempBodyPath,
+    runGhPrCreate: runGhPrCreate,
+    toErrorString: toErrorString
 };

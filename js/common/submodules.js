@@ -181,6 +181,17 @@ function parseRegisteredSubmodulePaths(gitConfigOutput) {
         .filter(function(path) { return !!path; });
 }
 
+// The .gitmodules registration gate: throws before any other git command when
+// the module path is not registered.
+function assertRegisteredManagedSubmodule(run, cleanOutput, path) {
+    var registeredPaths = parseRegisteredSubmodulePaths(
+        cleanOutput(run('git config --file .gitmodules --get-regexp "^submodule\\..*\\.path$"') || '')
+    );
+    if (registeredPaths.indexOf(path) === -1) {
+        throw new Error('Managed submodule path is not registered in .gitmodules: ' + path);
+    }
+}
+
 // Fetch failure is non-fatal: the publish decision works off local state.
 function tryFetchManagedSubmoduleBranch(run, path, branch) {
     try {
@@ -264,6 +275,21 @@ function publishSubmoduleTag(run, cleanOutput, path, tagPrefix) {
     console.log('Managed submodule tag pushed:', path, '->', tagName);
 }
 
+// Aligns the local branch before publishing: dirty trees are stashed onto the
+// latest remote branch (conflicts adopt the stashed agent changes); a clean
+// tree ahead of the remote is reset onto a local branch. Returns the status
+// to publish from — the dirty path's post-pop status, otherwise the known
+// clean status (no extra status command is added).
+function alignSubmoduleBranchForPublish(run, cleanOutput, path, branch, hasDirtyChanges, aheadCount, cleanStatus) {
+    if (hasDirtyChanges) {
+        return prepareDirtySubmoduleBranch(run, cleanOutput, path, branch);
+    }
+    if (aheadCount > 0) {
+        run('git -C ' + path + ' checkout -B ' + branch + ' HEAD');
+    }
+    return cleanStatus;
+}
+
 // Per-module publish body — same git commands, same order, same log lines as
 // the original pushManagedSubmodules forEach body.
 function pushOneManagedSubmodule(run, cleanOutput, config, ticketKey, module) {
@@ -272,14 +298,7 @@ function pushOneManagedSubmodule(run, cleanOutput, config, ticketKey, module) {
     var tagPrefix = module.tagPrefix || null;
 
     assertSafeManagedSubmoduleSpec(path, branch, tagPrefix);
-
-    var registeredPaths = parseRegisteredSubmodulePaths(
-        cleanOutput(run('git config --file .gitmodules --get-regexp "^submodule\\..*\\.path$"') || '')
-    );
-    if (registeredPaths.indexOf(path) === -1) {
-        throw new Error('Managed submodule path is not registered in .gitmodules: ' + path);
-    }
-
+    assertRegisteredManagedSubmodule(run, cleanOutput, path);
     tryFetchManagedSubmoduleBranch(run, path, branch);
 
     var status = cleanOutput(run('git -C ' + path + ' status --porcelain') || '');
@@ -291,11 +310,7 @@ function pushOneManagedSubmodule(run, cleanOutput, config, ticketKey, module) {
     }
 
     console.log('Publishing managed submodule changes:', path, '-> origin/' + branch);
-    if (hasDirtyChanges) {
-        status = prepareDirtySubmoduleBranch(run, cleanOutput, path, branch);
-    } else if (aheadCount > 0) {
-        run('git -C ' + path + ' checkout -B ' + branch + ' HEAD');
-    }
+    status = alignSubmoduleBranchForPublish(run, cleanOutput, path, branch, hasDirtyChanges, aheadCount, status);
 
     configureSubmoduleAuthor(run, path, config);
 
@@ -339,5 +354,7 @@ module.exports = {
     publishSubmoduleTag: publishSubmoduleTag,
     tryFetchManagedSubmoduleBranch: tryFetchManagedSubmoduleBranch,
     assertSafeManagedSubmoduleSpec: assertSafeManagedSubmoduleSpec,
+    assertRegisteredManagedSubmodule: assertRegisteredManagedSubmodule,
+    alignSubmoduleBranchForPublish: alignSubmoduleBranchForPublish,
     pushOneManagedSubmodule: pushOneManagedSubmodule
 };
