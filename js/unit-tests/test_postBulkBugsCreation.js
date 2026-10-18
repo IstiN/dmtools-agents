@@ -777,3 +777,48 @@ suite('postBulkBugsCreation: stage-label fallback (gh-916)', function() {
         assert.deepEqual(added, [{ key: 'TS-980', label: 'stage_bug_to_fix' }]);
     });
 });
+
+suite('postBulkBugsCreation.extractTickets', function() {
+    function loadModule_() {
+        return loadPostBulkBugsCreation({});
+    }
+
+    test('returns [] for null, undefined and empty input', function() {
+        var extractTickets = loadModule_().extractTickets;
+        assert.deepEqual(extractTickets(null), []);
+        assert.deepEqual(extractTickets(undefined), []);
+        assert.deepEqual(extractTickets(''), []);
+    });
+
+    test('returns the input array as-is', function() {
+        var arr = [{ key: 'TS-1' }, { key: 'TS-2' }];
+        assert.deepEqual(loadModule_().extractTickets(arr), arr);
+    });
+
+    test('parses a JSON string holding an array', function() {
+        assert.deepEqual(loadModule_().extractTickets('[{"key":"TS-1"}]'), [{ key: 'TS-1' }]);
+    });
+
+    test('returns [] for an invalid JSON string', function() {
+        assert.deepEqual(loadModule_().extractTickets('not-json{'), []);
+    });
+
+    test('extracts issues, data and results containers from an object', function() {
+        var extractTickets = loadModule_().extractTickets;
+        assert.deepEqual(extractTickets({ issues: ['i1', 'i2'] }), ['i1', 'i2']);
+        assert.deepEqual(extractTickets({ data: ['d1'] }), ['d1']);
+        assert.deepEqual(extractTickets({ results: ['r1', 'r2'] }), ['r1', 'r2']);
+    });
+
+    test('prefers data over results when both are present (pinned order)', function() {
+        var value = { data: ['d'], results: ['r'] };
+        assert.deepEqual(loadModule_().extractTickets(value), ['d']);
+    });
+
+    test('returns [] when no known container key holds an array', function() {
+        var extractTickets = loadModule_().extractTickets;
+        assert.deepEqual(extractTickets({ total: 5 }), []);
+        assert.deepEqual(extractTickets('{"total":5}'), []);
+        assert.deepEqual(extractTickets(42), []);
+    });
+});
