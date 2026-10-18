@@ -43,14 +43,23 @@ function parseJsonMaybe(value, fallback) {
     try { return JSON.parse(value); } catch (e) { return fallback; }
 }
 
+// Container keys used by tracker/SCM list responses (Jira paged values, ADO
+// work items, GitHub workflow runs / composite results). Kept in priority order.
+var ARRAY_CONTAINER_KEYS = ['values', 'items', 'workflow_runs', 'result'];
+
+// Pure: return the first container key of `value` that holds an array, else null.
+function firstArrayContainer(value) {
+    for (var i = 0; i < ARRAY_CONTAINER_KEYS.length; i++) {
+        var candidate = value[ARRAY_CONTAINER_KEYS[i]];
+        if (Array.isArray(candidate)) return candidate;
+    }
+    return null;
+}
+
 function asArray(value) {
     if (!value) return [];
     if (Array.isArray(value)) return value;
-    if (value.values && Array.isArray(value.values)) return value.values;
-    if (value.items && Array.isArray(value.items)) return value.items;
-    if (value.workflow_runs && Array.isArray(value.workflow_runs)) return value.workflow_runs;
-    if (value.result && Array.isArray(value.result)) return value.result;
-    return [];
+    return firstArrayContainer(value) || [];
 }
 
 function uniq(values) {
@@ -587,6 +596,7 @@ function action(params) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
+        asArray: asArray,
         buildSmLabelJql: buildSmLabelJql,
         collectLabelsFromRules: collectLabelsFromRules,
         extractTicketKey: extractTicketKey,
