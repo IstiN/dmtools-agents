@@ -22,7 +22,14 @@
 # ban are guarded by js/unit-tests/test_workflowLint.js.
 name: AI Teammate
 
-run-name: "teammate: ${{ github.event_name }} #${{ github.event.issue.number || github.event.inputs.issue }} ${{ github.event.inputs.leg }}"
+# gh-1065: the title carries the LEG for every path — the dispatch input
+# leg directly, and for event-path runs the strongest arming label on the
+# issue (rework > review > pr_approved → review > dev). legOfRunName
+# (js/common/teammateEventDedup.js) parses the trailing token, so a
+# COMPLETED owner stays title-precise: the strict completed-owner leg rule
+# (a leg-less completed run never swallows a KNOWN new leg) can only work
+# when real leg runs carry their leg in the title.
+run-name: "teammate: ${{ github.event_name }} #${{ github.event.issue.number || github.event.inputs.issue }} ${{ github.event.inputs.leg || (contains(github.event.issue.labels.*.name, 'agent:rework') && 'rework') || (contains(github.event.issue.labels.*.name, 'agent:review') && 'review') || (contains(github.event.issue.labels.*.name, 'pr_approved') && 'review') || (contains(github.event.issue.labels.*.name, 'agent:dev') && 'dev') || (contains(github.event.issue.labels.*.name, 'agent:develop') && 'dev') || github.event.label.name }}"
 
 on:
   issues:
@@ -75,11 +82,36 @@ jobs:
   # unit-tested pure module js/common/teammateEventDedup.js (AC4) — this
   # step is transport only. The probe short-circuits BEFORE any API call
   # for workflow_dispatch (SM-side gh-1028 governs it), non-arming
-  # lifecycle labels (the teammate gate below rejects them — gh-1029 no-burn
-  # parity) and non-teammate assignees.
+  # gh-1029 zero-burn parity: the job-level `if:` above mirrors the
+  # teammate gate, so non-arming lifecycle label writes execute ZERO jobs
+  # (those runs conclude failure — the gh-676 phantom shape — and own no
+  # dedup key). The in-probe preflight below remains as defense in depth
+  # against gate drift. The probe short-circuits BEFORE any API call
+  # for workflow_dispatch (SM-side gh-1028 governs it), non-arming
+  # lifecycle labels and non-teammate assignees.
   dedup:
     name: Event-path dedup probe (gh-1065)
     runs-on: ubuntu-latest
+    # gh-1065 rework (review thread — gh-1029 zero-burn parity): this gate
+    # MIRRORS the teammate call gate below. `on:` fires on EVERY label
+    # write repo-wide, and an unguarded dedup job would allocate a runner
+    # (checkout + node boot) per lifecycle-label storm — the exact burn
+    # gh-1029 eliminated. Rejected events now execute ZERO jobs: the run
+    # concludes failure (the gh-676 phantom pattern) and — because only
+    # conclusion 'success' owns the freshness window — can never suppress
+    # a trigger for an issue whose leg never ran.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' &&
+       github.event.action == 'assigned' &&
+       contains(github.event.issue.assignees.*.login, 'ai-teammate')) ||
+      (github.event_name == 'issues' &&
+       github.event.action == 'labeled' &&
+       (github.event.label.name == 'agent:dev' ||
+        github.event.label.name == 'agent:develop' ||
+        github.event.label.name == 'agent:review' ||
+        github.event.label.name == 'agent:rework' ||
+        github.event.label.name == 'pr_approved'))
     outputs:
       proceed: ${{ steps.probe.outputs.proceed }}
       audit: ${{ steps.probe.outputs.audit }}
@@ -93,9 +125,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           ACTION: ${{ github.event.action }}
           LABEL_NAME: ${{ github.event.label.name }}
-          ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ' ') }}
+          ISSUE_LABELS: ${{ toJson(github.event.issue.labels.*.name) }}
           ISSUE: ${{ github.event.issue.number || github.event.inputs.issue }}
-          ASSIGNEES: ${{ join(github.event.issue.assignees.*.login, ' ') }}
+          ASSIGNEES: ${{ toJson(github.event.issue.assignees.*.login) }}
           SELF_ID: ${{ github.run_id }}
           SELF_RUN_NUMBER: ${{ github.run_number }}
           WORKFLOW_FILE: ai-teammate.yml
@@ -107,8 +139,18 @@ jobs:
           const dedup = require('./js/common/teammateEventDedup.js');
 
           const env = process.env;
-          const issueLabels = (env.ISSUE_LABELS || '').split(' ').filter(Boolean);
-          const assignees = (env.ASSIGNEES || '').split(' ').filter(Boolean);
+          // gh-1065 rework (review thread): label/login names may contain
+          // spaces — the lists ride as JSON. Fallback: the legacy
+          // space-joined shape still parses (defense in depth).
+          const parseEventList = (raw) => {
+            try {
+              const v = JSON.parse(raw || '[]');
+              if (Array.isArray(v)) return v.filter(Boolean);
+            } catch (e) { /* legacy space-joined list — fall through */ }
+            return (raw || '').split(' ').filter(Boolean);
+          };
+          const issueLabels = parseEventList(env.ISSUE_LABELS);
+          const assignees = parseEventList(env.ASSIGNEES);
 
           const out = (proceed, audit) => {
             const line = String(audit).replace(/\s+/g, ' ').trim();

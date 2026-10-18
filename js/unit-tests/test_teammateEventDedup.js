@@ -404,6 +404,26 @@ suite('ai-teammate.yml — the dedup gate is wired into the stub', function () {
 
     var yml = file_read({ path: '.github/workflows/ai-teammate.yml' });
 
+    // Every folded job-level `if: >-` scalar in the workflow (the stub
+    // carries two since the gh-1065 rework: the dedup probe gate and the
+    // teammate call gate).
+    function foldedJobIfs(content) {
+        var lines = content.split('\n');
+        var ifs = [];
+        for (var i = 0; i < lines.length; i++) {
+            if (/^ {4}if: >-\s*$/.test(lines[i])) {
+                var parts = [];
+                for (var j = i + 1; j < lines.length; j++) {
+                    if (/^\s*$/.test(lines[j])) continue;
+                    if (/^ {5,}/.test(lines[j])) parts.push(lines[j].replace(/^\s+/, ''));
+                    else break;
+                }
+                ifs.push(parts.join(' '));
+            }
+        }
+        return ifs;
+    }
+
     test('the dedup probe job exists and exposes the proceed gate', function () {
         assert.ok(yml.indexOf('dedup:') !== -1, 'a dedup job is declared');
         assert.ok(yml.indexOf('proceed: ${{ steps.probe.outputs.proceed }}') !== -1,
@@ -423,5 +443,44 @@ suite('ai-teammate.yml — the dedup gate is wired into the stub', function () {
             'a probe crash still proceeds (catch-all fail-open, never wedges needs:)');
         assert.ok(yml.indexOf('status skipped, fail-open') !== -1,
             'a per-status API error is skipped fail-open');
+    });
+
+    test('the dedup job is gated (gh-1029 zero-burn parity): non-arming events execute ZERO jobs', function () {
+        // Review-thread fix: an unguarded dedup job burned a runner on EVERY
+        // label write repo-wide. With the gate mirroring the teammate gate,
+        // a non-arming lifecycle label write executes zero jobs — the run
+        // concludes failure (the gh-676 phantom pattern) and owns no dedup
+        // key, closing the freshness-window hole for runs that never ran a
+        // leg.
+        var ifs = foldedJobIfs(yml);
+        assert.ok(ifs.length >= 2, 'both the dedup and the teammate job carry a folded if gate');
+        var dedupIf = null;
+        for (var i = 0; i < ifs.length; i++) {
+            if (ifs[i].indexOf('needs.dedup') === -1 && ifs[i].indexOf("github.event.action == 'labeled'") !== -1) {
+                dedupIf = ifs[i];
+            }
+        }
+        assert.ok(dedupIf, 'the dedup job has its own arming gate (not just the teammate call gate)');
+        ['agent:dev', 'agent:develop', 'agent:review', 'agent:rework', 'pr_approved'].forEach(function (l) {
+            assert.ok(dedupIf.indexOf("github.event.label.name == '" + l + "'") !== -1,
+                'the dedup gate admits the arming label ' + l);
+        });
+        assert.ok(dedupIf.indexOf("github.event.action == 'assigned'") !== -1,
+            'the dedup gate keys the assignee check to the assigned action');
+        assert.ok(dedupIf.indexOf("github.event_name == 'workflow_dispatch'") !== -1,
+            'the dedup gate preserves the dispatch path (probe outputs proceed=true there)');
+    });
+
+    test('the run-name carries the label-derived leg (completed owners stay title-precise)', function () {
+        assert.ok(yml.indexOf("contains(github.event.issue.labels.*.name, 'agent:rework')") !== -1,
+            'run-name resolves the strongest arming label into the title');
+    });
+
+    test('label and assignee lists ride as JSON — names with spaces never fracture', function () {
+        assert.ok(yml.indexOf('${{ toJson(github.event.issue.labels.*.name) }}') !== -1,
+            'ISSUE_LABELS is JSON-encoded');
+        assert.ok(yml.indexOf('${{ toJson(github.event.issue.assignees.*.login) }}') !== -1,
+            'ASSIGNEES is JSON-encoded');
+        assert.ok(yml.indexOf('parseEventList') !== -1, 'the probe parses the JSON lists');
     });
 });

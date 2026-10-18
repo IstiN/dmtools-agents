@@ -330,7 +330,12 @@ var ARMING_LABELS = ['agent:dev', 'agent:develop', 'agent:review', 'agent:rework
 
 // Extract a folded job-level `if: >-` block (4-space indent under a job) and
 // return its scalar content (folded scalar semantics: lines joined with ' ').
+// gh-1065: the stub carries TWO such gates — the dedup probe job mirrors the
+// arming gate — so this contract targets the CALL gate: the one that also
+// gates on the dedup probe output (the template has only the call gate, so
+// the marker check falls back to the first block there).
 function extractJobIf(yml) {
+    var blocks = [];
     var lines = yml.split('\n');
     for (var i = 0; i < lines.length; i++) {
         if (/^ {4}if: >-\s*$/.test(lines[i])) {
@@ -343,10 +348,13 @@ function extractJobIf(yml) {
                     break;
                 }
             }
-            return parts.join(' ');
+            blocks.push(parts.join(' '));
         }
     }
-    return '';
+    for (var k = 0; k < blocks.length; k++) {
+        if (blocks[k].indexOf('needs.dedup.outputs.proceed') !== -1) return blocks[k];
+    }
+    return blocks.length ? blocks[0] : '';
 }
 
 // Every label comparison (`github.event.label.name == '...'`) in the gate.
