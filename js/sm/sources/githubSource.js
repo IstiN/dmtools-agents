@@ -723,7 +723,14 @@ function asItemsArray(liveData) {
 function livePrItems(provider, repoInfo) {
     if (!provider || typeof provider.listOpenPrsLive !== 'function' || !repoInfo) return null;
     try {
-        return asItemsArray(provider.listOpenPrsLive());
+        var live = asItemsArray(provider.listOpenPrsLive());
+        // The live payload carries the same label shape github_list_prs
+        // returns (REST: {name} objects) — the probe's label scans read
+        // PLAIN strings (same contract as the query's prLabels mapping),
+        // so normalize here or every defer would misread as a phantom.
+        return live ? live.map(function (p) {
+            return { number: p.number, labels: prLabels(p) };
+        }) : null;
     } catch (e) {
         console.log('   ⚠️ gh-1000 phantom-heal live re-read failed: ' +
             String((e && e.message) || e) + ' — keeping cached mutex decision (fail-closed)');

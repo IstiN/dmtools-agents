@@ -2857,3 +2857,113 @@ suite('sm github source: gh-1000 phantom-heal probe edges', function () {
         assert.deepEqual(dropped, [['o', 'r', 'openPrs', null]], 'ioCache self-healed');
     });
 });
+
+suite('sm github source: gh-1000 IT-1 phantom self-heal through queryPrs (AC2)', function () {
+    // The rework review thread pinned the BLOCKING defect: the production
+    // guard named a provider.githubApi method that never existed on the
+    // smProvider facade, so the self-heal was dead code in production and
+    // only pure-module tests passed. These tests drive the FULL-SLOT DEFER
+    // path through queryPrs with a facade shaped like the real
+    // createSmProvider return (listOpenPrs + listOpenPrsLive) — the guard
+    // cannot rot again without one of these failing.
+    function loadSrc(ioCacheDrop) {
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': {
+                createSmProvider: function () { return null; },
+                ioCacheDrop: ioCacheDrop
+            },
+            '../../common/smAsync.js': {},
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+        }), {});
+    }
+
+    function cachedPrs() {
+        // The stale per-tick view: PR 11 holds ai_validating, PR 10 is the
+        // queued approved candidate. Live 19:08Z shape.
+        return [
+            { number: 10, labels: [{ name: 'pr_approved' }], head: { ref: 'ai/gh-10' }, draft: false },
+            { number: 11, labels: [{ name: 'ai_validating' }, { name: 'pr_approved' }],
+              head: { ref: 'ai/gh-11' }, draft: false }
+        ];
+    }
+
+    function rule() {
+        return {
+            query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'],
+                     mutex: 'ai_validating' }
+        };
+    }
+
+    test('full-slot defer + live layer clean → self-heal, candidate arms in the SAME tick (AC2)', function () {
+        var dropped = [];
+        var mod = loadSrc(function (owner, repo, key, sub) { dropped.push([owner, repo, key, sub]); });
+        var liveCalls = 0;
+        var provider = {
+            // facade shape the real createSmProvider exposes
+            listOpenPrs: cachedPrs,
+            listOpenPrsLive: function () {
+                liveCalls++;
+                // LIVE layer: the arm is gone — 11's ai_validating vanished
+                return cachedPrs().map(function (p) {
+                    return p.number === 11
+                        ? { number: 11, labels: [{ name: 'pr_approved' }], head: p.head, draft: false }
+                        : p;
+                });
+            }
+        };
+        var items = mod.query(rule(), {
+            repoInfo: { owner: 'a', repo: 'b' },
+            provider: provider
+        });
+        assert.equal(liveCalls, 1, 'the LIVE re-read fired on the full-slot decision');
+        assert.equal(items.length, 1, 'queued candidate arms in the same tick');
+        assert.equal(items[0].key, 'pr-10');
+        assert.deepEqual(dropped, [['a', 'b', 'openPrs', null]], 'ioCache self-healed');
+        var snap = mod.takeMutexTickSnapshot();
+        assert.ok(snap, 'tick event recorded');
+        assert.equal(snap.mutexSelfHeals, 1);
+        assert.equal(snap.consecutivePhantomTicks, 1, 'streak key rides the event');
+        assert.equal(snap.alarms.length, 1);
+        assert.equal(snap.alarms[0].title, 'phantom_mutex_holder');
+    });
+
+    test('full-slot defer + live probe agrees → defer stands, no event', function () {
+        var mod = loadSrc(null);
+        var provider = {
+            listOpenPrs: cachedPrs,
+            listOpenPrsLive: cachedPrs // live layer confirms the holder
+        };
+        var items = mod.query(rule(), {
+            repoInfo: { owner: 'a', repo: 'b' },
+            provider: provider
+        });
+        assert.equal(items.length, 0, 'a REAL holder still defers the queue');
+        assert.equal(mod.takeMutexTickSnapshot(), null, 'no divergence → no self-heal event');
+    });
+
+    test('full-slot defer + live probe throws → fail-closed, cached decision kept one more tick (E4)', function () {
+        var mod = loadSrc(null);
+        var provider = {
+            listOpenPrs: cachedPrs,
+            listOpenPrsLive: function () { throw new Error('api down'); }
+        };
+        var items = mod.query(rule(), {
+            repoInfo: { owner: 'a', repo: 'b' },
+            provider: provider
+        });
+        assert.equal(items.length, 0, 'probe failure keeps the cached defer (fail-closed)');
+        assert.equal(mod.takeMutexTickSnapshot(), null, 'no event on a failed probe');
+    });
+
+    test('facade WITHOUT listOpenPrsLive (legacy stub) → defer stands, no crash, no event', function () {
+        var mod = loadSrc(null);
+        var provider = { listOpenPrs: cachedPrs }; // pre-gh-1000 stub shape
+        var items = mod.query(rule(), {
+            repoInfo: { owner: 'a', repo: 'b' },
+            provider: provider
+        });
+        assert.equal(items.length, 0, 'no live hook → cached decision stands (E4)');
+        assert.equal(mod.takeMutexTickSnapshot(), null);
+    });
+});
