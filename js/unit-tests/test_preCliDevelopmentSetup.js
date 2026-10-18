@@ -904,12 +904,25 @@ suite('preCliDevelopmentSetup.action — branch-coverage characterization (gh-10
     // Compact action loader: same wiring as the gh-716 suite, with per-test
     // stubs for restore/setupCommands/fetch extras and injected globals
     // (e.g. github_create_comment) that reach the real trackers module.
+    // Defaults live in an Object.assign map — every `||` would raise the
+    // loader's own CRAP (gh-1042 gate measures test files too).
     function loadActionGh1042(bag, config, globals, opts) {
-        opts = opts || {};
+        opts = Object.assign({
+            resolveBranchNameThrows: false,
+            restoreFromReleases: { action: function () {} },
+            setupCommands: {
+                runSetupCommands: function () { return null; },
+                buildSetupWarningsMarkdown: function () { return null; },
+                truncateSetupError: function (s) { return String(s); }
+            },
+            fetchLinkedTests: { action: function () {} },
+            fetchParentContext: { action: function () {} }
+        }, opts || {});
+        globals = globals || {};
         var trackers = loadModule('js/common/trackers.js', makeRequire({
             '../config.js': configModule,
             './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
-        }), globals || {});
+        }), globals);
         return loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
@@ -926,14 +939,10 @@ suite('preCliDevelopmentSetup.action — branch-coverage characterization (gh-10
                 './common/pullRequest.js': PR_HELPER_REAL,
                 './config.js': NOOP_CONFIG_JS,
                 './fetchQuestionsToInput.js': { action: function () {} },
-                './fetchLinkedTestsToInput.js': opts.fetchLinkedTests || { action: function () {} },
-                './fetchParentContextToInput.js': opts.fetchParentContext || { action: function () {} },
-                './restoreFromReleases.js': opts.restoreFromReleases || { action: function () {} },
-                './common/setupCommands.js': opts.setupCommands || {
-                    runSetupCommands: function () { return null; },
-                    buildSetupWarningsMarkdown: function () { return null; },
-                    truncateSetupError: function (s) { return String(s); }
-                },
+                './fetchLinkedTestsToInput.js': opts.fetchLinkedTests,
+                './fetchParentContextToInput.js': opts.fetchParentContext,
+                './restoreFromReleases.js': opts.restoreFromReleases,
+                './common/setupCommands.js': opts.setupCommands,
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
                 './common/commentMarkup.js': devCommentMarkupModule,
                 './common/trackers.js': trackers
@@ -944,7 +953,7 @@ suite('preCliDevelopmentSetup.action — branch-coverage characterization (gh-10
                 file_write: function (args) { bag.writes.push(args); },
                 github_add_labels: function (args) { bag.events.push({ op: 'add', args: args }); },
                 github_remove_label: function (args) { bag.events.push({ op: 'remove', args: args }); }
-            }, globals || {})
+            }, globals)
         );
     }
 
