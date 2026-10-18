@@ -297,6 +297,89 @@ function orphanedRunChecks(checkRuns, resolveRun, nowMs, opts) {
     return out;
 }
 
+// ── gh-998: placeholder lifecycle + sweper ──────────────────────────────────
+//
+// Live fa #1563 (2026-10-17, head f3d58647): the SM-registered placeholder
+// `Quality gate` (check-run 117469671401, kicker suite 105847141092) stayed
+// `in_progress` 40+ minutes past its cycle and held mergeStateStatus=BLOCKED
+// with 58 green sibling checks — a pending required check counts per name
+// across ALL suites on the head, and no machine action (re-dispatch, fresh
+// sha, operator REST close — 404 creator-only) can retire it. The gh-857
+// in-place close covers ONLY the success row (and only with a green cover);
+// the failure/superseded/cancelled/died rows of the gh-998 capability table
+// and every pre-fix leak had NO close path — a cycle that ends without
+// landing a verdict stamp on the head leaks its placeholders forever.
+//
+//  - conclusionForOutcome(outcome) — the capability table (AC1): the
+//    cycle's real outcome decides the close conclusion. `neutral` is
+//    reserved for the no-verdict rows (superseded/cancelled/died) — a
+//    superseded cycle carries no verdict about its head (I3); required-
+//    check truth is never laundered into a blanket success.
+//  - openCycle/closePlaceholderCycle — the register→outcome→closed state
+//    machine (AC1): the five outcomes close with the mapped conclusion and
+//    NO transition leaves the object open. An unknown outcome fails SAFE
+//    (returns null, the cycle stays open — the close obligation retries
+//    next tick, it is never silently dropped). Closing an already-closed
+//    cycle is rejected — idempotence, so two racing closers (E1) cannot
+//    double-close or double-count the metric.
+//  - zombieSweptLine — the I5 machine-log line for every sweeper action:
+//    `zombie-swept: <check-run-id> head <sha>`. The sweeper's DETECTION is
+//    the gh-865 orphan rule (a pending check-run whose owning run is
+//    terminal, past the propagation grace) — reused verbatim; its AC2
+//    guarantee (a live owner is never touched) is the gh-865 test suite.
+//
+// The close TRANSPORT (same-app token, gh-857 family) and the per-tick
+// wiring live in js/smAgent.js; the leak counter rides the factory-state
+// snapshot (js/factoryState.js, I5).
+
+// gh-998 capability table (AC1). Keys are the five cycle outcomes; values
+// are the placeholder close conclusions. `neutral` is deliberate for the
+// no-verdict rows — see above.
+var CYCLE_OUTCOME_CONCLUSIONS = {
+    success: 'success',
+    failure: 'failure',
+    superseded: 'neutral',
+    cancelled: 'neutral',
+    died: 'neutral'
+};
+
+/** The close conclusion for a cycle outcome; null for an unknown outcome. */
+function conclusionForOutcome(outcome) {
+    if (!CYCLE_OUTCOME_CONCLUSIONS.hasOwnProperty(outcome)) return null;
+    return CYCLE_OUTCOME_CONCLUSIONS[outcome];
+}
+
+/**
+ * A fresh validation cycle: placeholders registered, nothing concluded yet.
+ * @param placeholders [{name, id?}] — the registered placeholder check-runs
+ */
+function openCycle(placeholders) {
+    return { state: 'open', placeholders: (placeholders || []).slice() };
+}
+
+/**
+ * The finally-path transition (AC1): 'open' + outcome → 'closed' with the
+ * mapped conclusion. Returns null (no transition taken) when the cycle is
+ * not open or the outcome is unknown — the object can only reach 'closed',
+ * never back to open, and never linger open through a KNOWN outcome.
+ */
+function closePlaceholderCycle(cycle, outcome) {
+    if (!cycle || cycle.state !== 'open') return null;
+    var conclusion = conclusionForOutcome(outcome);
+    if (conclusion === null) return null;
+    return {
+        state: 'closed',
+        conclusion: conclusion,
+        outcome: outcome,
+        placeholders: (cycle.placeholders || []).slice()
+    };
+}
+
+/** I5: the machine-log line for one sweeper action. */
+function zombieSweptLine(checkRunId, headSha) {
+    return 'zombie-swept: ' + checkRunId + ' head ' + headSha;
+}
+
 function hasPlaceholderZombies(zombies) {
     // Among a classify() zombie set, the placeholder shape is a ghost with
     // NO backing run id — those are the ones a same-sha re-dispatch cannot
@@ -369,6 +452,11 @@ module.exports = {
     isPlaceholderShape: isPlaceholderShape,
     placeholders: placeholders,
     orphanedRunChecks: orphanedRunChecks,
+    conclusionForOutcome: conclusionForOutcome,
+    openCycle: openCycle,
+    closePlaceholderCycle: closePlaceholderCycle,
+    zombieSweptLine: zombieSweptLine,
+    CYCLE_OUTCOME_CONCLUSIONS: CYCLE_OUTCOME_CONCLUSIONS,
     hasPlaceholderZombies: hasPlaceholderZombies,
     placeholderMarks: placeholderMarks,
     placeholderMarkerLine: placeholderMarkerLine,

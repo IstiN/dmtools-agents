@@ -1179,6 +1179,82 @@ suite('factoryState — reworkInFlight (gh-806 latch persistence)', function () 
   });
 });
 
+// ── gh-998: zombiesSwept — the leak-rate counter rides the snapshot (I5) ────
+// Live fa #1563 (head f3d58647): a leaked in_progress placeholder pinned the
+// gate 40+ min with 58 green siblings. The sweper heals such zombies
+// (js/common/checkRunZombies.js + js/smAgent.js); the counter must be
+// visible in the factory-state payload so operators see the leak rate, not
+// just the fix.
+
+suite('factoryState — zombiesSwept (gh-998 leak-rate metric)', function () {
+  var T0 = '2026-10-17T19:00:00.000Z';
+
+  function baseInput(extra) {
+    var input = {
+      repoInfo: { owner: 'acme', repo: 'factory' },
+      prs: [], mergedPrs: [], issues: [], runs: [],
+      now: T0
+    };
+    if (extra) {
+      Object.keys(extra).forEach(function (k) { input[k] = extra[k]; });
+    }
+    return input;
+  }
+
+  test('stable shape: 0 when the sweeper never fired and no prev carries', function () {
+    var state = fsModule.buildFactoryState(baseInput({}));
+    assert.equal(state.zombiesSwept, 0);
+  });
+
+  test('this tick\u2019s sweep count lands in the payload', function () {
+    var state = fsModule.buildFactoryState(baseInput({ zombiesSwept: 2 }));
+    assert.equal(state.zombiesSwept, 2);
+  });
+
+  test('the counter is CUMULATIVE across snapshots (prev + this tick)', function () {
+    var prev = { lanes: {}, zombiesSwept: 5 };
+    var state = fsModule.buildFactoryState(baseInput({ prev: prev, zombiesSwept: 3 }));
+    assert.equal(state.zombiesSwept, 8, 'operators see the leak rate, not just the last tick');
+  });
+
+  test('a malformed carry restarts at this tick\u2019s count (no NaN poisoning)', function () {
+    var prev = { lanes: {}, zombiesSwept: 'bogus' };
+    var state = fsModule.buildFactoryState(baseInput({ prev: prev, zombiesSwept: 1 }));
+    assert.equal(state.zombiesSwept, 1);
+    var prevNaN = { lanes: {}, zombiesSwept: NaN };
+    var stateNaN = fsModule.buildFactoryState(baseInput({ prev: prevNaN }));
+    assert.equal(stateNaN.zombiesSwept, 0);
+  });
+
+  test('a malformed THIS-tick count counts as 0 (the saneCount guard, both call sites)', function () {
+    var prev = { lanes: {}, zombiesSwept: 4 };
+    var stateStr = fsModule.buildFactoryState(baseInput({ prev: prev, zombiesSwept: 'bogus' }));
+    assert.equal(stateStr.zombiesSwept, 4, 'string tick count contributes 0, carry survives');
+    var stateNaN = fsModule.buildFactoryState(baseInput({ prev: prev, zombiesSwept: NaN }));
+    assert.equal(stateNaN.zombiesSwept, 4, 'NaN tick count contributes 0, carry survives');
+  });
+
+  // Review-thread recipe (IstiN, PR #1012 thread PRRT_kwDORYAuYs6to_5g): pin
+  // the exact prev shapes so every new call-site line in buildFactoryState
+  // executes under each shape, and assert on the payload field name the
+  // snapshot consumers read (`zombiesSwept` in the built state JSON).
+  test('recipe shapes: null/missing prev, cumulative carry, combined malformed — payload field pinned', function () {
+    // 1. prev = null + zombiesSwept absent → 0 (stable shape, no NaN)
+    var stateNull = fsModule.buildFactoryState(baseInput({ prev: null }));
+    assert.equal(stateNull.zombiesSwept, 0);
+    var stateNoPrev = fsModule.buildFactoryState(baseInput({}));
+    assert.equal(stateNoPrev.zombiesSwept, 0);
+    // 2. prev = { zombiesSwept: 3 } + zombiesSwept: 2 → 5 (cumulative carry)
+    var stateCarry = fsModule.buildFactoryState(
+      baseInput({ prev: { lanes: {}, zombiesSwept: 3 }, zombiesSwept: 2 }));
+    assert.equal(stateCarry.zombiesSwept, 5, 'cumulative carry: 3 + 2');
+    // 3. malformed carry on BOTH sides (prev.zombiesSwept = 'x', zombiesSwept = NaN) → 0, not NaN
+    var stateBad = fsModule.buildFactoryState(
+      baseInput({ prev: { lanes: {}, zombiesSwept: 'x' }, zombiesSwept: NaN }));
+    assert.equal(stateBad.zombiesSwept, 0, 'double-malformed restarts at 0, never NaN');
+  });
+});
+
 // ── gh-816 — merge-lane citation integrity ───────────────────────────────────
 // The lane cite is the discharge evidence watchers and audits read. Two
 // integrity rules (gh-816):
@@ -1964,4 +2040,43 @@ suite('factoryState — priceTokens through buildFactoryState (gh-825)', functio
     assert.equal(st.costs.usd14d, 0.18,
       '(48210+12980)/1e6*3 = 0.18357 → 0.18');
   });
+});
+
+suite('factoryState — normalizeMutexSnapshot (gh-1000 phantom-holder bookkeeping)', function () {
+    test('absent/garbage blob → zeroed counters, empty alarms', function () {
+        assert.deepEqual(fsModule.normalizeMutexSnapshot(null),
+            { mutexSelfHeals: 0, phantomHolderTicks: 0, consecutivePhantomTicks: 0, alarms: [] });
+        assert.deepEqual(fsModule.normalizeMutexSnapshot('junk'),
+            { mutexSelfHeals: 0, phantomHolderTicks: 0, consecutivePhantomTicks: 0, alarms: [] });
+    });
+
+    test('numeric strings coerce; negatives and NaN drop to 0', function () {
+        var out = fsModule.normalizeMutexSnapshot({
+            mutexSelfHeals: '2', phantomHolderTicks: -1, consecutivePhantomTicks: 'x'
+        });
+        assert.equal(out.mutexSelfHeals, 2);
+        assert.equal(out.phantomHolderTicks, 0);
+        assert.equal(out.consecutivePhantomTicks, 0);
+    });
+
+    test('alarm tail caps at the last 5 entries', function () {
+        var alarms = [1, 2, 3, 4, 5, 6, 7].map(function (i) { return { at: 't' + i }; });
+        var out = fsModule.normalizeMutexSnapshot({ alarms: alarms });
+        assert.equal(out.alarms.length, 5);
+        assert.equal(out.alarms[0].at, 't3');
+        assert.equal(out.alarms[4].at, 't7');
+    });
+
+    test('buildFactoryState carries state.mutex only when the SM published one', function () {
+        var base = { repoInfo: { owner: 'o', repo: 'r' }, now: '2026-10-17T20:00:00Z',
+            prs: [], runs: [] };
+        var withMutex = fsModule.buildFactoryState(Object.assign({}, base, {
+            mutex: { mutexSelfHeals: 1, phantomHolderTicks: 1, consecutivePhantomTicks: 1,
+                alarms: [{ type: 'phantom_mutex_holder' }] }
+        }));
+        assert.equal(withMutex.mutex.mutexSelfHeals, 1);
+        assert.equal(withMutex.mutex.alarms.length, 1);
+        var without = fsModule.buildFactoryState(base);
+        assert.equal(without.mutex, undefined, 'absent input.mutex → no mutex key');
+    });
 });
