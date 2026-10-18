@@ -2066,14 +2066,6 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.ok(cmd.indexOf('epam/dmtools-dart') !== -1, 'clones the TARGET repo');
         assert.ok(cmd.indexOf('--branch feat/x') !== -1, 'single-branch clone of the head ref');
         assert.ok(cmd.indexOf('merge --no-edit FETCH_HEAD') !== -1, 'merges fetched main');
-        var lit = 'git push https://x-access-token:' + '$' + '{GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x';
-        var tail = cmd.slice(-120);
-        var tail2 = cmd.slice(-83);
-        require('fs').writeFileSync('/tmp/dbg_one.txt', JSON.stringify({
-            eq: tail2 === lit,
-            tail2codes: tail2.split('').map(function(c){return c.charCodeAt(0);}),
-            litcodes: lit.split('').map(function(c){return c.charCodeAt(0);})
-        }));
         assert.equal(cmd.slice(-'git push https://x-access-token:${GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x'.length),
             'git push https://x-access-token:${GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x');
         // No env swap: the push rides the checkout's stored credentials.

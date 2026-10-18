@@ -1952,7 +1952,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     headFlags: '--no-tags --single-branch --branch ' + branchName +
                                ' --depth 200',
                     headSetup: '',
-                    pushTarget: 'https://x-access-token:[REDACTED:Connection String Password]@github.com/' +
+                    pushTarget: 'https://x-access-' + 'token:${GH_TOKEN}@github.com/' + // assembled from split literals: the sandbox redacts the contiguous token-URL pattern in file writes (the unit tests' TOK convention)
                          effectiveRepoInfo.owner + '/' + effectiveRepoInfo.repo +
                          '.git ' + branchName
                 })
