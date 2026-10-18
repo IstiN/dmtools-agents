@@ -1,9 +1,0 @@
-js/unit-tests/test_factoryBoardSteps.js:2: * Unit tests for site/factory/steps.js — the factory board's per-card
-js/unit-tests/test_factoryBoardSteps.js:12:var steps = loadModule('site/factory/steps.js');
-js/unit-tests/test_factoryBoardSteps.js:155:    var fixture = JSON.parse(file_read({ path: 'site/factory/visual-check/fixture.json' }));
-js/unit-tests/test_factoryBoardApp.js:2: * Unit tests for site/factory/app.js — source-level regression guards.
-js/unit-tests/test_factoryBoardApp.js:22:var APP_SRC = file_read({ path: 'site/factory/app.js' })
-js/unit-tests/test_factoryFlow.js:2: * Unit tests for site/factory/flow.js — the factory board's value-stream
-js/unit-tests/test_factoryFlow.js:8: * exact pattern of site/factory/steps.js / test_factoryBoardSteps.js.
-js/unit-tests/test_factoryFlow.js:13:var flow = loadModule('site/factory/flow.js');
-js/unit-tests/test_factoryFlow.js:266:    var fixture = JSON.parse(file_read({ path: 'site/factory/visual-check/fixture.json' }));

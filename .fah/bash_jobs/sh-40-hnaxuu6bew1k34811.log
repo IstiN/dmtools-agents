@@ -1,8 +1,0 @@
-run_all.json
-run_factoryBoardApp.json
-run_factoryBoardSteps.json
-run_factoryFlow.json
-test_factoryBoardApp.js
-test_factoryBoardSteps.js
-test_factoryFlow.js
-testRunner.js
