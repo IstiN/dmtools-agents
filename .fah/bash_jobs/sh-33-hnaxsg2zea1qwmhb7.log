@@ -1,4 +1,0 @@
-crap	fail	21s	https://github.com/IstiN/dmtools-agents/actions/runs/39058583955/job/117471587305	
-gate	pass	2s	https://github.com/IstiN/dmtools-agents/actions/runs/39058583955/job/117471558898	
-kicker / head-completeness	pass	4s	https://github.com/IstiN/dmtools-agents/actions/runs/39058579627/job/117471545258	
-kicker / sm-liveness	pass	8s	https://github.com/IstiN/dmtools-agents/actions/runs/39058579627/job/117471545336	

@@ -1253,3 +1253,137 @@ suite('postTestReworkResults — path classification helpers (gh-981)', function
         assert.equal(m.decideConflictSide('src/y.js'), 'theirs');
     });
 });
+
+// gh-960 rework (review thread js/postTestReworkResults.js:279): `updatePrBody`
+// is a live seam (_githubUpdatePrBody returns null when the PATCH fails) — the
+// caller must not print a green check or return success in that case.
+suite('updatePullRequestBody > PATCH failure reporting (gh-960)', function() {
+
+    function captureConsole(fn) {
+        var logs = [], warns = [];
+        var origLog = console.log, origWarn = console.warn;
+        console.log = function(m) { logs.push(String(m)); };
+        console.warn = function(m) { warns.push(String(m)); };
+        try {
+            return { result: fn(), logs: logs, warns: warns };
+        } finally {
+            console.log = origLog;
+            console.warn = origWarn;
+        }
+    }
+
+    test('null from updatePrBody (failed PATCH) warns and reports failure — no green check', function() {
+        var h = loadReworkActionHarness({ files: {} });
+        var scm = { updatePrBody: function() { return null; } };
+        var out = captureConsole(function() {
+            return h.module.updatePullRequestBody(scm, 5, 'gh-1', 'passed', 'CONTENT');
+        });
+        assert.equal(out.result, false, 'a failed PATCH must not report success');
+        assert.equal(out.logs.filter(function(m) { return m.indexOf('✅ Updated PR/MR body') !== -1; }).length, 0,
+            'no green check in logs when the PATCH failed');
+        assert.equal(out.warns.filter(function(m) { return m.indexOf('PR body update failed') !== -1; }).length, 1,
+            'failure is surfaced as a warning instead');
+    });
+
+    test('truthy output from updatePrBody logs the green check and returns true', function() {
+        var h = loadReworkActionHarness({ files: {} });
+        var scm = { updatePrBody: function() { return '{"id":5}'; } };
+        var out = captureConsole(function() {
+            return h.module.updatePullRequestBody(scm, 5, 'gh-1', 'passed', 'CONTENT');
+        });
+        assert.equal(out.result, true, 'successful PATCH reports success');
+        assert.equal(out.logs.filter(function(m) { return m.indexOf('✅ Updated PR/MR body') !== -1; }).length, 1,
+            'green check only on a real success');
+    });
+
+    test('unsupported provider still warns and reports failure', function() {
+        var h = loadReworkActionHarness({ files: {} });
+        var out = captureConsole(function() {
+            return h.module.updatePullRequestBody({}, 5, 'gh-1', 'passed', 'CONTENT');
+        });
+        assert.equal(out.result, false, 'missing seam reports failure');
+        assert.equal(out.logs.filter(function(m) { return m.indexOf('✅ Updated PR/MR body') !== -1; }).length, 0,
+            'no green check when nothing was updated');
+    });
+});
+
+// gh-960: the PR body (including the canonical 'Closes #N' line) must be final
+// BEFORE the PR enters the merge queue. The rework-publish body refresh must:
+//   - be skipped entirely once validation armed (ai_validating) or the PR
+//     merged — a post-merge body edit never auto-closes the issue (live
+//     2026-10-17: #956 merged with 'Closes #952' landing at the merge moment,
+//     #952 stayed OPEN);
+//   - preserve the canonical 'Closes #N' line when it does run, so a refresh
+//     can never drop the keyword the merge bot links by (gh-737).
+suite('postTestReworkResults > PR body finality (gh-960)', function() {
+
+    function makeRecordingScm(calls) {
+        return {
+            updatePrBody: function(n, b) { calls.push(['body', n, b]); },
+            addComment: function(n, c) { calls.push(['comment', n, c]); }
+        };
+    }
+
+    test('body rewrite is skipped when the PR is merged, but the summary comment still posts', function() {
+        var h = loadReworkActionHarness({ files: {} });
+        var calls = [];
+        h.module.postReworkBodyAndComment(makeRecordingScm(calls), { number: 956, merged: true, state: 'closed' },
+            'gh-952', 'passed', true, 'CONTENT');
+        assert.deepEqual(calls.map(function(c) { return c[0]; }), ['comment'],
+            'no body rewrite after merge — only the comment');
+        assert.contains(calls[0][2], 'CONTENT', 'comment still carries the rework summary');
+    });
+
+    test('body rewrite is skipped while validation is armed (ai_validating), but the summary comment still posts', function() {
+        var h = loadReworkActionHarness({ files: {} });
+        var calls = [];
+        h.module.postReworkBodyAndComment(makeRecordingScm(calls),
+            { number: 956, state: 'open', labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }] },
+            'gh-952', 'passed', true, 'CONTENT');
+        assert.deepEqual(calls.map(function(c) { return c[0]; }), ['comment'],
+            'validation-armed PR body is final — no rewrite, comment still posts');
+    });
+
+    test('body rewrite still runs for an open PR outside the merge queue', function() {
+        var h = loadReworkActionHarness({ files: {} });
+        var calls = [];
+        h.module.postReworkBodyAndComment(makeRecordingScm(calls),
+            { number: 956, state: 'open', labels: [{ name: 'pr_approved' }] },
+            'gh-952', 'passed', true, 'CONTENT');
+        assert.deepEqual(calls.map(function(c) { return c[0]; }), ['body', 'comment'],
+            'pre-queue refresh keeps both side effects');
+    });
+
+    test('body rewrite preserves the canonical Closes line for GitHub router keys', function() {
+        var h = loadReworkActionHarness({ files: {} });
+        var calls = [];
+        // The refreshed content (outputs/pr_body.md) carries no Closes line of
+        // its own — the rewrite must not drop the one GitHub already parsed.
+        h.module.postReworkBodyAndComment(makeRecordingScm(calls), { number: 956 },
+            'gh-952', 'passed', true, '### Rework summary\n- Fixed the parser.\n');
+        assert.equal(calls[0][0], 'body');
+        assert.contains(calls[0][2], 'Closes #952',
+            'canonical line survives the refresh so the merge bot link never breaks');
+        assert.equal(calls[0][2].indexOf('Closes #952'), 0,
+            'canonical line stays first, as on creation');
+        assert.contains(calls[0][2], '### Rework summary', 'refreshed content preserved');
+    });
+
+    test('body rewrite is idempotent when the refreshed content already closes the issue', function() {
+        var h = loadReworkActionHarness({ files: {} });
+        var calls = [];
+        h.module.postReworkBodyAndComment(makeRecordingScm(calls), { number: 956 },
+            'gh-952', 'passed', true, 'Closes #952\n\n### Rework summary\n');
+        assert.equal(calls[0][2].split('Closes #952').length - 1, 1, 'exactly one Closes line after refresh');
+    });
+
+    test('body rewrite leaves non-GitHub tracker keys untouched', function() {
+        var h = loadReworkActionHarness({ files: {} });
+        var calls = [];
+        h.module.postReworkBodyAndComment(makeRecordingScm(calls), { number: 5 },
+            'PROJ-1', 'passed', true, 'CONTENT');
+        assert.equal(calls[0][2], '## PROJ-1 Result: PASSED\n\n**Latest rework result:** `PASSED`\n\n---\n\nCONTENT',
+            'tracker keys must not gain a bogus Closes #N line (gh-737 behavior kept)');
+    });
+
+});
