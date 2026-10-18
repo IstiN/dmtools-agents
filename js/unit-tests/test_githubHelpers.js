@@ -1299,9 +1299,12 @@ suite('githubHelpers.detectFailedChecks — Jenkins failed checks', function() {
         var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
         assert.ok(mdWrite, 'file should still be written for the failed check');
         assert.notContains(mdWrite.content, 'Jenkins error log');
+        // gh-1045: the failure is loud — per-check diagnostics in both files.
+        assert.contains(mdWrite.content, 'log fetch failed: unsupported details_url shape');
 
         var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
-        assert.ok(!fullLogWrite, 'ci_failures_full.log should not be written when no logs were fetched');
+        assert.ok(fullLogWrite, 'gh-1045: full log written with per-check error markers');
+        assert.contains(fullLogWrite.content, 'LOG FETCH FAILED for: Jenkins PR Build');
     });
 
     test('ignores failed checks whose details_url points to a different Jenkins host', function() {
@@ -1334,7 +1337,10 @@ suite('githubHelpers.detectFailedChecks — Jenkins failed checks', function() {
         var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
         assert.ok(mdWrite, 'ci_failures.md should still be written for the failed check');
         assert.notContains(mdWrite.content, 'Jenkins error log');
-        assert.ok(!fullLogWrite, 'ci_failures_full.log should not be written when no logs were fetched');
+        // gh-1045: the failure is loud — per-check diagnostics in both files.
+        assert.contains(mdWrite.content, 'log fetch failed: unsupported details_url shape');
+        assert.ok(fullLogWrite, 'gh-1045: full log written with per-check error markers');
+        assert.contains(fullLogWrite.content, 'LOG FETCH FAILED for: Other Jenkins Build');
     });
 });
 
@@ -1534,8 +1540,11 @@ suite('githubHelpers.detectFailedChecks — run-level details_url (/actions/runs
         assert.equal(jobLogCalls.length, 0, 'no job logs fetched when the run has no failed jobs');
         var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
         assert.ok(mdWrite, 'ci_failures.md should still be written');
+        assert.contains(mdWrite.content, 'log fetch failed: no failed jobs resolved from workflow run 123456789',
+            'gh-1045: loud per-check diagnostic for the empty run');
         var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
-        assert.ok(!fullLogWrite, 'ci_failures_full.log should not be written when no logs were fetched');
+        assert.ok(fullLogWrite, 'gh-1045: full log written with per-check error markers');
+        assert.contains(fullLogWrite.content, 'LOG FETCH FAILED for: CI');
     });
 
     test('supports a bare array workflow-run-jobs response', function() {
@@ -1650,8 +1659,11 @@ suite('githubHelpers.detectFailedChecks — run-level details_url (/actions/runs
         assert.equal(jobLogCalls.length, 0, 'no job logs fetched when the run-jobs response cannot be parsed');
         var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
         assert.ok(mdWrite, 'ci_failures.md should still be written');
+        assert.contains(mdWrite.content, 'log fetch failed: no failed jobs resolved from workflow run 888',
+            'gh-1045: loud per-check diagnostic for the unparseable run-jobs response');
         var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
-        assert.ok(!fullLogWrite, 'ci_failures_full.log should not be written when no jobs were parsed');
+        assert.ok(fullLogWrite, 'gh-1045: full log written with per-check error markers');
+        assert.contains(fullLogWrite.content, 'LOG FETCH FAILED for: CI');
     });
 });
 
@@ -1981,6 +1993,11 @@ suite('githubHelpers.detectFailedChecks — scm mode and GitHub job logs (gh-100
         var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
         assert.ok(mdWrite, 'report should still be written without logs');
         assert.notContains(mdWrite.content, 'Error log (last 500 lines)');
+        // gh-1045: the fetch failure is loud, not silent.
+        assert.contains(mdWrite.content, 'log fetch failed: job log fetch failed: logs down');
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(fullLogWrite, 'gh-1045: full log written with per-check error markers');
+        assert.contains(fullLogWrite.content, 'LOG FETCH FAILED for: Build');
     });
 
     test('passing checks produce no report files', function() {
@@ -2155,5 +2172,185 @@ suite('githubHelpers.fetchGithubCheckLogs / fetchGithubRunLogs (gh-982 runs-url 
         var boom = { getWorkflowRunJobs: function () { throw new Error('net'); } };
         assert.equal(gh.fetchGithubRunLogs({ details_url: 'https://x/actions/runs/9' }, boom, 'o', 'r'), null, 'fail-open');
         assert.equal(gh.fetchGithubCheckLogs({ details_url: null }, null, 'o', 'r'), null);
+    });
+});
+
+suite('githubHelpers.detectFailedChecks — gh-1045 bare check-run URLs + loud fetch failures', function() {
+
+    function makeGh(mocks) {
+        return loadGithubHelpers(mocks || {});
+    }
+
+    function findWrite(writes, path) {
+        for (var i = 0; i < writes.length; i++) {
+            if (writes[i].path === path) return writes[i];
+        }
+        return null;
+    }
+
+    test('extractGithubCheckRunId: bare runs/N yields the check-run id, actions/runs/N does not', function() {
+        var gh = makeGh();
+        assert.equal(gh.extractGithubCheckRunId({ details_url: 'https://github.com/acme/widgets/runs/117677625675' }), '117677625675');
+        assert.equal(gh.extractGithubCheckRunId({ details_url: 'https://github.com/acme/widgets/actions/runs/117677625675' }), null,
+            'an actions-run URL must stay on the workflow-run path');
+        assert.equal(gh.extractGithubCheckRunId({ details_url: 'https://github.com/acme/widgets/actions/runs/1/job/2' }), null);
+        assert.equal(gh.extractGithubCheckRunId({ details_url: 'https://x/pull/1' }), null);
+        assert.equal(gh.extractGithubCheckRunId({ details_url: null }), null);
+        assert.equal(gh.extractGithubCheckRunId({}), null);
+    });
+
+    test('bare check-run URL resolves its log via the check-run id (scm mode, no run-jobs lookup)', function() {
+        var gh = makeGh();
+        var calls = [];
+        var scm = {
+            getJobLogs: function(id) { calls.push('logs:' + id); return 'CHECK-RUN-LOG-' + id; },
+            getWorkflowRunJobs: function() { throw new Error('must not treat a check-run id as a workflow-run id'); }
+        };
+        var out = gh.fetchGithubCheckLogs({ name: 'gate/static', details_url: 'https://github.com/acme/widgets/runs/117677625675' }, scm, 'acme', 'widgets');
+        assert.equal(out, 'CHECK-RUN-LOG-117677625675');
+        assert.deepEqual(calls, ['logs:117677625675'], 'exactly one job-log fetch with the check-run id');
+    });
+
+    test('mixed URL shapes replay (#423 head): job logs fetched, bare check-runs resolved, failures marked', function() {
+        var writes = [];
+        var jobLogCalls = [];
+        var runJobsCalls = [];
+
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [
+                        { name: 'test (0)', conclusion: 'failure',
+                          details_url: 'https://github.com/acme/widgets/actions/runs/39127338030/job/117677126855' },
+                        { name: 'gate/static', conclusion: 'failure',
+                          details_url: 'https://github.com/acme/widgets/runs/117677625675' },
+                        { name: 'agents-gate', conclusion: 'failure',
+                          details_url: 'https://github.com/acme/widgets/runs/117677625999' }
+                    ]
+                };
+            },
+            github_get_job_logs: function(args) {
+                jobLogCalls.push(args.jobId);
+                if (args.jobId === '117677625999') { throw new Error('check-run gone'); }
+                return 'LOG-FOR-' + args.jobId;
+            },
+            github_get_workflow_run_jobs: function(args) {
+                runJobsCalls.push(args);
+                throw new Error('check-run ids must never reach the workflow-run API');
+            },
+            file_write: function(args) { writes.push(args); }
+        });
+
+        var failed = gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input');
+
+        assert.equal(failed.length, 3, 'all failed checks are still reported');
+        assert.equal(runJobsCalls.length, 0, 'no workflow-run-jobs call for bare check-run URLs');
+        assert.ok(jobLogCalls.indexOf('117677126855') !== -1, 'actions job URL resolved via its job id');
+        assert.ok(jobLogCalls.indexOf('117677625675') !== -1, 'bare check-run URL resolved via the check-run id');
+
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(fullLogWrite, 'ci_failures_full.log must be written even with mixed/unresolvable shapes');
+        assert.contains(fullLogWrite.content, 'LOG-FOR-117677126855', 'actions-job check log present');
+        assert.contains(fullLogWrite.content, 'LOG-FOR-117677625675', 'bare check-run check log present');
+        assert.contains(fullLogWrite.content, 'LOG FETCH FAILED for: agents-gate', 'per-check fetch diagnostics for the rest');
+        assert.contains(fullLogWrite.content, 'Reason: check-run log fetch failed: check-run gone');
+
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.ok(mdWrite, 'ci_failures.md written');
+        assert.contains(mdWrite.content, 'log fetch failed: check-run log fetch failed: check-run gone',
+            'per-check failure is loud in ci_failures.md');
+        assert.contains(mdWrite.content, 'ci_failures_full.log', 'md references the full log that WAS written');
+    });
+
+    test('fetch failure of one check does not drop the other checks\' logs', function() {
+        var writes = [];
+
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [
+                        { name: 'broken-check', conclusion: 'failure',
+                          details_url: 'https://github.com/acme/widgets/runs/1' },
+                        { name: 'healthy-check', conclusion: 'failure',
+                          details_url: 'https://github.com/acme/widgets/actions/runs/9/job/77' }
+                    ]
+                };
+            },
+            github_get_job_logs: function(args) {
+                if (args.jobId === '1') { throw new Error('boom'); }
+                return 'healthy log content';
+            },
+            file_write: function(args) { writes.push(args); }
+        });
+
+        gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input');
+
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(fullLogWrite, 'full log written');
+        assert.contains(fullLogWrite.content, 'healthy log content', 'resolvable check log survives another check\'s failure');
+        assert.contains(fullLogWrite.content, 'LOG FETCH FAILED for: broken-check');
+        assert.contains(fullLogWrite.content, 'Reason: check-run log fetch failed: boom');
+
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.ok(mdWrite);
+        assert.contains(mdWrite.content, 'healthy log content');
+        assert.contains(mdWrite.content, 'log fetch failed: check-run log fetch failed: boom');
+    });
+
+    test('ci_failures.md never references ci_failures_full.log when the full-log write failed (AC2)', function() {
+        var writes = [];
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [{
+                        name: 'Build', conclusion: 'failure',
+                        details_url: 'https://github.com/acme/widgets/actions/runs/9/job/77'
+                    }]
+                };
+            },
+            github_get_job_logs: function() { return 'some log'; },
+            file_write: function(args) {
+                if (args.path.indexOf('ci_failures_full.log') !== -1) { throw new Error('disk full'); }
+                writes.push(args);
+            }
+        });
+
+        var failed = gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input');
+
+        assert.equal(failed.length, 1, 'check still reported');
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.ok(mdWrite, 'ci_failures.md still written');
+        assert.notContains(mdWrite.content, 'ci_failures_full.log',
+            'must not advertise a file that was not written');
+    });
+
+    test('scm mode resolves bare check-run URLs via scm.getJobLogs', function() {
+        var writes = [];
+        var calls = [];
+        var scm = {
+            listPrs: function() { return []; },
+            getCommitCheckRuns: function() {
+                return {
+                    check_runs: [{
+                        name: 'agents-gate', conclusion: 'failure',
+                        details_url: 'https://github.com/acme/widgets/runs/117677625675'
+                    }]
+                };
+            },
+            getJobLogs: function(id) { calls.push(id); return 'scm check-run log'; }
+        };
+
+        var gh = makeGh({
+            github_get_job_logs: function() { throw new Error('github_get_job_logs must not be called in SCM mode'); },
+            file_write: function(args) { writes.push(args); }
+        });
+
+        var failed = gh.detectFailedChecks(scm, 'abc123def', '/tmp/input');
+
+        assert.equal(failed.length, 1);
+        assert.deepEqual(calls, ['117677625675']);
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(fullLogWrite, 'full log written');
+        assert.contains(fullLogWrite.content, 'scm check-run log');
     });
 });
