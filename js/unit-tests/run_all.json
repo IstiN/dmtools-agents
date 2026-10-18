@@ -111,6 +111,7 @@
         "js/unit-tests/test_postMobileTestAutomationResultsHelpers.js",
         "js/unit-tests/test_postMobileTestAutomationResults.js",
         "js/unit-tests/test_writeSolutionAndDiagrams.js",
+        "js/unit-tests/test_writeSolutionAndLabels.js",
         "js/unit-tests/test_createPlannedStoriesFromOutput.js",
         "js/unit-tests/test_createBugFixBatchEpic.js",
         "js/unit-tests/test_releaseArtefacts.js",
