@@ -210,6 +210,14 @@ function resolveAgentJsonPath(resolvedCf, projectKey) {
 }
 
 /**
+ * True when a string param carries a JQL placeholder that must be
+ * interpolated against the project config.
+ */
+function needsJqlInterpolation(value) {
+    return value.indexOf('{jiraProject}') !== -1 || value.indexOf('{parentTicket}') !== -1;
+}
+
+/**
  * Copy a single agent-JSON param value into the encoded params payload,
  * applying the JQL interpolation to strings carrying {jiraProject} /
  * {parentTicket} placeholders and deep-copying structured values.
@@ -219,7 +227,7 @@ function resolveAgentJsonPath(resolvedCf, projectKey) {
  */
 function copyParamValue(p, paramKey, value, effectiveConfig) {
     if (typeof value === 'string') {
-        if (value.indexOf('{jiraProject}') !== -1 || value.indexOf('{parentTicket}') !== -1) {
+        if (needsJqlInterpolation(value)) {
             p[paramKey] = configLoader.interpolateJql(value, effectiveConfig);
         } else {
             p[paramKey] = value;
@@ -425,6 +433,7 @@ module.exports = {
     resolveProjectKey: resolveProjectKey,
     resolveAgentJsonPath: resolveAgentJsonPath,
     copyParamValue: copyParamValue,
+    needsJqlInterpolation: needsJqlInterpolation,
     copyAgentParams: copyAgentParams,
     copyNestedAgentObjects: copyNestedAgentObjects,
     applyInstructionExtras: applyInstructionExtras,

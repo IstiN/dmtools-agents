@@ -413,6 +413,23 @@ function resolveCandidateBranch(config, branchKey) {
 }
 
 /**
+ * Invoke a branch resolver hook: a truthy return replaces the branch, a
+ * falsy return keeps the candidate, a throwing resolver is logged and
+ * ignored (candidate kept).
+ */
+function runBranchResolver(resolver, ticket, candidateBranch, config, branchKey, resolverPath) {
+    try {
+        var resolvedBranch = resolver(ticket, candidateBranch, config);
+        if (resolvedBranch) {
+            config.git[branchKey] = resolvedBranch;
+            console.log('configLoader: Resolved ' + branchKey + ' via ' + resolverPath + ' → ' + resolvedBranch);
+        }
+    } catch (e) {
+        console.warn('configLoader: ' + branchKey + 'Resolver failed, keeping candidate ' + branchKey + ':', e.message || e);
+    }
+}
+
+/**
  * Apply a project-specific branch resolver hook (config.git.baseBranchResolverFnPath
  * or config.git.snapshotBranchResolverFnPath). The resolver receives
  * (ticket, candidateBranch, config) and must return a branch name; a falsy
@@ -428,30 +445,21 @@ function applyBranchResolverFn(config, params, pathKey, branchKey) {
     if (!resolverPath || !params || !params.ticket) return;
     var resolver = loadHookFn(resolverPath, pathKey);
     if (!resolver) return;
-    var candidateBranch = resolveCandidateBranch(config, branchKey);
-    try {
-        var resolvedBranch = resolver(params.ticket, candidateBranch, config);
-        if (resolvedBranch) {
-            config.git[branchKey] = resolvedBranch;
-            console.log('configLoader: Resolved ' + branchKey + ' via ' + resolverPath + ' → ' + resolvedBranch);
-        }
-    } catch (e) {
-        console.warn('configLoader: ' + branchKey + 'Resolver failed, keeping candidate ' + branchKey + ':', e.message || e);
-    }
+    runBranchResolver(resolver, params.ticket, resolveCandidateBranch(config, branchKey), config, branchKey, resolverPath);
 }
 
 /**
  * Load a customParams.*FnPath hook file whose module.exports must be a
- * function, and install it on the config under exportKey. Used for
- * branchNamingFnPath and prSearchFnPath; warns and ignores non-function
- * exports.
+ * function, and install it on the given target under exportKey. Used for
+ * branchNamingFnPath (target: config.git) and prSearchFnPath (target:
+ * config); warns and ignores non-function exports.
  */
-function loadCustomParamFnHook(config, customParams, key, exportKey) {
+function loadCustomParamFnHook(target, customParams, key, exportKey) {
     var path = customParams[key];
     if (!path) return;
     var fn = loadConfigFile(path);
     if (typeof fn === 'function') {
-        config[exportKey] = fn;
+        target[exportKey] = fn;
         console.log('configLoader: Loaded ' + exportKey + ' from ' + path);
     } else {
         console.warn('configLoader: ' + key + ' "' + path + '" did not export a function — ignoring');
@@ -523,7 +531,7 @@ function loadProjectConfig(params) {
     // (ticket, branchRole, config) and overrides config.git.branchNamingFn;
     // prSearchFn takes (candidates, ticketKey, options). Both use the same
     // GraalJS-safe loadConfigFile() loader (new Function under the hood).
-    loadCustomParamFnHook(config, customParams, 'branchNamingFnPath', 'branchNamingFn');
+    loadCustomParamFnHook(config.git, customParams, 'branchNamingFnPath', 'branchNamingFn');
     loadCustomParamFnHook(config, customParams, 'prSearchFnPath', 'prSearchFn');
 
     applyCustomParamOverrides(config, customParams);
@@ -890,6 +898,7 @@ module.exports = {
     applyTargetRepository: applyTargetRepository,
     resolveCandidateBranch: resolveCandidateBranch,
     applyBranchResolverFn: applyBranchResolverFn,
+    runBranchResolver: runBranchResolver,
     loadCustomParamFnHook: loadCustomParamFnHook,
     applyCustomParamOverrides: applyCustomParamOverrides,
     createScm: _scmModule ? _scmModule.createScm : function() { throw new Error('scm.js not available in this environment'); }
