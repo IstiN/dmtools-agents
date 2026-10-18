@@ -2067,31 +2067,12 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.ok(cmd.indexOf('--branch feat/x') !== -1, 'single-branch clone of the head ref');
         assert.ok(cmd.indexOf('merge --no-edit FETCH_HEAD') !== -1, 'merges fetched main');
         var lit = 'git push https://x-access-token:' + '$' + '{GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x';
-        var act = cmd.slice(-lit.length);
-        var diffAt = -1;
-        for (var di = 0; di < Math.max(act.length, lit.length); di++) {
-            if (act.charCodeAt(di) !== lit.charCodeAt(di)) { diffAt = di; break; }
-        }
-        var nums = [cmd.length, lit.length, act.length, diffAt];
-        if (diffAt >= 0) {
-            for (var dj = Math.max(0, diffAt - 3); dj < diffAt + 8 && dj < act.length; dj++) {
-                nums.push(act.charCodeAt(dj));
-            }
-            nums.push(-1);
-            for (var dk = Math.max(0, diffAt - 3); dk < diffAt + 8 && dk < lit.length; dk++) {
-                nums.push(lit.charCodeAt(dk));
-            }
-        }
-        require('fs').writeFileSync('/tmp/dbg_num.txt', nums.join(','));
-        var lit = 'git push https://x-access-token:' + '$' + '{GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x';
-        var act = cmd.slice(-lit.length);
-        var gitPushAt = cmd.lastIndexOf('git push');
-        var protoAt = cmd.lastIndexOf('://');
-        require('fs').writeFileSync('/tmp/dbg_num2.txt', JSON.stringify({
-            lit: lit.length, act: act.length, gitPushAt: gitPushAt, protoAt: protoAt,
-            cmdLen: cmd.length,
-            actCodes: act.split('').map(function(c){return c.charCodeAt(0);}),
-            litCodes: lit.split('').map(function(c){return c.charCodeAt(0);})
+        var tail = cmd.slice(-120);
+        var tail2 = cmd.slice(-83);
+        require('fs').writeFileSync('/tmp/dbg_one.txt', JSON.stringify({
+            eq: tail2 === lit,
+            tail2codes: tail2.split('').map(function(c){return c.charCodeAt(0);}),
+            litcodes: lit.split('').map(function(c){return c.charCodeAt(0);})
         }));
         assert.equal(cmd.slice(-'git push https://x-access-token:${GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x'.length),
             'git push https://x-access-token:${GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x');
