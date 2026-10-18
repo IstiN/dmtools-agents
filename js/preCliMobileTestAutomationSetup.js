@@ -26,6 +26,7 @@ var prHelper = require('./common/pullRequest.js');
 var mergeState = require('./common/mergeState.js');
 const { STATUSES } = require('./config.js');
 var trackersModule = require('./common/trackers.js');
+var setupHelpers = require('./preCliMobileTestAutomationSetupHelpers.js');
 
 // Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
 // common/pullRequest.js once — this delegate keeps every local call site.
@@ -287,33 +288,27 @@ function downloadBitriseApp(ticketKey, folder, bitriseBuild, branch, workingDir)
         var builds = buildsResult && buildsResult.data ? buildsResult.data : [];
 
         // status=1 means success in Bitrise API
-        var successBuilds = builds.filter(function(b) { return b.status === 1 || b.status_text === 'success'; });
+        var successBuilds = setupHelpers.decideSuccessfulBuilds(builds);
 
         // If we have a feature branch, find the build whose commit message
         // mentions it (e.g. "PROJ-6818 — iOS build for bug/PROJ-6818")
+        var branchDecision = setupHelpers.decideBranchBuilds(successBuilds, branch);
         if (branch && successBuilds.length > 0) {
-            var branchMatched = successBuilds.filter(function(b) {
-                var msg = b.commit_message || b.original_build_params_commit_message || '';
-                return msg.indexOf(branch) !== -1;
-            });
-            if (branchMatched.length > 0) {
-                successBuilds = branchMatched;
-                console.log('✅ Found', branchMatched.length, 'build(s) matching branch', branch);
+            if (branchDecision.matched) {
+                console.log('✅ Found', branchDecision.builds.length, 'build(s) matching branch', branch);
             } else {
                 console.warn('⚠️ No builds found with commit message matching "' + branch + '".',
                     'Using latest successful build instead. Available builds:');
-                for (var si = 0; si < Math.min(successBuilds.length, 5); si++) {
-                    console.warn('   #' + successBuilds[si].build_number + ': "' +
-                        (successBuilds[si].commit_message || '').substring(0, 80) + '"');
+                var warnLines = setupHelpers.formatBuildsWarningList(successBuilds);
+                for (var wi = 0; wi < warnLines.length; wi++) {
+                    console.warn(warnLines[wi]);
                 }
             }
         }
 
-        if (successBuilds.length === 0) {
-            throw new Error('No successful ' + workflowId + ' builds found. Trigger a build first, then re-run this automation.');
-        }
-        buildSlug = successBuilds[0].slug;
-        console.log('✅ Found build #' + successBuilds[0].build_number + ' slug:', buildSlug);
+        var buildDecision = setupHelpers.decideBuildSlug(branchDecision.builds, workflowId);
+        buildSlug = buildDecision.slug;
+        console.log('✅ Found build #' + buildDecision.buildNumber + ' slug:', buildSlug);
     } catch (e) {
         throw new Error('Failed to list Bitrise builds: ' + e);
     }
@@ -325,15 +320,7 @@ function downloadBitriseApp(ticketKey, folder, bitriseBuild, branch, workingDir)
         var artifacts = parseMcpResult(bitrise_list_build_artifacts({ appSlug: appSlug, buildSlug: buildSlug }));
         var artifactList = artifacts && artifacts.data ? artifacts.data : [];
         // Find .zip or .app artifact
-        var appArtifact = null;
-        for (var ai = 0; ai < artifactList.length; ai++) {
-            var t = (artifactList[ai].title || '').toLowerCase();
-            if (t.indexOf('.zip') !== -1 || t.indexOf('.app') !== -1 || t.indexOf('simulator') !== -1) {
-                appArtifact = artifactList[ai];
-                break;
-            }
-        }
-        if (!appArtifact && artifactList.length > 0) appArtifact = artifactList[0];
+        var appArtifact = setupHelpers.decideAppArtifact(artifactList);
         if (!appArtifact) {
             console.warn('No artifacts found for build', buildSlug);
             return;
@@ -388,45 +375,21 @@ function downloadBitriseApp(ticketKey, folder, bitriseBuild, branch, workingDir)
         var findResult = cleanCommandOutput(
             cli_execute_command({ command: 'find "' + appDir + '" -name "*.app" -maxdepth 3 -type d' })
         );
-        if (findResult) {
+        appPath = setupHelpers.parseFindAppResult(findResult);
+        if (appPath) {
+            console.log('✅ iOS .app found:', appPath);
+        } else if (findResult) {
             // Filter out .dSYM, pick first real .app
-            var lines = findResult.split('\n').map(function(l) { return l.trim(); }).filter(function(l) {
-                return l.length > 0 && l.indexOf('.dSYM') === -1;
-            });
-            if (lines.length > 0) {
-                appPath = lines[0];
-                console.log('✅ iOS .app found:', appPath);
-            } else {
-                console.warn('Could not find .app bundle after unzip');
-            }
+            console.warn('Could not find .app bundle after unzip');
         }
     } catch (e) {
         console.warn('Failed to locate .app bundle:', e);
     }
 
     // Write app_info.md for the agent prompt
-    var lines = [];
-    lines.push('# iOS App Build Info\n');
-    lines.push('The iOS simulator app has been downloaded from Bitrise and is ready to use.\n');
-    lines.push('| Field | Value |');
-    lines.push('|-------|-------|');
-    lines.push('| Bitrise Workflow | ' + workflowId + ' |');
-    lines.push('| Build Slug | ' + buildSlug + ' |');
-    lines.push('| Artifact | ' + artifactTitle + ' |');
-    if (branch) lines.push('| Branch | ' + branch + ' |');
-    if (appPath) {
-        lines.push('| App Path | `' + appPath + '` |');
-        lines.push('\n## How to use\n');
-        lines.push('Set `APP_PATH` environment variable or pass `--app-path` to Maestro:\n');
-        lines.push('```bash');
-        lines.push('export APP_PATH="' + appPath + '"');
-        lines.push('maestro test --app-path "$APP_PATH" src/flows/...');
-        lines.push('```');
-    } else {
-        lines.push('| App Dir | `' + appDir + '` |');
-        lines.push('\n> ⚠️ Unzipped to `' + appDir + '` — locate the `.app` bundle manually.');
-    }
-    file_write(folder + '/app_info.md', lines.join('\n'));
+    var infoLines = setupHelpers.buildAppInfoMarkdown(
+        workflowId, buildSlug, artifactTitle, branch, appPath, appDir);
+    file_write(folder + '/app_info.md', infoLines.join('\n'));
     console.log('✅ Written app_info.md' + (appPath ? ' → ' + appPath : ''));
     return appPath || null;
 }
@@ -459,8 +422,7 @@ function installAppOnSimulator(appPath, folder, appId) {
             var simList = cleanCommandOutput(
                 cli_execute_command({ command: 'xcrun simctl list devices booted' })
             );
-            var match = simList.match(/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/);
-            if (match) udid = match[0];
+            udid = setupHelpers.matchBootedSimulatorUdid(simList);
         } catch (e) {
             console.warn('Could not list booted simulators:', e);
         }
@@ -481,20 +443,9 @@ function installAppOnSimulator(appPath, folder, appId) {
     }
 
     // Append simulator info to app_info.md
-    var resolvedAppId = appId || 'com.example.internal.business.app';
+    var resolvedAppId = setupHelpers.defaultAppId(appId);
     try {
-        var simInfo = [
-            '\n## Simulator & Maestro\n',
-            '| Field | Value |',
-            '|-------|-------|',
-            '| MAESTRO_DEVICE | `' + udid + '` |',
-            '| APP_ID | `' + resolvedAppId + '` |',
-            '',
-            'The simulator is booted and the app is installed. Use `run-flow.sh` to run tests:',
-            '```bash',
-            'MAESTRO_DEVICE="' + udid + '" APP_ID="' + resolvedAppId + '" PLATFORM=ios bash src/scripts/run-flow.sh <flow.yaml> --a11y',
-            '```'
-        ];
+        var simInfo = setupHelpers.buildSimulatorInfoMarkdown(udid, resolvedAppId);
         var existing = '';
         try { existing = file_read({ path: folder + '/app_info.md' }) || ''; } catch (_) {}
         file_write(folder + '/app_info.md', existing + '\n' + simInfo.join('\n'));
@@ -547,44 +498,24 @@ function action(params) {
             var featureBranch = findFeatureBranch(ticketKey, customParams.featurePR);
 
             // Resolve environment-specific config if available
-            var buildConfig = customParams.bitriseBuild;
-            var testEnvironment = customParams.testEnvironment || 'prod';
-            if (buildConfig.environments && buildConfig.environments[testEnvironment]) {
-                var envConfig = buildConfig.environments[testEnvironment];
-                console.log('🌍 Using environment:', testEnvironment);
-                // Override workflowId from environment config
-                buildConfig = {
-                    appSlug: buildConfig.appSlug,
-                    workflowId: envConfig.workflowId || buildConfig.workflowId
-                };
+            var envResolution = setupHelpers.resolveEnvironmentBuildConfig(
+                customParams.bitriseBuild, customParams.testEnvironment || 'prod');
+            var buildConfig = envResolution.buildConfig;
+            if (envResolution.active) {
+                console.log('🌍 Using environment:', envResolution.environment);
                 // Write environment info for the agent prompt
-                var envLines = [];
-                envLines.push('# Test Environment: ' + testEnvironment.toUpperCase() + '\n');
-                envLines.push('| Setting | Value |');
-                envLines.push('|---------|-------|');
-                envLines.push('| Environment | ' + testEnvironment + ' |');
-                envLines.push('| Bitrise Workflow | ' + buildConfig.workflowId + ' |');
-                if (envConfig.appId) envLines.push('| APP_ID | `' + envConfig.appId + '` |');
-                envLines.push('\n## Credentials\n');
-                envLines.push('Login credentials are available as environment variables:');
-                envLines.push('- `' + (envConfig.userEnvVar || 'TEST_USER_EMAIL') + '` — user email');
-                envLines.push('- `' + (envConfig.passwordEnvVar || 'TEST_USER_PASSWORD') + '` — password');
-                envLines.push('- `' + (envConfig.pinEnvVar || 'TEST_USER_PIN') + '` — PIN code');
-                envLines.push('\nUse these env var names in Maestro flows for `inputText` steps.');
+                var envLines = setupHelpers.buildEnvironmentMarkdown(
+                    envResolution.environment, buildConfig.workflowId, envResolution.envConfig);
                 file_write(folder + '/environment.md', envLines.join('\n'));
-                console.log('✅ Written environment.md for', testEnvironment);
+                console.log('✅ Written environment.md for', envResolution.environment);
             }
 
             appPath = downloadBitriseApp(ticketKey, folder, buildConfig, featureBranch, config.workingDir);
         }
 
         // Resolve appId from environment config
-        var resolvedAppId = null;
-        if (customParams.bitriseBuild && customParams.bitriseBuild.environments) {
-            var testEnv = customParams.testEnvironment || 'prod';
-            var ec = customParams.bitriseBuild.environments[testEnv];
-            if (ec && ec.appId) resolvedAppId = ec.appId;
-        }
+        var resolvedAppId = setupHelpers.decideAppId(
+            customParams.bitriseBuild, customParams.testEnvironment || 'prod');
 
         // Step 5: Install app on the already-booted simulator
         if (appPath) {
