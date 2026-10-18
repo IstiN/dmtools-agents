@@ -276,6 +276,49 @@ suite('postTestAutomationResultsHelpers: buildPartialCommitMessage', function() 
 
 });
 
+suite('postTestAutomationResultsHelpers: decidePublishStrategy', function() {
+
+    test('identical when both shas exist and match', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.decidePublishStrategy('aaa', 'aaa', 'aaa'), 'identical');
+        assert.equal(helpers.decidePublishStrategy('aaa', 'aaa', ''), 'identical');
+    });
+
+    test('not identical when either sha is missing', function() {
+        var helpers = loadHelpers();
+        assert.notEqual(helpers.decidePublishStrategy('', 'aaa', 'aaa'), 'identical');
+        assert.notEqual(helpers.decidePublishStrategy('aaa', '', 'aaa'), 'identical');
+        assert.notEqual(helpers.decidePublishStrategy('', '', ''), 'identical');
+    });
+
+    test('ahead when merge-base equals remote but differs from local', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.decidePublishStrategy('bbb', 'aaa', 'aaa'), 'ahead');
+    });
+
+    test('ahead matches even with empty strings (failed rev-parse edge)', function() {
+        var helpers = loadHelpers();
+        // Original condition mergeBase === remoteSha && mergeBase !== localSha
+        // with mergeBase '' and remoteSha '': falls into the fast-forward push
+        // branch, NOT straight to the diverged escalation.
+        assert.equal(helpers.decidePublishStrategy('', '', ''), 'diverged');
+        assert.equal(helpers.decidePublishStrategy('bbb', '', ''), 'ahead');
+        assert.equal(helpers.decidePublishStrategy('', 'ccc', ''), 'behind');
+    });
+
+    test('behind when merge-base equals local but differs from remote', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.decidePublishStrategy('aaa', 'bbb', 'aaa'), 'behind');
+    });
+
+    test('diverged when branches have no common merge-base relation', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.decidePublishStrategy('aaa', 'bbb', 'ccc'), 'diverged');
+        assert.equal(helpers.decidePublishStrategy('aaa', 'bbb', ''), 'diverged');
+    });
+
+});
+
 suite('postTestAutomationResultsHelpers: decideTargetStatus', function() {
 
     test('first-run passed goes to In Review - Passed', function() {

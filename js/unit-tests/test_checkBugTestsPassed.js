@@ -18,9 +18,10 @@ function loadCheckBugTestsPassed(mocks) {
         makeRequire({
             './config.js': configModule,
             './configLoader.js': configLoaderMock,
+            './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks),
-            './common/scm.js': {
+            './common/scm.js': mocks.__scm || {
                 createScm: function() {
                     return { listPrs: function() { return []; } };
                 }

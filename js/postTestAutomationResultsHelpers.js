@@ -147,6 +147,7 @@ if (typeof module !== 'undefined' && module.exports) {
         buildConflictComment: buildConflictComment,
         buildErrorComment: buildErrorComment,
         buildPartialCommitMessage: buildPartialCommitMessage,
-        decideTargetStatus: decideTargetStatus
+        decideTargetStatus: decideTargetStatus,
+        decidePublishStrategy: decidePublishStrategy
     };
 }

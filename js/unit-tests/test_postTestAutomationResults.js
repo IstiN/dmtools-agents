@@ -760,6 +760,131 @@ suite('postTestAutomationResults: missing result edge cases', function() {
 
 });
 
+suite('postTestAutomationResults: publishExistingBranch strategies (gh-1043)', function() {
+
+    // Drives action() down the performGitOperations "no staged changes →
+    // remote branch exists → publishExistingBranch" path with full control
+    // over rev-parse/merge-base/push outcomes.
+    function loadPublishScenario(opts) {
+        var commands = [];
+        var branch = opts.branch || 'test/DMC-920';
+        var module = loadPostTestAutomation({
+            file_read: function(args) {
+                if (args.path === 'outputs/test_automation_result.json') {
+                    return JSON.stringify({ status: 'passed', summary: 'Already covered' });
+                }
+                if (args.path === 'outputs/jira_comment.md') return 'h3. Result';
+                if (args.path && args.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            cli_execute_command: function(args) {
+                var command = args.command;
+                commands.push(command);
+                if (command === 'git branch --show-current') return branch;
+                if (command === 'git status --short -- testing') return '?? testing/tests/DMC-920/test.py';
+                if (command === 'git diff --cached --stat') return '';
+                if (command.indexOf('git ls-remote --heads origin ' + branch) === 0) {
+                    return '9a7e2aec\trefs/heads/' + branch;
+                }
+                if (command === 'git rev-parse HEAD') return opts.localSha;
+                if (command === 'git rev-parse origin/' + branch) return opts.remoteSha;
+                if (command === 'git merge-base HEAD origin/' + branch) return opts.mergeBase;
+                if (command === 'git push -u origin ' + branch) {
+                    if (opts.failNormalPush) throw new Error('push rejected');
+                    return '';
+                }
+                if (command === 'git push -u origin ' + branch + ' --force-with-lease') {
+                    if (opts.failLeasePush) throw new Error('lease stale');
+                    return '';
+                }
+                if (command === 'git reset --hard origin/' + branch) {
+                    if (opts.failReset) throw new Error('reset failed');
+                    return '';
+                }
+                return '';
+            }
+        });
+        return {
+            module: module,
+            commands: commands,
+            run: function() {
+                return module.action({
+                    ticket: { key: 'DMC-920', fields: { summary: 'Publish strategies' } },
+                    metadata: { contextId: 'test_case_automation' },
+                    jobParams: { customParams: { removeLabel: 'sm_test_automation_triggered' } }
+                });
+            }
+        };
+    }
+
+    function pushes(commands, branch) {
+        return commands.filter(function(c) { return c.indexOf('git push') === 0; });
+    }
+
+    test('identical: no merge-base, no push — branch already matches origin', function() {
+        var scenario = loadPublishScenario({ localSha: 'aaa', remoteSha: 'aaa' });
+        var result = scenario.run();
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, null);
+        assert.equal(scenario.commands.indexOf('git merge-base HEAD origin/test/DMC-920'), -1, 'no merge-base when already identical');
+        assert.equal(pushes(scenario.commands, 'test/DMC-920').length, 0, 'no push when already identical');
+    });
+
+    test('behind: resets --hard to origin, no push', function() {
+        var scenario = loadPublishScenario({ localSha: 'aaa', remoteSha: 'bbb', mergeBase: 'aaa' });
+        var result = scenario.run();
+        assert.equal(result.success, true);
+        assert.ok(scenario.commands.indexOf('git reset --hard origin/test/DMC-920') !== -1, 'reset to origin');
+        assert.equal(pushes(scenario.commands, 'test/DMC-920').length, 0, 'no push when adopting remote');
+    });
+
+    test('ahead: single fast-forward push', function() {
+        var scenario = loadPublishScenario({ localSha: 'bbb', remoteSha: 'aaa', mergeBase: 'aaa' });
+        var result = scenario.run();
+        assert.equal(result.success, true);
+        assert.deepEqual(pushes(scenario.commands, 'test/DMC-920'), ['git push -u origin test/DMC-920']);
+    });
+
+    test('ahead with failed fast-forward push falls through to the diverged escalation', function() {
+        var scenario = loadPublishScenario({ localSha: 'bbb', remoteSha: 'aaa', mergeBase: 'aaa', failNormalPush: true });
+        var result = scenario.run();
+        assert.equal(result.success, true);
+        // Original fall-through: the failed ff-push lands in the diverged
+        // block, which pushes normally and then with --force-with-lease.
+        assert.deepEqual(pushes(scenario.commands, 'test/DMC-920'), [
+            'git push -u origin test/DMC-920',
+            'git push -u origin test/DMC-920',
+            'git push -u origin test/DMC-920 --force-with-lease'
+        ]);
+    });
+
+    test('diverged: normal push succeeds without lease escalation', function() {
+        var scenario = loadPublishScenario({ localSha: 'bbb', remoteSha: 'ccc', mergeBase: 'aaa' });
+        var result = scenario.run();
+        assert.equal(result.success, true);
+        assert.deepEqual(pushes(scenario.commands, 'test/DMC-920'), ['git push -u origin test/DMC-920']);
+    });
+
+    test('diverged: normal push fails, --force-with-lease succeeds', function() {
+        var scenario = loadPublishScenario({ localSha: 'bbb', remoteSha: 'ccc', mergeBase: 'aaa', failNormalPush: true });
+        var result = scenario.run();
+        assert.equal(result.success, true);
+        assert.deepEqual(pushes(scenario.commands, 'test/DMC-920'), [
+            'git push -u origin test/DMC-920',
+            'git push -u origin test/DMC-920 --force-with-lease'
+        ]);
+    });
+
+    test('diverged: both pushes fail — reports failure and resets ticket to Backlog', function() {
+        var scenario = loadPublishScenario({ localSha: 'bbb', remoteSha: 'ccc', mergeBase: 'aaa', failNormalPush: true, failLeasePush: true });
+        var result = scenario.run();
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Git operations failed');
+        assert.contains(result.error, 'the synced branch could not be pushed');
+    });
+
+});
+
 suite('postTestAutomationResults: error catch path', function() {
 
     test('returns failure and posts error comment when in-try tracker creation fails', function() {
