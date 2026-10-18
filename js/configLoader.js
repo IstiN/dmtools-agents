@@ -295,20 +295,6 @@ function loadHookFn(path, hookName) {
 }
 
 /**
- * Load project configuration with discovery and merging.
- *
- * Discovery order:
- *   1. params.configPath          — top-level param (e.g. jobParams.configPath in sm.json)
- *   2. params.customParams.configPath — explicit path from agent customParams
- *   3. params.agentConfigsDir + "/.dmtools/config.js" — when agentConfigsDir is passed
- *   4. .dmtools/config.js          — target repo root layout
- *   5. ../.dmtools/config.js       — running directly from agents submodule
- *   6. Defaults                    — built-in defaults from config.js
- *
- * @param {Object} params - Agent params (jobParams or top-level params)
- * @returns {Object} Merged configuration
- */
-/**
  * Build the params object to pass into loadProjectConfig() when the caller needs
  * ticket-aware resolvers (baseBranchResolverFnPath / snapshotBranchResolverFnPath).
  *
@@ -333,164 +319,151 @@ function paramsForConfigLoad(params) {
     return base;
 }
 
-function loadProjectConfig(params) {
-    var customParams = (params && params.customParams) || {};
-    var loaded = null;
-    var resolvedPath = null;
-
+/**
+ * Build the ordered list of config sources to probe for loadProjectConfig().
+ * Each candidate is { path, logSuffix } — logSuffix is appended to the
+ * 'Loaded config from …' line so the agentConfigsDir convention stays
+ * distinguishable in logs.
+ */
+function buildConfigCandidates(params, customParams) {
+    var candidates = [];
     // 1. Top-level configPath (e.g. jobParams.configPath or smAgent's p.configPath)
     if (params && params.configPath) {
-        loaded = loadConfigFile(params.configPath);
-        if (loaded) {
-            resolvedPath = params.configPath;
-            console.log('configLoader: Loaded config from ' + params.configPath);
-        }
+        candidates.push({ path: params.configPath, logSuffix: '' });
     }
-
     // 2. Explicit configPath in customParams (e.g. agent JSON customParams.configPath)
-    if (!loaded && customParams.configPath) {
-        loaded = loadConfigFile(customParams.configPath);
-        if (loaded) {
-            resolvedPath = customParams.configPath;
-            console.log('configLoader: Loaded config from ' + customParams.configPath);
-        }
+    if (customParams.configPath) {
+        candidates.push({ path: customParams.configPath, logSuffix: '' });
     }
-
     // 3. agentConfigsDir convention: "{agentConfigsDir}/.dmtools/config.js"
     //    Allows sm.json to pass only "agentConfigsDir" and skip explicit configPath
-    if (!loaded && params && params.agentConfigsDir) {
-        var agentDirPath = params.agentConfigsDir + '/.dmtools/config.js';
-        loaded = loadConfigFile(agentDirPath);
-        if (loaded) {
-            resolvedPath = agentDirPath;
-            console.log('configLoader: Loaded config from ' + agentDirPath + ' (agentConfigsDir)');
-        }
+    if (params && params.agentConfigsDir) {
+        candidates.push({ path: params.agentConfigsDir + '/.dmtools/config.js', logSuffix: ' (agentConfigsDir)' });
     }
-
     // 4. Co-located/target-root discovery: .dmtools/config.js
-    if (!loaded) {
-        var absolutePath = '.dmtools/config.js';
-        loaded = loadConfigFile(absolutePath);
-        if (loaded) {
-            resolvedPath = absolutePath;
-            console.log('configLoader: Loaded config from ' + absolutePath);
-        }
-    }
-
+    candidates.push({ path: '.dmtools/config.js', logSuffix: '' });
     // 5. Relative discovery: ../.dmtools/config.js (when running from agents/)
-    if (!loaded) {
-        var relativePath = '../.dmtools/config.js';
-        loaded = loadConfigFile(relativePath);
-        if (loaded) {
-            resolvedPath = relativePath;
-            console.log('configLoader: Loaded config from ' + relativePath);
+    candidates.push({ path: '../.dmtools/config.js', logSuffix: '' });
+    return candidates;
+}
+
+/**
+ * Probe the candidate config sources in order and return the first one that
+ * loads, mirroring the historical precedence:
+ *   configPath → customParams.configPath → agentConfigsDir → .dmtools → ../.dmtools
+ *
+ * @returns {Object} { loaded: Object|null, resolvedPath: string|null }
+ */
+function discoverProjectConfig(params, customParams) {
+    var candidates = buildConfigCandidates(params, customParams);
+    var loaded = null;
+    var resolvedPath = null;
+    for (var i = 0; i < candidates.length; i++) {
+        if (loaded) break;
+        var candidate = candidates[i];
+        var config = loadConfigFile(candidate.path);
+        if (config) {
+            loaded = config;
+            resolvedPath = candidate.path;
+            console.log('configLoader: Loaded config from ' + candidate.path + candidate.logSuffix);
         }
     }
-
     if (!loaded) {
         console.log('configLoader: No project config found, using defaults');
     }
+    return { loaded: loaded, resolvedPath: resolvedPath };
+}
 
-    var config = mergeProjectConfig(DEFAULTS, loaded);
-
-    // Store resolved config path so callers can propagate it downstream
-    if (resolvedPath) config._configPath = resolvedPath;
-
-    // Explicit repository from the job params (SM passes the rule's target
-    // repo) — wins over remote-derived defaults.
+/**
+ * Apply the explicit repository from the job params (SM passes the rule's
+ * target repo) — wins over the config file and remote-derived defaults.
+ */
+function applyJobRepository(config, params) {
     if (params && params.repository && params.repository.owner && params.repository.repo) {
         config.repository.owner = params.repository.owner;
         config.repository.repo = params.repository.repo;
     }
+}
 
-    // Apply targetRepository override from customParams
-    if (customParams.targetRepository) {
-        var tr = customParams.targetRepository;
-        if (tr.owner) config.repository.owner = tr.owner;
-        if (tr.repo) config.repository.repo = tr.repo;
-        if (tr.baseBranch) config.git.baseBranch = tr.baseBranch;
-        if (tr.workingDir) config.workingDir = tr.workingDir;
-        console.log('configLoader: Applied targetRepository override → ' +
-            config.repository.owner + '/' + config.repository.repo);
+/**
+ * Apply the targetRepository override from customParams. Individual fields
+ * are applied only when present; the resulting owner/repo is always logged.
+ */
+function applyTargetRepository(config, customParams) {
+    if (!customParams.targetRepository) return;
+    var tr = customParams.targetRepository;
+    if (tr.owner) config.repository.owner = tr.owner;
+    if (tr.repo) config.repository.repo = tr.repo;
+    if (tr.baseBranch) config.git.baseBranch = tr.baseBranch;
+    if (tr.workingDir) config.workingDir = tr.workingDir;
+    console.log('configLoader: Applied targetRepository override → ' +
+        config.repository.owner + '/' + config.repository.repo);
+}
+
+/**
+ * Candidate branch a resolver receives: the snapshot resolver may fall back
+ * to the latest existing release branch rather than the repository's default
+ * base branch; the base-branch resolver always starts from baseBranch.
+ */
+function resolveCandidateBranch(config, branchKey) {
+    if (branchKey === 'snapshotBranch') {
+        return config.git.snapshotBranch || config.git.baseBranch;
     }
+    return config.git.baseBranch;
+}
 
-    // Keep customParams available to extension hooks such as branchNamingFn.
-    // This lets project-specific naming functions read explicit, non-generic
-    // settings without hardcoding them in the shared agents repo.
-    config.customParams = customParams;
-
-    // Apply baseBranchResolverFnPath from config.git — project-specific function
-    // that can override config.git.baseBranch based on the ticket (e.g. mapping from
-    // a Jira fixVersion to a release branch). The resolver receives
-    // (ticket, candidateBaseBranch, config) and must return a branch name;
-    // returning a falsy value keeps the candidate branch.
-    var baseBranchResolverPath = config.git && config.git.baseBranchResolverFnPath;
-    if (baseBranchResolverPath && params && params.ticket) {
-        var baseBranchResolver = loadHookFn(baseBranchResolverPath, 'baseBranchResolverFnPath');
-        if (baseBranchResolver) {
-            var candidateBaseBranch = config.git.baseBranch;
-            try {
-                var resolvedBaseBranch = baseBranchResolver(params.ticket, candidateBaseBranch, config);
-                if (resolvedBaseBranch) {
-                    config.git.baseBranch = resolvedBaseBranch;
-                    console.log('configLoader: Resolved baseBranch via ' + baseBranchResolverPath + ' → ' + resolvedBaseBranch);
-                }
-            } catch (e) {
-                console.warn('configLoader: baseBranchResolver failed, keeping candidate baseBranch:', e.message || e);
-            }
+/**
+ * Apply a project-specific branch resolver hook (config.git.baseBranchResolverFnPath
+ * or config.git.snapshotBranchResolverFnPath). The resolver receives
+ * (ticket, candidateBranch, config) and must return a branch name; a falsy
+ * return keeps the candidate, a throwing resolver is logged and ignored.
+ *
+ * @param {Object} config    - Merged project config (mutated in place)
+ * @param {Object} params    - Agent params (must carry .ticket for the hook to fire)
+ * @param {string} pathKey   - 'baseBranchResolverFnPath' | 'snapshotBranchResolverFnPath'
+ * @param {string} branchKey - 'baseBranch' | 'snapshotBranch' (the git key to update)
+ */
+function applyBranchResolverFn(config, params, pathKey, branchKey) {
+    var resolverPath = config.git && config.git[pathKey];
+    if (!resolverPath || !params || !params.ticket) return;
+    var resolver = loadHookFn(resolverPath, pathKey);
+    if (!resolver) return;
+    var candidateBranch = resolveCandidateBranch(config, branchKey);
+    try {
+        var resolvedBranch = resolver(params.ticket, candidateBranch, config);
+        if (resolvedBranch) {
+            config.git[branchKey] = resolvedBranch;
+            console.log('configLoader: Resolved ' + branchKey + ' via ' + resolverPath + ' → ' + resolvedBranch);
         }
+    } catch (e) {
+        console.warn('configLoader: ' + branchKey + 'Resolver failed, keeping candidate ' + branchKey + ':', e.message || e);
     }
+}
 
-    // Apply snapshotBranchResolverFnPath from config.git — project-specific function
-    // that selects the branch used for BA/SA/discovery codegraph snapshots.
-    // Differs from baseBranchResolver in that it may fall back to the latest
-    // existing release branch rather than the repository's default base branch.
-    var snapshotBranchResolverPath = config.git && config.git.snapshotBranchResolverFnPath;
-    if (snapshotBranchResolverPath && params && params.ticket) {
-        var snapshotBranchResolver = loadHookFn(snapshotBranchResolverPath, 'snapshotBranchResolverFnPath');
-        if (snapshotBranchResolver) {
-            var candidateSnapshotBranch = config.git.snapshotBranch || config.git.baseBranch;
-            try {
-                var resolvedSnapshotBranch = snapshotBranchResolver(params.ticket, candidateSnapshotBranch, config);
-                if (resolvedSnapshotBranch) {
-                    config.git.snapshotBranch = resolvedSnapshotBranch;
-                    console.log('configLoader: Resolved snapshotBranch via ' + snapshotBranchResolverPath + ' → ' + resolvedSnapshotBranch);
-                }
-            } catch (e) {
-                console.warn('configLoader: snapshotBranchResolver failed, keeping candidate snapshotBranch:', e.message || e);
-            }
-        }
+/**
+ * Load a customParams.*FnPath hook file whose module.exports must be a
+ * function, and install it on the config under exportKey. Used for
+ * branchNamingFnPath and prSearchFnPath; warns and ignores non-function
+ * exports.
+ */
+function loadCustomParamFnHook(config, customParams, key, exportKey) {
+    var path = customParams[key];
+    if (!path) return;
+    var fn = loadConfigFile(path);
+    if (typeof fn === 'function') {
+        config[exportKey] = fn;
+        console.log('configLoader: Loaded ' + exportKey + ' from ' + path);
+    } else {
+        console.warn('configLoader: ' + key + ' "' + path + '" did not export a function — ignoring');
     }
+}
 
-    // Apply branchNamingFnPath from customParams — loads a JS file whose module.exports
-    // is a function(ticket, branchRole, config) → string.  Takes priority over config.git.branchNamingFn.
-    // Existing two-argument functions remain compatible because JavaScript ignores extra args.
-    // Uses the same GraalJS-safe loadConfigFile() loader (new Function under the hood).
-    if (customParams.branchNamingFnPath) {
-        var namingFn = loadConfigFile(customParams.branchNamingFnPath);
-        if (typeof namingFn === 'function') {
-            config.git.branchNamingFn = namingFn;
-            console.log('configLoader: Loaded branchNamingFn from ' + customParams.branchNamingFnPath);
-        } else {
-            console.warn('configLoader: branchNamingFnPath "' + customParams.branchNamingFnPath +
-                '" did not export a function — ignoring');
-        }
-    }
-
-    // Apply prSearchFnPath from customParams — loads a JS file whose module.exports is a
-    // function(candidates, ticketKey, options) → pr | null. Lets a project plug in custom
-    // PR selection logic without putting project-specific code in the shared agents repo.
-    if (customParams.prSearchFnPath) {
-        var prSearchFn = loadConfigFile(customParams.prSearchFnPath);
-        if (typeof prSearchFn === 'function') {
-            config.prSearchFn = prSearchFn;
-            console.log('configLoader: Loaded prSearchFn from ' + customParams.prSearchFnPath);
-        } else {
-            console.warn('configLoader: prSearchFnPath "' + customParams.prSearchFnPath +
-                '" did not export a function — ignoring');
-        }
-    }
-
+/**
+ * Apply the simple customParams switches: featureBranchEnabled opts an
+ * individual agent into the two-branch flow, scmProvider overrides the
+ * source-control provider.
+ */
+function applyCustomParamOverrides(config, customParams) {
     // Allow individual agents to enable two-branch flow via customParams.featureBranchEnabled,
     // without requiring a project-wide config.git.featureBranch.enabled change.
     if (customParams.featureBranchEnabled === true) {
@@ -505,9 +478,59 @@ function loadProjectConfig(params) {
         config.scm.provider = customParams.scmProvider;
         console.log('configLoader: SCM provider set to ' + customParams.scmProvider + ' via customParams.scmProvider');
     }
+}
+
+/**
+ * Load project configuration with discovery and merging.
+ *
+ * Discovery order:
+ *   1. params.configPath          — top-level param (e.g. jobParams.configPath in sm.json)
+ *   2. params.customParams.configPath — explicit path from agent customParams
+ *   3. params.agentConfigsDir + "/.dmtools/config.js" — when agentConfigsDir is passed
+ *   4. .dmtools/config.js          — target repo root layout
+ *   5. ../.dmtools/config.js       — running directly from agents submodule
+ *   6. Defaults                    — built-in defaults from config.js
+ *
+ * @param {Object} params - Agent params (jobParams or top-level params)
+ * @returns {Object} Merged configuration
+ */
+function loadProjectConfig(params) {
+    var customParams = (params && params.customParams) || {};
+
+    var discovered = discoverProjectConfig(params, customParams);
+    var config = mergeProjectConfig(DEFAULTS, discovered.loaded);
+
+    // Store resolved config path so callers can propagate it downstream
+    if (discovered.resolvedPath) config._configPath = discovered.resolvedPath;
+
+    applyJobRepository(config, params);
+    applyTargetRepository(config, customParams);
+
+    // Keep customParams available to extension hooks such as branchNamingFn.
+    // This lets project-specific naming functions read explicit, non-generic
+    // settings without hardcoding them in the shared agents repo.
+    config.customParams = customParams;
+
+    // Apply baseBranchResolverFnPath / snapshotBranchResolverFnPath from
+    // config.git — project-specific functions that can override the base
+    // branch (e.g. mapped from a Jira fixVersion) or select the snapshot
+    // branch used for BA/SA/discovery codegraph snapshots.
+    applyBranchResolverFn(config, params, 'baseBranchResolverFnPath', 'baseBranch');
+    applyBranchResolverFn(config, params, 'snapshotBranchResolverFnPath', 'snapshotBranch');
+
+    // Apply branchNamingFnPath / prSearchFnPath from customParams — loads JS
+    // files whose module.exports is a function. branchNamingFn takes
+    // (ticket, branchRole, config) and overrides config.git.branchNamingFn;
+    // prSearchFn takes (candidates, ticketKey, options). Both use the same
+    // GraalJS-safe loadConfigFile() loader (new Function under the hood).
+    loadCustomParamFnHook(config, customParams, 'branchNamingFnPath', 'branchNamingFn');
+    loadCustomParamFnHook(config, customParams, 'prSearchFnPath', 'prSearchFn');
+
+    applyCustomParamOverrides(config, customParams);
 
     return config;
 }
+
 
 // ── Template utilities ───────────────────────────────────────────────────────
 
@@ -861,5 +884,13 @@ module.exports = {
     resolveInstructions: resolveInstructions,
     loadConfigFile: loadConfigFile,
     loadHookFn: loadHookFn,
+    buildConfigCandidates: buildConfigCandidates,
+    discoverProjectConfig: discoverProjectConfig,
+    applyJobRepository: applyJobRepository,
+    applyTargetRepository: applyTargetRepository,
+    resolveCandidateBranch: resolveCandidateBranch,
+    applyBranchResolverFn: applyBranchResolverFn,
+    loadCustomParamFnHook: loadCustomParamFnHook,
+    applyCustomParamOverrides: applyCustomParamOverrides,
     createScm: _scmModule ? _scmModule.createScm : function() { throw new Error('scm.js not available in this environment'); }
 };
