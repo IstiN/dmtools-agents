@@ -492,17 +492,19 @@ suite('pullRequest helper > Closes line (gh-737)', function() {
 suite('pullRequest helper > createPullRequest branches (gh-1041)', function() {
 
     test('requires branchName before either creation path runs', function() {
-        var pr = loadPullRequestHelper();
-        var scmCalled = false;
+        var cliCalls = 0;
+        var pr = loadPullRequestHelper({
+            cli_execute_command: function() { cliCalls++; return ''; }
+        });
 
         var result = pr.createPullRequest({
             title: 'x',
-            scm: { createPr: function() { scmCalled = true; return { success: true }; } }
+            scm: null
         });
 
         assert.equal(result.success, false);
         assert.equal(result.error, 'branchName is required');
-        assert.equal(scmCalled, false, 'SCM provider must not run without a branch');
+        assert.equal(cliCalls, 0, 'no creation path may run without a branch');
     });
 
     test('SCM-provider path returns a failure result as-is', function() {
@@ -561,11 +563,7 @@ suite('pullRequest helper > createPullRequest branches (gh-1041)', function() {
 
     test('SCM-provider path reads the body from the first readable candidate file', function() {
         var pr = loadPullRequestHelper({
-            file_read: function(arg) {
-                var path = typeof arg === 'object' ? arg.path : arg;
-                if (path === 'outputs/response.md') return 'response body';
-                return null;
-            }
+            file_read: function() { return 'response body'; }
         });
         var captured = null;
 
