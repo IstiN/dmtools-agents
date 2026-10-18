@@ -1607,10 +1607,8 @@ function blockedHeader(openCount, totalOpenCount, unaddressable) {
  * explicitly — never silently omitted (live: dmtools-dart PR #420 / gh-395 —
  * the leg's API-choice question reached no human and the PR blocked-looped
  * for a week).
- * Review follow-up: openCount is the ADDRESSABLE count — the same quantity
- * the gh-957 coverage gate uses — so the header can never disagree with the
- * fold below it. totalOpenCount (all open threads, machine notices included)
- * is reconciled in a parenthetical clause when it differs.
+ * Review follow-up: the header line lives in blockedHeader() — openCount is
+ * the ADDRESSABLE count (the gate quantity), totalOpenCount reconciles it.
  */
 function buildBlockedReworkComment(openCount, unaddressed, unaddressable, reason, runUrl, totalOpenCount) {
     var message = blockedHeader(openCount, totalOpenCount, unaddressable) +

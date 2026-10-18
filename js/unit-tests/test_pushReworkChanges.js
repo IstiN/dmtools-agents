@@ -2227,14 +2227,18 @@ suite('pushReworkChanges.action — gh-1061 blocked-loop gate (UT-1/UT-2/UT-4/AC
         };
     }
 
+    function runCaseInputFor(p, threads) {
+        if (!p) return null;
+        if (p.indexOf('rework_setup_failed.md') !== -1) throw new Error('File does not exist');
+        if (p.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
+        if (p.indexOf('rework_base_head.txt') !== -1) return BASE;
+        if (p.indexOf('pr_discussions_raw.json') !== -1) return JSON.stringify({ threads: threads });
+        return null;
+    }
+
     function runCaseFileStub(threads) {
         return function(a) {
-            var p = a && (a.path || a);
-            if (p && p.indexOf('rework_setup_failed.md') !== -1) throw new Error('File does not exist');
-            if (p && p.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
-            if (p && p.indexOf('rework_base_head.txt') !== -1) return BASE;
-            if (p && p.indexOf('pr_discussions_raw.json') !== -1) return JSON.stringify({ threads: threads });
-            return null;
+            return runCaseInputFor(a && (a.path || a), threads);
         };
     }
 
