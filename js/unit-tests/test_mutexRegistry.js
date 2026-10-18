@@ -64,6 +64,31 @@ suite('mutexRegistry derive — reconciliation from the label layer (AC1, I1)', 
             registry.noCompletedRuns, 'o/r', T0);
         assert.deepEqual(out.holders, [997]);
     });
+
+    test('the label layer is read against the RULE mutex label, never a hardcoded one (rework thread)', function () {
+        // The reconciliation is generic over q.mutex: a rule mutexing on
+        // 'review' must derive its label layer from 'review' arms — with a
+        // hardcoded 'ai_validating' read, a legit 'review' holder would
+        // mis-derive as a phantom (probe clears its slot and breaks the
+        // OTHER rule's serialization).
+        var out = registry.derive(
+            [997],
+            [item(997, ['review']), item(998, ['ai_validating'])],
+            registry.noCompletedRuns, 'o/r', T0, 'review');
+        assert.deepEqual(out.holders, [997], 'review-armed PR is a holder for a review-mutex rule');
+        assert.deepEqual(out.phantoms, [], 'NOT a phantom — the label layer confirms the arm');
+        assert.equal(out.label, 'review', 'snapshot carries the rule label for the alarm record');
+        // Same fixture under the default label: 997 is NOT ai_validating-armed,
+        // and the live layer's ai_validating arm (998) counts first even
+        // though 998 is not a cached candidate.
+        var def = registry.derive(
+            [997],
+            [item(997, ['review']), item(998, ['ai_validating'])],
+            registry.noCompletedRuns, 'o/r', T0);
+        assert.deepEqual(def.holders, [998], 'default rule derives the ai_validating layer');
+        assert.deepEqual(def.phantoms, [997], 'and 997 IS a phantom for the default label');
+        assert.equal(def.label, 'ai_validating', 'default label when the call site names none');
+    });
 });
 
 suite('mutexRegistry reconcile — self-heal with alarm, tick counters (AC2, I2)', function () {
@@ -98,6 +123,27 @@ suite('mutexRegistry reconcile — self-heal with alarm, tick counters (AC2, I2)
         var out = registry.reconcile(cached, live);
         assert.equal(out.selfHealed, true);
         assert.deepEqual(out.holders, [998]);
+    });
+
+    test('the alarm record carries the RULE mutex label in label and detail (shared builder, rework thread)', function () {
+        // derive() stamps the snapshot with the rule label; reconcile's
+        // alarm must surface it (never a hardcoded 'ai_validating' — the
+        // detail string included one until the shared-builder rework).
+        var cached = registry.derive([997], [item(997, [])], registry.noCompletedRuns, 'o/r', T0, 'review');
+        var live = registry.derive([], [item(997, ['review'])], registry.noCompletedRuns, 'o/r', T1, 'review');
+        var out = registry.reconcile(cached, live);
+        assert.equal(out.selfHealed, true);
+        assert.equal(out.alarm.label, 'review');
+        assert.ok(out.alarm.detail.indexOf('review') !== -1,
+            'detail names the actual mutex label');
+        assert.ok(out.alarm.detail.indexOf('ai_validating') === -1,
+            'no hardcoded label leaks into another rule\'s alarm');
+        // recordPhantomHeal (the state-carry path) builds the SAME shape.
+        var st = registry.recordPhantomHeal(null, 'review', [997], [], T1);
+        assert.equal(st.alarms.length, 1);
+        assert.equal(st.alarms[0].label, 'review');
+        assert.equal(st.alarms[0].detail, out.alarm.detail, 'one builder — the two paths cannot drift');
+        assert.equal(st.alarms[0].title, out.alarm.title);
     });
 
     test('clean tick resets the consecutive counter but keeps the cumulative self-heal count', function () {

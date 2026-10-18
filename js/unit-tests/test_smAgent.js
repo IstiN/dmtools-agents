@@ -115,6 +115,13 @@ function makeSmAgent(opts) {
             if (opts.github && opts.github.workflowApiRuns) {
                 return JSON.stringify({ workflow_runs: opts.github.workflowApiRuns });
             }
+            // Tests that set opts.github but no workflowApiRuns get an EMPTY
+            // rollup — never the real bridge: the harness network guard
+            // replaced that global with a throwing stub (GraalJS canonical
+            // run), and a real api.github.com read was never a legitimate
+            // unit-test dependency (rework thread: the delegation wrote
+            // for a host bridge the guard has since replaced).
+            if (opts.github) return '{"workflow_runs":[]}';
             return (typeof github_list_workflow_runs !== 'undefined')
                 ? github_list_workflow_runs(args)
                 : '{"workflow_runs":[]}';
@@ -10279,6 +10286,35 @@ suite('smAgent: ghost-cancel re-dispatch (gh-1000 AC3 — IT-2)', function () {
         }).length, 0, 'green terminal contexts mean the gate is not blocked-by-absence');
         assert.equal(sm.capturedPrComments.length, 0, 'no comment');
     });
+
+    test('gh-683 bug C, ghost class: a FAILED dispatch posts NO marker — the head is not latched and the next tick retries', function () {
+        // The once-per-head marker suppresses every future retry for the
+        // head, so it may only exist when the dispatch really landed. A
+        // throwing bridge (or one day a non-throwing error payload) must
+        // leave the head unlatched — never parked on flap-warns only.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [ghostItem(757)],
+                commitCheckRuns: { check_runs: [] },
+                prComments: []
+            },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('gh workflow run') === 0) {
+                    throw new Error('gh: could not create workflow dispatch (422)');
+                }
+                return cliGhost({ headRuns: ghostRuns() })(cmdOpts);
+            }
+        });
+
+        sm.action(paramsGhost());
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        }).length, 1, 'the dispatch was attempted');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'NO marker on a failed dispatch — the retry is not suppressed');
+    });
 });
 
 suite('smAgent: mutex streak reset on clean ticks (gh-1000, rework thread 4)', function () {
@@ -10316,9 +10352,14 @@ suite('smAgent: mutex streak reset on clean ticks (gh-1000, rework thread 4)', f
         } };
         // One quiet tick through the real statePublish block (same shape
         // as the tokens suite's publishTick, which is suite-local there).
+        // workflowApiRuns defaults to [] — without it the publish block's
+        // run-rollup read falls through to the harness bridge, which the
+        // unit-test network guard replaces with a throwing stub (the
+        // canonical GraalJS run then dies before the PUT — rework thread).
         var sm = makeSmAgent({
             fileMap: {},
-            github: { items: [{ key: 'T-1', labels: [], pr: null }], prList: '[]' },
+            github: { items: [{ key: 'T-1', labels: [], pr: null }], prList: '[]',
+                      workflowApiRuns: [] },
             onCliExecute: prevStateServes(prev)
         });
         sm.action({ jobParams: { owner: 'o', repo: 'r',

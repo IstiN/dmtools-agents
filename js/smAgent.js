@@ -3094,12 +3094,29 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         // shell metacharacters: single-quote the value and
                         // escape any embedded quote (rework review thread).
                         var ghostRef = String(ticket.branch || '').replace(/'/g, "'\\''");
-                        cli_execute_command({
-                            command: 'gh workflow run ' + ghostCi +
-                                     ' --repo ' + effectiveRepoInfo.owner + '/' +
-                                     effectiveRepoInfo.repo +
-                                     ' --ref \'' + ghostRef + '\''
-                        });
+                        // gh-683 bug C invariant, ghost class (rework review
+                        // thread): the once-per-head marker latches every
+                        // future retry for this head, so it may post ONLY
+                        // when the dispatch really landed. Wrap explicitly —
+                        // a bridge that returns an error payload WITHOUT
+                        // throwing must not latch the head to flap-warns.
+                        var ghostDispatched = false;
+                        try {
+                            cli_execute_command({
+                                command: 'gh workflow run ' + ghostCi +
+                                         ' --repo ' + effectiveRepoInfo.owner + '/' +
+                                         effectiveRepoInfo.repo +
+                                         ' --ref \'' + ghostRef + '\''
+                            });
+                            ghostDispatched = true;
+                        } catch (eGhostDispatch) {
+                            console.warn('  ⚠️  ' + key + ' ghost-cancel re-dispatch failed: ' +
+                                         (eGhostDispatch.message || eGhostDispatch) +
+                                         ' — no marker posted, retried next tick');
+                        }
+                        if (!ghostDispatched) {
+                            continue;
+                        }
                         githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(
                             ticket.prNumber,
                             ghostMarker + ': the newest dispatched validation run (' +

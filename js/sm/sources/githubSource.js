@@ -768,11 +768,15 @@ function rederiveHoldersLive(holders, items, provider, repoInfo, q) {
     // The cached leg in NUMBER shape (matches the live leg) — `holders`
     // here is the query's item-object array, not numbers.
     var cachedHolders = mutexHoldersOf(items, q);
+    // The reconciliation is generic over the RULE's mutex label (q.mutex) —
+    // both label-layer legs derive against q.mutex, never a hardcoded
+    // 'ai_validating' (a second mutex label would otherwise mis-derive
+    // every full-slot defer for its rule).
     var liveHolderSet = mutexRegistryModule.derive(
         mutexHoldersOf(liveItems, q), liveItems,
-        mutexRegistryModule.noCompletedRuns, repoName, nowIso());
+        mutexRegistryModule.noCompletedRuns, repoName, nowIso(), q.mutex);
     var cachedSet = mutexRegistryModule.derive(
-        cachedHolders, items, mutexRegistryModule.noCompletedRuns, repoName, nowIso());
+        cachedHolders, items, mutexRegistryModule.noCompletedRuns, repoName, nowIso(), q.mutex);
     var divergent = mutexRegistryModule.reconcile(cachedSet, liveHolderSet);
     if (divergent.selfHealed) {
         dropOpenPrsCache(repoInfo);

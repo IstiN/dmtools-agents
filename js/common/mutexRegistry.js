@@ -68,6 +68,10 @@ function uniquePositive(list) {
  *   isRunConcluded — fn(number) → true when the PR's run already concluded
  *                    (the gh-821 liveness conjunct; pass noCompletedRuns
  *                    when no run-state source exists at the call site)
+ *   mutexLabel     — the RULE's mutex label (q.mutex); defaults to
+ *                    'ai_validating'. The label layer is read against THIS
+ *                    label — the reconciliation is generic over the label,
+ *                    never hardcoded (rework review thread).
  * The armed layer counts first: a PR whose label layer shows the mutex
  * armed is a holder even if missing from the candidate list.
  */
@@ -121,9 +125,9 @@ function liveHoldersOf(merged, labelSet, candSet, concluded, phantoms) {
     });
 }
 
-function derive(holders, liveItems, isRunConcluded, repo, nowIso) {
+function derive(holders, liveItems, isRunConcluded, repo, nowIso, mutexLabel) {
     var concluded = (typeof isRunConcluded === 'function') ? isRunConcluded : function () { return false; };
-    var labelHolders = labelHoldersOf(liveItems);
+    var labelHolders = labelHoldersOf(liveItems, mutexLabel);
     var cand = uniquePositive(holders);
     var candSet = setOf(cand);
     var phantoms = [];
@@ -132,6 +136,7 @@ function derive(holders, liveItems, isRunConcluded, repo, nowIso) {
         holders: liveHoldersOf(merged, setOf(labelHolders), candSet, concluded, phantoms),
         phantoms: phantoms,
         armedExtra: armedExtrasOf(labelHolders, candSet),
+        label: str(mutexLabel) || DEFAULT_MUTEX_LABEL,
         repo: repo || null,
         at: nowIso || null
     };
