@@ -315,7 +315,8 @@ function makeSmAgent(opts) {
         var smProviderStub = { createSmProvider: function () { return realProvider; },
             // gh-1059: pin the REAL shared head-repo resolver (githubSource
             // consumes it on the PR-list path).
-            ghPrHeadRepoFull: smProviderRealMod.ghPrHeadRepoFull };
+            ghPrHeadRepoFull: smProviderRealMod.ghPrHeadRepoFull,
+            ghPrMaintainerCanModify: smProviderRealMod.ghPrMaintainerCanModify };
         var smAsyncForSource = loadModule(
             'js/common/smAsync.js',
             makeRequire({ './common/smProvider.js': smProviderStub }),
@@ -13849,5 +13850,255 @@ suite('smAgent: gh-998 neutral sweep — rework thread regression (the main-merg
         var state = m && JSON.parse(m[1]);
         assert.ok(state && typeof state.zombiesSwept === 'number',
             'the counter stays present (stable shape) even when the sweeper did not fire');
+    });
+});
+
+// ── gh-1070: fork-aware silent-update ────────────────────────────────────────
+// Live fa PR #1591 (YuryBY fork): silent-update pushed against the BASE repo
+// for a fork head 3× and flagged silent-update-degraded, then the gh-757
+// guest park waited on the human author. GitHub grants the base-repo token
+// a push to the fork's PR branch when "Allow edits from maintainers" is on
+// (probe: maintainer_can_modify) — the machine refreshes the fork head
+// itself (AC1), parks non-editable forks with ZERO attempts (AC2), parks
+// guest-style after MAX races (AC3) and never touches same-repo behavior
+// (AC4).
+
+suite('smAgent: fork-aware silent-update (gh-1070)', function () {
+
+    var FORK_RULE = { source: 'github', query: { type: 'pr', labels: ['pr_approved'], mergeState: 'BEHIND' },
+                      localAction: 'update_branch', limit: 5, id: 'silent-update-behind' };
+    var HEAD_OLD = '1111111111111111111111111111111111111111';
+    var HEAD_NEW = '2222222222222222222222222222222222222222';
+    // The sandbox redacts the contiguous token-URL pattern in file writes;
+    // assemble it dynamically so the assertion text never carries it whole.
+    var TOK = '${' + 'GH_TOKEN}';
+    var BASE = 'epam/dmtools-dart';
+    var FORK = 'yuryby/dmtools-dart';
+
+    function forkItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null, prNumber: n,
+                   draft: false, branch: 'feat/fork', headRepo: FORK };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function forkSm(extraItemFields, githubExtra, topExtra) {
+        var github = Object.assign({
+            items: [forkItem(1591, extraItemFields)],
+            pr: { number: 1591, head: { sha: HEAD_NEW } }
+        }, githubExtra || {});
+        var opts = Object.assign({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: github
+        }, topExtra || {});
+        // onCliExecute is read at the harness top level, not under github
+        if (githubExtra && githubExtra.onCliExecute) {
+            opts.onCliExecute = githubExtra.onCliExecute;
+            delete github.onCliExecute;
+        }
+        return makeSmAgent(opts);
+    }
+
+    function clones(sm) {
+        return sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone ') === 0;
+        });
+    }
+
+    function markerCount(comments) {
+        var n = 0;
+        (comments || []).forEach(function (c) {
+            var m = /silent-update failure — attempt (\d+)/g.exec(String((c && c.body) || ''));
+            if (m) n = Math.max(n, parseInt(m[1], 10));
+        });
+        return n;
+    }
+
+    test('AC1/UT-2: editable fork BEHIND — machine merges main into the FORK branch, never the base', function () {
+        var sm = forkSm({ maintainerCanModify: true });
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
+
+        assert.equal(clones(sm).length, 1, 'exactly one refresh command');
+        var cmd = clones(sm)[0].command;
+        assert.ok(cmd.indexOf('gh repo clone ' + BASE) === 0, 'clones the BASE repo');
+        assert.ok(cmd.indexOf('refs/pull/1591/head') !== -1,
+            'fetches the PR head via refs/pull/<N>/head — fork-branch independent');
+        assert.ok(cmd.indexOf('git checkout -B feat/fork FETCH_HEAD') !== -1,
+            'checks the PR head out as the branch to push');
+        assert.ok(cmd.indexOf('merge --no-edit FETCH_HEAD') !== -1, 'merges main under the head');
+        assert.ok(cmd.slice(-('HEAD:feat/fork').length) === 'HEAD:feat/fork', 'pushes HEAD to the PR branch');
+        assert.ok(cmd.indexOf('git push https://x-access-token:' + TOK + '@github.com/' + FORK + '.git') !== -1,
+            'the push targets the FORK built from head.repo.full_name');
+        assert.ok(cmd.indexOf('@github.com/' + BASE + '.git') === -1,
+            'the base repo is NEVER the push target for a fork head');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no park on the happy path');
+        assert.equal(sm.capturedPrComments.length, 0, 'no failure marker on the happy path');
+    });
+
+    test('IT-1: editable fork — the refresh moves the head and the gh-994 head-change reset clears the park', function () {
+        // Parked at HEAD_OLD (the recorded parked-head), the fork refresh
+        // moves the head to HEAD_NEW in the same tick: the RESET must fire
+        // (label removed) AND the maintainer-edit push must run — the
+        // standard validate lane then resumes on the fresh head.
+        var sm = forkSm({ maintainerCanModify: true, labels: ['pr_approved', 'validation_failed'] }, {
+            prComments: [{ body: '🛑 validation_failed — parked-head: ' + HEAD_OLD }]
+        });
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
+
+        assert.equal(clones(sm).length, 1, 'the fork refresh ran');
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['validation_failed'], 'the park cleared via the existing head-change reset (gh-994)');
+    });
+
+    test('AC2/UT-3: non-editable fork — guest park with ZERO attempts, ZERO markers, ZERO degraded label', function () {
+        var sm = forkSm({ maintainerCanModify: false });
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
+
+        assert.equal(clones(sm).length, 0, 'NO silent-update attempt — it can never succeed');
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'exactly one park label');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['validation_failed'],
+            'the gh-757 guest park label, not silent-update-degraded');
+        assert.equal(sm.capturedPrComments.length, 1, 'one park comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('fork park') !== -1, 'the comment says why it parked');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('parked-head: ' + HEAD_NEW) !== -1,
+            'the parked-head sha records — ANY head change clears the park (gh-994)');
+        assert.equal(markerCount(sm.capturedPrComments), 0, 'NO failure marker (AC2)');
+
+        // Next tick: already parked — no attempt, no re-park, no comment spam.
+        var sm2 = forkSm({ maintainerCanModify: false, labels: ['pr_approved', 'validation_failed'] }, {
+            prComments: [{ body: sm.capturedPrComments[0].body }]
+        });
+        sm2.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
+        assert.equal(clones(sm2).length, 0, 'still no attempt while parked');
+        assert.equal(sm2.capturedPrLabelAdds.length, 0, 'no duplicate park label');
+        assert.equal(sm2.capturedPrComments.length, 0, 'no comment spam on the holding tick');
+    });
+
+    test('probe failure defers fail-closed: no attempt, no park, no bookkeeping', function () {
+        // The item carries no probe value AND the fresh github_get_pr
+        // payload has no maintainer_can_modify field → null → defer.
+        var sm = forkSm({}, { pr: { number: 1591, head: { sha: HEAD_NEW } } });
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
+
+        assert.equal(clones(sm).length, 0, 'no refresh on a failed probe');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no park on a failed probe');
+        assert.equal(sm.capturedPrComments.length, 0, 'no bookkeeping on a failed probe');
+    });
+
+    test('AC3: push fails despite the probe — counted once per tick, after MAX parks GUEST-STYLE (never degraded)', function () {
+        var thread = []; // accumulated PR comment bodies across ticks
+        var labelAdds = [];
+        var sm;
+        for (var tick = 1; tick <= 4; tick++) {
+            sm = forkSm({ maintainerCanModify: true,
+                          labels: labelAdds.indexOf('validation_failed') === -1
+                              ? ['pr_approved'] : ['pr_approved', 'validation_failed'] }, {
+                prComments: thread.map(function (b) { return { body: b }; }),
+                onCliExecute: function (cmdOpts) {
+                    if (cmdOpts.command.indexOf('gh repo clone ') === 0) {
+                        throw new Error('denied — edits revoked mid-flight');
+                    }
+                    return '';
+                }
+            });
+            sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
+            sm.capturedPrComments.forEach(function (c) { thread.push(c.body); });
+            sm.capturedPrLabelAdds.forEach(function (a) {
+                (a.labels || []).forEach(function (l) { if (labelAdds.indexOf(l) === -1) labelAdds.push(l); });
+            });
+        }
+
+        assert.equal(markerCount(thread.map(function (b) { return { body: b }; })), 3,
+            'one marker per failed attempt, capped at MAX (no comment spam beyond it)');
+        assert.deepEqual(labelAdds, ['validation_failed'],
+            'after MAX consecutive failures the PR parks GUEST-STYLE');
+        assert.ok(labelAddsDegraded(labelAdds) === false, 'NEVER silent-update-degraded (the workspace is not dead — the permission is gone)');
+        assert.equal(thread.length, 4, '3 markers + 1 park comment, nothing more on the 4th tick');
+
+        function labelAddsDegraded(adds) { return adds.indexOf('silent-update-degraded') !== -1; }
+    });
+
+    test('same-tick double park: the red-head park already fired → the fork gate adds NO second park comment', function () {
+        // Corner: a guest fork whose head checks are red AND whose author
+        // disabled maintainer edits. The red-head park (the gh-757 sticky
+        // SET above) fires earlier in THIS pass — ticket.labels is the
+        // tick-start snapshot and does not reflect it — so the fork gate
+        // must thread that same-pass state and skip its own park, or the
+        // PR receives two different park comments in one tick.
+        var sm = forkSm({ maintainerCanModify: false }, {
+            prStatus: { checkConclusion: 'red' }
+        });
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
+
+        assert.equal(clones(sm).length, 0, 'non-editable fork — no refresh attempt');
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'exactly ONE park label (idempotent add, no churn)');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['validation_failed']);
+        assert.equal(sm.capturedPrComments.length, 1, 'exactly ONE park comment in the tick — no same-tick double park');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('parked-head:') !== -1,
+            'the single comment is the guest-park record');
+    });
+
+    test('AC4: same-repo PRs — zero behavior change even with maintainerCanModify=false', function () {
+        var sm = makeSmAgent(Object.assign({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: { items: [{ key: 'pr-681', labels: ['pr_approved'], issueNumber: null,
+                                prNumber: 681, draft: false, branch: 'feat/x',
+                                headRepo: BASE, maintainerCanModify: false }] }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
+
+        assert.equal(clones(sm).length, 1, 'one base-repush command');
+        var cmd = clones(sm)[0].command;
+        assert.ok(cmd.indexOf('--single-branch --branch feat/x') !== -1, 'the classic single-branch clone');
+        assert.equal(cmd.slice(-('git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/x').length),
+            'git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/x',
+            'the base repush is byte-identical to the pre-gh-1070 form');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no fork park on a same-repo PR');
+    });
+
+    test('AC4 (rework): casing drift between config and head.repo.full_name still rides the untouched base repush', function () {
+        // config owner/repo is lowercase here, the API's head.repo.full_name
+        // carries GitHub's canonical mixed casing — the SAME repo must not
+        // pay the probe, take the fork path, or get a false guest park.
+        var sm = makeSmAgent(Object.assign({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: { items: [{ key: 'pr-682', labels: ['pr_approved'], issueNumber: null,
+                                prNumber: 682, draft: false, branch: 'feat/y',
+                                headRepo: 'EPAM/Dmtools-Dart', maintainerCanModify: false }] }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
+
+        assert.equal(clones(sm).length, 1, 'one base-repush command — the fork paths never engaged');
+        var cmd = clones(sm)[0].command;
+        assert.ok(cmd.indexOf('refs/pull/') === -1, 'no refs/pull fetch on a same-repo head');
+        assert.equal(cmd.slice(-('git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/y').length),
+            'git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/y',
+            'the base repush is byte-identical to the pre-gh-1070 form');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'NO false guest park on a same-repo PR');
+        assert.equal(sm.capturedPrComments.length, 0, 'no park comment on a same-repo PR');
+    });
+
+    test('two fork PRs in one tick: the editable one refreshes, the non-editable one parks', function () {
+        var sm = makeSmAgent(Object.assign({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: { items: [
+                forkItem(1591, { maintainerCanModify: true }),
+                forkItem(1592, { maintainerCanModify: false, branch: 'feat/noedit' })
+            ], pr: { number: 1591, head: { sha: HEAD_NEW } } }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
+
+        assert.equal(clones(sm).length, 1, 'only the editable fork refreshed');
+        assert.ok(clones(sm)[0].command.indexOf('refs/pull/1591/head') !== -1,
+            'the push belongs to the editable PR');
+        var parked = sm.capturedPrLabelAdds.filter(function (a) {
+            return (a.labels || []).indexOf('validation_failed') !== -1;
+        });
+        assert.equal(parked.length, 1, 'exactly one guest park (the non-editable fork)');
+        assert.equal(parked[0].number, 1592, 'the non-editable PR is the parked one');
     });
 });

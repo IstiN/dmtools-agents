@@ -309,6 +309,63 @@ function silentUpdateAttemptsLeft(count) {
     return left > 0 ? left : 0;
 }
 
+// ── Fork-aware silent-update routing (gh-1070) ──────────────────────────────
+//
+// update_branch's silent refresh was fork-blind: it cloned and pushed the
+// BASE repo, so a fork PR's head (the branch lives on the fork) failed 3×
+// and got flagged silent-update-degraded while the gh-757 guest park
+// waited on the human author (live fa PR #1591, 2026-10-18). GitHub grants
+// the base-repo token a push to the fork's PR branch when the author left
+// "Allow edits from maintainers" on (default on personal forks; the PR
+// payload field is maintainer_can_modify / maintainerCanModify; org forks
+// never allow it). Pure dispatch — smAgent probes and executes, this
+// module only routes:
+//
+//   base — same-repo head: the untouched base-repush path (AC4)
+//   fork — editable fork: the machine merges main into the fork branch
+//          via the maintainer-edit push; the head move clears the park
+//          through the existing gh-994 head-change reset (AC1)
+//   park — non-editable fork: the gh-757 guest park with ZERO
+//          silent-update attempts and ZERO failure bookkeeping (AC2 —
+//          the attempt can never succeed)
+
+// The fork's 'owner/repo' full name when the PR head lives in a FOREIGN
+// repo, null otherwise (same-repo, missing headRepo from a legacy payload,
+// deleted fork, malformed name) — those keep the base path.
+function forkHeadFull(headRepoFull, baseOwner, baseRepo) {
+    // gh-1070 rework: the same-repo comparison is CASE-INSENSITIVE. The
+    // base side comes from config (effectiveRepoInfo.owner/repo) while
+    // headRepoFull comes from the API's head.repo.full_name, and GitHub
+    // repo names are case-insensitive — a casing drift (config
+    // 'istin/dmtools-agents' vs API 'IstiN/dmtools-agents') must NOT
+    // classify a same-repo PR as a fork (AC4 silently violated, or a
+    // false guest park when maintainer_can_modify=false — the exact
+    // silent-misroute class gh-1059 eliminated). The fork's own casing
+    // is preserved: the push URL is built from it.
+    var full = String(headRepoFull || '');
+    if (full.indexOf('/') === -1) return null;
+    var baseFull = (String(baseOwner || '') + '/' + String(baseRepo || '')).toLowerCase();
+    return full.toLowerCase() !== baseFull ? full : null;
+}
+
+// Three-path dispatch (UT-1). maintainerCanModify === true routes the
+// editable fork; anything else (false, null = probe failed/absent) fails
+// CLOSED to the park path — an unprobed fork push is never attempted.
+function forkSilentUpdateRoute(headRepoFull, baseOwner, baseRepo, maintainerCanModify) {
+    var forkFull = forkHeadFull(headRepoFull, baseOwner, baseRepo);
+    if (!forkFull) return { route: 'base', forkFull: null };
+    if (maintainerCanModify === true) return { route: 'fork', forkFull: forkFull };
+    return { route: 'park', forkFull: forkFull };
+}
+
+// The maintainer-edit push target: the FORK's token URL built from
+// head.repo.full_name — never the base repo for a fork head (UT-2). The
+// token rides the child env (${GH_TOKEN}) exactly like the base-repush
+// form, so the secret never appears in the script source.
+function forkPushTokenUrl(forkFull) {
+    return 'https://x-access-token:${GH_TOKEN}@github.com/' + forkFull + '.git';
+}
+
 module.exports = {
     classify: classify,
     zombieMarks: zombieMarks,
@@ -326,5 +383,8 @@ module.exports = {
     SILENT_UPDATE_DEGRADED_LABEL: SILENT_UPDATE_DEGRADED_LABEL,
     silentUpdateFailureLine: silentUpdateFailureLine,
     silentUpdateFailureCount: silentUpdateFailureCount,
-    silentUpdateAttemptsLeft: silentUpdateAttemptsLeft
+    silentUpdateAttemptsLeft: silentUpdateAttemptsLeft,
+    forkHeadFull: forkHeadFull,
+    forkSilentUpdateRoute: forkSilentUpdateRoute,
+    forkPushTokenUrl: forkPushTokenUrl
 };

@@ -929,6 +929,12 @@ function _prItemFromPr(p) {
         draft: !!p.draft,
         branch: _prListBranch(p),
         headRepo: smProviderModule.ghPrHeadRepoFull(p),
+        // gh-1070: the maintainer-edits probe ("Allow edits from maintainers")
+        // for the fork-aware silent update — resolved by the ONE shared
+        // smProvider resolver (gh-1059) so the PR-list and prStatus payload
+        // dialects never drift apart. null when the payload carries no
+        // field: the lane re-probes fresh, fail closed to the guest park.
+        maintainerCanModify: smProviderModule.ghPrMaintainerCanModify(p),
         title: p.title || '',
         author: _prListAuthor(p)
     };
