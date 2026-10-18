@@ -85,6 +85,8 @@
         "js/unit-tests/test_finishTestCasesGeneration.js",
         "js/unit-tests/test_preCliStoryTestAutomationSetup.js",
         "js/unit-tests/test_postStoryTestAutomationResults.js",
+        "js/unit-tests/test_postStoryTestAutomationShared.js",
+        "js/unit-tests/test_postStoryTestAutomationReviewHelpers.js",
         "js/unit-tests/test_postTestReworkResults.js",
         "js/unit-tests/test_preCliTestReworkSetup.js",
         "js/unit-tests/test_postStoryTestAutomationReview.js",
