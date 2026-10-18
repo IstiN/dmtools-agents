@@ -792,6 +792,113 @@ suite('writeContentOutput', function() {
 
 });
 
+suite('writeContentOutput — extracted helpers (gh-1037)', function() {
+    function loadFull(mocks, projectConfig) {
+        return loadWriteContentOutput(mocks || {}, projectConfig);
+    }
+
+    test('buildWipLabel appends _wip to the contextId, null without one', function() {
+        var mod = loadFull({});
+        assert.equal(mod.buildWipLabel({ metadata: { contextId: 'story_description' } }), 'story_description_wip');
+        assert.equal(mod.buildWipLabel({ metadata: {} }), null);
+        assert.equal(mod.buildWipLabel({}), null);
+    });
+
+    test('describeTarget renders field/space/pageId fallbacks', function() {
+        var mod = loadFull({});
+        assert.equal(mod.describeTarget({ target: 'jira_field', field: 'Description' }),
+            'target=jira_field, field=Description, confluence=?/?');
+        assert.equal(mod.describeTarget({ target: 'confluence', space: 'DOC', parentPageId: '42' }),
+            'target=confluence, field=(none), confluence=DOC/42');
+        assert.equal(mod.describeTarget({ target: 'both', field: 'F', space: 'S' }),
+            'target=both, field=F, confluence=S/?');
+    });
+
+    test('readResponseContent trims content, null (with error log) when empty', function() {
+        var errors = [];
+        var origError = console.error;
+        console.error = function(m) { errors.push(m); };
+        try {
+            var mod = loadFull({ __outputs: { 'response.md': '  padded  ' } });
+            assert.equal(mod.readResponseContent('PROJ-1', null), 'padded');
+            var mod2 = loadFull({ __outputs: {} });
+            assert.equal(mod2.readResponseContent('PROJ-1', null), null);
+            assert.equal(errors.some(function(m) { return String(m).indexOf('outputs/response.md not found or empty') !== -1; }), true);
+        } finally {
+            console.error = origError;
+        }
+    });
+
+    test('buildConfluenceLinkText / buildConfluenceCommentText pick url or page id', function() {
+        var mod = loadFull({});
+        assert.equal(mod.buildConfluenceLinkText('https://x/p1', 'p1'), 'Published to Confluence: https://x/p1');
+        assert.equal(mod.buildConfluenceLinkText(null, 'p9'), 'Published to Confluence page p9');
+        assert.contains(mod.buildConfluenceCommentText('https://x/p1', 'p1'), 'Page: https://x/p1');
+        assert.contains(mod.buildConfluenceCommentText(null, 'p9'), 'Page id: p9');
+    });
+
+    test('normalizeThenActionPath strips agents/ and js/ prefixes only', function() {
+        var mod = loadFull({});
+        assert.equal(mod.normalizeThenActionPath('assignForSolutionArchitecture.js'), 'assignForSolutionArchitecture.js');
+        assert.equal(mod.normalizeThenActionPath('agents/assignForSolutionArchitecture.js'), 'assignForSolutionArchitecture.js');
+        assert.equal(mod.normalizeThenActionPath('js/assignForSolutionArchitecture.js'), 'assignForSolutionArchitecture.js');
+        assert.equal(mod.normalizeThenActionPath('agents/js/nested.js'), 'nested.js');
+    });
+
+    test('writeJiraFieldStep falls back to replace when operationType is falsy', function() {
+        var calls = [];
+        var mocks = {
+            jira_get_ticket: function() { return { fields: { Description: 'old' } }; },
+            jira_update_field: function(args) { calls.push(args); }
+        };
+        var mod = loadFull(mocks);
+        var result = { success: true, ticketKey: 'PROJ-1', target: 'jira_field' };
+        var cfg = { target: 'jira_field', field: 'Description', operationType: null };
+        var out = mod.writeJiraFieldStep(result, cfg, 'PROJ-1', 'body', null);
+        assert.equal(out, result, 'success returns the same result object');
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].value, 'body', 'null operationType behaves as replace');
+    });
+
+    test('writeJiraFieldStep skips non-jira targets and reports the missing field', function() {
+        var mod = loadFull({});
+        var result = { success: true };
+        assert.equal(mod.writeJiraFieldStep(result, { target: 'confluence' }, 'K', 'c', null), result);
+        var out = mod.writeJiraFieldStep(result, { target: 'jira_field' }, 'K', 'c', null);
+        assert.equal(out.success, false);
+        assert.equal(out.error, 'contentOutput.field is required for jira_field target');
+    });
+
+    test('a failing inline reply logs the failed count (logReplySummary failed>0 arm)', function() {
+        var logs = [];
+        var origLog = console.log;
+        console.log = function(m) { logs.push(m); };
+        var mod = loadFull({});
+        try {
+            mod.logReplySummary({ posted: 0, failed: 2 });
+            mod.logReplySummary({ posted: 0, failed: 0 });
+            assert.equal(logs.length, 1, 'only the non-zero summary logs');
+            assert.contains(logs[0], 'Replied to 0 inline comment(s), 2 failed');
+        } finally {
+            console.log = origLog;
+        }
+    });
+
+    test('loadProjectConfigSafe returns null when the loader throws', function() {
+        var mod = loadModule('js/writeContentOutput.js', makeRequire({
+            './common/trackers.js': loadTrackersWc({}),
+            './common/contentOutput.js': loadContentOutputLib({}),
+            './common/outputFiles.js': { readOutputFile: function() { return null; } },
+            './common/jiraHelpers.js': { assignForReview: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './config.js': { STATUSES: { IN_REVIEW: 'In Review' } },
+            './configLoader.js': { loadProjectConfig: function() { throw new Error('no config'); } }
+        }), {});
+        assert.equal(mod.loadProjectConfigSafe({}), null);
+        assert.equal(mod.loadProjectConfigSafe({ jobParams: {} }), null);
+    });
+});
+
 suite('writeContentOutput uses the configured tracker for the field write (agents#873)', function() {
 
     test('ado provider: the field is written through ADO and jira_update_field is never called', function() {

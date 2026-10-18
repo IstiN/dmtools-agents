@@ -376,6 +376,130 @@ suite('writeSolutionAndLabels — repo label flow', function() {
         assert.equal(writtenValues[0].indexOf('h2. Affected Repositories') !== -1, true, 'repos section appended');
     });
 
+    test('topologicalSort skips deps that are not in the list and dedupes duplicate names (last wins)', function() {
+        var mod = makeLabelsModule({});
+        var sorted = mod.topologicalSort([
+            { name: 'a', depends_on: ['ghost'] },
+            { name: 'b', reason: 'first' },
+            { name: 'b', reason: 'dup' }
+        ]);
+        assert.equal(sorted.length, 2, 'ghost dep adds no entry, duplicate name collapses');
+        var bs = sorted.filter(function(r) { return r.name === 'b'; });
+        assert.equal(bs.length, 1);
+        assert.equal(bs[0].reason, 'dup', 'the last duplicate wins (byName overwrite)');
+    });
+
+    test('ADF field value falls back to response.md as the append base', function() {
+        var writtenValues = [];
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warns.push(m); };
+        var module = makeLabelsModule(
+            {
+                'outputs/response.md': 'h2. Solution Design',
+                'outputs/affected_repos.json': JSON.stringify([{ name: 'core-db', reason: 'DB' }])
+            },
+            {
+                jira_get_ticket: function() { return { fields: { description: { type: 'doc', content: [] } } }; },
+                jira_update_field: function(opts) { writtenValues.push(opts.value); }
+            }
+        );
+        try {
+            var result = module.action({
+                ticket: { key: 'PROJ-ADF' },
+                customParams: { solutionField: 'description', diagramField: '' }
+            });
+            assert.equal(result.success, true);
+            assert.equal(writtenValues.length, 1);
+            assert.equal(writtenValues[0].indexOf('h2. Solution Design') === 0, true, 'response.md is the base');
+            assert.equal(warns.some(function(m) { return String(m).indexOf('is ADF') !== -1; }), true);
+        } finally {
+            console.warn = origWarn;
+        }
+    });
+
+    test('a failing getIssue falls back to response.md and still appends', function() {
+        var writtenValues = [];
+        var module = makeLabelsModule(
+            {
+                'outputs/response.md': 'h2. Base',
+                'outputs/affected_repos.json': JSON.stringify([{ name: 'svc', reason: 'API' }])
+            },
+            {
+                jira_get_ticket: function() { throw new Error('jira down'); },
+                jira_update_field: function(opts) { writtenValues.push(opts.value); }
+            }
+        );
+        var result = module.action({
+            ticket: { key: 'PROJ-GETFAIL' },
+            customParams: { solutionField: 'description', diagramField: '' }
+        });
+        assert.equal(result.success, true);
+        assert.equal(writtenValues.length, 1);
+        assert.contains(writtenValues[0], 'h2. Base');
+        assert.contains(writtenValues[0], 'h2. Affected Repositories');
+    });
+
+    test('a failing addLabel is non-fatal: later labels are still added', function() {
+        var added = [];
+        var module = makeLabelsModule(
+            {
+                'outputs/response.md': 'h2. S',
+                'outputs/affected_repos.json': JSON.stringify([{ name: 'bad one' }, { name: 'good' }])
+            },
+            {
+                jira_add_label: function(opts) {
+                    added.push(opts.label);
+                    if (opts.label === 'bad one') { throw new Error('label api down'); }
+                }
+            }
+        );
+        var result = module.action({
+            ticket: { key: 'PROJ-LABELFAIL' },
+            customParams: { solutionField: 'description', diagramField: '' }
+        });
+        assert.equal(result.success, true, 'label failure must not fail the action');
+        assert.deepEqual(added, ['bad one', 'good'], 'label loop continues after a failure');
+    });
+
+    test('invalid affected_repos.json is non-fatal and skips the section', function() {
+        var writtenValues = [];
+        var module = makeLabelsModule(
+            {
+                'outputs/response.md': 'h2. S',
+                'outputs/affected_repos.json': '{not json'
+            },
+            {
+                jira_update_field: function(opts) { writtenValues.push(opts.value); }
+            }
+        );
+        var result = module.action({
+            ticket: { key: 'PROJ-BADJSON' },
+            customParams: { solutionField: 'description', diagramField: '' }
+        });
+        assert.equal(result.success, true);
+        assert.equal(writtenValues.length, 0, 'no field write when repos json is invalid');
+    });
+
+    test('non-array affected_repos.json is skipped gracefully', function() {
+        var writtenValues = [];
+        var module = makeLabelsModule(
+            {
+                'outputs/response.md': 'h2. S',
+                'outputs/affected_repos.json': '{"name":"not-an-array"}'
+            },
+            {
+                jira_update_field: function(opts) { writtenValues.push(opts.value); }
+            }
+        );
+        var result = module.action({
+            ticket: { key: 'PROJ-NOTARRAY' },
+            customParams: { solutionField: 'description', diagramField: '' }
+        });
+        assert.equal(result.success, true);
+        assert.equal(writtenValues.length, 0, 'no field write for non-array repos');
+    });
+
     test('stops early if base action fails', function() {
         var addedLabels = [];
         var outputFiles = makeOutputFiles({
