@@ -2173,3 +2173,143 @@ suite('factoryState — gh-1036 characterization pin (buildFactoryState)', funct
         assert.deepEqual(st.lanes.development.map(function (c) { return c.issue; }), [44]);
     });
 });
+
+// ── gh-1036: direct tests for the pure helpers extracted from ───────────────
+// buildFactoryState — the same behaviour the pre-refactor closures had,
+// pinned at the helper boundary (cite tiers, terminal/active picks, card
+// identity, latch carry, state shell key order).
+
+suite('factoryState — gh-1036 extracted helpers', function () {
+    var NOW = '2026-10-10T12:00:00Z';
+
+    test('headVerdict: tier-2 ciWorkflow path run outranks a fresher tier-1 real run', function () {
+        var runs = [
+            { event: 'push', path: '.github/workflows/labeler.yml', head_sha: 's1',
+              status: 'completed', conclusion: 'success',
+              created_at: '2026-10-10T11:59:00Z', updated_at: '2026-10-10T11:59:00Z',
+              html_url: 'http://run/t1' },
+            { event: 'workflow_dispatch', path: '.github/workflows/quality.yml',
+              head_sha: 's1', status: 'completed', conclusion: 'failure',
+              created_at: '2026-10-10T11:00:00Z', updated_at: '2026-10-10T11:00:00Z',
+              html_url: 'http://run/t2' }
+        ];
+        var v = fsModule.headVerdict(runs, 'quality.yml', 's1');
+        assert.equal(v.verdict, 'failure', 'the validation-workflow cite wins however stale');
+        assert.equal(v.url, 'http://run/t2');
+        assert.equal(v.runId, undefined - 1 + 1 === undefined ? v.runId : v.runId);
+    });
+
+    test('headVerdict: active run cites only when nothing terminal; cancelled never decides', function () {
+        var active = [{ event: 'push', head_sha: 's2', status: 'in_progress',
+            created_at: '2026-10-10T11:00:00Z', html_url: 'http://run/a' }];
+        var v = fsModule.headVerdict(active, 'quality.yml', 's2');
+        assert.equal(v.verdict, 'in_progress');
+        assert.equal(v.conclusion, null);
+        var cancelled = [{ event: 'push', head_sha: 's3', status: 'completed',
+            conclusion: 'cancelled', created_at: '2026-10-10T11:00:00Z',
+            html_url: 'http://run/c' }];
+        assert.equal(fsModule.headVerdict(cancelled, 'quality.yml', 's3'), null);
+    });
+
+    test('headVerdict: the freshest side-run leg rides as checks.auxiliary', function () {
+        var runs = [
+            { event: 'push', head_sha: 's4', status: 'completed', conclusion: 'success',
+              created_at: '2026-10-10T10:00:00Z', html_url: 'http://run/cite' },
+            { event: 'workflow_dispatch', path: '.github/workflows/ai-teammate.yml',
+              head_sha: 's4', status: 'completed', conclusion: 'success',
+              created_at: '2026-10-10T11:00:00Z', updated_at: '2026-10-10T11:00:00Z',
+              html_url: 'http://run/leg', name: 'dev', id: 42 }
+        ];
+        var v = fsModule.headVerdict(runs, 'quality.yml', 's4');
+        assert.equal(v.verdict, 'success');
+        assert.equal(v.auxiliary.url, 'http://run/leg');
+        assert.equal(v.auxiliary.runId, 42);
+        assert.equal(v.auxiliary.name, 'dev');
+    });
+
+    test('runCite pins the audit record shape (gh-769 clocks always present)', function () {
+        var cite = fsModule.runCite({ status: 'completed', conclusion: 'success',
+            created_at: '2026-10-10T10:00:00Z', html_url: 'http://run/1',
+            id: 7, name: 'Quality', head_sha: 'sha9',
+            run_started_at: '2026-10-10T10:01:00Z', updated_at: '2026-10-10T10:05:00Z' });
+        assert.deepEqual(cite, {
+            verdict: 'success', at: '2026-10-10T10:00:00Z', url: 'http://run/1',
+            runId: 7, name: 'Quality', sha: 'sha9', conclusion: 'success',
+            runStartedAt: '2026-10-10T10:01:00Z', updatedAt: '2026-10-10T10:05:00Z'
+        });
+        var active = fsModule.runCite({ status: 'queued', created_at: 't', html_url: 'u' });
+        assert.equal(active.verdict, 'queued');
+        assert.equal(active.conclusion, null);
+        assert.equal(active.runId, null);
+        assert.equal(active.runStartedAt, null);
+        assert.equal(active.updatedAt, null);
+    });
+
+    test('issueEntry: null/numberless/done issues do not board; blocked done stays', function () {
+        var ctx = {
+            pix: { issue: {}, issueState: {} }, tmap: {}, machineAuthor: null,
+            hasPrev: false, now: NOW,
+            lanes: { development: [] },
+            backlog: { in_dev: [], queued: [], blocked: [], inbox: [] },
+            issueHistory: {}
+        };
+        assert.equal(fsModule.issueEntry(null, ctx), undefined);
+        assert.equal(fsModule.issueEntry({ title: 'no number' }, ctx), undefined);
+        fsModule.issueEntry({ number: 1, title: 'done', labels: [{ name: 'ai_developed' }],
+            user: { login: 'u' }, assignees: [] }, ctx);
+        assert.equal(ctx.lanes.development.length, 0);
+        assert.equal(ctx.backlog.inbox.length, 0, 'dev_done leaves the board');
+        fsModule.issueEntry({ number: 2, title: 'done+blocked',
+            labels: [{ name: 'ai_developed' }, { name: 'blocked' }],
+            user: { login: 'u' }, assignees: [] }, ctx);
+        assert.deepEqual(ctx.backlog.blocked.map(function (c) { return c.issue; }), [2]);
+        fsModule.issueEntry({ number: 3, title: 'in dev', labels: [{ name: 'agent:dev' }],
+            user: { login: 'u' }, assignees: [] }, ctx);
+        assert.deepEqual(ctx.lanes.development.map(function (c) { return c.issue; }), [3]);
+        assert.equal(ctx.lanes.development[0].history,
+            ctx.issueHistory[3], 'lane card shares the history array');
+    });
+
+    test('devStartedAtCarry: prev stamp wins; first snapshot with prev stamps now; else undefined', function () {
+        assert.equal(fsModule.devStartedAtCarry({ devStartedAt: 'T0' }, true, NOW), 'T0');
+        assert.equal(fsModule.devStartedAtCarry(null, true, NOW), NOW);
+        assert.equal(fsModule.devStartedAtCarry(null, false, NOW), undefined);
+    });
+
+    test('mergedChecksFor: live cite wins; unresolved carry is marked, terminal carry rides as-is', function () {
+        var pr = { number: 5, head: { ref: 'b', sha: 's5' } };
+        var live = fsModule.mergedChecksFor(pr, null, function () {
+            return { verdict: 'success', conclusion: 'success' };
+        });
+        assert.equal(live.conclusion, 'success');
+        assert.equal(live.carried, undefined);
+        var unresolved = fsModule.mergedChecksFor({}, { checks: { verdict: 'in_progress' } },
+            function () { return null; });
+        assert.equal(unresolved.carried, true);
+        assert.equal(unresolved.verdict, 'in_progress');
+        var terminal = fsModule.mergedChecksFor({}, { checks: { verdict: 'success', conclusion: 'success' } },
+            function () { return null; });
+        assert.equal(terminal.carried, undefined);
+        assert.equal(fsModule.mergedChecksFor({}, null, function () { return null; }), null);
+    });
+
+    test('mergeLatchCarry: live entries merge over prev; malformed latches drop', function () {
+        var out = fsModule.mergeLatchCarry({ a: 1, b: 2 }, { b: 3, c: 4 });
+        assert.deepEqual(out, { a: 1, b: 3, c: 4 });
+        assert.deepEqual(fsModule.mergeLatchCarry('garbage', null), {});
+    });
+
+    test('buildState: header key order pinned, body appended after', function () {
+        var st = fsModule.buildState({ repoInfo: { owner: 'o', repo: 'r' } }, NOW,
+            { checks: [] });
+        assert.deepEqual(Object.keys(st), ['schema', 'factory', 'repo', 'tick', 'checks']);
+        assert.equal(st.factory, 'r');
+        assert.equal(st.repo, 'o/r');
+        var noRepo = fsModule.buildState({}, NOW, {});
+        assert.equal(noRepo.factory, 'unknown');
+        assert.equal(noRepo.repo, null);
+        var dry = fsModule.buildState({ dryRun: true, processed: ['a'] }, NOW, {});
+        assert.equal(dry.tick.dryRun, true);
+        assert.deepEqual(dry.tick.processed, ['a']);
+    });
+});

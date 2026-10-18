@@ -727,6 +727,121 @@ function applyMutexSnapshot(state, input) {
     if (input.mutex) state.mutex = normalizeMutexSnapshot(input.mutex);
 }
 
+// gh-816 — per-head run verdicts (citation integrity). The runs list is
+// repo-wide and newest-first; classification is explicit (same idiom as
+// syncValidationChecks/failedRunLinksLine) because the list is shared with
+// side-run legs whose clocks interleave with CI. Pure helpers, extracted
+// top-level (gh-1036) so buildFactoryState stays under its CRAP budget;
+// behaviour is exactly the former closure cluster.
+
+function headRuns(runs, sha) {
+    return runs.filter(function (r) {
+        return r && r.head_sha === sha;
+    });
+}
+
+function runClock(r) {
+    return {
+        runStartedAt: (r && r.run_started_at) || null,
+        updatedAt: (r && r.updated_at) || null
+    };
+}
+
+// Sort key: the run's run_started_at/updated_at (gh-769) carry the CI
+// wall-time vs queue-wait split; nulls sort as ''.
+function runSortKey(r) {
+    return String((r && (r.updated_at || r.created_at)) || '');
+}
+
+function freshestRun(list) {
+    return (list || []).slice().sort(function (a, b) {
+        return runSortKey(b).localeCompare(runSortKey(a));
+    })[0] || null;
+}
+
+// The audit record for one run: verdict + the identity fields the
+// merged_recent persistence needs (run id + name + sha + conclusion,
+// gh-816) alongside the gh-769 clock split.
+function runVerdictOf(r) {
+    var done = r.status === 'completed';
+    return done ? (r.conclusion || r.status) : r.status;
+}
+
+function runConclusionOf(r) {
+    var done = r.status === 'completed';
+    return done ? (r.conclusion || null) : null;
+}
+
+function runCite(r) {
+    var t = runClock(r);
+    return {
+        verdict: runVerdictOf(r),
+        at: r.created_at,
+        url: r.html_url,
+        runId: r.id == null ? null : r.id,
+        name: r.name || null,
+        sha: r.head_sha || null,
+        conclusion: runConclusionOf(r),
+        runStartedAt: t.runStartedAt,
+        updatedAt: t.updatedAt
+    };
+}
+
+// Cite resolution (gh-816 + rework threads 2/4): the runs list is repo-wide,
+// so REAL runs come in tiers — score 2: the machine's own validation
+// workflow (ciWorkflow path match); score 1: every other real run (repo CI,
+// dynamic PR-validation, unrelated push/pull_request workflows under the
+// documented fail-open). The best AVAILABLE tier cites — the validation
+// workflow outranks any bare real run however fresh, and an unrelated
+// workflow only cites when nothing better exists. Within the winning tier
+// the newest TERMINAL non-cancelled run decides (cancelled is never a
+// verdict — gh-191), else the newest active run, else NO cite — a head
+// carrying only SM side-run legs has no validation evidence to discharge.
+function citeTier(r, ciWorkflow) {
+    return isValidationWorkflowPath(r.path, ciWorkflow) ? 2 : 1;
+}
+
+function isTerminalVerdict(r) {
+    return r.status === 'completed' && r.conclusion &&
+        r.conclusion !== 'cancelled';
+}
+
+function isActiveRun(r) {
+    return ACTIVE_RUN_STATES.indexOf(r.status) !== -1;
+}
+
+// Within one tier pool: newest terminal non-cancelled run wins, else the
+// newest active run, else no cite.
+function citeFromPool(pool) {
+    return freshestRun(pool.filter(isTerminalVerdict)) ||
+        freshestRun(pool.filter(isActiveRun));
+}
+
+function citeForTier(real, ciWorkflow, tier) {
+    return citeFromPool(real.filter(function (r) {
+        return citeTier(r, ciWorkflow) === tier;
+    }));
+}
+
+// The freshest side-run leg, when any, rides along as checks.auxiliary
+// (runCite-shaped — same vocabulary as the cite: verdict/conclusion/
+// runId/name/sha) — evidence, never the cite.
+function headVerdict(runs, ciWorkflow, sha) {
+    var mine = headRuns(runs, sha);
+    var real = mine.filter(function (r) { return isValidationRun(r, ciWorkflow); });
+    var legs = mine.filter(function (r) { return !isValidationRun(r, ciWorkflow); });
+    var cite = null;
+    [2, 1].forEach(function (tier) {
+        if (cite) return;
+        cite = citeForTier(real, ciWorkflow, tier);
+    });
+    if (!cite) return null;
+    var out = runCite(cite);
+    var leg = freshestRun(legs);
+    if (leg) out.auxiliary = runCite(leg);
+    return out;
+}
+
 function buildFactoryState(input) {
     var prs = input.prs || [];
     var mergedPrs = input.mergedPrs || [];
@@ -748,94 +863,9 @@ function buildFactoryState(input) {
     // board header's global Σ$ rollup; absent when pricing is off/bad.
     var costs = priceTokens(tmap, input.pricing, nowMs);
     var issueHistory = {};   // issue-N → shared history (lane + backlog twin)
-
-    // Per-head run verdicts (gh-816 citation integrity): classify the
-    // head's runs, then cite. The runs list is repo-wide and newest-first;
-    // sorting is explicit (same idiom as syncValidationChecks/
-    // failedRunLinksLine) because the list is shared with side-run legs
-    // whose clocks interleave with CI. runStartedAt/updatedAt (gh-769)
-    // carry the run's run_started_at/updated_at so the board can split CI
-    // wall-time from queue wait — null when the payload lacks them
-    // (honest unknowns, the keys are always present so snapshots keep a
-    // stable shape).
     var ciWorkflow = input.ciWorkflow || 'quality.yml';
-    function headRuns(sha) {
-        return runs.filter(function (r) {
-            return r && r.head_sha === sha;
-        });
-    }
-    function isRealRun(r) {
-        return isValidationRun(r, ciWorkflow);
-    }
-    function runClock(r) {
-        return {
-            runStartedAt: (r && r.run_started_at) || null,
-            updatedAt: (r && r.updated_at) || null
-        };
-    }
-    function freshestRun(list) {
-        return (list || []).slice().sort(function (a, b) {
-            return String((b && (b.updated_at || b.created_at)) || '')
-                .localeCompare(String((a && (a.updated_at || a.created_at)) || ''));
-        })[0] || null;
-    }
-    // The audit record for one run: verdict + the identity fields the
-    // merged_recent persistence needs (run id + name + sha + conclusion,
-    // gh-816) alongside the gh-769 clock split.
-    function runCite(r) {
-        var t = runClock(r);
-        var done = r.status === 'completed';
-        return {
-            verdict: done ? (r.conclusion || r.status) : r.status,
-            at: r.created_at,
-            url: r.html_url,
-            runId: r.id == null ? null : r.id,
-            name: r.name || null,
-            sha: r.head_sha || null,
-            conclusion: done ? (r.conclusion || null) : null,
-            runStartedAt: t.runStartedAt,
-            updatedAt: t.updatedAt
-        };
-    }
-    // Cite resolution (gh-816 + rework threads 2/4): the runs list is
-    // repo-wide, so REAL runs come in tiers — score 2: the machine's own
-    // validation workflow (ciWorkflow path match); score 1: every other
-    // real run (repo CI, dynamic PR-validation, unrelated push/pull_request
-    // workflows under the documented fail-open). The best AVAILABLE tier
-    // cites — the validation workflow outranks any bare real run however
-    // fresh, and an unrelated workflow only cites when nothing better
-    // exists. Within the winning tier the newest TERMINAL non-cancelled
-    // run decides (cancelled is never a verdict — gh-191), else the newest
-    // active run, else NO cite — a head carrying only SM side-run legs has
-    // no validation evidence to discharge. The freshest side-run leg, when
-    // any, rides along as checks.auxiliary (runCite-shaped — same
-    // vocabulary as the cite: verdict/conclusion/runId/name/sha) —
-    // evidence, never the cite.
-    function citeTier(r) {
-        return isValidationWorkflowPath(r.path, ciWorkflow) ? 2 : 1;
-    }
-    function headVerdict(sha) {
-        var mine = headRuns(sha);
-        var real = mine.filter(isRealRun);
-        var legs = mine.filter(function (r) { return !isRealRun(r); });
-        var cite = null;
-        [2, 1].forEach(function (tier) {
-            if (cite) return;
-            var pool = real.filter(function (r) {
-                return citeTier(r) === tier;
-            });
-            cite = freshestRun(pool.filter(function (r) {
-                return r.status === 'completed' && r.conclusion &&
-                       r.conclusion !== 'cancelled';
-            })) || freshestRun(pool.filter(function (r) {
-                return ACTIVE_RUN_STATES.indexOf(r.status) !== -1;
-            }));
-        });
-        if (!cite) return null;
-        var out = runCite(cite);
-        var leg = freshestRun(legs);
-        if (leg) out.auxiliary = runCite(leg);
-        return out;
+    function verdictFor(sha) {
+        return headVerdict(runs, ciWorkflow, sha);
     }
 
     var lanes = {}; LANE_ORDER.forEach(function (l) { lanes[l] = []; });
@@ -845,141 +875,25 @@ function buildFactoryState(input) {
     // development lane and the backlog buckets — single source, one shared
     // history per issue). ai_developed hands the ticket to the PR side —
     // those leave the lane; they stay in the backlog only while blocked.
-    var devStartedAtByIssue = {};
-    issues.forEach(function (it) {
-        if (it == null || it.number == null) return;
-        var inDev = hasLabel(it, DEV_LABEL) && !hasLabel(it, DEV_DONE_LABEL);
-        var bucket = backlogBucket(it, machineAuthor);
-        if (hasLabel(it, DEV_DONE_LABEL) && bucket !== 'blocked') return;
-        var prevCard = pix.issue[it.number];
-        // devStartedAt: carried while the leg keeps running; the first
-        // snapshot that sees the handoff stamps it (tick-cadence exact).
-        if (inDev) {
-            if (prevCard && prevCard.devStartedAt) {
-                devStartedAtByIssue[it.number] = prevCard.devStartedAt;
-            } else if (hasPrev) {
-                devStartedAtByIssue[it.number] = now;
-            }
-        }
-        issueHistory[it.number] = nextHistory(
-            prevCard, pix.issueState[it.number], bucket, now, hasPrev);
-        if (inDev) {
-            lanes.development.push(issueCard(it, {
-                checks: null, queuePos: null,
-                devStartedAt: devStartedAtByIssue[it.number]
-            }, tmap, issueHistory));
-        }
-        // the backlog twin carries devStartedAt too — prevIndex resolves an
-        // issue to its BACKLOG card, so the next tick's carry reads it here
-        var twinExtra = { bucket: bucket };
-        if (devStartedAtByIssue[it.number]) {
-            twinExtra.devStartedAt = devStartedAtByIssue[it.number];
-        }
-        (backlog[bucket] = backlog[bucket] || []).push(
-            issueCard(it, twinExtra, tmap, issueHistory));
-    });
+    var issueCtx = {
+        pix: pix, tmap: tmap, machineAuthor: machineAuthor,
+        hasPrev: hasPrev, now: now, lanes: lanes, backlog: backlog,
+        issueHistory: issueHistory
+    };
+    issues.forEach(function (it) { issueEntry(it, issueCtx); });
     lanes.development.sort(function (a, b) { return a.issue - b.issue; });
-    // BACKLOG_CAP: github_search_issues returns a single page (no perPage
-    // knob), so an over-page repo truncates silently at the source. The
-    // per-bucket cap bounds the published snapshot regardless of repo AND
-    // keeps backlogCounts self-consistent with what the snapshot holds
-    // (newest kept — issue numbers are monotonic).
-    BACKLOG_BUCKETS.forEach(function (b) {
-        (backlog[b] = backlog[b] || []).sort(function (x, y) {
-            return x.issue - y.issue;
-        });
-        if (backlog[b].length > BACKLOG_CAP) {
-            backlog[b] = backlog[b]
-                .slice(backlog[b].length - BACKLOG_CAP);
-        }
-    });
+    sortAndCapBacklog(backlog);
 
     // open PR cards
-    prs.map(function (pr) {
-        var v = headVerdict(pr.head && pr.head.sha);
-        var card = {
-            pr: pr.number,
-            title: pr.title,
-            author: pr.user && pr.user.login,
-            branch: pr.head && pr.head.ref,
-            head: pr.head && pr.head.sha,
-            labels: (pr.labels || []).map(function (l) {
-                return l && l.name || l;
-            }),
-            // headVerdict already returns the card-shaped record (or null)
-            checks: v || null,
-            prCreated: iso(pr.created_at),
-            // FIFO position inside approved_queue is filled after the sort
-            queuePos: null,
-            _now: now
-        };
-        var lane = laneOf({ labels: card.labels, checks: card.checks });
-        mergeLabelTimestamps(card, pix.pr[pr.number], hasPrev);
-        card.history = nextHistory(pix.pr[pr.number], pix.prLane[pr.number],
-            lane, now, hasPrev);
-        if (tmap['pr-' + pr.number]) card.tokens = tmap['pr-' + pr.number];
-        delete card._now;
-        return { lane: lane, card: card };
-    }).sort(function (a, b) { return a.card.pr - b.card.pr; })
-      .forEach(function (e) { lanes[e.lane].push(e.card); });
+    openPrEntries(prs, verdictFor, now, tmap, pix, hasPrev)
+        .forEach(function (e) { lanes[e.lane].push(e.card); });
 
     // recently merged PRs (terminal lane) — GitHub fields carry the ends,
     // the accumulated label stamps ride over from the card's open life
-    mergedPrs.filter(function (pr) {
-        var t = Date.parse(pr.merged_at || '');
-        return !isNaN(t) && (nowMs - t) < MERGED_WINDOW_MS;
-    }).map(function (pr) {
-        var prevCard = pix.pr[pr.number];
-        // gh-816: PERSIST the checks record at merge time — resolve the
-        // head's real validation cite from the current runs list (the list
-        // is repo-wide, the merged head still matches), else carry the
-        // record the card accumulated during its open life. The terminal
-        // lane is the audit trail: dropping the record forced retrospectives
-        // to re-derive run history to tell legit merges from false-green.
-        // Rework thread 3: a carried record whose conclusion never landed
-        // (the runs rotated out of the window while validation was still
-        // in flight) is carried MARKED — without the marker the merged
-        // card would read "validation in flight" for the whole 24h window,
-        // since nothing ever resolves it. Terminal records carry as-is
-        // (a resolved verdict), and the audit fields stay uniform across
-        // cite/auxiliary/carried records (all runCite-shaped, thread 4).
-        var mergedChecks = (pr.head && pr.head.sha &&
-                headVerdict(pr.head.sha)) || null;
-        if (!mergedChecks && prevCard && prevCard.checks) {
-            mergedChecks = Object.assign({}, prevCard.checks);
-            if (mergedChecks.conclusion == null) mergedChecks.carried = true;
-        }
-        var card = {
-            pr: pr.number,
-            title: pr.title,
-            author: pr.user && pr.user.login,
-            branch: pr.head && pr.head.ref,
-            head: pr.head && pr.head.sha,
-            labels: (pr.labels || []).map(function (l) {
-                return l && l.name || l;
-            }),
-            checks: mergedChecks,
-            prCreated: iso(pr.created_at),
-            mergedAt: iso(pr.merged_at),
-            queuePos: null,
-            _now: now
-        };
-        carryTimestamps(card, prevCard);
-        // the merge is the terminal history entry — stamped with the exact
-        // GitHub merged_at, not the tick time
-        card.history = nextHistory(prevCard, pix.prLane[pr.number],
-            'merged_recent', now, true, card.mergedAt || now);
-        if (tmap['pr-' + pr.number]) card.tokens = tmap['pr-' + pr.number];
-        delete card._now;
-        return card;
-    }).sort(function (a, b) {
-        return Date.parse(b.mergedAt) - Date.parse(a.mergedAt);
-    }).forEach(function (card) { lanes.merged_recent.push(card); });
+    mergedCards(mergedPrs, nowMs, verdictFor, now, tmap, pix)
+        .forEach(function (card) { lanes.merged_recent.push(card); });
 
-    // approved FIFO positions (1-based; the mutex takes pos 1 on arm)
-    (lanes.approved_queue || []).forEach(function (card, i) {
-        card.queuePos = i + 1;
-    });
+    stampQueuePositions(lanes);
 
     // gh-806: the rework in-flight latch persists next to tick.processed —
     // the previous snapshot's map is the carry source, this tick's live map
@@ -989,17 +903,9 @@ function buildFactoryState(input) {
     // the snapshot never wedges the armer on a dead leg. A leg run still
     // ACTIVE survives even past the stale window — a queued run on a jammed
     // runner must not invite a duplicate. Additive; schema stays 2.
-    var latchCarry = {};
-    var prevLatch = input.prev && input.prev.reworkInFlight;
-    if (prevLatch && typeof prevLatch === 'object') {
-        Object.keys(prevLatch).forEach(function (k) { latchCarry[k] = prevLatch[k]; });
-    }
-    var liveLatch = input.reworkInFlight;
-    if (liveLatch && typeof liveLatch === 'object') {
-        Object.keys(liveLatch).forEach(function (k) { latchCarry[k] = liveLatch[k]; });
-    }
     var reworkInFlight = reworkLatchModule.pruneStale(
-        reworkLatchModule.normalizeMap(latchCarry), {
+        reworkLatchModule.normalizeMap(mergeLatchCarry(
+            input.prev && input.prev.reworkInFlight, input.reworkInFlight)), {
             now: nowMs,
             runs: runs,
             workflowFile: input.legWorkflow
@@ -1008,32 +914,252 @@ function buildFactoryState(input) {
     // gh-998 (I5): cumulative zombie-swept leak counter — see zombiesSweptTotal.
     var sweptTotal = zombiesSweptTotal(input);
 
-    var state = {
-        schema: 2,
-        factory: input.factory || (input.repoInfo && input.repoInfo.repo) || 'unknown',
-        repo: input.repoInfo ? (input.repoInfo.owner + '/' + input.repoInfo.repo) : null,
-        tick: {
-            at: now,
-            dryRun: input.dryRun === true,
-            processed: input.processed || []
-        },
+    var state = buildState(input, now, {
         checks: checkNames,
         reworkInFlight: reworkInFlight,
         zombiesSwept: sweptTotal,
         lanes: lanes,
-        counts: LANE_ORDER.reduce(function (m, l) {
-            m[l] = (lanes[l] || []).length; return m;
-        }, {}),
+        counts: laneCounts(lanes),
         backlog: backlog,
-        backlogCounts: BACKLOG_BUCKETS.reduce(function (m, b) {
-            m[b] = (backlog[b] || []).length; return m;
-        }, {})
-    };
+        backlogCounts: bucketCounts(backlog)
+    });
     // gh-825 — the board header's global Σ$ (all cards, 14d window). Absent
     // key when pricing is off/absent/malformed: the board renders tokens-only.
     if (costs) state.costs = costs;
     applyMutexSnapshot(state, input);
     return state;
+}
+
+// ── gh-1036: pure build/decide helpers extracted from buildFactoryState ─────
+// Each helper owns ONE concern of the former monolith; every one is covered
+// by the characterization suites in js/unit-tests/test_factoryState.js.
+
+/** True when the issue is a running dev leg: agent:dev on, ai_developed off. */
+function isInDevLeg(it) {
+    return hasLabel(it, DEV_LABEL) && !hasLabel(it, DEV_DONE_LABEL);
+}
+
+/** ai_developed hands the ticket to the PR side — it leaves the board unless the owner froze it (blocked). */
+function isDevDoneVisible(it, bucket) {
+    return hasLabel(it, DEV_DONE_LABEL) && bucket !== 'blocked';
+}
+
+// devStartedAt: carried while the leg keeps running; the first snapshot
+// that sees the handoff stamps it (tick-cadence exact).
+function devStartedAtCarry(prevCard, hasPrev, now) {
+    if (prevCard && prevCard.devStartedAt) return prevCard.devStartedAt;
+    return hasPrev ? now : undefined;
+}
+
+/**
+ * One open issue → development-lane card + backlog twin (v3: one pass
+ * feeds both; the history array is shared by reference so the two cards
+ * always tell the same story). Mutates ctx (lanes/backlog/issueHistory);
+ * issues that don't board (null, numberless, handed-off) are skipped.
+ */
+function issueEntry(it, ctx) {
+    if (it == null || it.number == null) return;
+    var inDev = isInDevLeg(it);
+    var bucket = backlogBucket(it, ctx.machineAuthor);
+    if (isDevDoneVisible(it, bucket)) return;
+    var prevCard = ctx.pix.issue[it.number];
+    ctx.issueHistory[it.number] = nextHistory(
+        prevCard, ctx.pix.issueState[it.number], bucket, ctx.now, ctx.hasPrev);
+    var devStartedAt;
+    if (inDev) {
+        devStartedAt = devStartedAtCarry(prevCard, ctx.hasPrev, ctx.now);
+        ctx.lanes.development.push(issueCard(it, {
+            checks: null, queuePos: null,
+            devStartedAt: devStartedAt
+        }, ctx.tmap, ctx.issueHistory));
+    }
+    // the backlog twin carries devStartedAt too — prevIndex resolves an
+    // issue to its BACKLOG card, so the next tick's carry reads it here
+    var twinExtra = { bucket: bucket };
+    if (devStartedAt) {
+        twinExtra.devStartedAt = devStartedAt;
+    }
+    (ctx.backlog[bucket] = ctx.backlog[bucket] || []).push(
+        issueCard(it, twinExtra, ctx.tmap, ctx.issueHistory));
+}
+
+// BACKLOG_CAP: github_search_issues returns a single page (no perPage
+// knob), so an over-page repo truncates silently at the source. The
+// per-bucket cap bounds the published snapshot regardless of repo AND
+// keeps backlogCounts self-consistent with what the snapshot holds
+// (newest kept — issue numbers are monotonic).
+function sortAndCapBacklog(backlog) {
+    BACKLOG_BUCKETS.forEach(function (b) {
+        (backlog[b] = backlog[b] || []).sort(function (x, y) {
+            return x.issue - y.issue;
+        });
+        if (backlog[b].length > BACKLOG_CAP) {
+            backlog[b] = backlog[b]
+                .slice(backlog[b].length - BACKLOG_CAP);
+        }
+    });
+}
+
+/** GitHub PR identity fields shared by the open card and the terminal card. */
+function prIdentity(pr) {
+    return {
+        pr: pr.number,
+        title: pr.title,
+        author: pr.user && pr.user.login,
+        branch: pr.head && pr.head.ref,
+        head: pr.head && pr.head.sha,
+        labels: (pr.labels || []).map(function (l) {
+            return l && l.name || l;
+        })
+    };
+}
+
+/** One open PR → { lane, card }: label lanes + carried/ stamped timestamps. */
+function openPrCard(pr, checks, now, tmap, pix, hasPrev) {
+    var card = prIdentity(pr);
+    // headVerdict already returns the card-shaped record (or null)
+    card.checks = checks || null;
+    card.prCreated = iso(pr.created_at);
+    // FIFO position inside approved_queue is filled after the sort
+    card.queuePos = null;
+    card._now = now;
+    var lane = laneOf({ labels: card.labels, checks: card.checks });
+    mergeLabelTimestamps(card, pix.pr[pr.number], hasPrev);
+    card.history = nextHistory(pix.pr[pr.number], pix.prLane[pr.number],
+        lane, now, hasPrev);
+    if (tmap['pr-' + pr.number]) card.tokens = tmap['pr-' + pr.number];
+    delete card._now;
+    return { lane: lane, card: card };
+}
+
+/** All open PR cards, sorted by PR number (the same FIFO the mutex uses). */
+function openPrEntries(prs, verdictFor, now, tmap, pix, hasPrev) {
+    return prs.map(function (pr) {
+        return openPrCard(pr, verdictFor(pr.head && pr.head.sha),
+            now, tmap, pix, hasPrev);
+    }).sort(function (a, b) { return a.card.pr - b.card.pr; });
+}
+
+/** merged_recent retention: merged within the last 24h (parseable merged_at). */
+function mergedInWindow(pr, nowMs) {
+    var t = Date.parse(pr.merged_at || '');
+    return !isNaN(t) && (nowMs - t) < MERGED_WINDOW_MS;
+}
+
+// gh-816 rework thread 3: a carried record whose conclusion never landed
+// (the runs rotated out of the window while validation was still in
+// flight) is carried MARKED — without the marker the merged card would
+// read "validation in flight" for the whole 24h window, since nothing
+// ever resolves it.
+function carriedMergeChecks(prevCard) {
+    var mergedChecks = Object.assign({}, prevCard.checks);
+    if (mergedChecks.conclusion == null) mergedChecks.carried = true;
+    return mergedChecks;
+}
+
+/**
+ * gh-816: PERSIST the checks record at merge time — resolve the head's
+ * real validation cite from the current runs list (the list is repo-wide,
+ * the merged head still matches), else carry the record the card
+ * accumulated during its open life. The terminal lane is the audit trail:
+ * dropping the record forced retrospectives to re-derive run history to
+ * tell legit merges from false-green. Terminal records carry as-is (a
+ * resolved verdict), and the audit fields stay uniform across
+ * cite/auxiliary/carried records (all runCite-shaped, thread 4).
+ */
+function mergedChecksFor(pr, prevCard, verdictFor) {
+    var mergedChecks = (pr.head && pr.head.sha &&
+        verdictFor(pr.head.sha)) || null;
+    if (!mergedChecks && prevCard && prevCard.checks) {
+        mergedChecks = carriedMergeChecks(prevCard);
+    }
+    return mergedChecks;
+}
+
+/** One recently merged PR → terminal card (the merge is the terminal history entry — exact GitHub merged_at). */
+function mergedPrCard(pr, mergedChecks, now, tmap, pix) {
+    var card = prIdentity(pr);
+    card.checks = mergedChecks;
+    card.prCreated = iso(pr.created_at);
+    card.mergedAt = iso(pr.merged_at);
+    card.queuePos = null;
+    card._now = now;
+    carryTimestamps(card, pix.pr[pr.number]);
+    card.history = nextHistory(pix.pr[pr.number], pix.prLane[pr.number],
+        'merged_recent', now, true, card.mergedAt || now);
+    if (tmap['pr-' + pr.number]) card.tokens = tmap['pr-' + pr.number];
+    delete card._now;
+    return card;
+}
+
+/** All merged_recent cards, newest merge first. */
+function mergedCards(mergedPrs, nowMs, verdictFor, now, tmap, pix) {
+    return mergedPrs.filter(function (pr) {
+        return mergedInWindow(pr, nowMs);
+    }).map(function (pr) {
+        return mergedPrCard(pr, mergedChecksFor(pr, pix.pr[pr.number], verdictFor),
+            now, tmap, pix);
+    }).sort(function (a, b) {
+        return Date.parse(b.mergedAt) - Date.parse(a.mergedAt);
+    });
+}
+
+// Approved FIFO positions (1-based; the mutex takes pos 1 on arm).
+function stampQueuePositions(lanes) {
+    (lanes.approved_queue || []).forEach(function (card, i) {
+        card.queuePos = i + 1;
+    });
+}
+
+function copyLatchInto(carry, latch) {
+    if (latch && typeof latch === 'object') {
+        Object.keys(latch).forEach(function (k) { carry[k] = latch[k]; });
+    }
+}
+
+// gh-806: the previous snapshot's latch map is the carry source, this
+// tick's live map (arms + clears that already happened mid-tick) merges
+// over it.
+function mergeLatchCarry(prevLatch, liveLatch) {
+    var carry = {};
+    copyLatchInto(carry, prevLatch);
+    copyLatchInto(carry, liveLatch);
+    return carry;
+}
+
+/**
+ * The snapshot shell: header first — schema, factory, repo, tick — in the
+ * pinned schema 2 key order (gh-1036 characterization test), then the
+ * per-tick body. `factory` falls back to the repo name, then 'unknown';
+ * `repo` is 'O/R' or null without repoInfo.
+ */
+function buildState(input, now, body) {
+    var state = {
+        schema: 2,
+        factory: input.factory ||
+            (input.repoInfo && input.repoInfo.repo) || 'unknown',
+        repo: input.repoInfo
+            ? (input.repoInfo.owner + '/' + input.repoInfo.repo) : null,
+        tick: {
+            at: now,
+            dryRun: input.dryRun === true,
+            processed: input.processed || []
+        }
+    };
+    Object.keys(body).forEach(function (k) { state[k] = body[k]; });
+    return state;
+}
+
+function laneCounts(lanes) {
+    return LANE_ORDER.reduce(function (m, l) {
+        m[l] = (lanes[l] || []).length; return m;
+    }, {});
+}
+
+function bucketCounts(backlog) {
+    return BACKLOG_BUCKETS.reduce(function (m, b) {
+        m[b] = (backlog[b] || []).length; return m;
+    }, {});
 }
 
 // ── Publisher ────────────────────────────────────────────────────────────────
@@ -1247,6 +1373,33 @@ function updateHistory(state, cfg, exec) {
 
 module.exports = {
     buildFactoryState: buildFactoryState,
+    headRuns: headRuns,
+    runClock: runClock,
+    runSortKey: runSortKey,
+    freshestRun: freshestRun,
+    runCite: runCite,
+    citeTier: citeTier,
+    citeFromPool: citeFromPool,
+    headVerdict: headVerdict,
+    isTerminalVerdict: isTerminalVerdict,
+    isActiveRun: isActiveRun,
+    issueEntry: issueEntry,
+    isInDevLeg: isInDevLeg,
+    isDevDoneVisible: isDevDoneVisible,
+    devStartedAtCarry: devStartedAtCarry,
+    sortAndCapBacklog: sortAndCapBacklog,
+    prIdentity: prIdentity,
+    openPrCard: openPrCard,
+    mergedInWindow: mergedInWindow,
+    carriedMergeChecks: carriedMergeChecks,
+    mergedChecksFor: mergedChecksFor,
+    mergedPrCard: mergedPrCard,
+    mergedCards: mergedCards,
+    stampQueuePositions: stampQueuePositions,
+    mergeLatchCarry: mergeLatchCarry,
+    buildState: buildState,
+    laneCounts: laneCounts,
+    bucketCounts: bucketCounts,
     publishCommands: publishCommands,
     publishFactoryState: publishFactoryState,
     fetchPreviousState: fetchPreviousState,
