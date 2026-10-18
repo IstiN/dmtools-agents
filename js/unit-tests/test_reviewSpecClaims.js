@@ -48,6 +48,7 @@ suite('reviewSpecClaims — detection (gh-1053)', function () {
         assert.ok(rsc.hasVerifiableCitation('deviation from the reference (Policy.java#L61)'), '#L line anchor');
         assert.ok(rsc.hasVerifiableCitation('see Policy.java#L61-L66'), '#L-L range anchor');
         assert.ok(rsc.hasVerifiableCitation('per https://github.com/acme/docs#retries the default is 3'), 'trusted doc URL');
+        assert.ok(rsc.hasVerifiableCitation('per https://api.github.com/repos/acme/spec the default is 3'), 'subdomain of a trusted host');
         assert.ok(rsc.hasVerifiableCitation('per https://docs.internal.example.com/spec the default is 3',
             { trustedDocHosts: ['docs.internal.example.com'] }), 'deployment override wins');
         assert.ok(rsc.hasVerifiableCitation('ticket.md:12 requires a timeout'), 'markdown file:line');
@@ -289,6 +290,21 @@ suite('reviewSpecClaims — sanitizeReviewData (machine-side guard)', function (
         var result = rsc.sanitizeReviewData(null, null);
         assert.equal(result.downgrades, 0);
         assert.deepEqual(result.rewrites, []);
+    });
+
+    test('entries with an empty body or no body/comment are tolerated (no crash, no downgrade)', function () {
+        var review = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+            inlineComments: [
+                { path: 'src/a.js', line: 1, severity: 'BLOCKING', body: '' },
+                { path: 'src/b.js', line: 2, severity: 'BLOCKING' }
+            ]
+        };
+        var result = rsc.sanitizeReviewData(review, function () { return '🚨 BLOCKING: the spec says X.'; });
+        assert.equal(result.downgrades, 0, 'no body to inspect — nothing demoted');
+        assert.equal(review.issueCounts.blocking, 1, 'census untouched');
+        assert.equal(review.recommendation, 'REQUEST_CHANGES', 'verdict untouched');
     });
 
     test('issueCounts missing is tolerated and created on downgrade', function () {

@@ -231,14 +231,12 @@ function classifyFindingSeverity(body, severity, opts) {
  * through readText when provided.
  */
 function resolveCommentBody(c, readText) {
-    if (typeof c.body === 'string' && c.body) {
-        return { body: c.body, inline: true, fromFile: false };
-    }
+    var body = typeof c.body === 'string' ? c.body : '';
+    if (body) return { body: body, inline: true, fromFile: false };
     if (c.comment && typeof readText === 'function') {
         return { body: readText(c.comment) || '', inline: false, fromFile: true };
     }
-    if (typeof c.body === 'string') return { body: c.body, inline: true, fromFile: false };
-    return { body: '', inline: false, fromFile: false };
+    return { body: body, inline: true, fromFile: false };
 }
 
 /** First demotion of a comment file wins; later same-file entries reuse it. */

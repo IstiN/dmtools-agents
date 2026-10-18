@@ -2517,11 +2517,12 @@ suite('postPRReviewComments — gh-1053 spec-claim guard wiring', function () {
                 './common/outputFiles.js': prReviewOutputFiles(mapReadingFileRead(fileMap))
             })),
             {
-                file_read: function (opts) {
-                    var p = opts && (opts.path || opts);
-                    if (fileMap[p] !== undefined) return fileMap[p];
-                    return null;
-                },
+                // Comment-file reads in this suite flow through the outputFiles
+                // instance's own file_read (see prReviewOutputFiles above); the
+                // module-level file_read is never exercised here, so keep it
+                // trivially simple (a branchy mock trips the CRAP ratchet on
+                // near-zero coverage).
+                file_read: function () { return null; },
                 file_write: function (opts) {
                     writes.push(opts);
                 }
