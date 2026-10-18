@@ -123,6 +123,13 @@ function commentAuthorLogin(item) {
     return login ? String(login).toLowerCase() : null;
 }
 
+// gh-1025 review: trust matching normalizes ONE trailing '[bot]' on both
+// sides — App-authored markers ('dmtools-factory-bot[bot]') are trusted
+// under the bare knob entry; a different bot never matches.
+function trustedLogin(login) {
+    return String(login || '').toLowerCase().replace(/\[bot\]$/i, '');
+}
+
 /**
  * Marker list parser shared by consume/restore markers. comments: [{body,
  * user?|author?}] — opts.authorLogins, when a non-empty array, restricts to
@@ -138,10 +145,10 @@ function parseMarkers(comments, prefix, opts) {
     var out = [];
     for (var i = 0; i < list.length; i++) {
         if (allow) {
-            var who = commentAuthorLogin(list[i]);
+            var who = trustedLogin(commentAuthorLogin(list[i]));
             var trusted = false;
             for (var a = 0; a < allow.length; a++) {
-                if (who && who === String(allow[a] || '').toLowerCase()) { trusted = true; break; }
+                if (who && who === trustedLogin(allow[a])) { trusted = true; break; }
             }
             if (!trusted) continue;
         }
