@@ -13,19 +13,21 @@
  */
 
 var trackersModule = require('./common/trackers.js');
+// Shared pure query/parse/markdown helpers (gh-1038) — no tracker/file side effects.
+var linkedIssuesReport = require('./common/linkedIssuesReport.js');
 
 function action(params) {
     try {
-        var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
-        var folder = actualParams.inputFolderPath;
-        var ticketKey = folder.split('/').pop();
-        var tracker = trackersModule.createTracker(null, actualParams.customParams || (params.jobParams && params.jobParams.customParams) || {});
+        var ctx = linkedIssuesReport.resolveInputContext(params);
+        var folder = ctx.folder;
+        var ticketKey = ctx.ticketKey;
+        var tracker = trackersModule.createTracker(null, ctx.actualParams.customParams || (params.jobParams && params.jobParams.customParams) || {});
 
         console.log('Fetching linked bugs for', ticketKey, '...');
 
         var linkedBugs = [];
         try {
-            linkedBugs = tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status not in (Done)', {
+            linkedBugs = tracker.searchIssues(linkedIssuesReport.buildLinkedQuery(ticketKey, 'issuetype = Bug AND status not in (Done)'), {
                 fields: ['key', 'summary', 'status', 'description', 'Solution', 'labels'],
                 maxResults: 10
             });
@@ -73,16 +75,7 @@ function action(params) {
 
                 if (comments.length > 0) {
                     // Include up to last 5 comments (most recent fix attempts)
-                    var startIdx = Math.max(0, comments.length - 5);
-                    lines.push('**Comments (' + (comments.length - startIdx) + ' most recent)**:\n');
-                    for (var j = startIdx; j < comments.length; j++) {
-                        var c = comments[j];
-                        var author = (c.author && c.author.displayName) || 'Unknown';
-                        var body = (c.body || '').substring(0, 2000);
-                        lines.push('**[' + author + ']**:');
-                        lines.push(body);
-                        lines.push('');
-                    }
+                    lines = lines.concat(linkedIssuesReport.buildRecentCommentLines(comments, '**Comments'));
                 }
             } catch (ce) {
                 console.warn('Could not fetch comments for', bug.key, ':', ce);

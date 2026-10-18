@@ -73,7 +73,7 @@ suite('wave2d4 tracker — fetchLinkedTestsToInput', function() {
             ado_get_work_item: function(a) { calls.push({ tool: 'ado_get_work_item', args: a }); return d4Wi(7, 'Login test', 'Failed'); },
             file_write: function(p, c) { written.path = p; written.content = c; }
         });
-        var mod = loadModule('js/fetchLinkedTestsToInput.js', makeRequire({ './common/trackers.js': d4Trackers(mocks) }), mocks);
+        var mod = loadModule('js/fetchLinkedTestsToInput.js', makeRequire({ './common/trackers.js': d4Trackers(mocks), './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js', makeRequire({}), {}) }), mocks);
         mod.action({ inputFolderPath: 'input/12', jobParams: D4_ADO });
         assert.deepEqual(d4Find(calls, 'ado_get_work_item')[0].args, { id: '7' });
         assert.equal(written.path, 'input/12/linked_tests.md');
@@ -90,7 +90,7 @@ suite('wave2d4 tracker — redirectToRepoAgent', function() {
             ado_get_work_item: function(a) { calls.push({ tool: 'ado_get_work_item', args: a }); return d4Wi(12, '[my-repo] do it'); },
             cli_execute_command: function(o) { cmds.push(o.command); return ''; }
         });
-        var mod = loadModule('js/redirectToRepoAgent.js', makeRequire({ './common/trackers.js': d4Trackers(mocks) }), mocks);
+        var mod = loadModule('js/redirectToRepoAgent.js', makeRequire({ './common/trackers.js': d4Trackers(mocks), './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js', makeRequire({}), {}) }), mocks);
         var r = mod.action({ inputFolderPath: 'input/12', jobParams: Object.assign({ customParams: { trackerProvider: 'ado' } }) });
         assert.equal(r, false);
         assert.deepEqual(d4Find(calls, 'ado_get_work_item')[0].args, { id: '12' });

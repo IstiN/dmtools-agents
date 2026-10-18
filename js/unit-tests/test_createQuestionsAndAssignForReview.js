@@ -32,6 +32,8 @@ function loadCreateQuestionsModule(fileMap, extraGlobals) {
     var moves = [];
     var removedLabels = [];
     var createdTickets = [];
+    var assigns = [];
+    var autoStarts = [];
 
     var globals = {
         file_read: function (opts) {
@@ -42,7 +44,7 @@ function loadCreateQuestionsModule(fileMap, extraGlobals) {
         jira_add_label: function (args) { labels.push(args); },
         jira_move_to_status: function (args) { moves.push(args); },
         jira_remove_label: function (args) { removedLabels.push(args); },
-        jira_assign_ticket_to: function () { },
+        jira_assign_ticket_to: function (args) { assigns.push(args); },
         jira_create_ticket_with_json: function (args) {
             createdTickets.push(args);
             return JSON.stringify({ key: 'BICE-' + (900 + createdTickets.length) });
@@ -66,7 +68,7 @@ function loadCreateQuestionsModule(fileMap, extraGlobals) {
             './config.js': configModule,
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function () { return {}; } },
-            './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function () { return false; } },
+            './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function (opts) { autoStarts.push(opts); return false; } },
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
             './common/outputFiles.js': outputFiles,
             './common/trackers.js': d2Trackers(globals)
@@ -80,7 +82,9 @@ function loadCreateQuestionsModule(fileMap, extraGlobals) {
         labels: labels,
         moves: moves,
         removedLabels: removedLabels,
-        createdTickets: createdTickets
+        createdTickets: createdTickets,
+        assigns: assigns,
+        autoStarts: autoStarts
     };
 }
 
@@ -398,3 +402,186 @@ suite('createQuestionsAndAssignForReview — question subtasks on Azure DevOps (
     });
 });
 
+
+suite('createQuestionsAndAssignForReview — priority map, answer field, initiator (gh-1038)', function () {
+
+    function run(fileMap, customParams, extra) {
+        var loaded = loadCreateQuestionsModule(fileMap, (extra || {}).globals);
+        var params = {
+            ticket: { key: 'BICE-829' },
+            metadata: { contextId: 'story_questions' },
+            jobParams: { customParams: customParams || {} }
+        };
+        if (!(extra && extra.noInitiator)) params.initiator = '712020:abc';
+        return { result: loaded.mod.action(params), loaded: loaded };
+    }
+
+    test('customParams.priorityMap renames the priority on the created subtask', function () {
+        var r = run({
+            'outputs/questions.json': JSON.stringify([{ summary: 'Clarify X', priority: 'High' }])
+        }, { priorityMap: { High: 'Critical' } });
+        assert.equal(r.result.success, true);
+        assert.equal(r.loaded.createdTickets[0].fieldsJson.priority.name, 'Critical');
+    });
+
+    test('an unmapped priority passes through unchanged', function () {
+        var r = run({
+            'outputs/questions.json': JSON.stringify([{ summary: 'Clarify X', priority: 'Medium' }])
+        }, { priorityMap: { High: 'Critical' } });
+        assert.equal(r.loaded.createdTickets[0].fieldsJson.priority.name, 'Medium');
+    });
+
+    test('entry.answer is written into the configured answer field', function () {
+        var r = run({
+            'outputs/questions.json': JSON.stringify([{ summary: 'Clarify X', answer: 'Already covered by AC-2' }])
+        });
+        assert.equal(r.loaded.createdTickets[0].fieldsJson.Answer, 'Already covered by AC-2');
+        assert.equal(r.loaded.createdTickets[0].fieldsJson.priority, undefined, 'no priority → no priority field');
+    });
+
+    test('no initiator id → assign is skipped, job still succeeds', function () {
+        var r = run({
+            'outputs/questions.json': '[]',
+            'outputs/response.md': 'No gaps found.'
+        }, {}, { noInitiator: true });
+        assert.equal(r.result.success, true);
+        assert.equal(r.loaded.assigns.length, 0, 'assignTo not called without an initiator');
+        assert.equal(r.loaded.moves.length, 1, 'ticket still moved to PO Review');
+    });
+
+    test('initiator id → ticket assigned to the initiator', function () {
+        var r = run({
+            'outputs/questions.json': '[]',
+            'outputs/response.md': 'No gaps found.'
+        });
+        assert.equal(r.loaded.assigns.length, 1);
+        assert.equal(r.loaded.assigns[0].accountId, '712020:abc');
+        assert.equal(r.loaded.assigns[0].key, 'BICE-829');
+    });
+});
+
+suite('createQuestionsAndAssignForReview — autoStart question answering (gh-1038)', function () {
+
+    function run(customParams, questions) {
+        var loaded = loadCreateQuestionsModule({
+            'outputs/questions.json': JSON.stringify(questions || [{ summary: 'Q1' }, { summary: 'Q2' }])
+        });
+        var result = loaded.mod.action({
+            ticket: { key: 'BICE-829' },
+            metadata: { contextId: 'story_questions' },
+            initiator: '712020:abc',
+            jobParams: { customParams: customParams || {} }
+        });
+        return { result: result, loaded: loaded };
+    }
+
+    test('true + config file triggers the answer workflow for each created question', function () {
+        var r = run({ autoStartQuestionAnswer: true, autoStartQuestionAnswerConfigFile: 'story_answer.json' });
+        assert.equal(r.result.success, true);
+        assert.equal(r.loaded.autoStarts.length, 2);
+        assert.equal(r.loaded.autoStarts[0].ticketKey, 'BICE-901');
+        assert.equal(r.loaded.autoStarts[1].ticketKey, 'BICE-902');
+        assert.equal(r.loaded.autoStarts[0].configFile, 'story_answer.json');
+        assert.deepEqual(r.loaded.autoStarts[0].stripKeys, ['autoStartQuestionAnswer', 'autoStartQuestionAnswerConfigFile']);
+    });
+
+    test("the string 'true' is accepted as well", function () {
+        var r = run({ autoStartQuestionAnswer: 'true', autoStartQuestionAnswerConfigFile: 'story_answer.json' });
+        assert.equal(r.loaded.autoStarts.length, 2);
+    });
+
+    test('true without a config file → no trigger', function () {
+        var r = run({ autoStartQuestionAnswer: true });
+        assert.equal(r.result.success, true);
+        assert.equal(r.loaded.autoStarts.length, 0);
+    });
+
+    test('disabled → no trigger', function () {
+        var r = run({ autoStartQuestionAnswer: false, autoStartQuestionAnswerConfigFile: 'story_answer.json' });
+        assert.equal(r.loaded.autoStarts.length, 0);
+    });
+});
+
+suite('createQuestionsAndAssignForReview — extracted pure helpers (gh-1038)', function () {
+
+    function helpers() {
+        return loadCreateQuestionsModule({}).mod;
+    }
+
+    test('buildWipLabel: contextId suffix or null', function () {
+        var h = helpers();
+        assert.equal(h.buildWipLabel({ contextId: 'story_questions' }), 'story_questions_wip');
+        assert.equal(h.buildWipLabel({}), null);
+        assert.equal(h.buildWipLabel(undefined), null);
+    });
+
+    test('resolveAgentId: explicit id or the story_questions default', function () {
+        var h = helpers();
+        assert.equal(h.resolveAgentId({ agentId: 'custom_agent' }), 'custom_agent');
+        assert.equal(h.resolveAgentId({}), 'story_questions');
+        assert.equal(h.resolveAgentId(undefined), 'story_questions');
+    });
+
+    test('resolveActionCustomParams: jobParams.customParams wins over params.customParams', function () {
+        var h = helpers();
+        assert.deepEqual(h.resolveActionCustomParams({ jobParams: { customParams: { a: 1 } }, customParams: { b: 2 } }), { a: 1 });
+        assert.deepEqual(h.resolveActionCustomParams({ customParams: { b: 2 } }), { b: 2 });
+        assert.deepEqual(h.resolveActionCustomParams({}), {});
+    });
+
+    test('resolvePriorityMap: customParams > jobParamPatch > projectConfig > null', function () {
+        var h = helpers();
+        var projectConfig = {
+            jobParamPatches: { story_questions: { customParams: { priorityMap: { fromPatch: 1 } } } },
+            priorityMap: { fromConfig: 2 }
+        };
+        assert.deepEqual(h.resolvePriorityMap({ priorityMap: { fromParams: 3 } }, projectConfig, 'story_questions'), { fromParams: 3 });
+        assert.deepEqual(h.resolvePriorityMap({}, projectConfig, 'story_questions'), { fromPatch: 1 });
+        assert.deepEqual(h.resolvePriorityMap({}, { priorityMap: { fromConfig: 2 } }, 'story_questions'), { fromConfig: 2 });
+        assert.equal(h.resolvePriorityMap({}, {}, 'story_questions'), null);
+        assert.equal(h.resolvePriorityMap({}, { jobParamPatches: {} }, 'unknown_agent'), null);
+    });
+
+    test('shouldAutoStartQuestionAnswer: true or the string true', function () {
+        var h = helpers();
+        assert.equal(h.shouldAutoStartQuestionAnswer({ autoStartQuestionAnswer: true }), true);
+        assert.equal(h.shouldAutoStartQuestionAnswer({ autoStartQuestionAnswer: 'true' }), true);
+        assert.equal(h.shouldAutoStartQuestionAnswer({ autoStartQuestionAnswer: 'false' }), false);
+        assert.equal(h.shouldAutoStartQuestionAnswer({ autoStartQuestionAnswer: false }), false);
+        assert.equal(h.shouldAutoStartQuestionAnswer({}), false);
+    });
+
+    test('buildActionMessage: moved / marked / failed wording', function () {
+        var h = helpers();
+        assert.equal(h.buildActionMessage('BICE-1', 'moved', 2), 'Ticket BICE-1 moved to PO Review, created 2 question subtask(s)');
+        assert.contains(h.buildActionMessage('BICE-1', 'marked', 0), 'marked stage PO Review (transition rejected)');
+        assert.contains(h.buildActionMessage('BICE-1', 'failed', 1), 'NOT moved to PO Review (transition failed)');
+    });
+
+    test('buildCreatedTicketReport: [Q] prefix, key and success flag', function () {
+        var h = helpers();
+        assert.deepEqual(h.buildCreatedTicketReport({ summary: 'Clarify X', priority: 'High' }, 'BICE-901'),
+            { summary: '[Q] Clarify X', priority: 'High', key: 'BICE-901', success: true });
+        assert.deepEqual(h.buildCreatedTicketReport({ summary: 'Clarify X' }, null),
+            { summary: '[Q] Clarify X', priority: undefined, key: null, success: false });
+        assert.deepEqual(h.buildCreatedTicketReport({}, 'BICE-902'),
+            { summary: '', priority: undefined, key: 'BICE-902', success: true });
+    });
+
+    test('buildCliFailureResult: surfaces the error and never reports success', function () {
+        var h = helpers();
+        assert.deepEqual(h.buildCliFailureResult('502 bad gateway'), {
+            success: false,
+            error: 'CLI/provider failure: 502 bad gateway',
+            createdQuestions: []
+        });
+    });
+
+    test('isAccountIdUnsupportedError: matches the accountId marker only', function () {
+        var h = helpers();
+        assert.equal(h.isAccountIdUnsupportedError(new Error('accountId not found')), true);
+        assert.equal(h.isAccountIdUnsupportedError(new Error('user does not exist')), false);
+        assert.equal(h.isAccountIdUnsupportedError('plain accountId failure'), true);
+        assert.equal(h.isAccountIdUnsupportedError(null), false);
+    });
+});
