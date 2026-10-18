@@ -149,3 +149,51 @@ suite('common/machineAuthor: isMachineLogin — case-insensitive list membership
         assert.ok(!isLogin('ai-teammate', ''));
     });
 });
+
+suite('common/machineAuthor: GitHub App [bot] suffix normalization (gh-1025)', function () {
+
+    // Live 2026-10-18 (SM tick 39103844372): #988 added 'dmtools-factory-bot'
+    // to the knob, but GitHub reports App-authored PRs as
+    // 'dmtools-factory-bot[bot]'. Exact match failed → every prMachineAuthor
+    // rule fail-closed: zero rework legs dispatched, zero arms landed, the
+    // whole agents queue silently dead for ~8h while labels looked armed.
+    var mod = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+    var isMachine = mod.isMachineAuthored;
+    var isLogin = mod.isMachineLogin;
+
+    test('configured bare login matches the API-reported [bot] author', function () {
+        assert.ok(isMachine({ author: 'dmtools-factory-bot[bot]' },
+            'ai-teammate,dmtools-factory-bot', 'owner'));
+    });
+
+    test('configured [bot] entry matches a bare author (both directions)', function () {
+        assert.ok(isMachine({ author: 'dmtools-factory-bot' },
+            'ai-teammate,dmtools-factory-bot[bot]', 'owner'));
+    });
+
+    test('exact [bot]-to-[bot] match still works (github-actions[bot] back-compat)', function () {
+        assert.ok(isMachine({ author: 'github-actions[bot]' },
+            'ai-teammate,github-actions[bot]', 'owner'));
+    });
+
+    test('isMachineLogin normalizes the suffix too (actor probes)', function () {
+        assert.ok(isLogin('dmtools-factory-bot[bot]', 'dmtools-factory-bot'));
+        assert.ok(isLogin('dmtools-factory-bot', 'dmtools-factory-bot[bot]'));
+        assert.ok(isLogin('DMTOOLS-FACTORY-BOT[bot]', 'dmtools-factory-bot'));
+    });
+
+    test('a bare suffix without brackets is NOT stripped (robot != ro[bot])', function () {
+        assert.ok(!isMachine({ author: 'robot' }, 'ro', 'owner'));
+        assert.ok(!isMachine({ author: 'ro' }, 'robot', 'owner'));
+    });
+
+    test('a DIFFERENT bot still does not match (normalization is not a wildcard)', function () {
+        assert.ok(!isMachine({ author: 'dependabot[bot]' }, 'dmtools-factory-bot', 'owner'));
+        assert.ok(!isMachine({ author: 'dmtools-factory-bot2[bot]' }, 'dmtools-factory-bot', 'owner'));
+        assert.ok(!isLogin('other-bot[bot]', 'dmtools-factory-bot'));
+    });
+
+    test('case-sensitivity of the bare login part is preserved in isMachineAuthored (design)', function () {
+        assert.ok(!isMachine({ author: 'DMTOOLS-FACTORY-BOT[bot]' }, 'dmtools-factory-bot', 'owner'));
+    });
+});

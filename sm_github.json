@@ -429,7 +429,7 @@
           "id": "validated-green"
         },
         {
-          "description": "GitHub PR: branch conflicts with main (silent-update's git merge cannot land; mergeState DIRTY) -> the queue would stall forever — report and, for MACHINE-authored PRs, re-arm agent:rework on the linked issue so the agent resolves the conflicts and pushes; the normal validate flow then resumes (pr_approved is STICKY — no re-review). Guest PRs get the report only (owner rule 2026-09-21: auto-rework is machine-author-only). Fires once per head: the marker comment carries the head sha and suppresses re-reports for the same head — never the arming (gh-683 bug C, live fa #677/#676 2026-10-03: the marker used to land before arming, a starved dispatch left a reported corpse and the issue was never labelled). Arming lands FIRST, the marker LAST; a marker whose linked issue lacks agent:rework re-arms on the next tick (suppression keys on the label, not the comment).",
+          "description": "GitHub PR: branch conflicts with main (silent-update's git merge cannot land; mergeState DIRTY) -> the queue would stall forever — report and, for MACHINE-authored PRs, re-arm agent:rework on the linked issue so the agent resolves the conflicts and pushes; the normal validate flow then resumes (pr_approved is STICKY — no re-review). Guest PRs get the report only (owner rule 2026-09-21: auto-rework is machine-author-only). Fires once per head: the marker comment carries the head sha and suppresses re-reports for the same head — never the arming (gh-683 bug C, live fa #677/#676 2026-10-03: the marker used to land before arming, a starved dispatch left a reported corpse and the issue was never labelled). Arming lands FIRST, the marker LAST; a marker whose linked issue lacks agent:rework  re-arms on the next tick (suppression keys on the label, not the comment). gh-1025: limit raised 1 -> 5 \u2014 an already-reported DIRTY PR consumed the whole per-tick slot (live 2026-10-18: #983 parked every tick behind its own marker while the approved trio #1014/#1016/#1018 was never evaluated); marker dedup keeps re-reports idempotent, extra candidates cost one comments fetch each.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -439,7 +439,7 @@
             "draft": false
           },
           "localAction": "conflict_rework",
-          "limit": 1,
+          "limit": 5,
           "id": "conflict-rework"
         },
         {
