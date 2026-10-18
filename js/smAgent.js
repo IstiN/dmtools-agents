@@ -5111,8 +5111,9 @@ function unresolvedMachineThreadCount(repoInfo, prNumber, machineLogins) {
             if (!t || t.isResolved === true) return;
             var first = (t.comments && t.comments.nodes && t.comments.nodes[0]) || {};
             var who = first.author && (first.author.login || first.author.name);
-            who = who ? String(who).toLowerCase() : null;
-            if (who && lower.indexOf(who) !== -1) n++;
+            // gh-1025 review: '[bot]'-normalized trust (App-authored threads
+            // count under the bare knob entry).
+            if (machineAuthorModule.loginMatchesList(who, lower)) n++;
         });
         return n;
     } catch (eCensus) {

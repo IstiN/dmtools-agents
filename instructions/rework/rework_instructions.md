@@ -66,6 +66,7 @@ Approved PRs with no unresolved review threads are not rework candidates. If the
 
 - Do not introduce new logic unrelated to fixing review comments
 - Do not create new branches or push code — this is automated. NEVER push to `main`/`master` (a git guard in your session hard-fails such pushes) and NEVER use closing keywords (`closes/fixes/resolves #N`) in commit messages — the PR body's squash-merge message owns issue closing.
+- NEVER edit the PR body/description (e.g. `gh pr edit --body*`, `gh api …/pulls/N -X PATCH -f body=…`) once the PR carries the `ai_validating` label or is merged/closed — from the moment validation arms the body is FINAL and GitHub never parses closing keywords from a post-merge edit (gh-960, live #956/#952). Post a PR comment instead.
 - Do not change the ticket scope — you are fixing, not re-implementing
 - Do not ignore any BLOCKING or IMPORTANT review comment
 

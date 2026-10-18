@@ -1,2 +1,0 @@
-11:# pull_request / workflow_dispatch (the factory SM dispatches this on PR heads): measure the
-116:          cp site/factory/app.js "$RUNNER_TEMP/inst/site/factory/app.js"
