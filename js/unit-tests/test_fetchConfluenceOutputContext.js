@@ -162,4 +162,138 @@ suite('fetchConfluenceOutputContext', function() {
         assert.equal(result.action, 'children_lookup_failed');
     });
 
+    test('empty list body falls back to a single-item GET (format md)', function() {
+        var calls = [];
+        var writes = {};
+        var mod = loadFetchConfluenceContext({
+            confluence_get_children_by_id: function() {
+                return [{ id: 'p1', title: 'PROJ-10 Story', body: { storage: { value: '' } } }];
+            },
+            confluence_content_by_id: function(args) {
+                calls.push(args);
+                return { id: 'p1', body: { storage: { value: '# Full body' } } };
+            },
+            confluence_get_page_inline_comments: function() { return '{"results":[]}'; },
+            file_write: function(p, c) { writes[p] = c; }
+        });
+
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42' } }
+        }));
+
+        assert.equal(result.action, 'context_fetched');
+        assert.equal(writes['input/PROJ-10/confluence_output_current.md'], '# Full body');
+        var mdCalls = calls.filter(function(c) { return c.format === 'md'; });
+        assert.equal(mdCalls.length, 1, 'exactly one md-format follow-up GET');
+        assert.equal(mdCalls[0].contentId, 'p1');
+    });
+
+    test('inline comment anchors are re-injected as placeholders into the Markdown body', function() {
+        var writes = {};
+        var mod = loadFetchConfluenceContext({
+            confluence_get_children_by_id: function() {
+                return [{ id: 'p1', title: 'PROJ-10 Story', body: { storage: { value: 'Some text with anchor here.' } } }];
+            },
+            confluence_content_by_id: function(args) {
+                if (args.format === 'md') return {};
+                return {
+                    id: 'p1',
+                    body: { storage: { value: '<p>Some <ac:inline-comment-marker ac:ref="c-9">anchor</ac:inline-comment-marker> text.</p>' } }
+                };
+            },
+            confluence_get_page_inline_comments: function() { return '{"results":[]}'; },
+            file_write: function(p, c) { writes[p] = c; }
+        });
+
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42' } }
+        }));
+
+        assert.equal(result.action, 'context_fetched');
+        assert.contains(writes['input/PROJ-10/confluence_output_current.md'], '[[ic:c-9]]anchor[[/ic]]');
+    });
+
+    test('marker extraction failure is non-fatal — the plain body is still written', function() {
+        var writes = {};
+        var mod = loadFetchConfluenceContext({
+            confluence_get_children_by_id: function() {
+                return [{ id: 'p1', title: 'PROJ-10 Story', body: { storage: { value: 'Plain body' } } }];
+            },
+            confluence_content_by_id: function(args) {
+                if (args.format === 'md') return {};
+                throw new Error('storage fetch down');
+            },
+            confluence_get_page_inline_comments: function() { return '{"results":[]}'; },
+            file_write: function(p, c) { writes[p] = c; }
+        });
+
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42' } }
+        }));
+
+        assert.equal(result.action, 'context_fetched');
+        assert.equal(writes['input/PROJ-10/confluence_output_current.md'], 'Plain body');
+    });
+
+    test('body fetch failure is non-fatal — comments are still collected', function() {
+        var writes = {};
+        var mod = loadFetchConfluenceContext({
+            confluence_get_children_by_id: function() {
+                return [{ id: 'p1', title: 'PROJ-10 Story' }];
+            },
+            confluence_content_by_id: function(args) {
+                assert.equal(args.format, 'md');
+                throw new Error('content down');
+            },
+            confluence_get_page_inline_comments: function() {
+                return JSON.stringify({
+                    results: [{
+                        id: 'c2',
+                        resolutionStatus: 'open',
+                        version: { createdAt: '2026-08-21T10:00:00Z' },
+                        body: { storage: { value: '<p>Follow-up?</p>' } }
+                    }]
+                });
+            },
+            file_write: function(p, c) { writes[p] = c; }
+        });
+
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42' } }
+        }));
+
+        assert.equal(result.action, 'context_fetched');
+        assert.equal(result.commentsCount, 1);
+        assert.equal(writes['input/PROJ-10/confluence_output_current.md'], undefined, 'no content file when the body fetch fails');
+        assert.contains(writes['input/PROJ-10/confluence_output_comments.md'], 'Follow-up?');
+    });
+
+    test('no input folder — marker and content files are skipped, comments not fetched', function() {
+        var writes = {};
+        var commentCalls = [];
+        var mod = loadFetchConfluenceContext({
+            confluence_get_children_by_id: function() {
+                return [{ id: 'p1', title: 'PROJ-10 Story', body: { storage: { value: 'Body' } } }];
+            },
+            confluence_content_by_id: function(args) {
+                if (args.format === 'md') return {};
+                return { id: 'p1', body: { storage: { value: '' } } };
+            },
+            confluence_get_page_inline_comments: function(args) { commentCalls.push(args); return '{"results":[]}'; },
+            file_write: function(p, c) { writes[p] = c; }
+        });
+
+        var result = mod.action({
+            inputFolderPath: null,
+            ticket: { key: 'PROJ-10', fields: { summary: 'Some story' } },
+            jobParams: {},
+            customParams: { contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42' } }
+        });
+
+        assert.equal(result.action, 'context_fetched');
+        assert.deepEqual(writes, {});
+        assert.equal(commentCalls.length, 0);
+        assert.equal(result.commentsCount, 0);
+    });
+
 });

@@ -18,9 +18,10 @@ function loadCheckBugTestsPassed(mocks) {
         makeRequire({
             './config.js': configModule,
             './configLoader.js': configLoaderMock,
+            './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks),
-            './common/scm.js': {
+            './common/scm.js': mocks.__scm || {
                 createScm: function() {
                     return { listPrs: function() { return []; } };
                 }
@@ -538,4 +539,235 @@ suite('checkBugTestsPassed: stage-label fallback (gh-916)', function() {
         assert.equal(result.action, 'waiting');
         assert.deepEqual(moved, []);
     });
+});
+
+// ── gh-1043: pure helpers extracted from action() — direct characterization ──
+
+suite('checkBugTestsPassedHelpers', function() {
+
+    function loadHelpers() {
+        return loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {});
+    }
+
+    test('decidePostFixRoute: not finalized keeps waiting', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.decidePostFixRoute([], 'test_pr_finalized'), null);
+        assert.equal(helpers.decidePostFixRoute(['other_label'], 'test_pr_finalized'), null);
+        assert.equal(helpers.decidePostFixRoute(null, 'test_pr_finalized'), null);
+        assert.equal(helpers.decidePostFixRoute(undefined, 'test_pr_finalized'), null);
+    });
+
+    test('decidePostFixRoute: finalized without rework label routes to rework', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.decidePostFixRoute(['test_pr_finalized'], 'test_pr_finalized'), 'rework');
+        assert.equal(helpers.decidePostFixRoute(['x', 'test_pr_finalized', 'y'], 'test_pr_finalized'), 'rework');
+    });
+
+    test('decidePostFixRoute: finalized after a rework attempt routes to blocked', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.decidePostFixRoute(['test_pr_finalized', 'sm_bug_rework_attempted'], 'test_pr_finalized'), 'blocked');
+        assert.equal(helpers.decidePostFixRoute(['sm_bug_rework_attempted'], 'test_pr_finalized'), null, 'rework label alone is not enough');
+    });
+
+    test('decideOtherActiveBug: true only for a non-Done bug other than the current one', function() {
+        var helpers = loadHelpers();
+        var doneStatus = 'Done';
+        assert.equal(helpers.decideOtherActiveBug([], 'TS-1', doneStatus), false);
+        assert.equal(helpers.decideOtherActiveBug(null, 'TS-1', doneStatus), false);
+        assert.equal(helpers.decideOtherActiveBug([{ key: 'TS-1', fields: { status: { name: 'In Progress' } } }], 'TS-1', doneStatus), false, 'current bug never counts');
+        assert.equal(helpers.decideOtherActiveBug([{ key: 'TS-2', fields: { status: { name: 'Done' } } }], 'TS-1', doneStatus), false, 'Done bug does not count');
+        assert.equal(helpers.decideOtherActiveBug([{ key: 'TS-2', fields: { status: { name: 'In Progress' } } }], 'TS-1', doneStatus), true);
+        assert.equal(helpers.decideOtherActiveBug([{ key: 'TS-2' }], 'TS-1', doneStatus), true, 'missing status counts as active');
+        assert.equal(helpers.decideOtherActiveBug([
+            { key: 'TS-1', fields: { status: { name: 'In Testing' } } },
+            { key: 'TS-2', fields: { status: { name: 'Done' } } },
+            { key: 'TS-3', fields: { status: { name: 'Blocked' } } }
+        ], 'TS-1', doneStatus), true);
+    });
+
+    test('buildBlockingList: one line per TC with unknown status fallback', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.buildBlockingList([]), '');
+        assert.equal(helpers.buildBlockingList([
+            { key: 'TS-1', fields: { status: { name: 'Failed' } } },
+            { key: 'TS-2' }
+        ]), '- TS-1 (Failed)\n- TS-2 (unknown)');
+    });
+
+    test('buildBlockedAfterReworkComment matches the original wording', function() {
+        var helpers = loadHelpers();
+        var comment = helpers.buildBlockedAfterReworkComment([
+            { key: 'TS-1', fields: { status: { name: 'Failed' } } }
+        ]);
+        assert.contains(comment, 'h3. 🚫 Test PR Finalized But Acceptance Tests Still Blocking After Rework\n\n');
+        assert.contains(comment, 'one rework was already attempted, but the following linked Test Case(s) are still not *Passed*:\n');
+        assert.contains(comment, '- TS-1 (Failed)\n\n');
+        assert.contains(comment, 'Moving the Bug to *Blocked* for manual triage instead of cycling indefinitely.');
+    });
+
+    test('buildReworkComment matches the original wording', function() {
+        var helpers = loadHelpers();
+        var comment = helpers.buildReworkComment([
+            { key: 'TS-1', fields: { status: { name: 'Failed' } } },
+            { key: 'TS-2', fields: { status: { name: 'Backlog' } } }
+        ]);
+        assert.contains(comment, 'h3. 🔄 Test PR Merged But Acceptance Tests Still Blocking\n\n');
+        assert.contains(comment, 'The test-automation PR was merged and finalized, but the following linked Test Case(s) are still not *Passed*:\n');
+        assert.contains(comment, '- TS-1 (Failed)\n- TS-2 (Backlog)\n\n');
+        assert.contains(comment, 'Moving the Bug to *In Rework* for one more fix attempt. If it still fails, it will be moved to *Blocked*.');
+    });
+
+    test('buildBugDoneComment matches the original wording', function() {
+        var helpers = loadHelpers();
+        var comment = helpers.buildBugDoneComment(3);
+        assert.contains(comment, 'h3. ✅ Bug Complete — All Linked Test Cases Resolved\n\n');
+        assert.contains(comment, 'All *3* linked Test Case(s) are either *Passed*, *Skipped*, *Irrelevant*, or already tracked by another Bug.\n\n');
+        assert.contains(comment, 'The bug has been automatically moved to *Done*.');
+    });
+
+    test('prMentionsTicket: title or head branch containing the key', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.prMentionsTicket({ title: 'Fix TS-1 crash', head: {} }, 'TS-1'), true);
+        assert.equal(helpers.prMentionsTicket({ title: 'Unrelated', head: { ref: 'bugfix/TS-1-crash' } }, 'TS-1'), true);
+        assert.equal(helpers.prMentionsTicket({ title: 'Unrelated', head: { ref: 'main' } }, 'TS-1'), false);
+        assert.equal(helpers.prMentionsTicket({}, 'TS-1'), false);
+        assert.equal(helpers.prMentionsTicket(null, 'TS-1'), false);
+    });
+
+    test('findOpenTestPr: first matching PR in list order, null when none', function() {
+        var helpers = loadHelpers();
+        var none = [{ title: 'Other', head: { ref: 'main' } }];
+        var hit = { title: 'TS-1 fix', head: { ref: 'main' } };
+        var later = { title: 'TS-1 again', head: { ref: 'main' } };
+        assert.equal(helpers.findOpenTestPr(none, 'TS-1'), null);
+        assert.equal(helpers.findOpenTestPr([], 'TS-1'), null);
+        assert.equal(helpers.findOpenTestPr(null, 'TS-1'), null);
+        assert.equal(helpers.findOpenTestPr([hit, later], 'TS-1'), hit, 'first match wins like Array.find');
+        assert.equal(helpers.findOpenTestPr([none[0], hit], 'TS-1'), hit);
+    });
+
+});
+
+// ── gh-1043: action paths that had no characterization test ──
+
+suite('checkBugTestsPassed: uncovered paths (gh-1043)', function() {
+
+    test('finalized + rework attempted + still blocking → moved_to_blocked', function() {
+        var moved = [];
+        var comments = [];
+        var removedLabels = [];
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: function() {
+                return {
+                    fields: {
+                        summary: 's',
+                        labels: ['test_pr_finalized', 'sm_bug_rework_attempted'],
+                        issuelinks: [
+                            { outwardIssue: makeTc('TS-101', 'Passed') },
+                            { outwardIssue: makeTc('TS-102', 'Failed') }
+                        ]
+                    }
+                };
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function(args) { comments.push(args); },
+            jira_remove_label: function(args) { removedLabels.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-100' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_done_check_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_blocked');
+        assert.deepEqual(moved, [{ key: 'TS-100', statusName: 'Blocked' }]);
+        assert.deepEqual(result.blockingTCs, ['TS-102']);
+        assert.contains(comments[0].comment, 'Still Blocking After Rework');
+        assert.contains(comments[0].comment, '- TS-102 (Failed)');
+        assert.contains(comments[0].comment, 'Moving the Bug to *Blocked* for manual triage');
+        assert.ok(removedLabels.some(function(l) { return l.label === 'sm_bug_done_check_triggered'; }), 'lock released after Blocked');
+    });
+
+    test('waits for an open test-automation PR before moving to Done', function() {
+        var moved = [];
+        var module = loadCheckBugTestsPassed({
+            __scm: {
+                createScm: function() {
+                    return {
+                        listPrs: function(state) {
+                            assert.equal(state, 'open');
+                            return [
+                                { title: 'Unrelated change', head: { ref: 'feature/other' }, number: 5, html_url: 'https://pr/5' },
+                                { title: 'Automate tests for TS-110', head: { ref: 'test/TS-110' }, number: 7, html_url: 'https://pr/7' }
+                            ];
+                        }
+                    };
+                }
+            },
+            jira_get_ticket: function() {
+                return {
+                    fields: {
+                        summary: 's',
+                        issuelinks: [{ outwardIssue: makeTc('TS-111', 'Passed') }]
+                    }
+                };
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function() {},
+            jira_remove_label: function(args) { removedLabels.push(args); }
+        });
+        var removedLabels = [];
+
+        var result = module.action({
+            ticket: { key: 'TS-110' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_done_check_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'waiting_for_test_pr_merge');
+        assert.equal(result.reason, 'open_pr');
+        assert.equal(result.prNumber, 7);
+        assert.equal(result.prUrl, 'https://pr/7');
+        assert.deepEqual(moved, [], 'must not move to Done while a test PR is open');
+    });
+
+    test('no linked Test Cases at all → no_test_cases, lock released', function() {
+        var moved = [];
+        var removedLabels = [];
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: function() {
+                return { fields: { summary: 's', issuelinks: [] } };
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function() {},
+            jira_remove_label: function(args) { removedLabels.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-120' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_done_check_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'no_test_cases');
+        assert.deepEqual(moved, []);
+        assert.deepEqual(removedLabels, [{ key: 'TS-120', label: 'sm_bug_done_check_triggered' }]);
+    });
+
+    test('missing ticket key → failure result', function() {
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: function() { throw new Error('must not read a ticket'); },
+            jira_search_by_jql: function() { return []; }
+        });
+
+        var result = module.action({ ticket: {}, jobParams: {} });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'params.ticket.key is missing');
+    });
+
 });
