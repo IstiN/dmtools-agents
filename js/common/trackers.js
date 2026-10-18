@@ -730,13 +730,6 @@ function createTracker(config, customParams) {
     };
     var impl = impls[providerName];
 
-    /**
-     * Normalize any backend's ticket payload into a flat view:
-     * { key, id, title, status, assignee, labels, description, url, raw: null }
-     * Returns null for empty/unparseable input. The raw payload is
-     * deliberately not embedded — agents needing backend specifics should
-     * call the provider tools directly.
-     */
     /** True when a payload's `fields` is an ADO field bag (any System.* reference name), whichever columns were asked for. */
     function _isAdoFields(f) {
         if (!f || typeof f !== 'object') return false;
@@ -746,72 +739,120 @@ function createTracker(config, customParams) {
         return false;
     }
 
+    /**
+     * Normalize any backend's ticket payload into a flat view — a thin
+     * decide-dispatch over per-provider parse helpers so this shared entry
+     * point stays under the CRAP budget (gh-1036); each _normalize* helper
+     * pins exactly one payload shape.
+     * { key, id, title, status, assignee, labels, description, url, raw: null }
+     * Returns null for empty/unparseable input. The raw payload is
+     * deliberately not embedded — agents needing backend specifics should
+     * call the provider tools directly.
+     */
     function normalizeTicket(rawTicket) {
         var t = _parseJson(rawTicket);
         if (!t || typeof t !== 'object' || typeof t === 'string') return null;
 
         // Already flat / previously normalized.
         if (typeof t.key === 'string' && !t.fields) {
-            return _flatTicket(t.key, t.id, t.title, t.status, t.assignee,
-                _labelNames(t.labels), t.description || t.body, t.html_url || t.url);
+            return _normalizeFlatTicket(t);
         }
 
         // Jira: { key, id, fields: { summary, status: { name }, ... } }
         if (t.fields && typeof t.fields === 'object' && t.fields.summary !== undefined) {
-            var f = t.fields;
-            return _extraFields(_flatTicket(
-                t.key || (t.id != null ? String(t.id) : null),
-                t.id != null ? String(t.id) : null,
-                f.summary || null,
-                f.status && f.status.name ? f.status.name : null,
-                _assigneeName(f),
-                _labelNames(f.labels),
-                f.description || null,
-                null
-            ), {
-                issueType: f.issuetype && f.issuetype.name ? f.issuetype.name : null,
-                parentKey: f.parent && f.parent.key ? f.parent.key : null,
-                fixVersions: _namesOf(f.fixVersions)
-            });
+            return _normalizeJiraTicket(t);
         }
 
         // ADO: { id, fields: { 'System.Title', 'System.State', ... } }
         if (_isAdoFields(t.fields)) {
-            var af = t.fields;
-            return _extraFields(_flatTicket(
-                t.id != null ? String(t.id) : null,
-                t.id != null ? String(t.id) : null,
-                af['System.Title'] || null,
-                af['System.State'] || null,
-                _assigneeName(af),
-                _labelNames(af['System.Tags']),
-                af['System.Description'] || null,
-                null
-            ), {
-                issueType: af['System.WorkItemType'] || null,
-                parentKey: af['System.Parent'] != null ? String(af['System.Parent']) : null,
-                fixVersions: []
-            });
+            return _normalizeAdoTicket(t);
         }
 
         // GitHub: { number, title, state, ... }
         if (t.number !== undefined) {
-            var ghKey = owner && repo
-                ? owner + '/' + repo + '#' + t.number
-                : (t.key != null ? String(t.key) : '#' + t.number);
-            return _flatTicket(
-                ghKey,
-                t.id != null ? String(t.id) : null,
-                t.title || null,
-                t.state || null,
-                _assigneeName(t),
-                _labelNames(t.labels),
-                t.body || null,
-                t.html_url || null
-            );
+            return _normalizeGithubTicket(t);
         }
 
         return null;
+    }
+
+    /** Flat / already-normalized payload: field pass-through, body/url fallbacks. */
+    function _normalizeFlatTicket(t) {
+        return _flatTicket(t.key, t.id, t.title, t.status, t.assignee,
+            _labelNames(t.labels), t.description || t.body, t.html_url || t.url);
+    }
+
+    /** Jira payload → flat view + the neutral extras (issue type, parent, fix versions). */
+    function _normalizeJiraTicket(t) {
+        var f = t.fields;
+        return _extraFields(_flatTicket(
+            t.key || (t.id != null ? String(t.id) : null),
+            t.id != null ? String(t.id) : null,
+            f.summary || null,
+            _nameOf(f.status),
+            _assigneeName(f),
+            _labelNames(f.labels),
+            f.description || null,
+            null
+        ), {
+            issueType: _nameOf(f.issuetype),
+            parentKey: _parentKeyOf(f),
+            fixVersions: _namesOf(f.fixVersions)
+        });
+    }
+
+    /** ADO payload → flat view + the neutral extras (ADO carries no fix versions). */
+    function _normalizeAdoTicket(t) {
+        var af = t.fields;
+        return _extraFields(_flatTicket(
+            _adoKey(t),
+            _adoKey(t),
+            af['System.Title'] || null,
+            af['System.State'] || null,
+            _assigneeName(af),
+            _labelNames(af['System.Tags']),
+            af['System.Description'] || null,
+            null
+        ), {
+            issueType: af['System.WorkItemType'] || null,
+            parentKey: af['System.Parent'] != null ? String(af['System.Parent']) : null,
+            fixVersions: []
+        });
+    }
+
+    /** GitHub payload → flat view; the repo-scoped key needs owner/repo context. */
+    function _normalizeGithubTicket(t) {
+        return _flatTicket(
+            _githubKey(t),
+            t.id != null ? String(t.id) : null,
+            t.title || null,
+            t.state || null,
+            _assigneeName(t),
+            _labelNames(t.labels),
+            t.body || null,
+            t.html_url || null
+        );
+    }
+
+    /** { name }-shaped Jira sub-objects (status/issuetype) → their name, else null. */
+    function _nameOf(obj) {
+        return obj && obj.name ? obj.name : null;
+    }
+
+    /** Jira parent link → the parent key, else null. */
+    function _parentKeyOf(f) {
+        return f.parent && f.parent.key ? f.parent.key : null;
+    }
+
+    /** ADO work item id → string key, else null. */
+    function _adoKey(t) {
+        return t.id != null ? String(t.id) : null;
+    }
+
+    /** GitHub issue key: 'owner/repo#N' with repository context, else t.key or '#N'. */
+    function _githubKey(t) {
+        if (owner && repo) return owner + '/' + repo + '#' + t.number;
+        return t.key != null ? String(t.key) : '#' + t.number;
     }
 
     function _namesOf(list) {

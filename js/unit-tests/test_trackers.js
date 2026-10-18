@@ -736,6 +736,78 @@ suite('trackers.js normalizeTicket', function () {
         assert.deepEqual(ticket.labels, ['bug', 'wip']);
         assert.equal(ticket.raw, null, 'raw payload should not leak into the normalized view');
     });
+
+    test('gh-1036 characterization pin — flat view shape per provider (pre-refactor)', function () {
+        var trackers = loadTrackers({});
+        var jira = trackers.createTracker({}, { trackerProvider: 'jira' });
+
+        // Flat / already-normalized: description falls back to body, url to html_url|url.
+        assert.deepEqual(jira.normalizeTicket({
+            key: 'PROJ-9', id: '1009', title: 'Flat', status: 'Done',
+            assignee: 'jane', labels: ['a'], body: 'B', url: 'http://u'
+        }), {
+            key: 'PROJ-9', id: '1009', title: 'Flat', status: 'Done',
+            assignee: 'jane', labels: ['a'], description: 'B',
+            url: 'http://u', raw: null
+        });
+
+        // Jira full shape: neutral extras ride along; absent ones are null/[].
+        assert.deepEqual(jira.normalizeTicket({
+            key: 'PROJ-7', id: 7007,
+            fields: {
+                summary: 'S', status: { name: 'Open' },
+                labels: ['x'], description: 'D',
+                issuetype: { name: 'Bug' },
+                parent: { key: 'PROJ-1' },
+                fixVersions: [{ name: '1.0' }, '2.0']
+            }
+        }), {
+            key: 'PROJ-7', id: '7007', title: 'S', status: 'Open',
+            assignee: null, labels: ['x'], description: 'D', url: null,
+            raw: null, issueType: 'Bug', parentKey: 'PROJ-1',
+            fixVersions: ['1.0', '2.0']
+        });
+
+        // Jira without key: stringified id becomes the key; missing
+        // name-shaped fields stay null.
+        var noKey = jira.normalizeTicket({ id: 55, fields: { summary: 'Only id' } });
+        assert.equal(noKey.key, '55');
+        assert.equal(noKey.id, '55');
+        assert.equal(noKey.status, null);
+        assert.equal(noKey.issueType, null);
+        assert.equal(noKey.parentKey, null);
+
+        // ADO full shape.
+        assert.deepEqual(jira.normalizeTicket({
+            id: 4242,
+            fields: {
+                'System.Title': 'Fix the login flow',
+                'System.State': 'Active',
+                'System.AssignedTo': { displayName: 'Jane Doe' },
+                'System.Description': 'Login breaks on expired sessions',
+                'System.WorkItemType': 'Bug',
+                'System.Parent': 4241
+            }
+        }), {
+            key: '4242', id: '4242', title: 'Fix the login flow',
+            status: 'Active', assignee: 'Jane Doe',
+            labels: [], description: 'Login breaks on expired sessions',
+            url: null, raw: null, issueType: 'Bug', parentKey: '4241',
+            fixVersions: []
+        });
+
+        // GitHub without repository context: '#N' key (no t.key on the payload).
+        var ghNoRepo = jira.normalizeTicket(GITHUB_TICKET);
+        assert.equal(ghNoRepo.key, '#41');
+        assert.equal(ghNoRepo.status, 'open');
+        assert.equal(ghNoRepo.url, 'https://github.com/acme/widgets/issues/41');
+
+        // GitHub without repository context but carrying an explicit key.
+        assert.equal(jira.normalizeTicket({ number: 3, key: 'EXT-3', title: 't' }).key, 'EXT-3');
+
+        // Unrecognized shape → null.
+        assert.equal(jira.normalizeTicket({ something: 'else' }), null);
+    });
 });
 
 suite('trackers.js assignForReview', function () {
