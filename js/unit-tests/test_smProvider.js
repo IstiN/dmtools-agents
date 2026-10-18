@@ -426,6 +426,35 @@ suite('smProvider', function () {
             'a missing head.repo (deleted fork) resolves to null — base probe, fail-open');
     });
 
+    test('github: the shared head-repo resolver covers every head.repo dialect (gh-1059)', function () {
+        // gh-1059 rework: ONE exported resolver (smProvider) is consumed by
+        // githubSource.js too — these branches are the CRAP-gate coverage
+        // the near-duplicate pair used to split between two files.
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {});
+        var full = mod.ghPrHeadRepoFull;
+        assert.equal(typeof full, 'function',
+            'the resolver is exported for the githubSource consumer');
+        assert.equal(full(null), null, 'no PR at all resolves to null');
+        assert.equal(full({ head: null }), null, 'a headless PR resolves to null');
+        assert.equal(full({ head: { repo: null } }), null, 'a deleted fork (null repo) resolves to null');
+        assert.equal(full({ head: { repo: 'forko/forkr' } }), 'forko/forkr',
+            'a STRING head.repo with a slash resolves as-is');
+        assert.equal(full({ head: { repo: 'noslash' } }), null,
+            'a STRING head.repo without a slash is malformed → null');
+        assert.equal(full({ head: { repo: { full_name: 'a/b' } } }), 'a/b',
+            'REST full_name dialect');
+        assert.equal(full({ head: { repo: { nameWithOwner: 'gql/o' } } }), 'gql/o',
+            'GraphQL nameWithOwner dialect');
+        assert.equal(full({ head: { repo: { owner: { login: 'o' }, name: 'r' } } }), 'o/r',
+            'owner.login + name dialect');
+        assert.equal(full({ head: { repo: { owner: { name: 'orgx' }, name: 'r' } } }), 'orgx/r',
+            'owner.name (no login) dialect');
+        assert.equal(full({ head: { repo: { owner: {}, name: 'r' } } }), null,
+            'an owner carrying neither login nor name resolves to null');
+        assert.equal(full({ head: { repo: { owner: { login: 'o' } } }), null,
+            'a repo object with no usable name resolves to null');
+    });
+
     test('github: prStatus preserves BLOCKED on a fresh base (dart #195 deadlock)', function () {
         // Live: dart #195 sat armed (ai_validating) on a fresh head whose
         // required checks were pending — REST reported mergeable_state
