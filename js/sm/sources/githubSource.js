@@ -694,8 +694,15 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
 // → the whole SM cycle red every 15 min). Qualified mentions are stripped
 // before scraping; existence of what remains is verified at dispatch time
 // (smAgent localIssueExists), so dangling bare refs degrade the same way.
-function linkedIssueNumber(body) {
+//
+// A qualifier naming THIS repository ('acme/widgets#12' in acme/widgets) is
+// not cross-repo: it is the composite ticket key the dev leg writes into the
+// PR (title and body heading), and dropping it left such a PR unlinked — no
+// latch, no validation, no review. It stays a local ref.
+function linkedIssueNumber(body, repoInfo) {
     var text = String(body || '');
+    var ownRepo = (repoInfo && repoInfo.owner && repoInfo.repo)
+        ? (repoInfo.owner + '/' + repoInfo.repo).toLowerCase() : null;
     // Strip repo-qualified mentions: a qualifier token (owner, repo, or
     // owner/repo — word chars/dots/dashes, optionally slash-separated)
     // before '#'. Only REAL qualifiers count — the token must contain a
@@ -706,9 +713,12 @@ function linkedIssueNumber(body) {
     // keywords ('Closes #123') intact — and the keyword check below is
     // belt-and-suspenders for 'closes repo#N'.
     text = text.replace(/(^|[^A-Za-z0-9_.\-/])([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?)([ \t]*)(#\d+)/g,
-        function (m0, boundary, qualifier, gap) {
+        function (m0, boundary, qualifier, gap, hash) {
             if (/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)/i.test(qualifier)) {
                 return m0; // closing keyword, not a repo qualifier
+            }
+            if (ownRepo && gap === '' && qualifier.toLowerCase() === ownRepo) {
+                return boundary + hash; // this repository — a local ref
             }
             if (gap === '' || qualifier.indexOf('.') !== -1 || qualifier.indexOf('/') !== -1) {
                 return boundary + ' '; // cross-repo mention — drop it
@@ -905,6 +915,24 @@ function _prListBranch(p) {
     return (p.head && p.head.ref) || p.headRefName || '';
 }
 
+// The issue a machine branch was cut for: '<branchPrefix><n>' exactly
+// ('ai/gh-12'). The issue-carrier side already links a PR to its issue by
+// this branch (provider.findPr); the PR-carrier side used only the body
+// scrape, so a PR whose body names no issue stayed unlinked.
+function issueNumberFromBranch(branch, branchPrefix) {
+    var b = String(branch || '');
+    var prefix = String(branchPrefix || '');
+    if (!prefix || b.indexOf(prefix) !== 0) return null;
+    var rest = b.substring(prefix.length);
+    return /^\d+$/.test(rest) ? parseInt(rest, 10) : null;
+}
+
+// An explicit reference in the body wins; the machine branch name is the fallback.
+function _prIssueNumber(p, repoInfo, branchPrefix) {
+    var bodyIssue = linkedIssueNumber(p.body, repoInfo);
+    return bodyIssue !== null ? bodyIssue : issueNumberFromBranch(_prListBranch(p), branchPrefix);
+}
+
 // gh-1057: the head REPOSITORY of the PR as an 'owner/repo' full name
 // (REST head.repo.full_name; null when the fork is deleted) — the
 // dead-head bench oracle must probe THERE for fork PRs, not the base.
@@ -919,12 +947,12 @@ function _prListAuthor(p) {
     return '';
 }
 
-function _prItemFromPr(p) {
+function _prItemFromPr(p, repoInfo, branchPrefix) {
     return {
         key: 'pr-' + p.number,
         labels: prLabels(p),
         pr: null,
-        issueNumber: linkedIssueNumber(p.body),
+        issueNumber: _prIssueNumber(p, repoInfo, branchPrefix),
         prNumber: p.number,
         draft: !!p.draft,
         branch: _prListBranch(p),
@@ -940,9 +968,9 @@ function _prItemFromPr(p) {
     };
 }
 
-function _buildPrItems(prs) {
+function _buildPrItems(prs, repoInfo, branchPrefix) {
     var items = [];
-    for (var i = 0; i < prs.length; i++) items.push(_prItemFromPr(prs[i]));
+    for (var i = 0; i < prs.length; i++) items.push(_prItemFromPr(prs[i], repoInfo, branchPrefix));
     return items;
 }
 
@@ -1140,7 +1168,8 @@ function _sortAndSlicePrCandidates(matched, limit, priorityLabels, repoInfo) {
 
 function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {
     var q = rule.query || {};
-    var items = _buildPrItems(_openPrList(provider, repoInfo));
+    // Same branch-prefix default as query() uses for the issue carrier.
+    var items = _buildPrItems(_openPrList(provider, repoInfo), repoInfo, rule.branchPrefix || 'ai/gh-');
 
     // 'blocked' = human hold (fa #939 — documented in matchesGuards): the
     // item is invisible to EVERY rule, so it must not even act as a mutex
