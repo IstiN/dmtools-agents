@@ -28,6 +28,10 @@
 var smProviderModule = require('../../common/smProvider.js');
 var machineAuthorModule = require('../../common/machineAuthor.js');
 var smAsyncModule = require('../../common/smAsync.js');
+// gh-1027 (hoisted, never lazy — the gh-823 pack-require rule): the
+// conflict-rework over-scan budget. Must mirror smAgent's rule-loop break
+// condition — the query slice is what the loop can possibly scan.
+var conflictReworkScanModule = require('../../common/conflictReworkScan.js');
 
 // runAsync worker sources — STRING literals of CLOSURE-FREE functions.
 // The Dart runtime serializes them via fn.toString() and runs each on a
@@ -923,7 +927,18 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
     // processedKeys cap still bounds successful dispatches at `limit`.
     // Pre-fix the slice stopped at `limit`, so a limit:1 rule returned
     // ONLY the dead head and the whole FIFO starved behind it.
-    return matched.slice(0, limit + TRIGGER_FALLTHROUGH_RESERVE);
+    //
+    // gh-1027 (conflict-rework over-scan): for the conflict_rework rule
+    // the slice widens to the shared over-scan budget (limit + 15).
+    // Already-reported DIRTY PRs don't consume rule-limit slots — the
+    // action detects and skips them — so a plain limit + 3 slice would
+    // re-cut the queue before the loop ever reaches unreported candidates
+    // parked behind 4+ markers (the exact starvation gh-1025 pushed out
+    // to 5+). The budget bounds the per-tick comments-fetch fan-out.
+    // The cap itself lives in conflictReworkScan.sliceCap — keeping the
+    // branch out of queryPrs so its CRAP stays under the released
+    // baseline (the ratchet failed on this ternary, gh-1027 rework).
+    return matched.slice(0, conflictReworkScanModule.sliceCap(rule, limit, TRIGGER_FALLTHROUGH_RESERVE));
 }
 
 if (typeof module !== 'undefined' && module.exports) {

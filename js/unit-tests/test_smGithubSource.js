@@ -48,7 +48,8 @@ suite('sm github source', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return providerStub; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {})
         }), tools);
     }
 
@@ -222,6 +223,29 @@ suite('sm github source', function () {
         assert.equal(items.length, 0);
     });
 
+    test('gh-1027: conflict_rework rules slice limit+OVERSCAN, other rules keep limit+3', function () {
+        var prs = [];
+        var details = {};
+        for (var n = 100; n < 125; n++) {
+            prs.push({ number: n, labels: [{ name: 'pr_approved' }], head: { ref: 'ai/gh-' + n }, draft: false });
+            details[n] = { number: n, state: 'OPEN', checks: 'green', mergeState: 'DIRTY', mergeable: false };
+        }
+        var srcMod = load({
+            github_list_prs: function () { return prs; }
+        }, {}, details);
+        var wide = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved'], mergeState: 'DIRTY' },
+            localAction: 'conflict_rework', limit: 1
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(wide.length, 16,
+            'conflict_rework: limit 1 + OVERSCAN 15 — already-reported candidates must not re-cut the queue');
+        var narrow = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved'], mergeState: 'DIRTY' },
+            limit: 1
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(narrow.length, 4, 'other rules keep limit + TRIGGER_FALLTHROUGH_RESERVE');
+    });
+
     test('blocked label: PR rules skip owner-parked PRs even when green (fa #939)', function () {
         var srcMod = load({
             github_list_prs: function () {
@@ -393,6 +417,48 @@ suite('sm github source', function () {
         }, { repoInfo: { owner: 'a', repo: 'b' } });
         assert.equal(items.length, 1);
         assert.equal(items[0].key, 'pr-12', 'conflicted 10 and behind 11 skipped; fresh 12 flows');
+    });
+
+    test('pr rules: conflict-rework over-scan slice — parked markers do not re-cut the queue (gh-1027)', function () {
+        // gh-1027: already-reported DIRTY PRs don't consume rule-limit
+        // slots, so the query must hand the engine enough candidates to
+        // reach `limit` actionable ones behind parked markers. The slice
+        // widens from limit + 3 (gh-922 reserve) to the shared over-scan
+        // budget (limit + 15) for the conflict_rework rule ONLY — other
+        // rules keep the plain reserve.
+        function mkPrs(count) {
+            var prs = [];
+            for (var i = 1; i <= count; i++) {
+                prs.push({ number: i, labels: [], head: { ref: 'fix/x' + i }, draft: false });
+            }
+            return prs;
+        }
+        function mkStatuses(count) {
+            var st = {};
+            for (var i = 1; i <= count; i++) {
+                st[i] = { number: i, state: 'OPEN', checks: 'none', mergeState: 'DIRTY', mergeable: false };
+            }
+            return st;
+        }
+        var dirtyQuery = { type: 'pr', mergeState: ['DIRTY'], draft: false };
+
+        var ten = load({ github_list_prs: function () { return mkPrs(10); } }, {}, mkStatuses(10));
+        var items = ten.query({
+            query: dirtyQuery, localAction: 'conflict_rework', limit: 5
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 10, 'limit 5 + over-scan 15 keeps all 10 candidates');
+
+        var twentyFive = load({ github_list_prs: function () { return mkPrs(25); } }, {}, mkStatuses(25));
+        var capped = twentyFive.query({
+            query: dirtyQuery, localAction: 'conflict_rework', limit: 5
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(capped.length, 20, 'the over-scan budget bounds the slice at limit + 15');
+
+        var plain = load({ github_list_prs: function () { return mkPrs(10); } }, {}, mkStatuses(10));
+        var other = plain.query({
+            query: dirtyQuery, limit: 5
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(other.length, 8, 'non-conflict rules keep the plain limit + 3 reserve');
     });
 
     test('pr rules: mutex — rule defers while another PR holds the label', function () {
@@ -1610,7 +1676,8 @@ suite('sm github source — runAsync batching', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return seqStub; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {}),
         }), tools);
     }
 
@@ -1682,7 +1749,8 @@ suite('sm github source — runAsync batching', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return batchStub; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {}),
         }), merged);
     }
 
@@ -1836,7 +1904,8 @@ function maskedGreenHarness() {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': { createSmProvider: function () { return providerStub; } },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {}),
         }), mergedTools);
     }
 
@@ -2435,7 +2504,8 @@ suite('sm github source: trigger fail-open overfetch (gh-922)', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return localProvider; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {}),
         }), tools);
     };
 
@@ -2624,7 +2694,8 @@ suite('sm github source: dev-on-assignment re-derive (gh-944)', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return devStub; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {}),
         }), tools);
     }
 
