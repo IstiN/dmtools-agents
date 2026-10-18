@@ -1,8 +1,0 @@
-ae84903e fix(ado): #889 #890 #894; feat(rework): opt-in WIP squash #895 (#896)
----
-site/index.html
-site/src/factory-flow.workflow.json
-site/src/factory-stalls.workflow.json
----
-factory-flow.workflow.json
-factory-stalls.workflow.json
