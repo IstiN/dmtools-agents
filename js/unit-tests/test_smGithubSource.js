@@ -1653,7 +1653,8 @@ suite('sm github source — runAsync batching', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return seqStub; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {}),
         }), tools);
     }
 
@@ -1725,7 +1726,8 @@ suite('sm github source — runAsync batching', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return batchStub; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {}),
         }), merged);
     }
 
@@ -1879,7 +1881,8 @@ function maskedGreenHarness() {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': { createSmProvider: function () { return providerStub; } },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {}),
         }), mergedTools);
     }
 
@@ -2478,7 +2481,8 @@ suite('sm github source: trigger fail-open overfetch (gh-922)', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return localProvider; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {}),
         }), tools);
     };
 
@@ -2667,7 +2671,8 @@ suite('sm github source: dev-on-assignment re-derive (gh-944)', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return devStub; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {}),
         }), tools);
     }
 
