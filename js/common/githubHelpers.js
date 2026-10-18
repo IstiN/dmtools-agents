@@ -459,16 +459,14 @@ function parseCheckRunsResult(rawResult) {
         : (parsed && parsed.check_runs ? parsed.check_runs : []);
 }
 
-/** Unwrap a JSON { result: ... } tool response, passing everything else through. */
+/**
+ * Unwrap a JSON { result: ... } tool response, passing everything else through.
+ * gh-1045 review: consolidated onto _unwrapToolResult — the two JSON-unwrap
+ * helpers were near-identical; one implementation now serves both the
+ * /jobs/{id} and /runs/{id} paths.
+ */
 function unwrapLogResult(rawLogs) {
-    var logs = rawLogs;
-    if (typeof rawLogs === 'string') {
-        try {
-            var parsedLogs = JSON.parse(rawLogs);
-            if (parsedLogs && parsedLogs.result) logs = parsedLogs.result;
-        } catch (e) { /* keep the raw string */ }
-    }
-    return logs;
+    return _unwrapToolResult(rawLogs);
 }
 
 /** Resolve a Jenkins details_url to { jobPath, buildNumber } under jenkinsBasePath, or null. */
@@ -509,46 +507,50 @@ function buildLogSections(check, logs, label) {
  * cannot be fetched must never fail silently again (the rework leg then has
  * no idea WHAT to fix and no-ops).
  *
- * Resolution order by details_url shape:
- *   /jobs/{id}          → direct job-log fetch (both scm and gh-tool modes)
- *   /actions/runs/{id}  → workflow-run path: the run's failed jobs' logs (gh-982)
- *   bare /runs/{id}     → the id IS a check-run id; the Actions job-log
- *                         endpoints accept a check-run id, so fetch directly
+ * Dispatch-only by details_url shape (per-shape work lives in the helpers,
+ * which also keeps each function under the CRAP ratchet):
+ *   /jobs/{id}          → fetchGithubJobLogsDetailed
+ *   /actions/runs/{id}  → fetchGithubRunLogsDetailed (gh-982 run-jobs path)
+ *   bare /runs/{id}     → fetchGithubCheckRunLogsDetailed (the id IS a
+ *                         check-run id; Actions job-log endpoints accept it)
  *   anything else       → unsupported shape (Jenkins/foreign URLs are handled
  *                         by the Jenkins resolver, not here)
  */
 function fetchGithubCheckLogsDetailed(check, scm, owner, repo) {
     var url = (check && check.details_url) ? String(check.details_url) : '';
     var jobIdMatch = url.match(/\/jobs?\/(\d+)/);
-    if (jobIdMatch) {
-        try {
-            var rawLogs = scm ? scm.getJobLogs(jobIdMatch[1]) : github_get_job_logs({
-                workspace: owner, repository: repo, jobId: jobIdMatch[1]
-            });
-            var logs = unwrapLogResult(rawLogs);
-            if (logs) return { logs: logs };
-            return { reason: 'job log for ' + jobIdMatch[1] + ' came back empty' };
-        } catch (e) {
-            console.warn('Could not fetch logs for job', jobIdMatch[1], ':', e.message || e);
-            return { reason: 'job log fetch failed: ' + (e && e.message ? e.message : String(e)) };
-        }
-    }
+    if (jobIdMatch) return fetchGithubJobLogsDetailed(jobIdMatch[1], scm, owner, repo);
     if (/\/actions\/runs\/\d+/.test(url)) {
         return fetchGithubRunLogsDetailed(check, scm, owner, repo);
     }
     var checkRunId = extractGithubCheckRunId(check);
-    if (checkRunId) {
-        try {
-            var checkRunLogs = _fetchJobLogs(scm, owner, repo, checkRunId);
-            if (checkRunLogs) return { logs: checkRunLogs };
-            return { reason: 'check-run ' + checkRunId + ' log came back empty (check run is not backed by a GitHub Actions job?)' };
-        } catch (e) {
-            console.warn('Could not fetch logs for check-run', checkRunId, ':', e.message || e);
-            return { reason: 'check-run log fetch failed: ' + (e && e.message ? e.message : String(e)) };
-        }
-    }
+    if (checkRunId) return fetchGithubCheckRunLogsDetailed(checkRunId, scm, owner, repo);
     if (!url) return { reason: 'check run has no details_url' };
     return { reason: 'unsupported details_url shape: ' + url };
+}
+
+/** gh-1045: loud /jobs/{id} branch — { logs } or { reason }. */
+function fetchGithubJobLogsDetailed(jobId, scm, owner, repo) {
+    try {
+        var logs = _fetchJobLogs(scm, owner, repo, jobId);
+        if (logs) return { logs: logs };
+        return { reason: 'job log for ' + jobId + ' came back empty' };
+    } catch (e) {
+        console.warn('Could not fetch logs for job', jobId, ':', e.message || e);
+        return { reason: 'job log fetch failed: ' + (e && e.message ? e.message : String(e)) };
+    }
+}
+
+/** gh-1045: loud bare-check-run branch — { logs } or { reason }. */
+function fetchGithubCheckRunLogsDetailed(checkRunId, scm, owner, repo) {
+    try {
+        var logs = _fetchJobLogs(scm, owner, repo, checkRunId);
+        if (logs) return { logs: logs };
+        return { reason: 'check-run ' + checkRunId + ' log came back empty (check run is not backed by a GitHub Actions job?)' };
+    } catch (e) {
+        console.warn('Could not fetch logs for check-run', checkRunId, ':', e.message || e);
+        return { reason: 'check-run log fetch failed: ' + (e && e.message ? e.message : String(e)) };
+    }
 }
 
 /** Fetch the raw GitHub job log for a check whose details_url contains /jobs/{id}. */
@@ -615,15 +617,20 @@ function fetchGithubRunLogsDetailed(check, scm, owner, repo) {
         var rawJobs = fetchWorkflowRunJobs(scm, owner, repo, runId);
         var out = formatFailedRunJobLogs(scm, owner, repo, rawJobs);
         if (out) return { logs: out };
-        var failedJobs = ciModule._jobsOf(rawJobs).filter(isFailedRunJob);
-        if (failedJobs.length > 0) {
-            return { reason: 'logs for ' + failedJobs.length + ' failed job(s) of run ' + runId + ' came back empty' };
-        }
-        return { reason: 'no failed jobs resolved from workflow run ' + runId };
+        return { reason: runLogsFailureReason(rawJobs, runId) };
     } catch (e) {
         console.warn('Could not fetch jobs/logs for run', runId, ':', e.message || e);
         return { reason: 'run ' + runId + ' jobs/logs fetch failed: ' + (e && e.message ? e.message : String(e)) };
     }
+}
+
+/** gh-1045: why a workflow run produced no log output despite being fetched. */
+function runLogsFailureReason(rawJobs, runId) {
+    var failedJobs = ciModule._jobsOf(rawJobs).filter(isFailedRunJob);
+    if (failedJobs.length > 0) {
+        return 'logs for ' + failedJobs.length + ' failed job(s) of run ' + runId + ' came back empty';
+    }
+    return 'no failed jobs resolved from workflow run ' + runId;
 }
 
 /** Fetch the failed jobs' logs of a workflow RUN whose details_url contains /runs/{id}. */
@@ -655,6 +662,46 @@ function fetchJenkinsCheckLogsDetailed(check, jenkinsBasePath) {
 /** Fetch the raw Jenkins build log for a check whose details_url resolves to a build target. */
 function fetchJenkinsCheckLogs(check, jenkinsBasePath) {
     return fetchJenkinsCheckLogsDetailed(check, jenkinsBasePath).logs || null;
+}
+
+/**
+ * gh-1045: resolve one failed check's logs through BOTH resolvers (a
+ * details_url can be a GitHub shape, a Jenkins build, or neither) and build
+ * its md + full-log sections. When no resolver produced logs, the sections
+ * carry a loud per-check failure entry instead.
+ */
+function buildCheckLogSections(check, scm, owner, repo, jenkinsBasePath) {
+    var ghResult = fetchGithubCheckLogsDetailed(check, scm, owner, repo);
+    var jenkinsResult = fetchJenkinsCheckLogsDetailed(check, jenkinsBasePath);
+
+    var md = '';
+    var full = '';
+    if (ghResult.logs) {
+        var ghSections = buildLogSections(check, ghResult.logs, 'Error log');
+        md += ghSections.md;
+        full += ghSections.full;
+    }
+    if (jenkinsResult.logs) {
+        var jenkinsSections = buildLogSections(check, jenkinsResult.logs, 'Jenkins error log');
+        md += jenkinsSections.md;
+        full += jenkinsSections.full;
+    }
+    if (full) return { md: md, full: full };
+
+    // gh-1045 review: when the URL resolved to a Jenkins build target but
+    // the Jenkins fetch failed/emptied, the Jenkins reason must win — the
+    // GitHub resolver's "unsupported details_url shape" is misleading there
+    // (the shape IS supported). jenkinsResult.skipped pins the foreign-host
+    // case, where the GitHub reason is the correct one.
+    var reason = (jenkinsResult.reason && !jenkinsResult.skipped)
+        ? jenkinsResult.reason
+        : (ghResult.reason || jenkinsResult.reason || 'unknown fetch failure');
+    return {
+        md: '- ⚠️ **Log**: log fetch failed: ' + reason + '\n\n',
+        full: '=== LOG FETCH FAILED for: ' + check.name + ' ===\n' +
+              'URL: ' + (check.details_url || 'N/A') + '\n' +
+              'Reason: ' + reason + '\n\n'
+    };
 }
 
 function buildCiFailuresHeader(failedChecks, headSha, hasFullLog) {
@@ -757,32 +804,9 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
 
             // gh-1045: every failed check resolves to logs OR a loud reason —
             // a silently missing log is what sent the #423 rework legs in blind.
-            var ghResult = fetchGithubCheckLogsDetailed(check, scm, owner, repo);
-            var jenkinsResult = fetchJenkinsCheckLogsDetailed(check, jenkinsBasePath);
-
-            var checkMd = '';
-            var checkFull = '';
-            if (ghResult.logs) {
-                var ghSections = buildLogSections(check, ghResult.logs, 'Error log');
-                checkMd += ghSections.md;
-                checkFull += ghSections.full;
-            }
-            if (jenkinsResult.logs) {
-                var jenkinsSections = buildLogSections(check, jenkinsResult.logs, 'Jenkins error log');
-                checkMd += jenkinsSections.md;
-                checkFull += jenkinsSections.full;
-            }
-
-            if (checkFull) {
-                mdBody += checkMd;
-                fullLogContent += checkFull;
-            } else {
-                var reason = ghResult.reason || jenkinsResult.reason || 'unknown fetch failure';
-                mdBody += '- ⚠️ **Log**: log fetch failed: ' + reason + '\n\n';
-                fullLogContent += '=== LOG FETCH FAILED for: ' + check.name + ' ===\n' +
-                                  'URL: ' + (check.details_url || 'N/A') + '\n' +
-                                  'Reason: ' + reason + '\n\n';
-            }
+            var sections = buildCheckLogSections(check, scm, owner, repo, jenkinsBasePath);
+            mdBody += sections.md;
+            fullLogContent += sections.full;
         });
 
         // gh-1045: the full log is written FIRST, whenever failed checks exist
@@ -825,14 +849,22 @@ module.exports = {
     fetchDiscussionsAndRawData: fetchDiscussionsAndRawData,
     detectFailedChecks: detectFailedChecks,
 
-    // Pure helpers extracted from detectFailedChecks (gh-1007) — exported for
-    // unit testing; detectFailedChecks behavior is unchanged.
+    // Pure helpers extracted from detectFailedChecks (gh-1007, extended by
+    // gh-1045) — exported for unit testing. gh-1045 DELIBERATELY changed
+    // detectFailedChecks behavior: ci_failures_full.log is now always written
+    // when failed checks exist, every failed check gets logs or a loud
+    // failure reason, and the md header/resolution sections are gated on
+    // whether the full-log write actually succeeded (hasFullLog).
     parseCheckRunsResult: parseCheckRunsResult,
     fetchGithubCheckLogs: fetchGithubCheckLogs,
     fetchGithubCheckLogsDetailed: fetchGithubCheckLogsDetailed,
+    fetchGithubJobLogsDetailed: fetchGithubJobLogsDetailed,
+    fetchGithubCheckRunLogsDetailed: fetchGithubCheckRunLogsDetailed,
     fetchGithubRunLogs: fetchGithubRunLogs,
     fetchGithubRunLogsDetailed: fetchGithubRunLogsDetailed,
+    runLogsFailureReason: runLogsFailureReason,
     fetchJenkinsCheckLogsDetailed: fetchJenkinsCheckLogsDetailed,
+    buildCheckLogSections: buildCheckLogSections,
     extractGithubRunId: extractGithubRunId,
     extractGithubCheckRunId: extractGithubCheckRunId,
     fetchWorkflowRunJobs: fetchWorkflowRunJobs,

@@ -1342,6 +1342,48 @@ suite('githubHelpers.detectFailedChecks — Jenkins failed checks', function() {
         assert.ok(fullLogWrite, 'gh-1045: full log written with per-check error markers');
         assert.contains(fullLogWrite.content, 'LOG FETCH FAILED for: Other Jenkins Build');
     });
+
+    test('a failed Jenkins fetch reports the Jenkins reason, not "unsupported details_url shape"', function() {
+        var writes = [];
+
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [{
+                        name: 'Jenkins PR Build',
+                        conclusion: 'failure',
+                        details_url: 'https://jenkins.example.com/job/example-org/job/example.repo/job/PR-123/45/'
+                    }]
+                };
+            },
+            jenkins_get_job_info: function() {
+                return { result: { number: 45, result: 'FAILURE' } };
+            },
+            jenkins_get_build_log: function() {
+                throw new Error('jenkins exploded');
+            },
+            file_write: function(args) {
+                writes.push(args);
+            }
+        });
+
+        gh.detectFailedChecks(
+            'example-org', 'example.repo', 'abc123def', '/tmp/input',
+            'https://jenkins.example.com/'
+        );
+
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(mdWrite, 'ci_failures.md should still be written for the failed check');
+        // gh-1045 review: the Jenkins-matched URL must surface the JENKINS
+        // failure — the GitHub resolver's "unsupported details_url shape" is
+        // misleading here because the shape IS supported.
+        assert.contains(mdWrite.content, 'log fetch failed: Jenkins log fetch failed: jenkins exploded');
+        assert.notContains(mdWrite.content, 'unsupported details_url shape',
+            'the GitHub resolver reason must not mask the Jenkins failure');
+        assert.ok(fullLogWrite, 'gh-1045: full log written with per-check error markers');
+        assert.contains(fullLogWrite.content, 'Reason: Jenkins log fetch failed: jenkins exploded');
+    });
 });
 
 suite('githubHelpers.detectFailedChecks — run-level details_url (/actions/runs/N)', function() {
@@ -2352,5 +2394,76 @@ suite('githubHelpers.detectFailedChecks — gh-1045 bare check-run URLs + loud f
         var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
         assert.ok(fullLogWrite, 'full log written');
         assert.contains(fullLogWrite.content, 'scm check-run log');
+    });
+
+    test('an empty job log for a /jobs/{id} URL is loud, not silent', function() {
+        var writes = [];
+
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [{
+                        name: 'empty-job', conclusion: 'failure',
+                        details_url: 'https://github.com/acme/widgets/actions/runs/9/job/77'
+                    }]
+                };
+            },
+            github_get_job_logs: function() { return ''; },
+            file_write: function(args) { writes.push(args); }
+        });
+
+        gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input');
+
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.ok(mdWrite);
+        assert.contains(mdWrite.content, 'log fetch failed: job log for 77 came back empty');
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(fullLogWrite, 'full log written');
+        assert.contains(fullLogWrite.content, 'Reason: job log for 77 came back empty');
+    });
+
+    test('an empty check-run log for a bare /runs/{id} URL is loud, not silent', function() {
+        var writes = [];
+
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [{
+                        name: 'empty-check-run', conclusion: 'failure',
+                        details_url: 'https://github.com/acme/widgets/runs/4242'
+                    }]
+                };
+            },
+            github_get_job_logs: function() { return ''; },
+            file_write: function(args) { writes.push(args); }
+        });
+
+        gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input');
+
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.ok(mdWrite);
+        assert.contains(mdWrite.content, 'log fetch failed: check-run 4242 log came back empty');
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(fullLogWrite, 'full log written');
+        assert.contains(fullLogWrite.content, 'Reason: check-run 4242 log came back empty');
+    });
+
+    test('empty-log branches of the resolvers return loud reasons (direct)', function() {
+        var gh = makeGh({
+            github_get_job_logs: function() { return ''; }
+        });
+
+        var jobResult = gh.fetchGithubCheckLogsDetailed(
+            { name: 'j', details_url: 'https://github.com/acme/widgets/actions/runs/9/job/77' },
+            null, 'acme', 'widgets');
+        assert.deepEqual(jobResult, { reason: 'job log for 77 came back empty' },
+            '/jobs/{id} empty log pins the loud contract');
+
+        var checkRunResult = gh.fetchGithubCheckLogsDetailed(
+            { name: 'c', details_url: 'https://github.com/acme/widgets/runs/4242' },
+            null, 'acme', 'widgets');
+        assert.deepEqual(checkRunResult,
+            { reason: 'check-run 4242 log came back empty (check run is not backed by a GitHub Actions job?)' },
+            'bare /runs/{id} empty log pins the loud contract');
     });
 });
