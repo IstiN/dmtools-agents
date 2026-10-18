@@ -7,9 +7,9 @@
 
 function makeOutputFiles(fileMap) {
     return loadModule('js/common/outputFiles.js', makeRequire({}), {
+        // The suite only reads via `file_read({ path })` (see js/common/outputFiles.js::readRaw).
         file_read: function(opts) {
-            var path = opts && (opts.path || opts);
-            return fileMap[path] !== undefined ? fileMap[path] : null;
+            return fileMap[opts.path] === undefined ? null : fileMap[opts.path];
         }
     });
 }
@@ -26,9 +26,9 @@ function makeLabelsModule(fileMap, extraGlobals) {
     };
 
     var globals = {
+        // Same { path }-only contract as makeOutputFiles above.
         file_read: function(opts) {
-            var path = opts && (opts.path || opts);
-            return fileMap[path] !== undefined ? fileMap[path] : null;
+            return fileMap[opts.path] === undefined ? null : fileMap[opts.path];
         },
         jira_add_label: function() {},
         jira_remove_label: function() {},
@@ -130,6 +130,98 @@ suite('writeSolutionAndLabels — buildMarkdownSection', function() {
         assert.equal(section.indexOf('| # | Repository |') !== -1, true, 'markdown table header');
         assert.equal(section.indexOf('```json') !== -1, true, 'json code block');
         assert.equal(section.indexOf('```mermaid') !== -1, true, 'mermaid block');
+    });
+
+    // ── gh-1037 characterization: byte-identical golden outputs (CRAP refactor) ──
+    var GOLDEN_REPOS = [
+        { name: 'core-db', reason: 'DB migration' },
+        { name: 'service-api', reason: 'API', depends_on: ['core-db'] },
+        { name: 'web-ui', depends_on: ['service-api', 'core-db'] }
+    ];
+    var GOLDEN_MARKDOWN = [
+        '---',
+        '## Affected Repositories',
+        '',
+        '| # | Repository | Reason | Depends On |',
+        '|---|---|---|---|',
+        '| 1 | core-db | DB migration | \u2014 |',
+        '| 2 | service-api | API | core-db |',
+        '| 3 | web-ui |  | service-api, core-db |',
+        '',
+        '```mermaid',
+        'graph LR',
+        '    core-db --> service-api',
+        '    service-api --> web-ui',
+        '    core-db --> web-ui',
+        '```',
+        '',
+        '```json',
+        '[',
+        '  {',
+        '    "name": "core-db",',
+        '    "reason": "DB migration"',
+        '  },',
+        '  {',
+        '    "name": "service-api",',
+        '    "reason": "API",',
+        '    "depends_on": [',
+        '      "core-db"',
+        '    ]',
+        '  },',
+        '  {',
+        '    "name": "web-ui",',
+        '    "depends_on": [',
+        '      "service-api",',
+        '      "core-db"',
+        '    ]',
+        '  }',
+        ']',
+        '```',
+        '---'
+    ].join('\n');
+
+    test('multi-repo output with edges is byte-identical to the pre-refactor golden (gh-1037)', function() {
+        var mod = makeLabelsModule({});
+        var section = mod.buildMarkdownSection(mod.topologicalSort(GOLDEN_REPOS));
+        assert.equal(section, GOLDEN_MARKDOWN);
+    });
+
+    test('no-edge output omits the mermaid block entirely (gh-1037 golden)', function() {
+        var mod = makeLabelsModule({});
+        var section = mod.buildMarkdownSection([{ name: 'solo', reason: 'r' }]);
+        assert.equal(section.indexOf('```mermaid'), -1, 'no mermaid block when no edges');
+        assert.equal(section.indexOf('|---|---|---|---|') !== -1, true, 'table separator kept');
+        assert.equal(section.split('\n')[0], '---', 'leading delimiter');
+        assert.equal(section.split('\n').pop(), '---', 'trailing delimiter');
+        assert.equal(section.indexOf('| 1 | solo | r | \u2014 |') !== -1, true, 'em-dash for missing deps');
+    });
+
+    test('empty depends_on array renders the em-dash, not an empty cell', function() {
+        var mod = makeLabelsModule({});
+        var section = mod.buildMarkdownSection([{ name: 'a', reason: '', depends_on: [] }]);
+        assert.equal(section.indexOf('| 1 | a |  | \u2014 |') !== -1, true, 'empty deps array → em-dash');
+    });
+
+    test('extracted helpers buildRepoTableRows / buildDependencyEdges / formatRepoDeps are pure and byte-identical (gh-1037)', function() {
+        var mod = makeLabelsModule({});
+        assert.equal(typeof mod.buildRepoTableRows, 'function', 'buildRepoTableRows exported');
+        assert.equal(typeof mod.buildDependencyEdges, 'function', 'buildDependencyEdges exported');
+        assert.equal(typeof mod.formatRepoDeps, 'function', 'formatRepoDeps exported');
+        var sorted = mod.topologicalSort(GOLDEN_REPOS);
+        assert.deepEqual(mod.buildRepoTableRows(sorted), [
+            '| 1 | core-db | DB migration | \u2014 |',
+            '| 2 | service-api | API | core-db |',
+            '| 3 | web-ui |  | service-api, core-db |'
+        ]);
+        assert.deepEqual(mod.buildDependencyEdges(sorted), [
+            '    core-db --> service-api',
+            '    service-api --> web-ui',
+            '    core-db --> web-ui'
+        ]);
+        assert.equal(mod.formatRepoDeps({}), '\u2014');
+        assert.equal(mod.formatRepoDeps({ depends_on: [] }), '\u2014');
+        assert.equal(mod.formatRepoDeps({ depends_on: ['x', 'y'] }), 'x, y');
+        assert.equal(mod.formatRepoDeps({ depends_on: 'not-an-array' }), '\u2014');
     });
 });
 
@@ -282,6 +374,130 @@ suite('writeSolutionAndLabels — repo label flow', function() {
         assert.equal(writtenValues.length, 1, 'description updated once');
         assert.equal(writtenValues[0].indexOf('h2. Solution Design') !== -1, true, 'response.md used as fallback base');
         assert.equal(writtenValues[0].indexOf('h2. Affected Repositories') !== -1, true, 'repos section appended');
+    });
+
+    test('topologicalSort skips deps that are not in the list and dedupes duplicate names (last wins)', function() {
+        var mod = makeLabelsModule({});
+        var sorted = mod.topologicalSort([
+            { name: 'a', depends_on: ['ghost'] },
+            { name: 'b', reason: 'first' },
+            { name: 'b', reason: 'dup' }
+        ]);
+        assert.equal(sorted.length, 2, 'ghost dep adds no entry, duplicate name collapses');
+        var bs = sorted.filter(function(r) { return r.name === 'b'; });
+        assert.equal(bs.length, 1);
+        assert.equal(bs[0].reason, 'dup', 'the last duplicate wins (byName overwrite)');
+    });
+
+    test('ADF field value falls back to response.md as the append base', function() {
+        var writtenValues = [];
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warns.push(m); };
+        var module = makeLabelsModule(
+            {
+                'outputs/response.md': 'h2. Solution Design',
+                'outputs/affected_repos.json': JSON.stringify([{ name: 'core-db', reason: 'DB' }])
+            },
+            {
+                jira_get_ticket: function() { return { fields: { description: { type: 'doc', content: [] } } }; },
+                jira_update_field: function(opts) { writtenValues.push(opts.value); }
+            }
+        );
+        try {
+            var result = module.action({
+                ticket: { key: 'PROJ-ADF' },
+                customParams: { solutionField: 'description', diagramField: '' }
+            });
+            assert.equal(result.success, true);
+            assert.equal(writtenValues.length, 1);
+            assert.equal(writtenValues[0].indexOf('h2. Solution Design') === 0, true, 'response.md is the base');
+            assert.equal(warns.some(function(m) { return String(m).indexOf('is ADF') !== -1; }), true);
+        } finally {
+            console.warn = origWarn;
+        }
+    });
+
+    test('a failing getIssue falls back to response.md and still appends', function() {
+        var writtenValues = [];
+        var module = makeLabelsModule(
+            {
+                'outputs/response.md': 'h2. Base',
+                'outputs/affected_repos.json': JSON.stringify([{ name: 'svc', reason: 'API' }])
+            },
+            {
+                jira_get_ticket: function() { throw new Error('jira down'); },
+                jira_update_field: function(opts) { writtenValues.push(opts.value); }
+            }
+        );
+        var result = module.action({
+            ticket: { key: 'PROJ-GETFAIL' },
+            customParams: { solutionField: 'description', diagramField: '' }
+        });
+        assert.equal(result.success, true);
+        assert.equal(writtenValues.length, 1);
+        assert.contains(writtenValues[0], 'h2. Base');
+        assert.contains(writtenValues[0], 'h2. Affected Repositories');
+    });
+
+    test('a failing addLabel is non-fatal: later labels are still added', function() {
+        var added = [];
+        var module = makeLabelsModule(
+            {
+                'outputs/response.md': 'h2. S',
+                'outputs/affected_repos.json': JSON.stringify([{ name: 'bad one' }, { name: 'good' }])
+            },
+            {
+                jira_add_label: function(opts) {
+                    added.push(opts.label);
+                    if (opts.label === 'bad one') { throw new Error('label api down'); }
+                }
+            }
+        );
+        var result = module.action({
+            ticket: { key: 'PROJ-LABELFAIL' },
+            customParams: { solutionField: 'description', diagramField: '' }
+        });
+        assert.equal(result.success, true, 'label failure must not fail the action');
+        assert.deepEqual(added, ['bad one', 'good'], 'label loop continues after a failure');
+    });
+
+    test('invalid affected_repos.json is non-fatal and skips the section', function() {
+        var writtenValues = [];
+        var module = makeLabelsModule(
+            {
+                'outputs/response.md': 'h2. S',
+                'outputs/affected_repos.json': '{not json'
+            },
+            {
+                jira_update_field: function(opts) { writtenValues.push(opts.value); }
+            }
+        );
+        var result = module.action({
+            ticket: { key: 'PROJ-BADJSON' },
+            customParams: { solutionField: 'description', diagramField: '' }
+        });
+        assert.equal(result.success, true);
+        assert.equal(writtenValues.length, 0, 'no field write when repos json is invalid');
+    });
+
+    test('non-array affected_repos.json is skipped gracefully', function() {
+        var writtenValues = [];
+        var module = makeLabelsModule(
+            {
+                'outputs/response.md': 'h2. S',
+                'outputs/affected_repos.json': '{"name":"not-an-array"}'
+            },
+            {
+                jira_update_field: function(opts) { writtenValues.push(opts.value); }
+            }
+        );
+        var result = module.action({
+            ticket: { key: 'PROJ-NOTARRAY' },
+            customParams: { solutionField: 'description', diagramField: '' }
+        });
+        assert.equal(result.success, true);
+        assert.equal(writtenValues.length, 0, 'no field write for non-array repos');
     });
 
     test('stops early if base action fails', function() {

@@ -26,23 +26,44 @@ function loadTrackersWc(mocks) {
     }), mocks || {});
 }
 
+/**
+ * Default implementations for the overridable './common/*' requires of
+ * js/writeContentOutput.js. Keyed by short name; loadWriteContentOutput
+ * resolves overrides against these without adding a decision per require.
+ */
+var WCO_DEFAULT_MODULES = {
+    outputFiles: function(mocks) {
+        return {
+            readOutputFile: function(name) { return (mocks.__outputs || {})[name] || null; }
+        };
+    },
+    jiraHelpers: function(mocks) {
+        return {
+            assignForReview: function() {
+                (mocks.__assignCalls = mocks.__assignCalls || []).push(true);
+                return { success: true };
+            }
+        };
+    },
+    tokenUsageComment: function() {
+        return { postTokenUsageComments: function() {} };
+    }
+};
+
 function loadWriteContentOutput(mocks, projectConfig, extraModules) {
     var configLoaderMock = {
         loadProjectConfig: function() { return projectConfig || {}; }
     };
+    var overrides = extraModules || {};
     var modules = {
         './common/contentOutput.js': loadContentOutputLib(mocks, projectConfig),
-        './common/outputFiles.js': (extraModules && extraModules.outputFiles) || {
-            readOutputFile: function(name) { return (mocks.__outputs || {})[name] || null; }
-        },
-        './common/jiraHelpers.js': (extraModules && extraModules.jiraHelpers) || {
-            assignForReview: function() { (mocks.__assignCalls = mocks.__assignCalls || []).push(true); return { success: true }; }
-        },
-        './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './config.js': { STATUSES: { IN_REVIEW: 'In Review' } },
         './configLoader.js': configLoaderMock,
         './common/trackers.js': loadTrackersWc(mocks)
     };
+    Object.keys(WCO_DEFAULT_MODULES).forEach(function(name) {
+        modules['./common/' + name + '.js'] = overrides[name] || WCO_DEFAULT_MODULES[name](mocks);
+    });
     return loadModule('js/writeContentOutput.js', makeRequire(modules), Object.assign({}, mocks || {}));
 }
 
@@ -425,6 +446,478 @@ suite('writeContentOutput', function() {
         assert.equal((mocks.__assignCalls || []).length, 1);
     });
 
+    // ── gh-1037 characterization tests: pin behaviour of every branch that the
+    //    CRAP refactor touches. All of these passed against the pre-refactor code. ──
+
+    test('missing ticket key fails with a stable error shape', function() {
+        var errors = [];
+        var origError = console.error;
+        console.error = function(msg) { errors.push(msg); };
+        try {
+            var mod = loadWriteContentOutput({ __outputs: { 'response.md': 'x' } });
+            var result = mod.action(makeParams({ ticket: null }));
+            assert.equal(result.success, false);
+            assert.equal(result.error, 'missing ticket key');
+            assert.equal(errors.some(function(m) { return String(m).indexOf('no ticket key') !== -1; }), true);
+        } finally {
+            console.error = origError;
+        }
+    });
+
+    test('empty ticket object (no key) fails the same way', function() {
+        var mod = loadWriteContentOutput({ __outputs: { 'response.md': 'x' } });
+        var result = mod.action(makeParams({ ticket: {} }));
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'missing ticket key');
+    });
+
+    test('wipLabel is null when metadata has no contextId', function() {
+        var assignArgs = null;
+        var mocks = {
+            __outputs: { 'response.md': 'content' },
+            jira_update_field: function() {}
+        };
+        var mod = loadWriteContentOutput(mocks, null, {
+            jiraHelpers: {
+                assignForReview: function(ticketKey, initiatorId, wipLabel) {
+                    assignArgs = { ticketKey: ticketKey, initiatorId: initiatorId, wipLabel: wipLabel };
+                }
+            }
+        });
+        var result = mod.action(makeParams({
+            metadata: {},
+            customParams: { contentOutput: { target: 'jira_field', field: 'Description' } }
+        }));
+        assert.equal(result.success, true);
+        assert.notEqual(assignArgs, null, 'assignForReview must run');
+        assert.equal(assignArgs.wipLabel, null);
+    });
+
+    test('ticket without fields still works (summary falls back to empty string)', function() {
+        var mocks = {
+            __outputs: { 'response.md': 'content' },
+            jira_update_field: function() {}
+        };
+        var mod = loadWriteContentOutput(mocks);
+        var result = mod.action(makeParams({
+            ticket: { key: 'PROJ-20' },
+            customParams: { contentOutput: { target: 'jira_field', field: 'Description' } }
+        }));
+        assert.equal(result.success, true);
+        assert.equal(result.ticketKey, 'PROJ-20');
+    });
+
+    test('params with neither jobParams.customParams nor customParams still resolve the tracker', function() {
+        var mocks = {
+            __outputs: { 'response.md': 'content' },
+            jira_update_field: function() {}
+        };
+        var mod = loadWriteContentOutput(mocks);
+        var params = makeParams({ customParams: undefined, jobParams: undefined });
+        var result = mod.action(params);
+        // no customParams → default jira_field target without a field: the tracker
+        // resolution (jobParams/customParams || {} fallback) must not throw before
+        // the config validation error is reported.
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'contentOutput.field is required for jira_field target');
+    });
+
+    test('jira_field target without cfg.field fails with a stable error', function() {
+        var mod = loadWriteContentOutput({ __outputs: { 'response.md': 'content' } });
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'jira_field' } }
+        }));
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'contentOutput.field is required for jira_field target');
+    });
+
+    test('field write failure returns Field update failed with the thrown message', function() {
+        var mocks = {
+            __outputs: { 'response.md': 'content' },
+            jira_update_field: function() { throw new Error('boom'); }
+        };
+        var mod = loadWriteContentOutput(mocks);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'jira_field', field: 'Description' } }
+        }));
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Field update failed:');
+        assert.contains(result.error, 'boom');
+    });
+
+    test('operationType append merges with the existing field value', function() {
+        var calls = [];
+        var mocks = {
+            __outputs: { 'response.md': 'new content' },
+            jira_get_ticket: function() { return { fields: { Description: 'old content' } }; },
+            jira_update_field: function(args) { calls.push(args); }
+        };
+        var mod = loadWriteContentOutput(mocks);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'jira_field', field: 'Description', operationType: 'append' } }
+        }));
+        assert.equal(result.success, true);
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].value, 'old content\n\n----\n\nnew content');
+    });
+
+    test('confluence target with posted replies logs and reports them in the result', function() {
+        var logs = [];
+        var origLog = console.log;
+        console.log = function(msg) { logs.push(msg); };
+        var fieldCalls = [];
+        var mocks = {
+            __outputs: { 'response.md': '# Solution' },
+            file_read: function() { return JSON.stringify([{ pageId: 'p1', commentId: 'c1', body: 'Fixed' }]); },
+            confluence_reply_to_inline_comment: function() { return {}; },
+            confluence_get_children_by_id: function() { return []; },
+            confluence_create_page: function() {
+                return { id: 'p1', _links: { webui: '/pages/p1', base: 'https://wiki.example.com' } };
+            },
+            confluence_sync_markdown_directory: function() { return JSON.stringify({ syncedPages: ['index'] }); },
+            file_write: function() {},
+            jira_update_field: function(args) { fieldCalls.push(args); },
+            jira_post_comment: function() {}
+        };
+        try {
+            var mod = loadWriteContentOutput(mocks);
+            var result = mod.action(makeParams({
+                customParams: { contentOutput: {
+                    target: 'confluence', field: 'Solution', space: 'DOC', parentPageId: '42'
+                } }
+            }));
+            assert.equal(result.success, true);
+            assert.equal(result.replies.posted, 1);
+            assert.equal(logs.some(function(m) { return String(m).indexOf('Replied to 1 inline comment(s)') !== -1; }), true);
+            assert.equal(fieldCalls.length, 1, 'link still written to the field');
+        } finally {
+            console.log = origLog;
+        }
+    });
+
+    test('confluence page without a URL falls back to the page-id link text everywhere', function() {
+        var fieldCalls = [];
+        var comments = [];
+        var mocks = {
+            __outputs: { 'response.md': '# Solution' },
+            confluence_get_children_by_id: function() { return []; },
+            confluence_create_page: function() { return { id: 'p9' }; },
+            confluence_sync_markdown_directory: function() { return JSON.stringify({ syncedPages: ['index'] }); },
+            file_write: function() {},
+            jira_update_field: function(args) { fieldCalls.push(args); },
+            jira_post_comment: function(args) { comments.push(args); }
+        };
+        var mod = loadWriteContentOutput(mocks);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: {
+                target: 'confluence', field: 'Solution', space: 'DOC', parentPageId: '42'
+            } }
+        }));
+        assert.equal(result.success, true);
+        assert.equal(result.pageUrl, null);
+        assert.equal(fieldCalls.length, 1);
+        assert.equal(fieldCalls[0].value, 'Published to Confluence page p9');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'Page id: p9');
+    });
+
+    test('updateTrackerField:false skips the Confluence link write but still posts the comment', function() {
+        var fieldCalls = [];
+        var comments = [];
+        var mocks = {
+            __outputs: { 'response.md': '# Solution' },
+            confluence_get_children_by_id: function() { return []; },
+            confluence_create_page: function() {
+                return { id: 'p1', _links: { webui: '/pages/p1', base: 'https://wiki.example.com' } };
+            },
+            confluence_sync_markdown_directory: function() { return JSON.stringify({ syncedPages: ['index'] }); },
+            file_write: function() {},
+            jira_update_field: function(args) { fieldCalls.push(args); },
+            jira_post_comment: function(args) { comments.push(args); }
+        };
+        var mod = loadWriteContentOutput(mocks);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: {
+                target: 'confluence', field: 'Solution', space: 'DOC', parentPageId: '42',
+                updateTrackerField: false
+            } }
+        }));
+        assert.equal(result.success, true);
+        assert.equal(fieldCalls.length, 0, 'no link write when updateTrackerField is false');
+        assert.equal(comments.length, 1, 'link comment still posted');
+    });
+
+    test('failing link-comment post is non-fatal and logs a warning', function() {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(msg) { warns.push(msg); };
+        var mocks = {
+            __outputs: { 'response.md': '# Solution' },
+            confluence_get_children_by_id: function() { return []; },
+            confluence_create_page: function() {
+                return { id: 'p1', _links: { webui: '/pages/p1', base: 'https://wiki.example.com' } };
+            },
+            confluence_sync_markdown_directory: function() { return JSON.stringify({ syncedPages: ['index'] }); },
+            file_write: function() {},
+            jira_update_field: function() {},
+            jira_post_comment: function() { throw new Error('comment api down'); }
+        };
+        try {
+            var mod = loadWriteContentOutput(mocks);
+            var result = mod.action(makeParams({
+                customParams: { contentOutput: {
+                    target: 'confluence', field: 'Solution', space: 'DOC', parentPageId: '42'
+                } }
+            }));
+            assert.equal(result.success, true, 'comment failure must not fail the publish');
+            assert.equal(warns.some(function(m) { return String(m).indexOf('Failed to post Confluence link comment') !== -1; }), true);
+        } finally {
+            console.warn = origWarn;
+        }
+    });
+
+    test('confluence publish failure returns Confluence publish failed with the thrown message', function() {
+        var mocks = {
+            __outputs: { 'response.md': '# Solution' },
+            confluence_get_children_by_id: function() { throw new Error('cf down'); },
+            file_write: function() {},
+            jira_post_comment: function() {}
+        };
+        var mod = loadWriteContentOutput(mocks);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: {
+                target: 'confluence', field: 'Solution', space: 'DOC', parentPageId: '42'
+            } }
+        }));
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Confluence publish failed:');
+        assert.contains(result.error, 'cf down');
+    });
+
+    test('thenAction pointing at a module without an action export warns and skips', function() {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(msg) { warns.push(msg); };
+        var mocks = {
+            __outputs: { 'response.md': 'content' },
+            jira_update_field: function() {}
+        };
+        var mod = loadModule('js/writeContentOutput.js', makeRequire({
+            './common/trackers.js': loadTrackersWc(mocks),
+            './common/contentOutput.js': loadContentOutputLib(mocks),
+            './common/outputFiles.js': { readOutputFile: function() { return 'content'; } },
+            './common/jiraHelpers.js': { assignForReview: function() { throw new Error('must not run'); } },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './config.js': { STATUSES: { IN_REVIEW: 'In Review' } },
+            './configLoader.js': { loadProjectConfig: function() { return {}; } },
+            './noActionModule.js': { notAction: true }
+        }), mocks);
+        try {
+            var result = mod.action(makeParams({
+                customParams: { contentOutput: {
+                    target: 'jira_field', field: 'Description',
+                    thenAction: 'noActionModule.js'
+                } }
+            }));
+            assert.equal(result.success, true);
+            assert.equal(result.thenAction, undefined, 'thenAction must not be recorded when skipped');
+            assert.equal(warns.some(function(m) { return String(m).indexOf('has no exported action()') !== -1; }), true);
+        } finally {
+            console.warn = origWarn;
+        }
+    });
+
+    test('thenAction whose module throws returns thenAction failed with the thrown message', function() {
+        var mocks = {
+            __outputs: { 'response.md': 'content' },
+            jira_update_field: function() {}
+        };
+        var mod = loadModule('js/writeContentOutput.js', makeRequire({
+            './common/trackers.js': loadTrackersWc(mocks),
+            './common/contentOutput.js': loadContentOutputLib(mocks),
+            './common/outputFiles.js': { readOutputFile: function() { return 'content'; } },
+            './common/jiraHelpers.js': { assignForReview: function() { throw new Error('must not run'); } },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './config.js': { STATUSES: { IN_REVIEW: 'In Review' } },
+            './configLoader.js': { loadProjectConfig: function() { return {}; } },
+            './explodingModule.js': {
+                get action() { throw new Error('load exploded'); }
+            }
+        }), mocks);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: {
+                target: 'jira_field', field: 'Description',
+                thenAction: 'explodingModule.js'
+            } }
+        }));
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'thenAction failed:');
+    });
+
+    test('assignForReview:false skips the review assignment', function() {
+        var mocks = {
+            __outputs: { 'response.md': 'content' },
+            jira_update_field: function() {}
+        };
+        var mod = loadWriteContentOutput(mocks);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'jira_field', field: 'Description', assignForReview: false } }
+        }));
+        assert.equal(result.success, true);
+        assert.equal((mocks.__assignCalls || []).length, 0, 'no assignForReview call');
+    });
+
+    test('assignForReview failure is non-fatal and logs a warning', function() {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(msg) { warns.push(msg); };
+        var mocks = {
+            __outputs: { 'response.md': 'content' },
+            jira_update_field: function() {}
+        };
+        var mod = loadWriteContentOutput(mocks, null, {
+            jiraHelpers: { assignForReview: function() { throw new Error('assign api down'); } }
+        });
+        try {
+            var result = mod.action(makeParams({
+                customParams: { contentOutput: { target: 'jira_field', field: 'Description' } }
+            }));
+            assert.equal(result.success, true);
+            assert.equal(warns.some(function(m) { return String(m).indexOf('assignForReview failed (non-fatal)') !== -1; }), true);
+        } finally {
+            console.warn = origWarn;
+        }
+    });
+
+    test('token usage comment failure is non-fatal and logs a warning', function() {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(msg) { warns.push(msg); };
+        var mocks = {
+            __outputs: { 'response.md': 'content' },
+            jira_update_field: function() {}
+        };
+        var mod = loadWriteContentOutput(mocks, null, {
+            tokenUsageComment: { postTokenUsageComments: function() { throw new Error('token api down'); } }
+        });
+        try {
+            var result = mod.action(makeParams({
+                customParams: { contentOutput: { target: 'jira_field', field: 'Description' } }
+            }));
+            assert.equal(result.success, true);
+            assert.equal(warns.some(function(m) { return String(m).indexOf('Failed to post token usage comments') !== -1; }), true);
+        } finally {
+            console.warn = origWarn;
+        }
+    });
+
+});
+
+suite('writeContentOutput — extracted helpers (gh-1037)', function() {
+    function loadFull(mocks, projectConfig) {
+        return loadWriteContentOutput(mocks || {}, projectConfig);
+    }
+
+    test('buildWipLabel appends _wip to the contextId, null without one', function() {
+        var mod = loadFull({});
+        assert.equal(mod.buildWipLabel({ metadata: { contextId: 'story_description' } }), 'story_description_wip');
+        assert.equal(mod.buildWipLabel({ metadata: {} }), null);
+        assert.equal(mod.buildWipLabel({}), null);
+    });
+
+    test('describeTarget renders field/space/pageId fallbacks', function() {
+        var mod = loadFull({});
+        assert.equal(mod.describeTarget({ target: 'jira_field', field: 'Description' }),
+            'target=jira_field, field=Description, confluence=?/?');
+        assert.equal(mod.describeTarget({ target: 'confluence', space: 'DOC', parentPageId: '42' }),
+            'target=confluence, field=(none), confluence=DOC/42');
+        assert.equal(mod.describeTarget({ target: 'both', field: 'F', space: 'S' }),
+            'target=both, field=F, confluence=S/?');
+    });
+
+    test('readResponseContent trims content, null (with error log) when empty', function() {
+        var errors = [];
+        var origError = console.error;
+        console.error = function(m) { errors.push(m); };
+        try {
+            var mod = loadFull({ __outputs: { 'response.md': '  padded  ' } });
+            assert.equal(mod.readResponseContent('PROJ-1', null), 'padded');
+            var mod2 = loadFull({ __outputs: {} });
+            assert.equal(mod2.readResponseContent('PROJ-1', null), null);
+            assert.equal(errors.some(function(m) { return String(m).indexOf('outputs/response.md not found or empty') !== -1; }), true);
+        } finally {
+            console.error = origError;
+        }
+    });
+
+    test('buildConfluenceLinkText / buildConfluenceCommentText pick url or page id', function() {
+        var mod = loadFull({});
+        assert.equal(mod.buildConfluenceLinkText('https://x/p1', 'p1'), 'Published to Confluence: https://x/p1');
+        assert.equal(mod.buildConfluenceLinkText(null, 'p9'), 'Published to Confluence page p9');
+        assert.contains(mod.buildConfluenceCommentText('https://x/p1', 'p1'), 'Page: https://x/p1');
+        assert.contains(mod.buildConfluenceCommentText(null, 'p9'), 'Page id: p9');
+    });
+
+    test('normalizeThenActionPath strips agents/ and js/ prefixes only', function() {
+        var mod = loadFull({});
+        assert.equal(mod.normalizeThenActionPath('assignForSolutionArchitecture.js'), 'assignForSolutionArchitecture.js');
+        assert.equal(mod.normalizeThenActionPath('agents/assignForSolutionArchitecture.js'), 'assignForSolutionArchitecture.js');
+        assert.equal(mod.normalizeThenActionPath('js/assignForSolutionArchitecture.js'), 'assignForSolutionArchitecture.js');
+        assert.equal(mod.normalizeThenActionPath('agents/js/nested.js'), 'nested.js');
+    });
+
+    test('writeJiraFieldStep falls back to replace when operationType is falsy', function() {
+        var calls = [];
+        var mocks = {
+            jira_get_ticket: function() { return { fields: { Description: 'old' } }; },
+            jira_update_field: function(args) { calls.push(args); }
+        };
+        var mod = loadFull(mocks);
+        var result = { success: true, ticketKey: 'PROJ-1', target: 'jira_field' };
+        var cfg = { target: 'jira_field', field: 'Description', operationType: null };
+        var out = mod.writeJiraFieldStep(result, cfg, 'PROJ-1', 'body', null);
+        assert.equal(out, result, 'success returns the same result object');
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].value, 'body', 'null operationType behaves as replace');
+    });
+
+    test('writeJiraFieldStep skips non-jira targets and reports the missing field', function() {
+        var mod = loadFull({});
+        var result = { success: true };
+        assert.equal(mod.writeJiraFieldStep(result, { target: 'confluence' }, 'K', 'c', null), result);
+        var out = mod.writeJiraFieldStep(result, { target: 'jira_field' }, 'K', 'c', null);
+        assert.equal(out.success, false);
+        assert.equal(out.error, 'contentOutput.field is required for jira_field target');
+    });
+
+    test('a failing inline reply logs the failed count (logReplySummary failed>0 arm)', function() {
+        var logs = [];
+        var origLog = console.log;
+        console.log = function(m) { logs.push(m); };
+        var mod = loadFull({});
+        try {
+            mod.logReplySummary({ posted: 0, failed: 2 });
+            mod.logReplySummary({ posted: 0, failed: 0 });
+            assert.equal(logs.length, 1, 'only the non-zero summary logs');
+            assert.contains(logs[0], 'Replied to 0 inline comment(s), 2 failed');
+        } finally {
+            console.log = origLog;
+        }
+    });
+
+    test('loadProjectConfigSafe returns null when the loader throws', function() {
+        var mod = loadModule('js/writeContentOutput.js', makeRequire({
+            './common/trackers.js': loadTrackersWc({}),
+            './common/contentOutput.js': loadContentOutputLib({}),
+            './common/outputFiles.js': { readOutputFile: function() { return null; } },
+            './common/jiraHelpers.js': { assignForReview: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './config.js': { STATUSES: { IN_REVIEW: 'In Review' } },
+            './configLoader.js': { loadProjectConfig: function() { throw new Error('no config'); } }
+        }), {});
+        assert.equal(mod.loadProjectConfigSafe({}), null);
+        assert.equal(mod.loadProjectConfigSafe({ jobParams: {} }), null);
+    });
 });
 
 suite('writeContentOutput uses the configured tracker for the field write (agents#873)', function() {

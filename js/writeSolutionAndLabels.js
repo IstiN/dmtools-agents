@@ -45,8 +45,35 @@ function topologicalSort(repos) {
 }
 
 // ---------------------------------------------------------------------------
-// Formatter — Jira wiki markup
+// Shared section builders (pure) — used by the Jira/ADO/Confluence formatters
 // ---------------------------------------------------------------------------
+
+/** 'a, b' for non-empty depends_on, em-dash otherwise. */
+function formatRepoDeps(r) {
+    return (Array.isArray(r.depends_on) && r.depends_on.length > 0)
+        ? r.depends_on.join(', ')
+        : '\u2014';
+}
+
+/** GFM/wiki table rows: | # | name | reason | deps | */
+function buildRepoTableRows(sorted) {
+    var rows = [];
+    sorted.forEach(function(r, idx) {
+        rows.push('| ' + (idx + 1) + ' | ' + r.name + ' | ' + (r.reason || '') + ' | ' + formatRepoDeps(r) + ' |');
+    });
+    return rows;
+}
+
+/** Mermaid dependency edges ('    dep --> name'), in sorted order. */
+function buildDependencyEdges(sorted) {
+    var edges = [];
+    sorted.forEach(function(r) {
+        if (Array.isArray(r.depends_on)) {
+            r.depends_on.forEach(function(dep) { edges.push('    ' + dep + ' --> ' + r.name); });
+        }
+    });
+    return edges;
+}
 
 function buildJiraSection(sorted) {
     var lines = [];
@@ -55,20 +82,10 @@ function buildJiraSection(sorted) {
     lines.push('');
     lines.push('|| # || Repository || Reason || Depends On ||');
 
-    sorted.forEach(function(r, idx) {
-        var deps = (Array.isArray(r.depends_on) && r.depends_on.length > 0)
-            ? r.depends_on.join(', ')
-            : '\u2014';
-        lines.push('| ' + (idx + 1) + ' | ' + r.name + ' | ' + (r.reason || '') + ' | ' + deps + ' |');
-    });
+    buildRepoTableRows(sorted).forEach(function(row) { lines.push(row); });
 
     // Mermaid diagram (only when there are edges)
-    var edges = [];
-    sorted.forEach(function(r) {
-        if (Array.isArray(r.depends_on)) {
-            r.depends_on.forEach(function(dep) { edges.push('    ' + dep + ' --> ' + r.name); });
-        }
-    });
+    var edges = buildDependencyEdges(sorted);
     if (edges.length > 0) {
         lines.push('');
         lines.push('{code}');
@@ -99,19 +116,9 @@ function buildMarkdownSection(sorted) {
     lines.push('| # | Repository | Reason | Depends On |');
     lines.push('|---|---|---|---|');
 
-    sorted.forEach(function(r, idx) {
-        var deps = (Array.isArray(r.depends_on) && r.depends_on.length > 0)
-            ? r.depends_on.join(', ')
-            : '\u2014';
-        lines.push('| ' + (idx + 1) + ' | ' + r.name + ' | ' + (r.reason || '') + ' | ' + deps + ' |');
-    });
+    buildRepoTableRows(sorted).forEach(function(row) { lines.push(row); });
 
-    var edges = [];
-    sorted.forEach(function(r) {
-        if (Array.isArray(r.depends_on)) {
-            r.depends_on.forEach(function(dep) { edges.push('    ' + dep + ' --> ' + r.name); });
-        }
-    });
+    var edges = buildDependencyEdges(sorted);
     if (edges.length > 0) {
         lines.push('');
         lines.push('```mermaid');
@@ -140,22 +147,12 @@ function buildConfluenceMarkdownSection(sorted) {
     lines.push('| # | Repository | Reason | Depends On |');
     lines.push('|---|---|---|---|');
 
-    sorted.forEach(function(r, idx) {
-        var deps = (Array.isArray(r.depends_on) && r.depends_on.length > 0)
-            ? r.depends_on.join(', ')
-            : '\u2014';
-        lines.push('| ' + (idx + 1) + ' | ' + r.name + ' | ' + (r.reason || '') + ' | ' + deps + ' |');
-    });
+    buildRepoTableRows(sorted).forEach(function(row) { lines.push(row); });
 
     // Mermaid dependency diagram (only when there are edges) — a single, plain
     // (unfenced) diagram, consistent with instructions/common/diagram_output_contract.md.
     // The Confluence markdown→storage converter wraps it with the correct macro itself.
-    var edges = [];
-    sorted.forEach(function(r) {
-        if (Array.isArray(r.depends_on)) {
-            r.depends_on.forEach(function(dep) { edges.push('    ' + dep + ' --> ' + r.name); });
-        }
-    });
+    var edges = buildDependencyEdges(sorted);
     if (edges.length > 0) {
         lines.push('');
         lines.push('```mermaid');
@@ -262,6 +259,9 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
         topologicalSort: topologicalSort,
+        formatRepoDeps: formatRepoDeps,
+        buildRepoTableRows: buildRepoTableRows,
+        buildDependencyEdges: buildDependencyEdges,
         buildJiraSection: buildJiraSection,
         buildMarkdownSection: buildMarkdownSection,
         buildConfluenceMarkdownSection: buildConfluenceMarkdownSection
