@@ -7,9 +7,9 @@
 
 function makeOutputFiles(fileMap) {
     return loadModule('js/common/outputFiles.js', makeRequire({}), {
+        // The suite only reads via `file_read({ path })` (see js/common/outputFiles.js::readRaw).
         file_read: function(opts) {
-            var path = opts && (opts.path || opts);
-            return fileMap[path] !== undefined ? fileMap[path] : null;
+            return fileMap[opts.path] === undefined ? null : fileMap[opts.path];
         }
     });
 }
@@ -26,9 +26,9 @@ function makeLabelsModule(fileMap, extraGlobals) {
     };
 
     var globals = {
+        // Same { path }-only contract as makeOutputFiles above.
         file_read: function(opts) {
-            var path = opts && (opts.path || opts);
-            return fileMap[path] !== undefined ? fileMap[path] : null;
+            return fileMap[opts.path] === undefined ? null : fileMap[opts.path];
         },
         jira_add_label: function() {},
         jira_remove_label: function() {},

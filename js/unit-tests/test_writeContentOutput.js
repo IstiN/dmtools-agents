@@ -26,23 +26,44 @@ function loadTrackersWc(mocks) {
     }), mocks || {});
 }
 
+/**
+ * Default implementations for the overridable './common/*' requires of
+ * js/writeContentOutput.js. Keyed by short name; loadWriteContentOutput
+ * resolves overrides against these without adding a decision per require.
+ */
+var WCO_DEFAULT_MODULES = {
+    outputFiles: function(mocks) {
+        return {
+            readOutputFile: function(name) { return (mocks.__outputs || {})[name] || null; }
+        };
+    },
+    jiraHelpers: function(mocks) {
+        return {
+            assignForReview: function() {
+                (mocks.__assignCalls = mocks.__assignCalls || []).push(true);
+                return { success: true };
+            }
+        };
+    },
+    tokenUsageComment: function() {
+        return { postTokenUsageComments: function() {} };
+    }
+};
+
 function loadWriteContentOutput(mocks, projectConfig, extraModules) {
     var configLoaderMock = {
         loadProjectConfig: function() { return projectConfig || {}; }
     };
+    var overrides = extraModules || {};
     var modules = {
         './common/contentOutput.js': loadContentOutputLib(mocks, projectConfig),
-        './common/outputFiles.js': (extraModules && extraModules.outputFiles) || {
-            readOutputFile: function(name) { return (mocks.__outputs || {})[name] || null; }
-        },
-        './common/jiraHelpers.js': (extraModules && extraModules.jiraHelpers) || {
-            assignForReview: function() { (mocks.__assignCalls = mocks.__assignCalls || []).push(true); return { success: true }; }
-        },
-        './common/tokenUsageComment.js': (extraModules && extraModules.tokenUsageComment) || { postTokenUsageComments: function() {} },
         './config.js': { STATUSES: { IN_REVIEW: 'In Review' } },
         './configLoader.js': configLoaderMock,
         './common/trackers.js': loadTrackersWc(mocks)
     };
+    Object.keys(WCO_DEFAULT_MODULES).forEach(function(name) {
+        modules['./common/' + name + '.js'] = overrides[name] || WCO_DEFAULT_MODULES[name](mocks);
+    });
     return loadModule('js/writeContentOutput.js', makeRequire(modules), Object.assign({}, mocks || {}));
 }
 
