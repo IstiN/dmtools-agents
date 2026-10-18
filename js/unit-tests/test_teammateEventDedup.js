@@ -483,4 +483,13 @@ suite('ai-teammate.yml — the dedup gate is wired into the stub', function () {
             'ASSIGNEES is JSON-encoded');
         assert.ok(yml.indexOf('parseEventList') !== -1, 'the probe parses the JSON lists');
     });
+
+    test('the transport supplies the clock — without nowMs the freshness window is inert', function () {
+        // Transport regression (mocked-gh smoke): the probe must pass
+        // nowMs, otherwise the module degrades to in-flight-only and a
+        // completed burst owner never suppresses the concurrency-released
+        // duplicates (AC2 dead in production).
+        assert.ok(yml.indexOf('nowMs: Date.now()') !== -1,
+            'the probe passes the wall clock into the decision');
+    });
 });

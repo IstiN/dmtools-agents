@@ -82,12 +82,6 @@ jobs:
   # unit-tested pure module js/common/teammateEventDedup.js (AC4) — this
   # step is transport only. The probe short-circuits BEFORE any API call
   # for workflow_dispatch (SM-side gh-1028 governs it), non-arming
-  # gh-1029 zero-burn parity: the job-level `if:` above mirrors the
-  # teammate gate, so non-arming lifecycle label writes execute ZERO jobs
-  # (those runs conclude failure — the gh-676 phantom shape — and own no
-  # dedup key). The in-probe preflight below remains as defense in depth
-  # against gate drift. The probe short-circuits BEFORE any API call
-  # for workflow_dispatch (SM-side gh-1028 governs it), non-arming
   # lifecycle labels and non-teammate assignees.
   dedup:
     name: Event-path dedup probe (gh-1065)
@@ -212,7 +206,12 @@ jobs:
               workflowFile: env.WORKFLOW_FILE,
               runs: runs,
               // The run_number tie-break needs no clock on the self side:
-              // REST always carries run_number for every run.
+              // REST always carries run_number for every run. The freshness
+              // window DOES need a clock — without nowMs the module degrades
+              // to in-flight-only and a completed burst owner would never
+              // suppress (transport regression caught by the mocked-gh
+              // smoke).
+              nowMs: Date.now(),
               selfRun: {
                 id: parseInt(env.SELF_ID, 10),
                 runNumber: parseInt(env.SELF_RUN_NUMBER, 10)
