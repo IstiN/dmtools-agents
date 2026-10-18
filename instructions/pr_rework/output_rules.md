@@ -46,5 +46,7 @@ belong to the refinement agents). Every open thread needs a code fix in this pas
 you genuinely cannot get past, change no thread state and write the reason in `outputs/response.md`
 (start the file with `BLOCKED:` followed by what blocks you and what is needed). A pass with open
 threads and no code change is treated as blocked: threads are not resolved and the ticket moves to
-the Blocked status.
+the Blocked status. Even when blocked or awaiting a human decision, ALWAYS write
+`outputs/response.md` — it is posted as the PR comment; nothing in the run log reaches the human
+otherwise.
 

@@ -129,6 +129,9 @@ Write two output files:
 - Test status: pass/fail and number of tests
 - Any cross-cutting concern worth calling out once (e.g. lint status)
 
+Even when blocked or awaiting a human decision, ALWAYS write `outputs/response.md` — it is posted
+as the PR comment; nothing in the run log reaches the human otherwise.
+
 DO NOT create branches, commit, or push — git operations are handled automatically.
 
 🛑 HARD RULES (enforced mechanically by a git guard in your session — violations fail loudly):
