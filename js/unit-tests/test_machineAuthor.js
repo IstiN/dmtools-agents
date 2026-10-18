@@ -197,3 +197,26 @@ suite('common/machineAuthor: GitHub App [bot] suffix normalization (gh-1025)', f
         assert.ok(!isMachine({ author: 'DMTOOLS-FACTORY-BOT[bot]' }, 'dmtools-factory-bot', 'owner'));
     });
 });
+
+suite('common/machineAuthor: degenerate [bot]-only inputs (gh-1025 review)', function () {
+    var mod = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+
+    test('isMachineAuthored never matches an empty stripped login', function () {
+        assert.ok(!mod.isMachineAuthored({ author: '[bot]' }, '[bot]', 'owner'),
+            "'[bot]' strips to '' — '' === '' must not match");
+        assert.ok(!mod.isMachineAuthored({ author: '' }, 'ai-teammate', 'owner'));
+    });
+
+    test('loginMatchesList: [bot]-normalized membership for allowlist matchers', function () {
+        var m = mod.loginMatchesList;
+        assert.ok(m('dmtools-factory-bot[bot]', ['ai-teammate', 'dmtools-factory-bot']));
+        assert.ok(m('dmtools-factory-bot', ['dmtools-factory-bot[bot]']));
+        assert.ok(m('AI-Teammate', ['ai-teammate']), 'case-insensitive (comment-layer semantics)');
+        assert.ok(!m('dependabot[bot]', ['dmtools-factory-bot']));
+        assert.ok(!m('[bot]', ['[bot]']), 'degenerate empty after strip never matches');
+        assert.ok(!m('', ['ai-teammate']));
+        assert.ok(!m(null, ['ai-teammate']));
+        assert.ok(!m('ai-teammate', []));
+        assert.ok(!m('ai-teammate', null));
+    });
+});
