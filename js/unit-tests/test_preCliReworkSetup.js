@@ -274,6 +274,185 @@ suite('preCliReworkSetup.buildReworkStartedComment — per-tracker markup (gh-77
 
 });
 
+// ── gh-1002: shared harness for the characterization + helper suites ─────────
+
+// default-without-a-branch helper: keeps makeActionHarness() branch-free so the
+// harness itself stays under the CRAP threshold in the coverage report.
+function def1002(value, fallback) {
+    return value === undefined ? fallback : value;
+}
+
+// Failure-mode switch for the harness: throws when the overrides bag enables
+// the named failure. A function call instead of an inline `if` so the harness
+// body carries no extra branches.
+function fail1002(overides, key, message) {
+    if (overides[key]) {
+        throw new Error(message);
+    }
+}
+
+var DEFAULT_REWORK_STATUSES = { IN_DEVELOPMENT: 'In Development', IN_REWORK: 'In Rework' };
+
+// File-level so the closure adds no branches to makeActionHarness() itself.
+function resolveStatusesMock(customParams, jiraStatuses) {
+    return jiraStatuses || DEFAULT_REWORK_STATUSES;
+}
+
+// gh-1002: console output of the SUT is captured by injecting a recorder as a
+// `console` mock in the loadModule mocks bag (the repo-standard pattern, cf.
+// test_reviewVerdicts.js) — never by touching `global`, which does not exist in
+// the GraalJS host the canonical testRunner.js runs in.
+
+/**
+ * Full-action harness for the gh-1002 suites: loads js/preCliReworkSetup.js with
+ * a complete set of spying mocks (tracker, gh, gitOps, scm, setupCommands) and an
+ * overrides bag that flips each failure mode on.
+ *
+ * @returns {{module: object, calls: object, files: object, tracker: object}}
+ */
+function makeActionHarness(overides) {
+    overides = overides || {};
+
+    var files = {}; // file_write captures: path → content
+    var calls = {   // spy registry shared across the host-tool mocks
+        postComment: [],      // [{key, body}]
+        moveToStatus: [],     // [status]
+        findPRForTicket: 0,
+        findPRForTicketArg: null,
+        getPRDetailsNumber: null,
+        getRemoteRepoInfo: 0,
+        checkoutPRBranch: [], // [{branch, dir, base}]
+        createTracker: 0,
+        runSetupCommands: 0,
+        writeBaseBranchMarker: null,
+        writePRContext: null
+    };
+
+    var tracker = {
+        postComment: function(key, body) {
+            calls.postComment.push({ key: key, body: body });
+            fail1002(overides, 'failTrackerPostComment', 'postComment failed');
+        },
+        moveToStatus: function(key, status) {
+            calls.moveToStatus.push(status);
+            fail1002(overides, 'failMoveToStatus', 'transition failed');
+        }
+    };
+
+    var ghStub = makeGhStub();
+    ghStub.findPRForTicket = function(scm, ticketKey, options) {
+        calls.findPRForTicket++;
+        calls.findPRForTicketArg = { scm: scm, ticketKey: ticketKey, options: options };
+        return def1002(overides.pr, { number: 7, url: 'https://github.com/acme/widgets/pull/7' });
+    };
+    ghStub.getPRDetails = function(scm, number) {
+        calls.getPRDetailsNumber = number;
+        return def1002(overides.prDetails, {
+            number: number, title: 't', html_url: 'https://github.com/acme/widgets/pull/' + number,
+            state: 'open', head: { ref: 'ai/gh-123', sha: 'sha-123' }, base: { ref: 'master' }, user: { login: 'a' }
+        });
+    };
+    ghStub.detectFailedChecks = function() { return def1002(overides.failedChecks, []); };
+    ghStub.fetchDiscussionsAndRawData = function() {
+        return def1002(overides.discussionData, { markdown: '## d', rawThreads: null });
+    };
+
+    var scm = {
+        getRemoteRepoInfo: function() {
+            calls.getRemoteRepoInfo++;
+            return def1002(overides.repoInfo, { owner: 'acme', repo: 'widgets' });
+        }
+    };
+
+    var gitOpsStub = {
+        checkoutPRBranch: function(branch, dir, base) {
+            calls.checkoutPRBranch.push({ branch: branch, dir: dir, base: base });
+            fail1002(overides, 'failCheckout', 'checkout failed');
+        },
+        detectMergeConflicts: function() { return def1002(overides.conflictFiles, []); },
+        getPRDiff: function() { return 'diff --git a/README.md b/README.md'; },
+        writePRContext: function(inputFolder, prDetails, diff, markdown, rawThreads) {
+            calls.writePRContext = { inputFolder: inputFolder, prNumber: prDetails.number, diff: diff, markdown: markdown, rawThreads: rawThreads };
+        },
+        writeInputFile: function(path, content) { files[path] = content; }
+    };
+
+    var config = {
+        git: { baseBranch: 'master' },
+        workingDir: null,
+        repository: overides.repository,
+        jira: overides.jira
+    };
+
+    var configLoaderStub = {
+        loadProjectConfig: function() {
+            fail1002(overides, 'failConfigLoad', 'config load failed');
+            return config;
+        },
+        paramsForConfigLoad: function(p) { return p; },
+        loadHookFn: function() { return null; },
+        createScm: function() { return scm; }
+    };
+
+    var trackersModuleStub = {
+        createTracker: function() {
+            calls.createTracker++;
+            fail1002(overides, 'failTrackerCreate', 'tracker create failed');
+            return tracker;
+        }
+    };
+
+    // Real module shape (the target binds truncateSetupError at load time), but
+    // with spying/stubbed behaviour so no real setup commands ever run.
+    var setupCommandsStub = {
+        truncateSetupError: function(s) { return s; },
+        runSetupCommands: function() {
+            calls.runSetupCommands++;
+            fail1002(overides, 'failSetupCommands', 'npm ci exploded');
+            return { ok: true };
+        },
+        buildSetupWarningsMarkdown: function() {
+            return def1002(overides.setupWarnings, '');
+        }
+    };
+
+    var logs = { log: [], warn: [], error: [] };
+    var consoleRecorder = {
+        log: function() { logs.log.push(Array.prototype.join.call(arguments, ' ')); },
+        warn: function() { logs.warn.push(Array.prototype.join.call(arguments, ' ')); },
+        error: function() { logs.error.push(Array.prototype.join.call(arguments, ' ')); }
+    };
+
+    var mod = loadModule(
+        'js/preCliReworkSetup.js',
+        makeRequire({
+            './configLoader.js': configLoaderStub,
+            './common/githubHelpers.js': ghStub,
+            './common/gitOps.js': gitOpsStub,
+            './common/commentMarkup.js': reworkCommentMarkupModule,
+            './fetchQuestionsToInput.js': NOOP_MODULE,
+            './fetchParentContextToInput.js': NOOP_MODULE,
+            './restoreFromReleases.js': NOOP_MODULE,
+            './common/trackers.js': trackersModuleStub,
+            './common/setupCommands.js': setupCommandsStub,
+            './common/baseBranchMarker.js': { writeBaseBranchMarker: function(base) { calls.writeBaseBranchMarker = base; } },
+            './config.js': { resolveStatuses: resolveStatusesMock }
+        }),
+        {
+            console: consoleRecorder,
+            file_write: function(args) {
+                var failPaths = def1002(overides.failFileWritePaths, []);
+                if (failPaths.indexOf(args.path) !== -1) {
+                    throw new Error('disk full');
+                }
+                files[args.path] = args.content;
+            }
+        }
+    );
+
+    return { module: mod, calls: calls, files: files, tracker: tracker, logs: logs };
+}
+
 // ── gh-799 AC1: pinned input trio, armer-independent ─────────────────────────
 // Whatever arms the rework leg (fail-validation CI-red, review-threads-resolved
 // armer, conflict-rework, manual dispatch), the input folder must ALWAYS carry:
@@ -698,4 +877,485 @@ suite('preCliReworkSetup.action — rework status write reflects the actual tran
         assert.ok(!passesRawObject,
             'the raw error object must NOT be passed through on this line (renders as {} on the host console)');
     });
+});
+
+// ── gh-1002: characterization of action() — pinned BEFORE the CRAP refactor ──
+// The gh-1002 refactor extracts pure helpers out of action() to bring its CRAP
+// below the quality-gate threshold. These tests pin action()'s observable
+// behaviour (results, files, comments, calls) so the extraction provably
+// preserves it. They must stay green across the refactor.
+
+suite('preCliReworkSetup.action — gh-1002 characterization (pinned before the CRAP refactor)', function() {
+
+    test('happy path: success result carries owner/repo from the remote; head SHA persisted; rework-started comment posted', function() {
+        var h = makeActionHarness({});
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123', jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} } });
+
+        assert.equal(result.success, true, JSON.stringify(result));
+        assert.equal(result.prNumber, 7);
+        assert.equal(result.branchName, 'ai/gh-123');
+        assert.equal(result.owner, 'acme');
+        assert.equal(result.repo, 'widgets');
+        assert.equal(h.calls.findPRForTicket, 1);
+        assert.deepEqual(h.calls.checkoutPRBranch, [{ branch: 'ai/gh-123', dir: null, base: 'master' }]);
+        assert.equal(h.calls.writeBaseBranchMarker, 'master');
+        assert.equal(h.files['input/PROJ-123/rework_base_head.txt'], 'sha-123');
+        assert.equal(h.calls.postComment.length, 1);
+        assert.contains(h.calls.postComment[0].body, 'Automated Rework Started');
+    });
+
+    test('a pinned targetRepository in the config wins over the git remote', function() {
+        var h = makeActionHarness({ repository: { owner: 'cfg', repo: 'proj' } });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123' });
+
+        assert.equal(result.success, true, JSON.stringify(result));
+        assert.equal(result.owner, 'cfg');
+        assert.equal(result.repo, 'proj');
+        assert.equal(h.calls.getRemoteRepoInfo, 0, 'the remote is never probed when the config pins the repo');
+    });
+
+    test('no repo info → {success:false} with the repo-resolution error and one error comment (no failSetup marker)', function() {
+        var h = makeActionHarness({ repoInfo: null });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123' });
+
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'Could not determine GitHub repository from git remote');
+        assert.equal(h.calls.postComment.length, 1);
+        assert.contains(h.calls.postComment[0].body, 'Could not determine GitHub repository');
+        assert.equal(h.files['input/PROJ-123/rework_setup_failed.md'], undefined, 'this path returns before failSetup exists');
+    });
+
+    test('no PR for the ticket → failSetup marker file + failSetup comment + catch-block error comment + {success:false}', function() {
+        var h = makeActionHarness({ pr: null });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123' });
+        var message = 'No Pull Request found for ticket PROJ-123. Cannot start rework without an existing PR.';
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'No Pull Request found for ticket PROJ-123');
+        assert.contains(h.files['input/PROJ-123/rework_setup_failed.md'], message);
+        assert.contains(h.files['input/PROJ-123/rework_setup_failed.md'], '# Rework Setup Failed');
+        assert.equal(h.calls.postComment.length, 2);
+        assert.contains(h.calls.postComment[1].body, '❌ Rework Setup Error');
+        assert.contains(h.calls.postComment[1].body, 'No Pull Request found for ticket PROJ-123');
+    });
+
+    test('PR details unavailable → {success:false}', function() {
+        var h = makeActionHarness({ prDetails: null });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123' });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Failed to fetch PR details for PR #7');
+        assert.contains(h.files['input/PROJ-123/rework_setup_failed.md'], 'Failed to fetch PR details for PR #7');
+    });
+
+    test('PR without a head branch → {success:false}', function() {
+        var h = makeActionHarness({ prDetails: { number: 7, html_url: 'u', base: { ref: 'master' } } });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123' });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Could not determine branch from PR details');
+        assert.contains(h.files['input/PROJ-123/rework_setup_failed.md'], 'Could not determine branch from PR details');
+    });
+
+    test('checkout failure → {success:false} with the checkout error', function() {
+        var h = makeActionHarness({ failCheckout: true });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123' });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Failed to checkout branch');
+        assert.contains(h.files['input/PROJ-123/rework_setup_failed.md'], 'Failed to checkout branch');
+        assert.equal(h.calls.postComment.length, 2);
+    });
+
+    test('setup commands failure → {success:false}; the marker carries the truncated setup error', function() {
+        var h = makeActionHarness({ failSetupCommands: true });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123' });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Environment setup failed');
+        assert.contains(h.files['input/PROJ-123/rework_setup_failed.md'], 'Environment setup failed');
+        assert.equal(h.calls.postComment.length, 2);
+    });
+
+    test('setup warnings land in setup_warnings.md', function() {
+        var h = makeActionHarness({ setupWarnings: '## ⚠️ Setup warnings\n- run pub get\n' });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123' });
+
+        assert.equal(result.success, true, JSON.stringify(result));
+        assert.equal(h.files['input/PROJ-123/setup_warnings.md'], '## ⚠️ Setup warnings\n- run pub get\n');
+    });
+
+    test('a failed setup_warnings.md write is non-fatal', function() {
+        var h = makeActionHarness({ setupWarnings: 'warn', failFileWritePaths: ['input/PROJ-123/setup_warnings.md'] });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123' });
+
+        assert.equal(result.success, true, JSON.stringify(result));
+    });
+
+    test('a failed rework_base_head.txt write is non-fatal', function() {
+        var h = makeActionHarness({ failFileWritePaths: ['input/PROJ-123/rework_base_head.txt'] });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123' });
+
+        assert.equal(result.success, true, JSON.stringify(result));
+    });
+
+    test('PR-anchored rework (input/pr-42): no ticket PR lookup, no status move, no tracker comment', function() {
+        var h = makeActionHarness({ jira: { markReworkInDevelopment: true } });
+        var result = h.module.action({ inputFolderPath: 'input/pr-42', jobParams: { inputFolderPath: 'input/pr-42', customParams: {} } });
+
+        assert.equal(result.success, true, JSON.stringify(result));
+        assert.equal(result.prNumber, 42);
+        assert.equal(h.calls.findPRForTicket, 0, 'the PR anchor wins — the ticket lookup is skipped');
+        assert.equal(h.calls.getPRDetailsNumber, 42);
+        assert.deepEqual(h.calls.moveToStatus, [], 'PR-anchored runs have no ticket to move');
+        assert.equal(h.calls.postComment.length, 0, 'PR-anchored runs never comment on a ticket');
+    });
+
+    test('jobParams.prNumber anchors the rework for a plain ticket key', function() {
+        var h = makeActionHarness({ jira: { markReworkInDevelopment: true } });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123', jobParams: { inputFolderPath: 'input/PROJ-123', prNumber: '9', customParams: {} } });
+
+        assert.equal(result.success, true, JSON.stringify(result));
+        assert.equal(result.prNumber, 9);
+        assert.equal(h.calls.findPRForTicket, 0);
+        assert.deepEqual(h.calls.moveToStatus, []);
+        assert.equal(h.calls.postComment.length, 0);
+    });
+
+    test('jobParams.pr is the fallback anchor when prNumber is absent', function() {
+        var h = makeActionHarness({});
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123', jobParams: { inputFolderPath: 'input/PROJ-123', pr: 11, customParams: {} } });
+
+        assert.equal(result.success, true, JSON.stringify(result));
+        assert.equal(result.prNumber, 11);
+        assert.equal(h.calls.findPRForTicket, 0);
+    });
+
+    test('a failed rework-started comment is non-fatal (gh-802 pins this behaviour)', function() {
+        var h = makeActionHarness({ failTrackerPostComment: true });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123' });
+
+        assert.equal(result.success, true, JSON.stringify(result));
+        assert.equal(h.calls.postComment.length, 1);
+    });
+
+    test('failure before the tracker exists: the error path retries tracker creation and degrades to {success:false} with no comments', function() {
+        var h = makeActionHarness({ failTrackerCreate: true });
+        var result = h.module.action({ inputFolderPath: 'input/PROJ-123' });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'tracker create failed');
+        assert.equal(h.calls.createTracker, 2, 'action() and the catch-block error reporter each try once');
+        assert.equal(h.calls.postComment.length, 0);
+    });
+
+    test('error reporting is a no-op when no ticket key can be derived from the params', function() {
+        var h = makeActionHarness({ failConfigLoad: true });
+        var result = h.module.action({});
+
+        assert.equal(result.success, false);
+        assert.equal(h.calls.createTracker, 0, 'no ticket key → the error reporter never builds a tracker');
+    });
+
+});
+
+// ── gh-1002: unit tests for the helpers extracted from action() ──────────────
+// Written before the extraction (RED) and kept green by it. Each helper keeps
+// the exact behaviour of the code it replaced, so the action-level
+// characterization suite above is the primary safety net — these tests pin the
+// helpers' own contracts so future refactors cannot drift them.
+
+suite('preCliReworkSetup — extracted helpers (gh-1002)', function() {
+
+    suite('parseReworkParams', function() {
+        test('plain ticket folder, no pr params → prAnchor null', function() {
+            var h = makeActionHarness({});
+            var parsed = h.module.parseReworkParams({ inputFolderPath: 'input/PROJ-123' });
+
+            assert.equal(parsed.ticketKey, 'PROJ-123');
+            assert.equal(parsed.inputFolder, 'input/PROJ-123');
+            assert.equal(parsed.prAnchor, null);
+        });
+
+        test('pr-N folder → numeric anchor', function() {
+            var h = makeActionHarness({});
+            var parsed = h.module.parseReworkParams({ inputFolderPath: 'input/pr-42' });
+
+            assert.equal(parsed.ticketKey, 'pr-42');
+            assert.equal(parsed.prAnchor, 42);
+        });
+
+        test('jobParams.prNumber anchors a plain ticket folder; jobParams.pr is the fallback', function() {
+            var h = makeActionHarness({});
+            var byPrNumber = h.module.parseReworkParams({ inputFolderPath: 'input/PROJ-123', jobParams: { inputFolderPath: 'input/PROJ-123', prNumber: '9' } });
+            assert.equal(byPrNumber.prAnchor, 9);
+
+            var byPr = h.module.parseReworkParams({ inputFolderPath: 'input/PROJ-123', jobParams: { inputFolderPath: 'input/PROJ-123', pr: 11 } });
+            assert.equal(byPr.prAnchor, 11);
+        });
+
+        test('params without inputFolderPath resolve through jobParams', function() {
+            var h = makeActionHarness({});
+            var parsed = h.module.parseReworkParams({ jobParams: { inputFolderPath: 'input/PROJ-9', prNumber: 5 } });
+
+            assert.equal(parsed.ticketKey, 'PROJ-9');
+            assert.equal(parsed.inputFolder, 'input/PROJ-9');
+            assert.equal(parsed.prAnchor, 5);
+        });
+
+        test('parsePrAnchor resolves the folder anchor before jobParams and null when neither exists', function() {
+            var h = makeActionHarness({});
+            assert.equal(h.module.parsePrAnchor('pr-42', {}), 42);
+            assert.equal(h.module.parsePrAnchor('PROJ-123', { jobParams: { prNumber: '9' } }), 9);
+            assert.equal(h.module.parsePrAnchor('PROJ-123', { jobParams: { pr: 11 } }), 11);
+            assert.equal(h.module.parsePrAnchor('PROJ-123', {}), null);
+        });
+    });
+
+    suite('resolveRepoInfo', function() {
+        test('a pinned targetRepository in the config wins; the remote is never probed', function() {
+            var h = makeActionHarness({ repository: { owner: 'cfg', repo: 'proj' } });
+            var repoInfo = h.module.resolveRepoInfo({ repository: { owner: 'cfg', repo: 'proj' } }, {
+                getRemoteRepoInfo: function() { throw new Error('must not be called'); }
+            });
+            assert.deepEqual(repoInfo, { owner: 'cfg', repo: 'proj' });
+
+            assert.equal(h.calls.getRemoteRepoInfo, 0);
+            assert.ok(h.logs.log.some(function(l) { return l.indexOf('Using targetRepository from config:') !== -1; }),
+                'the config-pinned log line is preserved: ' + JSON.stringify(h.logs.log));
+        });
+
+        test('falls back to the git remote when the config does not pin the repo', function() {
+            var h = makeActionHarness({});
+            var repoInfo = h.module.resolveRepoInfo({ jira: {} }, {
+                getRemoteRepoInfo: function() { return { owner: 'acme', repo: 'widgets' }; }
+            });
+
+            assert.deepEqual(repoInfo, { owner: 'acme', repo: 'widgets' });
+        });
+    });
+
+    suite('findPrForRework', function() {
+        test('anchor present → PR stub, no ticket lookup', function() {
+            var h = makeActionHarness({});
+            var pr = h.module.findPrForRework(42, {}, {}, 'PROJ-123');
+
+            assert.deepEqual(pr, { number: 42 });
+            assert.equal(h.calls.findPRForTicket, 0);
+        });
+
+        test('no anchor → delegates to findPRForTicket with empty options', function() {
+            var h = makeActionHarness({ pr: { number: 7 } });
+            var pr = h.module.findPrForRework(null, {}, {}, 'PROJ-123');
+
+            assert.equal(pr.number, 7);
+            assert.equal(h.calls.findPRForTicket, 1);
+            assert.equal(h.calls.findPRForTicketArg.ticketKey, 'PROJ-123');
+            assert.deepEqual(h.calls.findPRForTicketArg.options, {});
+        });
+
+        test('no anchor → config.prSearchFn is forwarded as the search option', function() {
+            var h = makeActionHarness({});
+            var fn = function() {};
+            h.module.findPrForRework(null, {}, { prSearchFn: fn }, 'PROJ-123');
+
+            assert.deepEqual(h.calls.findPRForTicketArg.options, { prSearchFn: fn });
+        });
+    });
+
+    suite('moveTicketToReworkStatus', function() {
+        test('configured + no anchor → tracker.moveToStatus with the real rework phase', function() {
+            var h = makeActionHarness({});
+            h.module.moveTicketToReworkStatus({ jira: { markReworkInDevelopment: true } }, h.tracker, 'PROJ-123', { IN_REWORK: 'In Rework' }, null);
+
+            assert.deepEqual(h.calls.moveToStatus, ['In Rework']);
+        });
+
+        test('skipped for PR-anchored runs even when configured', function() {
+            var h = makeActionHarness({});
+            h.module.moveTicketToReworkStatus({ jira: { markReworkInDevelopment: true } }, h.tracker, 'pr-42', { IN_REWORK: 'In Rework' }, 42);
+
+            assert.deepEqual(h.calls.moveToStatus, []);
+        });
+
+        test('skipped when the config does not enable it', function() {
+            var h = makeActionHarness({});
+            h.module.moveTicketToReworkStatus({}, h.tracker, 'PROJ-123', { IN_REWORK: 'In Rework' }, null);
+
+            assert.deepEqual(h.calls.moveToStatus, []);
+        });
+
+        test('a failing transition is logged with its content, not thrown', function() {
+            var h = makeActionHarness({ failMoveToStatus: true });
+            assert.doesNotThrow(function() {
+                h.module.moveTicketToReworkStatus({ jira: { markReworkInDevelopment: true } }, h.tracker, 'PROJ-123', { IN_REWORK: 'In Rework' }, null);
+            });
+
+            assert.ok(h.logs.warn.some(function(l) { return l.indexOf('Failed to move ticket to In Rework') !== -1; }),
+                'the gh-802 log line is preserved: ' + JSON.stringify(h.logs.warn));
+        });
+    });
+
+    suite('checkoutReworkBranch', function() {
+        test('happy path delegates branch, workingDir and baseBranch to gitOps', function() {
+            var h = makeActionHarness({});
+            h.module.checkoutReworkBranch('ai/gh-123', { workingDir: '/repo', git: { baseBranch: 'main' } }, 'input/PROJ-123', h.tracker, 'PROJ-123', {});
+
+            assert.deepEqual(h.calls.checkoutPRBranch, [{ branch: 'ai/gh-123', dir: '/repo', base: 'main' }]);
+            assert.equal(h.files['input/PROJ-123/rework_setup_failed.md'], undefined);
+        });
+
+        test('checkout error → failSetup marker + comment, then throws', function() {
+            var h = makeActionHarness({ failCheckout: true });
+            var err = null;
+            try {
+                h.module.checkoutReworkBranch('ai/gh-123', { workingDir: '/repo', git: { baseBranch: 'main' } }, 'input/PROJ-123', h.tracker, 'PROJ-123', {});
+            } catch (e) { err = e; }
+
+            assert.ok(err, 'checkoutReworkBranch must propagate the failSetup throw');
+            assert.contains(String(err), 'Failed to checkout branch');
+            assert.contains(h.files['input/PROJ-123/rework_setup_failed.md'], 'Failed to checkout branch');
+            assert.equal(h.calls.postComment.length, 1);
+        });
+    });
+
+    suite('runSetupCommandsStep', function() {
+        test('no warnings → no setup_warnings.md write', function() {
+            var h = makeActionHarness({});
+            h.module.runSetupCommandsStep({}, { workingDir: '/repo' }, 'input/PROJ-123', h.tracker, 'PROJ-123');
+
+            assert.equal(h.calls.runSetupCommands, 1);
+            assert.equal(h.files['input/PROJ-123/setup_warnings.md'], undefined);
+        });
+
+        test('warnings → setup_warnings.md written', function() {
+            var h = makeActionHarness({ setupWarnings: 'w1\nw2\n' });
+            h.module.runSetupCommandsStep({}, { workingDir: '/repo' }, 'input/PROJ-123', h.tracker, 'PROJ-123');
+
+            assert.equal(h.files['input/PROJ-123/setup_warnings.md'], 'w1\nw2\n');
+        });
+
+        test('warnings write failure → warn logged, not thrown', function() {
+            var h = makeActionHarness({ setupWarnings: 'w', failFileWritePaths: ['input/PROJ-123/setup_warnings.md'] });
+            assert.doesNotThrow(function() {
+                h.module.runSetupCommandsStep({}, { workingDir: '/repo' }, 'input/PROJ-123', h.tracker, 'PROJ-123');
+            });
+
+            assert.ok(h.logs.warn.some(function(l) { return l.indexOf('Failed to write setup_warnings.md') !== -1; }),
+                JSON.stringify(h.logs.warn));
+        });
+
+        test('commands failure → failSetup marker + comment, then throws', function() {
+            var h = makeActionHarness({ failSetupCommands: true });
+            var err = null;
+            try {
+                h.module.runSetupCommandsStep({}, { workingDir: '/repo' }, 'input/PROJ-123', h.tracker, 'PROJ-123');
+            } catch (e) { err = e; }
+
+            assert.ok(err);
+            assert.contains(String(err), 'Environment setup failed');
+            assert.contains(h.files['input/PROJ-123/rework_setup_failed.md'], 'Environment setup failed');
+            assert.equal(h.calls.postComment.length, 1);
+        });
+    });
+
+    suite('writeReworkBaseHead', function() {
+        test('writes the head SHA as a string', function() {
+            var h = makeActionHarness({});
+            h.module.writeReworkBaseHead('input/PROJ-123', 'sha-123');
+
+            assert.equal(h.files['input/PROJ-123/rework_base_head.txt'], 'sha-123');
+        });
+
+        test('no head SHA → no file', function() {
+            var h = makeActionHarness({});
+            h.module.writeReworkBaseHead('input/PROJ-123', null);
+
+            assert.equal(h.files['input/PROJ-123/rework_base_head.txt'], undefined);
+        });
+
+        test('write failure → warn, not thrown', function() {
+            var h = makeActionHarness({ failFileWritePaths: ['input/PROJ-123/rework_base_head.txt'] });
+            assert.doesNotThrow(function() { h.module.writeReworkBaseHead('input/PROJ-123', 'sha-123'); });
+
+            assert.ok(h.logs.warn.some(function(l) { return l.indexOf('rework_base_head.txt') !== -1; }), JSON.stringify(h.logs.warn));
+        });
+    });
+
+    suite('postReworkStartedCommentStep', function() {
+        test('posts the rework-started comment through the tracker', function() {
+            var h = makeActionHarness({});
+            h.module.postReworkStartedCommentStep(h.tracker, 'PROJ-123', {}, {
+                prNumber: 7, prUrl: 'https://github.com/acme/widgets/pull/7', branchName: 'ai/gh-123'
+            });
+
+            assert.equal(h.calls.postComment.length, 1);
+            assert.contains(h.calls.postComment[0].body, 'Automated Rework Started');
+        });
+
+        test('post failure → warn, not thrown', function() {
+            var h = makeActionHarness({ failTrackerPostComment: true });
+            assert.doesNotThrow(function() {
+                h.module.postReworkStartedCommentStep(h.tracker, 'PROJ-123', {}, { prNumber: 7 });
+            });
+
+            assert.ok(h.logs.warn.some(function(l) { return l.indexOf('Failed to post tracker comment') !== -1; }), JSON.stringify(h.logs.warn));
+        });
+    });
+
+    suite('reportActionError', function() {
+        test('posts a ❌ Rework Setup Error comment through the provided tracker', function() {
+            var h = makeActionHarness({});
+            h.module.reportActionError({ inputFolderPath: 'input/PROJ-123' }, h.tracker, new Error('boom'));
+
+            assert.equal(h.calls.postComment.length, 1);
+            assert.contains(h.calls.postComment[0].body, '❌ Rework Setup Error');
+            assert.contains(h.calls.postComment[0].body, 'boom');
+        });
+
+        test('without a tracker it falls back to creating one from the params', function() {
+            var h = makeActionHarness({});
+            h.module.reportActionError({ inputFolderPath: 'input/PROJ-123', jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} } }, null, new Error('boom'));
+
+            assert.equal(h.calls.createTracker, 1);
+            assert.equal(h.calls.postComment.length, 1);
+        });
+
+        test('a failing fallback tracker creation is logged, not thrown', function() {
+            var h = makeActionHarness({ failTrackerCreate: true });
+            assert.doesNotThrow(function() {
+                h.module.reportActionError({ inputFolderPath: 'input/PROJ-123' }, null, new Error('boom'));
+            });
+
+            assert.equal(h.calls.postComment.length, 0);
+            assert.ok(h.logs.error.some(function(l) { return l.indexOf('Failed to create tracker for error comment') !== -1; }),
+                JSON.stringify(h.logs.error));
+        });
+
+        test('a failing comment post inside the reporter is contained', function() {
+            var h = makeActionHarness({ failTrackerPostComment: true });
+            assert.doesNotThrow(function() {
+                h.module.reportActionError({ inputFolderPath: 'input/PROJ-123' }, h.tracker, new Error('boom'));
+            });
+
+            assert.ok(h.logs.error.some(function(l) { return l.indexOf('Failed to post rework setup error comment') !== -1; }),
+                JSON.stringify(h.logs.error));
+        });
+
+        test('no derivable ticket key → no tracker, no comment', function() {
+            var h = makeActionHarness({});
+            h.module.reportActionError({}, null, new Error('boom'));
+
+            assert.equal(h.calls.createTracker, 0);
+            assert.equal(h.calls.postComment.length, 0);
+        });
+
+        test('errorTicketKeyOf resolves the key from flat params or jobParams, empty when none', function() {
+            var h = makeActionHarness({});
+            assert.equal(h.module.errorTicketKeyOf({ inputFolderPath: 'input/PROJ-123' }), 'PROJ-123');
+            assert.equal(h.module.errorTicketKeyOf({ jobParams: { inputFolderPath: 'input/PROJ-9' } }), 'PROJ-9');
+            assert.equal(h.module.errorTicketKeyOf({}), '');
+        });
+    });
+
 });

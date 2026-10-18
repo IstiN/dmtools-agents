@@ -1,2 +1,0 @@
-sh: -c: line 0: syntax error near unexpected token `('
-sh: -c: line 0: `cd /Users/uladzimir_klyshevich/git/dmtools-agents && diff <(git show 622d0241 --format= | grep -v '^index ') <(git show be374aa8 --format= | grep -v '^index ') && echo "IDENTICAL PATCHES" || echo "---differs---"'

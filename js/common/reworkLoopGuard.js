@@ -111,9 +111,11 @@ function commentAuthorLogin(item) {
  * count): true when the comment author is in the allowlist.
  */
 function isTrustedAuthor(item, allow) {
-    var who = commentAuthorLogin(item);
+    // gh-1025 review: normalize ONE trailing '[bot]' on both sides —
+    // App-authored lap/escalation markers are trusted under the bare knob.
+    var who = String(commentAuthorLogin(item) || '').replace(/\[bot\]$/i, '');
     for (var a = 0; a < allow.length; a++) {
-        if (who && who === String(allow[a] || '').toLowerCase()) return true;
+        if (who && who === String(allow[a] || '').toLowerCase().replace(/\[bot\]$/i, '')) return true;
     }
     return false;
 }

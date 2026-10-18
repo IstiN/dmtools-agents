@@ -540,6 +540,211 @@ suite('postBulkBugsCreation', function() {
 
 });
 
+suite('postBulkBugsCreation: recovery and create flows (gh-1010 characterization)', function() {
+
+    var DEFAULT_LABELS = { removeLabel: 'sm_bug_creation_triggered', smTriggerLabel: 'sm_bulk_bugs_creation_triggered' };
+
+    function runBulk(mocks, customParams) {
+        var module = loadPostBulkBugsCreation(mocks);
+        return module.action({
+            ticket: { key: 'TS-901' },
+            jobParams: { customParams: customParams || DEFAULT_LABELS }
+        });
+    }
+
+    test('missing decisions file removes the SM trigger label and reports resume failure', function() {
+        var removedLabels = [];
+        var result = runBulk({
+            file_read: function() { return null; },
+            jira_remove_label: function(args) { removedLabels.push(args); }
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Missing bulk_bug_decisions.json');
+        assert.contains(result.error, 'unit test');
+        // triggerTicketKey resolves from actualParams (jobParams), which carries no ticket here
+        assert.deepEqual(removedLabels, []);
+    });
+
+    test('creates a new bug, links all processed TCs to it and moves them to Bug To Fix', function() {
+        var created = [];
+        var links = [];
+        var moves = [];
+        var removedLabels = [];
+        var comments = [];
+
+        var result = runBulk({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bulk_bug_decisions.json') {
+                    return JSON.stringify({
+                        processed: ['TS-910', 'TS-911'],
+                        newBugs: [
+                            {
+                                summary: 'Checkout total is wrong',
+                                priority: 'High',
+                                descriptionFile: 'outputs/bug_910_description.md',
+                                linkedTCs: ['TS-910', 'TS-911']
+                            }
+                        ],
+                        links: [],
+                        skipped: []
+                    });
+                }
+                if (opts.path === 'outputs/bug_910_description.md') return 'Total miscalc details';
+                return null;
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_create_ticket_basic: function(args) {
+                created.push(args);
+                return '{"key":"BUG-500"}';
+            },
+            jira_link_issues: function(args) { links.push(args); },
+            jira_move_to_status: function(args) { moves.push(args); return {}; },
+            jira_remove_label: function(args) { removedLabels.push(args); },
+            jira_post_comment: function(args) { comments.push(args); },
+            jira_attach_file_to_ticket: function() {}
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(created.length, 1);
+        assert.equal(created[0].project, 'TS');
+        assert.contains(created[0].description, 'Total miscalc details');
+        assert.deepEqual(links, [
+            { sourceKey: 'TS-910', anotherKey: 'BUG-500', relationship: 'Blocks' },
+            { sourceKey: 'TS-911', anotherKey: 'BUG-500', relationship: 'Blocks' }
+        ]);
+        assert.deepEqual(moves, [
+            { key: 'TS-910', statusName: 'Bug To Fix' },
+            { key: 'TS-911', statusName: 'Bug To Fix' }
+        ]);
+        assert.deepEqual(removedLabels, [
+            { key: 'TS-910', label: 'sm_bug_creation_triggered' },
+            { key: 'TS-910', label: 'sm_bulk_bugs_creation_triggered' },
+            { key: 'TS-911', label: 'sm_bug_creation_triggered' },
+            { key: 'TS-911', label: 'sm_bulk_bugs_creation_triggered' }
+        ]);
+        assert.equal(comments.length, 2);
+        assert.contains(comments[0].comment, 'New Bug Created (Batch)');
+        assert.deepEqual(result.results.created, [
+            { tcKey: 'TS-910', bugKey: 'BUG-500' },
+            { tcKey: 'TS-911', bugKey: 'BUG-500' }
+        ]);
+    });
+
+    test('skips TCs outside the processed list when creating a new bug (safety guard)', function() {
+        var links = [];
+
+        var result = runBulk({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bulk_bug_decisions.json') {
+                    return JSON.stringify({
+                        processed: ['TS-920'],
+                        newBugs: [
+                            { summary: 'Guarded bug', priority: 'Medium', linkedTCs: ['TS-920', 'TS-999'] }
+                        ],
+                        links: [],
+                        skipped: []
+                    });
+                }
+                return null;
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_create_ticket_basic: function() { return '{"key":"BUG-501"}'; },
+            jira_link_issues: function(args) { links.push(args); },
+            jira_move_to_status: function() { return {}; },
+            jira_remove_label: function() {},
+            jira_post_comment: function() {}
+        });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(links, [
+            { sourceKey: 'TS-920', anotherKey: 'BUG-501', relationship: 'Blocks' }
+        ]);
+        assert.deepEqual(result.results.created, [
+            { tcKey: 'TS-920', bugKey: 'BUG-501' }
+        ]);
+    });
+
+    test('skips newBug entries without a summary', function() {
+        var created = [];
+
+        var result = runBulk({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bulk_bug_decisions.json') {
+                    return JSON.stringify({
+                        processed: [],
+                        newBugs: [{ priority: 'Medium', linkedTCs: [] }],
+                        links: [],
+                        skipped: []
+                    });
+                }
+                return null;
+            },
+            jira_create_ticket_basic: function(args) { created.push(args); return '{"key":"BUG-502"}'; }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(created.length, 0);
+        assert.deepEqual(result.results.errors, []);
+    });
+
+    test('records create failures without aborting the batch', function() {
+        var result = runBulk({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bulk_bug_decisions.json') {
+                    return JSON.stringify({
+                        processed: ['TS-930'],
+                        newBugs: [
+                            { summary: 'Unstable bug', priority: 'Medium', linkedTCs: ['TS-930'] }
+                        ],
+                        links: [],
+                        skipped: []
+                    });
+                }
+                return null;
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_create_ticket_basic: function() { throw new Error('create exploded'); }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.results.created.length, 0);
+        assert.equal(result.results.errors.length, 1);
+        assert.contains(result.results.errors[0].error, 'create exploded');
+    });
+
+    test('ignores invalid link entries missing tcKey or bugKey', function() {
+        var links = [];
+
+        var result = runBulk({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bulk_bug_decisions.json') {
+                    return JSON.stringify({
+                        processed: ['TS-940'],
+                        newBugs: [],
+                        links: [{ tcKey: 'TS-940' }, { bugKey: 'BUG-1' }, { tcKey: 'TS-940', bugKey: 'BUG-600' }],
+                        skipped: []
+                    });
+                }
+                return null;
+            },
+            jira_link_issues: function(args) { links.push(args); },
+            jira_move_to_status: function() { return {}; },
+            jira_remove_label: function() {},
+            jira_post_comment: function() {}
+        });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(links, [
+            { sourceKey: 'TS-940', anotherKey: 'BUG-600', relationship: 'Blocks' }
+        ]);
+        assert.deepEqual(result.results.linked, [
+            { tcKey: 'TS-940', bugKey: 'BUG-600' }
+        ]);
+    });
+
+});
+
 suite('postBulkBugsCreation: stage-label fallback (gh-916)', function() {
     test("'label' mode: a rejected Bug To Fix move marks stage_bug_to_fix, no throw, decision still recorded", function() {
         var added = [];

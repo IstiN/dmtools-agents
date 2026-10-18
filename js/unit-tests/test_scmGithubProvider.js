@@ -179,6 +179,57 @@ suite('scm github provider', function () {
         ]);
     });
 
+    // ── updatePrBody (gh-960) ─────────────────────────────────────────────
+
+    test('updatePrBody PATCHes the body via gh api, staging it through a temp file', function () {
+        var writes = [], deletes = [], commands = [];
+        var scm = makeGithub({
+            file_write: function (path, content) { writes.push([path, content]); },
+            file_delete: function (args) { deletes.push(args.path || args); },
+            cli_execute_command: function (args) { commands.push(args); return '{"number":9}'; }
+        });
+        var out = scm.updatePrBody(9, 'Closes #952\n\nbody');
+        assert.equal(out, '{"number":9}');
+        assert.deepEqual(writes, [['pr_body_update_tmp_9.md', 'Closes #952\n\nbody']]);
+        assert.deepEqual(commands, [
+            { command: 'gh api repos/my-owner/my-repo/pulls/9 -X PATCH -F body=@pr_body_update_tmp_9.md' }
+        ]);
+        assert.deepEqual(deletes, ['pr_body_update_tmp_9.md'], 'temp body file cleaned up');
+    });
+
+    test('updatePrBody stringifies the PR id and coerces a null body to empty string', function () {
+        var writes = [], commands = [];
+        var scm = makeGithub({
+            file_write: function (path, content) { writes.push([path, content]); },
+            file_delete: function () {},
+            cli_execute_command: function (args) { commands.push(args); return 'ok'; }
+        });
+        scm.updatePrBody('42', null);
+        assert.deepEqual(writes, [['pr_body_update_tmp_42.md', '']]);
+        assert.notEqual(commands[0].command.indexOf('pulls/42 -X PATCH'), -1,
+            'PR id stringified in the api path: ' + commands[0].command);
+    });
+
+    test('updatePrBody returns null and still cleans up when the api call throws', function () {
+        var deletes = [];
+        var scm = makeGithub({
+            file_write: function () {},
+            file_delete: function (args) { deletes.push(args.path || args); },
+            cli_execute_command: function () { throw new Error('gh down'); }
+        });
+        assert.equal(scm.updatePrBody(7, 'x'), null);
+        assert.deepEqual(deletes, ['pr_body_update_tmp_7.md']);
+    });
+
+    test('updatePrBody returns null when gh produces no output (PATCH failed silently)', function () {
+        var scm = makeGithub({
+            file_write: function () {},
+            file_delete: function () {},
+            cli_execute_command: function () { return ''; }
+        });
+        assert.equal(scm.updatePrBody(7, 'x'), null);
+    });
+
     // ── getDiffText ────────────────────────────────────────────────────────
 
     test('getDiffText returns the tool result on success', function () {

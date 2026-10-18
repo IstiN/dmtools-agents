@@ -1,3 +1,0 @@
-5668:          <li>&bull; merge-validated: green + CLEAN · fail-validation: red (CANCELLED = no verdict) · conflict-rework: DIRTY · close-on-merge: ai_developed + issue OPEN · stalls: factory-stalls.html</li>
----
-docs/machine-factory-integration.md:45:| **factory/teammate.yml** | **dmtools-agents** (`.github/workflows/factory/`, reusable) | the legs: `guard → dev/review/rework` jobs, dmtools + `fa` agent |
