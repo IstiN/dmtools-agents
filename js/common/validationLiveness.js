@@ -255,6 +255,60 @@ function ghostGuardMarks(bodies) {
     return out;
 }
 
+// ── Silent-update failure markers (gh-1000 I5) ──────────────────────────────
+//
+// update_branch's silentUpdateBranch runs a throwaway /tmp clone to merge
+// main under the head (no CI). A bare `exit 1` from that harness (live
+// 2026-10-17 ~19:14Z) skipped park-set/unpark bookkeeping silently and the
+// branch stayed stale forever. One marker line per failed attempt records
+// the event durably on the PR — smAgent's recordSilentUpdateFailure (wired
+// via silentUpdateBranchTracked) is the consumer: it posts the marker on
+// every clone failure and applies the degraded flag once the attempts run
+// out (the every-tick retry itself stays self-healing):
+//
+//   ⚠️ silent-update failure — attempt <n> at <iso>
+
+var SILENT_UPDATE_MAX_FAILURES = 3;
+var SILENT_UPDATE_DEGRADED_LABEL = 'silent-update-degraded';
+var SILENT_UPDATE_MARKER_RE = /⚠️ silent-update failure — attempt (\d+) at (\S+)/g;
+
+function silentUpdateFailureLine(attempt, iso) {
+    return '⚠️ silent-update failure — attempt ' + attempt + ' at ' + (iso || '');
+}
+
+function commentBodyOf(c) {
+    return (c && (c.body || c.text)) || (typeof c === 'string' ? c : '');
+}
+
+// Fold one comment body's failure markers into the accumulator.
+function scanFailureMarkers(body, acc) {
+    var re = /⚠️ silent-update failure — attempt (\d+) at ([0-9T:\-.\+Z]+)/g;
+    var m;
+    while ((m = re.exec(String(body))) !== null) {
+        var n = parseInt(m[1], 10);
+        if (n > acc.count) acc.count = n;
+        var t = String(m[2]);
+        if (!acc.newest || t > acc.newest) acc.newest = t;
+    }
+}
+
+// Failure markers seen in a PR comment list (bodies or single strings).
+// Returns { count, newest } — count is the highest attempt number observed
+// (markers are monotonic per branch), newest the newest ISO timestamp.
+function silentUpdateFailureCount(comments) {
+    var acc = { count: 0, newest: null };
+    (comments || []).forEach(function (c) {
+        scanFailureMarkers(commentBodyOf(c), acc);
+    });
+    return acc;
+}
+
+// Remaining attempts before the branch is flagged degraded.
+function silentUpdateAttemptsLeft(count) {
+    var left = SILENT_UPDATE_MAX_FAILURES - (Math.floor(Number(count)) || 0);
+    return left > 0 ? left : 0;
+}
+
 module.exports = {
     classify: classify,
     zombieMarks: zombieMarks,
@@ -267,5 +321,10 @@ module.exports = {
     ZOMBIE_MARKER_RE: ZOMBIE_MARKER_RE,
     ACTIVE_RUN_STATES: ACTIVE_RUN_STATES,
     STALE_CANCEL_MARKER_RE: STALE_CANCEL_MARKER_RE,
-    staleCancelMarkerLine: staleCancelMarkerLine
+    staleCancelMarkerLine: staleCancelMarkerLine,
+    SILENT_UPDATE_MAX_FAILURES: SILENT_UPDATE_MAX_FAILURES,
+    SILENT_UPDATE_DEGRADED_LABEL: SILENT_UPDATE_DEGRADED_LABEL,
+    silentUpdateFailureLine: silentUpdateFailureLine,
+    silentUpdateFailureCount: silentUpdateFailureCount,
+    silentUpdateAttemptsLeft: silentUpdateAttemptsLeft
 };

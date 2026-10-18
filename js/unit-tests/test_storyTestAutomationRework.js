@@ -218,3 +218,223 @@ suite('storyTestAutomationRework: stage-label fallback (gh-916)', function() {
         assert.deepEqual(added, [{ key: 'TS-800', label: 'stage_in_testing' }]);
     });
 });
+
+// ── gh-1006: characterization tests for mergeMain conflict-resolution paths ──
+// Pure-refactor guard: these pin the exact git command order and error
+// strings of mergeMain before the CRAP extraction (gh-1006).
+
+function runMergeMainConflict(commands, behavior) {
+    // behavior: function(command) → output string, or throw to simulate failure
+    var m = loadRework({
+        cli_execute_command: function (args) {
+            commands.push(args.command);
+            if (args.command === 'git rev-parse --quiet --verify MERGE_HEAD') {
+                throw new Error('exit 1'); // no merge in progress
+            }
+            return behavior(args.command);
+        }
+    });
+    return m.mergeMain('PROJ-123', TEST_CONFIG);
+}
+
+suite('storyTestAutomationRework: mergeMain conflict auto-resolution (gh-1006)', function () {
+
+    test('merge conflict: resolves ticket test file with --ours, others with --theirs, then commits', function () {
+        var commands = [];
+        runMergeMainConflict(commands, function (command) {
+            if (command === 'git merge origin/main --no-edit') throw new Error('Auto-merging failed');
+            if (command === 'git diff --name-only --diff-filter=U') {
+                return 'testing/tests/PROJ-123/login.robot\njs/unrelated.js';
+            }
+            return '';
+        });
+        assert.deepEqual(commands, [
+            'git rev-parse --quiet --verify MERGE_HEAD',
+            'git config user.name "AI Teammate"',
+            'git config user.email "ai@example.com"',
+            'git fetch origin main',
+            'git fetch --unshallow',
+            'git merge origin/main --no-edit',
+            'git diff --name-only --diff-filter=U',
+            'git checkout --ours -- "testing/tests/PROJ-123/login.robot"',
+            'git add "testing/tests/PROJ-123/login.robot"',
+            'git checkout --theirs -- "js/unrelated.js"',
+            'git add "js/unrelated.js"',
+            'git commit -m "PROJ-123 test rework: merge origin/main and resolve test conflicts"'
+        ], 'git commands must run in the exact established order');
+    });
+
+    test('merge conflict with no unmerged files throws without resolving or committing', function () {
+        var commands = [];
+        var threw = null;
+        try {
+            runMergeMainConflict(commands, function (command) {
+                if (command === 'git merge origin/main --no-edit') throw new Error('boom');
+                return ''; // empty conflict list
+            });
+        } catch (e) {
+            threw = e;
+        }
+        assert.ok(threw, 'must throw when the merge failed but no conflicted files are found');
+        assert.contains(threw.toString(), 'no conflicted files were found');
+        assert.equal(commands.some(function (c) { return c.indexOf('git checkout --') !== -1; }), false);
+        assert.equal(commands.some(function (c) { return c.indexOf('git commit') === 0; }), false);
+    });
+
+    test('a failing git checkout aborts resolution with an actionable error, no commit', function () {
+        var commands = [];
+        var threw = null;
+        try {
+            runMergeMainConflict(commands, function (command) {
+                if (command === 'git merge origin/main --no-edit') throw new Error('conflict');
+                if (command === 'git diff --name-only --diff-filter=U') return 'testing/tests/PROJ-123/a.robot';
+                if (command === 'git checkout --ours -- "testing/tests/PROJ-123/a.robot"') throw new Error('disk full');
+                return '';
+            });
+        } catch (e) {
+            threw = e;
+        }
+        assert.ok(threw, 'must rethrow as a resolution failure');
+        assert.contains(threw.toString(), 'Failed to resolve conflict for testing/tests/PROJ-123/a.robot');
+        assert.equal(commands.some(function (c) { return c.indexOf('git commit') === 0; }), false);
+    });
+
+    test('a failing final commit throws with the commit error context', function () {
+        var threw = null;
+        try {
+            runMergeMainConflict([], function (command) {
+                if (command === 'git merge origin/main --no-edit') throw new Error('conflict');
+                if (command === 'git diff --name-only --diff-filter=U') return 'js/unrelated.js';
+                if (command === 'git add "js/unrelated.js"') throw new Error('index locked');
+                return '';
+            });
+        } catch (e) {
+            threw = e;
+        }
+        assert.ok(threw, 'must throw');
+        assert.contains(threw.toString(), 'Failed to resolve conflict for js/unrelated.js');
+    });
+
+    test('unshallow and git-config failures are non-fatal warnings; merge still runs', function () {
+        var commands = [];
+        runMergeMainConflict(commands, function (command) {
+            if (command === 'git config user.name "AI Teammate"') throw new Error('no repo');
+            if (command === 'git fetch --unshallow') throw new Error('already complete');
+            return '';
+        });
+        assert.ok(commands.some(function (c) { return c === 'git merge origin/main --no-edit'; }),
+            'merge must still run when author config and unshallow fail');
+    });
+
+    test('a failing origin/main fetch aborts before any merge attempt', function () {
+        var commands = [];
+        var threw = null;
+        try {
+            runMergeMainConflict(commands, function (command) {
+                if (command === 'git fetch origin main') throw new Error('network down');
+                return '';
+            });
+        } catch (e) {
+            threw = e;
+        }
+        assert.ok(threw, 'must throw');
+        assert.contains(threw.toString(), 'Failed to fetch origin/main: ');
+        assert.equal(commands.some(function (c) { return c.indexOf('git merge') === 0; }), false);
+    });
+});
+
+// ── gh-1006: characterization tests for postThreadReplies (review-thread replies) ──
+
+function makeReplyScm(calls, behavior) {
+    return {
+        replyToThread: function (pr, target, reply) {
+            calls.push({ kind: 'reply', pr: pr, target: target, reply: reply });
+            if (behavior && behavior.replyToThread) return behavior.replyToThread(pr, target, reply);
+        },
+        resolveThread: function (pr, target) {
+            calls.push({ kind: 'resolve', pr: pr, target: target });
+            if (behavior && behavior.resolveThread) return behavior.resolveThread(pr, target);
+        }
+    };
+}
+
+function loadReplyModule(fileContent) {
+    return loadRework({
+        file_read: function (args) {
+            if (args.path === 'outputs/review_replies.json') return fileContent;
+            return null;
+        }
+    });
+}
+
+suite('storyTestAutomationRework: postThreadReplies (gh-1006)', function () {
+
+    test('missing review_replies.json returns 0 and never touches the SCM', function () {
+        var calls = [];
+        var m = loadReplyModule(null);
+        assert.equal(m.postThreadReplies(makeReplyScm(calls), 42), 0);
+        assert.deepEqual(calls, []);
+    });
+
+    test('unparseable review_replies.json returns 0 and never touches the SCM', function () {
+        var calls = [];
+        var m = loadReplyModule('{not json');
+        assert.equal(m.postThreadReplies(makeReplyScm(calls), 42), 0);
+        assert.deepEqual(calls, []);
+    });
+
+    test('empty replies array returns 0 and never touches the SCM', function () {
+        var calls = [];
+        var m = loadReplyModule('{"replies": []}');
+        assert.equal(m.postThreadReplies(makeReplyScm(calls), 42), 0);
+        assert.deepEqual(calls, []);
+    });
+
+    test('posts replies for two items: threadId, discussionId fallback and default reply text', function () {
+        var calls = [];
+        var m = loadReplyModule(JSON.stringify({
+            replies: [
+                { inReplyToId: 101, threadId: 't-1', reply: 'Fixed in abc123' },
+                { inReplyToId: 202, discussionId: 'd-2' }
+            ]
+        }));
+        var scm = makeReplyScm(calls);
+        assert.equal(m.postThreadReplies(scm, 7), 2);
+        assert.deepEqual(calls, [
+            { kind: 'reply', pr: 7, target: { rootCommentId: 101, threadId: 't-1' }, reply: 'Fixed in abc123' },
+            { kind: 'resolve', pr: 7, target: { threadId: 't-1' } },
+            { kind: 'reply', pr: 7, target: { rootCommentId: 202, threadId: 'd-2' }, reply: '✅ Addressed.' },
+            // no threadId on the second item — discussionId only feeds the reply target
+        ]);
+    });
+
+    test('a failing reply is counted as not posted but does not stop the loop', function () {
+        var calls = [];
+        var m = loadReplyModule(JSON.stringify({
+            replies: [
+                { inReplyToId: 1, threadId: 't-1' },
+                { inReplyToId: 2, threadId: 't-2' }
+            ]
+        }));
+        var scm = makeReplyScm(calls, {
+            replyToThread: function (pr, target) {
+                if (target.rootCommentId === 1) throw new Error('thread gone');
+            }
+        });
+        assert.equal(m.postThreadReplies(scm, 7), 1);
+        assert.equal(calls.filter(function (c) { return c.kind === 'reply'; }).length, 2);
+        assert.equal(calls.filter(function (c) { return c.kind === 'resolve'; }).length, 2,
+            'both threads must still be resolved');
+    });
+
+    test('a failing resolve is non-fatal and does not change the posted count', function () {
+        var calls = [];
+        var m = loadReplyModule(JSON.stringify({
+            replies: [{ inReplyToId: 1, threadId: 't-1' }]
+        }));
+        var scm = makeReplyScm(calls, {
+            resolveThread: function () { throw new Error('cannot resolve'); }
+        });
+        assert.equal(m.postThreadReplies(scm, 7), 1);
+    });
+});

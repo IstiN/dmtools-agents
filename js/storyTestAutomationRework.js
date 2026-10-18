@@ -42,6 +42,61 @@ function runInRepo(command, workingDir) {
     return cli_execute_command(args);
 }
 
+// ── gh-1006: pure parse/build/decide helpers extracted from mergeMain ──
+
+function configureGitAuthor(runInRepoFn, config, workingDir) {
+    try {
+        runInRepoFn('git config user.name "' + config.git.authorName + '"', workingDir);
+        runInRepoFn('git config user.email "' + config.git.authorEmail + '"', workingDir);
+    } catch (e) {
+        console.warn('Could not configure git author:', e);
+    }
+}
+
+function parseConflictedFiles(statusOutput) {
+    return statusOutput.split('\n').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
+}
+
+function decideConflictSide(storyKey, file) {
+    return file.indexOf('testing/tests/' + storyKey + '/') === 0 ? 'ours' : 'theirs';
+}
+
+function buildMergeCommitMessage(storyKey) {
+    return storyKey + ' test rework: merge origin/main and resolve test conflicts';
+}
+
+function resolveMergeConflicts(runInRepoFn, workingDir, storyKey) {
+    var status = cleanCommandOutput(runInRepoFn('git diff --name-only --diff-filter=U', workingDir) || '');
+    var conflicts = parseConflictedFiles(status);
+    if (conflicts.length === 0) {
+        throw new Error('git merge origin/main failed and no conflicted files were found');
+    }
+
+    conflicts.forEach(function(file) {
+        try {
+            if (decideConflictSide(storyKey, file) === 'ours') {
+                runInRepoFn('git checkout --ours -- "' + file + '"', workingDir);
+                console.log('✅ Resolved conflict keeping branch version for ticket test file:', file);
+            } else {
+                runInRepoFn('git checkout --theirs -- "' + file + '"', workingDir);
+                console.log('✅ Resolved conflict keeping origin/main version:', file);
+            }
+            runInRepoFn('git add "' + file + '"', workingDir);
+        } catch (e) {
+            throw new Error('Failed to resolve conflict for ' + file + ': ' + e);
+        }
+    });
+}
+
+function commitResolvedMerge(runInRepoFn, workingDir, storyKey) {
+    try {
+        runInRepoFn('git commit -m "' + buildMergeCommitMessage(storyKey).replace(/"/g, '\\"') + '"', workingDir);
+        console.log('✅ Committed merge with auto-resolved test conflicts');
+    } catch (e) {
+        throw new Error('Failed to commit auto-resolved merge: ' + e);
+    }
+}
+
 function mergeMain(storyKey, config) {
     var workingDir = config.workingDir || null;
 
@@ -59,12 +114,7 @@ function mergeMain(storyKey, config) {
             (workingDir || '.') + ' — conclude or abort the unconcluded merge before rework can merge origin/main for ' + storyKey);
     }
 
-    try {
-        runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
-        runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
-    } catch (e) {
-        console.warn('Could not configure git author:', e);
-    }
+    configureGitAuthor(runInRepo, config, workingDir);
 
     console.log('Fetching origin/main to keep test branch up to date...');
     try {
@@ -91,34 +141,8 @@ function mergeMain(storyKey, config) {
         console.warn('Attempting auto-resolution for ticket test files...');
     }
 
-    var status = cleanCommandOutput(runInRepo('git diff --name-only --diff-filter=U', workingDir) || '');
-    var conflicts = status.split('\n').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
-    if (conflicts.length === 0) {
-        throw new Error('git merge origin/main failed and no conflicted files were found');
-    }
-
-    conflicts.forEach(function(file) {
-        try {
-            if (file.indexOf('testing/tests/' + storyKey + '/') === 0) {
-                runInRepo('git checkout --ours -- "' + file + '"', workingDir);
-                console.log('✅ Resolved conflict keeping branch version for ticket test file:', file);
-            } else {
-                runInRepo('git checkout --theirs -- "' + file + '"', workingDir);
-                console.log('✅ Resolved conflict keeping origin/main version:', file);
-            }
-            runInRepo('git add "' + file + '"', workingDir);
-        } catch (e) {
-            throw new Error('Failed to resolve conflict for ' + file + ': ' + e);
-        }
-    });
-
-    try {
-        var mergeMsg = storyKey + ' test rework: merge origin/main and resolve test conflicts';
-        runInRepo('git commit -m "' + mergeMsg.replace(/"/g, '\\"') + '"', workingDir);
-        console.log('✅ Committed merge with auto-resolved test conflicts');
-    } catch (e) {
-        throw new Error('Failed to commit auto-resolved merge: ' + e);
-    }
+    resolveMergeConflicts(runInRepo, workingDir, storyKey);
+    commitResolvedMerge(runInRepo, workingDir, storyKey);
 }
 
 function commitAndPush(storyKey, config) {
@@ -167,40 +191,65 @@ function commitAndPush(storyKey, config) {
     return branchName;
 }
 
-function postThreadReplies(scm, pullRequestId) {
-    const repliesJson = readFile('outputs/review_replies.json');
+// ── gh-1006: pure parse/build/decide helpers extracted from postThreadReplies ──
+
+// Returns the reply list to process, or null when there is nothing to do
+// (missing file, unparseable JSON, or empty list). Emits the same warnings
+// as the original inline flow.
+function parseReviewReplies(repliesJson) {
     if (!repliesJson) {
         console.warn('outputs/review_replies.json not found — skipping thread replies');
-        return 0;
+        return null;
     }
     var data;
     try {
         data = JSON.parse(repliesJson);
     } catch (e) {
         console.warn('Failed to parse review_replies.json:', e);
-        return 0;
+        return null;
     }
-    const replies = (data && data.replies) ? data.replies : [];
-    if (replies.length === 0) return 0;
+    var replies = (data && data.replies) ? data.replies : [];
+    return replies.length ? replies : null;
+}
+
+function buildThreadReplyTarget(item) {
+    return {
+        rootCommentId: item.inReplyToId,
+        threadId: item.threadId || item.discussionId
+    };
+}
+
+function replyTextFor(item) {
+    return item.reply || '✅ Addressed.';
+}
+
+function postThreadReply(scm, pullRequestId, item) {
+    try {
+        scm.replyToThread(pullRequestId, buildThreadReplyTarget(item), replyTextFor(item));
+        return true;
+    } catch (e) {
+        console.warn('Failed to reply to comment #' + item.inReplyToId + ':', e);
+        return false;
+    }
+}
+
+function resolveThreadIfPresent(scm, pullRequestId, item) {
+    if (!item.threadId) return;
+    try {
+        scm.resolveThread(pullRequestId, { threadId: item.threadId });
+    } catch (e) {
+        console.warn('Failed to resolve thread', item.threadId + ':', e);
+    }
+}
+
+function postThreadReplies(scm, pullRequestId) {
+    var replies = parseReviewReplies(readFile('outputs/review_replies.json'));
+    if (!replies) return 0;
 
     var posted = 0;
     replies.forEach(function(item) {
-        try {
-            scm.replyToThread(pullRequestId, {
-                rootCommentId: item.inReplyToId,
-                threadId: item.threadId || item.discussionId
-            }, item.reply || '✅ Addressed.');
-            posted++;
-        } catch (e) {
-            console.warn('Failed to reply to comment #' + item.inReplyToId + ':', e);
-        }
-        if (item.threadId) {
-            try {
-                scm.resolveThread(pullRequestId, { threadId: item.threadId });
-            } catch (e) {
-                console.warn('Failed to resolve thread', item.threadId + ':', e);
-            }
-        }
+        if (postThreadReply(scm, pullRequestId, item)) posted++;
+        resolveThreadIfPresent(scm, pullRequestId, item);
     });
     console.log('Posted ' + posted + '/' + replies.length + ' thread replies');
     return posted;
@@ -358,5 +407,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, mergeMain };
+    module.exports = { action, mergeMain, postThreadReplies };
 }

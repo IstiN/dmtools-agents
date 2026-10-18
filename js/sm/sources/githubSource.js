@@ -28,6 +28,8 @@
 var smProviderModule = require('../../common/smProvider.js');
 var machineAuthorModule = require('../../common/machineAuthor.js');
 var smAsyncModule = require('../../common/smAsync.js');
+var mutexRegistryModule = require('../../common/mutexRegistry.js');
+var mutexRegistryModule = require('../../common/mutexRegistry.js');
 
 // runAsync worker sources — STRING literals of CLOSURE-FREE functions.
 // The Dart runtime serializes them via fn.toString() and runs each on a
@@ -709,6 +711,169 @@ function linkedIssueNumber(body) {
     return m ? parseInt(m[2], 10) : null;
 }
 
+
+// gh-1000 — phantom mutex holder reconciliation (I1/I2/E4/AC2).
+// The mutex scan below reads the holder set from the provider's per-tick
+// ioCache. A holder that vanished from the live label layer (arm strip
+// racing the cached open-PR list) would otherwise stay a phantom turnstile
+// deferring every candidate with zero labeled open PRs (live 19:08Z:
+// `slots 1/1 taken` while factory lanes.validating was empty). On a
+// full-slot defer decision the holders are re-derived against a LIVE
+// github_list_prs re-read — divergence means the cached view was stale:
+// drop the cache entry (self-heal), record the alarm + counters, and let
+// the query proceed with the corrected holder set IN THE SAME TICK (a
+// queued candidate may arm immediately — AC2). Probe failure keeps the
+// cached decision for one more tick (fail-closed, E4).
+
+// Numbers of the PRs in `items` that hold the mutex label, honoring the
+// same guards the scan applies (mutexAmong scope; 'blocked' exempts).
+function mutexHoldersOf(items, q) {
+    var among = (q.mutexAmong && q.mutexAmong.length) ? q.mutexAmong : null;
+    return items.filter(function (p) {
+        var labels = p.labels || [];
+        if (labels.indexOf('blocked') !== -1) return false;
+        if (labels.indexOf(q.mutex) === -1) return false;
+        return !among || among.some(function (m) { return labels.indexOf(m) !== -1; });
+    // Tolerant of both payload shapes: the github_list_prs carrier uses
+    // `number`, the gh-1009 query items use `prNumber` (mutexRegistry's
+    // labelHoldersOf applies the same rule — a strict `p.number` read
+    // would silently empty the cached leg against the split's items).
+    }).map(function (p) { return p.number !== undefined ? p.number : p.prNumber; });
+}
+
+// gh-1000 — per-tick event accumulator: the phantom-heal scan below
+// records self-heal events HERE; the SM (smAgent factory-state publish
+// rule) drains them once per tick via takeMutexTickSnapshot(). Module
+// state, not a global — githubSource and smAgent are separate modules.
+var mutexTickEvents = null;
+
+function recordMutexTickEvent(ev) {
+    mutexTickEvents = mutexRegistryModule.mergeSnapshot(mutexTickEvents, ev || {});
+}
+
+// gh-1000 — the phantom-heal probe timestamps its derived snapshots; the
+// module had no ISO clock helper (the WIP called a nowIso() that was never
+// defined — every live re-derive would have thrown into the fail-closed
+// catch, masking the phantom forever).
+function nowIso() {
+    return new Date().toISOString();
+}
+
+// Probe-payload normalizer: accepts the bridge's {items:[...]} envelope or
+// a bare array; anything else (junk payload) reads as null — fail-closed.
+function asItemsArray(liveData) {
+    var liveItems = ((liveData || {}).items || liveData || []);
+    return Array.isArray(liveItems) ? liveItems : null;
+}
+
+// Live open-PR re-read for the phantom-heal probe (E4 fail-closed: any
+// failure — no provider hook, malformed payload, thrown probe — reads as
+// null and the caller keeps the cached decision for one more tick). The
+// probe deliberately bypasses the provider's per-tick ioCache through the
+// facade's listOpenPrsLive() — the cache itself may be the stale layer a
+// phantom holder rides on, and the guard must name a method that really
+// exists on the smProvider facade (a githubApi-style indirection never did;
+// the rework review thread pinned the self-heal dead on that guard).
+function livePrItems(provider, repoInfo) {
+    if (!provider || typeof provider.listOpenPrsLive !== 'function' || !repoInfo) return null;
+    try {
+        var live = asItemsArray(provider.listOpenPrsLive());
+        // The live payload carries the same label shape github_list_prs
+        // returns (REST: {name} objects) — the probe's label scans read
+        // PLAIN strings (same contract as the query's prLabels mapping),
+        // so normalize here or every defer would misread as a phantom.
+        return live ? live.map(function (p) {
+            return { number: p.number, labels: prLabels(p) };
+        }) : null;
+    } catch (e) {
+        console.log('   ⚠️ gh-1000 phantom-heal live re-read failed: ' +
+            String((e && e.message) || e) + ' — keeping cached mutex decision (fail-closed)');
+        return null;
+    }
+}
+
+// The open-PR cache is module-level in smProvider (the provider object is
+// a facade) — drop via the module, guarded for minimal test stubs.
+function dropOpenPrsCache(repoInfo) {
+    if (!smProviderModule || typeof smProviderModule.ioCacheDrop !== 'function') return;
+    try {
+        smProviderModule.ioCacheDrop(repoInfo.owner, repoInfo.repo, 'openPrs', null);
+    } catch (e2) { /* probe-only */ }
+}
+
+// One holder leg of the self-heal alarm: the alarm record's normalized
+// pair wins (cachedHolders may still be the raw queryPrs item objects),
+// the caller's argument is the fallback. Branch-light for the CRAP gate.
+function alarmHoldersOf(alarm, fallbackHolders, key) {
+    var h = alarm && alarm.holders;
+    var v = h && h[key];
+    return v ? v : (fallbackHolders || []);
+}
+
+function logPhantomHeal(alarm, cachedHolders, liveHolders) {
+    console.log('   ⚠️ ' + alarm.title + ' — ' + alarm.detail +
+        ' (cached holders [' + alarmHoldersOf(alarm, cachedHolders, 'cached').join(', ') +
+        '] vs live [' + alarmHoldersOf(alarm, liveHolders, 'live').join(', ') +
+        ']; ioCache self-healed, defer cancelled)');
+}
+
+// gh-1000 I1/I2 — re-derive the full-slot holder set against the LIVE
+// label layer; a divergent cached holder is self-healed (cache drop +
+// alarm + tick counters) so a queued candidate arms in the SAME tick
+// (AC2). Returns the corrected holders; fail-closed keeps `holders`.
+function rederiveHoldersLive(holders, items, provider, repoInfo, q) {
+    var liveItems = livePrItems(provider, repoInfo);
+    if (!liveItems) return holders;
+    var repoName = repoInfo.owner + '/' + repoInfo.repo;
+    // The cached leg in NUMBER shape (matches the live leg) — `holders`
+    // here is the query's item-object array, not numbers.
+    var cachedHolders = mutexHoldersOf(items, q);
+    // The reconciliation is generic over the RULE's mutex label (q.mutex) —
+    // both label-layer legs derive against q.mutex, never a hardcoded
+    // 'ai_validating' (a second mutex label would otherwise mis-derive
+    // every full-slot defer for its rule).
+    var liveHolderSet = mutexRegistryModule.derive(
+        mutexHoldersOf(liveItems, q), liveItems,
+        mutexRegistryModule.noCompletedRuns, repoName, nowIso(), q.mutex);
+    var cachedSet = mutexRegistryModule.derive(
+        cachedHolders, items, mutexRegistryModule.noCompletedRuns, repoName, nowIso(), q.mutex);
+    var divergent = mutexRegistryModule.reconcile(cachedSet, liveHolderSet);
+    if (divergent.selfHealed) {
+        dropOpenPrsCache(repoInfo);
+        logPhantomHeal(divergent.alarm, cachedHolders, liveHolderSet.holders);
+        recordMutexTickEvent({
+            mutexSelfHeals: 1,
+            phantomHolderTicks: 1,
+            // gh-1000 (rework thread): the streak key MUST ride the event —
+            // without it num() coerces to 0 and the published
+            // consecutivePhantomTicks stays 0 forever (only the test-only
+            // recordPhantomHeal used to increment it).
+            consecutivePhantomTicks: 1,
+            alarm: divergent.alarm
+        });
+    }
+    return liveHolderSet.holders;
+}
+
+// Re-derive only on a full-slot decision — keeps the mutex gate's
+// zero-slot fast path allocation-free (and the query's branch count
+// identical to the pre-gh-1000 shape).
+function phantomHealIfFull(holders, items, provider, repoInfo, q, mutexMax) {
+    if (holders.length < mutexMax) return holders;
+    return rederiveHoldersLive(holders, items, provider, repoInfo, q);
+}
+
+function logMutexDefer(q, holderCount, mutexMax) {
+    console.log('   🔒 mutex "' + q.mutex + '" slots ' + holderCount + '/' + mutexMax +
+        ' taken — rule defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ')');
+}
+
+function takeMutexTickSnapshot() {
+    var s = mutexTickEvents;
+    mutexTickEvents = null;
+    return s;
+}
+
 // ── queryPrs helpers (gh-1009) ──────────────────────────────────────────────
 // Same split as the guards: queryPrs keeps the orchestration (list → block
 // filter → mutex → lazy status → guard filter → bench → tier sort → slice);
@@ -807,7 +972,10 @@ function _applyExcludeSelfMutex(q, items, holders, mutexMax) {
 
 // Returns the filtered item list, or NULL when the rule defers entirely
 // (the global mutex form at cap) — the caller turns that into [].
-function _applyMutexFilter(q, items) {
+// gh-1000: provider/repoInfo feed the phantom-heal live re-derive on a
+// full-slot defer decision (phantomHealIfFull); the exclude-self form is
+// untouched (it never returns the global defer).
+function _applyMutexFilter(q, items, provider, repoInfo) {
     if (!q.mutex) return items;
     // Mutex (q.mutex = label): if ANY open PR holds the label, this rule
     // defers entirely. Serializes one-dispatch stages — validate-armed /
@@ -818,11 +986,16 @@ function _applyMutexFilter(q, items) {
     if (q.mutexExcludeSelf) {
         return _applyExcludeSelfMutex(q, items, holders, mutexMax);
     }
+    // gh-1000 I1/I2 — phantom-holder reconciliation before deferring: the
+    // full-slot decision is re-derived against the LIVE label layer; a
+    // divergent cached holder is self-healed (cache drop + alarm + tick
+    // counters) so a queued candidate arms in the SAME tick (AC2).
+    // Fail-closed (E4): probe failure keeps the cached decision.
+    holders = phantomHealIfFull(holders, items, provider, repoInfo, q, mutexMax);
     // Only the global (non-exclude-self) form arms; it defers once the
     // slot count reaches mutexMax holders within mutexAmong.
     if (holders.length >= mutexMax) {
-        console.log('   🔒 mutex "' + q.mutex + '" slots ' + holders.length + '/' + mutexMax +
-            ' taken — rule defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ')');
+        logMutexDefer(q, holders.length, mutexMax);
         return null;
     }
     return items;
@@ -954,8 +1127,101 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
     // the matchesGuards check remains the engine-level guard.
     items = items.filter(function (it) { return it.labels.indexOf('blocked') === -1; });
 
-    items = _applyMutexFilter(q, items);
+    // Mutex: gh-1009 split — _applyMutexFilter owns the defer decision;
+    // gh-1000's phantom-holder reconciliation (phantomHealIfFull, inside
+    // the global-mutex branch) re-derives a full-slot defer against the
+    // LIVE label layer before returning null. Fail-closed (E4).
+    items = _applyMutexFilter(q, items, provider, repoInfo);
     if (items === null) return [];
+    // validate-fresh both arm ai_validating + dispatch CI; without the
+    // mutex multiple approved PRs validate in parallel and every merge
+    // (base move) re-invalidates the others: N merges = N×N validation
+    // runs. One at a time, oldest-first (FIFO sort below) = each head
+    // validates exactly once. Owner rule 2026-09-22 (live: fa #778/#779
+    // both ai_validating while older #762 waited).
+    //
+    // q.mutexAmong = [labels]: scope the mutex to holders that ALSO carry
+    // one of these labels. Owner priority rule 2026-09-22 (live: fa #801
+    // pr_approved+ai_validated starved behind dev-lane ai_validating arms
+    // on #831/#832/#834 — validate-armed deferred every tick while the
+    // parallel dev wave re-occupied the label): the dev lane is
+    // non-blocking by design, so its arms must NOT block the approved
+    // merge window. Only approved-PR arms serialize the merge window
+    // (the N×N re-validation invariant is a merge-window property).
+    // q.mutexExcludeSelf = true (recovery-rule form): the rule's own target
+    // carries the mutex label by definition (it re-dispatches CI on an
+    // ALREADY armed PR), so the global scan would self-block it 100% of the
+    // time — which is exactly why the recovery rules shipped with NO mutex
+    // and leaked (live multi-arm, fa 2026-09-26: 7 approved PRs held
+    // ai_validating at once, +1 arm per tick, while their descriptions
+    // claimed validate-armed's mutex made the arm a singleton — false once
+    // heads move: silent-update / BEHIND unarm races / guest pushes keep
+    // feeding checks=none states). With exclude-self the mutex is evaluated
+    // PER CANDIDATE (#577): a candidate defers only while ANOTHER PR holds
+    // the arm AND the candidate itself does not (mutexAmong still scopes
+    // the holders). One armed approved PR = the candidate itself = fires;
+    // with several arms the self-holding candidates drain the stack
+    // oldest-first (a stack can also freeze the drain rules themselves —
+    // live: fa #1068+#1088 2026-09-30, both heads green-with-missing-CI +
+    // BLOCKED, so merge-validated/fail-validation/unarm-stale matched
+    // nothing and the old all-defer form deadlocked the queue ~40 min).
+    // Arming stays serialized: only the global (non-exclude-self) form
+    // adds the label, and it defers on ANY holder within mutexAmong.
+    // gh-837 (merge cadence): q.mutexMax (default 1) — how many arms the
+    // mutex admits CONCURRENTLY. The SM engine patches this onto the
+    // ai_validating/pr_approved merge-window rules when the
+    // validationConcurrency knob (repo var, default 1 = today's behavior)
+    // is raised AND the approved queue depth is at/above the watermark —
+    // N=2-3 parallel validations drain the approved FIFO at ~1 merge per
+    // validation cycle instead of one. The candidate/holder accounting is
+    // unchanged: mutexAmong still scopes WHO counts as a holder, 'blocked'
+    // holders are invisible, and mutexExcludeSelf still lets a self-holding
+    // recovery candidate drain a leaked stack — only the defer threshold
+    // moves from '>=1 other holder' to '>= mutexMax other holders'.
+    if (q.mutex) {
+        var among = q.mutexAmong;
+        var holdsMutex = function (it) {
+            if (it.labels.indexOf(q.mutex) === -1) return false;
+            if (!among) return true;
+            return among.some(function (l) { return it.labels.indexOf(l) !== -1; });
+        };
+        var mutexMax = (typeof q.mutexMax === 'number' && isFinite(q.mutexMax))
+            ? Math.max(1, Math.floor(q.mutexMax)) : 1;
+        var holders = items.filter(holdsMutex);
+        if (q.mutexExcludeSelf) {
+            items = items.filter(function (candidate) {
+                // #577 (fa 2026-09-30, live #1068+#1088): a candidate that
+                // itself holds the mutex occupies its own serialization slot.
+                // The old 'another holder exists' test made two armed PRs
+                // block each other forever whenever every drain rule was
+                // inapplicable (both heads green-with-missing-CI + BLOCKED +
+                // not BEHIND: revalidate-armed and dead-zone each deferred on
+                // the other, while merge-validated / fail-validation /
+                // unarm-stale could not complete the stack — the whole queue
+                // froze ~40 min until a manual unarm). Defer only when the
+                // candidate does NOT hold the mutex itself; recovery-rule
+                // candidates always self-hold (their query carries the arm
+                // label), so a leaked stack drains oldest-first instead of
+                // deadlocking. New arms still cannot leak: only the global
+                // (non-exclude-self) form arms, and it still defers once the
+                // slot count reaches mutexMax holders within mutexAmong.
+                var selfHolds = holdsMutex(candidate);
+                var otherHolders = 0;
+                for (var hi = 0; hi < holders.length; hi++) {
+                    if (holders[hi] !== candidate && holders[hi].prNumber !== candidate.prNumber) {
+                        otherHolders++;
+                    }
+                }
+                var blocked = !selfHolds && otherHolders >= mutexMax;
+                if (blocked) {
+                    console.log('   🔒 mutex "' + q.mutex + '" slots ' + otherHolders + '/' + mutexMax +
+                        ' taken — candidate pr-' + candidate.prNumber +
+                        ' defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ', exclude-self)');
+                }
+                return !blocked;
+            });
+        }
+    }
 
     // PR guards that need per-PR facts (checks/merge state) resolve lazily:
     // only when the rule actually filters on them.
@@ -987,5 +1253,8 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
 
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { query: query, matchesGuards: matchesGuards };
+    module.exports = { query: query, matchesGuards: matchesGuards,
+        takeMutexTickSnapshot: takeMutexTickSnapshot,
+        mutexHoldersOf: mutexHoldersOf, rederiveHoldersLive: rederiveHoldersLive,
+        logPhantomHeal: logPhantomHeal };
 }

@@ -167,5 +167,9 @@ function stampRequiredChecks(options) {
 }
 
 module.exports = {
-    stampRequiredChecks: stampRequiredChecks
+    stampRequiredChecks: stampRequiredChecks,
+    // Exported (gh-992) so githubHelpers.detectFailedChecks can reuse the
+    // single envelope-tolerant workflow-run-jobs parser instead of
+    // maintaining a second copy.
+    _jobsOf: _jobsOf
 };

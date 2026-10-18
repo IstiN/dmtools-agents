@@ -253,3 +253,42 @@ suite('validationLiveness ACTIVE_RUN_STATES (gh-821 round-2 review)', function (
         assert.equal(live.ACTIVE_RUN_STATES.indexOf('success'), -1);
     });
 });
+
+suite('validationLiveness silent-update failure markers (gh-1000 bookkeeping)', function () {
+    var MARK = '⚠️ silent-update failure — attempt ';
+
+    test('no markers → zero count, no timestamp', function () {
+        var out = live.silentUpdateFailureCount(['ordinary comment', { body: 'nothing here' }, null]);
+        assert.deepEqual(out, { count: 0, newest: null });
+        assert.deepEqual(live.silentUpdateFailureCount(null), { count: 0, newest: null });
+    });
+
+    test('strings, bodies and texts all scan; highest attempt + newest ISO win', function () {
+        var out = live.silentUpdateFailureCount([
+            MARK + '1 at 2026-10-17T19:00:00Z',
+            { body: MARK + '3 at 2026-10-17T19:20:00Z trailing' },
+            { text: MARK + '2 at 2026-10-17T19:10:00Z' }
+        ]);
+        assert.deepEqual(out, { count: 3, newest: '2026-10-17T19:20:00Z' });
+    });
+
+    test('two markers in one body both count', function () {
+        var body = MARK + '1 at 2026-10-17T19:00:00Z\n' + MARK + '2 at 2026-10-17T19:05:00Z';
+        var out = live.silentUpdateFailureCount([{ body: body }]);
+        assert.deepEqual(out, { count: 2, newest: '2026-10-17T19:05:00Z' });
+    });
+
+    test('attemptsLeft: 3 max, clamps at 0, garbage counts as 0', function () {
+        assert.equal(live.silentUpdateAttemptsLeft(0), 3);
+        assert.equal(live.silentUpdateAttemptsLeft(2), 1);
+        assert.equal(live.silentUpdateAttemptsLeft(3), 0);
+        assert.equal(live.silentUpdateAttemptsLeft(9), 0);
+        assert.equal(live.silentUpdateAttemptsLeft('junk'), 3);
+    });
+
+    test('failureLine renders the exact marker the counter scans (round-trip)', function () {
+        var line = live.silentUpdateFailureLine(2, '2026-10-17T19:10:00Z');
+        var out = live.silentUpdateFailureCount([line]);
+        assert.deepEqual(out, { count: 2, newest: '2026-10-17T19:10:00Z' });
+    });
+});

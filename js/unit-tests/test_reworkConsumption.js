@@ -190,3 +190,23 @@ suite('reworkConsumption — shouldRestoreArm (gh-840 sweep decision)', function
         assert.ok(d.restore, 'a one-hour stale window still restores the 4h-old #826 state');
     });
 });
+
+suite('reworkConsumption: [bot]-suffixed machine authors are trusted (gh-1025)', function () {
+    var rc = loadModule('js/common/reworkConsumption.js', makeRequire({}), {});
+
+    test('consume/restore markers authored by dmtools-factory-bot[bot] parse under the bare knob entry', function () {
+        var body = rc.buildConsumeAuditComment('dispatch', 'abc1234');
+        var markers = rc.parseConsumeMarkers(
+            [{ body: body, user: { login: 'dmtools-factory-bot[bot]' } }],
+            { authorLogins: ['dmtools-factory-bot'] });
+        assert.equal(markers.length, 1, 'App-authored consume markers must be visible to the gh-840 sweep');
+    });
+
+    test('a forged [bot] marker from a different bot stays invisible', function () {
+        var body = rc.buildConsumeAuditComment('dispatch', 'abc1234');
+        var markers = rc.parseConsumeMarkers(
+            [{ body: body, user: { login: 'dependabot[bot]' } }],
+            { authorLogins: ['dmtools-factory-bot'] });
+        assert.equal(markers.length, 0);
+    });
+});

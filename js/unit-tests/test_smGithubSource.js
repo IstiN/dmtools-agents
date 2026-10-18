@@ -48,7 +48,8 @@ suite('sm github source', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return providerStub; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
         }), tools);
     }
 
@@ -1610,7 +1611,8 @@ suite('sm github source — runAsync batching', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return seqStub; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
         }), tools);
     }
 
@@ -1682,7 +1684,8 @@ suite('sm github source — runAsync batching', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return batchStub; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
         }), merged);
     }
 
@@ -1836,7 +1839,8 @@ function maskedGreenHarness() {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': { createSmProvider: function () { return providerStub; } },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
         }), mergedTools);
     }
 
@@ -2435,7 +2439,8 @@ suite('sm github source: trigger fail-open overfetch (gh-922)', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return localProvider; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
         }), tools);
     };
 
@@ -2624,7 +2629,8 @@ suite('sm github source: dev-on-assignment re-derive (gh-944)', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return devStub; }
             },
-            '../../common/smAsync.js': smAsyncMod
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
         }), tools);
     }
 
@@ -2771,6 +2777,7 @@ suite('sm github source — gh-1009 CRAP characterization (paths touched by the 
             '../../common/smProvider.js': {
                 createSmProvider: function () { return providerStub; }
             },
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
             '../../common/smAsync.js': loadModule('js/common/smAsync.js', makeRequire({
                 './common/smProvider.js': { createSmProvider: function () { return providerStub; } }
             }), tools || {})
@@ -2877,5 +2884,250 @@ suite('sm github source — gh-1009 CRAP characterization (paths touched by the 
             query: { type: 'pr', labels: ['x'], authors: ['ann'] }, limit: 50
         }, { repoInfo: { owner: 'o', repo: 'r' } });
         assert.deepEqual(matched.map(function (i) { return i.prNumber; }), [601]);
+    });
+});
+
+suite('sm github source: gh-1000 phantom-heal helpers', function () {
+    function loadBare() {
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': { createSmProvider: function () { return null; } },
+            '../../common/smAsync.js': {},
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+        }), {});
+    }
+    function pr(n, labels) { return { number: n, labels: labels }; }
+
+    test('mutexHoldersOf: mutex-label holders, blocked exempt, mutexAmong scopes', function () {
+        var mod = loadBare();
+        var items = [pr(1, ['ai_validating']), pr(2, ['ai_validating', 'blocked']), pr(3, ['other'])];
+        assert.deepEqual(mod.mutexHoldersOf(items, { mutex: 'ai_validating' }), [1],
+            'blocked holder is invisible');
+        var scoped = [pr(4, ['ai_validating', 'agent']), pr(5, ['ai_validating'])];
+        assert.deepEqual(mod.mutexHoldersOf(scoped, { mutex: 'ai_validating', mutexAmong: ['agent'] }), [4],
+            'mutexAmong scopes WHO counts');
+    });
+
+    test('logPhantomHeal: full branch coverage (CRAP ratchet)', function () {
+        // The rework-added log helper resolves its holder lists through
+        // || / && chains (CC 9) — partially covered by the IT suites it
+        // redlined the released CRAP ratchet as a NEW > 8 function. These
+        // direct calls pin every operand branch so its CRAP stays at 0
+        // under any future coverage variance.
+        var mod = loadBare();
+        var logged = [];
+        var realLog = console.log;
+        console.log = function (msg) { logged.push(String(msg)); };
+        try {
+            mod.logPhantomHeal(
+                { title: 'phantom_mutex_holder', detail: 'diverged',
+                  holders: { cached: [1, 2], live: [3] } }, null, null);
+            mod.logPhantomHeal(
+                { title: 'phantom_mutex_holder', detail: 'diverged',
+                  holders: null }, [7], [8]);
+            mod.logPhantomHeal(
+                { title: 'phantom_mutex_holder', detail: 'diverged',
+                  holders: {} }, null, null);
+            mod.logPhantomHeal(
+                { title: 'phantom_mutex_holder', detail: 'diverged',
+                  holders: { cached: null, live: [] } }, [9], []);
+        } finally {
+            console.log = realLog;
+        }
+        assert.equal(logged.length, 4);
+        assert.ok(logged[0].indexOf('[1, 2]') !== -1 && logged[0].indexOf('[3]') !== -1,
+            'alarm holders win when present');
+        assert.ok(logged[1].indexOf('[7]') !== -1 && logged[1].indexOf('[8]') !== -1,
+            'argument fallbacks used when the alarm carries no holders');
+        assert.ok(logged[2].indexOf('[]') !== -1,
+            'empty holders + null args degrade to empty lists, never throws');
+        assert.ok(logged[3].indexOf('[9]') !== -1,
+            'a null cached list falls back to the cachedHolders argument');
+    });
+
+    test('rederiveHoldersLive: no listOpenPrsLive hook → cached holders kept (fail-closed, E4)', function () {
+        var mod = loadBare();
+        var out = mod.rederiveHoldersLive([97], [pr(97, ['ai_validating'])], {}, { owner: 'o', repo: 'r' },
+            { mutex: 'ai_validating' });
+        assert.deepEqual(out, [97]);
+        assert.equal(mod.takeMutexTickSnapshot(), null, 'no probe → no tick event');
+    });
+
+    test('rederiveHoldersLive: probe throw → cached holders kept (fail-closed, E4)', function () {
+        var mod = loadBare();
+        var provider = { listOpenPrsLive: function () { throw new Error('boom'); } };
+        var out = mod.rederiveHoldersLive([97], [pr(97, ['ai_validating'])], provider,
+            { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
+        assert.deepEqual(out, [97]);
+    });
+
+    test('rederiveHoldersLive: divergent live label layer self-heals and records the tick event', function () {
+        var mod = loadBare();
+        var provider = { listOpenPrsLive: function () { return { items: [pr(97, [])] }; } };
+        var out = mod.rederiveHoldersLive([97], [pr(97, ['ai_validating'])], provider,
+            { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
+        assert.deepEqual(out, [], 'live layer shows no arm → phantom holder dropped');
+        var snap = mod.takeMutexTickSnapshot();
+        assert.equal(snap.mutexSelfHeals, 1);
+        assert.equal(snap.phantomHolderTicks, 1);
+        assert.equal(snap.consecutivePhantomTicks, 1, 'streak key rides the tick event');
+        assert.equal(snap.alarms.length, 1);
+        assert.equal(snap.alarms[0].type, 'phantom_mutex_holder');
+        assert.equal(snap.alarms[0].title, 'phantom_mutex_holder', 'alarm carries a title');
+        assert.equal(typeof snap.alarms[0].detail, 'string', 'alarm carries a detail');
+        assert.equal(mod.takeMutexTickSnapshot(), null, 'snapshot drains');
+    });
+
+    test('rederiveHoldersLive: live layer agrees → holders kept, no event', function () {
+        var mod = loadBare();
+        var provider = { listOpenPrsLive: function () { return { items: [pr(97, ['ai_validating'])] }; } };
+        var out = mod.rederiveHoldersLive([97], [pr(97, ['ai_validating'])], provider,
+            { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
+        assert.deepEqual(out, [97]);
+        assert.equal(mod.takeMutexTickSnapshot(), null, 'no divergence → no self-heal event');
+    });
+});
+
+suite('sm github source: gh-1000 phantom-heal probe edges', function () {
+    function loadBare2(dropSpy) {
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': {
+                createSmProvider: function () { return null; },
+                ioCacheDrop: dropSpy
+            },
+            '../../common/smAsync.js': {},
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+        }), {});
+    }
+    function pr2(n, labels) { return { number: n, labels: labels }; }
+
+    test('non-array probe payload → cached holders kept (fail-closed)', function () {
+        var mod = loadBare2(null);
+        var provider = { listOpenPrsLive: function () { return { items: 'junk' }; } };
+        var out = mod.rederiveHoldersLive([97], [pr2(97, ['ai_validating'])], provider,
+            { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
+        assert.deepEqual(out, [97]);
+        assert.equal(mod.takeMutexTickSnapshot(), null);
+    });
+
+    test('divergence drops the openPrs cache entry via smProvider.ioCacheDrop', function () {
+        var dropped = [];
+        var mod = loadBare2(function (owner, repo, key, sub) { dropped.push([owner, repo, key, sub]); });
+        var provider = { listOpenPrsLive: function () { return { items: [pr2(97, [])] }; } };
+        var out = mod.rederiveHoldersLive([97], [pr2(97, ['ai_validating'])], provider,
+            { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
+        assert.deepEqual(out, []);
+        assert.deepEqual(dropped, [['o', 'r', 'openPrs', null]], 'ioCache self-healed');
+    });
+});
+
+suite('sm github source: gh-1000 IT-1 phantom self-heal through queryPrs (AC2)', function () {
+    // The rework review thread pinned the BLOCKING defect: the production
+    // guard named a provider.githubApi method that never existed on the
+    // smProvider facade, so the self-heal was dead code in production and
+    // only pure-module tests passed. These tests drive the FULL-SLOT DEFER
+    // path through queryPrs with a facade shaped like the real
+    // createSmProvider return (listOpenPrs + listOpenPrsLive) — the guard
+    // cannot rot again without one of these failing.
+    function loadSrc(ioCacheDrop) {
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': {
+                createSmProvider: function () { return null; },
+                ioCacheDrop: ioCacheDrop
+            },
+            '../../common/smAsync.js': {},
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+        }), {});
+    }
+
+    function cachedPrs() {
+        // The stale per-tick view: PR 11 holds ai_validating, PR 10 is the
+        // queued approved candidate. Live 19:08Z shape.
+        return [
+            { number: 10, labels: [{ name: 'pr_approved' }], head: { ref: 'ai/gh-10' }, draft: false },
+            { number: 11, labels: [{ name: 'ai_validating' }, { name: 'pr_approved' }],
+              head: { ref: 'ai/gh-11' }, draft: false }
+        ];
+    }
+
+    function rule() {
+        return {
+            query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'],
+                     mutex: 'ai_validating' }
+        };
+    }
+
+    test('full-slot defer + live layer clean → self-heal, candidate arms in the SAME tick (AC2)', function () {
+        var dropped = [];
+        var mod = loadSrc(function (owner, repo, key, sub) { dropped.push([owner, repo, key, sub]); });
+        var liveCalls = 0;
+        var provider = {
+            // facade shape the real createSmProvider exposes
+            listOpenPrs: cachedPrs,
+            listOpenPrsLive: function () {
+                liveCalls++;
+                // LIVE layer: the arm is gone — 11's ai_validating vanished
+                return cachedPrs().map(function (p) {
+                    return p.number === 11
+                        ? { number: 11, labels: [{ name: 'pr_approved' }], head: p.head, draft: false }
+                        : p;
+                });
+            }
+        };
+        var items = mod.query(rule(), {
+            repoInfo: { owner: 'a', repo: 'b' },
+            provider: provider
+        });
+        assert.equal(liveCalls, 1, 'the LIVE re-read fired on the full-slot decision');
+        assert.equal(items.length, 1, 'queued candidate arms in the same tick');
+        assert.equal(items[0].key, 'pr-10');
+        assert.deepEqual(dropped, [['a', 'b', 'openPrs', null]], 'ioCache self-healed');
+        var snap = mod.takeMutexTickSnapshot();
+        assert.ok(snap, 'tick event recorded');
+        assert.equal(snap.mutexSelfHeals, 1);
+        assert.equal(snap.consecutivePhantomTicks, 1, 'streak key rides the event');
+        assert.equal(snap.alarms.length, 1);
+        assert.equal(snap.alarms[0].title, 'phantom_mutex_holder');
+    });
+
+    test('full-slot defer + live probe agrees → defer stands, no event', function () {
+        var mod = loadSrc(null);
+        var provider = {
+            listOpenPrs: cachedPrs,
+            listOpenPrsLive: cachedPrs // live layer confirms the holder
+        };
+        var items = mod.query(rule(), {
+            repoInfo: { owner: 'a', repo: 'b' },
+            provider: provider
+        });
+        assert.equal(items.length, 0, 'a REAL holder still defers the queue');
+        assert.equal(mod.takeMutexTickSnapshot(), null, 'no divergence → no self-heal event');
+    });
+
+    test('full-slot defer + live probe throws → fail-closed, cached decision kept one more tick (E4)', function () {
+        var mod = loadSrc(null);
+        var provider = {
+            listOpenPrs: cachedPrs,
+            listOpenPrsLive: function () { throw new Error('api down'); }
+        };
+        var items = mod.query(rule(), {
+            repoInfo: { owner: 'a', repo: 'b' },
+            provider: provider
+        });
+        assert.equal(items.length, 0, 'probe failure keeps the cached defer (fail-closed)');
+        assert.equal(mod.takeMutexTickSnapshot(), null, 'no event on a failed probe');
+    });
+
+    test('facade WITHOUT listOpenPrsLive (legacy stub) → defer stands, no crash, no event', function () {
+        var mod = loadSrc(null);
+        var provider = { listOpenPrs: cachedPrs }; // pre-gh-1000 stub shape
+        var items = mod.query(rule(), {
+            repoInfo: { owner: 'a', repo: 'b' },
+            provider: provider
+        });
+        assert.equal(items.length, 0, 'no live hook → cached decision stands (E4)');
+        assert.equal(mod.takeMutexTickSnapshot(), null);
     });
 });

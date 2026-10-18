@@ -668,3 +668,217 @@ suite('gitOps.getPRDiff — characterization (gh-962)', function() {
 
 });
 
+
+// ── gh-1011: detectMergeConflicts conflict branches ─────────────────────────
+// Pins the exact return shapes, log/warn lines and file writes of the
+// merge-failure paths (conflict markers, non-conflict failure, status probe
+// failure, shallow clone, quiet-diff anomalies) so the CRAP-reducing
+// extraction of the pure parse/build helpers stays byte-identical.
+
+// Response table for the conflict-detect mock: maps exact commands to their
+// captures and routes failures through a `throw` marker (kept separate from
+// the mock closure so both stay under the CRAP gate).
+function conflictResponses(spec) {
+    var outs = {
+        'git rev-parse --is-shallow-repository': (spec.shallow || 'false') + '\nCOMMAND_EXIT_CODE=0',
+        'git diff --cached --quiet HEAD': 'COMMAND_EXIT_CODE=0',
+        'git status --short': (spec.statusRaw || '') + '\nCOMMAND_EXIT_CODE=0'
+    };
+    var throws = {};
+    if (spec.shallow === 'THROW') {
+        delete outs['git rev-parse --is-shallow-repository'];
+        throws['git rev-parse --is-shallow-repository'] = 'shallow probe failed';
+    }
+    if (spec.quietThrow) {
+        delete outs['git diff --cached --quiet HEAD'];
+        throws['git diff --cached --quiet HEAD'] = spec.quietThrow;
+    }
+    if (spec.statusThrow) {
+        delete outs['git status --short'];
+        throws['git status --short'] = spec.statusThrow;
+    }
+    return { outs: outs, throws: throws };
+}
+
+function makeConflictCmdMock(spec) {
+    var table = conflictResponses(spec);
+    return function(args) {
+        var c = args.command || '';
+        if (c.indexOf('git merge origin/') === 0) {
+            if (spec.mergeThrow) throw new Error(spec.mergeThrow);
+            if (spec.record) spec.record(c, args);
+            return 'Merge cleanup\nCOMMAND_EXIT_CODE=0';
+        }
+        var response = table.throws[c];
+        if (response) {
+            throw new Error(response);
+        }
+        if (spec.record) spec.record(c, args);
+        return table.outs[c] || 'COMMAND_EXIT_CODE=0';
+    };
+}
+
+function runConflictDetect(spec) {
+    var logs = [];
+    var warns = [];
+    var writes = [];
+    var commands = [];
+    var origLog = console.log;
+    var origWarn = console.warn;
+    console.log = function() { logs.push(Array.prototype.slice.call(arguments).join(' ')); };
+    console.warn = function() { warns.push(Array.prototype.slice.call(arguments).join(' ')); };
+    try {
+        spec.record = function(c, args) { commands.push({ command: c, workingDirectory: args.workingDirectory || null }); };
+        var gitOps = loadGitOps({
+            cli_execute_command: makeConflictCmdMock(spec),
+            file_write: function(args) { writes.push(args); }
+        });
+        var conflicts = gitOps.detectMergeConflicts(spec.baseBranch || 'main', spec.inputFolder || 'input/PROJ-123', spec.workingDir || null);
+        return { conflicts: conflicts, logs: logs, warns: warns, writes: writes, commands: commands };
+    } finally {
+        console.log = origLog;
+        console.warn = origWarn;
+    }
+}
+
+suite('gitOps.detectMergeConflicts — conflict handling (gh-1011)', function() {
+
+    test('merge conflict exit code returns the conflict file list and writes merge_conflicts.md', function() {
+        var fx = runConflictDetect({
+            mergeThrow: 'Automatic merge failed; fix conflicts and then commit the result. COMMAND_EXIT_CODE=1',
+            statusRaw: 'UU src/a.js\nAA  src/b.js\nM src/clean.js'
+        });
+
+        assert.deepEqual(fx.conflicts, ['src/a.js', 'src/b.js'], 'only conflict-marker lines become files, in order');
+
+        var joinedWarns = fx.warns.join('\n');
+        assert.contains(joinedWarns, '⚠️ Merge conflicts in 2 file(s):', 'the warn carries the count');
+        assert.contains(joinedWarns, 'src/a.js, src/b.js', 'the warn lists the files');
+
+        assert.equal(fx.writes.length, 1, 'exactly one merge_conflicts.md write');
+        assert.equal(fx.writes[0].path, 'input/PROJ-123/merge_conflicts.md');
+        var md = fx.writes[0].content;
+        assert.contains(md, '# ⚠️ Merge Conflicts — Resolve Before Rework');
+        assert.contains(md, 'conflicts with `main`');
+        assert.contains(md, '- `src/a.js`');
+        assert.contains(md, '- `src/b.js`');
+        assert.contains(md, '2 file(s) contain conflict markers');
+        assert.contains(md, 'git add <file>');
+        assert.contains(md, 'Do NOT run `git commit` or `git merge --abort`');
+
+        var logged = fx.logs.join('\n');
+        assert.contains(logged, '✅ Wrote merge_conflicts.md');
+        assert.ok(logged.indexOf('No merge conflicts') === -1, 'a real conflict must not log "No merge conflicts"');
+        var mergeAborts = fx.commands.filter(function(c) { return c.command === 'git merge --abort'; });
+        assert.equal(mergeAborts.length, 0, 'the conflicted merge state is left in place for the agent');
+    });
+
+    test('merge failure without conflict markers aborts, warns with the reason and returns no files', function() {
+        var fx = runConflictDetect({
+            mergeThrow: 'fatal: refusing to merge unrelated histories COMMAND_EXIT_CODE=128',
+            statusRaw: 'M src/something.js'
+        });
+
+        assert.deepEqual(fx.conflicts, []);
+        assert.contains(fx.warns.join('\n'), 'Merge failed (non-conflict reason):',
+            'the non-conflict path is announced, got: ' + JSON.stringify(fx.warns));
+        assert.equal(fx.writes.length, 0, 'no merge_conflicts.md on a non-conflict failure');
+        assert.equal(fx.commands.filter(function(c) { return c.command === 'git merge --abort'; }).length, 1,
+            'a non-conflict failure aborts the merge');
+    });
+
+    test('when the status probe itself fails, the merge is aborted and no files are reported', function() {
+        var fx = runConflictDetect({
+            mergeThrow: 'error: merge failed COMMAND_EXIT_CODE=1',
+            statusThrow: 'fatal: unable to read the index COMMAND_EXIT_CODE=128'
+        });
+
+        assert.deepEqual(fx.conflicts, [], 'no files are reported when the status probe fails');
+        assert.contains(fx.warns.join('\n'), 'Could not determine merge state after conflict:',
+            'the status-probe failure is announced, got: ' + JSON.stringify(fx.warns));
+        assert.equal(fx.commands.filter(function(c) { return c.command === 'git merge --abort'; }).length, 1);
+        assert.equal(fx.writes.length, 0, 'no merge_conflicts.md when the state cannot be determined');
+    });
+
+    test('a shallow repository is unshallowed before the merge attempt', function() {
+        var fx = runConflictDetect({ shallow: 'true' });
+
+        assert.deepEqual(fx.conflicts, []);
+        assert.ok(fx.commands.some(function(c) { return c.command === 'git fetch --unshallow'; }),
+            'git fetch --unshallow must run for a shallow clone');
+        assert.contains(fx.logs.join('\n'), 'Unshallowed repository for full merge base detection');
+    });
+
+    test('a failing shallow probe is swallowed silently and the merge proceeds', function() {
+        var fx = runConflictDetect({
+            shallow: 'THROW',
+            mergeThrow: 'Automatic merge failed COMMAND_EXIT_CODE=1',
+            statusRaw: 'UU src/x.js'
+        });
+
+        assert.deepEqual(fx.conflicts, ['src/x.js'], 'the conflict outcome is unaffected by the probe failure');
+        assert.equal(fx.warns.filter(function(w) { return w.indexOf('shallow') !== -1; }).length, 0,
+            'the swallowed probe failure stays silent');
+    });
+
+    test('a quiet-diff failure that is NOT exit 1 warns with the message and keeps the staged assumption', function() {
+        var fx = runConflictDetect({
+            quietThrow: 'fatal: unable to read the index COMMAND_EXIT_CODE=128'
+        });
+
+        assert.deepEqual(fx.conflicts, []);
+        var joinedWarns = fx.warns.join('\n');
+        assert.contains(joinedWarns, 'git diff --cached --quiet failed (assuming staged):');
+        assert.contains(joinedWarns, 'unable to read the index', 'the warn carries the failure content');
+        assert.contains(fx.logs.join('\n'), 'No merge conflicts — base branch changes staged',
+            'the conservative staged wording is kept');
+    });
+
+    test('a successful merge with staged changes keeps the staged wording (exit-1 quiet diff)', function() {
+        var fx = runConflictDetect({
+            quietThrow: 'exit 1 — the merge staged changes COMMAND_EXIT_CODE=1'
+        });
+
+        assert.deepEqual(fx.conflicts, []);
+        assert.contains(fx.logs.join('\n'), 'No merge conflicts — base branch changes staged');
+        assert.equal(fx.warns.length, 0, 'exit 1 is the expected staged signal — no warn');
+    });
+
+    test('a non-conflict merge failure with a clean index aborts and reports no conflicts', function() {
+        var fx = runConflictDetect({
+            mergeThrow: 'error: Your local changes COMMAND_EXIT_CODE=128',
+            statusRaw: ''
+        });
+
+        assert.deepEqual(fx.conflicts, []);
+        assert.contains(fx.warns.join('\n'), 'Merge failed (non-conflict reason):');
+        assert.equal(fx.commands.filter(function(c) { return c.command === 'git merge --abort'; }).length, 1);
+    });
+
+    test('the working directory is threaded into every command and the opening log line', function() {
+        var fx = runConflictDetect({ workingDir: '/tmp/work' });
+
+        assert.deepEqual(fx.conflicts, []);
+        assert.contains(fx.logs.join('\n'), 'Checking for merge conflicts with origin/main in /tmp/work...');
+        assert.ok(fx.commands.length > 0, 'sanity: commands were recorded');
+        fx.commands.forEach(function(c) {
+            assert.equal(c.workingDirectory, '/tmp/work', 'every git call carries the working directory: ' + c.command);
+        });
+    });
+
+    test('an up-to-date merge logs the explicit up-to-date wording (gh-802 AC3a)', function() {
+        var fx = runConflictDetect({});
+
+        assert.deepEqual(fx.conflicts, []);
+        assert.contains(fx.logs.join('\n'), 'No merge conflicts — branch already up to date with origin/main');
+    });
+
+    test('conflict file names are trimmed of leading/trailing whitespace', function() {
+        var fx = runConflictDetect({
+            mergeThrow: 'CONFLICT COMMAND_EXIT_CODE=1',
+            statusRaw: 'UU   src/spaced.js  '
+        });
+
+        assert.deepEqual(fx.conflicts, ['src/spaced.js']);
+    });
+});
