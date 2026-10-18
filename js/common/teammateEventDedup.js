@@ -236,16 +236,23 @@ function isOwningRun(run, nowMs, staleMs, freshMs) {
  * so of a same-second burst (run_numbers N, N+1, N+2) only the earliest
  * proceeds — regardless of probe execution order. run_number order first
  * (REST always carries it), created_at fallback; a run with neither order
- * signal is ignored.
+ * signal is ignored. Timestamps accept ISO strings or epoch ms.
  */
+function timeMsOf(value) {
+    if (typeof value === 'number') return isNaN(value) ? NaN : value;
+    if (!value) return NaN;
+    var ms = Date.parse(String(value));
+    return isNaN(ms) ? NaN : ms;
+}
+
 function isOlderRun(run, selfRun) {
     if (!run || !selfRun) return false;
     var a = run.run_number, b = selfRun.runNumber;
     if (typeof a === 'number' && typeof b === 'number' && !isNaN(a) && !isNaN(b)) {
         return a < b;
     }
-    var ta = run.created_at ? Date.parse(String(run.created_at)) : NaN;
-    var tb = selfRun.createdAt ? Date.parse(String(selfRun.createdAt)) : NaN;
+    var ta = timeMsOf(run.created_at);
+    var tb = timeMsOf(selfRun.createdAt);
     if (!isNaN(ta) && !isNaN(tb)) return ta < tb;
     return false;
 }
