@@ -2080,6 +2080,15 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
 
         function parkForkGuest(reason) {
+            // gh-1070 rework: the red-head park (the sticky SET block) may
+            // have fired earlier in THIS pass — ticket.labels is the
+            // tick-start snapshot and never reflects it, so the fork gate
+            // can still route here for a guest fork with red checks AND no
+            // maintainer edits. Skip the comment instead of posting a
+            // second, different park comment in the same tick (the label
+            // add below is idempotent and stays snapshot-guarded; the
+            // red-head park comment already records parked-head: <sha>).
+            if (parkedRedHeadThisPass) return;
             var tracker = githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo);
             if ((ticket.labels || []).indexOf('validation_failed') === -1) {
                 tracker.addLabel(ticket.prNumber, 'validation_failed');
@@ -2164,6 +2173,27 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // zero attempts, zero bookkeeping). A same-repo head returns
         // refresh with forkFull=null and never pays the probe (AC4: zero
         // behavior change, zero extra API calls).
+        // The non-editable-fork park (AC2), split out of forkSilentUpdateGate
+        // so the gate stays a pure three-path router under the CRAP budget
+        // — the park's guards (a gh-994 reset in THIS pass yields the tick
+        // to the re-query; the labels snapshot; DRY) live here.
+        function parkNonEditableFork() {
+            if (unparkedThisPass || DRY ||
+                (ticket.labels || []).indexOf('validation_failed') !== -1) {
+                return;
+            }
+            try {
+                parkForkGuest('this head lives on a fork where maintainer ' +
+                    'edits are NOT available (the author disabled "Allow ' +
+                    'edits from maintainers", or an organization fork) — ' +
+                    'the machine cannot refresh the branch itself, so no ' +
+                    'silent-update is attempted (gh-1070 AC2).');
+            } catch (ePark) {
+                console.warn('  ⚠️  ' + key + ' fork park failed: ' +
+                             (ePark.message || ePark));
+            }
+        }
+
         function forkSilentUpdateGate() {
             var forkFull = validationLivenessModule.forkHeadFull(
                 ticket.headRepo, effectiveRepoInfo.owner, effectiveRepoInfo.repo);
@@ -2176,25 +2206,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             }
             if (canModify === true) return { refresh: true, forkFull: forkFull };
             // Non-editable fork (or org fork): NO silent-update attempt,
-            // NO failure marker, NO silent-update-degraded label. A park
-            // reset in THIS pass (the author just pushed — gh-994) yields
-            // the tick to the re-query instead of re-parking a head the
-            // reset just freed; a red-head park fired earlier in THIS
-            // pass (the tick-start labels snapshot predates it) likewise
-            // suppresses a second park comment (gh-1070 rework thread).
-            if (!unparkedThisPass && !parkedRedHeadThisPass && !DRY &&
-                (ticket.labels || []).indexOf('validation_failed') === -1) {
-                try {
-                    parkForkGuest('this head lives on a fork where maintainer ' +
-                        'edits are NOT available (the author disabled "Allow ' +
-                        'edits from maintainers", or an organization fork) — ' +
-                        'the machine cannot refresh the branch itself, so no ' +
-                        'silent-update is attempted (gh-1070 AC2).');
-                } catch (ePark) {
-                    console.warn('  ⚠️  ' + key + ' fork park failed: ' +
-                                 (ePark.message || ePark));
-                }
-            }
+            // NO failure marker, NO silent-update-degraded label.
+            parkNonEditableFork();
             console.log('  🅿️  ' + key + ' fork head is not maintainer-editable — ' +
                 'guest park, zero silent-update attempts (gh-1070 AC2)');
             return { refresh: false, forkFull: forkFull };
