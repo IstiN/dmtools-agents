@@ -762,12 +762,39 @@ suite('postTestAutomationResults: missing result edge cases', function() {
 
 suite('postTestAutomationResults: publishExistingBranch strategies (gh-1043)', function() {
 
-    // Drives action() down the performGitOperations "no staged changes →
-    // remote branch exists → publishExistingBranch" path with full control
-    // over rev-parse/merge-base/push outcomes.
-    function loadPublishScenario(opts) {
-        var commands = [];
+    // Static command→response table for the performGitOperations
+    // "no staged changes → remote branch exists → publishExistingBranch"
+    // path; every response is fixed per scenario, so the cli mock stays CC-low.
+    function scenarioResponses(opts) {
         var branch = opts.branch || 'test/DMC-920';
+        var normalPush = 'git push -u origin ' + branch;
+        var leasePush = normalPush + ' --force-with-lease';
+        var responses = {};
+        responses['git branch --show-current'] = branch;
+        responses['git status --short -- testing'] = '?? testing/tests/DMC-920/test.py';
+        responses['git diff --cached --stat'] = '';
+        responses['git ls-remote --heads origin ' + branch] = '9a7e2aec\trefs/heads/' + branch;
+        responses['git rev-parse HEAD'] = opts.localSha;
+        responses['git rev-parse origin/' + branch] = opts.remoteSha;
+        responses['git merge-base HEAD origin/' + branch] = opts.mergeBase;
+        responses[normalPush] = opts.failNormalPush ? { throw: 'push rejected' } : '';
+        responses[leasePush] = opts.failLeasePush ? { throw: 'lease stale' } : '';
+        responses['git reset --hard origin/' + branch] = opts.failReset ? { throw: 'reset failed' } : '';
+        return { branch: branch, responses: responses, commands: [] };
+    }
+
+    function scenarioCli(scenario) {
+        return function(args) {
+            var command = args.command;
+            scenario.commands.push(command);
+            var r = scenario.responses[command];
+            if (r && r.throw) throw new Error(r.throw);
+            return r === undefined ? '' : r;
+        };
+    }
+
+    function loadPublishScenario(opts) {
+        var scenario = scenarioResponses(opts);
         var module = loadPostTestAutomation({
             file_read: function(args) {
                 if (args.path === 'outputs/test_automation_result.json') {
@@ -777,36 +804,11 @@ suite('postTestAutomationResults: publishExistingBranch strategies (gh-1043)', f
                 if (args.path && args.path.indexOf('.dmtools/config') !== -1) return null;
                 return null;
             },
-            cli_execute_command: function(args) {
-                var command = args.command;
-                commands.push(command);
-                if (command === 'git branch --show-current') return branch;
-                if (command === 'git status --short -- testing') return '?? testing/tests/DMC-920/test.py';
-                if (command === 'git diff --cached --stat') return '';
-                if (command.indexOf('git ls-remote --heads origin ' + branch) === 0) {
-                    return '9a7e2aec\trefs/heads/' + branch;
-                }
-                if (command === 'git rev-parse HEAD') return opts.localSha;
-                if (command === 'git rev-parse origin/' + branch) return opts.remoteSha;
-                if (command === 'git merge-base HEAD origin/' + branch) return opts.mergeBase;
-                if (command === 'git push -u origin ' + branch) {
-                    if (opts.failNormalPush) throw new Error('push rejected');
-                    return '';
-                }
-                if (command === 'git push -u origin ' + branch + ' --force-with-lease') {
-                    if (opts.failLeasePush) throw new Error('lease stale');
-                    return '';
-                }
-                if (command === 'git reset --hard origin/' + branch) {
-                    if (opts.failReset) throw new Error('reset failed');
-                    return '';
-                }
-                return '';
-            }
+            cli_execute_command: scenarioCli(scenario)
         });
         return {
             module: module,
-            commands: commands,
+            commands: scenario.commands,
             run: function() {
                 return module.action({
                     ticket: { key: 'DMC-920', fields: { summary: 'Publish strategies' } },
