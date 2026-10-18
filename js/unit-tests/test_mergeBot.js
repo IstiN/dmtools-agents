@@ -1173,7 +1173,6 @@ suite('mergeBot: action loop edge paths (gh-1040 characterization)', function ()
             github_list_workflow_runs: function () { return JSON.stringify({ workflow_runs: [] }); },
             github_list_prs: function () { return JSON.stringify(list); },
             github_get_pr: function () {
-                if (opts.getPrThrows) throw new Error(opts.getPrThrows);
                 return JSON.stringify(opts.prBody !== undefined ? opts.prBody : {
                     number: 7, state: 'OPEN', draft: false, mergeable: true,
                     mergeable_state: 'clean', head: { sha: 's7' },
@@ -1187,7 +1186,11 @@ suite('mergeBot: action loop edge paths (gh-1040 characterization)', function ()
                 calls.merges.push(m);
                 return JSON.stringify({ merged: true });
             },
-            github_add_labels: function (a) { calls.adds.push(a); return '{}'; },
+            github_add_labels: function (a) {
+                calls.adds.push(a);
+                if (opts.addThrows) throw new Error(opts.addThrows);
+                return '{}';
+            },
             github_remove_label: function (r) {
                 if (opts.removeThrows) throw new Error(opts.removeThrows);
                 calls.removes.push(r); return '{}';
@@ -1264,6 +1267,7 @@ suite('mergeBot: action loop edge paths (gh-1040 characterization)', function ()
 
     test('ai_validated latch throws -> latch-failed line, no acted credit', function () {
         var fx = loopFixture({
+            addThrows: 'labels endpoint down',
             list: [{ number: 7, labels: [{ name: 'ai_validating' }], head: { sha: 's7' } }],
             prBody: {
                 number: 7, state: 'OPEN', draft: false, mergeable: true, mergeable_state: 'clean',
@@ -1271,39 +1275,13 @@ suite('mergeBot: action loop edge paths (gh-1040 characterization)', function ()
             },
             checkRuns: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }]
         });
-        // add_labels is not loopFixture-configurable; patch via removeThrows-style knob:
-        var modsFx = fx;
-        var result;
-        // Rebuild with a throwing add_labels:
-        var calls = { merges: [], adds: [], removes: [] };
-        var mods = {
-            github_list_workflow_runs: function () { return JSON.stringify({ workflow_runs: [] }); },
-            github_list_prs: function () {
-                return JSON.stringify([{ number: 7, labels: [{ name: 'ai_validating' }], head: { sha: 's7' } }]);
-            },
-            github_get_pr: function () {
-                return JSON.stringify({
-                    number: 7, state: 'OPEN', draft: false, mergeable: true, mergeable_state: 'clean',
-                    head: { sha: 's7' }, labels: [{ name: 'ai_validating' }]
-                });
-            },
-            github_get_commit_check_runs: function () {
-                return JSON.stringify({ check_runs: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] });
-            },
-            github_merge_pr: function (m) { calls.merges.push(m); return JSON.stringify({ merged: true }); },
-            github_add_labels: function (a) { calls.adds.push(a); throw new Error('labels endpoint down'); },
-            github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
-            cli_execute_command: function () { return ''; }
-        };
-        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
-        result = bot.action({ jobParams: { repo: 'a/b' } });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
         assert.ok(result.log.some(function (l) {
             return l.indexOf('⚠️ pr-7 latch failed:') !== -1 && l.indexOf('labels endpoint down') !== -1;
         }), 'the verbatim failure is surfaced: ' + JSON.stringify(result.log));
         assert.equal(result.acted, 0, 'a failed latch is not motion');
-        assert.equal(calls.adds.length, 1, 'the latch was attempted exactly once');
-        assert.equal(calls.removes.length, 1, 'the unarm still ran before the latch attempt');
-        void modsFx;
+        assert.equal(fx.calls.adds.length, 1, 'the latch was attempted exactly once');
+        assert.equal(fx.calls.removes.length, 1, 'the unarm still ran before the latch attempt');
     });
 
     test('advance candidate merge refused -> refusal line + deferral + self-tick', function () {

@@ -80,6 +80,21 @@ function pendingStartedAt(r) {
 }
 
 /**
+ * Concluded-red conclusions (any case, already upper-cased by the caller).
+ */
+function isRedConclusion(c) {
+    return c === 'FAILURE' || c === 'TIMED_OUT' || c === 'CANCELLED';
+}
+
+/**
+ * Not-yet-concluded run shapes (gh-1040): no conclusion at all, or an
+ * explicitly queued/in-flight status.
+ */
+function isPendingRunShape(c, s) {
+    return !c || s === 'QUEUED' || s === 'IN_PROGRESS' || s === 'WAITING' || s === 'PENDING';
+}
+
+/**
  * Per-run classification for rollupDetail (gh-1040): a concluded
  * FAILURE/TIMED_OUT/CANCELLED run is red; a run with no conclusion yet
  * (or an explicitly queued/in-flight status) is pending and carries its
@@ -89,10 +104,8 @@ function pendingStartedAt(r) {
 function decideRunState(r) {
     var c = r.conclusion ? String(r.conclusion).toUpperCase() : null;
     var s = r.status ? String(r.status).toUpperCase() : null;
-    if (c === 'FAILURE' || c === 'TIMED_OUT' || c === 'CANCELLED') {
-        return { red: true, pending: false, started: null };
-    }
-    if (!c || s === 'QUEUED' || s === 'IN_PROGRESS' || s === 'WAITING' || s === 'PENDING') {
+    if (isRedConclusion(c)) return { red: true, pending: false, started: null };
+    if (isPendingRunShape(c, s)) {
         return { red: false, pending: true, started: pendingStartedAt(r) };
     }
     return { red: false, pending: false, started: null };
@@ -269,20 +282,62 @@ function listSmRuns(owner, name) {
             workspace: owner, repository: name,
             workflowId: 'machine-sm.yml', perPage: 30
         }));
-        var runs = (wf && (wf.workflow_runs || wf.runs)) || [];
+        var runs = smRunsFromPayload(wf);
         if (!runs.length && wf && wf.message) {
-            var all = parseMcp(github_list_workflow_runs({
-                workspace: owner, repository: name, perPage: 30
-            }));
-            var allRuns = (all && (all.workflow_runs || all.runs)) || [];
-            runs = allRuns.filter(function (r) {
-                return String(r.path || '') === '.github/workflows/machine-sm.yml';
-            });
+            runs = allRunsFallback(owner, name);
         }
         return runs;
     } catch (eActive) {
         return null; // unlistable → fail open, the self-heal still fires
     }
+}
+
+/**
+ * The workflow_runs/runs array of a listing payload, verbatim shapes.
+ */
+function smRunsFromPayload(payload) {
+    return (payload && (payload.workflow_runs || payload.runs)) || [];
+}
+
+/**
+ * The all-runs-endpoint fallback of the active-SM probe (gh-1040
+ * extraction): same call as the primary listing minus the workflowId
+ * (that form is what 404s), filtered to machine-sm.yml by run path.
+ */
+function allRunsFallback(owner, name) {
+    var all = parseMcp(github_list_workflow_runs({
+        workspace: owner, repository: name, perPage: 30
+    }));
+    return smRunsFromPayload(all).filter(function (r) {
+        return String(r.path || '') === '.github/workflows/machine-sm.yml';
+    });
+}
+
+/**
+ * Live-SM statuses (review #701, already lower-cased by the caller).
+ */
+function isActiveSmStatus(s) {
+    return s === 'queued' || s === 'in_progress' || s === 'waiting' || s === 'pending';
+}
+
+/**
+ * Zombie stamp of a non-in_progress run (review #701 tick-storm fix,
+ * verbatim): the last update timestamp of the run, whatever field the
+ * bridge payload carried it in.
+ */
+function smRunTimestamp(r) {
+    return r.updated_at || r.updatedAt || r.created_at || r.createdAt || '';
+}
+
+/**
+ * Zombie check (gh-1040 extraction): a non-in_progress run whose last
+ * update is older than 6h was superseded by its concurrency group and
+ * does not count as active. A run with NO parseable timestamp is never a
+ * zombie (no evidence of motionlessness — fail open as live).
+ */
+function isZombieSmRun(r, now) {
+    var ts = Date.parse(smRunTimestamp(r));
+    return !isNaN(ts) && (now - ts) > 6 * 60 * 60 * 1000;
 }
 
 /**
@@ -293,11 +348,8 @@ function listSmRuns(owner, name) {
  */
 function isLiveSmRun(r, now) {
     var s = r.status ? String(r.status).toLowerCase() : '';
-    if (s !== 'queued' && s !== 'in_progress' && s !== 'waiting' && s !== 'pending') return false;
-    if (s !== 'in_progress') {
-        var ts = Date.parse(r.updated_at || r.updatedAt || r.created_at || r.createdAt || '');
-        if (!isNaN(ts) && (now - ts) > 6 * 60 * 60 * 1000) return false; // zombie queued > 6h
-    }
+    if (!isActiveSmStatus(s)) return false;
+    if (s !== 'in_progress' && isZombieSmRun(r, now)) return false; // zombie queued > 6h
     return true;
 }
 
@@ -430,6 +482,14 @@ function isLiveOpenPr(pr) {
 }
 
 /**
+ * The head sha of a PR body, verbatim shapes (gh-1040 extraction): the
+ * REST body carries head.sha, older bridges a bare head string.
+ */
+function headShaOf(pr) {
+    return pr.head && (pr.head.sha || pr.head);
+}
+
+/**
  * The ai_validating unarm, both log shapes verbatim (gh-1040
  * extraction): on success the ok line is logged and true returned; on
  * failure the failPrefix line carries the verbatim error and false is
@@ -445,6 +505,29 @@ function unarmValidating(owner, name, number, okLine, failPrefix, say) {
         say(failPrefix + (e.message || e));
         return false;
     }
+}
+
+/**
+ * The gh-766 stale-pending unarm, log line verbatim (gh-1040
+ * extraction): the motionless-hours arithmetic and the skip line move
+ * out of action(); returns the acted credit (1 unarmed, 0 on failure).
+ */
+function unarmStaleHead(owner, name, pr, pendingSince, staleHeadMinutes, say) {
+    var stillHours = Math.round(((Date.now() - pendingSince) / 3600000) * 10) / 10;
+    return unarmValidating(owner, name, pr.number,
+        '⏭️ pr-' + pr.number + ' skipped: checks pending ' + stillHours +
+        'h (> ' + (Math.round(staleHeadMinutes / 6) / 10) + 'h motionless) — unarmed, queue advances',
+        '⚠️ pr-' + pr.number + ' stale-head unarm failed: ', say) ? 1 : 0;
+}
+
+/**
+ * The BEHIND/DIRTY staleness unarm, log line verbatim (gh-1040
+ * extraction): returns the acted credit (1 unarmed, 0 on failure).
+ */
+function unarmStaleHeadState(owner, name, pr, ms, say) {
+    return unarmValidating(owner, name, pr.number,
+        '🔓 pr-' + pr.number + ' validated head stale (' + ms + ') — unarmed, refresh follows',
+        '⚠️ pr-' + pr.number + ' unarm failed: ', say) ? 1 : 0;
 }
 
 /**
@@ -584,7 +667,7 @@ function action(params) {
         if (!isLiveOpenPr(pr)) continue;
         if (pr.draft) continue;
         var labels = labelNames(pr);
-        var headSha = pr.head && (pr.head.sha || pr.head);
+        var headSha = headShaOf(pr);
         if (!headSha) continue;
         if (hasLabel(labels, 'blocked')) {
             // gh-766: owner-parked (#939 semantics unchanged — the bot still
@@ -616,10 +699,11 @@ function action(params) {
             // holds for everyone behind; never-validated, mid-review,
             // draft, conflicted and not-ready candidates keep deferring.
             if (approved && !hasLabel(labels, 'agent:review')) {
-                var advance = deadHeadPassed && hasLabel(labels, 'ai_validated');
-                if (advance) deadHeadPassed = false; // consumed by the first live candidate
                 var advanced = false;
-                if (advance) {
+                if (deadHeadPassed && hasLabel(labels, 'ai_validated')) {
+                    // consumed by the first live candidate — one advance
+                    // per skip-chain, so FIFO holds for everyone behind.
+                    deadHeadPassed = false;
                     var upRollup = checksRollup(String(headSha), pr, job, owner, name);
                     if (upRollup === 'green' && mergeStateOf(pr) === 'CLEAN') {
                         var gained = mergeApprovedHead(owner, name, pr,
@@ -657,13 +741,7 @@ function action(params) {
                 // (dev-lane) arms don't hold the merge window (mutexAmong
                 // parity) and keep waiting untouched: re-dispatching a
                 // slow-CI dev lane every 2h would only lose its queue spot.
-                var stillHours = Math.round(((Date.now() - detail.pendingSince) / 3600000) * 10) / 10;
-                if (unarmValidating(owner, name, pr.number,
-                        '⏭️ pr-' + pr.number + ' skipped: checks pending ' + stillHours +
-                        'h (> ' + (Math.round(staleHeadMinutes / 6) / 10) + 'h motionless) — unarmed, queue advances',
-                        '⚠️ pr-' + pr.number + ' stale-head unarm failed: ', say)) {
-                    acted++;
-                }
+                acted += unarmStaleHead(owner, name, pr, detail.pendingSince, staleHeadMinutes, say);
                 skippedHeads++;
                 deadHeadPassed = true;
                 continue;
@@ -674,11 +752,7 @@ function action(params) {
         var ms = mergeStateOf(pr);
         if (ms !== 'CLEAN') {
             if (shouldUnarmStaleHead(ms, approved)) {
-                if (unarmValidating(owner, name, pr.number,
-                        '🔓 pr-' + pr.number + ' validated head stale (' + ms + ') — unarmed, refresh follows',
-                        '⚠️ pr-' + pr.number + ' unarm failed: ', say)) {
-                    acted++;
-                }
+                acted += unarmStaleHeadState(owner, name, pr, ms, say);
             } else {
                 say('⏳ pr-' + pr.number + ' mergeState=' + ms + ' — waiting (checks settling)');
             }
