@@ -33,6 +33,21 @@ function scanLimit(limit) {
     return l + OVERSCAN;
 }
 
+// queryPrs' candidate-slice cap (gh-1027 CRAP refactor): extracted from
+// queryPrs so the conflict_rework branch doesn't compound the query
+// function's complexity — the CRAP ratchet failed on queryPrs 67.4 -> 68.4
+// because the ternary added a decision point the coverage could never buy
+// back (CRAP floors at CC). conflict_rework widens to the shared over-scan
+// budget; every other rule keeps the gh-922 fallthrough reserve (passed in
+// so the TRIGGER_FALLTHROUGH_RESERVE constant stays at its githubSource
+// home).
+function sliceCap(rule, limit, fallthroughReserve) {
+    if (rule && rule.localAction === 'conflict_rework') {
+        return scanLimit(limit);
+    }
+    return limit + fallthroughReserve;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { OVERSCAN: OVERSCAN, scanLimit: scanLimit };
+    module.exports = { OVERSCAN: OVERSCAN, scanLimit: scanLimit, sliceCap: sliceCap };
 }

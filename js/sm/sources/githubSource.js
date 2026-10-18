@@ -935,10 +935,10 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
     // re-cut the queue before the loop ever reaches unreported candidates
     // parked behind 4+ markers (the exact starvation gh-1025 pushed out
     // to 5+). The budget bounds the per-tick comments-fetch fan-out.
-    var sliceCap = rule.localAction === 'conflict_rework'
-        ? conflictReworkScanModule.scanLimit(limit)
-        : limit + TRIGGER_FALLTHROUGH_RESERVE;
-    return matched.slice(0, sliceCap);
+    // The cap itself lives in conflictReworkScan.sliceCap — keeping the
+    // branch out of queryPrs so its CRAP stays under the released
+    // baseline (the ratchet failed on this ternary, gh-1027 rework).
+    return matched.slice(0, conflictReworkScanModule.sliceCap(rule, limit, TRIGGER_FALLTHROUGH_RESERVE));
 }
 
 if (typeof module !== 'undefined' && module.exports) {
