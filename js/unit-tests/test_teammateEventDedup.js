@@ -45,9 +45,9 @@ function runOnIssue(runNumber, status, opts) {
         status: status,
         path: opts.path || LEG_PATH,
         created_at: opts.createdAt || FIVE_MIN_AGO,
-        updated_at: opts.updatedAt || FIVE_MIN_AGO
+        updated_at: opts.updatedAt || FIVE_MIN_AGO,
+        conclusion: opts.conclusion
     };
-    if (opts.conclusion) r.conclusion = opts.conclusion;
     return r;
 }
 
@@ -225,6 +225,18 @@ suite('teammateEventDedup — key/window predicates', function () {
         assert.notOk(dedup.isOlderRun({ run_number: 500 }, { runNumber: 500 }), 'self-age run is not a suppressor');
         assert.ok(dedup.isOlderRun({ created_at: FIVE_MIN_AGO }, { createdAt: NOW_MS }));
         assert.notOk(dedup.isOlderRun({}, { runNumber: 500 }), 'a run with no order signal is ignored');
+    });
+
+    test('isLegWorkflowRun: only runs of the leg workflow count (path guard parity)', function () {
+        assert.notOk(dedup.isLegWorkflowRun(null), 'no run at all');
+        assert.ok(dedup.isLegWorkflowRun({}), 'a missing path counts (legacy run shapes)');
+        assert.ok(dedup.isLegWorkflowRun({ path: null }), 'a null path counts');
+        assert.ok(dedup.isLegWorkflowRun({ path: '' }), 'an empty path counts');
+        assert.ok(dedup.isLegWorkflowRun({ path: LEG_PATH }), 'the leg workflow path matches');
+        assert.ok(dedup.isLegWorkflowRun({ path: 'workflows/ai-teammate.yml' }), 'a workflow-file suffix match counts');
+        assert.notOk(dedup.isLegWorkflowRun({ path: '.github/workflows/quality.yml' }), 'another workflow never matches');
+        assert.notOk(dedup.isLegWorkflowRun({ path: 'ai-teammate.yml' }), 'a path shorter than the /-prefixed suffix never matches');
+        assert.ok(dedup.isLegWorkflowRun({ path: 'x/ai-teammate.yml' }, 'ai-teammate.yml'), 'an explicit workflowFile override matches its suffix');
     });
 });
 

@@ -328,29 +328,31 @@ suite('workflow contract — all .github/workflows/*.yml', function () {
 
 var ARMING_LABELS = ['agent:dev', 'agent:develop', 'agent:review', 'agent:rework', 'pr_approved'];
 
-// Extract a folded job-level `if: >-` block (4-space indent under a job) and
-// return its scalar content (folded scalar semantics: lines joined with ' ').
-// gh-1065: the stub carries TWO such gates — the dedup probe job mirrors the
-// arming gate — so this contract targets the CALL gate: the one that also
-// gates on the dedup probe output (the template has only the call gate, so
-// the marker check falls back to the first block there).
-function extractJobIf(yml) {
+// Collect every folded job-level `if: >-` block (4-space indent under a
+// job) as a scalar (folded scalar semantics: lines joined with ' ').
+function foldedIfBlocks(yml) {
     var blocks = [];
     var lines = yml.split('\n');
     for (var i = 0; i < lines.length; i++) {
-        if (/^ {4}if: >-\s*$/.test(lines[i])) {
-            var parts = [];
-            for (var j = i + 1; j < lines.length; j++) {
-                if (/^\s*$/.test(lines[j])) continue;
-                if (/^ {5,}/.test(lines[j])) {
-                    parts.push(lines[j].replace(/^\s+/, ''));
-                } else {
-                    break;
-                }
-            }
-            blocks.push(parts.join(' '));
+        if (!/^ {4}if: >-\s*$/.test(lines[i])) continue;
+        var parts = [];
+        for (var j = i + 1; j < lines.length; j++) {
+            if (/^\s*$/.test(lines[j])) continue;
+            if (!/^ {5,}/.test(lines[j])) break;
+            parts.push(lines[j].replace(/^\s+/, ''));
         }
+        blocks.push(parts.join(' '));
     }
+    return blocks;
+}
+
+// The folded `if: >-` gate this contract guards. gh-1065: the stub now
+// carries TWO such gates — the dedup probe job mirrors the arming gate —
+// so target the CALL gate: the one that also gates on the dedup probe
+// output (the template has only the call gate, so the marker check falls
+// back to the first block there).
+function extractJobIf(yml) {
+    var blocks = foldedIfBlocks(yml);
     for (var k = 0; k < blocks.length; k++) {
         if (blocks[k].indexOf('needs.dedup.outputs.proceed') !== -1) return blocks[k];
     }
