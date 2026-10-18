@@ -15,6 +15,8 @@
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
+// Shared pure query/parse/markdown helpers (gh-1038) — no tracker/file side effects.
+var linkedIssuesReport = require('./common/linkedIssuesReport.js');
 var _trackerCtx = { config: null, customParams: {} };
 var _trackerInst = null;
 function initTracker(config, customParams) {
@@ -28,17 +30,17 @@ function getTracker() {
 
 function action(params) {
     try {
-        var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
-        var folder = actualParams.inputFolderPath;
-        initTracker(null, (params.jobParams && params.jobParams.customParams) || actualParams.customParams || {});
-        var ticketKey = folder.split('/').pop();
+        var ctx = linkedIssuesReport.resolveInputContext(params);
+        var folder = ctx.folder;
+        var ticketKey = ctx.ticketKey;
+        initTracker(null, (params.jobParams && params.jobParams.customParams) || ctx.actualParams.customParams || {});
 
         console.log('Fetching linked test cases for', ticketKey, '...');
 
         var linkedTests = [];
         try {
             // JQL text: provider-specific query (WIQL on ado)
-            linkedTests = getTracker().searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = "Test Case"', { maxResults: 10, fields: ['key', 'summary', 'status', 'description', 'labels'] });
+            linkedTests = getTracker().searchIssues(linkedIssuesReport.buildLinkedQuery(ticketKey, 'issuetype = "Test Case"'), { maxResults: 10, fields: ['key', 'summary', 'status', 'description', 'labels'] });
         } catch (e) {
             console.warn('Could not fetch linked test cases (skipping):', e);
             return;
@@ -79,16 +81,7 @@ function action(params) {
 
                 if (comments.length > 0) {
                     // Include up to last 5 comments (most recent test run results)
-                    var startIdx = Math.max(0, comments.length - 5);
-                    lines.push('**Test Run Comments (' + (comments.length - startIdx) + ' most recent)**:\n');
-                    for (var j = startIdx; j < comments.length; j++) {
-                        var c = comments[j];
-                        var author = (c.author && c.author.displayName) || 'Unknown';
-                        var body = (c.body || '').substring(0, 2000);
-                        lines.push('**[' + author + ']**:');
-                        lines.push(body);
-                        lines.push('');
-                    }
+                    lines = lines.concat(linkedIssuesReport.buildRecentCommentLines(comments, '**Test Run Comments'));
                 }
             } catch (ce) {
                 console.warn('Could not fetch comments for', tc.key, ':', ce);
