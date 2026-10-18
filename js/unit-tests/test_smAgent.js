@@ -9397,6 +9397,148 @@ suite('smAgent: duplicate rework dispatch — one leg wins (gh-715)', function (
     });
 });
 
+// ─── gh-1028: duplicate CONCURRENT rework legs on one PR (live 2026-10-18
+// 08:04–08:09Z: PR #1017 / gh-1000 / branch ai/gh-1000 got TWO concurrent
+// rework legs for ONE rework cycle — run 39110030366 PR-armed at 08:04:12Z
+// titled 'workflow_dispatch # rework' + run 39110364398 issue-armed at
+// 08:09:31Z titled 'workflow_dispatch #1000 rework'). The first leg pushed,
+// the head moved (c2e0d28f → 94988905), so the gh-806 (pr, head) latch keyed
+// a NEW head and never suppressed the second arm; and the PR-armed factory
+// run title carries NO '· gh-N'/'#N' anchor token, so the title guards
+// (gh-715/gh-944) were blind to it too. The branch-keyed probe (an ACTIVE
+// ai-teammate run whose head_branch IS the dispatch branch, regardless of
+// head sha) closes both holes for BOTH dispatch arms — the branch is the
+// leg's single writer and two concurrent legs race every push.
+suite('smAgent: branch-keyed leg dedupe (gh-1028)', function () {
+    var BRANCH = 'ai/gh-100';
+    var HEAD_OLD = 'c2e0d28f00000000000000000000000000000000';
+    var HEAD_NEW = '94988905000000000000000000000000000000000';
+    var LEG_PATH = '.github/workflows/ai-teammate.yml';
+
+    // The first leg's in-flight run — dispatched on the OLD head, no anchor
+    // token in the title (the exact PR-armed factory shape from the ticket).
+    function legRun(head) {
+        return { id: 39110030366, status: 'in_progress',
+                 display_title: 'workflow_dispatch # rework',
+                 path: LEG_PATH, head_branch: BRANCH, head_sha: head || HEAD_OLD };
+    }
+
+    function reworkSource(prLabels) {
+        return function (rule, ctx) {
+            var q = (rule && rule.query) || {};
+            if (q.type === 'issue') {
+                return [{ key: 'gh-100', labels: ['agent:rework'], issueNumber: 100,
+                          prNumber: 1017, branch: BRANCH, author: 'ai-teammate',
+                          headSha: HEAD_NEW, pr: { labels: prLabels } }];
+            }
+            return [{ key: 'pr-1017', labels: prLabels, issueNumber: 100,
+                      prNumber: 1017, branch: BRANCH, author: 'ai-teammate',
+                      headSha: HEAD_NEW }];
+        };
+    }
+
+    var FILEMAP = { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' };
+
+    test('AC2: a head move between dispatches does NOT bypass the probe — the active run on the OLD head still suppresses', function () {
+        var sm = makeSmAgent({
+            fileMap: FILEMAP,
+            github: { items: reworkSource([]),
+                      issue: { number: 100, state: 'open', labels: [{ name: 'agent:rework' }] } },
+            workflowRuns: { in_progress: [legRun(HEAD_OLD)] } // first leg on the MOVED-FROM head
+        });
+
+        sm.action(ghParams(deployedRules(['rework-on-red-ci'])));
+
+        assert.equal(sm.capturedTriggers.length, 0,
+            'the issue-armed dispatch sees the PR-armed leg in flight on the SAME branch even though the head moved');
+    });
+
+    test('AC1: issue-armed and PR-armed rework for the SAME PR in one tick dispatch EXACTLY ONE leg', function () {
+        // The first dispatch materializes its run (the live 08:04 leg); the
+        // second arm's probe must then see it. The run's head is the OLD
+        // head — the leg pushed mid-flight is exactly what moved the head
+        // before the second arm fired.
+        var opts = {
+            fileMap: FILEMAP,
+            github: { items: reworkSource(['agent:rework']),
+                      issue: { number: 100, state: 'open', labels: [{ name: 'agent:rework' }] } },
+            workflowRuns: { in_progress: [] },
+            onTrigger: function () { opts.workflowRuns.in_progress.push(legRun(HEAD_OLD)); }
+        };
+        var sm = makeSmAgent(opts);
+
+        sm.action(ghParams(deployedRules(['rework-on-red-ci', 'rework-on-label'])));
+
+        assert.equal(sm.capturedTriggers.length, 1,
+            'one leg wins — the second arm lands on the branch the first leg already owns');
+    });
+
+    test('a COMPLETED leg run on the branch does not suppress — the next arm dispatches (dead-letter re-fire intact)', function () {
+        var sm = makeSmAgent({
+            fileMap: FILEMAP,
+            github: { items: reworkSource([]),
+                      issue: { number: 100, state: 'open', labels: [{ name: 'agent:rework' }] } },
+            workflowRuns: { in_progress: [
+                Object.assign(legRun(HEAD_OLD), { status: 'completed', conclusion: 'success',
+                    updated_at: '2026-10-18T08:05:00.000Z' })
+            ] }
+        });
+
+        sm.action(ghParams(deployedRules(['rework-on-red-ci'])));
+
+        assert.equal(sm.capturedTriggers.length, 1,
+            'the concluded leg owns nothing — a consumed-without-work arm re-fires as designed');
+    });
+
+    test('an active leg run on a DIFFERENT branch does not suppress', function () {
+        var other = legRun(HEAD_OLD);
+        other.head_branch = 'ai/gh-999';
+        var sm = makeSmAgent({
+            fileMap: FILEMAP,
+            github: { items: reworkSource([]),
+                      issue: { number: 100, state: 'open', labels: [{ name: 'agent:rework' }] } },
+            workflowRuns: { in_progress: [other] }
+        });
+
+        sm.action(ghParams(deployedRules(['rework-on-red-ci'])));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'another branch is another writer — dispatch proceeds');
+    });
+
+    test('branch-guard suppression does NOT consume the PR arm — rework-on-label keeps its label for the next tick', function () {
+        var sm = makeSmAgent({
+            fileMap: FILEMAP,
+            github: { items: [{ key: 'pr-1017', labels: ['agent:rework'], issueNumber: 100,
+                                prNumber: 1017, branch: BRANCH, author: 'ai-teammate',
+                                headSha: HEAD_NEW }] },
+            workflowRuns: { in_progress: [legRun(HEAD_OLD)] }
+        });
+
+        sm.action(ghParams(deployedRules(['rework-on-label'])));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'suppressed — a leg already owns the branch');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'the arm survives the suppression (unlike the gh-715 cross-anchor consume) — if the in-flight leg dies silently, the arm re-fires next tick');
+    });
+
+    test('a dispatch that does NOT land on the branch (ref=main) is outside the guard', function () {
+        var rules = deployedRules(['rework-on-label']).map(function (r) {
+            var r2 = Object.assign({}, r); r2.workflowRef = 'main'; return r2;
+        });
+        var sm = makeSmAgent({
+            fileMap: FILEMAP,
+            github: { items: [{ key: 'pr-1017', labels: ['agent:rework'], issueNumber: 100,
+                                prNumber: 1017, branch: BRANCH, author: 'ai-teammate',
+                                headSha: HEAD_NEW }] },
+            workflowRuns: { in_progress: [legRun(HEAD_OLD)] }
+        });
+
+        sm.action(ghParams(rules));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'a main-ref leg is not the branch writer — no race to guard');
+    });
+});
+
 // ─── gh-682: standing cancelled-checks remedy. Live evidence: fa#1202
 // (head 898efd4) — all 4 kicker push-runs on ai/gh-1171 CANCELLED
 // 21:43–23:05 as refresh pushes landed, required checks ended CANCELLED →
