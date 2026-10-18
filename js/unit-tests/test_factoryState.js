@@ -1233,6 +1233,26 @@ suite('factoryState — zombiesSwept (gh-998 leak-rate metric)', function () {
     var stateNaN = fsModule.buildFactoryState(baseInput({ prev: prev, zombiesSwept: NaN }));
     assert.equal(stateNaN.zombiesSwept, 4, 'NaN tick count contributes 0, carry survives');
   });
+
+  // Review-thread recipe (IstiN, PR #1012 thread PRRT_kwDORYAuYs6to_5g): pin
+  // the exact prev shapes so every new call-site line in buildFactoryState
+  // executes under each shape, and assert on the payload field name the
+  // snapshot consumers read (`zombiesSwept` in the built state JSON).
+  test('recipe shapes: null/missing prev, cumulative carry, combined malformed — payload field pinned', function () {
+    // 1. prev = null + zombiesSwept absent → 0 (stable shape, no NaN)
+    var stateNull = fsModule.buildFactoryState(baseInput({ prev: null }));
+    assert.equal(stateNull.zombiesSwept, 0);
+    var stateNoPrev = fsModule.buildFactoryState(baseInput({}));
+    assert.equal(stateNoPrev.zombiesSwept, 0);
+    // 2. prev = { zombiesSwept: 3 } + zombiesSwept: 2 → 5 (cumulative carry)
+    var stateCarry = fsModule.buildFactoryState(
+      baseInput({ prev: { lanes: {}, zombiesSwept: 3 }, zombiesSwept: 2 }));
+    assert.equal(stateCarry.zombiesSwept, 5, 'cumulative carry: 3 + 2');
+    // 3. malformed carry on BOTH sides (prev.zombiesSwept = 'x', zombiesSwept = NaN) → 0, not NaN
+    var stateBad = fsModule.buildFactoryState(
+      baseInput({ prev: { lanes: {}, zombiesSwept: 'x' }, zombiesSwept: NaN }));
+    assert.equal(stateBad.zombiesSwept, 0, 'double-malformed restarts at 0, never NaN');
+  });
 });
 
 // ── gh-816 — merge-lane citation integrity ───────────────────────────────────
