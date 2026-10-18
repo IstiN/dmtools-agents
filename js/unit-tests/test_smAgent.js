@@ -342,6 +342,7 @@ function makeSmAgent(opts) {
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
             './common/triggerFailures.js': loadModule('js/common/triggerFailures.js', makeRequire({}), {}),
+            './common/branchLegGuard.js': loadModule('js/common/branchLegGuard.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {
@@ -9438,6 +9439,23 @@ suite('smAgent: branch-keyed leg dedupe (gh-1028)', function () {
     }
 
     var FILEMAP = { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' };
+
+    // Local copies of the gh-715 suite helpers (they are suite-scoped there).
+    function deployedRules(ids) {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+        return ids.map(function (id) {
+            assert.ok(byId[id], 'deployed rule ' + id + ' exists');
+            return byId[id];
+        });
+    }
+
+    function ghParams(rules) {
+        return { jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                              machineAuthor: 'ai-teammate', rules: rules } };
+    }
 
     test('AC2: a head move between dispatches does NOT bypass the probe — the active run on the OLD head still suppresses', function () {
         var sm = makeSmAgent({
