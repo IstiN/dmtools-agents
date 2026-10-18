@@ -884,3 +884,335 @@ suite('preCliDevelopmentSetup.checkoutBranch — warning-only ls-remote captures
     });
 
 });
+
+// ── gh-1042: action()-level branch characterization ─────────────────────────
+// Pins the CURRENT behaviour of the paths the CRAP refactor of action() touches
+// (param resolution, status move, restore, checkout failure reporting, setup
+// commands/warnings, fetch extras). The suite must stay green through the
+// extraction.
+
+suite('preCliDevelopmentSetup.action — branch-coverage characterization (gh-1042)', function() {
+
+    function make1042Config(extra) {
+        return makeConfig(Object.assign({
+            git: { baseBranch: 'main', featureBranch: { enabled: false } },
+            tracker: { provider: 'github' },
+            repository: { owner: 'acme', repo: 'widgets' }
+        }, extra || {}));
+    }
+
+    // Compact action loader: same wiring as the gh-716 suite, with per-test
+    // stubs for restore/setupCommands/fetch extras and injected globals
+    // (e.g. github_create_comment) that reach the real trackers module.
+    // Defaults live in an Object.assign map — every `||` would raise the
+    // loader's own CRAP (gh-1042 gate measures test files too).
+    function loadActionGh1042(bag, config, globals, opts) {
+        opts = Object.assign({
+            resolveBranchNameThrows: false,
+            restoreFromReleases: { action: function () {} },
+            setupCommands: {
+                runSetupCommands: function () { return null; },
+                buildSetupWarningsMarkdown: function () { return null; },
+                truncateSetupError: function (s) { return String(s); }
+            },
+            fetchLinkedTests: { action: function () {} },
+            fetchParentContext: { action: function () {} }
+        }, opts || {});
+        globals = globals || {};
+        var trackers = loadModule('js/common/trackers.js', makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }), globals);
+        return loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRequire({
+                './configLoader.js': {
+                    loadProjectConfig: function () { return config; },
+                    paramsForConfigLoad: function (p) { return p; },
+                    resolveBranchName: function (cfg, ticket, role) {
+                        if (opts.resolveBranchNameThrows) { throw new Error('branch resolve boom'); }
+                        return (role === 'development' ? 'ai/' : 'feature/') + ticket.key;
+                    },
+                    resolvePRTargetBranch: function () { return 'main'; },
+                    loadHookFn: function () { return null; }
+                },
+                './common/pullRequest.js': PR_HELPER_REAL,
+                './config.js': NOOP_CONFIG_JS,
+                './fetchQuestionsToInput.js': { action: function () {} },
+                './fetchLinkedTestsToInput.js': opts.fetchLinkedTests,
+                './fetchParentContextToInput.js': opts.fetchParentContext,
+                './restoreFromReleases.js': opts.restoreFromReleases,
+                './common/setupCommands.js': opts.setupCommands,
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
+                './common/commentMarkup.js': devCommentMarkupModule,
+                './common/trackers.js': trackers
+            }),
+            Object.assign({
+                cli_execute_command: makeCliMock(bag.cliCalls, {}),
+                jira_move_to_status: function (args) { bag.moves.push(args); },
+                file_write: function (args) { bag.writes.push(args); },
+                github_add_labels: function (args) { bag.events.push({ op: 'add', args: args }); },
+                github_remove_label: function (args) { bag.events.push({ op: 'remove', args: args }); }
+            }, globals)
+        );
+    }
+
+    function make1042Bag() {
+        return { cliCalls: [], moves: [], writes: [], events: [] };
+    }
+
+    var GH1042_TICKET = { key: 'gh-1042', fields: {} };
+
+    function run1042Action(mod, params) {
+        var threw = null;
+        try {
+            mod.action(params);
+        } catch (e) {
+            threw = e;
+        }
+        return threw;
+    }
+
+    test('jobParams-only params are honoured (no top-level inputFolderPath)', function() {
+        var bag = make1042Bag();
+        var mod = loadActionGh1042(bag, make1042Config());
+
+        var threw = run1042Action(mod, { jobParams: { inputFolderPath: 'input/gh-1042', customParams: {} }, ticket: GH1042_TICKET });
+
+        assert.equal(threw, null);
+        assert.ok(bag.cliCalls.indexOf('git checkout -b ai/gh-1042') !== -1,
+            'branch setup ran with the ticket key derived from jobParams');
+    });
+
+    test('ticket status move failure is a warning only — setup continues', function() {
+        var bag = make1042Bag();
+        var mod = loadActionGh1042(bag, make1042Config({ tracker: { provider: 'jira' } }), {
+            jira_move_to_status: function () { throw new Error('jira down'); }
+        });
+
+        var threw = run1042Action(mod, { inputFolderPath: 'input/PROJ-1', ticket: { key: 'PROJ-1', fields: {} }, customParams: {} });
+
+        assert.equal(threw, null);
+        assert.ok(bag.cliCalls.indexOf('git checkout -b ai/PROJ-1') !== -1,
+            'branch setup still ran after the status move failed');
+    });
+
+    test('restoreFromReleases failure is non-fatal', function() {
+        var bag = make1042Bag();
+        var mod = loadActionGh1042(bag, make1042Config(), {}, {
+            restoreFromReleases: { action: function () { throw new Error('release fetch failed'); } }
+        });
+
+        var threw = run1042Action(mod, { inputFolderPath: 'input/gh-1042', ticket: GH1042_TICKET, customParams: {} });
+
+        assert.equal(threw, null);
+        assert.ok(bag.cliCalls.indexOf('git checkout -b ai/gh-1042') !== -1,
+            'branch setup still ran after the restore step failed');
+    });
+
+    test('branch checkout failure posts a Git Branch Setup error comment and stops the leg', function() {
+        var bag = make1042Bag();
+        var comments = [];
+        var mod = loadActionGh1042(bag, make1042Config(), {
+            github_create_comment: function (args) { comments.push(args); }
+        }, { resolveBranchNameThrows: true });
+
+        var threw = run1042Action(mod, { inputFolderPath: 'input/gh-1042', ticket: GH1042_TICKET, customParams: {} });
+
+        assert.ok(threw, 'leg stops when the branch cannot be prepared');
+        assert.contains(threw.toString(), 'Git branch setup failed');
+        assert.equal(comments.length, 1, 'exactly one setup-error comment');
+        assert.ok(comments[0].text.indexOf('### **Development Setup Error**') === 0,
+            'github ticket renders markdown flavor, got: ' + comments[0].text);
+        assert.contains(comments[0].text, '**Stage:** Git Branch Setup');
+        assert.contains(comments[0].text, 'branch resolve boom');
+        assert.ok(bag.cliCalls.indexOf('git checkout -b ai/gh-1042') === -1,
+            'no checkout was possible past the branch resolution failure');
+    });
+
+    test('environment setup failure posts an Environment Setup error comment and stops the leg', function() {
+        var bag = make1042Bag();
+        var comments = [];
+        var mod = loadActionGh1042(bag, make1042Config(), {
+            github_create_comment: function (args) { comments.push(args); }
+        }, {
+            setupCommands: {
+                runSetupCommands: function () { throw new Error('npm ci failed'); },
+                buildSetupWarningsMarkdown: function () { return null; },
+                truncateSetupError: function (s) { return String(s); }
+            }
+        });
+
+        var threw = run1042Action(mod, { inputFolderPath: 'input/gh-1042', ticket: GH1042_TICKET, customParams: {} });
+
+        assert.ok(threw, 'leg stops when the environment cannot be prepared');
+        assert.contains(threw.toString(), 'Environment setup failed');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].text, '**Stage:** Environment Setup');
+        assert.contains(comments[0].text, 'npm ci failed');
+        assert.ok(bag.cliCalls.indexOf('git checkout -b ai/gh-1042') !== -1,
+            'branch setup ran BEFORE the environment step failed');
+    });
+
+    test('setup warnings are written to setup_warnings.md (non-fatal)', function() {
+        var bag = make1042Bag();
+        var mod = loadActionGh1042(bag, make1042Config(), {}, {
+            setupCommands: {
+                runSetupCommands: function () { return { warnings: ['jdk missing'] }; },
+                buildSetupWarningsMarkdown: function (result) { return '# Setup Warnings\n' + result.warnings.join('\n'); },
+                truncateSetupError: function (s) { return String(s); }
+            }
+        });
+
+        var threw = run1042Action(mod, { inputFolderPath: 'input/gh-1042', ticket: GH1042_TICKET, customParams: {} });
+
+        assert.equal(threw, null);
+        var warningWrites = bag.writes.filter(function (w) { return w.path === 'input/gh-1042/setup_warnings.md'; });
+        assert.equal(warningWrites.length, 1, 'exactly one setup_warnings.md write');
+        assert.equal(warningWrites[0].content, '# Setup Warnings\njdk missing');
+    });
+
+    test('setup_warnings.md write failure is a warning only — setup continues', function() {
+        var bag = make1042Bag();
+        var mod = loadActionGh1042(bag, make1042Config(), {
+            file_write: function (args) {
+                bag.writes.push(args);
+                if (args.path.indexOf('setup_warnings.md') !== -1) { throw new Error('disk full'); }
+            }
+        }, {
+            setupCommands: {
+                runSetupCommands: function () { return { warnings: ['jdk missing'] }; },
+                buildSetupWarningsMarkdown: function (result) { return '# Setup Warnings\n' + result.warnings.join('\n'); },
+                truncateSetupError: function (s) { return String(s); }
+            }
+        });
+
+        var threw = run1042Action(mod, { inputFolderPath: 'input/gh-1042', ticket: GH1042_TICKET, customParams: {} });
+
+        assert.equal(threw, null, 'an unwritable setup_warnings.md must not fail the leg');
+    });
+
+    test('linked-tests and parent-context fetch failures are non-fatal', function() {
+        var bag = make1042Bag();
+        var mod = loadActionGh1042(bag, make1042Config(), {}, {
+            fetchLinkedTests: { action: function () { throw new Error('jira down'); } },
+            fetchParentContext: { action: function () { throw new Error('confluence down'); } }
+        });
+
+        var threw = run1042Action(mod, { inputFolderPath: 'input/gh-1042', ticket: GH1042_TICKET, customParams: {} });
+
+        assert.equal(threw, null);
+        assert.ok(bag.cliCalls.indexOf('git checkout -b ai/gh-1042') !== -1, 'setup completed through the extras');
+    });
+
+});
+
+suite('preCliDevelopmentSetup — extracted helpers (gh-1042)', function() {
+
+    // Direct tests for the parse*/build*/decide* helpers extracted from
+    // action() — pins their contracts so action()'s CRAP stays low with
+    // full coverage on the helpers.
+
+    function loadHelpersOnly(globals) {
+        return loadPreCliDevelopmentSetup({
+            loadProjectConfig: function () { return makeConfig(); },
+            paramsForConfigLoad: function (p) { return p; }
+        }, globals || {});
+    }
+
+    test('parseActualParams: direct params vs jobParams vs bare params', function() {
+        var mod = loadHelpersOnly();
+        var direct = { inputFolderPath: 'input/PROJ-1' };
+        assert.equal(mod.parseActualParams(direct), direct);
+        var wrapped = { jobParams: { inputFolderPath: 'input/PROJ-1' } };
+        assert.equal(mod.parseActualParams(wrapped), wrapped.jobParams);
+        var bare = { customParams: {} };
+        assert.equal(mod.parseActualParams(bare), bare);
+    });
+
+    test('parseCustomParams: jobParams wins over actualParams', function() {
+        var mod = loadHelpersOnly();
+        assert.deepEqual(mod.parseCustomParams({ jobParams: { customParams: { a: 1 } } }, { customParams: { b: 2 } }), { a: 1 });
+        assert.deepEqual(mod.parseCustomParams({}, { customParams: { b: 2 } }), { b: 2 });
+        assert.equal(mod.parseCustomParams({}, {}), undefined,
+            'no customParams anywhere stays undefined (tracker factory tolerates it)');
+    });
+
+    test('parseTicketKeyOf: folder basename', function() {
+        var mod = loadHelpersOnly();
+        assert.equal(mod.parseTicketKeyOf('input/PROJ-1'), 'PROJ-1');
+        assert.equal(mod.parseTicketKeyOf('input/gh-1042'), 'gh-1042');
+    });
+
+    test('decideErrorMessage: Error objects and plain values', function() {
+        var mod = loadHelpersOnly();
+        assert.equal(mod.decideErrorMessage(new Error('boom')), 'Error: boom');
+        assert.equal(mod.decideErrorMessage('plain'), 'plain');
+        assert.equal(mod.decideErrorMessage(null), 'null');
+    });
+
+    test('checkoutBranchOrReport: failure posts the Git Branch Setup comment and rethrows', function() {
+        var comments = [];
+        var posted = [];
+        var mod = loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRequire({
+                './configLoader.js': {
+                    loadProjectConfig: function () { return makeConfig(); },
+                    paramsForConfigLoad: function (p) { return p; }
+                },
+                './common/pullRequest.js': PR_HELPER_REAL,
+                './config.js': NOOP_CONFIG_JS,
+                './fetchQuestionsToInput.js': NOOP_MODULE,
+                './fetchLinkedTestsToInput.js': NOOP_MODULE,
+                './fetchParentContextToInput.js': NOOP_MODULE,
+                './restoreFromReleases.js': NOOP_MODULE,
+                './common/setupCommands.js': devSetupCommandsReal,
+                './common/commentMarkup.js': devCommentMarkupModule,
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
+                './common/trackers.js': {
+                    createTracker: function () {
+                        return {
+                            provider: function () { return 'stub'; },
+                            postComment: function (ticketKey, text) { posted.push({ key: ticketKey, text: text }); }
+                        };
+                    }
+                }
+            }),
+            {
+                cli_execute_command: function (opts) {
+                    if (opts.command === 'git branch --list "ai/PROJ-9"') { throw new Error('git exploded'); }
+                    return '';
+                }
+            }
+        );
+
+        // configLoader stub without resolveBranchName → checkoutBranch throws.
+        var threw = null;
+        try {
+            mod.checkoutBranchOrReport(makeConfig(), {}, 'PROJ-9', { inputFolderPath: 'input/PROJ-9' }, {});
+        } catch (e) {
+            threw = e;
+        }
+
+        assert.ok(threw, 'checkout failure must rethrow');
+        assert.contains(threw.toString(), 'Git branch setup failed');
+        assert.equal(posted.length, 1, 'the setup error comment went through the probed tracker');
+        assert.equal(posted[0].key, 'PROJ-9');
+        assert.contains(posted[0].text, 'Git Branch Setup');
+    });
+
+    test('moveTicketToInDevelopment: tracker failure is a warning only', function() {
+        var mod = loadHelpersOnly();
+        // tracker factory (real trackers module, no provider configured) throws
+        // on unknown provider — the step must swallow it.
+        var threw = null;
+        try {
+            mod.moveTicketToInDevelopment({}, null, 'PROJ-1', { IN_DEVELOPMENT: 'In Development' });
+        } catch (e) {
+            threw = e;
+        }
+        assert.equal(threw, null, 'a failing status move must not propagate');
+    });
+
+});
