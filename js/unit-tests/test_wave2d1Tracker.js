@@ -154,7 +154,7 @@ suite('wave2d1 tracker — fetchLinkedBugsToInput / prepareBulkBugsCreationConte
         });
         var written = {};
         var mocks = Object.assign({ file_write: function(p, c) { written[p] = c; } }, rec.mocks);
-        var mod = loadModule('js/fetchLinkedBugsToInput.js', makeRequire({ './common/trackers.js': d1Trackers(mocks) }), mocks);
+        var mod = loadModule('js/fetchLinkedBugsToInput.js', makeRequire({ './common/trackers.js': d1Trackers(mocks), './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js', makeRequire({}), {}) }), mocks);
         mod.action({ inputFolderPath: 'input/30', customParams: D1_ADO });
         var md = written['input/30/linked_bugs.md'];
         assert.contains(md, '## 31: Bug one');
@@ -275,7 +275,7 @@ suite('wave2d1 tracker — fetchParentContextToInput', function() {
         });
         var written = {};
         var mocks = Object.assign({ file_write: function(p, c) { written[p] = c; } }, rec.mocks);
-        var mod = loadModule('js/fetchParentContextToInput.js', makeRequire({ './common/trackers.js': d1Trackers(mocks) }), mocks);
+        var mod = loadModule('js/fetchParentContextToInput.js', makeRequire({ './common/trackers.js': d1Trackers(mocks), './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js', makeRequire({}), {}) }), mocks);
         mod.action({
             inputFolderPath: 'input/51',
             ticket: { key: '51', fields: { parent: { key: '50' }, summary: 's', status: { name: 'New' } } },
@@ -299,7 +299,7 @@ suite('wave2d1 tracker — fetchParentContextToInput', function() {
         });
         var written = {};
         var mocks = Object.assign({ file_write: function(p, c) { written[p] = c; } }, rec.mocks);
-        var mod = loadModule('js/fetchParentContextToInput.js', makeRequire({ './common/trackers.js': d1Trackers(mocks) }), mocks);
+        var mod = loadModule('js/fetchParentContextToInput.js', makeRequire({ './common/trackers.js': d1Trackers(mocks), './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js', makeRequire({}), {}) }), mocks);
         mod.action({
             inputFolderPath: 'input/P-51',
             ticket: { key: 'P-51', fields: { parent: { key: 'P-50' }, summary: 's' } },

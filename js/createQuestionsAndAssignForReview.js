@@ -45,6 +45,96 @@ function ensureQPrefix(summary) {
     return '[Q] ' + summary;
 }
 
+// ── Pure decision/build helpers extracted from action() (gh-1038) ────────────
+// No tracker/SCM/file side effects — kept separate so action()'s complexity
+// drops and each decision can be unit-tested directly.
+
+/**
+ * WIP label for the workflow context, or null when no contextId is set.
+ */
+function buildWipLabel(metadata) {
+    return metadata && metadata.contextId
+        ? metadata.contextId + '_wip'
+        : null;
+}
+
+/**
+ * Agent id from the job metadata, defaulting to the story_questions workflow.
+ */
+function resolveAgentId(metadata) {
+    return (metadata && metadata.agentId) || 'story_questions';
+}
+
+/**
+ * Effective customParams: jobParams.customParams wins over params.customParams.
+ */
+function resolveActionCustomParams(params) {
+    return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+}
+
+/**
+ * Priority-name mapping: customParams > jobParamPatches[agentId] > project config.
+ * @returns {Object|null} The resolved map, or null when none is configured.
+ */
+function resolvePriorityMap(customParams, projectConfig, agentId) {
+    var jobParamPatch = projectConfig.jobParamPatches && projectConfig.jobParamPatches[agentId];
+    return customParams.priorityMap
+        || (jobParamPatch && jobParamPatch.customParams && jobParamPatch.customParams.priorityMap)
+        || projectConfig.priorityMap
+        || null;
+}
+
+/**
+ * autoStartQuestionAnswer accepts both boolean true and the string 'true'.
+ */
+function shouldAutoStartQuestionAnswer(customParams) {
+    return customParams.autoStartQuestionAnswer === true ||
+        customParams.autoStartQuestionAnswer === 'true';
+}
+
+/**
+ * Result message for the fatal CLI/provider error path.
+ */
+function buildCliFailureResult(cliErrorMessage) {
+    return {
+        success: false,
+        error: 'CLI/provider failure: ' + cliErrorMessage,
+        createdQuestions: []
+    };
+}
+
+/**
+ * Success-path result message, honest about the stage transition outcome.
+ */
+function buildActionMessage(ticketKey, stageOutcome, createdCount) {
+    return stageOutcome === 'moved'
+        ? 'Ticket ' + ticketKey + ' moved to PO Review, created ' + createdCount + ' question subtask(s)'
+        : stageOutcome === 'marked'
+            ? 'Ticket ' + ticketKey + ' marked stage PO Review (transition rejected), created ' + createdCount + ' question subtask(s)'
+            : 'Ticket ' + ticketKey + ' NOT moved to PO Review (transition failed), created ' + createdCount + ' question subtask(s)';
+}
+
+/**
+ * Per-question entry of the createdQuestions result list.
+ */
+function buildCreatedTicketReport(entry, key) {
+    return {
+        summary: ensureQPrefix(entry.summary || ''),
+        priority: entry.priority,
+        key: key,
+        success: !!key
+    };
+}
+
+/**
+ * The Jira Server/DC assign failure mentions 'accountId' — those instances
+ * want a silent skip instead of a noisy warning.
+ */
+function isAccountIdUnsupportedError(assignError) {
+    var assignMsg = String(assignError && (assignError.message || assignError));
+    return assignMsg.indexOf('accountId') !== -1;
+}
+
 /**
  * Read and parse outputs/questions.json
  * @returns {Array} Array of question entries, or empty array on error
@@ -189,9 +279,7 @@ function action(params) {
         var projectKey = ticketKey.split('-')[0];
         initTracker(null, (params.jobParams && params.jobParams.customParams) || {});
         var initiatorId = params.initiator;
-        var wipLabel = params.metadata && params.metadata.contextId
-            ? params.metadata.contextId + '_wip'
-            : null;
+        var wipLabel = buildWipLabel(params.metadata);
 
         // The CLI/AI-provider call can fail (missing binary, provider outage, HTTP 5xx, ...)
         // while outputType is 'none' and skipAIProcessing is true — in that setup Teammate's
@@ -211,24 +299,16 @@ function action(params) {
             } catch (commentError) {
                 console.warn('Failed to post CLI-failure comment:', commentError);
             }
-            return {
-                success: false,
-                error: 'CLI/provider failure: ' + cliErrorMessage,
-                createdQuestions: []
-            };
+            return buildCliFailureResult(cliErrorMessage);
         }
 
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         var jiraConfig = projectConfig.jira;
         var labels = projectConfig.labels;
-        var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+        var customParams = resolveActionCustomParams(params);
         initTracker(projectConfig, customParams);
-        var agentId = (params.metadata && params.metadata.agentId) || 'story_questions';
-        var jobParamPatch = projectConfig.jobParamPatches && projectConfig.jobParamPatches[agentId];
-        var priorityMap = customParams.priorityMap
-            || (jobParamPatch && jobParamPatch.customParams && jobParamPatch.customParams.priorityMap)
-            || projectConfig.priorityMap
-            || null;
+        var agentId = resolveAgentId(params.metadata);
+        var priorityMap = resolvePriorityMap(customParams, projectConfig, agentId);
 
         console.log('Processing question creation for:', ticketKey);
         if (priorityMap) console.log('Priority map active:', JSON.stringify(priorityMap));
@@ -246,12 +326,7 @@ function action(params) {
         var createdTickets = [];
         questions.forEach(function (entry) {
             var key = createQuestion(entry, ticketKey, projectKey, Object.assign({}, jiraConfig, { labels: labels }), priorityMap);
-            createdTickets.push({
-                summary: ensureQPrefix(entry.summary || ''),
-                priority: entry.priority,
-                key: key,
-                success: !!key
-            });
+            createdTickets.push(buildCreatedTicketReport(entry, key));
         });
 
         var failedCount = createdTickets.filter(function (t) { return !t.success; }).length;
@@ -286,8 +361,7 @@ function action(params) {
                 console.log('No initiator id — skipping assign');
             }
         } catch (assignError) {
-            var assignMsg = String(assignError && (assignError.message || assignError));
-            if (assignMsg.indexOf('accountId') !== -1) {
+            if (isAccountIdUnsupportedError(assignError)) {
                 console.warn('Skipping assign — accountId not supported in this Jira instance (Server/DC uses username)');
             } else {
                 console.warn('Failed to assign ticket:', assignError);
@@ -321,8 +395,7 @@ function action(params) {
         }
 
         // 8. Optionally auto-start question answering for each created question
-        var autoStartQuestionAnswer = customParams.autoStartQuestionAnswer === true ||
-            customParams.autoStartQuestionAnswer === 'true';
+        var autoStartQuestionAnswer = shouldAutoStartQuestionAnswer(customParams);
         var questionAnswerConfigFile = customParams.autoStartQuestionAnswerConfigFile;
         if (autoStartQuestionAnswer && questionAnswerConfigFile) {
             try {
@@ -355,11 +428,7 @@ function action(params) {
 
         return {
             success: true,
-            message: stageOutcome === 'moved'
-                ? 'Ticket ' + ticketKey + ' moved to PO Review, created ' + createdTickets.length + ' question subtask(s)'
-                : stageOutcome === 'marked'
-                    ? 'Ticket ' + ticketKey + ' marked stage PO Review (transition rejected), created ' + createdTickets.length + ' question subtask(s)'
-                    : 'Ticket ' + ticketKey + ' NOT moved to PO Review (transition failed), created ' + createdTickets.length + ' question subtask(s)',
+            message: buildActionMessage(ticketKey, stageOutcome, createdTickets.length),
             stageStatus: stageOutcome,
             createdQuestions: createdTickets
         };
@@ -371,5 +440,16 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action: action };
+    module.exports = {
+        action: action,
+        buildWipLabel: buildWipLabel,
+        resolveAgentId: resolveAgentId,
+        resolveActionCustomParams: resolveActionCustomParams,
+        resolvePriorityMap: resolvePriorityMap,
+        shouldAutoStartQuestionAnswer: shouldAutoStartQuestionAnswer,
+        buildCliFailureResult: buildCliFailureResult,
+        buildActionMessage: buildActionMessage,
+        buildCreatedTicketReport: buildCreatedTicketReport,
+        isAccountIdUnsupportedError: isAccountIdUnsupportedError
+    };
 }
