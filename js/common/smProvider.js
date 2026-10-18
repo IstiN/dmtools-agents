@@ -440,18 +440,33 @@ function _ghBuildPrStatus(pr, rollup, tally, ms) {
 
 // gh-1057: resolve the PR's head repository as an 'owner/repo' full name
 // for the dead-head bench oracle. REST /pulls spells it head.repo.full_name
-// (null when the fork is gone); the owner+name spelling is accepted for
-// GraphQL-shaped fixtures. Same-repo PRs resolve to their own full name —
-// the caller compares against the base and keeps the base probe.
+// (null when the fork is gone). Same-repo PRs resolve to their own full
+// name — the caller compares against the base and keeps the base probe.
+// gh-1059: ONE resolver, exported below and shared with
+// githubSource.js — the PR-list and prStatus payload dialects must never
+// drift apart again.
 function _ghPrHeadRepoFull(pr) {
     var r = pr && pr.head && pr.head.repo;
     if (!r) return null;
     if (typeof r === 'string') return r.indexOf('/') !== -1 ? r : null;
+    return _ghRepoShapeFull(r);
+}
+
+// gh-1059: object-shaped head.repo dialects — full_name (REST),
+// nameWithOwner (GraphQL), owner+name (fixtures).
+function _ghRepoShapeFull(r) {
     if (r.full_name) return r.full_name;
     if (r.nameWithOwner) return r.nameWithOwner;
-    var owner = r.owner && (r.owner.login || r.owner.name);
-    if (owner && r.name) return owner + '/' + r.name;
-    return null;
+    var owner = _ghRepoOwnerLogin(r);
+    return owner && r.name ? owner + '/' + r.name : null;
+}
+
+// gh-1057: owner login of a repo payload — REST spells it owner.login,
+// GraphQL-shaped fixtures owner.name; '' when the payload carries none.
+function _ghRepoOwnerLogin(repo) {
+    var o = repo && repo.owner;
+    if (!o) return '';
+    return o.login || o.name || '';
 }
 
 // (was the computePrStatus closure — hoisted to module scope by gh-1009;
@@ -486,7 +501,11 @@ function _ghBranchExists(owner, repo, name) {
 // pr.head.repo) redirects the SAME snapshot + #639 probe machinery at
 // the head repo. An absent spec, a spec naming the base, or a malformed
 // spec keeps the base probe (fail-safe — today's behavior for same-repo
-// PRs and blind probes alike).
+// PRs and blind probes alike). Fail-open note: a fork the token cannot
+// read (private fork) fails the probe exactly like a deleted branch —
+// branchHead reads a probe error as absent — so an unreadable fork reads
+// as a dead head and the parked PR is benched; that matches pre-gh-1057
+// fork behavior (the githubSource catch only rescues a THROWING oracle).
 function _ghBranchExistsRef(owner, repo, name, headFull) {
     var ho = owner;
     var hr = repo;
@@ -1220,6 +1239,9 @@ if (typeof module !== 'undefined' && module.exports) {
         createSmProvider: createSmProvider,
         ioCacheDrop: ioCacheDrop,
         BOOKKEEPING_CHECK_PREFIXES: BOOKKEEPING_CHECK_PREFIXES,
+        // gh-1059: ONE head-repo resolver shared with githubSource.js (the
+        // PR-list and prStatus payload dialects must never drift apart).
+        ghPrHeadRepoFull: _ghPrHeadRepoFull,
         _cache: _cache
     };
 }

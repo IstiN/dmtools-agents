@@ -908,16 +908,8 @@ function _prListBranch(p) {
 // gh-1057: the head REPOSITORY of the PR as an 'owner/repo' full name
 // (REST head.repo.full_name; null when the fork is deleted) — the
 // dead-head bench oracle must probe THERE for fork PRs, not the base.
-function _prListHeadRepo(p) {
-    var r = p && p.head && p.head.repo;
-    if (!r) return null;
-    if (typeof r === 'string') return r.indexOf('/') !== -1 ? r : null;
-    if (r.full_name) return r.full_name;
-    var owner = r.owner && (r.owner.login || r.owner.name);
-    if (owner && r.name) return owner + '/' + r.name;
-    return null;
-}
-
+// gh-1059: resolved by the ONE shared smProvider resolver
+// (ghPrHeadRepoFull) — never a second implementation here.
 function _prListAuthor(p) {
     // REST /pulls carries the creator under `user` (no `author` key at
     // all — live-verified); GraphQL and the unit fixtures use `author`.
@@ -936,7 +928,7 @@ function _prItemFromPr(p) {
         prNumber: p.number,
         draft: !!p.draft,
         branch: _prListBranch(p),
-        headRepo: _prListHeadRepo(p),
+        headRepo: smProviderModule.ghPrHeadRepoFull(p),
         title: p.title || '',
         author: _prListAuthor(p)
     };

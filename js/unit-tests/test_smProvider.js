@@ -451,7 +451,7 @@ suite('smProvider', function () {
             'owner.name (no login) dialect');
         assert.equal(full({ head: { repo: { owner: {}, name: 'r' } } }), null,
             'an owner carrying neither login nor name resolves to null');
-        assert.equal(full({ head: { repo: { owner: { login: 'o' } } }), null,
+        assert.equal(full({ head: { repo: { owner: { login: 'o' } } } }), null,
             'a repo object with no usable name resolves to null');
     });
 
