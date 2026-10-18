@@ -2094,7 +2094,8 @@ suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)'
 suite('pushReworkChanges.buildBlockedReworkComment — comment composition (gh-1061 AC1/AC2/AC4)', function() {
     function commentFor(unaddressed, unaddressable, reason, runUrl) {
         return loadPushReworkChangesModule({}).mod.buildBlockedReworkComment(
-            unaddressed.length + unaddressable.length, unaddressed, unaddressable, reason, runUrl);
+            unaddressed.length, unaddressed, unaddressable, reason, runUrl,
+            unaddressed.length + unaddressable.length);
     }
 
     test('AC1: response.md is the first block after the ⚠️ header — before any thread label or fold', function() {
@@ -2140,8 +2141,25 @@ suite('pushReworkChanges.buildBlockedReworkComment — comment composition (gh-1
             'reason text', null);
         assert.contains(c, 'excluded from the coverage gate');
         assert.contains(c, 'rework-consume payload');
-        assert.ok(c.indexOf('excluded from the coverage gate') > c.indexOf('<details>'),
-            'null-id notices live in the fold, not in the visible body');
+        assert.ok(c.indexOf('rework-consume payload') > c.indexOf('<details>'),
+            'null-id notice bodies live in the fold, not in the visible body');
+    });
+
+    test('review follow-up: the header counts addressable threads only and reconciles the total', function() {
+        var c = commentFor([ghThread('PRRT_1', 1)],
+            [ghThread(null, null, { body: 'machine notice' })],
+            'reason text', null);
+        assert.contains(c, '1 review thread(s) are still open',
+            'the header counts addressable threads only — the same quantity the gate uses');
+        assert.contains(c, '2 open in total', 'the total keeps the header and the fold reconcilable');
+        assert.contains(c, 'machine-notice thread(s) excluded from the coverage gate');
+    });
+
+    test('review follow-up: no machine notices — header names the plain open count with no total clause', function() {
+        var c = commentFor([ghThread('PRRT_1', 1), ghThread('PRRT_2', 2)], [],
+            'reason text', null);
+        assert.contains(c, '2 review thread(s) are still open');
+        assert.notContains(c, 'open in total', 'no reconciliation clause when there is nothing to reconcile');
     });
 });
 
@@ -2195,38 +2213,53 @@ suite('pushReworkChanges.buildReplyCoverage — null-id threads out of the gate 
 suite('pushReworkChanges.action — gh-1061 blocked-loop gate (UT-1/UT-2/UT-4/AC4)', function() {
     var BASE = 'c'.repeat(40);
 
+    // Suite-level stubs (CRAP split, review thread 1): runCase used to inline
+    // these three mocks — a 14.1-CRAP body plus an 11-CC file_read dispatch.
+    // Each mock is a single-responsibility named helper now.
+    function runCaseCliStub(diffOut) {
+        return function(a) {
+            if (a.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+            if (a.command.indexOf('git ls-remote --heads origin') === 0) {
+                return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
+            }
+            if (a.command.indexOf('git diff --name-only') === 0) return diffOut;
+            return '';
+        };
+    }
+
+    function runCaseFileStub(threads) {
+        return function(a) {
+            var p = a && (a.path || a);
+            if (p && p.indexOf('rework_setup_failed.md') !== -1) throw new Error('File does not exist');
+            if (p && p.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
+            if (p && p.indexOf('rework_base_head.txt') !== -1) return BASE;
+            if (p && p.indexOf('pr_discussions_raw.json') !== -1) return JSON.stringify({ threads: threads });
+            return null;
+        };
+    }
+
+    function runCaseScmStub(threads, comments) {
+        return {
+            addComment: function(n, body) { comments.push(body); },
+            resolveThread: function() {},
+            replyToThread: function() {},
+            listReviews: function() { return []; },
+            fetchDiscussions: function() {
+                return { rawThreads: { threads: threads } };
+            }
+        };
+    }
+
     function runCase(diffOut, threads, response) {
         var comments = [], moved = [], removed = [];
         var loaded = loadPushReworkChangesForAction({
-            cli_execute_command: function(a) {
-                if (a.command === 'git branch --show-current') return 'bug/PROJ-123\n';
-                if (a.command.indexOf('git ls-remote --heads origin') === 0) {
-                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
-                }
-                if (a.command.indexOf('git diff --name-only') === 0) return diffOut;
-                return '';
-            },
-            file_read: function(a) {
-                var p = a && (a.path || a);
-                if (p && p.indexOf('rework_setup_failed.md') !== -1) throw new Error('File does not exist');
-                if (p && p.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
-                if (p && p.indexOf('rework_base_head.txt') !== -1) return BASE;
-                if (p && p.indexOf('pr_discussions_raw.json') !== -1) return JSON.stringify({ threads: threads });
-                return null;
-            },
+            cli_execute_command: runCaseCliStub(diffOut),
+            file_read: runCaseFileStub(threads),
             jira_move_to_status: function(a) { moved.push(a); },
             jira_remove_label: function(a) { removed.push(a); },
             github_remove_label: function() { return '{}'; }
         }, {
-            scm: {
-                addComment: function(n, body) { comments.push(body); },
-                resolveThread: function() {},
-                replyToThread: function() {},
-                listReviews: function() { return []; },
-                fetchDiscussions: function() {
-                    return { rawThreads: { threads: threads } };
-                }
-            }
+            scm: runCaseScmStub(threads, comments)
         });
         var result = loaded.mod.action({
             ticket: { key: 'PROJ-123', fields: { labels: [] } },
@@ -2283,6 +2316,18 @@ suite('pushReworkChanges.action — gh-1061 blocked-loop gate (UT-1/UT-2/UT-4/AC
         assert.contains(c, 'PRRT_real');
         assert.contains(c, 'excluded from the coverage gate', 'the null-id notice is reported as informational');
         assert.deepEqual(r.moved.map(function(m) { return m.statusName; }), ['Blocked']);
+    });
+
+    test('review follow-up (thread 3): the blocked header counts addressable threads only — the same quantity the gate uses', function() {
+        var threads = [
+            ghThread('PRRT_real', 42, { body: 'A real unaddressed finding' }),
+            ghThread(null, null, { body: 'machine notice' })
+        ];
+        var r = runCase('', threads, 'Some response that does not address the real finding.');
+        var c = blockedComment(r);
+        assert.contains(c, '1 review thread(s) are still open',
+            'header and gate must count the same quantity — addressable threads only');
+        assert.contains(c, '2 open in total', 'the all-open total is reconciled in the header, not hidden');
     });
 
     test('AC4: no response.md on a blocked pass — the comment says so explicitly', function() {
