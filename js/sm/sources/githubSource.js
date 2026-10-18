@@ -705,19 +705,25 @@ function nowIso() {
     return new Date().toISOString();
 }
 
-// Live open-PR re-read for the phantom-heal probe (E4 fail-closed: any
-// failure — no provider hook, malformed payload, thrown probe — reads as
-// null and the caller keeps the cached decision for one more tick).
+// Probe-payload normalizer: accepts the bridge's {items:[...]} envelope or
+// a bare array; anything else (junk payload) reads as null — fail-closed.
 function asItemsArray(liveData) {
     var liveItems = ((liveData || {}).items || liveData || []);
     return Array.isArray(liveItems) ? liveItems : null;
 }
 
+// Live open-PR re-read for the phantom-heal probe (E4 fail-closed: any
+// failure — no provider hook, malformed payload, thrown probe — reads as
+// null and the caller keeps the cached decision for one more tick). The
+// probe deliberately bypasses the provider's per-tick ioCache through the
+// facade's listOpenPrsLive() — the cache itself may be the stale layer a
+// phantom holder rides on, and the guard must name a method that really
+// exists on the smProvider facade (a githubApi-style indirection never did;
+// the rework review thread pinned the self-heal dead on that guard).
 function livePrItems(provider, repoInfo) {
-    if (!provider || typeof provider.githubApi !== 'function' || !repoInfo) return null;
+    if (!provider || typeof provider.listOpenPrsLive !== 'function' || !repoInfo) return null;
     try {
-        return asItemsArray(provider.githubApi('list_prs',
-            { owner: repoInfo.owner, repo: repoInfo.repo }));
+        return asItemsArray(provider.listOpenPrsLive());
     } catch (e) {
         console.log('   ⚠️ gh-1000 phantom-heal live re-read failed: ' +
             String((e && e.message) || e) + ' — keeping cached mutex decision (fail-closed)');
@@ -760,6 +766,11 @@ function rederiveHoldersLive(holders, items, provider, repoInfo, q) {
         recordMutexTickEvent({
             mutexSelfHeals: 1,
             phantomHolderTicks: 1,
+            // gh-1000 (rework thread): the streak key MUST ride the event —
+            // without it num() coerces to 0 and the published
+            // consecutivePhantomTicks stays 0 forever (only the test-only
+            // recordPhantomHeal used to increment it).
+            consecutivePhantomTicks: 1,
             alarm: divergent.alarm
         });
     }

@@ -154,6 +154,11 @@ function noDivergenceResult(live) {
 function phantomAlarmOf(liveSnapshot, cachedSnapshot, cached, live) {
     return {
         type: 'phantom_mutex_holder',
+        // Human-readable pair for log lines and factory-state consumers
+        // (the rework thread pinned the self-heal alarm logging as
+        // "undefined — undefined" — every alarm record carries them).
+        title: 'phantom_mutex_holder',
+        detail: 'cached ai_validating holders diverge from the live label layer',
         label: 'ai_validating',
         repo: (liveSnapshot && liveSnapshot.repo) || (cachedSnapshot && cachedSnapshot.repo) || null,
         holders: { cached: cached, live: live },
@@ -184,8 +189,27 @@ function emptyTickEvents() {
 /**
  * Record one self-heal event for the current tick. Alarm records cap at
  * PHANTOM_ALARM_CAP per holder signature (a flapping registry must not
- * grow state unbounded).
+ * grow state unbounded) — the signature cap is enforced by
+ * capAlarmsPerSignature, the total tail by MAX_ALARMS.
  */
+function alarmSignatureOf(a) {
+    return String(a && a.holders && a.holders.cached || '');
+}
+
+// Keep at most PHANTOM_ALARM_CAP (newest) records per holder signature —
+// oldest beyond the cap drop first.
+function capAlarmsPerSignature(alarms) {
+    var counts = {};
+    var out = [];
+    (alarms || []).forEach(function (a) {
+        if (!a) return;
+        var sig = alarmSignatureOf(a);
+        counts[sig] = (counts[sig] || 0) + 1;
+        if (counts[sig] <= PHANTOM_ALARM_CAP) out.push(a);
+    });
+    return out;
+}
+
 function recordPhantomHeal(state, label, cachedHolders, liveHolders, atIso) {
     var s = state || defaultState();
     var sig = uniquePositive(cachedHolders).join(',');
@@ -194,10 +218,13 @@ function recordPhantomHeal(state, label, cachedHolders, liveHolders, atIso) {
     });
     alarms.push({
         type: 'phantom_mutex_holder',
+        title: 'phantom_mutex_holder',
+        detail: 'cached ai_validating holders diverge from the live label layer',
         label: str(label) || 'ai_validating',
         holders: { cached: uniquePositive(cachedHolders), live: uniquePositive(liveHolders) },
         at: str(atIso)
     });
+    alarms = capAlarmsPerSignature(alarms);
     while (alarms.length > MAX_ALARMS) alarms.shift();
     return {
         mutexSelfHeals: num(s.mutexSelfHeals) + 1,
@@ -218,13 +245,18 @@ function alarmKey(a) {
 
 function appendDedupedAlarms(out, alarms) {
     var seen = {};
+    var deduped = [];
     alarms.forEach(function (a) {
         if (!a) return;
         var key = alarmKey(a);
         if (seen[key]) return;
         seen[key] = true;
-        out.push(a);
+        deduped.push(a);
     });
+    // Same contract as recordPhantomHeal: per-signature cap first, then
+    // the total tail cap (newest kept).
+    deduped = capAlarmsPerSignature(deduped);
+    deduped.forEach(function (a) { out.push(a); });
     while (out.length > MAX_ALARMS) out.shift();
 }
 

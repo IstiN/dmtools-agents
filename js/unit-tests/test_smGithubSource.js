@@ -2781,7 +2781,7 @@ suite('sm github source: gh-1000 phantom-heal helpers', function () {
             'mutexAmong scopes WHO counts');
     });
 
-    test('rederiveHoldersLive: no githubApi hook → cached holders kept (fail-closed, E4)', function () {
+    test('rederiveHoldersLive: no listOpenPrsLive hook → cached holders kept (fail-closed, E4)', function () {
         var mod = loadBare();
         var out = mod.rederiveHoldersLive([97], [pr(97, ['ai_validating'])], {}, { owner: 'o', repo: 'r' },
             { mutex: 'ai_validating' });
@@ -2791,7 +2791,7 @@ suite('sm github source: gh-1000 phantom-heal helpers', function () {
 
     test('rederiveHoldersLive: probe throw → cached holders kept (fail-closed, E4)', function () {
         var mod = loadBare();
-        var provider = { githubApi: function () { throw new Error('boom'); } };
+        var provider = { listOpenPrsLive: function () { throw new Error('boom'); } };
         var out = mod.rederiveHoldersLive([97], [pr(97, ['ai_validating'])], provider,
             { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
         assert.deepEqual(out, [97]);
@@ -2799,21 +2799,24 @@ suite('sm github source: gh-1000 phantom-heal helpers', function () {
 
     test('rederiveHoldersLive: divergent live label layer self-heals and records the tick event', function () {
         var mod = loadBare();
-        var provider = { githubApi: function () { return { items: [pr(97, [])] }; } };
+        var provider = { listOpenPrsLive: function () { return { items: [pr(97, [])] }; } };
         var out = mod.rederiveHoldersLive([97], [pr(97, ['ai_validating'])], provider,
             { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
         assert.deepEqual(out, [], 'live layer shows no arm → phantom holder dropped');
         var snap = mod.takeMutexTickSnapshot();
         assert.equal(snap.mutexSelfHeals, 1);
         assert.equal(snap.phantomHolderTicks, 1);
+        assert.equal(snap.consecutivePhantomTicks, 1, 'streak key rides the tick event');
         assert.equal(snap.alarms.length, 1);
         assert.equal(snap.alarms[0].type, 'phantom_mutex_holder');
+        assert.equal(snap.alarms[0].title, 'phantom_mutex_holder', 'alarm carries a title');
+        assert.equal(typeof snap.alarms[0].detail, 'string', 'alarm carries a detail');
         assert.equal(mod.takeMutexTickSnapshot(), null, 'snapshot drains');
     });
 
     test('rederiveHoldersLive: live layer agrees → holders kept, no event', function () {
         var mod = loadBare();
-        var provider = { githubApi: function () { return { items: [pr(97, ['ai_validating'])] }; } };
+        var provider = { listOpenPrsLive: function () { return { items: [pr(97, ['ai_validating'])] }; } };
         var out = mod.rederiveHoldersLive([97], [pr(97, ['ai_validating'])], provider,
             { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
         assert.deepEqual(out, [97]);
@@ -2837,7 +2840,7 @@ suite('sm github source: gh-1000 phantom-heal probe edges', function () {
 
     test('non-array probe payload → cached holders kept (fail-closed)', function () {
         var mod = loadBare2(null);
-        var provider = { githubApi: function () { return { items: 'junk' }; } };
+        var provider = { listOpenPrsLive: function () { return { items: 'junk' }; } };
         var out = mod.rederiveHoldersLive([97], [pr2(97, ['ai_validating'])], provider,
             { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
         assert.deepEqual(out, [97]);
@@ -2847,7 +2850,7 @@ suite('sm github source: gh-1000 phantom-heal probe edges', function () {
     test('divergence drops the openPrs cache entry via smProvider.ioCacheDrop', function () {
         var dropped = [];
         var mod = loadBare2(function (owner, repo, key, sub) { dropped.push([owner, repo, key, sub]); });
-        var provider = { githubApi: function () { return { items: [pr2(97, [])] }; } };
+        var provider = { listOpenPrsLive: function () { return { items: [pr2(97, [])] }; } };
         var out = mod.rederiveHoldersLive([97], [pr2(97, ['ai_validating'])], provider,
             { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
         assert.deepEqual(out, []);

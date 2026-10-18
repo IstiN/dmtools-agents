@@ -3076,7 +3076,17 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             });
                         } catch (eGhostRead) { /* read failed — treat as not reported */ }
                         if (ghostReported) {
-                            console.log('  ⏭️  ' + key + ' ghost-cancelled validation already re-dispatched for head — waiting on the run');
+                            // gh-1000 E3: the marker is on record yet the
+                            // probe STILL reads ghost-cancel — the fresh
+                            // run was cancelled again. Count the flap and
+                            // escalate (warn + one comment per flap level)
+                            // instead of re-wedging silently forever.
+                            var ghostFlapPosted = ghostFlapEscalate(
+                                effectiveRepoInfo, ticket, rcHead,
+                                ghostCommentList, key, ghostMarker);
+                            console.log('  ⏭️  ' + key + ' ghost-cancelled validation already ' +
+                                're-dispatched for head — waiting on the run' +
+                                (ghostFlapPosted ? ' (flap alarm posted)' : ''));
                             continue;
                         }
                         var ghostCi = rule.ciWorkflow ||
@@ -3086,11 +3096,17 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                         ghostCi + ' @ ' + (ticket.branch || '?') + ')');
                             continue;
                         }
+                        // The branch is guest-controlled (this path is by
+                        // design authorship-blind — gh-757 covers pushes,
+                        // not this dispatch), and git ref names permit
+                        // shell metacharacters: single-quote the value and
+                        // escape any embedded quote (rework review thread).
+                        var ghostRef = String(ticket.branch || '').replace(/'/g, "'\\''");
                         cli_execute_command({
                             command: 'gh workflow run ' + ghostCi +
                                      ' --repo ' + effectiveRepoInfo.owner + '/' +
                                      effectiveRepoInfo.repo +
-                                     ' --ref ' + (ticket.branch || '')
+                                     ' --ref \'' + ghostRef + '\''
                         });
                         githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(
                             ticket.prNumber,
@@ -4150,6 +4166,15 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 if (spMutex || (spPrev && spPrev.mutex)) {
                     spState.mutex = mutexRegistryModule.mergeSnapshot(
                         spPrev && spPrev.mutex, spMutex);
+                    // gh-1000 (rework thread): consecutivePhantomTicks is a
+                    // STREAK, not a cumulative counter — a tick that carried
+                    // no phantom self-heal must reset it. The cross-tick
+                    // merge alone would carry one phantom event forward
+                    // across every later clean tick and the Q2 auto-issue
+                    // threshold would key on noise.
+                    if (!spMutex || !spMutex.phantomHolderTicks) {
+                        spState.mutex.consecutivePhantomTicks = 0;
+                    }
                 }
                 var spUrl = factoryStateModule.publishFactoryState(
                     spState, spCfg, function (args) {
@@ -6107,8 +6132,59 @@ function hasRecentHeadRun(runs, graceMs) {
     });
 }
 
-function cancelledRequiredContexts(repoInfo, headSha, contexts) {
-    // Which check contexts currently read CANCELLED on this head — the
+// gh-1000 E3 — ghost re-dispatch flap bookkeeping. The once-per-head
+// marker makes the ghost-cancel re-dispatch one-shot; if the fresh run the
+// machine dispatched was cancelled AGAIN, the next tick finds the marker
+// and used to wait forever with only a skip log — the permanent-wedge
+// shape this ticket bans, moved one level down (the gh-748 kicker race is
+// not guaranteed gone; the incident behind gh-1000 was a cancel storm).
+// Each machine re-dispatch posts one marker comment carrying the head sha,
+// so the comment history IS the flap counter: a marker whose run still
+// reads ghost-cancel is one re-cancel.
+var GHOST_FLAP_MARKER = '🚨 Ghost-cancel flap';
+
+function headKeyedComments(comments, head) {
+    var out = [];
+    (comments || []).forEach(function (c) {
+        var b = String((c && c.body) || '');
+        if (b.indexOf(String(head)) !== -1) out.push(b);
+    });
+    return out;
+}
+
+function ghostFlapState(comments, head, dispatchMarker) {
+    var keyed = headKeyedComments(comments, head);
+    var dispatches = keyed.filter(function (b) {
+        return b.indexOf(dispatchMarker) !== -1;
+    }).length;
+    var alarms = keyed.filter(function (b) {
+        return b.indexOf(GHOST_FLAP_MARKER) !== -1;
+    }).length;
+    return { dispatches: dispatches, alarms: alarms };
+}
+
+// Escalate a ghost re-dispatch flap: a warn line every tick plus ONE flap
+// comment per new flap level (rate-limited by construction — the dispatch
+// count only grows when a new re-dispatch lands, and the marker suppresses
+// further dispatches on this head). Returns true when a comment posted.
+function ghostFlapEscalate(repoInfo, ticket, head, comments, key, dispatchMarker) {
+    var st = ghostFlapState(comments, head, dispatchMarker);
+    if (st.dispatches < 1) return false; // no machine dispatch on record — nothing flapping
+    var flaps = st.dispatches; // every dispatch whose run still reads ghost-cancel
+    console.warn('  ⚠️  ' + key + ' ghost-cancel flap: machine re-dispatch ' +
+        flaps + '× and the head still reads ghost-cancel (merge gate still waiting) — ' +
+        'a guest PR cannot self-escape (gh-1000 E3)');
+    if (st.alarms >= flaps) return false; // this flap level already alarmed
+    githubTracker(repoInfo.owner, repoInfo.repo).postComment(
+        ticket.prNumber,
+        GHOST_FLAP_MARKER + ' (head `' + head + '`): the machine re-dispatched validation ' +
+        st.dispatches + '× after ghost-cancel and every fresh run was cancelled again — ' +
+        'the arm is wedged and a guest PR cannot self-escape (gh-1000 E3). Manual action ' +
+        'required: re-run the workflow or inspect the cancel source (gh-748 kicker race).');
+    return true;
+}
+
+function cancelledRequiredContexts(repoInfo, headSha, contexts) {    // Which check contexts currently read CANCELLED on this head — the
     // check-runs rollup is the source of truth, read with
     // BRANCH-PROTECTION semantics: a context's verdict is the LATEST
     // check run carrying its name, not any historical one (#695 review:
