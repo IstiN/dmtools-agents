@@ -714,11 +714,12 @@ suite('preCliMobileTestAutomationSetup — simulator install', function() {
 
         var md = writtenFiles['input/PROJ-5678/app_info.md'];
         assert.ok(md, 'app_info.md should be written');
-        assert.ok(md.indexOf('| App Path | `input/PROJ-5678/app/Example Business.app` |') !== -1,
-            'default handler should locate the .app via find: ' + md);
-        assert.ok(md.indexOf('## Simulator & Maestro') !== -1, 'should append simulator info');
+        assert.ok(md.indexOf('## Simulator & Maestro') !== -1,
+            'default handler should carry the app path all the way to the install: ' + md);
         assert.ok(md.indexOf('| MAESTRO_DEVICE | `SIM-UDID-1234` |') !== -1,
             'should use the default env UDID');
+        assert.ok(md.indexOf('`com.example.internal.business.app`') !== -1,
+            'should use the default appId');
     });
 
     test('installs app on simulator using SIMULATOR_UDID from env', function() {
