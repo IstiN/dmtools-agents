@@ -104,11 +104,18 @@ function hostIsTrusted(host, hosts) {
 }
 
 function hasTrustedDocUrl(text, hosts) {
+    // module-level /g regex — reset lastIndex so early returns cannot
+    // leak scan position into the next call.
+    DOC_URL_HOST_RE.lastIndex = 0;
     var m = DOC_URL_HOST_RE.exec(text);
     while (m !== null) {
-        if (hostIsTrusted(m[1], hosts)) return true;
+        if (hostIsTrusted(m[1], hosts)) {
+            DOC_URL_HOST_RE.lastIndex = 0;
+            return true;
+        }
         m = DOC_URL_HOST_RE.exec(text);
     }
+    DOC_URL_HOST_RE.lastIndex = 0;
     return false;
 }
 
