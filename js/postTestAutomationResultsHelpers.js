@@ -117,6 +117,22 @@ function decideTargetStatus(passed, noCodeChanges, statuses) {
         : { stage: 'IN_REVIEW_FAILED', statusName: statuses.IN_REVIEW_FAILED };
 }
 
+/**
+ * Pure sync-strategy decision for publishExistingBranch from the three known
+ * revisions (gh-1043 CRAP split). Mirrors the original in-function conditions
+ * EXACTLY — including the empty-string edge cases (a failed rev-parse yields
+ * ''), because the command sequence and log lines differ per strategy:
+ * 'identical' | 'ahead' (fast-forward push, then fall through to the
+ * diverged escalation when the push fails) | 'behind' (reset --hard) |
+ * 'diverged' (normal push → --force-with-lease escalation).
+ */
+function decidePublishStrategy(localSha, remoteSha, mergeBase) {
+    if (localSha && remoteSha && localSha === remoteSha) return 'identical';
+    if (mergeBase === remoteSha && mergeBase !== localSha) return 'ahead';
+    if (mergeBase === localSha && mergeBase !== remoteSha) return 'behind';
+    return 'diverged';
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         parseOutcome: parseOutcome,
@@ -131,6 +147,7 @@ if (typeof module !== 'undefined' && module.exports) {
         buildConflictComment: buildConflictComment,
         buildErrorComment: buildErrorComment,
         buildPartialCommitMessage: buildPartialCommitMessage,
-        decideTargetStatus: decideTargetStatus
+        decideTargetStatus: decideTargetStatus,
+        decidePublishStrategy: decidePublishStrategy
     };
 }

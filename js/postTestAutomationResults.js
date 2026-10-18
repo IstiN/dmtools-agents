@@ -141,14 +141,24 @@ function publishExistingBranch(branchName, workingDir) {
     var localSha = revParse('HEAD', workingDir);
     var remoteSha = revParse('origin/' + branchName, workingDir);
 
+    // The identical check must stay BEFORE the merge-base call: when the
+    // branch is already in sync no `git merge-base` command may run.
+    var strategy;
     if (localSha && remoteSha && localSha === remoteSha) {
+        strategy = 'identical';
+    } else {
+        var mergeBase = (localSha && remoteSha) ? findMergeBase('HEAD', 'origin/' + branchName, workingDir) : '';
+        // gh-1043: pure decision extracted (and unit-tested) in postHelpers —
+        // the strategies below keep the original command order and log lines.
+        strategy = postHelpers.decidePublishStrategy(localSha, remoteSha, mergeBase);
+    }
+
+    if (strategy === 'identical') {
         console.log('Local branch already matches origin/' + branchName + '; no push needed');
         return { success: true, noNewCommit: true };
     }
 
-    var mergeBase = (localSha && remoteSha) ? findMergeBase('HEAD', 'origin/' + branchName, workingDir) : '';
-
-    if (mergeBase === remoteSha && mergeBase !== localSha) {
+    if (strategy === 'ahead') {
         // Local is strictly ahead of remote (fast-forward).
         try {
             runInRepo('git push -u origin ' + branchName, workingDir);
@@ -156,7 +166,7 @@ function publishExistingBranch(branchName, workingDir) {
         } catch (e) {
             console.warn('Fast-forward push failed:', e);
         }
-    } else if (mergeBase === localSha && mergeBase !== remoteSha) {
+    } else if (strategy === 'behind') {
         // Remote moved ahead while we had no local changes to keep. Adopt remote state.
         console.log('Remote ' + branchName + ' is ahead of local branch; resetting to origin/' + branchName);
         runInRepo('git reset --hard origin/' + branchName, workingDir);

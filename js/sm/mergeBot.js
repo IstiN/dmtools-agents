@@ -57,6 +57,16 @@ function listArray(prs) {
 }
 
 /**
+ * Membership test for a normalized label-name list — extracted from
+ * action()'s `labels.indexOf('x') !== -1` chains (gh-1040): each inline
+ * chain added a decision to action's complexity, and the predicate reads
+ * the same everywhere.
+ */
+function hasLabel(labels, wanted) {
+    return labels.indexOf(wanted) !== -1;
+}
+
+/**
  * Epoch ms when the run started waiting (check-run started_at, workflow-run
  * created_at) or null when the payload carries no usable timestamp — the
  * gh-766 stale-head detection FAILS OPEN on null (treated as live).
@@ -70,13 +80,65 @@ function pendingStartedAt(r) {
 }
 
 /**
- * Same rollup as checksRollup, plus pendingSince: the OLDEST start time
- * among the pending evidence (gh-766) — an armed head whose checks have
- * been motionless past staleHeadMinutes is a dead FIFO head (skipped with
- * an explicit log line, unarmed, queue advances) instead of an eternal
- * 'checks=pending — waiting'.
+ * Concluded-red conclusions (any case, already upper-cased by the caller).
  */
-function rollupDetail(commitSha, pr, job, owner, name) {
+function isRedConclusion(c) {
+    return c === 'FAILURE' || c === 'TIMED_OUT' || c === 'CANCELLED';
+}
+
+/**
+ * Not-yet-concluded run shapes (gh-1040): no conclusion at all, or an
+ * explicitly queued/in-flight status.
+ */
+function isPendingRunShape(c, s) {
+    return !c || s === 'QUEUED' || s === 'IN_PROGRESS' || s === 'WAITING' || s === 'PENDING';
+}
+
+/**
+ * Per-run classification for rollupDetail (gh-1040): a concluded
+ * FAILURE/TIMED_OUT/CANCELLED run is red; a run with no conclusion yet
+ * (or an explicitly queued/in-flight status) is pending and carries its
+ * start timestamp as motionless-since evidence; anything else is a
+ * settled non-failure and contributes nothing.
+ */
+function decideRunState(r) {
+    var c = r.conclusion ? String(r.conclusion).toUpperCase() : null;
+    var s = r.status ? String(r.status).toUpperCase() : null;
+    if (isRedConclusion(c)) return { red: true, pending: false, started: null };
+    if (isPendingRunShape(c, s)) {
+        return { red: false, pending: true, started: pendingStartedAt(r) };
+    }
+    return { red: false, pending: false, started: null };
+}
+
+/**
+ * Rollup combination (gh-1040): any red run turns the head red; else any
+ * pending run makes it pending with the OLDEST pending start as
+ * pendingSince (gh-766 motionless evidence); else green.
+ */
+function combineRunStates(states) {
+    var red = false, pending = false, oldestPending = null;
+    states.forEach(function (st) {
+        if (st.red) { red = true; return; }
+        if (!st.pending) return;
+        pending = true;
+        if (st.started !== null && (oldestPending === null || st.started < oldestPending)) {
+            oldestPending = st.started;
+        }
+    });
+    if (red) return { state: 'red', pendingSince: null };
+    if (pending) return { state: 'pending', pendingSince: oldestPending };
+    return { state: 'green', pendingSince: null };
+}
+
+/**
+ * Commit-check-runs fetch + PR statusCheckRollup fallback (gh-1040
+ * extraction, call order and shapes verbatim): the bridge payload may
+ * carry { total_count } without a check_runs array (reads as empty), and
+ * the REST PR body's statusCheckRollup — when it is a non-empty ARRAY —
+ * is the next evidence rung before the workflow-run fallback.
+ */
+function fetchCheckRuns(commitSha, pr, owner, name) {
     var cr = parseMcp(github_get_commit_check_runs({
         workspace: owner, repository: name, commitSha: commitSha
     }));
@@ -84,6 +146,35 @@ function rollupDetail(commitSha, pr, job, owner, name) {
     if (!runs.length && pr && Array.isArray(pr.statusCheckRollup) && pr.statusCheckRollup.length) {
         runs = pr.statusCheckRollup;
     }
+    return runs;
+}
+
+/**
+ * Workflow-run evidence for a head sha (gh-1040 extraction): the newest
+ * run on the sha decides — SUCCESS green, FAILURE/TIMED_OUT/CANCELLED
+ * red, anything else pending with the run's start as pendingSince.
+ * Null when no run matches (caller reports 'none').
+ */
+function workflowRunEvidence(wruns, commitSha) {
+    var mine = wruns.filter(function (r) { return String(r.head_sha || r.headSha) === String(commitSha); });
+    if (!mine.length) return null;
+    // newest first (API order); conclusion decides, in-flight waits
+    var top = mine[0];
+    var c = top.conclusion ? String(top.conclusion).toUpperCase() : null;
+    if (c === 'SUCCESS') return { state: 'green', pendingSince: null };
+    if (c === 'FAILURE' || c === 'TIMED_OUT' || c === 'CANCELLED') return { state: 'red', pendingSince: null };
+    return { state: 'pending', pendingSince: pendingStartedAt(top) };
+}
+
+/**
+ * Same rollup as checksRollup, plus pendingSince: the OLDEST start time
+ * among the pending evidence (gh-766) — an armed head whose checks have
+ * been motionless past staleHeadMinutes is a dead FIFO head (skipped with
+ * an explicit log line, unarmed, queue advances) instead of an eternal
+ * 'checks=pending — waiting'.
+ */
+function rollupDetail(commitSha, pr, job, owner, name) {
+    var runs = fetchCheckRuns(commitSha, pr, owner, name);
     if (!runs.length) {
         // Workflow-run fallback (live: fa #762): the REST PR body has NO
         // statusCheckRollup (GraphQL-only) and API silent-updated heads carry
@@ -96,32 +187,12 @@ function rollupDetail(commitSha, pr, job, owner, name) {
             workflowId: (job && job.ciWorkflow) || 'ci.yml', perPage: 30
         }));
         var wruns = (wf && (wf.workflow_runs || wf.runs)) || [];
-        var mine = wruns.filter(function (r) { return String(r.head_sha || r.headSha) === String(commitSha); });
-        if (mine.length) {
-            // newest first (API order); conclusion decides, in-flight waits
-            var top = mine[0];
-            var c = top.conclusion ? String(top.conclusion).toUpperCase() : null;
-            if (c === 'SUCCESS') return { state: 'green', pendingSince: null };
-            if (c === 'FAILURE' || c === 'TIMED_OUT' || c === 'CANCELLED') return { state: 'red', pendingSince: null };
-            return { state: 'pending', pendingSince: pendingStartedAt(top) };
-        }
+        var evidence = workflowRunEvidence(wruns, commitSha);
+        if (evidence) return evidence;
         return { state: 'none', pendingSince: null };
     }
     if (!runs.length) return { state: 'none', pendingSince: null };
-    var red = false, pending = false, oldestPending = null;
-    runs.forEach(function (r) {
-        var c = r.conclusion ? String(r.conclusion).toUpperCase() : null;
-        var s = r.status ? String(r.status).toUpperCase() : null;
-        if (c === 'FAILURE' || c === 'TIMED_OUT' || c === 'CANCELLED') red = true;
-        else if (!c || s === 'QUEUED' || s === 'IN_PROGRESS' || s === 'WAITING' || s === 'PENDING') {
-            pending = true;
-            var st = pendingStartedAt(r);
-            if (st !== null && (oldestPending === null || st < oldestPending)) oldestPending = st;
-        }
-    });
-    if (red) return { state: 'red', pendingSince: null };
-    if (pending) return { state: 'pending', pendingSince: oldestPending };
-    return { state: 'green', pendingSince: null };
+    return combineRunStates(runs.map(decideRunState));
 }
 
 /**
@@ -160,6 +231,129 @@ function mergeStateOf(pr) {
 }
 
 /**
+ * Repo resolution (gh-1040 extraction, verbatim behavior): jobParams.repo
+ * first, the GH_REPO global second, throws on neither / on a value
+ * without an owner/name split.
+ */
+function resolveRepoTarget(job) {
+    var repo = job.repo;
+    if (!repo && typeof GH_REPO !== 'undefined') repo = GH_REPO;
+    if (!repo) throw new Error('mergeBot: no repo (params.jobParams.repo / GH_REPO)');
+    var parts = String(repo).split('/');
+    if (parts.length < 2) throw new Error('mergeBot: repo must be owner/name, got ' + repo);
+    return { owner: parts[0], name: parts.slice(1).join('/') };
+}
+
+/**
+ * gh-766 stale-head threshold (default 120 = 2h), verbatim.
+ */
+function staleHeadMinutesOr(job) {
+    return (typeof job.staleHeadMinutes === 'number' && job.staleHeadMinutes > 0)
+        ? job.staleHeadMinutes : 120;
+}
+
+/**
+ * gh-952 merged-slot-holder pre-scan (gh-1040 extraction, same call
+ * order: no tracker calls until the merged probe). Returns the
+ * recently-merged still-armed holder the open list cannot show, or null.
+ */
+function findReleasedSlotHolder(list, owner, name) {
+    var approvedSeen = list.some(function (p) {
+        return hasLabel(labelNames(p), 'pr_approved');
+    });
+    if (!approvedSeen) return null;
+    var armedHolderOpen = list.some(function (p) {
+        var ls = labelNames(p);
+        return hasLabel(ls, 'ai_validating') && hasLabel(ls, 'pr_approved');
+    });
+    if (armedHolderOpen) return null;
+    return mergedSlotHolder(owner, name);
+}
+
+/**
+ * machine-sm.yml listing with the PAT-404 fallback (gh-1040 extraction,
+ * verbatim semantics): the workflow-id form 404s for some PATs — fall
+ * back to the all-runs endpoint and filter by workflow path client-side.
+ * Returns null when the listing itself is unlistable (fail open).
+ */
+function listSmRuns(owner, name) {
+    try {
+        var wf = parseMcp(github_list_workflow_runs({
+            workspace: owner, repository: name,
+            workflowId: 'machine-sm.yml', perPage: 30
+        }));
+        var runs = smRunsFromPayload(wf);
+        if (!runs.length && wf && wf.message) {
+            runs = allRunsFallback(owner, name);
+        }
+        return runs;
+    } catch (eActive) {
+        return null; // unlistable → fail open, the self-heal still fires
+    }
+}
+
+/**
+ * The workflow_runs/runs array of a listing payload, verbatim shapes.
+ */
+function smRunsFromPayload(payload) {
+    return (payload && (payload.workflow_runs || payload.runs)) || [];
+}
+
+/**
+ * The all-runs-endpoint fallback of the active-SM probe (gh-1040
+ * extraction): same call as the primary listing minus the workflowId
+ * (that form is what 404s), filtered to machine-sm.yml by run path.
+ */
+function allRunsFallback(owner, name) {
+    var all = parseMcp(github_list_workflow_runs({
+        workspace: owner, repository: name, perPage: 30
+    }));
+    return smRunsFromPayload(all).filter(function (r) {
+        return String(r.path || '') === '.github/workflows/machine-sm.yml';
+    });
+}
+
+/**
+ * Live-SM statuses (review #701, already lower-cased by the caller).
+ */
+function isActiveSmStatus(s) {
+    return s === 'queued' || s === 'in_progress' || s === 'waiting' || s === 'pending';
+}
+
+/**
+ * Zombie stamp of a non-in_progress run (review #701 tick-storm fix,
+ * verbatim): the last update timestamp of the run, whatever field the
+ * bridge payload carried it in.
+ */
+function smRunTimestamp(r) {
+    return r.updated_at || r.updatedAt || r.created_at || r.createdAt || '';
+}
+
+/**
+ * Zombie check (gh-1040 extraction): a non-in_progress run whose last
+ * update is older than 6h was superseded by its concurrency group and
+ * does not count as active. A run with NO parseable timestamp is never a
+ * zombie (no evidence of motionlessness — fail open as live).
+ */
+function isZombieSmRun(r, now) {
+    var ts = Date.parse(smRunTimestamp(r));
+    return !isNaN(ts) && (now - ts) > 6 * 60 * 60 * 1000;
+}
+
+/**
+ * Zombie-aware liveness of one workflow run (gh-1040 extraction, review
+ * #701 tick-storm fix, verbatim): queued/in_progress/waiting/pending
+ * counts as active, EXCEPT a non-in_progress run whose last update is
+ * older than 6h — a zombie superseded by its concurrency group.
+ */
+function isLiveSmRun(r, now) {
+    var s = r.status ? String(r.status).toLowerCase() : '';
+    if (!isActiveSmStatus(s)) return false;
+    if (s !== 'in_progress' && isZombieSmRun(r, now)) return false; // zombie queued > 6h
+    return true;
+}
+
+/**
  * SM-active probe (review #701, tick-storm fix): TRUE when a machine-sm.yml
  * run is queued/in_progress/waiting/pending — the SM is already about to
  * drain the queue itself, so the end-of-run self-tick must NOT stack another
@@ -172,35 +366,11 @@ function mergeStateOf(pr) {
  * duplicate one is idempotent.
  */
 function hasActiveSmRun(owner, name) {
-    var runs = [];
-    try {
-        var wf = parseMcp(github_list_workflow_runs({
-            workspace: owner, repository: name,
-            workflowId: 'machine-sm.yml', perPage: 30
-        }));
-        runs = (wf && (wf.workflow_runs || wf.runs)) || [];
-        if (!runs.length && wf && wf.message) {
-            var all = parseMcp(github_list_workflow_runs({
-                workspace: owner, repository: name, perPage: 30
-            }));
-            var allRuns = (all && (all.workflow_runs || all.runs)) || [];
-            runs = allRuns.filter(function (r) {
-                return String(r.path || '') === '.github/workflows/machine-sm.yml';
-            });
-        }
-    } catch (eActive) {
-        return false; // unlistable → fail open, the self-heal still fires
-    }
+    var runs = listSmRuns(owner, name);
+    if (runs === null) return false; // unlistable → fail open, the self-heal still fires
     var now = Date.now();
     for (var i = 0; i < runs.length; i++) {
-        var r = runs[i] || {};
-        var s = r.status ? String(r.status).toLowerCase() : '';
-        if (s !== 'queued' && s !== 'in_progress' && s !== 'waiting' && s !== 'pending') continue;
-        if (s !== 'in_progress') {
-            var ts = Date.parse(r.updated_at || r.updatedAt || r.created_at || r.createdAt || '');
-            if (!isNaN(ts) && (now - ts) > 6 * 60 * 60 * 1000) continue; // zombie queued > 6h
-        }
-        return true;
+        if (isLiveSmRun(runs[i] || {}, now)) return true;
     }
     return false;
 }
@@ -276,6 +446,123 @@ function selfTickToSm(owner, name, job, deferredApproved, acted, say) {
     }
 }
 
+/**
+ * gh-766 dead-head predicate (gh-1040 extraction, verbatim): an armed
+ * head is stale when its rollup is pending, the PR is approved, and the
+ * oldest pending evidence has been motionless past the threshold. The
+ * pendingSince truthiness check is load-bearing (falsy = fail open).
+ */
+function isStalePending(rollup, approved, pendingSince, staleHeadMinutes, now) {
+    return rollup === 'pending' && approved && pendingSince &&
+        (now - pendingSince) > staleHeadMinutes * 60 * 1000;
+}
+
+/**
+ * Unarm-on-staleness predicate (gh-1040 extraction, verbatim): only a
+ * REALLY stale approved head is unarmed — BEHIND (base moved) or DIRTY
+ * (conflicts). BLOCKED right after a workflow_run trigger means
+ * 'required checks still settling' — unarming there races the check-run
+ * conclusion, drops a green armed PR, and forces a full re-validation
+ * cycle (live: fa pr-762, 11:36 — bot unarm on BLOCKED while the rollup
+ * was green two lines above).
+ */
+function shouldUnarmStaleHead(ms, approved) {
+    return approved && (ms === 'BEHIND' || ms === 'DIRTY');
+}
+
+/**
+ * Live-open guard for the get_pr body in action()'s FIFO loop
+ * (gh-1040 extraction, verbatim): a body without a number, or with an
+ * explicit non-OPEN state, is a stale list entry and is skipped.
+ */
+function isLiveOpenPr(pr) {
+    if (!pr.number) return false;
+    if (!pr.state) return true;
+    return String(pr.state).toUpperCase() === 'OPEN';
+}
+
+/**
+ * The head sha of a PR body, verbatim shapes (gh-1040 extraction): the
+ * REST body carries head.sha, older bridges a bare head string.
+ */
+function headShaOf(pr) {
+    return pr.head && (pr.head.sha || pr.head);
+}
+
+/**
+ * The ai_validating unarm, both log shapes verbatim (gh-1040
+ * extraction): on success the ok line is logged and true returned; on
+ * failure the failPrefix line carries the verbatim error and false is
+ * returned (callers only credit acted on success). The tracker call is
+ * the same single github_remove_label in the same position.
+ */
+function unarmValidating(owner, name, number, okLine, failPrefix, say) {
+    try {
+        github_remove_label({ workspace: owner, repository: name, number: number, label: 'ai_validating' });
+        say(okLine);
+        return true;
+    } catch (e) {
+        say(failPrefix + (e.message || e));
+        return false;
+    }
+}
+
+/**
+ * The gh-766 stale-pending unarm, log line verbatim (gh-1040
+ * extraction): the motionless-hours arithmetic and the skip line move
+ * out of action(); returns the acted credit (1 unarmed, 0 on failure).
+ */
+function unarmStaleHead(owner, name, pr, pendingSince, staleHeadMinutes, say) {
+    var stillHours = Math.round(((Date.now() - pendingSince) / 3600000) * 10) / 10;
+    return unarmValidating(owner, name, pr.number,
+        '⏭️ pr-' + pr.number + ' skipped: checks pending ' + stillHours +
+        'h (> ' + (Math.round(staleHeadMinutes / 6) / 10) + 'h motionless) — unarmed, queue advances',
+        '⚠️ pr-' + pr.number + ' stale-head unarm failed: ', say) ? 1 : 0;
+}
+
+/**
+ * The BEHIND/DIRTY staleness unarm, log line verbatim (gh-1040
+ * extraction): returns the acted credit (1 unarmed, 0 on failure).
+ */
+function unarmStaleHeadState(owner, name, pr, ms, say) {
+    return unarmValidating(owner, name, pr.number,
+        '🔓 pr-' + pr.number + ' validated head stale (' + ms + ') — unarmed, refresh follows',
+        '⚠️ pr-' + pr.number + ' unarm failed: ', say) ? 1 : 0;
+}
+
+/**
+ * The green-CLEAN unapproved latch (gh-1040 extraction, verbatim): unarm
+ * ai_validating (failure swallowed by design), then add ai_validated —
+ * the add is the acted motion; its failure is reported verbatim.
+ */
+function latchValidated(owner, name, pr, say) {
+    try { github_remove_label({ workspace: owner, repository: name, number: pr.number, label: 'ai_validating' }); } catch (e) {}
+    try {
+        github_add_labels({ workspace: owner, repository: name, number: pr.number, labels: ['ai_validated'] });
+        say('✅ pr-' + pr.number + ' validated (no approval yet) — ai_validated latched, review follows');
+        return true;
+    } catch (e) {
+        say('⚠️ pr-' + pr.number + ' latch failed: ' + (e.message || e));
+        return false;
+    }
+}
+
+/**
+ * Squash-merge attempt for an approved head (gh-1040 extraction,
+ * verbatim): merges through squashMerge (one transparent retry) and
+ * logs the caller's merged line on success or the verbatim refusal on
+ * failure. Returns the acted credit (1 or 0).
+ */
+function mergeApprovedHead(owner, name, pr, mergedLine, say) {
+    var m = squashMerge(owner, name, pr.number);
+    if (m.merged) {
+        say(mergedLine);
+        return 1;
+    }
+    say('❌ pr-' + pr.number + ' merge refused: ' + m.error);
+    return 0;
+}
+
 function squashMerge(owner, repo, number) {
     var last = null;
     for (var attempt = 1; attempt <= 2; attempt++) {
@@ -301,12 +588,8 @@ function squashMerge(owner, repo, number) {
 
 function action(params) {
     var job = (params && params.jobParams) || {};
-    var repo = job.repo;
-    if (!repo && typeof GH_REPO !== 'undefined') repo = GH_REPO;
-    if (!repo) throw new Error('mergeBot: no repo (params.jobParams.repo / GH_REPO)');
-    var parts = String(repo).split('/');
-    if (parts.length < 2) throw new Error('mergeBot: repo must be owner/name, got ' + repo);
-    var owner = parts[0], name = parts.slice(1).join('/');
+    var target = resolveRepoTarget(job);
+    var owner = target.owner, name = target.name;
 
     var log = [];
     function say(line) { log.push(line); console.log(line); }
@@ -323,8 +606,7 @@ function action(params) {
     // vanish here starved the whole queue behind the head — acted: 0 for
     // over an hour while 4 approved+validated PRs waited (live fa
     // 2026-10-06: pr-1231 checks=pending over pr-1309/1311/1313/1317).
-    var staleHeadMinutes = (typeof job.staleHeadMinutes === 'number' && job.staleHeadMinutes > 0)
-        ? job.staleHeadMinutes : 120;
+    var staleHeadMinutes = staleHeadMinutesOr(job);
     var skippedHeads = 0;
     var deadHeadPassed = false;
     // gh-952 slot release: the holder the open list can no longer see. An
@@ -336,20 +618,11 @@ function action(params) {
     // RELEASED — say so, and vacate the head position (gh-766 dead-head
     // parity: a validated candidate may take the turn on existing
     // evidence; the SM still owns arming the fresh head).
-    var approvedSeen = list.some(function (p) {
-        return labelNames(p).indexOf('pr_approved') !== -1;
-    });
-    var armedHolderOpen = list.some(function (p) {
-        var ls = labelNames(p);
-        return ls.indexOf('ai_validating') !== -1 && ls.indexOf('pr_approved') !== -1;
-    });
-    if (approvedSeen && !armedHolderOpen) {
-        var releasedHolder = mergedSlotHolder(owner, name);
-        if (releasedHolder) {
-            deadHeadPassed = true;
-            say('🔓 pr-' + releasedHolder.number + ' held the merge-window slot but is MERGED — ' +
-                'slot released (the armed stamps belonged to a merged PR, gh-952)');
-        }
+    var releasedHolder = findReleasedSlotHolder(list, owner, name);
+    if (releasedHolder) {
+        deadHeadPassed = true;
+        say('🔓 pr-' + releasedHolder.number + ' held the merge-window slot but is MERGED — ' +
+            'slot released (the armed stamps belonged to a merged PR, gh-952)');
     }
 
     // Owner directive 2026-10-04 ("red yields the slot") — diagnostic only:
@@ -391,12 +664,12 @@ function action(params) {
         var pr = parseMcp(github_get_pr({
             workspace: owner, repository: name, pullRequestId: list[i].number
         }));
-        if (!pr.number || (pr.state ? String(pr.state).toUpperCase() !== 'OPEN' : true)) continue;
+        if (!isLiveOpenPr(pr)) continue;
         if (pr.draft) continue;
         var labels = labelNames(pr);
-        var headSha = pr.head && (pr.head.sha || pr.head);
+        var headSha = headShaOf(pr);
         if (!headSha) continue;
-        if (labels.indexOf('blocked') !== -1) {
+        if (hasLabel(labels, 'blocked')) {
             // gh-766: owner-parked (#939 semantics unchanged — the bot still
             // never acts on a blocked PR), but the skip is now EXPLICIT and
             // the head position is dead: the queue may advance past it. The
@@ -408,9 +681,9 @@ function action(params) {
             continue;
         }
 
-        var approved = labels.indexOf('pr_approved') !== -1;
-        var validating = labels.indexOf('ai_validating') !== -1;
-        if (!validating || labels.indexOf('agent:review') !== -1) {
+        var approved = hasLabel(labels, 'pr_approved');
+        var validating = hasLabel(labels, 'ai_validating');
+        if (!validating || hasLabel(labels, 'agent:review')) {
             // Approved-but-unarmed PRs are FIFO-queued behind the current
             // validation (validate-armed mutex, one CI at a time). Say so —
             // a silent skip is indistinguishable from a stuck pipeline for
@@ -425,20 +698,20 @@ function action(params) {
             // per skip-chain — the first candidate consumes it, so FIFO
             // holds for everyone behind; never-validated, mid-review,
             // draft, conflicted and not-ready candidates keep deferring.
-            if (approved && labels.indexOf('agent:review') === -1) {
-                var advance = deadHeadPassed && labels.indexOf('ai_validated') !== -1;
-                if (advance) deadHeadPassed = false; // consumed by the first live candidate
+            if (approved && !hasLabel(labels, 'agent:review')) {
                 var advanced = false;
-                if (advance) {
+                if (deadHeadPassed && hasLabel(labels, 'ai_validated')) {
+                    // consumed by the first live candidate — one advance
+                    // per skip-chain, so FIFO holds for everyone behind.
+                    deadHeadPassed = false;
                     var upRollup = checksRollup(String(headSha), pr, job, owner, name);
                     if (upRollup === 'green' && mergeStateOf(pr) === 'CLEAN') {
-                        var um = squashMerge(owner, name, pr.number);
-                        if (um.merged) {
-                            say('🧲 pr-' + pr.number + ' squash-merged (approved + validated + green + CLEAN — advanced past a skipped dead head)');
-                            acted++;
+                        var gained = mergeApprovedHead(owner, name, pr,
+                            '🧲 pr-' + pr.number + ' squash-merged (approved + validated + green + CLEAN — advanced past a skipped dead head)',
+                            say);
+                        if (gained) {
+                            acted += gained;
                             advanced = true;
-                        } else {
-                            say('❌ pr-' + pr.number + ' merge refused: ' + um.error);
                         }
                     }
                 }
@@ -459,8 +732,7 @@ function action(params) {
         var detail = rollupDetail(String(headSha), pr, job, owner, name);
         var rollup = detail.state;
         if (rollup !== 'green') {
-            if (rollup === 'pending' && approved && detail.pendingSince &&
-                (Date.now() - detail.pendingSince) > staleHeadMinutes * 60 * 1000) {
+            if (isStalePending(rollup, approved, detail.pendingSince, staleHeadMinutes, Date.now())) {
                 // gh-766 dead head: the armed validation has been motionless
                 // past the threshold and will never conclude. Unarm — it
                 // frees the SM's validate-armed mutex so the next approved
@@ -469,15 +741,7 @@ function action(params) {
                 // (dev-lane) arms don't hold the merge window (mutexAmong
                 // parity) and keep waiting untouched: re-dispatching a
                 // slow-CI dev lane every 2h would only lose its queue spot.
-                var stillHours = Math.round(((Date.now() - detail.pendingSince) / 3600000) * 10) / 10;
-                try {
-                    github_remove_label({ workspace: owner, repository: name, number: pr.number, label: 'ai_validating' });
-                    say('⏭️ pr-' + pr.number + ' skipped: checks pending ' + stillHours +
-                        'h (> ' + (Math.round(staleHeadMinutes / 6) / 10) + 'h motionless) — unarmed, queue advances');
-                    acted++;
-                } catch (eStale) {
-                    say('⚠️ pr-' + pr.number + ' stale-head unarm failed: ' + (eStale.message || eStale));
-                }
+                acted += unarmStaleHead(owner, name, pr, detail.pendingSince, staleHeadMinutes, say);
                 skippedHeads++;
                 deadHeadPassed = true;
                 continue;
@@ -487,18 +751,8 @@ function action(params) {
         }
         var ms = mergeStateOf(pr);
         if (ms !== 'CLEAN') {
-            // Unarm ONLY on real staleness (BEHIND: base moved; DIRTY:
-            // conflicts). BLOCKED right after a workflow_run trigger means
-            // 'required checks still settling' — unarming there races the
-            // check-run conclusion, drops a green armed PR, and forces a
-            // full re-validation cycle (live: fa pr-762, 11:36 — bot unarm
-            // on BLOCKED while the rollup was green two lines above).
-            if (approved && (ms === 'BEHIND' || ms === 'DIRTY')) {
-                try {
-                    github_remove_label({ workspace: owner, repository: name, number: pr.number, label: 'ai_validating' });
-                    say('🔓 pr-' + pr.number + ' validated head stale (' + ms + ') — unarmed, refresh follows');
-                    acted++;
-                } catch (e) { say('⚠️ pr-' + pr.number + ' unarm failed: ' + (e.message || e)); }
+            if (shouldUnarmStaleHead(ms, approved)) {
+                acted += unarmStaleHeadState(owner, name, pr, ms, say);
             } else {
                 say('⏳ pr-' + pr.number + ' mergeState=' + ms + ' — waiting (checks settling)');
             }
@@ -506,21 +760,11 @@ function action(params) {
         }
 
         if (approved) {
-            var m = squashMerge(owner, name, pr.number);
-            if (m.merged) {
-                say('🧲 pr-' + pr.number + ' squash-merged (approved + green + CLEAN)');
-                acted++;
-            } else {
-                say('❌ pr-' + pr.number + ' merge refused: ' + m.error);
-            }
+            acted += mergeApprovedHead(owner, name, pr,
+                '🧲 pr-' + pr.number + ' squash-merged (approved + green + CLEAN)', say);
         } else {
             // Green head, no approval yet: latch for the review leg.
-            try { github_remove_label({ workspace: owner, repository: name, number: pr.number, label: 'ai_validating' }); } catch (e) {}
-            try {
-                github_add_labels({ workspace: owner, repository: name, number: pr.number, labels: ['ai_validated'] });
-                say('✅ pr-' + pr.number + ' validated (no approval yet) — ai_validated latched, review follows');
-                acted++;
-            } catch (e) { say('⚠️ pr-' + pr.number + ' latch failed: ' + (e.message || e)); }
+            if (latchValidated(owner, name, pr, say)) acted++;
         }
     }
 

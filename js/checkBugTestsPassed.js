@@ -21,6 +21,7 @@ const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const scmModule = require('./common/scm.js');
 const trackersModule = require('./common/trackers.js');
+const checkHelpers = require('./checkBugTestsPassedHelpers.js');
 
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
@@ -137,11 +138,8 @@ function action(params) {
         // hold the current Bug hostage.
         if (tracker.hasStage(tc, 'BUG_TO_FIX', jiraConfig.statuses.BUG_TO_FIX)) {
             var linkedBugs = findLinkedBugs(tc.key);
-            var hasOtherBug = linkedBugs.some(function(bug) {
-                var bugStatus = bug.fields && bug.fields.status && bug.fields.status.name;
-                return bug.key !== ticketKey && bugStatus !== jiraConfig.statuses.DONE;
-            });
-            if (hasOtherBug) {
+            // gh-1043: pure predicate extracted (and unit-tested) in checkHelpers.
+            if (checkHelpers.decideOtherActiveBug(linkedBugs, ticketKey, jiraConfig.statuses.DONE)) {
                 console.log('TC', tc.key, 'is Bug To Fix but already tracked by another active Bug — treating as non-blocking');
                 return false;
             }
@@ -187,31 +185,24 @@ function action(params) {
             // If the test-automation PR has already been merged and finalized, any still-blocking
             // Test Case means the fix did not work. Route the Bug to In Rework instead of
             // waiting forever.
-            const isFinalized = labels.indexOf(LABELS.TEST_PR_FINALIZED) !== -1;
-            if (isFinalized) {
-                // Anti-cycle guard: do not bounce a finalized Bug back to In Rework
-                // more than once for the same blockers. After one rework attempt,
-                // move to Blocked so a human triages persistent blockers instead of
-                // burning CI minutes in an infinite loop.
-                var reworkAttempted = labels.indexOf('sm_bug_rework_attempted') !== -1;
-                if (reworkAttempted) {
-                    console.log('Test PR finalized and one rework already attempted — moving', ticketKey, 'to Blocked for triage');
-                    tracker.moveToStatus(ticketKey, jiraConfig.statuses.BLOCKED);
-                    tracker.postComment(ticketKey, 'h3. 🚫 Test PR Finalized But Acceptance Tests Still Blocking After Rework\n\n' +
-                            'The test-automation PR was merged and finalized, and one rework was already attempted, but the following linked Test Case(s) are still not *Passed*:\n' +
-                            blockingTCs.map(function(tc) { return '- ' + tc.key + ' (' + (tc.fields && tc.fields.status && tc.fields.status.name || 'unknown') + ')'; }).join('\n') + '\n\n' +
-                            'Moving the Bug to *Blocked* for manual triage instead of cycling indefinitely.');
-                    releaseLock();
-                    return { success: true, action: 'moved_to_blocked', totalTCs, blockingCount, blockingTCs: blockingTCs.map(function(tc) { return tc.key; }), ticketKey };
-                }
+            // Anti-cycle guard (gh-1043: pure route decision in checkHelpers): do not bounce a
+            // finalized Bug back to In Rework more than once for the same blockers. After one
+            // rework attempt, move to Blocked so a human triages persistent blockers instead of
+            // burning CI minutes in an infinite loop.
+            var route = checkHelpers.decidePostFixRoute(labels, LABELS.TEST_PR_FINALIZED);
+            if (route === 'blocked') {
+                console.log('Test PR finalized and one rework already attempted — moving', ticketKey, 'to Blocked for triage');
+                tracker.moveToStatus(ticketKey, jiraConfig.statuses.BLOCKED);
+                tracker.postComment(ticketKey, checkHelpers.buildBlockedAfterReworkComment(blockingTCs));
+                releaseLock();
+                return { success: true, action: 'moved_to_blocked', totalTCs, blockingCount, blockingTCs: blockingTCs.map(function(tc) { return tc.key; }), ticketKey };
+            }
 
+            if (route === 'rework') {
                 console.log('Test PR finalized but', blockingCount, 'linked Test Case(s) still block — moving', ticketKey, 'to In Rework (one attempt)');
                 tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
                 tracker.addLabel(ticketKey, 'sm_bug_rework_attempted');
-                tracker.postComment(ticketKey, 'h3. 🔄 Test PR Merged But Acceptance Tests Still Blocking\n\n' +
-                        'The test-automation PR was merged and finalized, but the following linked Test Case(s) are still not *Passed*:\n' +
-                        blockingTCs.map(function(tc) { return '- ' + tc.key + ' (' + (tc.fields && tc.fields.status && tc.fields.status.name || 'unknown') + ')'; }).join('\n') + '\n\n' +
-                        'Moving the Bug to *In Rework* for one more fix attempt. If it still fails, it will be moved to *Blocked*.');
+                tracker.postComment(ticketKey, checkHelpers.buildReworkComment(blockingTCs));
                 releaseLock();
                 return { success: true, action: 'moved_to_rework', totalTCs, blockingCount, blockingTCs: blockingTCs.map(function(tc) { return tc.key; }), ticketKey };
             }
@@ -232,11 +223,8 @@ function action(params) {
         try {
             var scm = scmModule.createScm(projectConfig);
             var prList = scm.listPrs('open') || [];
-            openTestPR = prList.find(function(pr) {
-                var titleMatch = pr.title && pr.title.indexOf(ticketKey) !== -1;
-                var branchMatch = pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1;
-                return titleMatch || branchMatch;
-            });
+            // gh-1043: pure filter extracted (and unit-tested) in checkHelpers.
+            openTestPR = checkHelpers.findOpenTestPr(prList, ticketKey);
         } catch (e) {
             console.warn('Could not list open PRs for', ticketKey, ':', e);
         }
@@ -268,10 +256,7 @@ function action(params) {
             console.warn('Could not remove sm_bug_rework_attempted label:', e);
         }
 
-        tracker.postComment(ticketKey, 'h3. ✅ Bug Complete — All Linked Test Cases Resolved\n\n' +
-                'All *' + totalTCs + '* linked Test Case(s) are either *Passed*, *Skipped*, *Irrelevant*, ' +
-                'or already tracked by another Bug.\n\n' +
-                'The bug has been automatically moved to *Done*.');
+        tracker.postComment(ticketKey, checkHelpers.buildBugDoneComment(totalTCs));
 
         console.log('✅ Bug', ticketKey, 'moved to Done');
 

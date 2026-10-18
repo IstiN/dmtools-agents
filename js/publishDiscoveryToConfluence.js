@@ -46,6 +46,45 @@ var RESPONSE_FILE = 'outputs/response.md';
  * resuming the SAME session (feedbackLoop.resumeAgent()) rather than publishing
  * whatever partial bookkeeping exists and moving on.
  */
+
+// ── Pure helpers (gh-1043 CRAP split): string building and parsing extracted
+// from action(); posted strings must stay byte-identical to the originals.
+
+function buildPageTitle(ticketKey, ticketSummary) {
+    return ticketSummary ? (ticketKey + ' ' + ticketSummary) : ticketKey;
+}
+
+function buildNotConfiguredMessage() {
+    return 'Discovery output was generated in `' + DISCOVERY_OUTPUT_DIR + '` but not published to Confluence: ' +
+        '`discovery.space` / `discovery.parentPageId` are not configured for this project. ' +
+        'Set them in `.dmtools/config.js` to enable publishing.';
+}
+
+function parseSyncSummary(syncSummaryRaw) {
+    try {
+        return JSON.parse(syncSummaryRaw);
+    } catch (e) {
+        return { raw: syncSummaryRaw };
+    }
+}
+
+function buildDiscoveryPublishedComment(pageUrl, syncedCount, replyResult) {
+    return 'h3. 📚 Discovery published to Confluence\n\n' +
+        (pageUrl ? 'Page: ' + pageUrl + '\n\n' : '') +
+        'Synced *' + syncedCount + '* page(s) from `' + DISCOVERY_OUTPUT_DIR + '`.' +
+        (replyResult.posted > 0 ? '\n\nReplied to *' + replyResult.posted + '* inline comment(s).' : '') +
+        (replyResult.failed > 0 ? ' (' + replyResult.failed + ' reply attempt(s) failed — see job log.)' : '');
+}
+
+/**
+ * Storage body to carry across a page-title rename; '<p></p>' when the
+ * children-list entry carries no body (same fallback as the original inline
+ * expression).
+ */
+function buildRenameBody(page) {
+    return (page.body && page.body.storage && page.body.storage.value) || '<p></p>';
+}
+
 function isResponseFileMissing() {
     try {
         var raw = file_read({ path: RESPONSE_FILE });
@@ -133,7 +172,7 @@ function action(params) {
         return { success: false, action: 'missing_ticket' };
     }
     var ticketSummary = (params.ticket.fields && params.ticket.fields.summary) || '';
-    var pageTitle = ticketSummary ? (ticketKey + ' ' + ticketSummary) : ticketKey;
+    var pageTitle = buildPageTitle(ticketKey, ticketSummary);
 
     var result = { success: false, action: 'not_configured', ticketKey: ticketKey };
 
@@ -146,9 +185,7 @@ function action(params) {
         var deleteOrphans = !!discoveryConfig.deleteOrphans;
 
         if (!space || !parentPageId) {
-            var msg = 'Discovery output was generated in `' + DISCOVERY_OUTPUT_DIR + '` but not published to Confluence: ' +
-                '`discovery.space` / `discovery.parentPageId` are not configured for this project. ' +
-                'Set them in `.dmtools/config.js` to enable publishing.';
+            var msg = buildNotConfiguredMessage();
             console.warn(msg);
             try {
                 tracker.postComment(ticketKey, 'h3. ⚠️ Discovery drafted, not published\n\n' + msg);
@@ -183,7 +220,7 @@ function action(params) {
                 contentId: page.id,
                 title: pageTitle,
                 parentId: parentPageId,
-                body: (page.body && page.body.storage && page.body.storage.value) || '<p></p>',
+                body: buildRenameBody(page),
                 space: space
             });
         }
@@ -195,12 +232,7 @@ function action(params) {
             deleteOrphans: deleteOrphans
         });
 
-        var syncSummary;
-        try {
-            syncSummary = JSON.parse(syncSummaryRaw);
-        } catch (e) {
-            syncSummary = { raw: syncSummaryRaw };
-        }
+        var syncSummary = parseSyncSummary(syncSummaryRaw);
 
         var pageUrl = resolvePageUrl(page);
         var syncedCount = (syncSummary.syncedPages && syncSummary.syncedPages.length) || 0;
@@ -233,11 +265,7 @@ function action(params) {
             console.warn('publishDiscoveryToConfluence: resume not attempted/available (disabled, exhausted, or non-recoverable) — publishing with whatever output exists.');
         }
 
-        var comment = 'h3. 📚 Discovery published to Confluence\n\n' +
-            (pageUrl ? 'Page: ' + pageUrl + '\n\n' : '') +
-            'Synced *' + syncedCount + '* page(s) from `' + DISCOVERY_OUTPUT_DIR + '`.' +
-            (replyResult.posted > 0 ? '\n\nReplied to *' + replyResult.posted + '* inline comment(s).' : '') +
-            (replyResult.failed > 0 ? ' (' + replyResult.failed + ' reply attempt(s) failed — see job log.)' : '');
+        var comment = buildDiscoveryPublishedComment(pageUrl, syncedCount, replyResult);
         try {
             tracker.postComment(ticketKey, comment);
         } catch (commentError) {
