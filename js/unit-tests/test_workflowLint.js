@@ -315,3 +315,79 @@ suite('workflow contract — all .github/workflows/*.yml', function () {
         console.log('  ⏭ file_list unavailable (node harness) — directory-wide duplicate scan skipped');
     }
 });
+
+// ── repo contract: gh-1029 — labeled events must not self-retrigger ─────────
+//
+// Live 2026-10-18 (issue #1027): the leg labels `status:In Development` at
+// 08:31:14Z → the issues `labeled` trigger fires a second run that parks in
+// the same concurrency group and burns a runner spin on a guaranteed no-op.
+// `on:` cannot filter by label name, so the gate must live in the job `if:`:
+// a labeled event proceeds ONLY when the added label is an arming label
+// (agent:*, pr_approved). Lifecycle labels (status:*, ai_developed, ...)
+// must never allocate a runner.
+
+var ARMING_LABELS = ['agent:dev', 'agent:develop', 'agent:review', 'agent:rework', 'pr_approved'];
+
+// Extract a folded job-level `if: >-` block (4-space indent under a job) and
+// return its scalar content (folded scalar semantics: lines joined with ' ').
+function extractJobIf(yml) {
+    var lines = yml.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+        if (/^ {4}if: >-\s*$/.test(lines[i])) {
+            var parts = [];
+            for (var j = i + 1; j < lines.length; j++) {
+                if (/^\s*$/.test(lines[j])) continue;
+                if (/^ {5,}/.test(lines[j])) {
+                    parts.push(lines[j].replace(/^\s+/, ''));
+                } else {
+                    break;
+                }
+            }
+            return parts.join(' ');
+        }
+    }
+    return '';
+}
+
+// Every label comparison (`github.event.label.name == '...'`) in the gate.
+function gateLabelNames(ifExpr) {
+    var found = [];
+    var re = /github\.event\.label\.name\s*==\s*'([^']+)'/g;
+    var m;
+    while ((m = re.exec(ifExpr)) !== null) found.push(m[1]);
+    return found;
+}
+
+function assertLabelGate(yml, label) {
+    var ifExpr = extractJobIf(yml);
+    assert.ok(ifExpr, label + ': no folded job-level `if: >-` gate found — the ' +
+        'labeled-event gate must live at job level so no-op runs never allocate a runner');
+
+    test(label + ': labeled path admits ONLY the arming labels', function () {
+        assert.deepEqual(gateLabelNames(ifExpr).slice().sort(), ARMING_LABELS.slice().sort(),
+            label + ': `github.event.label.name` gate drifted. Arming set must be exactly ' +
+            JSON.stringify(ARMING_LABELS) + ' — a lifecycle label (status:*, ai_developed, ...) ' +
+            'here re-triggers a no-op run per leg (gh-1029). Found: ' +
+            JSON.stringify(gateLabelNames(ifExpr)));
+    });
+
+    test(label + ': gate distinguishes the assigned action from the labeled action', function () {
+        assert.ok(ifExpr.indexOf("github.event.action == 'assigned'") !== -1,
+            label + ': gate must key the assignee check to action == assigned');
+        assert.ok(ifExpr.indexOf("github.event.action == 'labeled'") !== -1,
+            label + ': gate must key the label check to action == labeled, otherwise a ' +
+            'labeled event from ANY label write matches the assignee-only branch');
+    });
+
+    test(label + ': workflow_dispatch entry path is preserved', function () {
+        assert.ok(ifExpr.indexOf("github.event_name == 'workflow_dispatch'") !== -1,
+            label + ': dropping the dispatch path silently kills the SM reconciler loop');
+    });
+}
+
+suite('workflow contract — ai-teammate labeled-event gate (gh-1029)', function () {
+
+    assertLabelGate(STUB, '.github/workflows/ai-teammate.yml');
+    assertLabelGate(TEMPLATE, 'workflows/ai-teammate.yml.template');
+});
+
