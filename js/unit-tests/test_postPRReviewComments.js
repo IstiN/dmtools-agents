@@ -38,30 +38,52 @@ function makeTrackersModule(toolMocks) {
     };
 }
 
-function loadPostPRReviewComments(mocks) {
-    var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
-            './common/commentMarkup.js': commentMarkupModule
-        }), {
-        file_read: (mocks && mocks.file_read) || function() { return null; }
+/**
+ * Shared outputFiles loader for postPRReviewComments harnesses — the real
+ * js/common/outputFiles.js wired against the given file_read mock.
+ */
+function prReviewOutputFiles(fileReadMock) {
+    return loadModule('js/common/outputFiles.js', makeRequire({
+        './common/commentMarkup.js': commentMarkupModule
+    }), {
+        file_read: fileReadMock
     });
+}
+
+/**
+ * Shared require map for loading js/postPRReviewComments.js in tests — the
+ * real module wiring with every common/* collaborator resolved, including
+ * the gh-1053 reviewSpecClaims mapping (previously duplicated inline in
+ * ~8 loaders, which pushed loadWithFileMap's CRAP over the ratchet).
+ * Callers pass overrides for the collaborators a suite needs to double
+ * (scm, configLoader, outputFiles, githubHelpers, trackers, autoStart, ...).
+ */
+function prReviewRequireMap(overrides) {
+    var map = {
+        './common/machineAuthor.js': machineAuthorModule,
+        './config.js': configModule,
+        './common/scm.js': { createScm: function() { return {}; } },
+        './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
+        './configLoader.js': configLoaderModule,
+        './common/githubHelpers.js': githubHelpersStub,
+        './common/trackers.js': makeTrackersModule({}),
+        './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+        './common/commentMarkup.js': commentMarkupModule,
+        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+        './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
+    };
+    return Object.assign(map, overrides || {});
+}
+
+function loadPostPRReviewComments(mocks) {
+    var fileRead = (mocks && mocks.file_read) || function() { return null; };
     return loadModule(
         'js/postPRReviewComments.js',
-        makeRequire({
-            './common/machineAuthor.js': machineAuthorModule,
-            './config.js': configModule,
-            './common/scm.js': { createScm: function() { return {}; } },
-            './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
-            './configLoader.js': configLoaderModule,
-            './common/outputFiles.js': outputFiles,
-            './common/githubHelpers.js': githubHelpersStub,
-            './common/trackers.js': makeTrackersModule({}),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
-        ,
-            './common/commentMarkup.js': commentMarkupModule,
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
-        }),
+        makeRequire(prReviewRequireMap({
+            './common/outputFiles.js': prReviewOutputFiles(fileRead)
+        })),
         {
-            file_read: (mocks && mocks.file_read) || function() { return null; }
+            file_read: fileRead
         }
     );
 }
@@ -370,7 +392,8 @@ suite('postPRReviewComments', function() {
                     './common/trackers.js': makeTrackersModule(mergedMocks),
                     './common/tokenUsageComment.js': opts.tokenUsage || { postTokenUsageComments: function() {} },
                     './common/commentMarkup.js': commentMarkupModule,
-                    './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+                    './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+                    './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
                 }),
                 mergedMocks
             );
@@ -663,7 +686,8 @@ suite('postPRReviewComments', function() {
                     './common/trackers.js': makeTrackersModule(formalMocks),
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
                     './common/commentMarkup.js': commentMarkupModule,
-                    './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+                    './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+                    './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
                 }),
                 formalMocks
             );
@@ -972,7 +996,8 @@ suite('postPRReviewComments', function() {
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
                 ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
         }),
                 {
                     file_read: function(args) {
@@ -1351,7 +1376,8 @@ function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged
                 postTokenUsageComments: function(key, o) { rec('tokenUsage', { key: key, initiator: o && o.initiator }); }
             },
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
         }),
         merged
     );
@@ -2043,7 +2069,8 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
             './common/trackers.js': makeTrackersModule({}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
         }), {});
 
         assert.equal(bad.readReviewJson('PROJ-1', null), null);
@@ -2130,7 +2157,8 @@ function gh926ResumeRequire(opts) {
         './common/trackers.js': makeTrackersModule({}),
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './common/commentMarkup.js': commentMarkupModule,
-        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+        './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
     });
 }
 
@@ -2462,7 +2490,8 @@ function loadForPrSearch(foundPr) {
             './common/trackers.js': makeTrackersModule({}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
         }),
         {
             file_read: function() { return null; }
@@ -2470,3 +2499,74 @@ function loadForPrSearch(foundPr) {
     );
     return { mod: mod, searchCalls: searchCalls };
 }
+
+suite('postPRReviewComments — gh-1053 spec-claim guard wiring', function () {
+    function mapReadingFileRead(fileMap) {
+        return function (opts) {
+            var p = opts && (opts.path || opts);
+            if (fileMap[p] !== undefined) return fileMap[p];
+            if (p && p.indexOf('.dmtools/config') !== -1) return null;
+            return null;
+        };
+    }
+
+    function loadWithFileMap(fileMap, writes) {
+        return loadModule(
+            'js/postPRReviewComments.js',
+            makeRequire(prReviewRequireMap({
+                './common/outputFiles.js': prReviewOutputFiles(mapReadingFileRead(fileMap))
+            })),
+            {
+                // Comment-file reads in this suite flow through the outputFiles
+                // instance's own file_read (see prReviewOutputFiles above); the
+                // module-level file_read is never exercised here, so keep it
+                // trivially simple (a branchy mock trips the CRAP ratchet on
+                // near-zero coverage).
+                file_read: function () { return null; },
+                file_write: function (opts) {
+                    writes.push(opts);
+                }
+            }
+        );
+    }
+
+    test('applySpecClaimDowngrades rewrites a file-referenced uncited spec claim before posting', function () {
+        var fileMap = {
+            'outputs/pr_review_comments/f1.md':
+                '🚨 BLOCKING: the spec says only *_MAX_TOKENS is exempt — this PR exempts more.'
+        };
+        var writes = [];
+        var mod = loadWithFileMap(fileMap, writes);
+        var reviewData = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+            inlineComments: [
+                { path: 'src/env.js', line: 10, comment: 'outputs/pr_review_comments/f1.md' }
+            ]
+        };
+        var result = mod.applySpecClaimDowngrades(reviewData, 'TICKET-1', null);
+        assert.equal(result.downgrades, 1, 'one downgrade applied');
+        assert.equal(writes.length, 1, 'comment file rewritten');
+        assert.ok(writes[0].content.indexOf('\uD83D\uDEA8') === -1, 'no 🚨 in rewritten file');
+        assert.ok(writes[0].content.indexOf('\u26A0') !== -1, '⚠ in rewritten file');
+        assert.equal(reviewData.issueCounts.blocking, 0, 'census drained');
+        assert.equal(reviewData.recommendation, 'APPROVE', 'verdict collapsed to APPROVE');
+    });
+
+    test('applySpecClaimDowngrades leaves cited blocking findings untouched', function () {
+        var writes = [];
+        var mod = loadWithFileMap({}, writes);
+        var reviewData = {
+            recommendation: 'REQUEST_CHANGES',
+            issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+            inlineComments: [
+                { path: 'src/env.js', line: 40, severity: 'BLOCKING', body: '🚨 BLOCKING: deviation from the spec (Policy.java:61-66).' }
+            ]
+        };
+        var result = mod.applySpecClaimDowngrades(reviewData, 'TICKET-1', null);
+        assert.equal(result.downgrades, 0);
+        assert.equal(writes.length, 0, 'nothing rewritten');
+        assert.equal(reviewData.recommendation, 'REQUEST_CHANGES');
+        assert.equal(reviewData.issueCounts.blocking, 1);
+    });
+});
