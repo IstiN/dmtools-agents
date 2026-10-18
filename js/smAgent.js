@@ -3187,6 +3187,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             (!headSha || b.indexOf(String(headSha)) !== -1);
                     });
                 } catch (e6) { /* read failed — treat as not reported */ }
+                // gh-1027: an unreported candidate is actionable — it counts
+                // toward the rule limit. A failed comments read leaves
+                // alreadyReported false (fail-open), so it counts too and
+                // gets a full re-report attempt, matching the marker dedup
+                // contract above.
+                if (!alreadyReported) conflictActionable++;
 
                 // Resolve machine-author + linked issue BEFORE the marker
                 // check — the self-heal below needs to know whether the
