@@ -1513,6 +1513,13 @@ function evaluateAuditResolveGate(realCodeChanges, codeChangesCommitted, openThr
  * Blocked move the caller already performed.
  */
 
+// Normalize a raw GitHub REST label list to plain names: the payload from
+// scm.listPrs('open') carries [{name}] objects, not strings
+// (githubSource.prLabels / prHasApproved pattern).
+function prLabelNames(pr) {
+    return (pr.labels || []).map(function(l) { return (l && l.name) || l; });
+}
+
 // Label the PR `blocked` — the SM park vocabulary (engine-level freeze in
 // githubSource matchesGuards/_prSideBlockedLabel/queryPrs).
 function labelPrBlocked(scm, pr) {
@@ -1524,16 +1531,11 @@ function labelPrBlocked(scm, pr) {
     }
 }
 
-// Strip one arm from the PR. The pr payload is the raw GitHub REST list
-// shape (requirePrForTicket → findPRForTicket → scm.listPrs('open')), where
-// labels are [{name}] objects or strings — normalize before checking
-// presence (githubSource.prLabels / prHasApproved pattern). A leftover arm
-// would re-dispatch a leg the moment a human unblocks, so strip
-// unconditionally when the PR carries labels at all (a 404 on an absent
-// label is tolerated by the try/catch).
+// Strip one arm from the PR. A leftover arm would re-dispatch a leg the
+// moment a human unblocks, so strip unconditionally when the PR carries
+// labels at all (a 404 on an absent label is tolerated by the try/catch).
 function stripArmFromPr(scm, pr, arm) {
-    var names = (pr.labels || []).map(function(l) { return (l && l.name) || l; });
-    if (names.length === 0) return;
+    if (prLabelNames(pr).length === 0) return;
     try {
         scm.removeLabel(pr.number, arm);
         console.log('✅ Stripped ' + arm + ' from PR #' + pr.number + ' (gh-1060 park)');
