@@ -205,6 +205,7 @@ suite('wave2d1 tracker — preCli setups / writeSolutionAndLabels', function() {
             './config.js': configModule,
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
             './mergeState.js': loadModule('js/common/mergeState.js'),
+            './preCliMobileTestAutomationSetupHelpers.js': loadModule('js/preCliMobileTestAutomationSetupHelpers.js'),
             './common/pullRequest.js': {},
             './common/trackers.js': d1Trackers(mocks)
         }), mocks);

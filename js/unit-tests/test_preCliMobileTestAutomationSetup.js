@@ -452,7 +452,7 @@ suite('preCliMobileTestAutomationSetup — Bitrise artifact download', function(
             onListArtifacts: function() {
                 return JSON.stringify({ data: [
                     { slug: 'log-slug', title: 'build-log.txt', file_size_bytes: 100 },
-                    { slug: 'zip-slug', title: 'app.zip', file_size_bytes: 1000 }
+                    { slug: 'bin-slug', title: 'report.bin', file_size_bytes: 1000 }
                 ]});
             },
             onGetArtifact: function() { return JSON.stringify({ data: { expiring_download_url: 'https://x.com/a.zip' } }); }
@@ -670,18 +670,20 @@ suite('preCliMobileTestAutomationSetup — simulator install', function() {
         return params;
     }
 
+    function defaultInstallCliHandler(o) {
+        if (o.command && o.command.indexOf('find') !== -1) return 'input/PROJ-5678/app/Example Business.app';
+        if (o.command && o.command.indexOf('SIMULATOR_UDID') !== -1) return 'SIM-UDID-1234';
+        return '';
+    }
+
     function makeInstallMocks(opts) {
         opts = opts || {};
-        return {
+        var mocks = {
             jira_move_to_status: function() {},
             jira_search_by_jql: function() { return []; },
-            file_write: opts.onFileWrite || function() {},
-            file_read: opts.onFileRead || function() { return '# existing app_info'; },
-            cli_execute_command: opts.onCliCommand || function(o) {
-                if (o.command && o.command.indexOf('find') !== -1) return 'input/PROJ-5678/app/Example Business.app';
-                if (o.command && o.command.indexOf('SIMULATOR_UDID') !== -1) return 'SIM-UDID-1234';
-                return '';
-            },
+            file_write: function() {},
+            file_read: function() { return '# existing app_info'; },
+            cli_execute_command: defaultInstallCliHandler,
             github_list_prs: function() {
                 return JSON.stringify({ data: [{ number: 963, head: { ref: 'story/PROJ-5678' } }]});
             },
@@ -695,7 +697,29 @@ suite('preCliMobileTestAutomationSetup — simulator install', function() {
                 return JSON.stringify({ data: { expiring_download_url: 'https://x.com/a.zip' }});
             }
         };
+        if (opts.onFileWrite) mocks.file_write = opts.onFileWrite;
+        if (opts.onFileRead) mocks.file_read = opts.onFileRead;
+        if (opts.onCliCommand) mocks.cli_execute_command = opts.onCliCommand;
+        return mocks;
     }
+
+    test('install flow works end-to-end with the default cli handler', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli(makeInstallMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; }
+        }));
+
+        m.action(makeInstallParams());
+
+        var md = writtenFiles['input/PROJ-5678/app_info.md'];
+        assert.ok(md, 'app_info.md should be written');
+        assert.ok(md.indexOf('| App Path | `input/PROJ-5678/app/Example Business.app` |') !== -1,
+            'default handler should locate the .app via find: ' + md);
+        assert.ok(md.indexOf('## Simulator & Maestro') !== -1, 'should append simulator info');
+        assert.ok(md.indexOf('| MAESTRO_DEVICE | `SIM-UDID-1234` |') !== -1,
+            'should use the default env UDID');
+    });
 
     test('installs app on simulator using SIMULATOR_UDID from env', function() {
         var commands = [];
