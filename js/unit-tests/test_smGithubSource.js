@@ -223,6 +223,29 @@ suite('sm github source', function () {
         assert.equal(items.length, 0);
     });
 
+    test('gh-1027: conflict_rework rules slice limit+OVERSCAN, other rules keep limit+3', function () {
+        var prs = [];
+        var details = {};
+        for (var n = 100; n < 125; n++) {
+            prs.push({ number: n, labels: [{ name: 'pr_approved' }], head: { ref: 'ai/gh-' + n }, draft: false });
+            details[n] = { number: n, state: 'OPEN', checks: 'green', mergeState: 'DIRTY', mergeable: false };
+        }
+        var srcMod = load({
+            github_list_prs: function () { return prs; }
+        }, {}, details);
+        var wide = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved'], mergeState: 'DIRTY' },
+            localAction: 'conflict_rework', limit: 1
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(wide.length, 16,
+            'conflict_rework: limit 1 + OVERSCAN 15 — already-reported candidates must not re-cut the queue');
+        var narrow = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved'], mergeState: 'DIRTY' },
+            limit: 1
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(narrow.length, 4, 'other rules keep limit + TRIGGER_FALLTHROUGH_RESERVE');
+    });
+
     test('blocked label: PR rules skip owner-parked PRs even when green (fa #939)', function () {
         var srcMod = load({
             github_list_prs: function () {
