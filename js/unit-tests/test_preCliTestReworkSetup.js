@@ -156,6 +156,191 @@ function recordingCliMock(commands) {
     };
 }
 
+suite('preCliTestReworkSetup.action — branch-coverage characterization (gh-1042)', function() {
+
+    // These pin the CURRENT behaviour of paths the CRAP refactor touches —
+    // the suite must stay green through the extraction.
+
+    test('ls-remote probe failure → branch treated as absent → Backlog failure', function() {
+        var ctx = loadPreCliTestReworkSetup({
+            scm: makeScmMock({ openPrs: [] }),
+            cli: function() { throw new Error('network unreachable'); }
+        });
+
+        var result = ctx.module.action(baseParams());
+
+        assert.deepEqual(result, {
+            success: false,
+            error: 'No test PR and no remote branch found for test/PROJ-12. Moving to Backlog for re-automation.'
+        });
+        assert.deepEqual(ctx.tracker.calls.moveToStatus, [{ key: 'PROJ-12', status: 'Backlog' }]);
+    });
+
+    var checkoutCalls1042 = [];
+
+    test('no-PR path: checkout AND fetch+checkout both fail → PR auto-create still attempted', function() {
+        var ctx = loadPreCliTestReworkSetup({
+            scm: makeScmMock({
+                openPrs: [],
+                createPr: function() { return { success: true, number: 15, prUrl: 'https://github.com/acme/widgets/pull/15' }; }
+            }),
+            cli: function(args) {
+                if (args.command === 'git ls-remote --heads origin test/PROJ-12') return LS_REMOTE_LINE;
+                if (args.command.indexOf('git fetch origin') === 0) throw new Error('fetch denied');
+                return '';
+            },
+            gitOps: {
+                // First checkout (no-PR path) fails; the post-PR-details step-4
+                // checkout succeeds — a fetch+checkout failure on the no-PR path
+                // must not stop the PR auto-create.
+                checkoutPRBranch: function() {
+                    checkoutCalls1042.push(1);
+                    if (checkoutCalls1042.length === 1) throw new Error('checkout boom');
+                }
+            },
+            gh: {
+                getPRDetails: function() {
+                    return { number: 15, html_url: 'u', head: { ref: 'test/PROJ-12' }, base: { ref: 'main' } };
+                },
+                fetchDiscussionsAndRawData: function() { return { markdown: '', rawThreads: [] }; }
+            }
+        });
+
+        var result = ctx.module.action(baseParams());
+
+        assert.equal(result.success, true, 'both checkout fallbacks failing must not stop the auto-create');
+        assert.equal(result.prNumber, 15);
+    });
+
+    test('scm without createPr → warning comment + fallback context with ticketKey-only title', function() {
+        var contextCalls = [];
+        var tracker = makeTrackerMock();
+        tracker.getIssue = function(key) { tracker.calls.getIssue.push(key); return null; };
+        var ctx = loadPreCliTestReworkSetup({
+            scm: makeScmMock({ openPrs: [] }), // createPr intentionally absent
+            cli: function(args) { return recordingCliMock([])(args); },
+            tracker: tracker,
+            gitOps: {
+                writePRContext: function(folder, pr) { contextCalls.push(pr); }
+            }
+        });
+
+        var result = ctx.module.action(baseParams());
+
+        assert.deepEqual(result, { success: true, branchName: 'test/PROJ-12', prNumber: null, noPR: true });
+        assert.equal(ctx.tracker.calls.postComment.length, 1);
+        assert.contains(ctx.tracker.calls.postComment[0].body, 'Error: Error: Configured SCM provider does not support createPr');
+        assert.equal(contextCalls.length, 1, 'fallback context written despite the createPr throw');
+        assert.equal(contextCalls[0].title, 'PROJ-12 ',
+            'a null ticket falls back to the bare key and an empty summary');
+    });
+
+    test('fallback context write failure is a warning only — noPR success still returned', function() {
+        var ctx = loadPreCliTestReworkSetup({
+            scm: makeScmMock({
+                openPrs: [],
+                createPr: function() { return { success: false, error: 'x' }; }
+            }),
+            cli: function(args) { return recordingCliMock([])(args); },
+            gitOps: { writePRContext: function() { throw new Error('disk full'); } }
+        });
+
+        var result = ctx.module.action(baseParams());
+
+        assert.deepEqual(result, { success: true, branchName: 'test/PROJ-12', prNumber: null, noPR: true });
+    });
+
+    test('createPr failure without an error field → generic SCM provider message in the warning comment', function() {
+        var ctx = loadPreCliTestReworkSetup({
+            scm: makeScmMock({
+                openPrs: [],
+                createPr: function() { return { success: false }; } // no error field
+            }),
+            cli: function(args) { return recordingCliMock([])(args); }
+        });
+
+        var result = ctx.module.action(baseParams());
+
+        assert.equal(result.noPR, true);
+        assert.contains(ctx.tracker.calls.postComment[0].body,
+            'Error: Error: SCM provider failed to create PR/MR');
+    });
+
+    test('createPr success without a PR number → flow continues with the created PR', function() {
+        var ctx = loadPreCliTestReworkSetup({
+            scm: makeScmMock({
+                openPrs: [],
+                createPr: function() { return { success: true }; } // no number/prUrl
+            }),
+            cli: function(args) { return recordingCliMock([])(args); },
+            gh: {
+                getPRDetails: function(scm, prNumber) {
+                    return { number: 15, html_url: 'u', head: { ref: 'test/PROJ-12' }, base: { ref: 'main' } };
+                },
+                fetchDiscussionsAndRawData: function() { return { markdown: '', rawThreads: [] }; }
+            }
+        });
+
+        var result = ctx.module.action(baseParams());
+
+        assert.equal(result.success, true, 'auto-created PR without metadata still continues the flow');
+        assert.equal(result.prNumber, 15);
+    });
+
+    test('PR details without base → conflict detection and diff fall back to config.git.baseBranch', function() {
+        var conflictBases = [];
+        var diffBases = [];
+        var ctx = loadPreCliTestReworkSetup({
+            gh: {
+                getPRDetails: function() {
+                    return { number: 12, html_url: 'u', head: { ref: 'test/PROJ-12' }, base: null };
+                }
+            },
+            gitOps: {
+                detectMergeConflicts: function(baseBranch) { conflictBases.push(baseBranch); return []; },
+                getPRDiff: function(baseBranch) { diffBases.push(baseBranch); return ''; }
+            }
+        });
+
+        var result = ctx.module.action(baseParams());
+
+        assert.equal(result.success, true);
+        assert.deepEqual(conflictBases, ['main'], 'conflicts detected against the configured base branch');
+        assert.deepEqual(diffBases, ['main'], 'diff computed against the configured base branch');
+    });
+
+    test('tracker comment failure on the started comment is non-fatal', function() {
+        var tracker = makeTrackerMock();
+        tracker.postComment = function() { throw new Error('tracker down'); };
+        var ctx = loadPreCliTestReworkSetup({ tracker: tracker });
+
+        var result = ctx.module.action(baseParams());
+
+        assert.equal(result.success, true, 'a failed started-comment must not fail the setup');
+    });
+
+    test('unexpected error with no input folder → fallback tracker, no comment, failure result', function() {
+        var ctx = loadPreCliTestReworkSetup({
+            configLoader: {
+                loadProjectConfig: function() { throw new Error('config unreadable'); },
+                createScm: function() { return makeScmMock(); },
+                formatTemplate: function(t) { return t; }
+            },
+            tracker: null
+        });
+
+        var result = ctx.module.action({});
+
+        // The input-folder split runs BEFORE the config load, so an empty
+        // params object dies on the folder, not on the config error.
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'split');
+        assert.equal(ctx.tracker.calls.postComment.length, 0,
+            'no comment target can be derived from an empty input folder');
+    });
+
+});
+
 suite('preCliTestReworkSetup.action — characterization (gh-928)', function() {
 
     test('happy path: open test PR → checkout, context, questions, bugs, tracker comment, success shape', function() {
@@ -521,4 +706,94 @@ suite('preCliTestReworkSetup.action — characterization (gh-928)', function() {
         assert.equal(result.success, false);
         assert.contains(result.error, 'config unreadable');
     });
+});
+
+suite('preCliTestReworkSetup — extracted helpers (gh-1042)', function() {
+
+    // Direct tests for the parse*/build* helpers extracted from action() —
+    // pins their contracts so action()'s CRAP stays low with full coverage.
+
+    test('parseActualParams: direct params vs jobParams vs bare params', function() {
+        var direct = { inputFolderPath: 'input/PROJ-12' };
+        assert.equal(loadPreCliTestReworkSetup().module.parseActualParams(direct), direct);
+        var wrapped = { jobParams: { inputFolderPath: 'input/PROJ-12' } };
+        assert.equal(loadPreCliTestReworkSetup().module.parseActualParams(wrapped), wrapped.jobParams);
+        var bare = { customParams: {} };
+        assert.equal(loadPreCliTestReworkSetup().module.parseActualParams(bare), bare);
+    });
+
+    test('parseCustomParams: actualParams wins, then jobParams, then {}', function() {
+        var mod = loadPreCliTestReworkSetup().module;
+        assert.deepEqual(mod.parseCustomParams({}, { customParams: { a: 1 } }), { a: 1 });
+        assert.deepEqual(mod.parseCustomParams({ jobParams: { customParams: { b: 2 } } }, {}), { b: 2 });
+        assert.deepEqual(mod.parseCustomParams({}, {}), {});
+    });
+
+    test('parseTicketKey and buildTestBranchName round-trip the folder basename', function() {
+        var mod = loadPreCliTestReworkSetup().module;
+        assert.equal(mod.parseTicketKey('input/PROJ-12'), 'PROJ-12');
+        assert.equal(mod.buildTestBranchName('PROJ-12'), 'test/PROJ-12');
+    });
+
+    test('parseBranchExists: ref line present/absent, null-safe output', function() {
+        var mod = loadPreCliTestReworkSetup().module;
+        assert.equal(mod.parseBranchExists(LS_REMOTE_LINE, 'test/PROJ-12'), true);
+        assert.equal(mod.parseBranchExists('', 'test/PROJ-12'), false);
+        assert.equal(mod.parseBranchExists(null, 'test/PROJ-12'), false,
+            'a null capture (defensive) is "branch absent"');
+    });
+
+    test('buildFailureResult / buildSuccessResult pin the return contract', function() {
+        var mod = loadPreCliTestReworkSetup().module;
+        assert.deepEqual(mod.buildFailureResult('boom'), { success: false, error: 'boom' });
+        assert.deepEqual(mod.buildSuccessResult(PR12, 'test/PROJ-12', { owner: 'acme', repo: 'widgets' }), {
+            success: true,
+            prNumber: 12,
+            prUrl: 'https://github.com/acme/widgets/pull/12',
+            branchName: 'test/PROJ-12',
+            owner: 'acme',
+            repo: 'widgets'
+        });
+    });
+
+    test('decidePrCreateError: provider reason wins, generic message otherwise', function() {
+        var mod = loadPreCliTestReworkSetup().module;
+        assert.equal(mod.decidePrCreateError({ success: false, error: 'validation failed' }), 'validation failed');
+        assert.equal(mod.decidePrCreateError({ success: false }), 'SCM provider failed to create PR/MR');
+        assert.equal(mod.decidePrCreateError(null), 'SCM provider failed to create PR/MR');
+    });
+
+    test('buildReworkStartedComment: without conflicts matches the historical template', function() {
+        var mod = loadPreCliTestReworkSetup().module;
+        var out = mod.buildReworkStartedComment(PR12, 'test/PROJ-12', []);
+        assert.equal(out,
+            'h3. 🔧 Automated Test Rework Started\n\n' +
+            '*Pull Request*: [PR #12|https://github.com/acme/widgets/pull/12]\n' +
+            '*Branch*: {code}test/PROJ-12{code}\n\n' +
+            'AI Teammate is fixing test code issues raised in the review.\n\n' +
+            '_Results will be posted shortly..._');
+    });
+
+    test('buildReworkStartedComment: conflict panel lists every file', function() {
+        var mod = loadPreCliTestReworkSetup().module;
+        var out = mod.buildReworkStartedComment(PR12, 'test/PROJ-12', ['testing/a.ts', 'testing/b.ts']);
+        assert.contains(out, '{panel:bgColor=#FFEBE6|borderColor=#DE350B}');
+        assert.contains(out, '⚠️ *Merge conflicts detected* — 2 file(s) must be resolved:');
+        assert.contains(out, '* {code}testing/a.ts{code}\n* {code}testing/b.ts{code}');
+        assert.contains(out, '_Results will be posted shortly..._');
+    });
+
+    test('buildPrTitle: summary from ticket, bare key when ticket is null', function() {
+        var titles = [];
+        var tracker = makeTrackerMock({ fields: { summary: 'Fix flaky login test' } });
+        var ctx = loadPreCliTestReworkSetup({ tracker: tracker });
+        // Drive buildPrTitle through the module's own exported surface via a
+        // no-PR flow would be heavy — call the helper directly.
+        var title = ctx.module.buildPrTitle(REWORK_SETUP_CONFIG, tracker, 'PROJ-12');
+        assert.equal(title, 'PROJ-12 Fix flaky login test');
+        var nullTracker = makeTrackerMock();
+        nullTracker.getIssue = function() { return null; };
+        assert.equal(ctx.module.buildPrTitle(REWORK_SETUP_CONFIG, nullTracker, 'PROJ-12'), 'PROJ-12');
+    });
+
 });
