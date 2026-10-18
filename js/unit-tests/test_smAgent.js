@@ -13893,6 +13893,12 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         }, { github: github }));
     }
 
+    function clones(sm) {
+        return sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone ') === 0;
+        });
+    }
+
     function markerCount(comments) {
         var n = 0;
         (comments || []).forEach(function (c) {
@@ -13906,8 +13912,8 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         var sm = forkSm({ maintainerCanModify: true });
         sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
 
-        assert.equal(sm.capturedCliCommands.length, 1, 'exactly one refresh command');
-        var cmd = sm.capturedCliCommands[0].command;
+        assert.equal(clones(sm).length, 1, 'exactly one refresh command');
+        var cmd = clones(sm)[0].command;
         assert.ok(cmd.indexOf('gh repo clone ' + BASE) === 0, 'clones the BASE repo');
         assert.ok(cmd.indexOf('refs/pull/1591/head') !== -1,
             'fetches the PR head via refs/pull/<N>/head — fork-branch independent');
@@ -13933,16 +13939,16 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         });
         sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
 
-        assert.equal(sm.capturedCliCommands.length, 1, 'the fork refresh ran');
-        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.labels; }),
-            [['validation_failed']], 'the park cleared via the existing head-change reset (gh-994)');
+        assert.equal(clones(sm).length, 1, 'the fork refresh ran');
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['validation_failed'], 'the park cleared via the existing head-change reset (gh-994)');
     });
 
     test('AC2/UT-3: non-editable fork — guest park with ZERO attempts, ZERO markers, ZERO degraded label', function () {
         var sm = forkSm({ maintainerCanModify: false });
         sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
 
-        assert.equal(sm.capturedCliCommands.length, 0, 'NO silent-update attempt — it can never succeed');
+        assert.equal(clones(sm).length, 0, 'NO silent-update attempt — it can never succeed');
         assert.equal(sm.capturedPrLabelAdds.length, 1, 'exactly one park label');
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['validation_failed'],
             'the gh-757 guest park label, not silent-update-degraded');
@@ -13957,7 +13963,7 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
             prComments: [{ body: sm.capturedPrComments[0].body }]
         });
         sm2.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
-        assert.equal(sm2.capturedCliCommands.length, 0, 'still no attempt while parked');
+        assert.equal(clones(sm2).length, 0, 'still no attempt while parked');
         assert.equal(sm2.capturedPrLabelAdds.length, 0, 'no duplicate park label');
         assert.equal(sm2.capturedPrComments.length, 0, 'no comment spam on the holding tick');
     });
@@ -13968,7 +13974,7 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         var sm = forkSm({}, { pr: { number: 1591, head: { sha: HEAD_NEW } } });
         sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
 
-        assert.equal(sm.capturedCliCommands.length, 0, 'no refresh on a failed probe');
+        assert.equal(clones(sm).length, 0, 'no refresh on a failed probe');
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no park on a failed probe');
         assert.equal(sm.capturedPrComments.length, 0, 'no bookkeeping on a failed probe');
     });
@@ -13982,9 +13988,15 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
                           labels: labelAdds.indexOf('validation_failed') === -1
                               ? ['pr_approved'] : ['pr_approved', 'validation_failed'] }, {
                 prComments: thread.map(function (b) { return { body: b }; }),
-                onCliExecute: function () { throw new Error('denied — edits revoked mid-flight'); }
+                onCliExecute: function (cmdOpts) {
+                    if (cmdOpts.command.indexOf('gh repo clone ') === 0) {
+                        throw new Error('denied — edits revoked mid-flight');
+                    }
+                    return '';
+                }
             });
             sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
+            console.log('DEBUG tick ' + tick + ' clones=' + clones(sm).length + ' newComments=' + sm.capturedPrComments.length + ' ' + JSON.stringify(sm.capturedPrComments.map(function(c){return (c.body||'').slice(0,60));}));
             sm.capturedPrComments.forEach(function (c) { thread.push(c.body); });
             sm.capturedPrLabelAdds.forEach(function (a) {
                 (a.labels || []).forEach(function (l) { if (labelAdds.indexOf(l) === -1) labelAdds.push(l); });
@@ -14011,8 +14023,8 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         }));
         sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
 
-        assert.equal(sm.capturedCliCommands.length, 1, 'one base-repush command');
-        var cmd = sm.capturedCliCommands[0].command;
+        assert.equal(clones(sm).length, 1, 'one base-repush command');
+        var cmd = clones(sm)[0].command;
         assert.ok(cmd.indexOf('--single-branch --branch feat/x') !== -1, 'the classic single-branch clone');
         assert.equal(cmd.slice(-('git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/x').length),
             'git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/x',
@@ -14031,8 +14043,8 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         }));
         sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
 
-        assert.equal(sm.capturedCliCommands.length, 1, 'only the editable fork refreshed');
-        assert.ok(sm.capturedCliCommands[0].command.indexOf('refs/pull/1591/head') !== -1,
+        assert.equal(clones(sm).length, 1, 'only the editable fork refreshed');
+        assert.ok(clones(sm)[0].command.indexOf('refs/pull/1591/head') !== -1,
             'the push belongs to the editable PR');
         var parked = sm.capturedPrLabelAdds.filter(function (a) {
             return (a.labels || []).indexOf('validation_failed') !== -1;

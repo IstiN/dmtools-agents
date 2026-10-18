@@ -1983,6 +1983,188 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             }
         }
 
+        // ── gh-1070: fork-aware silent update ─────────────────────────
+        // Live fa PR #1591 (YuryBY fork): silentUpdateBranch cloned and
+        // pushed the BASE repo for a fork head 3× (the branch lives on
+        // the fork), got flagged silent-update-degraded, and the gh-757
+        // guest park then waited on the human author. GitHub grants the
+        // base-repo token a push to the fork's PR branch when the author
+        // left "Allow edits from maintainers" on (default on personal
+        // forks; the PR payload field is maintainer_can_modify /
+        // maintainerCanModify; org forks never allow it) — the machine
+        // refreshes the fork head itself. Non-editable forks park
+        // guest-style with ZERO silent-update attempts and ZERO failure
+        // bookkeeping (the attempt can never succeed — AC2).
+        function probeForkMaintainerCanModify() {
+            // The per-tick PR payload (list item, gh-1070 wiring in
+            // githubSource) usually carries the field; only a missing /
+            // unknown value pays the extra github_get_pr. Probe failure
+            // → null → the gate defers fail closed (no attempt, no
+            // bookkeeping) and re-probes next tick (AC3).
+            var t = ticket.maintainerCanModify;
+            if (t === true || t === false) return t;
+            try {
+                var pr = mcpParse(github_get_pr({
+                    workspace: effectiveRepoInfo.owner,
+                    repository: effectiveRepoInfo.repo,
+                    pullRequestId: ticket.prNumber
+                }));
+                return smProviderModule.ghPrMaintainerCanModify(pr);
+            } catch (eProbe) {
+                console.warn('  ⚠️  ' + key + ' maintainer-edits probe failed: ' +
+                             (eProbe.message || eProbe));
+                return null;
+            }
+        }
+
+        function postForkParkComment(reason) {
+            // The gh-757 guest-park contract: the park comment records
+            // 'parked-head: <sha>' so the gh-994 head-change reset clears
+            // the park on ANY head-moving push (the author's merge of
+            // main, a rebase, anything).
+            var head = resolveHeadSha(effectiveRepoInfo, ticket) || 'unknown';
+            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(
+                ticket.prNumber,
+                '🛑 validation_failed — fork park (gh-1070): ' + reason +
+                ' Update the branch from main (merge main in, or re-enable ' +
+                '"Allow edits from maintainers") — ANY push that moves the ' +
+                'head clears this park automatically. parked-head: ' + head);
+        }
+
+        function parkForkGuest(reason) {
+            var tracker = githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo);
+            if ((ticket.labels || []).indexOf('validation_failed') === -1) {
+                tracker.addLabel(ticket.prNumber, 'validation_failed');
+            }
+            postForkParkComment(reason);
+        }
+
+        function forkSilentUpdateBranch(branchName, forkFull) {
+            // The editable-fork refresh (gh-1070 AC1): clone the BASE
+            // repo, fetch the PR head via refs/pull/<N>/head (always
+            // fetchable — even when the fork branch was deleted, gh-1057),
+            // check it out as the branch, merge origin/main UNDER the
+            // head, then push HEAD:<branch> to the FORK via the
+            // maintainer-edit token URL built from head.repo.full_name
+            // (UT-2 — the base repo is never the push target). The head
+            // move clears validation_failed through the existing gh-994
+            // head-change reset and the standard validate lane resumes.
+            var dir = '/tmp/sm-silent-update-' + Date.now() + '-' +
+                      String(branchName).replace(/[^a-zA-Z0-9._-]/g, '_');
+            cli_execute_command({
+                command: 'gh repo clone ' + effectiveRepoInfo.owner + '/' +
+                         effectiveRepoInfo.repo + ' ' + dir +
+                         ' --no-tags --depth 200' +
+                         ' && cd ' + dir +
+                         ' && git fetch --no-tags --depth 200 origin refs/pull/' +
+                         ticket.prNumber + '/head' +
+                         ' && git checkout -B ' + branchName + ' FETCH_HEAD' +
+                         ' && git fetch --no-tags --depth 200 origin main' +
+                         // No-op skip scoped to the ancestor check ONLY
+                         // (fa 2026-10-01 root fix — a clone/network failure
+                         // must propagate, not ride the || exit 0 branch).
+                         ' && if git merge-base --is-ancestor FETCH_HEAD HEAD; then' +
+                         ' echo "silent-update: already up to date"' +
+                         ' && exit 0; fi' +
+                         ' && git -c user.name=sm-silent-update' +
+                         ' -c user.email=sm-silent-update@users.noreply.github.com' +
+                         ' merge --no-edit FETCH_HEAD' +
+                         ' && git push ' +
+                         validationLivenessModule.forkPushTokenUrl(forkFull) +
+                         ' HEAD:' + branchName
+            });
+        }
+
+        function recordForkSilentUpdateFailure() {
+            // AC3: the maintainer-edit push failed DESPITE the probe (the
+            // race: the author disabled edits mid-flight). Counted once
+            // per failed tick on the shared silent-update marker trail;
+            // the retry itself stays every-tick (self-healing). Once the
+            // attempts run out the PR parks GUEST-STYLE — NEVER
+            // silent-update-degraded: the workspace is not dead, the
+            // permission is gone.
+            try {
+                var tracker = githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo);
+                var comments = tracker.getComments(ticket.prNumber) || [];
+                var count = validationLivenessModule.silentUpdateFailureCount(comments);
+                var attempt = count.count + 1;
+                var iso = new Date().toISOString();
+                var left = validationLivenessModule.silentUpdateAttemptsLeft(attempt);
+                if (attempt <= validationLivenessModule.SILENT_UPDATE_MAX_FAILURES) {
+                    tracker.postComment(ticket.prNumber,
+                        validationLivenessModule.silentUpdateFailureLine(attempt, iso));
+                }
+                if (left > 0) {
+                    console.warn('  ⚠️  ' + key + ' fork silent-update push failure #' +
+                        attempt + ' recorded on the PR — ' + left +
+                        ' attempt(s) left before the guest park (gh-1070 AC3)');
+                    return;
+                }
+                if ((ticket.labels || []).indexOf('validation_failed') === -1) {
+                    parkForkGuest('the maintainer-edit push kept failing (' +
+                        validationLivenessModule.SILENT_UPDATE_MAX_FAILURES +
+                        ' consecutive attempts — maintainer edits were likely ' +
+                        'revoked mid-flight, gh-1070 AC3).');
+                }
+                console.error('  ❌ ' + key + ' fork silent-update parked guest-style ' +
+                    'after ' + validationLivenessModule.SILENT_UPDATE_MAX_FAILURES +
+                    ' consecutive push failures (gh-1070 AC3)');
+            } catch (e1070) {
+                console.warn('  ⚠️  ' + key + ' gh-1070 failure bookkeeping failed: ' +
+                             (e1070.message || e1070));
+            }
+        }
+
+        function forkSilentUpdateBranchTracked(branchName, forkFull) {
+            try {
+                forkSilentUpdateBranch(branchName, forkFull);
+            } catch (eFork) {
+                recordForkSilentUpdateFailure();
+                throw eFork;
+            }
+        }
+
+        // The fork gate runs BEFORE any silent-update attempt (probe-first,
+        // gh-1070). Returns { refresh, forkFull }: refresh=false → the
+        // caller skips the refresh this tick (a failed probe — fail
+        // closed, nothing counted; or a non-editable fork — guest park,
+        // zero attempts, zero bookkeeping). A same-repo head returns
+        // refresh with forkFull=null and never pays the probe (AC4: zero
+        // behavior change, zero extra API calls).
+        function forkSilentUpdateGate() {
+            var forkFull = validationLivenessModule.forkHeadFull(
+                ticket.headRepo, effectiveRepoInfo.owner, effectiveRepoInfo.repo);
+            if (!forkFull) return { refresh: true, forkFull: null };
+            var canModify = probeForkMaintainerCanModify();
+            if (canModify === null) {
+                console.warn('  ⚠️  ' + key + ' maintainer-edits probe failed — ' +
+                    'fork refresh deferred (fail closed, re-probe next tick; gh-1070)');
+                return { refresh: false, forkFull: forkFull };
+            }
+            if (canModify === true) return { refresh: true, forkFull: forkFull };
+            // Non-editable fork (or org fork): NO silent-update attempt,
+            // NO failure marker, NO silent-update-degraded label. A park
+            // reset in THIS pass (the author just pushed — gh-994) yields
+            // the tick to the re-query instead of re-parking a head the
+            // reset just freed.
+            if (!unparkedThisPass && !DRY &&
+                (ticket.labels || []).indexOf('validation_failed') === -1) {
+                try {
+                    parkForkGuest('this head lives on a fork where maintainer ' +
+                        'edits are NOT available (the author disabled "Allow ' +
+                        'edits from maintainers", or an organization fork) — ' +
+                        'the machine cannot refresh the branch itself, so no ' +
+                        'silent-update is attempted (gh-1070 AC2).');
+                } catch (ePark) {
+                    console.warn('  ⚠️  ' + key + ' fork park failed: ' +
+                                 (ePark.message || ePark));
+                }
+            }
+            console.log('  🅿️  ' + key + ' fork head is not maintainer-editable — ' +
+                'guest park, zero silent-update attempts (gh-1070 AC2)');
+            return { refresh: false, forkFull: forkFull };
+        }
+
 
         // Validation trigger (dispatch-only CI): no push ever fires CI on
         // its own — the SM is the only trigger. The PAT update-branch dance
@@ -2287,6 +2469,27 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     console.log('  🅿️  ' + key + ' head checks red on a guest PR — ' +
                         parkLabelVf + ' set, merge window advances');
                 }
+                // gh-1070: fork-aware refresh routing — the maintainer-edits
+                // probe runs BEFORE any silent-update attempt. A
+                // non-editable fork parks guest-style with zero attempts
+                // and zero failure bookkeeping; a failed probe defers
+                // fail-closed (re-probe next tick). Same-repo PRs keep
+                // the exact base-repush behavior (AC4 regression guard).
+                var forkGateU = forkSilentUpdateGate();
+                if (!forkGateU.refresh) {
+                    processedKeys.push(key);
+                    continue;
+                }
+                // The routed refresh: the FORK path pushes to the fork's
+                // PR branch (maintainer-edit URL); same-repo rides the
+                // classic base repush untouched.
+                function refreshHeadSilent() {
+                    if (forkGateU.forkFull) {
+                        forkSilentUpdateBranchTracked(ticket.branch, forkGateU.forkFull);
+                    } else {
+                        silentUpdateBranchTracked(ticket.branch);
+                    }
+                }
                 // gh-798 (live fa PR #1420 rework leg, run 37828431528): a
                 // rework/review leg dispatched with workflowRef={branch} runs
                 // ON the PR head and its timer pushes WIP auto-saves to that
@@ -2355,7 +2558,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         console.warn('  ⚠️  ' + key +
                             ' head-run probe failed — branch refresh deferred (fail closed, gh-798)');
                     } else {
-                        silentUpdateBranchTracked(ticket.branch);
+                        refreshHeadSilent();
                         console.log('  ✅ ' + key + ' branch silently updated (no CI)');
                         cancelStaleAfterRefreshUb();
                     }
@@ -2370,7 +2573,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // unresolvable-but-existing head would close the hole
                     // for one tick of delay; the heal backstop was chosen
                     // instead so a flaky API never freezes freshness.
-                    silentUpdateBranchTracked(ticket.branch);
+                    refreshHeadSilent();
                     console.log('  ✅ ' + key + ' branch silently updated (no CI)');
                     cancelStaleAfterRefreshUb();
                 }
