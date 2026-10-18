@@ -322,4 +322,249 @@ suite('submodule helper', function() {
         }, 'unregistered paths should be rejected');
     });
 
+    // ── gh-1041: branch characterization for the publish decision paths ─────
+
+    function makeRun(commands, responses) {
+        return function(command) {
+            commands.push(command);
+            for (var i = 0; i < responses.length; i++) {
+                if (responses[i].match instanceof RegExp ? responses[i].match.test(command) : command === responses[i].match) {
+                    if (responses[i].throwError) throw new Error(responses[i].throwError);
+                    return responses[i].returnValue;
+                }
+            }
+            return '';
+        };
+    }
+
+    function gitmodulesRegistered(path) {
+        return { match: /^git config --file \.gitmodules/, returnValue: 'submodule.' + path + '.path ' + path };
+    }
+
+    test('rejects unsafe managed submodule paths', function() {
+        var helper = loadSubmoduleHelper();
+
+        assert.throws(function() {
+            helper.pushManagedSubmodules({
+                customParams: { managedSubmodules: ['../outside'] },
+                run: function() { return ''; }
+            });
+        }, 'unsafe paths should be rejected');
+    });
+
+    test('rejects unsafe managed submodule branch names', function() {
+        var helper = loadSubmoduleHelper();
+
+        assert.throws(function() {
+            helper.pushManagedSubmodules({
+                customParams: { managedSubmodules: [{ path: 'trackstate-setup', branch: '-bad branch' }] },
+                run: function() { return ''; }
+            });
+        }, 'unsafe branch names should be rejected');
+    });
+
+    test('rejects unsafe managed submodule tag prefixes', function() {
+        var helper = loadSubmoduleHelper();
+
+        assert.throws(function() {
+            helper.pushManagedSubmodules({
+                customParams: { managedSubmodules: [{ path: 'trackstate-setup', branch: 'main', tagPrefix: '-bad' }] },
+                run: function() { return ''; }
+            });
+        }, 'unsafe tag prefixes should be rejected');
+    });
+
+    test('tolerates a failing fetch of the managed submodule branch', function() {
+        var helper = loadSubmoduleHelper();
+        var commands = [];
+        helper.pushManagedSubmodules({
+            customParams: { managedSubmodules: [{ path: 'trackstate-setup', branch: 'main' }] },
+            cleanOutput: function(output) { return output || ''; },
+            run: makeRun(commands, [
+                gitmodulesRegistered('trackstate-setup'),
+                { match: /^git -C trackstate-setup fetch origin main$/, throwError: 'network down' },
+                { match: /^git -C trackstate-setup status --porcelain$/, returnValue: '' },
+                { match: /^git -C trackstate-setup rev-list --count/, returnValue: '0' }
+            ])
+        });
+
+        assert.ok(commands.indexOf('git -C trackstate-setup fetch origin main') !== -1, 'fetch attempted even though it fails');
+        assert.ok(commands.indexOf('git -C trackstate-setup push origin HEAD:main') === -1, 'nothing to push when clean and not ahead');
+    });
+
+    test('tolerates a failing ahead-count probe and treats it as zero ahead', function() {
+        var helper = loadSubmoduleHelper();
+        var commands = [];
+        helper.pushManagedSubmodules({
+            customParams: { managedSubmodules: [{ path: 'trackstate-setup', branch: 'main' }] },
+            cleanOutput: function(output) { return output || ''; },
+            run: makeRun(commands, [
+                gitmodulesRegistered('trackstate-setup'),
+                { match: /^git -C trackstate-setup status --porcelain$/, returnValue: ' M README.md' },
+                { match: /^git -C trackstate-setup rev-list --count/, throwError: 'unknown revision' }
+            ])
+        });
+
+        assert.ok(commands.some(function(command) {
+            return command.indexOf('git -C trackstate-setup commit -m "Agent Update trackstate-setup assets"') === 0;
+        }), 'default Agent ticket key is used when none is configured');
+        assert.ok(commands.indexOf('git -C trackstate-setup push origin HEAD:main') !== -1, 'dirty submodule still published');
+    });
+
+    test('skips a clean submodule that is not ahead and has no dirty changes', function() {
+        var helper = loadSubmoduleHelper();
+        var commands = [];
+        helper.pushManagedSubmodules({
+            customParams: { managedSubmodules: [{ path: 'trackstate-setup', branch: 'main' }] },
+            cleanOutput: function(output) { return output || ''; },
+            run: makeRun(commands, [
+                gitmodulesRegistered('trackstate-setup'),
+                { match: /^git -C trackstate-setup status --porcelain$/, returnValue: '' },
+                { match: /^git -C trackstate-setup rev-list --count/, returnValue: '0' }
+            ])
+        });
+
+        assert.ok(commands.indexOf('git -C trackstate-setup push origin HEAD:main') === -1, 'clean, non-ahead submodule is not pushed');
+        assert.ok(commands.every(function(command) {
+            return command.indexOf('rev-parse') === -1;
+        }), 'ancestor probes are skipped entirely when nothing changed');
+    });
+
+    test('skips a clean submodule whose HEAD is already included in the remote branch', function() {
+        var helper = loadSubmoduleHelper();
+        var commands = [];
+        helper.pushManagedSubmodules({
+            customParams: { managedSubmodules: [{ path: 'trackstate-setup', branch: 'main' }] },
+            cleanOutput: function(output) { return output || ''; },
+            run: makeRun(commands, [
+                gitmodulesRegistered('trackstate-setup'),
+                { match: /^git -C trackstate-setup status --porcelain$/, returnValue: '' },
+                { match: /^git -C trackstate-setup rev-list --count/, returnValue: '3' },
+                { match: /^git -C trackstate-setup rev-parse HEAD$/, returnValue: 'head-sha' },
+                { match: /^git -C trackstate-setup rev-parse origin\/main$/, returnValue: 'base-sha' },
+                { match: /^git -C trackstate-setup rev-list -1 head-sha --not base-sha$/, returnValue: '' },
+                { match: /^git -C trackstate-setup rev-list -1 base-sha --not head-sha$/, returnValue: 'base-sha' }
+            ])
+        });
+
+        assert.ok(commands.indexOf('git -C trackstate-setup push origin HEAD:main') === -1, 'HEAD already on the remote — nothing to publish');
+        assert.ok(commands.indexOf('git -C trackstate-setup checkout -B main HEAD') === -1, 'branch is not rewritten when skipping');
+    });
+
+    test('skips publishing when staging produced no committable changes', function() {
+        var helper = loadSubmoduleHelper();
+        var commands = [];
+        var statusCalls = 0;
+        helper.pushManagedSubmodules({
+            customParams: { managedSubmodules: [{ path: 'trackstate-setup', branch: 'main' }] },
+            cleanOutput: function(output) { return output || ''; },
+            run: function(command) {
+                commands.push(command);
+                if (command.indexOf('git config --file .gitmodules') === 0) {
+                    return 'submodule.trackstate-setup.path trackstate-setup';
+                }
+                if (command === 'git -C trackstate-setup status --porcelain') {
+                    statusCalls++;
+                    // #1 initial read: dirty; #2 after stash pop: still dirty;
+                    // #3 staged read after `add .`: clean (nothing committable)
+                    return statusCalls === 3 ? '' : ' M README.md';
+                }
+                if (command.indexOf('rev-list --count') === 0) return '0';
+                return '';
+            }
+        });
+
+        assert.ok(commands.indexOf('git -C trackstate-setup add .') !== -1, 'dirty changes staged');
+        assert.ok(commands.every(function(command) {
+            return command.indexOf('commit -m') === -1;
+        }), 'no commit when staging left nothing committable');
+        assert.ok(commands.indexOf('git -C trackstate-setup push origin HEAD:main') !== -1, 'submodule still pushed');
+    });
+
+    test('uses the configured commit message when publishing dirty changes', function() {
+        var helper = loadSubmoduleHelper();
+        var commands = [];
+        helper.pushManagedSubmodules({
+            customParams: { managedSubmodules: [{ path: 'trackstate-setup', branch: 'main', commitMessage: 'Release assets' }] },
+            ticketKey: 'TS-99',
+            cleanOutput: function(output) { return output || ''; },
+            run: makeRun(commands, [
+                gitmodulesRegistered('trackstate-setup'),
+                { match: /^git -C trackstate-setup status --porcelain$/, returnValue: ' M README.md' },
+                { match: /^git -C trackstate-setup rev-list --count/, returnValue: '0' }
+            ])
+        });
+
+        assert.ok(commands.some(function(command) {
+            return command.indexOf('git -C trackstate-setup commit -m "Release assets"') === 0;
+        }), 'module commit message wins over the ticket-derived default');
+    });
+
+    test('throws when the submodule HEAD cannot be resolved for tag publishing', function() {
+        var helper = loadSubmoduleHelper();
+
+        assert.throws(function() {
+            helper.pushManagedSubmodules({
+                customParams: { managedSubmodules: [{ path: 'trackstate-setup', branch: 'main', tagPrefix: 'stable' }] },
+                cleanOutput: function(output) { return output || ''; },
+                run: makeRun([], [
+                    gitmodulesRegistered('trackstate-setup'),
+                    { match: /^git -C trackstate-setup status --porcelain$/, returnValue: ' M README.md' },
+                    { match: /^git -C trackstate-setup rev-list --count/, returnValue: '0' },
+                    { match: /^git -C trackstate-setup rev-parse --short=12 HEAD$/, returnValue: '' }
+                ])
+            });
+        }, 'unresolvable HEAD aborts tag publishing');
+    });
+
+    test('rejects an unsafe computed tag name', function() {
+        var helper = loadSubmoduleHelper();
+
+        assert.throws(function() {
+            helper.pushManagedSubmodules({
+                customParams: { managedSubmodules: [{ path: 'trackstate-setup', branch: 'main', tagPrefix: 'stable' }] },
+                cleanOutput: function(output) { return output || ''; },
+                run: makeRun([], [
+                    gitmodulesRegistered('trackstate-setup'),
+                    { match: /^git -C trackstate-setup status --porcelain$/, returnValue: ' M README.md' },
+                    { match: /^git -C trackstate-setup rev-list --count/, returnValue: '0' },
+                    { match: /^git -C trackstate-setup rev-parse --short=12 HEAD$/, returnValue: 'bad sha with spaces' }
+                ])
+            });
+        }, 'unsafe computed tag name is rejected before tagging');
+    });
+
+    test('processes every managed submodule in order', function() {
+        var helper = loadSubmoduleHelper();
+        var commands = [];
+        helper.pushManagedSubmodules({
+            customParams: { managedSubmodules: ['mod-a', 'mod-b'] },
+            cleanOutput: function(output) { return output || ''; },
+            run: makeRun(commands, [
+                { match: /^git config --file \.gitmodules/, returnValue: 'submodule.mod-a.path mod-a\nsubmodule.mod-b.path mod-b' },
+                { match: /^git -C mod-a status --porcelain$/, returnValue: ' M a.txt' },
+                { match: /^git -C mod-b status --porcelain$/, returnValue: ' M b.txt' },
+                { match: /^git -C mod-a rev-list --count/, returnValue: '0' },
+                { match: /^git -C mod-b rev-list --count/, returnValue: '0' }
+            ])
+        });
+
+        var aPush = -1, bPush = -1;
+        commands.forEach(function(command, index) {
+            if (command === 'git -C mod-a push origin HEAD:main') aPush = index;
+            if (command === 'git -C mod-b push origin HEAD:main') bPush = index;
+        });
+        assert.ok(aPush !== -1 && bPush !== -1, 'both submodules published');
+        assert.ok(aPush < bPush, 'submodules processed in config order');
+    });
+
+    test('drops submodule config entries without a path', function() {
+        var helper = loadSubmoduleHelper();
+        var modules = helper.collectManagedSubmodules({}, {
+            managedSubmodules: [{ noPath: true }, 'plain-path']
+        });
+
+        assert.deepEqual(modules, [{ path: 'plain-path' }], 'path-less entries are ignored, not coerced');
+    });
+
 });
