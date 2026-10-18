@@ -81,9 +81,6 @@ _Pre-CLI Story Test Automation Setup Action_
 _Post Story Test Automation Results Action_
 
 - Source: `agents/js/postStoryTestAutomationResults.js`
-- Side effects:
-  - git push
-  - git merge
 - Parameters (customParams):
   - `adoTextFormat`
   - `aiRepository`

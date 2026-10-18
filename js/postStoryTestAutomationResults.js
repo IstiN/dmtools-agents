@@ -8,6 +8,9 @@
  *    - failed TC: attach outputs/failed_description_{TC_KEY}.md and set Failed Reason field
  * 5. Moves Story → In Testing
  * 6. Triggers pr_story_test_automation_review
+ *
+ * gh-1008 CRAP split: tracker/git/marker/wiki helpers live in
+ * js/postStoryTestAutomationShared.js; action() is a thin orchestrator.
  */
 
 var configLoader = require('./configLoader.js');
@@ -16,19 +19,20 @@ var autoStart = require('./common/autoStart.js');
 const { GIT_CONFIG, LABELS, JIRA_FIELDS } = require('./config.js');
 var outputFiles = require('./common/outputFiles.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var shared = require('./postStoryTestAutomationShared.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
+var trackerHolder = shared.createTrackerHolder(trackersModule);
 function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
+    trackerHolder.initTracker(config, customParams);
 }
 function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
+    return trackerHolder.getTracker();
 }
+
+var gitOps = shared.createGitOps(prHelper);
+var runInRepo = shared.runInRepo;
 
 var RESUME_MARKER = 'outputs/.story-test-resume-attempted';
 
@@ -108,40 +112,7 @@ function getMissingTestCaseKeys(result, linkedTestCases) {
         .filter(function(key) { return key && !resultKeys[key]; });
 }
 
-function readAttempt(markerPath) {
-    try {
-        var raw = file_read({ path: markerPath });
-        var value = parseInt(raw || '0', 10);
-        return isNaN(value) ? 0 : value;
-    } catch (e) {
-        return 0;
-    }
-}
-
-function writeAttempt(markerPath, attempt) {
-    try {
-        file_write({ path: markerPath, content: String(attempt) });
-    } catch (e) {
-        console.warn('Could not write resume attempt marker:', e);
-    }
-}
-
-function attemptResumeIfOutputsIncomplete(storyKey, result, linkedTestCases, workingDir) {
-    var missingKeys = getMissingTestCaseKeys(result, linkedTestCases);
-    if (missingKeys.length === 0) {
-        return { attempted: false, reason: 'complete' };
-    }
-
-    var attempt = readAttempt(RESUME_MARKER);
-    var maxAttempts = 2;
-    if (attempt >= maxAttempts) {
-        console.warn('Story test resume attempts exhausted (' + attempt + '/' + maxAttempts + '). Missing TCs:', missingKeys.join(', '));
-        return { attempted: false, reason: 'attempts-exhausted', missingKeys: missingKeys };
-    }
-
-    attempt += 1;
-    writeAttempt(RESUME_MARKER, attempt);
-
+function buildResumePrompt(storyKey, linkedTestCases, result, missingKeys) {
     var checkedKeys = [];
     if (result && Array.isArray(result.results)) {
         checkedKeys = result.results.map(function(r) { return r.testCaseKey; }).filter(Boolean);
@@ -174,7 +145,7 @@ function attemptResumeIfOutputsIncomplete(storyKey, result, linkedTestCases, wor
         "additionalProperties": false
     }, null, 2);
 
-    var prompt = 'RESUME TASK: The previous story test automation run did not verify all linked Test Cases.\n\n' +
+    return 'RESUME TASK: The previous story test automation run did not verify all linked Test Cases.\n\n' +
         'Story: ' + storyKey + '\n' +
         'Linked Test Cases (' + linkedTestCases.length + '): ' + linkedTestCases.map(function(tc) { return tc.key; }).join(', ') + '\n' +
         'Already checked (' + checkedKeys.length + '): ' + (checkedKeys.join(', ') || 'none') + '\n' +
@@ -192,6 +163,25 @@ function attemptResumeIfOutputsIncomplete(storyKey, result, linkedTestCases, wor
         '- Update outputs/response.md with a short summary of what was verified.\n' +
         '- Validate that outputs/story_test_automation_result.json is parseable JSON that conforms to the schema before stopping.\n\n' +
         'Required JSON schema for outputs/story_test_automation_result.json:\n' + resultSchema + '\n';
+}
+
+function attemptResumeIfOutputsIncomplete(storyKey, result, linkedTestCases, workingDir) {
+    var missingKeys = getMissingTestCaseKeys(result, linkedTestCases);
+    if (missingKeys.length === 0) {
+        return { attempted: false, reason: 'complete' };
+    }
+
+    var attempt = shared.readAttemptMarker(RESUME_MARKER);
+    var maxAttempts = 2;
+    if (attempt >= maxAttempts) {
+        console.warn('Story test resume attempts exhausted (' + attempt + '/' + maxAttempts + '). Missing TCs:', missingKeys.join(', '));
+        return { attempted: false, reason: 'attempts-exhausted', missingKeys: missingKeys };
+    }
+
+    attempt += 1;
+    shared.writeAttemptMarker(RESUME_MARKER, attempt);
+
+    var prompt = buildResumePrompt(storyKey, linkedTestCases, result, missingKeys);
 
     var promptPath = 'outputs/.story-test-resume-prompt.md';
     try {
@@ -216,24 +206,6 @@ function attemptResumeIfOutputsIncomplete(storyKey, result, linkedTestCases, wor
     return { attempted: true, attempt: attempt, missingKeys: missingKeys };
 }
 
-function markdownToJiraWiki(markdown) {
-    if (!markdown) return '';
-    var text = String(markdown);
-    text = text.replace(/```(\w+)?\n([\s\S]*?)```/g, function(_, language, code) {
-        return '{code' + (language ? ':' + language : '') + '}\n' + code.trim() + '\n{code}';
-    });
-    text = text
-        .replace(/^####\s+(.+)$/gm, 'h4. $1')
-        .replace(/^###\s+(.+)$/gm, 'h3. $1')
-        .replace(/^##\s+(.+)$/gm, 'h2. $1')
-        .replace(/^#\s+(.+)$/gm, 'h1. $1')
-        .replace(/^\s*-\s+/gm, '* ')
-        .replace(/\*\*([^*\n]+)\*\*/g, '*$1*')
-        .replace(/`([^`\n]+)`/g, '{{$1}}')
-        .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '[$1|$2]');
-    return text.trim();
-}
-
 function readJiraComment(params, workingDir, storyKey) {
     var jiraComment = readOutputFile('tracker_comment.md', workingDir, storyKey);
     if (jiraComment) return jiraComment;
@@ -244,167 +216,7 @@ function readJiraComment(params, workingDir, storyKey) {
     jiraComment = readOutputFile('jira_comment.md', workingDir, storyKey);
     if (jiraComment) return jiraComment;
 
-    return markdownToJiraWiki(params.response || readOutputFile('response.md', workingDir, storyKey) || '');
-}
-
-function runInRepo(command, workingDir) {
-    var args = { command: command };
-    if (workingDir) args.workingDirectory = workingDir;
-    return cli_execute_command(args);
-}
-
-function fetchRemoteBranch(branchName, workingDir) {
-    try {
-        runInRepo('git fetch origin ' + branchName, workingDir);
-        return true;
-    } catch (e) {
-        console.warn('Could not fetch remote branch origin/' + branchName + ':', e);
-        return false;
-    }
-}
-
-function revParse(ref, workingDir) {
-    try {
-        return cleanCommandOutput(runInRepo('git rev-parse ' + ref, workingDir) || '').trim();
-    } catch (e) {
-        return '';
-    }
-}
-
-function findMergeBase(left, right, workingDir) {
-    try {
-        return cleanCommandOutput(runInRepo('git merge-base ' + left + ' ' + right, workingDir) || '').trim();
-    } catch (e) {
-        return '';
-    }
-}
-
-function publishExistingBranch(branchName, workingDir) {
-    // Ensure the local remote-tracking ref is fresh before any push decision.
-    fetchRemoteBranch(branchName, workingDir);
-
-    var localSha = revParse('HEAD', workingDir);
-    var remoteSha = revParse('origin/' + branchName, workingDir);
-
-    if (localSha && remoteSha && localSha === remoteSha) {
-        console.log('Local branch already matches origin/' + branchName + '; no push needed');
-        return { success: true, noNewCommit: true };
-    }
-
-    var mergeBase = (localSha && remoteSha) ? findMergeBase('HEAD', 'origin/' + branchName, workingDir) : '';
-
-    if (mergeBase === remoteSha && mergeBase !== localSha) {
-        // Local is strictly ahead of remote (fast-forward).
-        try {
-            runInRepo('git push -u origin ' + branchName, workingDir);
-            return { success: true, noNewCommit: true };
-        } catch (e) {
-            console.warn('Fast-forward push failed:', e);
-        }
-    } else if (mergeBase === localSha && mergeBase !== remoteSha) {
-        // Remote moved ahead while we had no local changes to keep. Adopt remote state.
-        console.log('Remote ' + branchName + ' is ahead of local branch; resetting to origin/' + branchName);
-        runInRepo('git reset --hard origin/' + branchName, workingDir);
-        return { success: true, noNewCommit: true };
-    }
-
-    // Branches diverged or no remote yet; fall back to push with refreshed lease.
-    try {
-        runInRepo('git push -u origin ' + branchName, workingDir);
-        return { success: true, noNewCommit: true };
-    } catch (pushErr) {
-        console.log('Normal push failed, retrying with --force-with-lease...');
-        try {
-            runInRepo('git push -u origin ' + branchName + ' --force-with-lease', workingDir);
-            return { success: true, noNewCommit: true };
-        } catch (forcePushErr) {
-            console.warn('Failed to publish existing branch:', forcePushErr);
-            return { success: false, error: 'No test files were written and the synced branch could not be pushed' };
-        }
-    }
-}
-
-function performGitOperations(branchName, commitMessage, workingDir, testFilesPath) {
-    var addPath = testFilesPath || 'testing/';
-    var inspectPath = addPath.replace(/\/$/, '') || '.';
-    try {
-        try {
-            var lsOutput = runInRepo('git status --short -- ' + inspectPath, workingDir) || '';
-            console.log('Git status for ' + inspectPath + ':', cleanCommandOutput(lsOutput) || '(empty)');
-        } catch (e) {
-            console.warn('Could not list ' + inspectPath + ':', e);
-        }
-
-        console.log('Staging test path:', addPath);
-        runInRepo('git add ' + addPath, workingDir);
-
-        var stagedOutput = cleanCommandOutput(runInRepo('git diff --cached --stat', workingDir) || '');
-        console.log('Staged changes:', stagedOutput || '(none)');
-
-        if (!stagedOutput || !stagedOutput.trim()) {
-            console.warn('No new staged changes in ' + addPath + ' (files may already exist on branch)');
-            var remoteBranchExists = false;
-            try {
-                // gh-912: decide on a real refs/heads/<branch> ref line — a
-                // warning-only capture (central-mode insteadOf origin, git
-                // ≥ 2.54) must classify as "branch absent" so the push runs.
-                remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
-            } catch (lsRemoteErr) {
-                console.warn('Error checking remote branches:', lsRemoteErr);
-            }
-            if (!remoteBranchExists) {
-                console.log('No remote branch found, pushing current branch state...');
-                try {
-                    runInRepo('git push -u origin ' + branchName, workingDir);
-                } catch (pushErr) {
-                    console.warn('Failed to push branch:', pushErr);
-                    return { success: false, error: 'No test files were written and could not push branch' };
-                }
-            } else {
-                var publishResult = publishExistingBranch(branchName, workingDir);
-                if (!publishResult.success) {
-                    return publishResult;
-                }
-            }
-            return { success: true, branchName: branchName, noNewCommit: true };
-        }
-
-        console.log('Committing...');
-        runInRepo('git commit -m "' + prHelper.sanitizeCommitMessage(commitMessage) + '"', workingDir);
-
-        console.log('Pushing to remote...');
-        fetchRemoteBranch(branchName, workingDir);
-        try {
-            runInRepo('git push -u origin ' + branchName, workingDir);
-        } catch (e) {
-            console.log('Normal push failed, retrying with --force-with-lease...');
-            try {
-                runInRepo('git push -u origin ' + branchName + ' --force-with-lease', workingDir);
-            } catch (leaseErr) {
-                console.log('Force-with-lease push failed, force pushing...');
-                runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
-            }
-        }
-
-        var remoteBranchExists = false;
-        try {
-            // gh-912: verify the push produced a real refs/heads/<branch> ref
-            // line — stderr noise never counts as the branch existing.
-            remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
-        } catch (lsRemoteErr) {
-            console.warn('Error checking remote branches:', lsRemoteErr);
-        }
-        if (!remoteBranchExists) {
-            throw new Error('Branch not found on remote after push');
-        }
-
-        console.log('✅ Git operations completed');
-        return { success: true, branchName: branchName };
-
-    } catch (error) {
-        console.error('Git operations failed:', error);
-        return { success: false, error: error.toString() };
-    }
+    return shared.markdownToJiraWiki(params.response || readOutputFile('response.md', workingDir, storyKey) || '');
 }
 
 function createPullRequest(title, branchName, baseBranch, workingDir, scm, ticketKey) {
@@ -562,28 +374,147 @@ function autoStartStoryTestReview(storyKey, config, customParams, noCodeChanges)
 }
 
 function removeAutomationLabels(storyKey, params) {
-    try {
-        const wipLabel = params.metadata && params.metadata.contextId
-            ? params.metadata.contextId + '_wip'
-            : 'story_test_automation_wip';
-        getTracker().removeLabel(storyKey, wipLabel);
-    } catch (e) {}
+    const wipLabel = params.metadata && params.metadata.contextId
+        ? params.metadata.contextId + '_wip'
+        : 'story_test_automation_wip';
+    shared.removeLabelSafely(getTracker, storyKey, wipLabel);
 
-    try {
-        const smTriggerLabel = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.removeLabel;
-        if (smTriggerLabel) {
-            getTracker().removeLabel(storyKey, smTriggerLabel);
+    const smTriggerLabel = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.removeLabel;
+    if (smTriggerLabel) {
+        if (shared.removeLabelSafely(getTracker, storyKey, smTriggerLabel)) {
             console.log('✅ Removed SM trigger label:', smTriggerLabel);
         }
-    } catch (e) {}
+    }
 
     // Clean up stale finalization labels from a previous test-automation cycle so the
     // new bulk PR can go through review/merge again.
     [LABELS.PR_APPROVED, LABELS.TEST_PR_MERGED, LABELS.TEST_PR_FINALIZED, LABELS.TEST_PR_REWORK_NEEDED].forEach(function(staleLabel) {
-        try {
-            getTracker().removeLabel(storyKey, staleLabel);
+        if (shared.removeLabelSafely(getTracker, storyKey, staleLabel)) {
             console.log('✅ Removed stale label:', staleLabel);
-        } catch (e) {}
+        }
+    });
+}
+
+// ── action() step helpers (gh-1008 CRAP split) ───────────────────────────────
+
+/**
+ * Bug with a real product failure: the fix did not work — finalize the
+ * failing Test Cases as Failed (stage + final status).
+ */
+function finalizeFailedBugTestCases(failedResults, workingDir, storyKey, config, jiraConfig) {
+    failedResults.forEach(function(item) {
+        updateTestCaseStatus(item.testCaseKey, 'failed', workingDir, storyKey, config);
+        finalizeTestCaseStatus(item.testCaseKey, 'failed', jiraConfig);
+    });
+}
+
+/** Moves the Bug back to Ready For Development and posts the failure summary. */
+function returnBugToDevelopment(storyKey, failedResults, statuses) {
+    var bugReturnStatus = statuses.READY_FOR_DEVELOPMENT;
+    try {
+        getTracker().moveToStatus(storyKey, bugReturnStatus);
+        console.log('✅ Moved Bug', storyKey, 'back to', bugReturnStatus);
+    } catch (moveErr) {
+        console.warn('Failed to move Bug', storyKey, 'to', bugReturnStatus, ':', moveErr);
+    }
+
+    try {
+        var failureList = failedResults.map(function(r) { return '* ' + r.testCaseKey + (r.failureSummary ? ' — ' + r.failureSummary : ''); }).join('\n');
+        getTracker().postComment(storyKey, 'h3. ⚠️ Bug Fix Did Not Pass Automated Tests\n\nThe following Test Cases failed with a product regression:\n' + failureList + '\n\nThe Bug is being returned to *Ready For Development* for a corrected fix.');
+    } catch (e) {
+        console.warn('Failed to post bug return comment:', e);
+    }
+}
+
+/**
+ * Bug with a real product failure: the fix did not work — send the Bug
+ * straight back to development and finalize the failing Test Cases as Failed.
+ * Returns the action result when this path handled the run, null otherwise.
+ */
+function handleBugWithProductFailure(params, result, storyKey, jiraConfig, statuses, config, workingDir) {
+    var issueType = (params.ticket && params.ticket.fields &&
+        params.ticket.fields.issuetype && params.ticket.fields.issuetype.name) || 'Story';
+    var failedResults = (result.results || []).filter(function(r) {
+        return r.status === 'failed';
+    });
+    if (issueType !== jiraConfig.issueTypes.BUG || failedResults.length === 0) {
+        return null;
+    }
+
+    console.log('Bug', storyKey, 'has', failedResults.length, 'product failure(s) — returning to development');
+    finalizeFailedBugTestCases(failedResults, workingDir, storyKey, config, jiraConfig);
+    returnBugToDevelopment(storyKey, failedResults, statuses);
+
+    removeAutomationLabels(storyKey, params);
+    return {
+        success: true,
+        status: 'failed',
+        storyKey: storyKey,
+        failedTestCases: failedResults.map(function(r) { return r.testCaseKey; })
+    };
+}
+
+function postStoryResultComment(storyKey, jiraComment, prUrl, noCodeChanges) {
+    try {
+        let comment = jiraComment || '';
+        if (prUrl) {
+            comment += '\n\n*Story Test Branch PR*: ' + prUrl;
+        }
+        if (noCodeChanges) {
+            comment += '\n\nℹ️ _Test code unchanged from previous run._';
+        }
+        if (comment) {
+            getTracker().postComment(storyKey, comment);
+            console.log('✅ Posted story test result comment to Jira');
+        }
+    } catch (e) {
+        console.warn('Failed to post Jira comment:', e);
+    }
+}
+
+function handleBlockedByHuman(storyKey, result, jiraConfig, params) {
+    var blockedComment = 'h3. 🚫 Story Test Automation Blocked — Awaiting Human Setup\n\n' +
+        (result.blockedReason || 'Missing credentials or test data.') + '\n\n' +
+        'Once setup is complete, move this Story back to *Ready For Testing* to trigger re-run.';
+    try {
+        getTracker().postComment(storyKey, blockedComment);
+        getTracker().moveToStatus(storyKey, jiraConfig.statuses.BLOCKED);
+        console.log('✅ Blocked — moved', storyKey, 'to', jiraConfig.statuses.BLOCKED);
+    } catch (e) {
+        console.warn('Failed to handle blocked story:', e);
+    }
+    removeAutomationLabels(storyKey, params);
+    return { success: true, status: 'blocked_by_human', storyKey: storyKey };
+}
+
+function updatePassedOrFailedTc(item, noCodeChanges, workingDir, storyKey, config, jiraConfig) {
+    updateTestCaseStatus(item.testCaseKey, item.status, workingDir, storyKey, config);
+    // When there are no test code changes we skip the PR/review/merge flow,
+    // so we must finalize TC statuses immediately so story_done_check can act.
+    if (noCodeChanges) {
+        finalizeTestCaseStatus(item.testCaseKey, item.status, jiraConfig);
+    }
+}
+
+function handleTestCaseOutcome(item, noCodeChanges, workingDir, storyKey, config, jiraConfig, statuses, testFilesPath) {
+    if (item.status === 'passed' || item.status === 'failed') {
+        updatePassedOrFailedTc(item, noCodeChanges, workingDir, storyKey, config, jiraConfig);
+    } else if (item.status === 'skipped') {
+        // Skipped tests are final — no PR/review needed.
+        moveSkippedTcToStatus(item.testCaseKey, statuses.SKIPPED);
+    } else if (item.status === 'irrelevant') {
+        // Legacy/no-longer-applicable tests are final; delete their test code.
+        moveIrrelevantTcToStatus(item.testCaseKey, statuses.IRRELEVANT, testFilesPath, workingDir);
+    } else {
+        console.log('Skipping status update for', item.testCaseKey, '— status:', item.status);
+    }
+}
+
+function applyTestCaseResults(result, noCodeChanges, workingDir, storyKey, config, jiraConfig, statuses, testFilesPath) {
+    if (!result.results || result.results.length === 0) return;
+
+    result.results.forEach(function(item) {
+        handleTestCaseOutcome(item, noCodeChanges, workingDir, storyKey, config, jiraConfig, statuses, testFilesPath);
     });
 }
 
@@ -639,45 +570,11 @@ function action(params) {
         const overall = (result.overall || '').toLowerCase();
         const blockedByHuman = overall === 'blocked_by_human';
 
-        // Determine whether this is a Bug with a real product failure.
-        var issueType = (params.ticket && params.ticket.fields &&
-            params.ticket.fields.issuetype && params.ticket.fields.issuetype.name) || 'Story';
-        var failedResults = (result.results || []).filter(function(r) {
-            return r.status === 'failed';
-        });
-        var hasProductFailure = failedResults.length > 0;
-
         // For a Bug, a product failure means the fix did not work. Send the Bug
         // straight back to development and finalize the failing Test Cases as Failed.
-        if (issueType === jiraConfig.issueTypes.BUG && hasProductFailure) {
-            console.log('Bug', storyKey, 'has', failedResults.length, 'product failure(s) — returning to development');
-            failedResults.forEach(function(item) {
-                updateTestCaseStatus(item.testCaseKey, 'failed', workingDir, storyKey, config);
-                finalizeTestCaseStatus(item.testCaseKey, 'failed', jiraConfig);
-            });
-
-            var bugReturnStatus = statuses.READY_FOR_DEVELOPMENT;
-            try {
-                getTracker().moveToStatus(storyKey, bugReturnStatus);
-                console.log('✅ Moved Bug', storyKey, 'back to', bugReturnStatus);
-            } catch (moveErr) {
-                console.warn('Failed to move Bug', storyKey, 'to', bugReturnStatus, ':', moveErr);
-            }
-
-            try {
-                var failureList = failedResults.map(function(r) { return '* ' + r.testCaseKey + (r.failureSummary ? ' — ' + r.failureSummary : ''); }).join('\n');
-                getTracker().postComment(storyKey, 'h3. ⚠️ Bug Fix Did Not Pass Automated Tests\n\nThe following Test Cases failed with a product regression:\n' + failureList + '\n\nThe Bug is being returned to *Ready For Development* for a corrected fix.');
-            } catch (e) {
-                console.warn('Failed to post bug return comment:', e);
-            }
-
-            removeAutomationLabels(storyKey, params);
-            return {
-                success: true,
-                status: 'failed',
-                storyKey: storyKey,
-                failedTestCases: failedResults.map(function(r) { return r.testCaseKey; })
-            };
+        var bugResult = handleBugWithProductFailure(params, result, storyKey, jiraConfig, statuses, config, workingDir);
+        if (bugResult) {
+            return bugResult;
         }
 
         // Step 2: Configure git author
@@ -698,7 +595,7 @@ function action(params) {
         let noCodeChanges = false;
         if (branchName) {
             const commitMessage = configLoader.formatTemplate(config.formats.commitMessage.testAutomation, {ticketKey: storyKey, ticketSummary: storySummary});
-            const gitResult = performGitOperations(branchName, commitMessage, workingDir, testFilesPath);
+            const gitResult = gitOps.performGitOperations(branchName, commitMessage, workingDir, testFilesPath);
 
             if (gitResult.success && !gitResult.noNewCommit) {
                 const prTitle = configLoader.formatTemplate(config.formats.prTitle.testAutomation, {ticketKey: storyKey, ticketSummary: storySummary});
@@ -722,59 +619,15 @@ function action(params) {
         }
 
         // Step 5: Post Story Jira comment
-        try {
-            let comment = jiraComment || '';
-            if (prUrl) {
-                comment += '\n\n*Story Test Branch PR*: ' + prUrl;
-            }
-            if (noCodeChanges) {
-                comment += '\n\nℹ️ _Test code unchanged from previous run._';
-            }
-            if (comment) {
-                getTracker().postComment(storyKey, comment);
-                console.log('✅ Posted story test result comment to Jira');
-            }
-        } catch (e) {
-            console.warn('Failed to post Jira comment:', e);
-        }
+        postStoryResultComment(storyKey, jiraComment, prUrl, noCodeChanges);
 
         // Step 6: Handle blocked_by_human
         if (blockedByHuman) {
-            var blockedComment = 'h3. 🚫 Story Test Automation Blocked — Awaiting Human Setup\n\n' +
-                (result.blockedReason || 'Missing credentials or test data.') + '\n\n' +
-                'Once setup is complete, move this Story back to *Ready For Testing* to trigger re-run.';
-            try {
-                getTracker().postComment(storyKey, blockedComment);
-                getTracker().moveToStatus(storyKey, jiraConfig.statuses.BLOCKED);
-                console.log('✅ Blocked — moved', storyKey, 'to', jiraConfig.statuses.BLOCKED);
-            } catch (e) {
-                console.warn('Failed to handle blocked story:', e);
-            }
-            removeAutomationLabels(storyKey, params);
-            return { success: true, status: 'blocked_by_human', storyKey: storyKey };
+            return handleBlockedByHuman(storyKey, result, jiraConfig, params);
         }
 
         // Step 7: Update per-Test Case statuses
-        if (result.results && result.results.length > 0) {
-            result.results.forEach(function(item) {
-                if (item.status === 'passed' || item.status === 'failed') {
-                    updateTestCaseStatus(item.testCaseKey, item.status, workingDir, storyKey, config);
-                    // When there are no test code changes we skip the PR/review/merge flow,
-                    // so we must finalize TC statuses immediately so story_done_check can act.
-                    if (noCodeChanges) {
-                        finalizeTestCaseStatus(item.testCaseKey, item.status, jiraConfig);
-                    }
-                } else if (item.status === 'skipped') {
-                    // Skipped tests are final — no PR/review needed.
-                    moveSkippedTcToStatus(item.testCaseKey, statuses.SKIPPED);
-                } else if (item.status === 'irrelevant') {
-                    // Legacy/no-longer-applicable tests are final; delete their test code.
-                    moveIrrelevantTcToStatus(item.testCaseKey, statuses.IRRELEVANT, testFilesPath, workingDir);
-                } else {
-                    console.log('Skipping status update for', item.testCaseKey, '— status:', item.status);
-                }
-            });
-        }
+        applyTestCaseResults(result, noCodeChanges, workingDir, storyKey, config, jiraConfig, statuses, testFilesPath);
 
         // Step 8: Move Story to In Testing
         try {
@@ -788,10 +641,8 @@ function action(params) {
         }
 
         // Step 9: Trigger review
-        if (!blockedByHuman) {
-            if (!autoStartStoryTestReview(storyKey, config, customParams, noCodeChanges)) {
-                autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
-            }
+        if (!autoStartStoryTestReview(storyKey, config, customParams, noCodeChanges)) {
+            autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
         }
 
         // Step 10: Labels cleanup
