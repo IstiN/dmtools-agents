@@ -2196,7 +2196,7 @@ suite('factoryState — gh-1036 extracted helpers', function () {
         var v = fsModule.headVerdict(runs, 'quality.yml', 's1');
         assert.equal(v.verdict, 'failure', 'the validation-workflow cite wins however stale');
         assert.equal(v.url, 'http://run/t2');
-        assert.equal(v.runId, undefined - 1 + 1 === undefined ? v.runId : v.runId);
+        assert.equal(v.runId, null, 'no run id on the payload → honest null');
     });
 
     test('headVerdict: active run cites only when nothing terminal; cancelled never decides', function () {
