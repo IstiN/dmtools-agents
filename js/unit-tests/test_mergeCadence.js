@@ -51,7 +51,8 @@ suite('gh-837 merge cadence simulation (AC1)', function () {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': { createSmProvider: function () { return providerStub; },
-                ghPrHeadRepoFull: smProviderRealMod.ghPrHeadRepoFull },
+                ghPrHeadRepoFull: smProviderRealMod.ghPrHeadRepoFull,
+            ghPrMaintainerCanModify: smProviderRealMod.ghPrMaintainerCanModify },
             '../../common/smAsync.js': smAsyncMod,
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
         }), {

@@ -60,7 +60,8 @@ suite('sm github source', function () {
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return providerStub; },
-                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': smAsyncMod,
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
@@ -1624,7 +1625,8 @@ suite('sm github source — runAsync batching', function () {
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return seqStub; },
-                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': smAsyncMod,
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
@@ -1698,7 +1700,8 @@ suite('sm github source — runAsync batching', function () {
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return batchStub; },
-                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': smAsyncMod,
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
@@ -1855,7 +1858,8 @@ function maskedGreenHarness() {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': { createSmProvider: function () { return providerStub; },
-                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull },
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify },
             '../../common/smAsync.js': smAsyncMod,
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
         }), mergedTools);
@@ -2455,7 +2459,8 @@ suite('sm github source: trigger fail-open overfetch (gh-922)', function () {
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return localProvider; },
-                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': smAsyncMod,
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
@@ -2765,7 +2770,8 @@ suite('sm github source: dev-on-assignment re-derive (gh-944)', function () {
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return devStub; },
-                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': smAsyncMod,
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
@@ -2914,7 +2920,8 @@ suite('sm github source — gh-1009 CRAP characterization (paths touched by the 
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return providerStub; },
-                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
             '../../common/smAsync.js': loadModule('js/common/smAsync.js', makeRequire({
@@ -3031,7 +3038,8 @@ suite('sm github source: gh-1000 phantom-heal helpers', function () {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': { createSmProvider: function () { return null; },
-                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull },
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify },
             '../../common/smAsync.js': {},
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
         }), {});
@@ -3135,7 +3143,8 @@ suite('sm github source: gh-1000 phantom-heal probe edges', function () {
             '../../common/smProvider.js': {
                 createSmProvider: function () { return null; },
                 ioCacheDrop: dropSpy,
-                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': {},
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
@@ -3177,7 +3186,8 @@ suite('sm github source: gh-1000 IT-1 phantom self-heal through queryPrs (AC2)',
             '../../common/smProvider.js': {
                 createSmProvider: function () { return null; },
                 ioCacheDrop: ioCacheDrop,
-                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': {},
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
@@ -3316,5 +3326,69 @@ suite('sm github source: gh-807 latestVerdict receiver binding (fa tick crash 20
         }, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
         assert.ok(Array.isArray(items),
             'the verdict probe ran through the bound provider method (pre-fix: TypeError "not a function" killed the tick)');
+    });
+});
+
+suite('githubSource — gh-1070 maintainer-edits probe on the PR item', function () {
+
+    function load(tools) {
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': {
+                createSmProvider: function () {
+                    return { branchExists: function () { return true; } };
+                },
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
+            },
+            '../../common/smAsync.js': loadModule('js/common/smAsync.js', makeRequire({
+                './common/smProvider.js': { createSmProvider: function () {
+                    return { branchExists: function () { return true; } };
+                } }
+            }), tools || {}),
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+        }), tools || {});
+    }
+
+    test('the PR item carries maintainerCanModify resolved from every payload dialect', function () {
+        // gh-1070: update_branch probes "Allow edits from maintainers"
+        // BEFORE any silent-update attempt on a fork head. The probe value
+        // rides the PR item (like headRepo, gh-1057) so the reconcile lane
+        // reads one shared resolver (gh-1059) over the raw /pulls payload.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 304, state: 'open', draft: false, body: '',
+                      head: { sha: 's4', ref: 'feat/rest',
+                              repo: { full_name: 'forko/forkr' } },
+                      maintainer_can_modify: true,
+                      labels: [{ name: 'pr_approved' }],
+                      user: { login: 'guest' } },
+                    { number: 303, state: 'open', draft: false, body: '',
+                      head: { sha: 's3', ref: 'feat/gql',
+                              repo: { full_name: 'forko/forkr' } },
+                      maintainerCanModify: false,
+                      labels: [{ name: 'pr_approved' }],
+                      user: { login: 'guest' } },
+                    { number: 302, state: 'open', draft: false, body: '',
+                      head: { sha: 's2', ref: 'feat/absent',
+                              repo: { full_name: 'forko/forkr' } },
+                      labels: [{ name: 'pr_approved' }],
+                      user: { login: 'guest' } }
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved'], draft: false }, limit: 5
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate',
+             provider: { branchExists: function () { return true; } } });
+
+        var byNum = {};
+        items.forEach(function (i) { byNum[i.prNumber] = i; });
+        assert.equal(byNum[304].maintainerCanModify, true, 'REST maintainer_can_modify dialect rides the item');
+        assert.equal(byNum[303].maintainerCanModify, false, 'GraphQL maintainerCanModify dialect rides the item');
+        assert.equal(byNum[302].maintainerCanModify, null,
+            'a payload without the field resolves to null — the lane re-probes fresh (fail closed)');
     });
 });

@@ -469,6 +469,25 @@ function _ghRepoOwnerLogin(repo) {
     return o.login || o.name || '';
 }
 
+// gh-1070: the maintainer-edits probe for the fork-aware silent update.
+// REST /pulls spells the field maintainer_can_modify, GraphQL
+// maintainerCanModify — fixtures use either. Returns the BOOLEAN when the
+// payload carries the field, null when it does not (the caller re-probes
+// fresh or fails closed to the guest park — an unprobed fork push is never
+// attempted). ONE exported resolver, shared with githubSource exactly like
+// ghPrHeadRepoFull (gh-1059) — the PR-list and prStatus payload dialects
+// must never drift apart.
+function _ghPrMaintainerCanModify(pr) {
+    if (!pr) return null;
+    if (pr.maintainerCanModify === true || pr.maintainerCanModify === false) {
+        return pr.maintainerCanModify;
+    }
+    if (pr.maintainer_can_modify === true || pr.maintainer_can_modify === false) {
+        return pr.maintainer_can_modify;
+    }
+    return null;
+}
+
 // (was the computePrStatus closure — hoisted to module scope by gh-1009;
 // resolveBranchHead injects the per-provider branchHead so the merge-state
 // override keeps its deterministic base check; every step is one of the
@@ -1242,6 +1261,7 @@ if (typeof module !== 'undefined' && module.exports) {
         // gh-1059: ONE head-repo resolver shared with githubSource.js (the
         // PR-list and prStatus payload dialects must never drift apart).
         ghPrHeadRepoFull: _ghPrHeadRepoFull,
+        ghPrMaintainerCanModify: _ghPrMaintainerCanModify,
         _cache: _cache
     };
 }

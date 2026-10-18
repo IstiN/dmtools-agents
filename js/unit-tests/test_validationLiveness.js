@@ -339,7 +339,7 @@ suite('validationLiveness fork-aware silent-update routing (gh-1070)', function 
     test('UT-2: the fork push URL is built from head.repo.full_name and never targets the base', function () {
         var url = live.forkPushTokenUrl('forko/forkr');
         assert.equal(url,
-            'https://x-access-token:[REDACTED:Connection String Password]@github.com/forko/forkr.git');
+            'https://x-access-token:${GH_TOKEN}@github.com/forko/forkr.git');
         assert.notOk(url.indexOf('epam/base') !== -1, 'the base repo is never the push target');
         assert.ok(url.indexOf('${GH_TOKEN}') !== -1, 'the token rides the child env, never the source');
     });

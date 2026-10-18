@@ -1577,3 +1577,27 @@ suite('smProvider: listOpenPrsLive — gh-1000 phantom-heal probe surface', func
         assert.equal(typeof h.provider.listOpenPrs, 'function');
     });
 });
+
+suite('smProvider — gh-1070 maintainer-edits probe resolver', function () {
+
+    var MOD = 'js/common/smProvider.js';
+
+    test('github: one shared resolver covers every maintainerCanModify payload dialect', function () {
+        // gh-1070: update_branch probes "Allow edits from maintainers"
+        // before pushing to a fork head. REST /pulls spells the field
+        // maintainer_can_modify, GraphQL maintainerCanModify — ONE
+        // exported resolver (gh-1059 pattern), consumed by githubSource
+        // on the PR-list path and by smAgent on the fresh-probe path.
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {});
+        var mcm = mod.ghPrMaintainerCanModify;
+        assert.equal(typeof mcm, 'function', 'the resolver is exported for consumers');
+        assert.equal(mcm({ maintainer_can_modify: true }), true, 'REST dialect: editable');
+        assert.equal(mcm({ maintainer_can_modify: false }), false, 'REST dialect: not editable');
+        assert.equal(mcm({ maintainerCanModify: true }), true, 'GraphQL dialect: editable');
+        assert.equal(mcm({ maintainerCanModify: false }), false, 'GraphQL dialect: not editable');
+        assert.equal(mcm({}), null, 'a payload WITHOUT the field resolves to null (re-probe, fail closed)');
+        assert.equal(mcm(null), null, 'no PR at all resolves to null');
+        assert.equal(mcm({ maintainer_can_modify: 'true' }), null,
+            'a non-boolean value is not a probe verdict');
+    });
+});
