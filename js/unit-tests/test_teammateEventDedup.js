@@ -132,6 +132,16 @@ suite('teammateEventDedup — title parsing', function () {
         // an issue TITLE ending in a leg word must not alias (no stub prefix)
         assert.equal(dedup.legOfRunName('some title ending in review'), '');
     });
+
+    test('legOfRunName reads the leg the stub run-name now carries for event-path runs', function () {
+        // gh-1065 rework: run-name resolves the strongest arming label, so a
+        // completed event-path owner stays title-precise (the strict
+        // completed-owner leg rule needs it).
+        assert.equal(dedup.legOfRunName('teammate: issues #1040 dev'), 'dev');
+        assert.equal(dedup.legOfRunName('teammate: issues #1040 review'), 'review');
+        assert.equal(dedup.legOfRunName('teammate: issues #1040 rework'), 'rework');
+        assert.equal(dedup.issueOfRunName('teammate: issues #1040 dev'), 1040);
+    });
 });
 
 // ── event leg derivation ─────────────────────────────────────────────────
@@ -174,6 +184,19 @@ suite('teammateEventDedup — key/window predicates', function () {
         assert.ok(dedup.legsCompatible('', ''));
         assert.ok(dedup.legsCompatible('dev', 'dev'));
         assert.notOk(dedup.legsCompatible('dev', 'review'));
+    });
+
+    test('completedLegsCompatible: the wildcard is scoped to IN-FLIGHT owners only — a completed owner never swallows a KNOWN new leg', function () {
+        // Review-thread regression (sequential human actions): assign at T
+        // (the run title carries no leg), deliberate agent:review at T+6min
+        // is a genuinely new request — the completed leg-less owner must not
+        // suppress it. Both-unknown stays burst-noise; both-known stays
+        // precision.
+        assert.notOk(dedup.completedLegsCompatible('review', ''), 'known review after a leg-less completion proceeds');
+        assert.notOk(dedup.completedLegsCompatible('', 'dev'), 'a bare re-assign after a known-leg completion proceeds');
+        assert.ok(dedup.completedLegsCompatible('', ''), 'two unknown legs inside the window stay burst-noise');
+        assert.ok(dedup.completedLegsCompatible('dev', 'dev'), 'same known leg is a duplicate');
+        assert.notOk(dedup.completedLegsCompatible('dev', 'review'), 'different known legs never match');
     });
 
     test('isFreshlyCompleted: only success inside the window counts', function () {
@@ -334,6 +357,44 @@ suite('teammateEventDedup — decideEventDedup', function () {
         var zombie = runOnIssue(499, 'queued', { updatedAt: SEVEN_HOURS_AGO });
         var v = dedup.decideEventDedup(assignedEvent({ runs: [zombie] }));
         assert.equal(v.proceed, true);
+    });
+
+    test('review-thread regression: a COMPLETED owner with unknown leg never swallows a KNOWN-leg event (sequential human actions)', function () {
+        // The gh-1065 rework scopes the wildcard to in-flight owners: a run
+        // titled 'teammate: issues #1040 ' that concluded success WITHOUT
+        // running the leg (the dropped-duplicate shape) cannot own a
+        // genuinely new, different-leg request within the window.
+        var leglessDone = runOnIssue(500, 'completed', { conclusion: 'success' });
+        var review = dedup.decideEventDedup(labeledEvent('agent:review', { runs: [leglessDone], selfRun: selfRun(501) }));
+        assert.equal(review.proceed, true, 'deliberate agent:review minutes after a leg-less completion proceeds');
+        assert.equal(review.reason, 'first-trigger');
+        var dev = dedup.decideEventDedup(labeledEvent('agent:dev', { runs: [leglessDone], selfRun: selfRun(501) }));
+        assert.equal(dev.proceed, true, 'a different known leg is never swallowed by a leg-less owner');
+    });
+
+    test('AC2 with carried legs: the burst duplicate of a KNOWN leg still drops after the first run completed', function () {
+        // The stub run-name now carries the label-derived leg, so the burst
+        // owner stays title-precise even when completed: the
+        // assign-while-labels-change run 500 completes 'success', the queued
+        // labeled agent:dev run 501 drops.
+        var done = runOnIssue(500, 'completed', {
+            conclusion: 'success',
+            name: 'teammate: issues #1040 dev',
+            createdAt: '2026-10-18T20:08:00.000Z', updatedAt: '2026-10-18T20:08:30.000Z'
+        });
+        var v = dedup.decideEventDedup(labeledEvent('agent:dev', { runs: [done], selfRun: selfRun(501) }));
+        assert.equal(v.proceed, false, 'same known leg after completion is a duplicate');
+        assert.equal(v.reason, 'duplicate');
+    });
+
+    test('in-flight owner still wildcards an unknown leg (the wildcard is scoped, not removed)', function () {
+        // Event-path in-flight titles carry no leg; during a same-second
+        // burst the in-flight owner of the same issue IS the same human
+        // action — the wildcard survives for active states.
+        var inflight = runOnIssue(500, 'in_progress');
+        var v = dedup.decideEventDedup(labeledEvent('agent:dev', { runs: [inflight], selfRun: selfRun(501) }));
+        assert.equal(v.proceed, false, 'an in-flight leg-less owner still suppresses (same burst)');
+        assert.equal(v.reason, 'duplicate');
     });
 });
 
