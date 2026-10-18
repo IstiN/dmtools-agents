@@ -73,7 +73,7 @@ suite('fetchLinkedTestsToInput — jira happy path', function () {
 
     test('writes linked_tests.md with header, test blocks and last-5 trimmed comments', function () {
         var longBody = '';
-        for (var j = 0; j < 250; j++) longBody += 'x';
+        for (var j = 0; j < 2100; j++) longBody += 'x';
         var six = [
             comment('Runner 1', 'run 1 passed'),
             comment('Runner 2', 'run 2 passed'),

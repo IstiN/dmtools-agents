@@ -61,9 +61,10 @@ suite('linkedIssuesReport.buildRecentCommentLines', function () {
         assert.contains(lines[0], '**Comments (2 most recent)**');
         assert.contains(lines[1], '**[A]**');
         assert.equal(lines[2], 'one');
-        assert.contains(lines[3], '**[B]**');
-        assert.equal(lines[4], 'two');
-        assert.equal(lines[5], '');
+        assert.equal(lines[3], '');
+        assert.contains(lines[4], '**[B]**');
+        assert.equal(lines[5], 'two');
+        assert.equal(lines[6], '');
     });
 
     test('more than 5 comments: only the last 5 are rendered', function () {
@@ -78,11 +79,12 @@ suite('linkedIssuesReport.buildRecentCommentLines', function () {
 
     test('missing author becomes Unknown, missing body becomes empty, body is truncated to 2000', function () {
         var longBody = '';
-        for (var i = 0; i < 250; i++) longBody += 'x';
+        for (var i = 0; i < 2100; i++) longBody += 'x';
         var lines = loadReport().buildRecentCommentLines([c(undefined, undefined), c('V', longBody)], '**Comments');
         assert.contains(lines[1], '**[Unknown]**');
         assert.equal(lines[2], '');
-        assert.equal(lines[4], longBody.substring(0, 2000));
-        assert.equal(lines[4].length, 2000);
+        assert.contains(lines[4], '**[V]**');
+        assert.equal(lines[5], longBody.substring(0, 2000));
+        assert.equal(lines[5].length, 2000);
     });
 });
