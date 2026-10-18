@@ -24,7 +24,8 @@ var githubHelpersModule = loadModule(
         },
         './machineNotice.js': loadModule('js/common/machineNotice.js'),
         './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })),
-        './common/reworkLoopGuard.js': reworkLoopGuardModule
+        './common/reworkLoopGuard.js': reworkLoopGuardModule,
+        './ci.js': loadModule('js/common/ci.js')
     }),
     {}
 );
