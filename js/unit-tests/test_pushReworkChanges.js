@@ -2041,6 +2041,7 @@ suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)'
     var BASE = 'b'.repeat(40);
     function run(diffOut) {
         var resolved = [], moved = [], comments = [], removed = [];
+        var prLabelsAdded = [], prLabelsRemoved = [];
         var loaded = loadPushReworkChangesForAction({
             cli_execute_command: function(a) {
                 if (a.command === 'git branch --show-current') return 'bug/PROJ-123\n';
@@ -2063,14 +2064,28 @@ suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)'
         }, { scm: {
             addComment: function(n, body) { comments.push(body); },
             resolveThread: function(n, t) { resolved.push(t); },
-            replyToThread: function() {}
+            replyToThread: function() {},
+            // gh-1060: the PR carries a rework arm when the leg concludes
+            // blocked — the park must label it blocked and strip the arms.
+            listPrs: function() {
+                return [{
+                    number: 123,
+                    title: 'PROJ-123: rework fix',
+                    head: { ref: 'bug/PROJ-123' },
+                    html_url: 'https://github.com/IstiN/dmtools-agents/pull/123',
+                    labels: ['agent:rework', 'agent:review']
+                }];
+            },
+            addLabel: function(n, l) { prLabelsAdded.push({ number: n, label: l }); },
+            removeLabel: function(n, l) { prLabelsRemoved.push({ number: n, label: l }); }
         } });
         var result = loaded.mod.action({
             ticket: { key: 'PROJ-123', fields: { labels: [] } },
             response: 'Fix summary long enough to be a meaningful rework completion summary.',
             customParams: {}
         });
-        return { result: result, resolved: resolved, moved: moved, comments: comments, removed: removed };
+        return { result: result, resolved: resolved, moved: moved, comments: comments, removed: removed,
+            prLabelsAdded: prLabelsAdded, prLabelsRemoved: prLabelsRemoved };
     }
 
     test('open threads + no production change: BLOCKED — nothing resolved, ticket moved to Blocked, response.md posted', function() {
@@ -2081,6 +2096,31 @@ suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)'
         assert.deepEqual(r.moved.map(function(m) { return m.statusName; }), ['Blocked'], 'only the Blocked move, never In Review');
         assert.ok(r.comments.some(function(c) { return c.indexOf('blocked') !== -1 && c.indexOf('NOT resolved') !== -1; }), JSON.stringify(r.comments));
         assert.ok(r.comments.some(function(c) { return c.indexOf('Fix summary long enough') !== -1; }), 'the agent response.md is the explanation');
+    });
+
+    // gh-1060 (live dart gh-395 / PR #420, 2026-10-18): the issue-side
+    // status:Blocked is read by NO SM rule — the SM's park vocabulary is the
+    // PR-side `blocked` label (engine-level freeze in githubSource). A blocked
+    // conclusion that only moves the issue leaves the PR armed (agent:rework)
+    // and every tick re-dispatches a rework leg on the blocked ticket. The
+    // post-action must do ONE atomic park: PR labeled blocked + the
+    // agent:rework / agent:review arms stripped from BOTH carriers. With the
+    // park in place the next tick dispatches nothing for the pair (the engine
+    // filters `blocked` PRs in matchesGuards/queryPrs — AC3).
+    test('gh-1060: BLOCKED parks the PR — `blocked` label on the PR, arms stripped from PR and issue (one atomic park)', function() {
+        var r = run('');
+        assert.equal(r.result.blocked, true);
+        assert.deepEqual(r.prLabelsAdded, [{ number: 123, label: 'blocked' }],
+            'PR must carry the SM park label');
+        assert.deepEqual(r.prLabelsRemoved, [
+            { number: 123, label: 'agent:rework' },
+            { number: 123, label: 'agent:review' }
+        ], 'both arms stripped from the PR so no rule re-arms a leg');
+        var issueArms = r.removed.filter(function(a) {
+            return a.label === 'agent:rework' || a.label === 'agent:review';
+        }).map(function(a) { return a.label; });
+        assert.deepEqual(issueArms.sort(), ['agent:review', 'agent:rework'],
+            'both arms stripped from the issue carrier too');
     });
 
     test('a real production change keeps the normal flow (guard does not fire)', function() {
