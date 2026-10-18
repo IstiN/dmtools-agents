@@ -2133,6 +2133,334 @@ suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)'
     });
 });
 
+// ── gh-1061: the blocked comment delivers the agent's message, not a thread dump ──
+suite('pushReworkChanges.buildBlockedReworkComment — comment composition (gh-1061 AC1/AC2/AC4)', function() {
+    function commentFor(unaddressed, unaddressable, reason, runUrl) {
+        return loadPushReworkChangesModule({}).mod.buildBlockedReworkComment(
+            unaddressed.length, unaddressed, unaddressable, reason, runUrl,
+            unaddressed.length + unaddressable.length);
+    }
+
+    test('AC1: response.md is the first block after the ⚠️ header — before any thread label or fold', function() {
+        var c = commentFor(
+            [ghThread('PRRT_1', 1), ghThread('PRRT_2', 2)], [],
+            'I need a human decision: which public API should the fix expose?', 'https://example.com/run/1');
+        assert.contains(c, '⚠️ Rework is **blocked**');
+        assert.contains(c, 'I need a human decision: which public API should the fix expose?');
+        assert.ok(c.indexOf('I need a human decision') < c.indexOf('<details>'),
+            'the agent text must precede the thread fold');
+        assert.ok(c.indexOf('I need a human decision') < c.indexOf('PRRT_1'),
+            'the agent text must precede every thread label');
+        assert.contains(c, '<details>');
+    });
+
+    test('AC2: 39-thread case — fold present, 3 previews + "…and 36 more", full list inside, < 2000 chars', function() {
+        var threads = [];
+        for (var i = 1; i <= 39; i++) {
+            threads.push(ghThread('PRRT_' + i, i, { body: 'Finding number ' + i + ' needs a fix' }));
+        }
+        var c = commentFor(threads, [], 'Agent response asking for a human decision.', null);
+        assert.ok(c.length < 2000, '39-thread blocked comment stays under ~2000 chars, got ' + c.length);
+        assert.contains(c, '<details>');
+        assert.contains(c, '…and 36 more');
+        assert.contains(c, 'PRRT_1');
+        assert.contains(c, 'PRRT_39', 'the full list is inside the fold');
+        var beforeMore = c.substring(0, c.indexOf('…and'));
+        assert.equal(beforeMore.split('- <code>').length - 1, 3, 'exactly 3 inline previews before "…and N more"');
+    });
+
+    test('review follow-up (gh-1063 thread 6): the fold remainder lines use the same bullet+<code> format as the 3 previews', function() {
+        var threads = [];
+        for (var i = 1; i <= 5; i++) {
+            threads.push(ghThread('PRRT_' + i, i, { body: 'Finding number ' + i + ' needs a fix' }));
+        }
+        var c = commentFor(threads, [], 'reason text', null);
+        var afterMore = c.substring(c.indexOf('…and'));
+        assert.equal(afterMore.split('- <code>').length - 1, 2,
+            'the 2 remainder lines after "…and N more" carry the same "- <code>…</code>" format as the 3 previews');
+        var remainderLines = c.split('\n').filter(function(l) { return l.indexOf('PRRT_4') !== -1 || l.indexOf('PRRT_5') !== -1; });
+        assert.equal(remainderLines.length, 2, 'both remainder threads are listed inside the fold');
+        remainderLines.forEach(function(l) {
+            assert.equal(l.indexOf('- <code>'), 0, 'remainder line is bulleted + code-formatted, got: ' + l);
+        });
+    });
+
+    test('AC4: missing response.md — explicit placeholder with the run log url', function() {
+        var c = commentFor([ghThread('PRRT_1', 1)], [], null,
+            'https://github.com/acme/widgets/actions/runs/39156398849');
+        assert.contains(c, 'agent wrote no response.md');
+        assert.contains(c, 'https://github.com/acme/widgets/actions/runs/39156398849');
+        var c2 = commentFor([ghThread('PRRT_1', 1)], [], '_(No fix summary generated)_', null);
+        assert.contains(c2, 'agent wrote no response.md', 'the historical placeholder counts as "no response.md"');
+    });
+
+    test('AC3: null-id machine notices are reported inside the fold as informational context only', function() {
+        var c = commentFor([ghThread('PRRT_1', 1)],
+            [ghThread(null, null, { body: 'rework-consume payload notice' })],
+            'reason text', null);
+        assert.contains(c, 'excluded from the coverage gate');
+        assert.contains(c, 'rework-consume payload');
+        assert.ok(c.indexOf('rework-consume payload') > c.indexOf('<details>'),
+            'null-id notice bodies live in the fold, not in the visible body');
+    });
+
+    test('review follow-up: the header counts addressable threads only and reconciles the total', function() {
+        var c = commentFor([ghThread('PRRT_1', 1)],
+            [ghThread(null, null, { body: 'machine notice' })],
+            'reason text', null);
+        assert.contains(c, '1 review thread(s) are still open',
+            'the header counts addressable threads only — the same quantity the gate uses');
+        assert.contains(c, '2 open in total', 'the total keeps the header and the fold reconcilable');
+        assert.contains(c, 'machine-notice thread(s) excluded from the coverage gate');
+    });
+
+    test('review follow-up: no machine notices — header names the plain open count with no total clause', function() {
+        var c = commentFor([ghThread('PRRT_1', 1), ghThread('PRRT_2', 2)], [],
+            'reason text', null);
+        assert.contains(c, '2 review thread(s) are still open');
+        assert.notContains(c, 'open in total', 'no reconciliation clause when there is nothing to reconcile');
+    });
+});
+
+suite('pushReworkChanges.buildReplyCoverage — null-id threads out of the gate denominator (gh-1061 AC3)', function() {
+    function mod() { return loadPushReworkChangesModule({}).mod; }
+
+    test('UT-4 mixed null-id + addressable: the denominator counts only addressable threads', function() {
+        var coverage = mod().buildReplyCoverage([
+            ghThread('PRRT_a', 1),
+            ghThread(null, null, { body: 'machine notice one' }),
+            ghThread(null, null, { body: 'machine notice two' })
+        ], []);
+        assert.equal(coverage.openCount, 1, 'null-id notices are not gate obligations');
+        assert.equal(coverage.unaddressed.length, 1);
+        assert.equal(coverage.unaddressable.length, 2, 'null-id notices reported as informational context');
+        assert.equal(coverage.totalOpenCount, 3, 'total open count still visible for reporting');
+    });
+
+    test('UT-2 all open threads null-id: openCount 0 / unaddressed 0 — the gate is satisfiable', function() {
+        var m = mod();
+        var coverage = m.buildReplyCoverage([
+            ghThread(null, null, { body: 'red-head marker' }),
+            ghThread(null, null, { body: 'prior blocked comment' })
+        ], []);
+        assert.equal(coverage.openCount, 0);
+        assert.equal(coverage.unaddressed.length, 0);
+        var d = m.evaluateAuditResolveGate(false, false, coverage.openCount, coverage.unaddressed.length);
+        assert.equal(d.blocked, false, 'all-null-id PR must NOT enter the blocked path on coverage grounds');
+        assert.equal(d.auditResolve, false, 'nothing addressable to audit-resolve — normal completion');
+    });
+
+    test('REG-1: addressable unaddressed threads still block (gh-957 semantics unchanged)', function() {
+        var m = mod();
+        var coverage = m.buildReplyCoverage([ghThread('PRRT_a', 1), ghThread('PRRT_b', 2)], []);
+        assert.equal(coverage.openCount, 2);
+        assert.equal(coverage.unaddressed.length, 2);
+        var d = m.evaluateAuditResolveGate(false, false, coverage.openCount, coverage.unaddressed.length);
+        assert.equal(d.blocked, true, 'addressable threads with no targeted reply still block');
+    });
+
+    test('an id-less thread is still accountable when it carries a rootCommentId (addressable via inReplyToId)', function() {
+        var coverage = mod().buildReplyCoverage(
+            [ghThread(null, 77, { body: 'thread without GraphQL id' })],
+            [{ inReplyToId: 77, reply: 'Fixed.' }]);
+        assert.equal(coverage.openCount, 1, 'rootCommentId alone makes a thread addressable');
+        assert.equal(coverage.unaddressed.length, 0);
+        assert.equal(coverage.unaddressable.length, 0);
+    });
+});
+
+suite('pushReworkChanges.action — gh-1061 blocked-loop gate (UT-1/UT-2/UT-4/AC4)', function() {
+    var BASE = 'c'.repeat(40);
+
+    // Suite-level stubs (CRAP split, review thread 1): runCase used to inline
+    // these three mocks — a 14.1-CRAP body plus an 11-CC file_read dispatch.
+    // Each mock is a single-responsibility named helper now.
+    function runCaseCliStub(diffOut) {
+        return function(a) {
+            if (a.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+            if (a.command.indexOf('git ls-remote --heads origin') === 0) {
+                return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
+            }
+            if (a.command.indexOf('git diff --name-only') === 0) return diffOut;
+            return '';
+        };
+    }
+
+    function runCaseInputFor(p, threads) {
+        if (!p) return null;
+        if (p.indexOf('rework_setup_failed.md') !== -1) throw new Error('File does not exist');
+        if (p.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
+        if (p.indexOf('rework_base_head.txt') !== -1) return BASE;
+        if (p.indexOf('pr_discussions_raw.json') !== -1) return JSON.stringify({ threads: threads });
+        return null;
+    }
+
+    function runCaseFileStub(threads) {
+        return function(a) {
+            return runCaseInputFor(a && (a.path || a), threads);
+        };
+    }
+
+    function runCaseScmStub(threads, comments) {
+        return {
+            addComment: function(n, body) { comments.push(body); },
+            resolveThread: function() {},
+            replyToThread: function() {},
+            listReviews: function() { return []; },
+            fetchDiscussions: function() {
+                return { rawThreads: { threads: threads } };
+            }
+        };
+    }
+
+    function runCase(diffOut, threads, response) {
+        var comments = [], moved = [], removed = [];
+        var loaded = loadPushReworkChangesForAction({
+            cli_execute_command: runCaseCliStub(diffOut),
+            file_read: runCaseFileStub(threads),
+            jira_move_to_status: function(a) { moved.push(a); },
+            jira_remove_label: function(a) { removed.push(a); },
+            github_remove_label: function() { return '{}'; }
+        }, {
+            scm: runCaseScmStub(threads, comments)
+        });
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: response,
+            customParams: {}
+        });
+        return { result: result, comments: comments, moved: moved, removed: removed };
+    }
+
+    function blockedComment(r) {
+        return r.comments.filter(function(c) { return c.indexOf('Rework is **blocked**') !== -1; })[0] || '';
+    }
+
+    test('UT-1: 39-thread blocked case — comment < 2000 chars, response.md first, fold present', function() {
+        var threads = [];
+        for (var i = 1; i <= 39; i++) {
+            threads.push(ghThread('PRRT_' + i, i, { body: 'Finding number ' + i + ' needs a fix' }));
+        }
+        var r = runCase('', threads, 'Agent needs a human decision before it can proceed.');
+        assert.equal(r.result.success, false);
+        assert.equal(r.result.blocked, true);
+        var c = blockedComment(r);
+        assert.ok(c, 'a blocked comment was posted');
+        assert.ok(c.length < 2000, 'comment body under ~2000 chars, got ' + c.length);
+        assert.ok(c.indexOf('Agent needs a human decision') < c.indexOf('<details>'),
+            'response.md leads; the thread dump is folded away');
+        assert.contains(c, '<details>');
+        assert.contains(c, '…and 36 more');
+        assert.deepEqual(r.moved.map(function(m) { return m.statusName; }), ['Blocked']);
+    });
+
+    test('UT-2: all open threads null-id — blocked path NOT taken on coverage grounds', function() {
+        var threads = [
+            ghThread(null, null, { body: 'red-head marker notice' }),
+            ghThread(null, null, { body: 'prior blocked comment payload' })
+        ];
+        var r = runCase('', threads,
+            'Only machine notices remain open — there is nothing actionable to reply to.');
+        assert.equal(r.result.success, true, 'must complete normally, not loop back into Blocked');
+        assert.equal(r.result.blocked, undefined);
+        assert.equal(blockedComment(r), '', 'no blocked comment on the PR');
+        assert.deepEqual(r.moved.map(function(m) { return m.statusName; }), ['In Review'],
+            'ticket moves to In Review — the gh-395 week-long blocked loop is broken');
+    });
+
+    test('UT-4/REG-1: mixed null-id + addressable unaddressed threads — still blocked', function() {
+        var threads = [
+            ghThread('PRRT_real', 42, { body: 'A real unaddressed finding' }),
+            ghThread(null, null, { body: 'machine notice' })
+        ];
+        var r = runCase('', threads, 'Some response that does not address the real finding.');
+        assert.equal(r.result.blocked, true, 'one addressable unaddressed thread keeps the gate closed');
+        var c = blockedComment(r);
+        assert.contains(c, 'PRRT_real');
+        assert.contains(c, 'excluded from the coverage gate', 'the null-id notice is reported as informational');
+        assert.deepEqual(r.moved.map(function(m) { return m.statusName; }), ['Blocked']);
+    });
+
+    test('review follow-up (thread 3): the blocked header counts addressable threads only — the same quantity the gate uses', function() {
+        var threads = [
+            ghThread('PRRT_real', 42, { body: 'A real unaddressed finding' }),
+            ghThread(null, null, { body: 'machine notice' })
+        ];
+        var r = runCase('', threads, 'Some response that does not address the real finding.');
+        var c = blockedComment(r);
+        assert.contains(c, '1 review thread(s) are still open',
+            'header and gate must count the same quantity — addressable threads only');
+        assert.contains(c, '2 open in total', 'the all-open total is reconciled in the header, not hidden');
+    });
+
+    test('AC4: no response.md on a blocked pass — the comment says so explicitly', function() {
+        var threads = [ghThread('PRRT_real', 42, { body: 'A real unaddressed finding' })];
+        var r = runCase('', threads, '');
+        assert.equal(r.result.blocked, true);
+        var c = blockedComment(r);
+        assert.contains(c, 'agent wrote no response.md',
+            'a silent omission re-arms the loop — the missing file must be called out');
+    });
+});
+
+suite('pushReworkChanges.handleReworkBlocked — coverage-object snapshot (gh-1063 review thread 5)', function() {
+    // The 11-positional-arg signature grew once per follow-up; the coverage
+    // snapshot (open/unaddressed/unaddressable/total) now travels as ONE
+    // buildReplyCoverage result — the same object the lap gate evaluates.
+    function runBlocked(coverage) {
+        var comments = [], moved = [], prLabelsAdded = [], prLabelsRemoved = [];
+        var mod = loadPushReworkChangesModule({}).mod;
+        var scm = {
+            addComment: function(n, body) { comments.push(body); },
+            addLabel: function(n, l) { prLabelsAdded.push(l); },
+            removeLabel: function(n, l) { prLabelsRemoved.push(l); }
+        };
+        var tracker = {
+            moveToStatus: function(key, status) { moved.push({ statusName: status }); },
+            removeLabel: function() {}
+        };
+        var result = mod.handleReworkBlocked(scm, tracker,
+            { number: 7, labels: [{ name: 'agent:rework' }, { name: 'agent:review' }] }, 'PROJ-9',
+            { BLOCKED: 'Blocked' }, 'the agent reason', coverage, { metadata: {} });
+        return { result: result, comments: comments, moved: moved,
+            prLabelsAdded: prLabelsAdded, prLabelsRemoved: prLabelsRemoved };
+    }
+
+    function coverageOf(openThreads, unaddressed, unaddressable) {
+        return {
+            openCount: openThreads,
+            targetedCount: openThreads - unaddressed.length,
+            unaddressed: unaddressed,
+            unaddressable: unaddressable,
+            totalOpenCount: openThreads + unaddressable.length
+        };
+    }
+
+    test('takes ONE coverage object: header count, fold, Blocked move and gh-1060 park all derive from it', function() {
+        var r = runBlocked(coverageOf(1, [ghThread('PRRT_x', 5, { body: 'a real finding' })],
+            [ghThread(null, null, { body: 'machine notice' })]));
+        assert.equal(r.result.blocked, true);
+        assert.equal(r.result.success, false);
+        var c = r.comments.filter(function(x) { return x.indexOf('Rework is **blocked**') !== -1; })[0] || '';
+        assert.contains(c, '1 review thread(s) are still open',
+            'the header count comes from coverage.openCount — a positional openCount can no longer drift from the fold');
+        assert.contains(c, '2 open in total', 'coverage.totalOpenCount reconciles the header');
+        assert.contains(c, 'PRRT_x', 'coverage.unaddressed feeds the fold');
+        assert.contains(c, 'excluded from the coverage gate', 'coverage.unaddressable is reported as informational');
+        assert.deepEqual(r.moved.map(function(m) { return m.statusName; }), ['Blocked'],
+            'the ticket still moves to Blocked');
+        assert.deepEqual(r.prLabelsAdded, ['blocked'], 'the gh-1060 park still labels the PR blocked');
+        assert.deepEqual(r.prLabelsRemoved.sort(), ['agent:review', 'agent:rework'],
+            'both arms are stripped from the PR');
+    });
+
+    test('a no-notice coverage object renders the plain header with no reconciliation clause', function() {
+        var r = runBlocked(coverageOf(2, [ghThread('PRRT_a', 1), ghThread('PRRT_b', 2)], []));
+        var c = r.comments.filter(function(x) { return x.indexOf('Rework is **blocked**') !== -1; })[0] || '';
+        assert.contains(c, '2 review thread(s) are still open');
+        assert.notContains(c, 'open in total');
+    });
+});
 
 // ── gh-957: the lap gate — a failed diff probe must never mislabel a progress lap ──
 suite('pushReworkChanges.evaluateAuditResolveGate — failed probe (null) semantics (gh-957)', function() {

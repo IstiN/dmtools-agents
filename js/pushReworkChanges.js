@@ -576,6 +576,19 @@ function threadKeySet(threads) {
 }
 
 /**
+ * gh-1061 AC3: an open thread that can NEVER receive a targeted reply —
+ * threadKeyOf() is null (no threadId AND no rootCommentId). These are the
+ * machine-notice shapes (red-head markers, rework-consume payloads, prior
+ * blocked comments): review_replies.json addresses threads by id, so a null-id
+ * thread sits in the gh-957 coverage-gate denominator forever and the gate can
+ * never pass (live: dmtools-dart PR #420 / gh-395 blocked-looping for a week).
+ * Excluded from the gate denominator; reported as informational context only.
+ */
+function isUnaddressableThread(t) {
+    return !!t && threadKeyOf(t) === null;
+}
+
+/**
  * Human-readable thread identification for logs and completion comments:
  * id, file:line location, and the first body line (the reviewer's title).
  */
@@ -587,6 +600,34 @@ function threadLabel(t) {
     var body = String(t.body || '').split('\n')[0].trim();
     if (body.length > 120) body = body.substring(0, 117) + '...';
     return id + (loc ? ' (' + loc + ')' : '') + (body ? ' — "' + body + '"' : '');
+}
+
+/**
+ * gh-1061 AC2: the thread-id part of the compact label — threadId, else
+ * 'comment#<rootCommentId>', else 'no-id', hard-capped at 16 chars.
+ */
+function shortThreadId(t) {
+    var id = t.threadId ||
+        (t.rootCommentId !== null && t.rootCommentId !== undefined ? 'comment#' + t.rootCommentId : 'no-id');
+    id = String(id);
+    return id.length > 16 ? id.substring(0, 13) + '...' : id;
+}
+
+/** gh-1061 AC2: hard-cap a string at cap chars, trailing '...' included. */
+function capLen(s, cap) {
+    return s.length > cap ? s.substring(0, cap - 3) + '...' : s;
+}
+
+/**
+ * gh-1061 AC2: compact one-line thread label for the blocked-comment fold —
+ * id plus a short body snippet, hard-capped at maxLen so a 39-thread
+ * enumeration stays inside the ~2000-char comment budget (threadLabel's
+ * 120-char body cap would blow the budget on its own).
+ */
+function threadShortLabel(t, maxLen) {
+    if (!t) return '(unknown thread)';
+    var body = String(t.body || '').split('\n')[0].trim();
+    return capLen(shortThreadId(t) + (body ? ' — "' + body + '"' : ''), maxLen || 40);
 }
 
 /**
@@ -630,7 +671,18 @@ function replyTargetsThread(reply, thread) {
 
 function buildReplyCoverage(inputThreads, replies) {
     var open = (inputThreads || []).filter(isOpenThread);
-    var unaddressed = open.filter(function(t) {
+    // gh-1061 AC3: null-id machine notices can never receive a targeted reply
+    // — keep them OUT of the coverage-gate denominator (they are reported as
+    // informational context instead). A PR whose only open threads are
+    // null-id notices must not blocked-loop on coverage grounds forever.
+    // Review follow-up: ONE partition pass builds both buckets — a single
+    // classification, so the two sets can never drift apart.
+    var unaddressable = [];
+    var addressable = [];
+    open.forEach(function(t) {
+        (isUnaddressableThread(t) ? unaddressable : addressable).push(t);
+    });
+    var unaddressed = addressable.filter(function(t) {
         var targeted = false;
         (replies || []).forEach(function(r) {
             if (replyTargetsThread(r, t)) targeted = true;
@@ -638,9 +690,11 @@ function buildReplyCoverage(inputThreads, replies) {
         return !targeted;
     });
     return {
-        openCount: open.length,
-        targetedCount: open.length - unaddressed.length,
-        unaddressed: unaddressed
+        openCount: addressable.length,
+        targetedCount: addressable.length - unaddressed.length,
+        unaddressed: unaddressed,
+        unaddressable: unaddressable,
+        totalOpenCount: open.length
     };
 }
 
@@ -1464,8 +1518,10 @@ function headMovedSinceLastReview(scm, pr) {
  *                         when the git diff probe itself failed (unknown)
  *   codeChangesCommitted— commitAndPush()'s own hasChanges (a rework commit
  *                         actually landed this leg)
- *   openThreadCount     — open threads in the input snapshot
- *   unaddressedCount    — open threads with no targeted reply
+ *   openThreadCount     — open ADDRESSABLE threads in the input snapshot
+ *                         (gh-1061: null-id machine notices are excluded —
+ *                         they can never receive a targeted reply)
+ *   unaddressedCount    — open addressable threads with no targeted reply
  * Returns { blocked, auditResolve, lapPushed }:
  *   lapPushed    — a real change landed (either signal) — the lap marker
  *                  records it so a genuine progress lap is NEVER counted as
@@ -1485,6 +1541,97 @@ function evaluateAuditResolveGate(realCodeChanges, codeChangesCommitted, openThr
     var blocked = realCodeChanges === false && openThreadCount > 0 && unaddressedCount > 0;
     var auditResolve = !blocked && openThreadCount > 0 && !lapPushed;
     return { blocked: blocked, auditResolve: auditResolve, lapPushed: lapPushed };
+}
+
+/**
+ * gh-1061 AC2/AC3: the unaddressed-thread enumeration for the blocked comment
+ * — one collapsed <details> block: 3 inline previews, "…and N more", then the
+ * full list with hard-capped labels so a 39-thread case stays inside the
+ * ~2000-char body budget. Null-id machine notices are listed as informational
+ * context, explicitly marked as excluded from the coverage gate.
+ */
+function buildUnaddressedThreadsFold(unaddressed, unaddressable) {
+    var lines = [];
+    lines.push('<details>');
+    lines.push('<summary><b>' + unaddressed.length + ' open review thread(s) had no targeted reply</b> in ' +
+        '<code>outputs/review_replies.json</code> (gh-957 coverage gate) — click to expand the full list</summary>');
+    lines.push('');
+    unaddressed.slice(0, 3).forEach(function(t) {
+        lines.push('- <code>' + threadShortLabel(t, 48) + '</code>');
+    });
+    if (unaddressed.length > 3) {
+        lines.push('…and ' + (unaddressed.length - 3) + ' more:');
+        lines.push('');
+        unaddressed.slice(3).forEach(function(t) {
+            // gh-1063 review follow-up (thread 6): the remainder lines carry
+            // the same bullet + <code> format as the 3 previews — the
+            // expanded full list no longer alternates between two formats.
+            // The label cap drops 32 -> 20 so the wrapper's 14 extra chars
+            // per line stay inside the AC2 ~2000-char comment budget.
+            lines.push('- <code>' + threadShortLabel(t, 20) + '</code>');
+        });
+    }
+    if (unaddressable.length > 0) {
+        lines.push('');
+        lines.push(unaddressable.length + ' machine-notice thread(s) have no thread id and can never receive ' +
+            'a targeted reply — excluded from the coverage gate (gh-1061), informational only:');
+        unaddressable.forEach(function(t) {
+            lines.push('- ' + threadShortLabel(t, 48));
+        });
+    }
+    lines.push('');
+    lines.push('</details>');
+    return lines.join('\n');
+}
+
+/**
+ * gh-1061 review follow-up: the blocked comment's ⚠️ header line. openCount
+ * is the ADDRESSABLE count — the same quantity the gh-957 coverage gate uses
+ * — so the header can never disagree with the fold below it. totalOpenCount
+ * (all open threads, machine notices included) is reconciled in a
+ * parenthetical clause when it differs; when the caller does not pass it,
+ * the total is derived from the unaddressable list.
+ */
+function blockedHeader(openCount, totalOpenCount, unaddressable) {
+    var total = (typeof totalOpenCount === 'number') ? totalOpenCount
+        : openCount + (unaddressable ? unaddressable.length : 0);
+    var header = '⚠️ Rework is **blocked**: no code changes were made while ' + openCount +
+        ' review thread(s) are still open';
+    if (total > openCount) {
+        header += ' (' + total + ' open in total — ' + (total - openCount) +
+            ' machine-notice thread(s) excluded from the coverage gate, informational only)';
+    }
+    return header;
+}
+
+/**
+ * gh-1061 AC1/AC2/AC4: compose the blocked-rework PR comment. The agent's
+ * outputs/response.md is the message a blocked pass exists to deliver, so it
+ * leads verbatim (first block after the ⚠️ header); the thread-coverage
+ * evidence moves into a collapsed fold. A missing response.md is called out
+ * explicitly — never silently omitted (live: dmtools-dart PR #420 / gh-395 —
+ * the leg's API-choice question reached no human and the PR blocked-looped
+ * for a week).
+ * Review follow-up: the header line lives in blockedHeader() — openCount is
+ * the ADDRESSABLE count (the gate quantity), totalOpenCount reconciles it.
+ */
+function buildBlockedReworkComment(openCount, unaddressed, unaddressable, reason, runUrl, totalOpenCount) {
+    var message = blockedHeader(openCount, totalOpenCount, unaddressable) +
+        '. Threads were NOT resolved; the PR is parked (`blocked` label, gh-1060) and the ' +
+        'rework/review arms are stripped from both carriers.';
+    var summary = String(reason || '').trim();
+    if (summary && summary !== '_(No fix summary generated)_') {
+        message += '\n' + summary;
+    } else if (runUrl) {
+        message += '\n_The agent wrote no response.md — see run log ' + runUrl + '._';
+    } else {
+        message += '\n_The agent wrote no response.md — nothing from the agent\'s run reached this ' +
+            'comment; see the raw run log._';
+    }
+    if (unaddressed.length > 0 || unaddressable.length > 0) {
+        message += '\n' + buildUnaddressedThreadsFold(unaddressed, unaddressable);
+    }
+    return message;
 }
 
 /**
@@ -1567,25 +1714,22 @@ function parkBlockedPr(scm, tracker, pr, ticketKey) {
  * agents#827 + gh-957: the rework pass produced no production change while
  * review threads are open AND reply coverage is incomplete (gh-957 tightens
  * the gate — full coverage takes the audit-resolve path instead). Posts the
- * agent's response.md as the explanation, moves the ticket to Blocked,
- * parks the PR (gh-1060 — blocked label + arms stripped from both
- * carriers), and stamps a no-op lap marker (pushed 0, resolved 0)
+ * blocked comment (gh-1061: response.md leads, thread dump folded), moves the
+ * ticket to Blocked, parks the PR (gh-1060 — `blocked` label + arms stripped
+ * from both carriers), and stamps a no-op lap marker (pushed 0, resolved 0)
  * so the SM loop guard can bound consecutive empty laps on this head.
+ * Review follow-up (gh-1063): the coverage snapshot arrives as ONE object —
+ * the buildReplyCoverage result — instead of four positional params, so the
+ * signature cannot grow a 12th argument on the next follow-up.
  */
-function handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, openCount, actualParams, unaddressed) {
-    var reason = String(fixSummary || '').trim();
-    var message = 'Rework is **blocked**: no code changes were made while ' + openCount +
-        ' review thread(s) are still open. Threads were NOT resolved; the PR is parked ' +
-        '(`blocked` label) and the rework/review arms are stripped from both the PR and the issue (gh-1060).';
-    if (Array.isArray(unaddressed) && unaddressed.length > 0) {
-        message += ' ' + unaddressed.length + ' open thread(s) had no targeted reply in ' +
-            '`outputs/review_replies.json` (gh-957 coverage gate): ' +
-            unaddressed.map(function(t) { return '`' + threadLabel(t) + '`'; }).join(', ') + '.';
-    }
-    if (reason && reason !== '_(No fix summary generated)_') message += '\n\n' + reason;
-    console.error('❌ Rework blocked (no code changes, ' + openCount + ' open thread(s))');
+function handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, coverage, actualParams) {
+    var openCount = coverage.openCount;
+    var message = buildBlockedReworkComment(openCount, coverage.unaddressed || [], coverage.unaddressable || [],
+        fixSummary, reworkRunUrl(), coverage.totalOpenCount);
+    console.error('❌ Rework blocked (no code changes, ' + openCount + ' open addressable thread(s)' +
+        (coverage.totalOpenCount > openCount ? ', ' + coverage.totalOpenCount + ' open in total' : '') + ')');
     try {
-        scm.addComment(pr.number, '⚠️ ' + message);
+        scm.addComment(pr.number, message);
     } catch (e) {
         console.warn('Failed to post blocked rework comment on PR #' + pr.number + ':', e.message || e);
     }
@@ -2024,13 +2168,29 @@ function runLapGate(ticketKey, config, codeChangesCommitted, actualParams, statu
     var inputSnapshotThreads = readInputRawThreads(ticketKey, outputOptsForCoverage);
     var openInputThreads = inputSnapshotThreads.filter(isOpenThread);
     var replyCoverage = buildReplyCoverage(inputSnapshotThreads, readRepliesArray(outputOptsForCoverage).replies);
+    // gh-1061 AC3: the gate denominator counts only ADDRESSABLE open threads —
+    // null-id machine notices can never receive a targeted reply, so a PR
+    // whose open threads are all null-id must not enter the blocked path on
+    // coverage grounds (live: dmtools-dart PR #420 / gh-395 week-long loop).
     var lapGate = evaluateAuditResolveGate(realCodeChanges, codeChangesCommitted,
-        openInputThreads.length, replyCoverage.unaddressed.length);
+        replyCoverage.openCount, replyCoverage.unaddressed.length);
     if (lapGate.blocked) {
+        // gh-1061 review follow-up: the blocked comment's header counts the
+        // ADDRESSABLE open threads only — the same quantity the gate above
+        // uses — while totalOpenCount (machine notices included) is passed
+        // through so the header reconciles with the fold instead of
+        // disagreeing with it.
+        if (replyCoverage.totalOpenCount > replyCoverage.openCount) {
+            console.log('ℹ️ ' + (replyCoverage.totalOpenCount - replyCoverage.openCount) +
+                ' open thread(s) are null-id machine notices — excluded from the coverage gate denominator');
+        }
+        // gh-1063 review follow-up: the whole buildReplyCoverage snapshot is
+        // passed as ONE coverage object — openCount/unaddressed/unaddressable/
+        // totalOpenCount stay together and the call site is self-documenting.
         return {
             blocked: true,
             result: handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary,
-                openInputThreads.length, actualParams, replyCoverage.unaddressed)
+                replyCoverage, actualParams)
         };
     }
     // gh-957 audit-resolve is live when the gate above passed with zero
@@ -2271,5 +2431,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, hasMeaningfulSummary, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr };
+    module.exports = { action, hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked };
 }
