@@ -234,3 +234,20 @@ suite('reworkLoopGuard.buildEscalationComment', function() {
         assert.equal(parsed[0].laps, 2);
     });
 });
+
+
+suite('reworkLoopGuard: [bot]-suffixed machine authors are trusted (gh-1025)', function () {
+    function botComment(body, login) {
+        return { body: body, user: { login: login }, created_at: '2026-10-18T07:00:00Z' };
+    }
+
+    test('lap markers authored by dmtools-factory-bot[bot] parse under the bare knob entry', function () {
+        var g = loadGuard();
+        var lap = g.buildLapMarker('abc123def456', 1, 2, null, '2026-10-18T07:00:00Z');
+        var allow = { authorLogins: ['dmtools-factory-bot'] };
+        assert.equal(g.parseLapMarkers([botComment(lap, 'dmtools-factory-bot[bot]')], allow).length, 1,
+            'App-authored lap markers feed the gh-957 budget');
+        assert.equal(g.parseLapMarkers([botComment(lap, 'dependabot[bot]')], allow).length, 0,
+            'a different bot stays invisible');
+    });
+});

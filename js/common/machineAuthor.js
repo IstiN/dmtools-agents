@@ -67,23 +67,37 @@ function machineAuthorLogins(machineAuthor) {
     return out;
 }
 
+// gh-1025 (live 2026-10-18, SM tick 39103844372): GitHub reports App
+// authors WITH a `[bot]` suffix (`dmtools-factory-bot[bot]`) while the
+// deployment knob lists the bare login (`dmtools-factory-bot`, added by
+// #988 — which therefore never matched). Every prMachineAuthor SM rule
+// failed closed for ~8h: zero rework legs, zero arms, queue silently
+// dead. Comparisons strip ONE trailing `[bot]` (case-insensitive) from
+// both sides; a bare `bot` ending without brackets (`robot`) is never
+// touched, and different bots still never match (`dependabot[bot]` !=
+// `dmtools-factory-bot`).
+function stripBotSuffix(login) {
+    return String(login || '').replace(/\[bot\]$/i, '');
+}
+
 /**
  * Case-insensitive membership test for ACTOR probes (the sticky-park
  * RESET in smAgent.js): those have always lowercase-compared the head
  * commit's GitHub login against the machine login — with a list, a push
  * by ANY entry is machine movement (the park survives every machine
- * login's push, not just the first one's).
+ * login's push, not just the first one's). The `[bot]` suffix is
+ * normalized on both sides (gh-1025).
  *
  * @param {string|null} login      the actor/committer login to test
  * @param {string|null} machineAuthor raw resolveMachineAuthor output
  * @returns {boolean} true when login matches any list entry
  */
 function isMachineLogin(login, machineAuthor) {
-    var l = String(login || '').toLowerCase();
+    var l = stripBotSuffix(String(login || '').toLowerCase());
     if (!l) return false;
     var entries = machineAuthorLogins(machineAuthor);
     for (var i = 0; i < entries.length; i++) {
-        if (entries[i].toLowerCase() === l) return true;
+        if (stripBotSuffix(entries[i].toLowerCase()) === l) return true;
     }
     return false;
 }
@@ -135,8 +149,44 @@ function isMachineReleaseBump(item, owner) {
  */
 function isMachineAuthored(item, machineAuthor, owner) {
     var author = itemAuthor(item);
-    if (author && machineAuthorLogins(machineAuthor).indexOf(author) !== -1) return true;
+    if (author) {
+        // gh-1025: the bare login part stays case-SENSITIVE (design);
+        // only the API's App `[bot]` suffix is normalized away.
+        var bareAuthor = stripBotSuffix(author);
+        // gh-1025 review: a degenerate '[bot]'-only author strips to ''
+        // and must never match ('' === '' would trust everyone).
+        if (bareAuthor) {
+            var entries = machineAuthorLogins(machineAuthor);
+            for (var i = 0; i < entries.length; i++) {
+                if (stripBotSuffix(entries[i]) === bareAuthor) return true;
+            }
+        }
+    }
     return isMachineReleaseBump(item, owner);
+}
+
+/**
+ * Comment/thread-layer trust test (gh-1025 review): the verdict/consume/lap
+ * markers and the machine-thread census match comment AUTHORS against the
+ * machine allowlist. Same normalization as the login predicates — both
+ * sides lowercased and stripped of one trailing `[bot]` — so a marker
+ * authored by `dmtools-factory-bot[bot]` (the App identity) is trusted
+ * under the bare knob entry `dmtools-factory-bot`. Empty-after-strip never
+ * matches; a different bot never matches.
+ *
+ * @param {string|null} login       comment/thread author login
+ * @param {string[]}    loginsList  allowlist entries (machineAuthorLogins output)
+ * @returns {boolean}
+ */
+function loginMatchesList(login, loginsList) {
+    var l = stripBotSuffix(String(login || '').toLowerCase());
+    if (!l) return false;
+    var list = Array.isArray(loginsList) ? loginsList : [];
+    for (var i = 0; i < list.length; i++) {
+        var e = stripBotSuffix(String(list[i] || '').toLowerCase());
+        if (e && e === l) return true;
+    }
+    return false;
 }
 
 module.exports = {
@@ -144,5 +194,7 @@ module.exports = {
     machineAuthorLogins: machineAuthorLogins,
     isMachineLogin: isMachineLogin,
     isMachineReleaseBump: isMachineReleaseBump,
-    isMachineAuthored: isMachineAuthored
+    isMachineAuthored: isMachineAuthored,
+    stripBotSuffix: stripBotSuffix,
+    loginMatchesList: loginMatchesList
 };
