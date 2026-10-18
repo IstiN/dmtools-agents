@@ -276,24 +276,31 @@ function silentUpdateFailureLine(attempt, iso) {
     return '⚠️ silent-update failure — attempt ' + attempt + ' at ' + (iso || '');
 }
 
+function commentBodyOf(c) {
+    return (c && (c.body || c.text)) || (typeof c === 'string' ? c : '');
+}
+
+// Fold one comment body's failure markers into the accumulator.
+function scanFailureMarkers(body, acc) {
+    var re = /⚠️ silent-update failure — attempt (\d+) at ([0-9T:\-.\+Z]+)/g;
+    var m;
+    while ((m = re.exec(String(body))) !== null) {
+        var n = parseInt(m[1], 10);
+        if (n > acc.count) acc.count = n;
+        var t = String(m[2]);
+        if (!acc.newest || t > acc.newest) acc.newest = t;
+    }
+}
+
 // Failure markers seen in a PR comment list (bodies or single strings).
 // Returns { count, newest } — count is the highest attempt number observed
 // (markers are monotonic per branch), newest the newest ISO timestamp.
 function silentUpdateFailureCount(comments) {
-    var count = 0;
-    var newest = null;
+    var acc = { count: 0, newest: null };
     (comments || []).forEach(function (c) {
-        var body = (c && (c.body || c.text)) || (typeof c === 'string' ? c : '');
-        var re = /⚠️ silent-update failure — attempt (\d+) at ([0-9T:\-.\+Z]+)/g;
-        var m;
-        while ((m = re.exec(String(body))) !== null) {
-            var n = parseInt(m[1], 10);
-            if (n > count) count = n;
-            var t = String(m[2]);
-            if (!newest || t > newest) newest = t;
-        }
+        scanFailureMarkers(commentBodyOf(c), acc);
     });
-    return { count: count, newest: newest };
+    return acc;
 }
 
 // Remaining attempts before the branch is flagged degraded.

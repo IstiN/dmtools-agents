@@ -214,3 +214,22 @@ suite('mutexRegistry isGhostCancelProbe — rerun_cancelled_checks predicate (AC
         assert.equal(registry.isGhostCancelProbe(undefined, NOW).isGhostCancel, false);
     });
 });
+
+suite('mutexRegistry holder normalization — object shapes (AC1 edge)', function () {
+    test('PR-item holder objects resolve via prNumber / number / pr', function () {
+        var out = registry.derive(
+            [{ prNumber: 997 }, { number: 998 }, { pr: 999 }],
+            [item(997, ['ai_validating']), item(998, ['ai_validating']), item(999, ['ai_validating'])],
+            registry.noCompletedRuns, 'o/r', T0);
+        assert.deepEqual(out.holders, [997, 998, 999]);
+        assert.deepEqual(out.phantoms, []);
+    });
+
+    test('garbage holder entries (null, NaN-string, empty object) drop out', function () {
+        var out = registry.derive(
+            [null, 'junk', {}, 0, -3],
+            [item(997, ['ai_validating'])],
+            registry.noCompletedRuns, 'o/r', T0);
+        assert.deepEqual(out.holders, [997], 'armed layer first — the live label still counts');
+    });
+});

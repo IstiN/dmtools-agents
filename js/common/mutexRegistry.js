@@ -16,8 +16,7 @@ var PHANTOM_ALARM_CAP = 3;
 var FRESH_CANCEL_GRACE_MS = 15 * 60 * 1000; // gh-755 — do not re-dispatch a cancel still within its visibility grace
 
 function num(v) {
-    var n = Math.floor(Number(v));
-    return (typeof n === 'number' && !isNaN(n) && n >= 0) ? n : 0;
+    return Math.max(0, Math.floor(Number(v)) || 0);
 }
 
 function str(v) {
@@ -26,6 +25,12 @@ function str(v) {
 
 // ── I1 — derive(M): reconciliation from the label layer ─────────────────────
 
+function holderFromObject(h) {
+    if (h.prNumber !== undefined) return normalizeHolder(h.prNumber);
+    if (h.number !== undefined) return normalizeHolder(h.number);
+    return normalizeHolder(h.pr);
+}
+
 function normalizeHolder(h) {
     if (h === null || h === undefined) return 0;
     if (typeof h === 'number') return Math.floor(h);
@@ -33,10 +38,7 @@ function normalizeHolder(h) {
         var n = parseInt(h, 10);
         return isNaN(n) ? 0 : n;
     }
-    if (typeof h === 'object') {
-        return normalizeHolder(h.prNumber !== undefined ? h.prNumber
-            : (h.number !== undefined ? h.number : h.pr));
-    }
+    if (typeof h === 'object') return holderFromObject(h);
     return 0;
 }
 
@@ -63,29 +65,35 @@ function uniquePositive(list) {
  * The armed layer counts first: a PR whose label layer shows the mutex
  * armed is a holder even if missing from the candidate list.
  */
-function derive(holders, liveItems, isRunConcluded, repo, nowIso) {
-    var concluded = (typeof isRunConcluded === 'function') ? isRunConcluded : function () { return false; };
-    var labelHolders = [];
+function labelHoldersOf(liveItems) {
+    var out = [];
     (liveItems || []).forEach(function (it) {
         var labels = (it && it.labels) || [];
-        if (labels.indexOf('ai_validating') !== -1) labelHolders.push(it.number);
+        if (labels.indexOf('ai_validating') !== -1) out.push(it.number);
     });
-    var cand = uniquePositive(holders);
-    var candSet = {};
-    cand.forEach(function (n) { candSet[n] = true; });
-    var labelSet = {};
-    labelHolders.forEach(function (n) { labelSet[n] = true; });
-    var phantoms = [];
-    var armedExtra = [];
+    return out;
+}
+
+function setOf(list) {
+    var s = {};
+    list.forEach(function (n) { s[n] = true; });
+    return s;
+}
+
+function armedExtrasOf(labelHolders, candSet) {
+    var out = [];
     labelHolders.forEach(function (n) {
-        if (!candSet[n]) armedExtra.push(n);
+        if (!candSet[n]) out.push(n);
     });
-    var merged = uniquePositive(cand.concat(labelHolders));
-    // The card's contract: M = { pr | L[pr]=armed ∧ run(pr) not concluded }.
-    // A candidate the live label layer does NOT show armed is not a holder —
-    // that divergence IS the phantom class (live 19:08Z: registry said 1/1,
-    // the label layer said none).
-    var liveHolders = merged.filter(function (n) {
+    return out;
+}
+
+// The card's contract: M = { pr | L[pr]=armed ∧ run(pr) not concluded }.
+// A candidate the live label layer does NOT show armed is not a holder —
+// that divergence IS the phantom class (live 19:08Z: registry said 1/1,
+// the label layer said none).
+function liveHoldersOf(merged, labelSet, candSet, concluded, phantoms) {
+    return merged.filter(function (n) {
         if (!labelSet[n]) {
             if (candSet[n]) phantoms.push(n);
             return false;
@@ -98,10 +106,19 @@ function derive(holders, liveItems, isRunConcluded, repo, nowIso) {
         }
         return true;
     });
+}
+
+function derive(holders, liveItems, isRunConcluded, repo, nowIso) {
+    var concluded = (typeof isRunConcluded === 'function') ? isRunConcluded : function () { return false; };
+    var labelHolders = labelHoldersOf(liveItems);
+    var cand = uniquePositive(holders);
+    var candSet = setOf(cand);
+    var phantoms = [];
+    var merged = uniquePositive(cand.concat(labelHolders));
     return {
-        holders: liveHolders,
+        holders: liveHoldersOf(merged, setOf(labelHolders), candSet, concluded, phantoms),
         phantoms: phantoms,
-        armedExtra: armedExtra,
+        armedExtra: armedExtrasOf(labelHolders, candSet),
         repo: repo || null,
         at: nowIso || null
     };
@@ -117,34 +134,41 @@ function defaultState() {
  * Compare a cached registry snapshot against a freshly derived live one.
  * Divergence ⇒ self-heal: corrected holders + alarm record + tick counters.
  */
-function reconcile(cachedSnapshot, liveSnapshot) {
-    var cached = (cachedSnapshot && cachedSnapshot.holders) || [];
-    var live = (liveSnapshot && liveSnapshot.holders) || [];
-    var liveSet = {};
-    live.forEach(function (n) { liveSet[n] = true; });
-    var divergent = cached.some(function (n) { return !liveSet[n]; }) ||
+function snapshotsDiverge(cached, live) {
+    var liveSet = setOf(live);
+    return cached.some(function (n) { return !liveSet[n]; }) ||
         live.some(function (n) { return cached.indexOf(n) === -1; });
-    if (!divergent) {
-        return {
-            selfHealed: false,
-            holders: live.slice(),
-            alarm: null,
-            mutexSelfHeals: 0,
-            phantomHolderTicks: 0,
-            consecutivePhantomTicks: 0
-        };
-    }
-    var alarm = {
+}
+
+function noDivergenceResult(live) {
+    return {
+        selfHealed: false,
+        holders: live.slice(),
+        alarm: null,
+        mutexSelfHeals: 0,
+        phantomHolderTicks: 0,
+        consecutivePhantomTicks: 0
+    };
+}
+
+function phantomAlarmOf(liveSnapshot, cachedSnapshot, cached, live) {
+    return {
         type: 'phantom_mutex_holder',
         label: 'ai_validating',
         repo: (liveSnapshot && liveSnapshot.repo) || (cachedSnapshot && cachedSnapshot.repo) || null,
         holders: { cached: cached, live: live },
         at: (liveSnapshot && liveSnapshot.at) || null
     };
+}
+
+function reconcile(cachedSnapshot, liveSnapshot) {
+    var cached = (cachedSnapshot && cachedSnapshot.holders) || [];
+    var live = (liveSnapshot && liveSnapshot.holders) || [];
+    if (!snapshotsDiverge(cached, live)) return noDivergenceResult(live);
     return {
         selfHealed: true,
         holders: live,
-        alarm: alarm,
+        alarm: phantomAlarmOf(liveSnapshot, cachedSnapshot, cached, live),
         mutexSelfHeals: 1,
         phantomHolderTicks: 1,
         consecutivePhantomTicks: 1
@@ -188,6 +212,22 @@ function recordPhantomHeal(state, label, cachedHolders, liveHolders, atIso) {
  * Counter keys never carry negative or NaN values; absent both sides the
  * snapshot stays absent (additive only).
  */
+function alarmKey(a) {
+    return str(a.type) + '|' + String(a.holders && a.holders.cached) + '|' + str(a.at);
+}
+
+function appendDedupedAlarms(out, alarms) {
+    var seen = {};
+    alarms.forEach(function (a) {
+        if (!a) return;
+        var key = alarmKey(a);
+        if (seen[key]) return;
+        seen[key] = true;
+        out.push(a);
+    });
+    while (out.length > MAX_ALARMS) out.shift();
+}
+
 function mergeSnapshot(prev, events) {
     var p = (prev && typeof prev === 'object') ? prev : {};
     var e = (events && typeof events === 'object') ? events : {};
@@ -197,15 +237,7 @@ function mergeSnapshot(prev, events) {
         consecutivePhantomTicks: num(p.consecutivePhantomTicks) + num(e.consecutivePhantomTicks),
         alarms: []
     };
-    var seen = {};
-    (p.alarms || []).concat(e.alarm ? [e.alarm] : []).forEach(function (a) {
-        if (!a) return;
-        var key = str(a.type) + '|' + String(a.holders && a.holders.cached) + '|' + str(a.at);
-        if (seen[key]) return;
-        seen[key] = true;
-        out.alarms.push(a);
-    });
-    while (out.alarms.length > MAX_ALARMS) out.alarms.shift();
+    appendDedupedAlarms(out.alarms, (p.alarms || []).concat(e.alarm ? [e.alarm] : []));
     return out;
 }
 
@@ -237,21 +269,34 @@ var ACTIVE_STATUSES = ['queued', 'in_progress', 'waiting', 'pending', 'requested
  * inside its fresh-cancel visibility grace (gh-755). Runs are newest-
  * first; a failed probe (null) reads as no ghost — fail closed.
  */
-function isGhostCancelProbe(runs, nowMs) {
-    var list = (runs || []).filter(function (r) { return r && typeof r === 'object'; });
-    var terminal = list.filter(function (r) { return ACTIVE_STATUSES.indexOf(String(r.status || '')) === -1; });
-    if (!terminal.length) return { isGhostCancel: false, reason: 'no-terminal-run' };
-    var newest = terminal[0];
-    var map = conclusionMapping(newest.conclusion);
-    var canceled = map && map.reDispatch === true;
-    if (!canceled) return { isGhostCancel: false, reason: 'newest-not-cancelled', conclusion: newest.conclusion };
-    var active = list.some(function (r) { return ACTIVE_STATUSES.indexOf(String(r.status || '')) !== -1; });
-    if (active) return { isGhostCancel: false, reason: 'active-run-on-head' };
+function isActiveRun(r) {
+    return ACTIVE_STATUSES.indexOf(String(r.status || '')) !== -1;
+}
+
+function validRuns(runs) {
+    return (runs || []).filter(function (r) { return r && typeof r === 'object'; });
+}
+
+function terminalRunsOf(list) {
+    return list.filter(function (r) { return !isActiveRun(r); });
+}
+
+function isReDispatchable(conclusion) {
+    var map = conclusionMapping(conclusion);
+    return !!(map && map.reDispatch === true);
+}
+
+function probeTimesOf(newest, nowMs) {
     var updatedAt = Date.parse(newest.updatedAt || newest.updated_at || '') || 0;
     var now = (nowMs === null || nowMs === undefined) ? Date.now() : nowMs;
-    if (updatedAt && (now - updatedAt) < FRESH_CANCEL_GRACE_MS) {
-        return { isGhostCancel: false, reason: 'within-fresh-cancel-grace', updatedAt: updatedAt };
-    }
+    return { updatedAt: updatedAt, now: now };
+}
+
+function withinFreshCancelGrace(updatedAt, now) {
+    return !!updatedAt && (now - updatedAt) < FRESH_CANCEL_GRACE_MS;
+}
+
+function ghostCancelResult(newest, updatedAt) {
     return {
         isGhostCancel: true,
         runId: newest.id || null,
@@ -259,6 +304,22 @@ function isGhostCancelProbe(runs, nowMs) {
         conclusion: newest.conclusion,
         updatedAt: updatedAt || null
     };
+}
+
+function isGhostCancelProbe(runs, nowMs) {
+    var list = validRuns(runs);
+    var terminal = terminalRunsOf(list);
+    if (!terminal.length) return { isGhostCancel: false, reason: 'no-terminal-run' };
+    var newest = terminal[0];
+    if (!isReDispatchable(newest.conclusion)) {
+        return { isGhostCancel: false, reason: 'newest-not-cancelled', conclusion: newest.conclusion };
+    }
+    if (list.some(isActiveRun)) return { isGhostCancel: false, reason: 'active-run-on-head' };
+    var times = probeTimesOf(newest, nowMs);
+    if (withinFreshCancelGrace(times.updatedAt, times.now)) {
+        return { isGhostCancel: false, reason: 'within-fresh-cancel-grace', updatedAt: times.updatedAt };
+    }
+    return ghostCancelResult(newest, times.updatedAt);
 }
 
 // The derive() run-state conjunct placeholder for call sites without a

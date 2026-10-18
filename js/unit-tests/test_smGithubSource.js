@@ -2759,3 +2759,98 @@ suite('sm github source: dev-on-assignment re-derive (gh-944)', function () {
             'bounded per tick — a burst drains over consecutive ticks (workflow budget caps concurrency)');
     });
 });
+
+suite('sm github source: gh-1000 phantom-heal helpers', function () {
+    function loadBare() {
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': { createSmProvider: function () { return null; } },
+            '../../common/smAsync.js': {},
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+        }), {});
+    }
+    function pr(n, labels) { return { number: n, labels: labels }; }
+
+    test('mutexHoldersOf: mutex-label holders, blocked exempt, mutexAmong scopes', function () {
+        var mod = loadBare();
+        var items = [pr(1, ['ai_validating']), pr(2, ['ai_validating', 'blocked']), pr(3, ['other'])];
+        assert.deepEqual(mod.mutexHoldersOf(items, { mutex: 'ai_validating' }), [1],
+            'blocked holder is invisible');
+        var scoped = [pr(4, ['ai_validating', 'agent']), pr(5, ['ai_validating'])];
+        assert.deepEqual(mod.mutexHoldersOf(scoped, { mutex: 'ai_validating', mutexAmong: ['agent'] }), [4],
+            'mutexAmong scopes WHO counts');
+    });
+
+    test('rederiveHoldersLive: no githubApi hook → cached holders kept (fail-closed, E4)', function () {
+        var mod = loadBare();
+        var out = mod.rederiveHoldersLive([97], [pr(97, ['ai_validating'])], {}, { owner: 'o', repo: 'r' },
+            { mutex: 'ai_validating' });
+        assert.deepEqual(out, [97]);
+        assert.equal(mod.takeMutexTickSnapshot(), null, 'no probe → no tick event');
+    });
+
+    test('rederiveHoldersLive: probe throw → cached holders kept (fail-closed, E4)', function () {
+        var mod = loadBare();
+        var provider = { githubApi: function () { throw new Error('boom'); } };
+        var out = mod.rederiveHoldersLive([97], [pr(97, ['ai_validating'])], provider,
+            { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
+        assert.deepEqual(out, [97]);
+    });
+
+    test('rederiveHoldersLive: divergent live label layer self-heals and records the tick event', function () {
+        var mod = loadBare();
+        var provider = { githubApi: function () { return { items: [pr(97, [])] }; } };
+        var out = mod.rederiveHoldersLive([97], [pr(97, ['ai_validating'])], provider,
+            { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
+        assert.deepEqual(out, [], 'live layer shows no arm → phantom holder dropped');
+        var snap = mod.takeMutexTickSnapshot();
+        assert.equal(snap.mutexSelfHeals, 1);
+        assert.equal(snap.phantomHolderTicks, 1);
+        assert.equal(snap.alarms.length, 1);
+        assert.equal(snap.alarms[0].type, 'phantom_mutex_holder');
+        assert.equal(mod.takeMutexTickSnapshot(), null, 'snapshot drains');
+    });
+
+    test('rederiveHoldersLive: live layer agrees → holders kept, no event', function () {
+        var mod = loadBare();
+        var provider = { githubApi: function () { return { items: [pr(97, ['ai_validating'])] }; } };
+        var out = mod.rederiveHoldersLive([97], [pr(97, ['ai_validating'])], provider,
+            { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
+        assert.deepEqual(out, [97]);
+        assert.equal(mod.takeMutexTickSnapshot(), null, 'no divergence → no self-heal event');
+    });
+});
+
+suite('sm github source: gh-1000 phantom-heal probe edges', function () {
+    function loadBare2(dropSpy) {
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': {
+                createSmProvider: function () { return null; },
+                ioCacheDrop: dropSpy
+            },
+            '../../common/smAsync.js': {},
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+        }), {});
+    }
+    function pr2(n, labels) { return { number: n, labels: labels }; }
+
+    test('non-array probe payload → cached holders kept (fail-closed)', function () {
+        var mod = loadBare2(null);
+        var provider = { githubApi: function () { return { items: 'junk' }; } };
+        var out = mod.rederiveHoldersLive([97], [pr2(97, ['ai_validating'])], provider,
+            { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
+        assert.deepEqual(out, [97]);
+        assert.equal(mod.takeMutexTickSnapshot(), null);
+    });
+
+    test('divergence drops the openPrs cache entry via smProvider.ioCacheDrop', function () {
+        var dropped = [];
+        var mod = loadBare2(function (owner, repo, key, sub) { dropped.push([owner, repo, key, sub]); });
+        var provider = { githubApi: function () { return { items: [pr2(97, [])] }; } };
+        var out = mod.rederiveHoldersLive([97], [pr2(97, ['ai_validating'])], provider,
+            { owner: 'o', repo: 'r' }, { mutex: 'ai_validating' });
+        assert.deepEqual(out, []);
+        assert.deepEqual(dropped, [['o', 'r', 'openPrs', null]], 'ioCache self-healed');
+    });
+});

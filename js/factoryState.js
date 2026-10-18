@@ -684,19 +684,32 @@ function firstAssignee(it) {
  */
 // gh-1000 — mutex metrics snapshot normalizer: caps the alarm tail,
 // coerces counters, drops a malformed blob rather than poisoning state.
+function mutexCounterNum(v) {
+    return Math.max(0, Math.floor(Number(v)) || 0);
+}
+
+function mutexSnapObject(input) {
+    return (input && typeof input === 'object') ? input : {};
+}
+
+function mutexAlarmsTail(snap) {
+    return Array.isArray(snap.alarms) ? snap.alarms.slice(-5) : [];
+}
+
 function normalizeMutexSnapshot(input) {
-    var snap = (input && typeof input === 'object') ? input : {};
-    function num(v) {
-        var n = Math.floor(Number(v));
-        return (typeof n === 'number' && !isNaN(n) && n >= 0) ? n : 0;
-    }
-    var alarms = Array.isArray(snap.alarms) ? snap.alarms.slice(-5) : [];
+    var snap = mutexSnapObject(input);
     return {
-        mutexSelfHeals: num(snap.mutexSelfHeals),
-        phantomHolderTicks: num(snap.phantomHolderTicks),
-        consecutivePhantomTicks: num(snap.consecutivePhantomTicks),
-        alarms: alarms
+        mutexSelfHeals: mutexCounterNum(snap.mutexSelfHeals),
+        phantomHolderTicks: mutexCounterNum(snap.phantomHolderTicks),
+        consecutivePhantomTicks: mutexCounterNum(snap.consecutivePhantomTicks),
+        alarms: mutexAlarmsTail(snap)
     };
+}
+
+// gh-1000 — phantom-holder bookkeeping (second tier). Present only when
+// the SM published a mutex snapshot this tick; malformed blobs drop.
+function applyMutexSnapshot(state, input) {
+    if (input.mutex) state.mutex = normalizeMutexSnapshot(input.mutex);
 }
 
 function buildFactoryState(input) {
@@ -1000,9 +1013,7 @@ function buildFactoryState(input) {
     // gh-825 — the board header's global Σ$ (all cards, 14d window). Absent
     // key when pricing is off/absent/malformed: the board renders tokens-only.
     if (costs) state.costs = costs;
-    // gh-1000 — phantom-holder bookkeeping (second tier). Present only when
-    // the SM published a mutex snapshot this tick; malformed blobs drop.
-    if (input.mutex) state.mutex = normalizeMutexSnapshot(input.mutex);
+    applyMutexSnapshot(state, input);
     return state;
 }
 
@@ -1238,6 +1249,7 @@ module.exports = {
     backlogBucket: backlogBucket,
     nextHistory: nextHistory,
     normalizeTokens: normalizeTokens,
+    normalizeMutexSnapshot: normalizeMutexSnapshot,
     readTokensFile: readTokensFile,
     fetchTokensFromBranch: fetchTokensFromBranch,
     tokensMapOf: tokensMapOf,

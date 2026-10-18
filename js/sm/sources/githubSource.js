@@ -697,6 +697,88 @@ function recordMutexTickEvent(ev) {
     mutexTickEvents = mutexRegistryModule.mergeSnapshot(mutexTickEvents, ev || {});
 }
 
+// gh-1000 — the phantom-heal probe timestamps its derived snapshots; the
+// module had no ISO clock helper (the WIP called a nowIso() that was never
+// defined — every live re-derive would have thrown into the fail-closed
+// catch, masking the phantom forever).
+function nowIso() {
+    return new Date().toISOString();
+}
+
+// Live open-PR re-read for the phantom-heal probe (E4 fail-closed: any
+// failure — no provider hook, malformed payload, thrown probe — reads as
+// null and the caller keeps the cached decision for one more tick).
+function asItemsArray(liveData) {
+    var liveItems = ((liveData || {}).items || liveData || []);
+    return Array.isArray(liveItems) ? liveItems : null;
+}
+
+function livePrItems(provider, repoInfo) {
+    if (!provider || typeof provider.githubApi !== 'function' || !repoInfo) return null;
+    try {
+        return asItemsArray(provider.githubApi('list_prs',
+            { owner: repoInfo.owner, repo: repoInfo.repo }));
+    } catch (e) {
+        console.log('   ⚠️ gh-1000 phantom-heal live re-read failed: ' +
+            String((e && e.message) || e) + ' — keeping cached mutex decision (fail-closed)');
+        return null;
+    }
+}
+
+// The open-PR cache is module-level in smProvider (the provider object is
+// a facade) — drop via the module, guarded for minimal test stubs.
+function dropOpenPrsCache(repoInfo) {
+    if (!smProviderModule || typeof smProviderModule.ioCacheDrop !== 'function') return;
+    try {
+        smProviderModule.ioCacheDrop(repoInfo.owner, repoInfo.repo, 'openPrs', null);
+    } catch (e2) { /* probe-only */ }
+}
+
+function logPhantomHeal(alarm, cachedHolders, liveHolders) {
+    console.log('   ⚠️ ' + alarm.title + ' — ' + alarm.detail +
+        ' (cached holders [' + cachedHolders.join(', ') + '] vs live [' +
+        liveHolders.join(', ') + ']; ioCache self-healed, defer cancelled)');
+}
+
+// gh-1000 I1/I2 — re-derive the full-slot holder set against the LIVE
+// label layer; a divergent cached holder is self-healed (cache drop +
+// alarm + tick counters) so a queued candidate arms in the SAME tick
+// (AC2). Returns the corrected holders; fail-closed keeps `holders`.
+function rederiveHoldersLive(holders, items, provider, repoInfo, q) {
+    var liveItems = livePrItems(provider, repoInfo);
+    if (!liveItems) return holders;
+    var repoName = repoInfo.owner + '/' + repoInfo.repo;
+    var liveHolderSet = mutexRegistryModule.derive(
+        mutexHoldersOf(liveItems, q), liveItems,
+        mutexRegistryModule.noCompletedRuns, repoName, nowIso());
+    var cachedSet = mutexRegistryModule.derive(
+        holders, items, mutexRegistryModule.noCompletedRuns, repoName, nowIso());
+    var divergent = mutexRegistryModule.reconcile(cachedSet, liveHolderSet);
+    if (divergent.selfHealed) {
+        dropOpenPrsCache(repoInfo);
+        logPhantomHeal(divergent.alarm, holders, liveHolderSet.holders);
+        recordMutexTickEvent({
+            mutexSelfHeals: 1,
+            phantomHolderTicks: 1,
+            alarm: divergent.alarm
+        });
+    }
+    return liveHolderSet.holders;
+}
+
+// Re-derive only on a full-slot decision — keeps the mutex gate's
+// zero-slot fast path allocation-free (and the query's branch count
+// identical to the pre-gh-1000 shape).
+function phantomHealIfFull(holders, items, provider, repoInfo, q, mutexMax) {
+    if (holders.length < mutexMax) return holders;
+    return rederiveHoldersLive(holders, items, provider, repoInfo, q);
+}
+
+function logMutexDefer(q, holderCount, mutexMax) {
+    console.log('   🔒 mutex "' + q.mutex + '" slots ' + holderCount + '/' + mutexMax +
+        ' taken — rule defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ')');
+}
+
 function takeMutexTickSnapshot() {
     var s = mutexTickEvents;
     mutexTickEvents = null;
@@ -831,61 +913,12 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
             });
         } else {
             // gh-1000 I1/I2 — phantom-holder reconciliation before deferring.
-            // Full-slot decision MUST be re-derived against the LIVE label
-            // layer; a divergent cached holder is self-healed here so a
-            // queued candidate arms in the SAME tick (AC2).
+            // The full-slot decision is re-derived against the LIVE label
+            // layer; a divergent cached holder is self-healed so a queued
+            // candidate arms in the SAME tick (AC2). Fail-closed (E4).
+            holders = phantomHealIfFull(holders, items, provider, repoInfo, q, mutexMax);
             if (holders.length >= mutexMax) {
-                var liveHolderSet = null;
-                var holdersLive = false;
-                if (provider && typeof provider.githubApi === 'function' && repoInfo) {
-                    try {
-                        var liveData = provider.githubApi('list_prs', { owner: repoInfo.owner, repo: repoInfo.repo });
-                        var liveItems = ((liveData || {}).items || liveData || []);
-                        if (Array.isArray(liveItems)) {
-                            liveHolderSet = mutexRegistryModule.derive(
-                                mutexHoldersOf(liveItems, q),
-                                liveItems,
-                                mutexRegistryModule.noCompletedRuns,
-                                repoInfo.owner + '/' + repoInfo.repo, nowIso());
-                            holdersLive = true;
-                        }
-                    } catch (e) {
-                        console.log('   ⚠️ gh-1000 phantom-heal live re-read failed: ' +
-                            String((e && e.message) || e) + ' — keeping cached mutex decision (fail-closed)');
-                    }
-                }
-                if (holdersLive) {
-                    var cachedSet = mutexRegistryModule.derive(
-                        holders,
-                        items,
-                        mutexRegistryModule.noCompletedRuns,
-                        repoInfo ? repoInfo.owner + '/' + repoInfo.repo : '', nowIso());
-                    var divergent = mutexRegistryModule.reconcile(cachedSet, liveHolderSet);
-                    if (divergent.selfHealed) {
-                        // The cache is module-level in smProvider (the
-                        // provider object is a facade) — drop via the
-                        // module, guarded for minimal test stubs.
-                        if (smProviderModule && typeof smProviderModule.ioCacheDrop === 'function') {
-                            try {
-                                smProviderModule.ioCacheDrop(repoInfo.owner, repoInfo.repo, 'openPrs', null);
-                            } catch (e2) { /* probe-only */ }
-                        }
-                        var alarm = divergent.alarm;
-                        console.log('   ⚠️ ' + alarm.title + ' — ' + alarm.detail +
-                            ' (cached holders [' + holders.join(', ') + '] vs live [' +
-                            liveHolderSet.holders.join(', ') + ']; ioCache self-healed, defer cancelled)');
-                        recordMutexTickEvent({
-                            mutexSelfHeals: 1,
-                            phantomHolderTicks: 1,
-                            alarm: alarm
-                        });
-                    }
-                    holders = liveHolderSet.holders;
-                }
-            }
-            if (holders.length >= mutexMax) {
-                console.log('   🔒 mutex "' + q.mutex + '" slots ' + holders.length + '/' + mutexMax +
-                    ' taken — rule defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ')');
+                logMutexDefer(q, holders.length, mutexMax);
                 return [];
             }
         }
@@ -1024,5 +1057,6 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { query: query, matchesGuards: matchesGuards,
-        takeMutexTickSnapshot: takeMutexTickSnapshot };
+        takeMutexTickSnapshot: takeMutexTickSnapshot,
+        mutexHoldersOf: mutexHoldersOf, rederiveHoldersLive: rederiveHoldersLive };
 }
