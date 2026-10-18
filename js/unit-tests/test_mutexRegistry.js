@@ -146,6 +146,22 @@ suite('mutexRegistry reconcile — self-heal with alarm, tick counters (AC2, I2)
         assert.equal(st.alarms[0].title, out.alarm.title);
     });
 
+    test('phantomAlarmOf is null-safe: absent snapshot fields fall back to cached, then defaults', function () {
+        // The CRAP-gate decomposition normalized both snapshots up front —
+        // these branches pin the fallbacks: live fields win, cached fields
+        // cover, defaults close the gaps.
+        var noLive = registry.reconcile({ holders: [997] }, null);
+        assert.equal(noLive.selfHealed, true);
+        assert.equal(noLive.alarm.label, 'ai_validating', 'default label when neither snapshot names one');
+        assert.equal(noLive.alarm.repo, null);
+        assert.equal(noLive.alarm.at, null);
+        var cachedOnly = registry.reconcile(
+            { holders: [997], label: 'review', repo: 'o/r', at: T0 }, { holders: [] });
+        assert.equal(cachedOnly.alarm.label, 'review', 'cached snapshot covers when the live one lacks the field');
+        assert.equal(cachedOnly.alarm.repo, 'o/r');
+        assert.equal(cachedOnly.alarm.at, null, 'at is live-only — an alarm timestamp marks the live observation');
+    });
+
     test('clean tick resets the consecutive counter but keeps the cumulative self-heal count', function () {
         // Tick 1: cached says 997 holds, live says nobody (phantom heal).
         var healed = registry.reconcile({ holders: [997], at: T0 }, { holders: [], at: T0 });

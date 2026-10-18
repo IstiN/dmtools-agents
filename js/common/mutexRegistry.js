@@ -189,12 +189,16 @@ function buildPhantomAlarm(label, cached, live, repo, atIso) {
 }
 
 function phantomAlarmOf(liveSnapshot, cachedSnapshot, cached, live) {
+    // Field resolution stays branch-light (CRAP gate: a CC over 8 can never
+    // pass the threshold even fully covered) — normalize both snapshots up
+    // front, then one flat call to the shared builder.
+    var liveWins = liveSnapshot || {};
+    var cachedWins = cachedSnapshot || {};
     return buildPhantomAlarm(
-        (liveSnapshot && liveSnapshot.label) ||
-            (cachedSnapshot && cachedSnapshot.label) || DEFAULT_MUTEX_LABEL,
+        liveWins.label || cachedWins.label || DEFAULT_MUTEX_LABEL,
         cached, live,
-        (liveSnapshot && liveSnapshot.repo) || (cachedSnapshot && cachedSnapshot.repo),
-        (liveSnapshot && liveSnapshot.at) || null);
+        liveWins.repo || cachedWins.repo || null,
+        liveWins.at || null);
 }
 
 function reconcile(cachedSnapshot, liveSnapshot) {
