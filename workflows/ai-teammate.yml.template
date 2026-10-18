@@ -93,6 +93,24 @@ env:
 
 jobs:
   guard:
+    # gh-1029: the `labeled` trigger fires on EVERY label write — including
+    # the leg's own lifecycle labels (status:*, ai_developed, ...) — and
+    # `on:` cannot filter by label name. Without this job-level gate the
+    # guard allocated a runner on each lifecycle-label write only to decide
+    # run=false (the self-retrigger no-op burn). `assigned` and the arming
+    # `labeled` events (agent:*) still enter; lifecycle labels skip the job
+    # entirely and never allocate a runner.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' &&
+       github.event.action == 'assigned') ||
+      (github.event_name == 'issues' &&
+       github.event.action == 'labeled' &&
+       (github.event.label.name == 'agent:dev' ||
+        github.event.label.name == 'agent:develop' ||
+        github.event.label.name == 'agent:review' ||
+        github.event.label.name == 'agent:rework' ||
+        github.event.label.name == 'pr_approved'))
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.check.outputs.run }}
