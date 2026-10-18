@@ -336,6 +336,28 @@ suite('validationLiveness fork-aware silent-update routing (gh-1070)', function 
         assert.equal(live.forkSilentUpdateRoute(null, 'epam', 'base', false).route, 'base');
     });
 
+    test('forkHeadFull: the same-repo comparison is CASE-INSENSITIVE (config vs API casing drift)', function () {
+        // The base side comes from config (effectiveRepoInfo.owner/repo),
+        // headRepoFull from the API's head.repo.full_name — GitHub repo
+        // names are case-insensitive, so a casing drift between the two
+        // must NOT classify a same-repo PR as a fork (a false guest park
+        // when maintainer_can_modify=false, the silent misroute class
+        // gh-1059 eliminated).
+        assert.equal(live.forkHeadFull('IstiN/dmtools-agents', 'istin', 'dmtools-agents'), null,
+            'casing drift on the SAME repo is not a fork');
+        assert.equal(live.forkSilentUpdateRoute('IstiN/dmtools-agents', 'istin', 'dmtools-agents', false).route,
+            'base', 'route base — NEVER the park path for a same-repo head');
+        assert.equal(live.forkSilentUpdateRoute('IstiN/dmtools-agents', 'istin', 'dmtools-agents', true).route,
+            'base', 'route base — even an editable probe does not reroute a same-repo head');
+        assert.equal(live.forkHeadFull('ISTIN/DMTOOLS-AGENTS', 'istin', 'dmtools-agents'), null,
+            'all-caps drift is still the same repo');
+        // a GENUINE fork still resolves, preserving its own casing for the push URL
+        assert.equal(live.forkHeadFull('Forko/ForkR', 'epam', 'base'), 'Forko/ForkR',
+            'a real fork keeps its canonical casing');
+        assert.equal(live.forkSilentUpdateRoute('Forko/ForkR', 'EPAM', 'BASE', true).forkFull,
+            'Forko/ForkR', 'the fork push target carries the fork\'s own casing');
+    });
+
     test('UT-2: the fork push URL is built from head.repo.full_name and never targets the base', function () {
         var url = live.forkPushTokenUrl('forko/forkr');
         assert.equal(url,
