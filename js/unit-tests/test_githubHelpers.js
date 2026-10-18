@@ -1814,7 +1814,7 @@ suite('scm.getDiffText', function() {
     });
 });
 
-suite('githubHelpers.detectFailedChecks — pure log helpers (gh-1012)', function() {
+suite('githubHelpers.detectFailedChecks — pure log helpers (gh-1007)', function() {
 
     function makeGh(mocks) {
         return loadGithubHelpers(mocks || {});
@@ -1893,7 +1893,7 @@ suite('githubHelpers.detectFailedChecks — pure log helpers (gh-1012)', functio
     });
 });
 
-suite('githubHelpers.detectFailedChecks — scm mode and GitHub job logs (gh-1012)', function() {
+suite('githubHelpers.detectFailedChecks — scm mode and GitHub job logs (gh-1007)', function() {
 
     function makeGh(mocks) {
         return loadGithubHelpers(mocks || {});
@@ -2088,6 +2088,63 @@ suite('githubHelpers.fetchGithubCheckLogs / fetchGithubRunLogs (gh-982 runs-url 
         assert.ok(out.indexOf('=== crap ===') !== -1, 'failed job labeled');
         assert.ok(out.indexOf('ERR7') !== -1);
         assert.ok(out.indexOf('ERR8') === -1, 'successful jobs skipped');
+    });
+
+    test('runs/N fallback accumulates MULTIPLE failed jobs in order and skips log-less jobs', function () {
+        var gh = load();
+        var fetched = [];
+        var scm = {
+            getWorkflowRunJobs: function () {
+                return { jobs: [
+                    { id: 7, name: 'crap', conclusion: 'failure' },
+                    { id: 9, name: 'lint', conclusion: 'timed_out' },
+                    { id: 10, conclusion: 'failure' },
+                    { id: 11, name: 'empty', conclusion: 'failure' }
+                ] };
+            },
+            getJobLogs: function (id) { fetched.push(id); return String(id) === '11' ? null : 'ERR' + id; }
+        };
+        var out = gh.fetchGithubRunLogs({ details_url: 'https://x/actions/runs/99' }, scm, 'o', 'r');
+        assert.deepEqual(fetched, ['7', '9', '10', '11'], 'every failed job with an id is fetched');
+        assert.ok(out.indexOf('=== crap ===\nERR7') !== -1, 'first failed job first');
+        assert.ok(out.indexOf('ERR7') < out.indexOf('=== lint ==='), 'order preserved');
+        assert.ok(out.indexOf('=== lint ===\nERR9') !== -1, 'timed_out job included');
+        assert.ok(out.indexOf('=== job 10 ===\nERR10') !== -1, 'unnamed job falls back to job <id> header');
+        assert.ok(out.indexOf('empty') === -1 && out.indexOf('ERR11') === -1, 'job with null logs contributes nothing');
+    });
+
+    test('extractGithubRunId: digits after /runs/, nothing otherwise', function () {
+        var gh = load();
+        assert.equal(gh.extractGithubRunId({ details_url: 'https://x/actions/runs/123456' }), '123456');
+        assert.equal(gh.extractGithubRunId({ details_url: 'https://x/actions/runs/555/job/77' }), '555');
+        assert.equal(gh.extractGithubRunId({ details_url: 'https://x/pull/1' }), null);
+        assert.equal(gh.extractGithubRunId({ details_url: null }), null);
+        assert.equal(gh.extractGithubRunId({}), null);
+    });
+
+    test('fetchWorkflowRunJobs: scm provider preferred, gh tool as fallback', function () {
+        var gh = load();
+        var calls = [];
+        var scm = { getWorkflowRunJobs: function (id) { calls.push(id); return { jobs: [] }; } };
+        gh.fetchWorkflowRunJobs(scm, 'o', 'r', '42');
+        assert.deepEqual(calls, ['42']);
+        var tools = { github_get_workflow_run_jobs: function (p) { calls.push(p); return { jobs: [] }; } };
+        var gh2 = loadGithubHelpers(tools);
+        gh2.fetchWorkflowRunJobs(null, 'o', 'r', '43');
+        assert.deepEqual(calls, ['42', { workspace: 'o', repository: 'r', runId: '43' }]);
+        var gh3 = loadGithubHelpers({});
+        assert.throws(function () { gh3.fetchWorkflowRunJobs(null, 'o', 'r', '44'); }, /github_get_workflow_run_jobs/, 'no provider at all is a loud failure');
+    });
+
+    test('formatFailedRunJobLogs: concatenates failed-job sections, null when none', function () {
+        var gh = load();
+        var scm = { getJobLogs: function (id) { return 'L' + id; } };
+        var out = gh.formatFailedRunJobLogs(scm, 'o', 'r', { jobs: [
+            { id: 1, name: 'a', conclusion: 'failure' },
+            { id: 2, name: 'b', conclusion: 'failure' }
+        ] });
+        assert.equal(out, '=== a ===\nL1\n=== b ===\nL2\n');
+        assert.equal(gh.formatFailedRunJobLogs(scm, 'o', 'r', { jobs: [{ id: 3, name: 'c', conclusion: 'success' }] }), null);
     });
 
     test('null paths: no url match, no failed jobs, provider throw', function () {

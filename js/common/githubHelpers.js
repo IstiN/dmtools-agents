@@ -447,7 +447,7 @@ function _fetchJobLogs(scm, owner, repo, jobId) {
  * In SCM mode an optional jenkinsBasePath can be passed to fetch Jenkins console logs
  * for failed checks whose details_url points at the configured Jenkins instance.
  */
-// ─── Pure helpers extracted from detectFailedChecks (gh-1012) ────────────────
+// ─── Pure helpers extracted from detectFailedChecks (gh-1007) ────────────────
 
 /** Normalize a check-runs payload (object or JSON string) into a check-runs array. */
 function parseCheckRunsResult(rawResult) {
@@ -527,25 +527,40 @@ function isFailedRunJob(runJob) {
     return runJob.conclusion === 'failure' || runJob.conclusion === 'timed_out';
 }
 
+/** Extract the numeric workflow-run id from a details_url shaped /runs/{id}. */
+function extractGithubRunId(check) {
+    var runIdMatch = check.details_url && check.details_url.match(/\/runs\/(\d+)/);
+    return runIdMatch ? runIdMatch[1] : null;
+}
+
+/** Fetch the jobs payload of a workflow run via the scm provider or the gh tool. */
+function fetchWorkflowRunJobs(scm, owner, repo, runId) {
+    return (scm && typeof scm.getWorkflowRunJobs === 'function')
+        ? scm.getWorkflowRunJobs(runId)
+        : github_get_workflow_run_jobs({
+            workspace: owner, repository: repo, runId: runId
+        });
+}
+
+/** Concatenate the logs of a run's failed jobs, each under a `=== name ===` header. */
+function formatFailedRunJobLogs(scm, owner, repo, rawJobs) {
+    var out = '';
+    ciModule._jobsOf(rawJobs).forEach(function (runJob) {
+        if (!isFailedRunJob(runJob)) return;
+        var jobLogs = _fetchJobLogs(scm, owner, repo, runJob.id);
+        if (jobLogs) out += '=== ' + (runJob.name || 'job ' + runJob.id) + ' ===\n' + jobLogs + '\n';
+    });
+    return out || null;
+}
+
 /** Fetch the failed jobs' logs of a workflow RUN whose details_url contains /runs/{id}. */
 function fetchGithubRunLogs(check, scm, owner, repo) {
-    var runIdMatch = check.details_url && check.details_url.match(/\/runs\/(\d+)/);
-    if (!runIdMatch) return null;
+    var runId = extractGithubRunId(check);
+    if (!runId) return null;
     try {
-        var rawJobs = (scm && typeof scm.getWorkflowRunJobs === 'function')
-            ? scm.getWorkflowRunJobs(runIdMatch[1])
-            : github_get_workflow_run_jobs({
-                workspace: owner, repository: repo, runId: runIdMatch[1]
-            });
-        var out = '';
-        ciModule._jobsOf(rawJobs).forEach(function (runJob) {
-            if (!isFailedRunJob(runJob)) return;
-            var jobLogs = _fetchJobLogs(scm, owner, repo, runJob.id);
-            if (jobLogs) out += '=== ' + (runJob.name || 'job ' + runJob.id) + ' ===\n' + jobLogs + '\n';
-        });
-        return out || null;
+        return formatFailedRunJobLogs(scm, owner, repo, fetchWorkflowRunJobs(scm, owner, repo, runId));
     } catch (e) {
-        console.warn('Could not fetch jobs/logs for run', runIdMatch[1], ':', e.message || e);
+        console.warn('Could not fetch jobs/logs for run', runId, ':', e.message || e);
         return null;
     }
 }
@@ -692,11 +707,14 @@ module.exports = {
     fetchDiscussionsAndRawData: fetchDiscussionsAndRawData,
     detectFailedChecks: detectFailedChecks,
 
-    // Pure helpers extracted from detectFailedChecks (gh-1012) — exported for
+    // Pure helpers extracted from detectFailedChecks (gh-1007) — exported for
     // unit testing; detectFailedChecks behavior is unchanged.
     parseCheckRunsResult: parseCheckRunsResult,
     fetchGithubCheckLogs: fetchGithubCheckLogs,
     fetchGithubRunLogs: fetchGithubRunLogs,
+    extractGithubRunId: extractGithubRunId,
+    fetchWorkflowRunJobs: fetchWorkflowRunJobs,
+    formatFailedRunJobLogs: formatFailedRunJobLogs,
     isFailedRunJob: isFailedRunJob,
     unwrapLogResult: unwrapLogResult,
     extractJenkinsBuildTarget: extractJenkinsBuildTarget,

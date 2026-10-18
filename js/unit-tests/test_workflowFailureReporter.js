@@ -1,5 +1,5 @@
 /**
- * Unit tests for js/workflowFailureReporter.js (gh-1012 CRAP reduction).
+ * Unit tests for js/workflowFailureReporter.js (gh-1007 CRAP reduction).
  *
  * Covers the pure helpers extracted from action() (parseWorkflowRuns,
  * detectTicketKey, buildBugSummary, buildBugDescription, extractKeyFromString,

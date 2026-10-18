@@ -32,7 +32,7 @@ function getTracker() {
     return _trackerInst;
 }
 
-// ─── Pure helpers (extracted from action — gh-1012) ──────────────────────────
+// ─── Pure helpers (extracted from action — gh-1007) ──────────────────────────
 
 /**
  * Normalize the listWorkflowRuns payload into a runs array.
@@ -163,7 +163,7 @@ function createBugTicket(tracker, jiraProject, run, workflowId, ticketKey) {
 }
 
 /** Link the created bug to the detected ticket and add the ci-ticket dedup label. */
-function linkCreatedBug(tracker, newKey, ticketKey, label) {
+function linkCreatedBug(tracker, newKey, ticketKey) {
     try {
         tracker.linkIssues(ticketKey, newKey, 'is blocked by');
         console.log('  🔗 Linked ' + ticketKey + ' is blocked by ' + newKey);
