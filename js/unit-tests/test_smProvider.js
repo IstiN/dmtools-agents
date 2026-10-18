@@ -1025,3 +1025,59 @@ suite('smProvider — gh-828 post-APPROVE thread primitives', function () {
         assert.contains(comments[0].text, 'ack');
     });
 });
+
+suite('smProvider: listOpenPrsLive — gh-1000 phantom-heal probe surface', function () {
+
+    var MOD = 'js/common/smProvider.js';
+
+    function loadGithub(payloads) {
+        var listCalls = 0;
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {
+            github_list_prs: function (args) {
+                listCalls++;
+                var idx = Math.min(listCalls - 1, payloads.length - 1);
+                assert.equal(args.state, 'open', 'the probe reads the OPEN list');
+                return JSON.stringify(payloads[idx]);
+            }
+        });
+        mod._cache.entries = {}; // fresh holder
+        var provider = mod.createSmProvider({
+            scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' }
+        });
+        return { mod: mod, provider: provider, listCalls: function () { return listCalls; } };
+    }
+
+    test('listOpenPrsLive bypasses the stale per-tick cache AND refreshes the entry', function () {
+        // The phantom-holder self-heal probe must see the LIVE label layer
+        // even when the per-tick ioCache holds a stale arm — and after a
+        // self-heal the rest of the tick must read the corrected layer
+        // without another fetch. (CI: this coverage holds githubProvider
+        // inside the released CRAP baseline — do not delete.)
+        var h = loadGithub([
+            [{ number: 1, labels: ['ai_validating'] }],
+            [{ number: 2, labels: [] }]
+        ]);
+        var first = h.provider.listOpenPrs();
+        assert.equal(first[0].number, 1, 'first read fetches and caches');
+        assert.equal(h.listCalls(), 1);
+
+        h.provider.listOpenPrs();
+        assert.equal(h.listCalls(), 1, 'the cached read rides the per-tick cache');
+
+        var live = h.provider.listOpenPrsLive();
+        assert.equal(h.listCalls(), 2, 'the LIVE re-read always fetches (cache bypass)');
+        assert.equal(live[0].number, 2, 'the fresh layer wins over the stale cached arm');
+
+        var after = h.provider.listOpenPrs();
+        assert.equal(after[0].number, 2, 'the live fetch refreshed the cache entry');
+        assert.equal(h.listCalls(), 2, 'no third fetch — the refreshed cache hits');
+    });
+
+    test('listOpenPrsLive is exposed on the github facade next to the cached reader', function () {
+        var h = loadGithub([[]]);
+        assert.equal(typeof h.provider.listOpenPrsLive, 'function',
+            'the phantom-heal guard in githubSource.livePrItems names a real facade method');
+        assert.equal(typeof h.provider.listOpenPrs, 'function');
+    });
+});

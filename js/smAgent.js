@@ -167,6 +167,21 @@ var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
 // ⚠️ trigger-failed marker math and the dead-head park cap. The pure
 // half lives in the module; recordDispatchFailure below wires transport.
 var triggerFailuresModule = require('./common/triggerFailures.js');
+// gh-1000 (hoisted, never lazy — the gh-823 pack-require rule): the
+// phantom ai_validating mutex holder — registry probes/heals, live-PR
+// re-derivation and the alarm/streak counter persistence.
+var mutexRegistryModule = require('./common/mutexRegistry.js');
+// gh-1000 (same pack-require rule): the github source layer the phantom
+// probe rides on (livePrItems guard + the tick-scan event below).
+var githubSourceModule = require('./sm/sources/githubSource.js');
+// gh-1028 (hoisted, never lazy — the gh-823 pack-require rule): the
+// branch-keyed in-flight leg probe — an ACTIVE ai-teammate run whose
+// head_branch IS the dispatch branch keeps a second leg off that branch
+// regardless of head_sha (the (pr, head) latch and the title guards both
+// missed the duplicate-concurrent-rework pathology, live PR #1017
+// 2026-10-18 08:04–08:09Z). Pure half here; the probe fan-out lives in
+// hasActiveLegRunOnBranch below.
+var branchLegGuardModule = require('./common/branchLegGuard.js');
 // gh-922 (same-tick dedup, review): PR numbers whose dispatch failure was
 // already recorded THIS tick. The already-parked guard in
 // recordDispatchFailure reads the query-time label snapshot — within one
@@ -182,6 +197,15 @@ var projectConfig = null;
 // paths, ridden into the published snapshot. Null until the first latch
 // touch; reset at the top of action().
 var tickReworkLatch = null;
+// gh-998: zombie-swept counter, one per tick — incremented by the neutral
+// sweeper for every terminal-owner placeholder force-completed in place;
+// ridden into the published factory-state snapshot (I5: operators see the
+// leak rate, not just the fix). Reset at the top of action().
+var tickZombiesSwept = 0;
+// gh-1000 (phantom ai_validating holder): per-tick snapshot carried from
+// the github-source mutex scan to the factory-state publish rule (second
+// tier — the publish merge keeps counters/alarm tail across ticks).
+var spMutex = null;
 // Priority-tier label names (owner directive 2026-10-08), resolved once in
 // action() from config.smPriorityLabels — passed down to the source query
 // path (githubSource queryPrs' tier-aware FIFO sort).
@@ -355,6 +379,35 @@ function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
         }
     }
 
+    return false;
+}
+
+// gh-1028: the branch-keyed in-flight leg probe (transport half — the
+// match itself is the pure branchLegGuardModule.hasActiveLegRunOnBranch).
+// Fan-out parity with hasActiveTargetWorkflowRun: the four active statuses
+// via scm.listWorkflowRuns, stale non-running zombies aged out by the same
+// 6h bound, per-status probe errors logged and skipped. FAIL-OPEN: a probe
+// error must not wedge the rework loop — one stacked leg is the same worst
+// case the title guards already accept on a broken read.
+function hasActiveLegRunOnBranch(scm, workflowFile, branch) {
+    if (!scm || typeof scm.listWorkflowRuns !== 'function' || !branch) return false;
+    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
+    for (var i = 0; i < statuses.length; i++) {
+        var runs = [];
+        try {
+            runs = parseWorkflowRuns(scm.listWorkflowRuns(statuses[i], workflowFile, 50));
+        } catch (eBranchLeg) {
+            console.warn('  ⚠️  Could not inspect active workflow runs (' + statuses[i] + '): ' + (eBranchLeg.message || eBranchLeg));
+            continue;
+        }
+        if (branchLegGuardModule.hasActiveLegRunOnBranch(runs, branch, {
+                workflowFile: workflowFile,
+                staleNonRunningMs: STALE_NON_RUNNING_WORKFLOW_MS,
+                nowMs: Date.now()
+            })) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -583,6 +636,32 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
                 if (skipInfo) skipInfo.crossAnchorActive = altKeys[altIx];
                 return false;
             }
+        }
+        // gh-1028 branch-keyed leg guard: BOTH rework dispatch arms
+        // (issue-anchored rework-on-red-ci AND PR-anchored
+        // rework-on-label) land the leg ON the PR branch
+        // (workflowRef={branch}), and the leg is the branch's SINGLE
+        // WRITER — two concurrent legs on one branch race every push
+        // (live PR #1017 / gh-1000, 2026-10-18 08:04–08:09Z: TWO
+        // concurrent rework legs for ONE rework cycle — the first leg's
+        // push moved the head c2e0d28f → 94988905, so the gh-806
+        // (pr, head) latch keyed a NEW head and never suppressed the
+        // second arm, and the PR-armed factory run titled
+        // 'workflow_dispatch # rework' carries no '· gh-N'/'#N' anchor
+        // token, so the title guards above were blind to it). This probe
+        // keys on the BRANCH, not the head: an ACTIVE ai-teammate run
+        // whose head_branch IS the dispatch branch — regardless of
+        // head_sha — owns the branch, and the dispatch is suppressed.
+        // The arm survives (no consumeLabels bookkeeping here, unlike
+        // the gh-715 cross-anchor path): a leg that dies silently leaves
+        // the arm armed, and the next quiet tick re-fires it — the
+        // dead-letter recovery the machine loop is built on.
+        if (it0.branch && workflowRef === String(it0.branch) &&
+                hasActiveLegRunOnBranch(scm, workflowFile, it0.branch)) {
+            console.log('  ⏭️  ' + ticketKey + ' skipped (leg already in flight on branch ' +
+                it0.branch + ' — gh-1028: the branch is the leg\'s single writer, ' +
+                'a second leg would race its push)');
+            return false;
         }
         var inputs;
         if (rule.inputs) {
@@ -1847,6 +1926,64 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             });
         }
 
+        // gh-1000 I5 — silent-update clone-failure bookkeeping (the pure
+        // helpers live in validationLiveness; THIS is the wiring the rework
+        // thread demanded — without it a live repeat of the 19:14Z
+        // clone failure behaves exactly as before). On a clone failure:
+        // post the per-head failure marker (attempt N at ISO), and once
+        // the attempts are exhausted flag the PR 'silent-update-degraded'
+        // — visible state INSTEAD OF a silent retry-forever loop. The
+        // retry itself stays every-tick (self-healing by design); the
+        // marker trail makes the failure observable and the flag routes
+        // it to a human before the queue burns more ticks on a dead
+        // workspace. Bookkeeping failures never mask the clone error.
+        function recordSilentUpdateFailure() {
+            try {
+                var tracker = githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo);
+                var comments = tracker.getComments(ticket.prNumber) || [];
+                var count = validationLivenessModule.silentUpdateFailureCount(comments);
+                var attempt = count.count + 1;
+                var iso = new Date().toISOString();
+                var left = validationLivenessModule.silentUpdateAttemptsLeft(attempt);
+                // The marker trail covers attempts 1..MAX — the label is
+                // the durable signal beyond the cap (no comment spam).
+                if (attempt <= validationLivenessModule.SILENT_UPDATE_MAX_FAILURES) {
+                    tracker.postComment(ticket.prNumber,
+                        validationLivenessModule.silentUpdateFailureLine(attempt, iso));
+                }
+                if (left > 0) {
+                    console.warn('  ⚠️  ' + key + ' silent-update clone failure #' + attempt +
+                        ' recorded on the PR — ' + left + ' attempt(s) left before the degraded flag (I5)');
+                    return;
+                }
+                // Attempts exhausted: flag the PR once (REST add-label is
+                // idempotent).
+                if ((ticket.labels || []).indexOf(
+                        validationLivenessModule.SILENT_UPDATE_DEGRADED_LABEL) === -1) {
+                    tracker.addLabel(ticket.prNumber,
+                        validationLivenessModule.SILENT_UPDATE_DEGRADED_LABEL);
+                }
+                console.error('  ❌ ' + key + ' silent-update DEGRADED after ' +
+                    validationLivenessModule.SILENT_UPDATE_MAX_FAILURES +
+                    ' consecutive clone failures — PR flagged silent-update-degraded (I5)');
+            } catch (eI5) {
+                console.warn('  ⚠️  ' + key + ' I5 failure bookkeeping failed: ' +
+                             (eI5.message || eI5));
+            }
+        }
+
+        function silentUpdateBranchTracked(branchName) {
+            try {
+                silentUpdateBranch(branchName);
+            } catch (eClone) {
+                // I5: only CLONE/refresh failures get the marker trail —
+                // the caller's catch still reports the rule failure.
+                recordSilentUpdateFailure();
+                throw eClone;
+            }
+        }
+
+
         // Validation trigger (dispatch-only CI): no push ever fires CI on
         // its own — the SM is the only trigger. The PAT update-branch dance
         // (a source-token push DOES fire CI) is retired: a workflow_dispatch
@@ -2218,7 +2355,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         console.warn('  ⚠️  ' + key +
                             ' head-run probe failed — branch refresh deferred (fail closed, gh-798)');
                     } else {
-                        silentUpdateBranch(ticket.branch);
+                        silentUpdateBranchTracked(ticket.branch);
                         console.log('  ✅ ' + key + ' branch silently updated (no CI)');
                         cancelStaleAfterRefreshUb();
                     }
@@ -2233,7 +2370,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // unresolvable-but-existing head would close the hole
                     // for one tick of delay; the heal backstop was chosen
                     // instead so a flaky API never freezes freshness.
-                    silentUpdateBranch(ticket.branch);
+                    silentUpdateBranchTracked(ticket.branch);
                     console.log('  ✅ ' + key + ' branch silently updated (no CI)');
                     cancelStaleAfterRefreshUb();
                 }
@@ -2700,11 +2837,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // from checks:write, gh-848 belt); with no App token
                     // configured the in-place cure is skipped entirely —
                     // the reset below is the only working remedy.
-                    if (vProbe && vProbe.green && (RUN_JOB_PARAMS || {}).silentToken) {
+                    if ((RUN_JOB_PARAMS || {}).silentToken) {
                         var phHeadRuns = headWorkflowRunsSafe(effectiveRepoInfo, vHead0);
                         if (phHeadRuns !== null && !hasActiveHeadRun(phHeadRuns)) {
                             var phCover = greenCoverRun(effectiveRepoInfo, vCiWf, vHead0);
-                            if (phCover) {
+                            if (vProbe && vProbe.green && phCover) {
                                 // gh-865: conclude the link-less placeholders
                                 // AND the numeric-id orphans in ONE pass —
                                 // the generalized orphan rule (a pending
@@ -2751,6 +2888,60 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                                 ' failed: ' + (ePh403.message || ePh403));
                                         }
                                     }
+                                }
+                            } else if (vOrphans && vOrphans.length &&
+                                        !(vProbe && vProbe.green)) {
+                                // gh-998 NEUTRAL SWEEP — the finally-path
+                                // rows the gh-857 mirror never covered:
+                                // terminal-owner orphans (the gh-865
+                                // detector: pending check-runs whose owning
+                                // run concluded, past the grace) whose
+                                // cycle left NO verdict on the head (no
+                                // green cover — the failure/superseded/
+                                // cancelled/died rows of the gh-998
+                                // capability table). Live fa #1563
+                                // (2026-10-17, head f3d58647): the kicker-
+                                // suite placeholder Quality gate (check-run
+                                // 117469671401) stayed in_progress 40+ min
+                                // past its cycle and held mergeStateStatus=
+                                // BLOCKED with 58 green siblings; the
+                                // fall-through legacy cure (a same-sha
+                                // re-dispatch) cannot conclude a stamp
+                                // nothing will conclude (gh-865's own
+                                // note). The honest terminal state is
+                                // 'neutral' — a terminal owner carries no
+                                // live verdict about its head (I3) — closed
+                                // under the cycle's own app token (I4) with
+                                // the gh-857 AC2 fail-safe established
+                                // above (no ACTIVE run on the head).
+                                // Link-less placeholders deliberately keep
+                                // the gh-852 fresh-sha reset below: a
+                                // same-sha re-dispatch RE-MINTS them, so
+                                // only a fresh head cures that pathology
+                                // (gh-852 AC3). A neutral close is not a
+                                // green verdict — the PR still re-validates
+                                // via the legacy dispatch fall-through; the
+                                // sweep only retires the zombie. Every
+                                // swept check-run logs the zombie-swept
+                                // line and increments the tick counter
+                                // ridden into the factory-state payload
+                                // (I5); a close GitHub rejects (403
+                                // ownership, transient) is retried next
+                                // tick, never silently dropped (E2).
+                                var swConc = sweepZombieCheckRunsNeutral(
+                                    effectiveRepoInfo, vOrphans, vHead0);
+                                if (swConc.concluded > 0) {
+                                    console.log('  🧹 ' + key + ' zombie-swept ' +
+                                        swConc.concluded + ' terminal-owner check-run(s)' +
+                                        ' as neutral (gh-998)' +
+                                        (swConc.rejected
+                                            ? ' — ' + swConc.rejected + ' rejected, retry next tick'
+                                            : ''));
+                                    tickZombiesSwept += swConc.concluded;
+                                } else if (swConc.rejected) {
+                                    console.warn('  ⚠️  ' + key + ' zombie sweep' +
+                                        ' rejected (' + swConc.rejected + ') — retry next' +
+                                        ' tick (gh-998)');
                                 }
                             }
                         } else if (phHeadRuns !== null) {
@@ -2803,7 +2994,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             continue;
                         }
                         try {
-                            silentUpdateBranch(ticket.branch);
+                            silentUpdateBranchTracked(ticket.branch);
                         } catch (ePhUp) {
                             console.warn('  ⚠️  ' + key + ' placeholder fresh-sha refresh failed: ' +
                                          (ePhUp.message || ePhUp) + ' — head unchanged, retry next tick');
@@ -2979,14 +3170,6 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     console.log('  ⏭️  ' + key + ' rerun_cancelled_checks: no head sha — skip');
                     continue;
                 }
-                var rcContexts = [];
-                if (Array.isArray(rule.requiredContexts)) {
-                    rcContexts = rule.requiredContexts;
-                } else if (typeof rule.requiredContexts === 'string' && rule.requiredContexts) {
-                    rcContexts = rule.requiredContexts.split(',').map(function (s) {
-                        return s.trim();
-                    }).filter(Boolean);
-                }
                 // gh-755 (owner directive 2026-10-05 'если что-то
                 // канселится — надо повторно запускать'): rule.anyCancelled
                 // switches the rule to the ANY-cancelled mode — no name
@@ -3007,8 +3190,131 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     console.warn('  ⚠️  ' + key + ' rerun_cancelled_checks: rule carries no requiredContexts and no anyCancelled — skip');
                     continue;
                 }
+                // One head-runs fetch feeds the ghost-cancel probe (below),
+                // the in-flight guard and the target mapping (#695 review:
+                // the double identical gh api call was redundant).
+                var rcHeadRuns = headWorkflowRunsSafe(effectiveRepoInfo, rcHead);
                 var rcCancelled = cancelledRequiredContexts(effectiveRepoInfo, rcHead, rcAny ? null : rcContexts);
                 if (!rcCancelled.length) {
+                    // gh-1000 (AC3/I3/I4 — live gh-757): a validation run
+                    // that concluded CANCELLED pre-materialization leaves
+                    // NO check contexts at all, so the probe above sees
+                    // nothing while the arm sits wedged with no live
+                    // validation run behind it — and a guest PR has no
+                    // machine push to escape (merge gate refuses forever).
+                    // Newest dispatched run completed cancelled/timed_out +
+                    // nothing active on the head + fresh-cancel grace
+                    // observed ⇒ re-dispatch fresh CI on the SAME head.
+                    // Authorship-blind by construction: the dispatch is a
+                    // plain workflow run on the head ref, no write to the
+                    // guest branch (a failed --ref surfaces next tick,
+                    // marker not posted).
+                    var ghostProbe = rcHeadRuns
+                        ? mutexRegistryModule.isGhostCancelProbe(rcHeadRuns, null)
+                        : null;
+                    // gh-1000 ghost gate: a re-dispatch is only justified
+                    // while the merge gate is actually WAITING on a
+                    // required context that will never report (missing
+                    // from the rollup or non-terminal). All-terminal
+                    // contexts (green/failure) mean the gate is not
+                    // blocked-by-absence — red belongs to fail_validation,
+                    // a cancelled CONTEXT to the rerun path above (the
+                    // gh-682 kicker fixtures: cancelled run in the
+                    // rollup, contexts re-stamped green — never act).
+                    var ghostGateHeld = false;
+                    try {
+                        var ghostRollup = headCheckRunsSafe(effectiveRepoInfo, rcHead);
+                        if (ghostRollup !== null) {
+                            var ghostLatest = latestCheckRunConclusions(ghostRollup);
+                            var ghostNames = rcAny ? Object.keys(ghostLatest) : rcContexts;
+                            ghostGateHeld = ghostNames.some(function (c) {
+                                return !ghostLatest[c] || ghostLatest[c].concl === null;
+                            });
+                        }
+                    } catch (eGhostGate) { ghostGateHeld = false; }
+                    if (ghostProbe && ghostProbe.isGhostCancel && ghostGateHeld) {
+                        var ghostMarker = '🔁 Ghost-cancelled validation re-dispatched';
+                        var ghostReported = false;
+                        try {
+                            var ghostCommentsRaw = github_get_pr_comments({
+                                workspace: effectiveRepoInfo.owner,
+                                repository: effectiveRepoInfo.repo,
+                                pullRequestId: ticket.prNumber
+                            });
+                            var ghostCommentsObj = typeof ghostCommentsRaw === 'string'
+                                ? JSON.parse(ghostCommentsRaw) : (ghostCommentsRaw || []);
+                            var ghostCommentList = Array.isArray(ghostCommentsObj)
+                                ? ghostCommentsObj
+                                : (ghostCommentsObj.comments || ghostCommentsObj.items || []);
+                            ghostReported = ghostCommentList.some(function (c) {
+                                var b = String((c && c.body) || '');
+                                return b.indexOf(ghostMarker) !== -1 &&
+                                    b.indexOf(String(rcHead)) !== -1;
+                            });
+                        } catch (eGhostRead) { /* read failed — treat as not reported */ }
+                        if (ghostReported) {
+                            // gh-1000 E3: the marker is on record yet the
+                            // probe STILL reads ghost-cancel — the fresh
+                            // run was cancelled again. Count the flap and
+                            // escalate (warn + one comment per flap level)
+                            // instead of re-wedging silently forever.
+                            var ghostFlapPosted = ghostFlapEscalate(
+                                effectiveRepoInfo, ticket, rcHead,
+                                ghostCommentList, key, ghostMarker);
+                            console.log('  ⏭️  ' + key + ' ghost-cancelled validation already ' +
+                                're-dispatched for head — waiting on the run' +
+                                (ghostFlapPosted ? ' (flap alarm posted)' : ''));
+                            continue;
+                        }
+                        var ghostCi = rule.ciWorkflow ||
+                            ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
+                        if (DRY) {
+                            console.log('  🧪 [dry] ghost-cancel re-dispatch skipped (gh workflow run ' +
+                                        ghostCi + ' @ ' + (ticket.branch || '?') + ')');
+                            continue;
+                        }
+                        // The branch is guest-controlled (this path is by
+                        // design authorship-blind — gh-757 covers pushes,
+                        // not this dispatch), and git ref names permit
+                        // shell metacharacters: single-quote the value and
+                        // escape any embedded quote (rework review thread).
+                        var ghostRef = String(ticket.branch || '').replace(/'/g, "'\\''");
+                        // gh-683 bug C invariant, ghost class (rework review
+                        // thread): the once-per-head marker latches every
+                        // future retry for this head, so it may post ONLY
+                        // when the dispatch really landed. Wrap explicitly —
+                        // a bridge that returns an error payload WITHOUT
+                        // throwing must not latch the head to flap-warns.
+                        var ghostDispatched = false;
+                        try {
+                            cli_execute_command({
+                                command: 'gh workflow run ' + ghostCi +
+                                         ' --repo ' + effectiveRepoInfo.owner + '/' +
+                                         effectiveRepoInfo.repo +
+                                         ' --ref \'' + ghostRef + '\''
+                            });
+                            ghostDispatched = true;
+                        } catch (eGhostDispatch) {
+                            console.warn('  ⚠️  ' + key + ' ghost-cancel re-dispatch failed: ' +
+                                         (eGhostDispatch.message || eGhostDispatch) +
+                                         ' — no marker posted, retried next tick');
+                        }
+                        if (!ghostDispatched) {
+                            continue;
+                        }
+                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(
+                            ticket.prNumber,
+                            ghostMarker + ': the newest dispatched validation run (' +
+                            ghostProbe.runId + ') concluded CANCELLED before its check runs ' +
+                            'materialized — no required check will ever re-report on its own ' +
+                            '(gh-1000 ghost-cancel class, live gh-757). CANCELLED is never a ' +
+                            'verdict: fresh CI re-dispatched on the same head, merging resumes ' +
+                            'automatically. (head `' + rcHead + '`)');
+                        console.log('  🔁 ' + key + ' ghost-cancelled validation re-dispatched (run ' +
+                                    ghostProbe.runId + ' concluded ' + ghostProbe.conclusion + ')');
+                        processedKeys.push(key);
+                        continue;
+                    }
                     console.log('  ⏭️  ' + key + ' no context reads CANCELLED on ' +
                                 rcHead.substring(0, 7) + ' — nothing to rerun');
                     continue;
@@ -3040,11 +3346,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 }
                 // No in-flight run on the head: a queued/running run
                 // re-stamps the contexts on its own (hasActiveDispatchedRun
-                // probe pattern, widened to every event). One head-runs
-                // fetch feeds both the probe and the target mapping below
-                // (#695 review: the double identical gh api call was
-                // redundant).
-                var rcHeadRuns = headWorkflowRunsSafe(effectiveRepoInfo, rcHead);
+                // probe pattern, widened to every event). The head rollup
+                // was fetched above (shared with the ghost-cancel probe).
                 if (hasActiveHeadRun(rcHeadRuns)) {
                     console.log('  ⏭️  ' + key + ' head carries an in-flight run — it re-stamps the contexts, no rerun');
                     continue;
@@ -4010,6 +4313,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     spFull, spCfg, function (a) {
                         return cli_execute_command(a);
                     });
+                // gh-1000: drain this tick's mutex events accumulated by
+                // the github-source phantom-heal scan (module channel —
+                // githubSource and smAgent do not share scope).
+                spMutex = (githubSourceModule &&
+                    typeof githubSourceModule.takeMutexTickSnapshot === 'function')
+                    ? githubSourceModule.takeMutexTickSnapshot() : null;
                 var spState = factoryStateModule.buildFactoryState({
                     repoInfo: spRepo,
                     prs: spPrList,
@@ -4039,8 +4348,31 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // gh-806: this tick's rework latch rides the snapshot —
                     // the next tick's armer consults what this tick armed.
                     reworkInFlight: tickReworkLatch ? tickReworkLatch.map : {},
-                    legWorkflow: reworkLatchModule.DEFAULT_LEG_WORKFLOW
+                    // gh-998 (I5): this tick's zombie-swept count rides the
+                    // snapshot cumulatively — operators see the leak rate.
+                    zombiesSwept: tickZombiesSwept,
+                    legWorkflow: reworkLatchModule.DEFAULT_LEG_WORKFLOW,
+                    // gh-1000 (phantom ai_validating holder): this tick's
+                    // mutex bookkeeping from the github-source scan —
+                    // counters + alarm tail, carried across ticks below.
+                    mutex: spMutex
                 });
+                // gh-1000 second tier: merge over the PREVIOUS published
+                // snapshot's mutex block so counters/alarm tail persist
+                // across ticks (absent on both sides ⇒ key stays absent).
+                if (spMutex || (spPrev && spPrev.mutex)) {
+                    spState.mutex = mutexRegistryModule.mergeSnapshot(
+                        spPrev && spPrev.mutex, spMutex);
+                    // gh-1000 (rework thread): consecutivePhantomTicks is a
+                    // STREAK, not a cumulative counter — a tick that carried
+                    // no phantom self-heal must reset it. The cross-tick
+                    // merge alone would carry one phantom event forward
+                    // across every later clean tick and the Q2 auto-issue
+                    // threshold would key on noise.
+                    if (!spMutex || !spMutex.phantomHolderTicks) {
+                        spState.mutex.consecutivePhantomTicks = 0;
+                    }
+                }
                 var spUrl = factoryStateModule.publishFactoryState(
                     spState, spCfg, function (args) {
                         // MUST return: publishFactoryState probes the
@@ -5788,6 +6120,74 @@ function headOrphanedRunChecks(repoInfo, headSha) {
     });
 }
 
+// gh-998 sweper transport — force-complete terminal-owner zombie check-runs
+// as 'neutral'. Same creator-token contract as concludePlaceholderCheckRuns
+// (the check-runs belong to the github-actions App; the PATCH rides
+// jobParams.silentToken with checks:write, the tick PAT would 403 — gh-848
+// belt, gh-857): the close runs under the SAME app identity that minted the
+// stamps (I4 — GitHub rejects cross-app completion with 404 by design, live
+// fa #1563: operator REST close of check-run 117469671401 404'd). Every
+// successful close emits the I5 machine-log line
+// `zombie-swept: <check-run-id> head <sha>`; the caller accumulates the
+// count into the tick counter ridden into the factory-state snapshot.
+// Returns { concluded, rejected } — rejected carries the first failure
+// message; a rejection is a degradation retried next tick, never a silent
+// leak (gh-998 E2).
+function sweepZombieCheckRunsNeutral(repoInfo, zombies, headSha) {
+    var out = { concluded: 0, rejected: null };
+    if (!zombies || !zombies.length) return out;
+    var summary = 'Zombie-swept by the SM tick (gh-998): the check-run outlived its' +
+        ' validation cycle — the owning workflow run terminated without' +
+        ' concluding it. Closed as neutral: a dead cycle carries no verdict' +
+        ' about its head. The PR re-validates through the normal dispatch path.';
+    var appToken = (RUN_JOB_PARAMS || {}).silentToken;
+    var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
+    var swapped = false;
+    if (appToken) {
+        try {
+            set_env_variable('GH_TOKEN', appToken);
+            swapped = true;
+        } catch (eSwap) {
+            console.warn('  ⚠️  gh-998 token swap failed, sweep uses the PAT' +
+                         ' (may 403): ' + (eSwap.message || eSwap));
+        }
+    }
+    try {
+        zombies.forEach(function (z) {
+            if (!z || z.id === null || z.id === undefined) {
+                if (!out.rejected) out.rejected = 'check-run id missing (cannot PATCH)';
+                return;
+            }
+            if (DRY) {
+                console.log('  🧪 [dry] zombie-swept check-run ' + z.id + ' ("' +
+                            (z.name || '?') + '") completed/neutral on ' +
+                            String(headSha).slice(0, 7) + ' (gh-998)');
+                out.concluded++;
+                return;
+            }
+            try {
+                cli_execute_command({
+                    command: 'gh api -X PATCH repos/' + repoInfo.owner +
+                        '/' + repoInfo.repo + '/check-runs/' + z.id +
+                        ' -f status=completed' +
+                        ' -f conclusion=neutral' +
+                        ' -f "output[title]=SM swept a zombie check-run (gh-998)"' +
+                        ' -f "output[summary]=' + summary + '"'
+                });
+                out.concluded++;
+                console.log('  ' + checkRunZombiesModule.zombieSweptLine(z.id, headSha));
+            } catch (ePatch) {
+                if (!out.rejected) out.rejected = (ePatch && ePatch.message) || String(ePatch);
+            }
+        });
+    } finally {
+        if (swapped && sourceTok) {
+            try { set_env_variable('GH_TOKEN', sourceTok); } catch (e3) {}
+        }
+    }
+    return out;
+}
+
 // ── gh-857: in-place placeholder conclusion ────────────────────────────────
 //
 // Live fa #1457 (head fd1b9aa2): the placeholder check-run (18:51:25)
@@ -5995,6 +6395,58 @@ function hasRecentHeadRun(runs, graceMs) {
         }
         return false;
     });
+}
+
+// gh-1000 E3 — ghost re-dispatch flap bookkeeping. The once-per-head
+// marker makes the ghost-cancel re-dispatch one-shot; if the fresh run the
+// machine dispatched was cancelled AGAIN, the next tick finds the marker
+// and used to wait forever with only a skip log — the permanent-wedge
+// shape this ticket bans, moved one level down (the gh-748 kicker race is
+// not guaranteed gone; the incident behind gh-1000 was a cancel storm).
+// Each machine re-dispatch posts one marker comment carrying the head sha,
+// so the comment history IS the flap counter: a marker whose run still
+// reads ghost-cancel is one re-cancel.
+var GHOST_FLAP_MARKER = '🚨 Ghost-cancel flap';
+
+function headKeyedComments(comments, head) {
+    var out = [];
+    (comments || []).forEach(function (c) {
+        var b = String((c && c.body) || '');
+        if (b.indexOf(String(head)) !== -1) out.push(b);
+    });
+    return out;
+}
+
+function ghostFlapState(comments, head, dispatchMarker) {
+    var keyed = headKeyedComments(comments, head);
+    var dispatches = keyed.filter(function (b) {
+        return b.indexOf(dispatchMarker) !== -1;
+    }).length;
+    var alarms = keyed.filter(function (b) {
+        return b.indexOf(GHOST_FLAP_MARKER) !== -1;
+    }).length;
+    return { dispatches: dispatches, alarms: alarms };
+}
+
+// Escalate a ghost re-dispatch flap: a warn line every tick plus ONE flap
+// comment per new flap level (rate-limited by construction — the dispatch
+// count only grows when a new re-dispatch lands, and the marker suppresses
+// further dispatches on this head). Returns true when a comment posted.
+function ghostFlapEscalate(repoInfo, ticket, head, comments, key, dispatchMarker) {
+    var st = ghostFlapState(comments, head, dispatchMarker);
+    if (st.dispatches < 1) return false; // no machine dispatch on record — nothing flapping
+    var flaps = st.dispatches; // every dispatch whose run still reads ghost-cancel
+    console.warn('  ⚠️  ' + key + ' ghost-cancel flap: machine re-dispatch ' +
+        flaps + '× and the head still reads ghost-cancel (merge gate still waiting) — ' +
+        'a guest PR cannot self-escape (gh-1000 E3)');
+    if (st.alarms >= flaps) return false; // this flap level already alarmed
+    githubTracker(repoInfo.owner, repoInfo.repo).postComment(
+        ticket.prNumber,
+        GHOST_FLAP_MARKER + ' (head `' + head + '`): the machine re-dispatched validation ' +
+        st.dispatches + '× after ghost-cancel and every fresh run was cancelled again — ' +
+        'the arm is wedged and a guest PR cannot self-escape (gh-1000 E3). Manual action ' +
+        'required: re-run the workflow or inspect the cancel source (gh-748 kicker race).');
+    return true;
 }
 
 function cancelledRequiredContexts(repoInfo, headSha, contexts) {
@@ -6841,6 +7293,7 @@ function action(params) {
     var p     = params.jobParams || params;
     RUN_JOB_PARAMS = p;    DRY = p.dryRun === true;
     tickReworkLatch = null;
+    tickZombiesSwept = 0; // gh-998 (I5): fresh per-tick sweep counter
     tickParkedRecorded = {}; // gh-922: fresh same-tick dedup window (see recordDispatchFailure)
     if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
     var rules = p.rules;

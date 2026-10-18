@@ -378,3 +378,174 @@ suite('postTestReviewComments: inline comments', function() {
             'pullRequestId is rejected by the runtime schema — must not be sent');
     });
 });
+
+suite('postTestReviewComments: recommendation normalization and final status (gh-1011)', function() {
+
+    function loadWithReview(reviewJson, extraMocks, moduleMocks) {
+        return loadPostTestReviewComments(Object.assign({
+            file_read: function(opts) {
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                if (opts.path === 'outputs/pr_review.json') return JSON.stringify(reviewJson);
+                return null;
+            },
+            github_list_prs: function() {
+                return [{ number: 42, html_url: 'https://github.com/org/repo/pull/42', head: { ref: 'test/DMC-7' } }];
+            },
+            cli_execute_command: function() { return 'https://github.com/IstiN/trackstate'; }
+        }, extraMocks || {}), moduleMocks);
+    }
+
+    function approveParams(extra) {
+        return Object.assign({
+            ticket: { key: 'DMC-7', fields: { summary: 'Normalize' } },
+            jobParams: { customParams: {} }
+        }, extra || {});
+    }
+
+    test('"PASSED" normalizes to APPROVE and a Passed ticket goes to Passed', function() {
+        var moves = [];
+        var module = loadWithReview({ recommendation: 'PASSED' }, {
+            jira_move_to_status: function(args) { moves.push(args.statusName); }
+        });
+
+        var result = module.action(approveParams());
+
+        assert.equal(result.success, true);
+        assert.equal(result.recommendation, 'APPROVE');
+        assert.equal(result.mergeSucceeded, true, 'PR found → queued for merge');
+        assert.equal(result.finalStatus, 'Passed', 'In Review - Passed ticket ends Passed');
+        assert.deepEqual(moves, [], 'approval never moves the ticket directly');
+    });
+
+    test('"FAILED" normalizes to BLOCK and moves the ticket to In Rework', function() {
+        var moves = [];
+        var module = loadWithReview({ recommendation: 'FAILED' }, {
+            jira_move_to_status: function(args) { moves.push(args.statusName); }
+        });
+
+        var result = module.action(approveParams());
+
+        assert.equal(result.success, true);
+        assert.equal(result.recommendation, 'BLOCK');
+        assert.equal(result.mergeSucceeded, false);
+        assert.equal(result.finalStatus, 'In Rework');
+        assert.deepEqual(moves, ['In Rework']);
+    });
+
+    test('"REJECT" normalizes to BLOCK', function() {
+        var module = loadWithReview({ recommendation: 'reject' }, {});
+
+        var result = module.action(approveParams());
+
+        assert.equal(result.recommendation, 'BLOCK');
+        assert.equal(result.finalStatus, 'In Rework');
+    });
+
+    test('an unrecognized recommendation is passed through untouched', function() {
+        var module = loadWithReview({ recommendation: 'Request Changes' }, {});
+
+        var result = module.action(approveParams());
+
+        assert.equal(result.recommendation, 'Request Changes', 'mixed-case unknown value is NOT normalized');
+        assert.equal(result.finalStatus, 'In Rework');
+    });
+
+    test('APPROVE without a discoverable PR reports the merge-conflict final status', function() {
+        var module = loadWithReview({ recommendation: 'APPROVE' }, {
+            github_list_prs: function() { return []; }
+        });
+
+        var result = module.action(approveParams());
+
+        assert.equal(result.success, true);
+        assert.equal(result.mergeSucceeded, false, 'no PR → nothing queued for merge');
+        assert.equal(result.finalStatus, 'In Rework', 'approved-but-unmerged lands on In Rework');
+    });
+
+    test('APPROVE on an In Review - Failed ticket ends Failed', function() {
+        var module = loadWithReview({ recommendation: 'APPROVED' }, {
+            jira_get_ticket: function() {
+                return { fields: { status: { name: 'In Review - Failed' } } };
+            }
+        });
+
+        var result = module.action(approveParams());
+
+        assert.equal(result.recommendation, 'APPROVE');
+        assert.equal(result.finalStatus, 'Failed');
+    });
+
+    test('the review comment text is posted to the tracker', function() {
+        var comments = [];
+        var module = loadWithReview({ recommendation: 'BLOCK' }, {
+            jira_post_comment: function(args) { comments.push(args.comment); }
+        });
+
+        module.action(approveParams({ response: 'h3. Review verdict\n\nPlease fix' }));
+
+        assert.ok(comments.some(function(c) { return c.indexOf('Review verdict') !== -1; }),
+            'the response text is posted, got: ' + JSON.stringify(comments));
+    });
+
+    test('a tracker status probe failure leaves the flow on the BLOCK fallback', function() {
+        var module = loadWithReview({ recommendation: 'BLOCK' }, {
+            jira_get_ticket: function() { throw new Error('jira down'); }
+        });
+
+        var result = module.action(approveParams());
+
+        assert.equal(result.success, true);
+        assert.equal(result.finalStatus, 'In Rework');
+    });
+
+    test('outer catch: a params object without a ticket returns a failure instead of throwing', function() {
+        var module = loadWithReview({}, {});
+
+        var result = module.action({});
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'propert', 'the TypeError message is surfaced (Node and GraalJS phrase it differently)');
+        assert.contains(result.error, 'key');
+    });
+});
+
+suite('postTestReviewComments: outer-catch error comment (gh-1011)', function() {
+
+    test('an unwrapped mid-flow error posts the ❌ error comment and removes the SM trigger label', function() {
+        var comments = [];
+        var removedLabels = [];
+        var module = loadPostTestReviewComments({
+            file_read: function(opts) {
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify({ recommendation: 'APPROVE' });
+                }
+                return null;
+            },
+            github_list_prs: function() {
+                return [{ number: 42, html_url: 'https://github.com/org/repo/pull/42', head: { ref: 'test/DMC-8' } }];
+            },
+            cli_execute_command: function() { return 'https://github.com/IstiN/trackstate'; },
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            jira_remove_label: function(args) { removedLabels.push(args.label); }
+        }, {
+            autoStart: {
+                triggerConfiguredWorkflowForTicket: function() { return { success: true }; },
+                triggerSmIfIdle: function() { throw new Error('sm idle boom'); }
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-8', fields: { summary: 'Mid-flow error' } },
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'sm idle boom', 'the original error is surfaced');
+        assert.ok(removedLabels.indexOf('sm_test_review_triggered') !== -1,
+            'the SM trigger label is removed in the catch, got: ' + JSON.stringify(removedLabels));
+        assert.ok(comments.some(function(c) {
+            return c.indexOf('❌ Test Review Error') !== -1 && c.indexOf('sm idle boom') !== -1;
+        }), 'the error comment is posted to the ticket, got: ' + JSON.stringify(comments));
+    });
+});

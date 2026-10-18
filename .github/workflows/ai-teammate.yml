@@ -63,14 +63,27 @@ concurrency:
 
 jobs:
   teammate:
-    # Assignment gate: issues must be ASSIGNED to ai-teammate; dispatch
-    # runs reach the factory even with empty gate outputs.
+    # gh-1029: the `labeled` trigger fires on EVERY label write — including
+    # the leg's own lifecycle labels (status:*, ai_developed, ...) — and
+    # `on:` cannot filter by label name. The old assignee-only clause
+    # admitted any labeled event on an assigned issue, so each leg
+    # re-triggered a guaranteed no-op run that parked in the same
+    # concurrency group (live: run 39111715487 → 39111765329 on #1027,
+    # 2026-10-18). The gate therefore keys the action: `assigned` requires
+    # the ai-teammate assignee; `labeled` proceeds ONLY for the arming
+    # labels — lifecycle labels never allocate a runner.
     if: >-
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'issues' &&
+       github.event.action == 'assigned' &&
        contains(github.event.issue.assignees.*.login, 'ai-teammate')) ||
       (github.event_name == 'issues' &&
-       github.event.label.name == 'pr_approved') ||
-      github.event_name == 'workflow_dispatch'
+       github.event.action == 'labeled' &&
+       (github.event.label.name == 'agent:dev' ||
+        github.event.label.name == 'agent:develop' ||
+        github.event.label.name == 'agent:review' ||
+        github.event.label.name == 'agent:rework' ||
+        github.event.label.name == 'pr_approved'))
     uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-teammate.yml@main
     with:
       issue: ${{ github.event.issue.number || github.event.inputs.issue }}

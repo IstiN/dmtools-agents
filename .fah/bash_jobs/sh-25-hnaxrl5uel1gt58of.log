@@ -1,5 +1,0 @@
-9c9
-< +  machineAuthor: 'ai-teammate,dmtools-factory-bot',
----
-> +  machineAuthor: 'ai-teammate,github-actions[bot],dmtools-factory-bot',
----differs---
