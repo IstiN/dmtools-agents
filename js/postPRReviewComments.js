@@ -25,6 +25,7 @@ const tokenUsageComment = require('./common/tokenUsageComment.js');
 var gh = require('./common/githubHelpers.js');
 const commentMarkup = require('./common/commentMarkup.js');
 var reviewVerdicts = require('./common/reviewVerdicts.js');
+var reviewSpecClaims = require('./common/reviewSpecClaims.js');
 
 var RESUME_MARKER = 'outputs/.pr-review-missing-output-resume-attempted';
 
@@ -1478,6 +1479,31 @@ function readOrResumeReviewData(ticketKey, workingDir) {
     return readReviewJson(ticketKey, workingDir);
 }
 
+/**
+ * gh-1053: downgrade BLOCKING findings whose core claim is an uncited
+ * external-spec assertion BEFORE anything derives verdicts, census, or
+ * posted bodies from the review data (see js/common/reviewSpecClaims.js).
+ * File-referenced comment bodies are rewritten via writeFile so the posted
+ * thread no longer carries the 🚨 marker; every downgrade is logged.
+ */
+function applySpecClaimDowngrades(reviewData, ticketKey, workingDir) {
+    try {
+        var result = reviewSpecClaims.sanitizeReviewData(reviewData, function (path) {
+            return readMarkdownFile(path, ticketKey, workingDir);
+        });
+        result.rewrites.forEach(function (rw) {
+            writeFile(rw.path, rw.content);
+        });
+        result.notes.forEach(function (note) {
+            console.warn('⚠️ gh-1053 spec-claim guard:', note);
+        });
+        return result;
+    } catch (e) {
+        console.warn('⚠️ gh-1053 spec-claim guard failed (continuing un-sanitized):', e.message || e);
+        return { downgrades: 0, notes: [], rewrites: [] };
+    }
+}
+
 function hasGitHubTarget(pr, repoInfo) {
     return !!(pr.number && repoInfo);
 }
@@ -2044,6 +2070,10 @@ function action(params) {
             return handleMissingReviewData(params, ctx.config, ctx.customParams, tracker);
         }
 
+        // gh-1053: uncited external-spec BLOCKING claims are downgraded to
+        // non-blocking questions before they can drive the verdict/census.
+        applySpecClaimDowngrades(reviewData, ctx.ticketKey, ctx.workingDir);
+
         console.log('Review recommendation:', reviewData.recommendation);
         console.log('Issue counts:', JSON.stringify(reviewData.issueCounts));
 
@@ -2156,6 +2186,7 @@ if (typeof module !== 'undefined' && module.exports) {
         hasPrApprovedLabel,
         getGitHubRepoInfo,
         searchMissingPRNumber,
-        ticketKeyOfParams
+        ticketKeyOfParams,
+        applySpecClaimDowngrades
     };
 }
