@@ -428,9 +428,45 @@ function _ghBuildPrStatus(pr, rollup, tally, ms) {
         // Head ref — SM legs dispatched on the PR branch link their
         // workflow runs to the PR (checks area + timeline).
         branch: (pr.head && pr.head.ref) || '',
+        // gh-1057: the head REPOSITORY full name ('owner/repo') — a fork
+        // PR's branch lives there, never in the base repo. null when the
+        // REST body carries no head.repo (deleted fork) or it IS the
+        // base: both keep the base-reprobe behavior downstream.
+        headRepo: _ghPrHeadRepoFull(pr),
         labels: _ghPrLabelNames(pr),
         author: _ghPrAuthor(pr)
     };
+}
+
+// gh-1057: resolve the PR's head repository as an 'owner/repo' full name
+// for the dead-head bench oracle. REST /pulls spells it head.repo.full_name
+// (null when the fork is gone). Same-repo PRs resolve to their own full
+// name — the caller compares against the base and keeps the base probe.
+// gh-1059: ONE resolver, exported below and shared with
+// githubSource.js — the PR-list and prStatus payload dialects must never
+// drift apart again.
+function _ghPrHeadRepoFull(pr) {
+    var r = pr && pr.head && pr.head.repo;
+    if (!r) return null;
+    if (typeof r === 'string') return r.indexOf('/') !== -1 ? r : null;
+    return _ghRepoShapeFull(r);
+}
+
+// gh-1059: object-shaped head.repo dialects — full_name (REST),
+// nameWithOwner (GraphQL), owner+name (fixtures).
+function _ghRepoShapeFull(r) {
+    if (r.full_name) return r.full_name;
+    if (r.nameWithOwner) return r.nameWithOwner;
+    var owner = _ghRepoOwnerLogin(r);
+    return owner && r.name ? owner + '/' + r.name : null;
+}
+
+// gh-1057: owner login of a repo payload — REST spells it owner.login,
+// GraphQL-shaped fixtures owner.name; '' when the payload carries none.
+function _ghRepoOwnerLogin(repo) {
+    var o = repo && repo.owner;
+    if (!o) return '';
+    return o.login || o.name || '';
 }
 
 // (was the computePrStatus closure — hoisted to module scope by gh-1009;
@@ -457,6 +493,31 @@ function _ghBranchExists(owner, repo, name) {
     if (!name) return false;
     if (branchHeadsMap(owner, repo)[name] !== undefined) return true;
     return branchHead(owner, repo, name) !== null;
+}
+
+// gh-1057 (live fa pr-1591): a FORK PR's head branch lives on the fork,
+// never on the base repo — probing the base is a guaranteed 404 that
+// parks a restored fork forever. headFull ('owner/repo', from
+// pr.head.repo) redirects the SAME snapshot + #639 probe machinery at
+// the head repo. An absent spec, a spec naming the base, or a malformed
+// spec keeps the base probe (fail-safe — today's behavior for same-repo
+// PRs and blind probes alike). Fail-open note: a fork the token cannot
+// read (private fork) fails the probe exactly like a deleted branch —
+// branchHead reads a probe error as absent — so an unreadable fork reads
+// as a dead head and the parked PR is benched; that matches pre-gh-1057
+// fork behavior (the githubSource catch only rescues a THROWING oracle).
+function _ghBranchExistsRef(owner, repo, name, headFull) {
+    var ho = owner;
+    var hr = repo;
+    if (typeof headFull === 'string' && headFull.indexOf('/') !== -1) {
+        var parts = headFull.split('/');
+        if (parts.length === 2 && parts[0] && parts[1] &&
+            !(parts[0] === owner && parts[1] === repo)) {
+            ho = parts[0];
+            hr = parts[1];
+        }
+    }
+    return _ghBranchExists(ho, hr, name);
 }
 
 // snapshot(kinds?) — kinds limits which cache legs to materialize:
@@ -793,8 +854,12 @@ function githubProvider(cfg) {
         listOpenPrsLive: function () { return listOpenPrsLive(owner, repo); },
         listMergedPrs: function () { return listMergedPrs(owner, repo); },
 
-        // branchExists(name) — gh-922 dead-head park bench oracle.
-        branchExists: function (name) { return _ghBranchExists(owner, repo, name); },
+        // branchExists(name, headFull?) — gh-922 dead-head park bench
+        // oracle; gh-1057: headFull redirects the probe at a fork's head
+        // repo (absent/same-repo/malformed keeps the base probe).
+        branchExists: function (name, headFull) {
+            return _ghBranchExistsRef(owner, repo, name, headFull);
+        },
 
         // snapshot(kinds?) — args-carried cache snapshot for the
         // runAsync worker engines (see the helper for the contract).
@@ -1174,6 +1239,9 @@ if (typeof module !== 'undefined' && module.exports) {
         createSmProvider: createSmProvider,
         ioCacheDrop: ioCacheDrop,
         BOOKKEEPING_CHECK_PREFIXES: BOOKKEEPING_CHECK_PREFIXES,
+        // gh-1059: ONE head-repo resolver shared with githubSource.js (the
+        // PR-list and prStatus payload dialects must never drift apart).
+        ghPrHeadRepoFull: _ghPrHeadRepoFull,
         _cache: _cache
     };
 }

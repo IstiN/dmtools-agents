@@ -309,7 +309,13 @@ function makeSmAgent(opts) {
                 return opts.github.prStatus || null;
             }
         };
-        var smProviderStub = { createSmProvider: function () { return realProvider; } };
+        var smProviderRealMod = loadModule('js/common/smProvider.js', makeRequire({
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+        }), {});
+        var smProviderStub = { createSmProvider: function () { return realProvider; },
+            // gh-1059: pin the REAL shared head-repo resolver (githubSource
+            // consumes it on the PR-list path).
+            ghPrHeadRepoFull: smProviderRealMod.ghPrHeadRepoFull };
         var smAsyncForSource = loadModule(
             'js/common/smAsync.js',
             makeRequire({ './common/smProvider.js': smProviderStub }),

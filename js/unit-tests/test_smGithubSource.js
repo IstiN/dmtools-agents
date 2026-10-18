@@ -4,6 +4,19 @@
  */
 /* global loadModule, assert, test, suite, makeRequire */
 
+// gh-1059: the head-repo resolver is the REAL smProvider export — the
+// createSmProvider mocks below stay stubbed, but the resolver must never
+// be forked into a mock copy (that would move the CRAP-gate duplication
+// into the tests).
+var smProviderReal = function () {
+    if (!smProviderReal.mod) {
+        smProviderReal.mod = loadModule('js/common/smProvider.js', makeRequire({
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+        }), {});
+    }
+    return smProviderReal.mod;
+};
+
 suite('sm github source', function () {
 
     var src;
@@ -46,7 +59,8 @@ suite('sm github source', function () {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
-                createSmProvider: function () { return providerStub; }
+                createSmProvider: function () { return providerStub; },
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
             },
             '../../common/smAsync.js': smAsyncMod,
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
@@ -1609,7 +1623,8 @@ suite('sm github source — runAsync batching', function () {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
-                createSmProvider: function () { return seqStub; }
+                createSmProvider: function () { return seqStub; },
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
             },
             '../../common/smAsync.js': smAsyncMod,
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
@@ -1682,7 +1697,8 @@ suite('sm github source — runAsync batching', function () {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
-                createSmProvider: function () { return batchStub; }
+                createSmProvider: function () { return batchStub; },
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
             },
             '../../common/smAsync.js': smAsyncMod,
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
@@ -1838,7 +1854,8 @@ function maskedGreenHarness() {
         }), mergedTools);
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
-            '../../common/smProvider.js': { createSmProvider: function () { return providerStub; } },
+            '../../common/smProvider.js': { createSmProvider: function () { return providerStub; },
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull },
             '../../common/smAsync.js': smAsyncMod,
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
         }), mergedTools);
@@ -2437,16 +2454,18 @@ suite('sm github source: trigger fail-open overfetch (gh-922)', function () {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
-                createSmProvider: function () { return localProvider; }
+                createSmProvider: function () { return localProvider; },
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
             },
             '../../common/smAsync.js': smAsyncMod,
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
         }), tools);
     };
 
-    function listPr(n, labels, ref) {
+    function listPr(n, labels, ref, headFull) {
         return { number: n, state: 'open', draft: false, body: '',
-                 head: { sha: 'ovsha' + n, ref: ref || ('feat/ov-' + n) },
+                 head: { sha: 'ovsha' + n, ref: ref || ('feat/ov-' + n),
+                         repo: headFull ? { full_name: headFull } : null },
                  labels: (labels || []).map(function (l) { return { name: l }; }),
                  user: { login: 'ai-teammate' } };
     }
@@ -2516,6 +2535,124 @@ suite('sm github source: trigger fail-open overfetch (gh-922)', function () {
         assert.ok(logs.some(function (l) {
             return l.indexOf('\uD83E\uDD47') !== -1 && l.indexOf('pr-302') !== -1;
         }), 'the blocker taking the limit:1 slot over a cut medium still logs the preemption line');
+    });
+
+    test('gh-1057: a FORK dead-head park whose branch lives on the fork (404 in base) is NOT benched', function () {
+        // Live fa pr-1591: the gh-922 oracle probed the head branch in the
+        // BASE repo, where a fork branch is always 404 — a restored fork
+        // stayed parked forever. The bench must consult the PR's head
+        // repository (head.repo.full_name) instead.
+        var calls = [];
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review', 'validation_failed'], 'fix/fork-branch', 'forko/forkr'),
+                    listPr(301, ['agent:review'], 'feat/alive')
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 5
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate',
+             provider: { branchExists: function (name, headFull) {
+                 calls.push(name + '@' + headFull);
+                 // base repo never holds a fork branch; the fork does
+                 if (!headFull || headFull === 'o/r') return false;
+                 return name !== 'gone/everywhere';
+             } } });
+
+        assert.deepEqual(items.map(function (i) { return i.prNumber; }), [301, 302],
+            'the restored fork head re-enters the queue — parked label + LIVE fork branch stays a candidate');
+        assert.equal(calls.indexOf('fix/fork-branch@forko/forkr') !== -1, true,
+            'the oracle was asked against the FORK repo, not the base');
+        assert.equal(items[1].headRepo, 'forko/forkr',
+            'the item carries the head repo for the bench oracle');
+    });
+
+    test('gh-1057: a fork PR whose branch is gone from BOTH repos stays benched', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review', 'validation_failed'], 'gone/everywhere', 'forko/forkr'),
+                    listPr(301, ['agent:review'], 'feat/alive')
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 5
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate',
+             provider: { branchExists: function (name, headFull) {
+                 if (!headFull || headFull === 'o/r') return false;
+                 return name !== 'gone/everywhere';
+             } } });
+
+        assert.deepEqual(items.map(function (i) { return i.prNumber; }), [301],
+            'a fork branch deleted everywhere is still a dead head — the bench verdict holds');
+    });
+
+    test('gh-1057: fail-open preserved — a fork probe error keeps the parked item', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review', 'validation_failed'], 'fix/fork-branch', 'forko/forkr')
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 5
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate',
+             provider: { branchExists: function () { throw new Error('fork probe denied'); } } });
+
+        assert.equal(items.length, 1,
+            'a throwing fork probe never strands the candidate (fail-open, today\'s contract)');
+    });
+
+    test('gh-1059: STRING and GraphQL head.repo spellings ride the item via the shared resolver', function () {
+        // gh-1059 rework: githubSource consumes the ONE smProvider
+        // resolver — a string head.repo and the GraphQL nameWithOwner
+        // dialect must flow to the item and the bench oracle exactly like
+        // the REST full_name shape (the deleted duplicate _prListHeadRepo
+        // accepted strings but never nameWithOwner).
+        var calls = [];
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 303, state: 'open', draft: false, body: '',
+                      head: { sha: 's3', ref: 'fix/str', repo: 'forko/forkr' },
+                      labels: [{ name: 'agent:review' }, { name: 'validation_failed' }],
+                      user: { login: 'ai-teammate' } },
+                    { number: 302, state: 'open', draft: false, body: '',
+                      head: { sha: 's2', ref: 'fix/gql',
+                              repo: { nameWithOwner: 'gqlowner/gqlrepo' } },
+                      labels: [{ name: 'agent:review' }, { name: 'validation_failed' }],
+                      user: { login: 'ai-teammate' } },
+                    { number: 301, state: 'open', draft: false, body: '',
+                      head: { sha: 's1', ref: 'feat/alive', repo: null },
+                      labels: [{ name: 'agent:review' }],
+                      user: { login: 'ai-teammate' } }
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 5
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate',
+             provider: { branchExists: function (name, headFull) {
+                 calls.push(name + '@' + headFull);
+                 return true; // every probed head is alive
+             } } });
+
+        assert.equal(items.length, 3,
+            'all three dialects resolve a live head repo — nothing is benched');
+        var byNum = {};
+        items.forEach(function (i) { byNum[i.prNumber] = i; });
+        assert.equal(byNum[303].headRepo, 'forko/forkr',
+            'the STRING head.repo spelling resolves through the shared resolver');
+        assert.equal(byNum[302].headRepo, 'gqlowner/gqlrepo',
+            'the GraphQL nameWithOwner dialect resolves through the shared resolver');
+        assert.equal(calls.indexOf('fix/str@forko/forkr') !== -1, true,
+            'the oracle was asked against the fork named by the string spec');
+        assert.equal(calls.indexOf('fix/gql@gqlowner/gqlrepo') !== -1, true,
+            'the oracle was asked against the fork named by nameWithOwner');
     });
 
     test('a dead-head park (validation_failed + gone head ref) is benched from the candidate list', function () {
@@ -2627,7 +2764,8 @@ suite('sm github source: dev-on-assignment re-derive (gh-944)', function () {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
-                createSmProvider: function () { return devStub; }
+                createSmProvider: function () { return devStub; },
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
             },
             '../../common/smAsync.js': smAsyncMod,
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
@@ -2775,7 +2913,8 @@ suite('sm github source — gh-1009 CRAP characterization (paths touched by the 
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
-                createSmProvider: function () { return providerStub; }
+                createSmProvider: function () { return providerStub; },
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
             },
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
             '../../common/smAsync.js': loadModule('js/common/smAsync.js', makeRequire({
@@ -2891,7 +3030,8 @@ suite('sm github source: gh-1000 phantom-heal helpers', function () {
     function loadBare() {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
-            '../../common/smProvider.js': { createSmProvider: function () { return null; } },
+            '../../common/smProvider.js': { createSmProvider: function () { return null; },
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull },
             '../../common/smAsync.js': {},
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
         }), {});
@@ -2994,7 +3134,8 @@ suite('sm github source: gh-1000 phantom-heal probe edges', function () {
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return null; },
-                ioCacheDrop: dropSpy
+                ioCacheDrop: dropSpy,
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
             },
             '../../common/smAsync.js': {},
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
@@ -3035,7 +3176,8 @@ suite('sm github source: gh-1000 IT-1 phantom self-heal through queryPrs (AC2)',
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return null; },
-                ioCacheDrop: ioCacheDrop
+                ioCacheDrop: ioCacheDrop,
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull
             },
             '../../common/smAsync.js': {},
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})

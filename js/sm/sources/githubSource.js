@@ -246,10 +246,17 @@ function voidParkedBlockerTier(item) {
 // the park-reset lane must keep finding them. Fail-open — no provider
 // oracle, a probe error, or an empty branch keeps the item (today's
 // behavior; a blind tick never strands a candidate).
+// gh-1057 (live fa pr-1591): the probe must run against the PR's HEAD
+// repository — for a fork PR the branch lives on the fork (head.repo
+// full name), never on the base, where the probe was a guaranteed 404
+// that parked restored forks forever. A missing headRepo (same-repo PR
+// whose list payload lacks head.repo, deleted-fork status, legacy
+// provider) keeps the base probe.
 function isDeadHeadParked(item, provider) {
     if (!item.branch || item.labels.indexOf(PARKED_LABEL) === -1) return false;
+    var headFull = item.headRepo || (item.pr && item.pr.headRepo) || null;
     try {
-        return provider.branchExists(item.branch) === false;
+        return provider.branchExists(item.branch, headFull) === false;
     } catch (eBench) { return false; }
 }
 
@@ -898,6 +905,11 @@ function _prListBranch(p) {
     return (p.head && p.head.ref) || p.headRefName || '';
 }
 
+// gh-1057: the head REPOSITORY of the PR as an 'owner/repo' full name
+// (REST head.repo.full_name; null when the fork is deleted) — the
+// dead-head bench oracle must probe THERE for fork PRs, not the base.
+// gh-1059: resolved by the ONE shared smProvider resolver
+// (ghPrHeadRepoFull) — never a second implementation here.
 function _prListAuthor(p) {
     // REST /pulls carries the creator under `user` (no `author` key at
     // all — live-verified); GraphQL and the unit fixtures use `author`.
@@ -916,6 +928,7 @@ function _prItemFromPr(p) {
         prNumber: p.number,
         draft: !!p.draft,
         branch: _prListBranch(p),
+        headRepo: smProviderModule.ghPrHeadRepoFull(p),
         title: p.title || '',
         author: _prListAuthor(p)
     };
