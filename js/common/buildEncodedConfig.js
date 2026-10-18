@@ -158,6 +158,181 @@ function resolveConfluenceTrackerOverride(agentParamsRoot, effectiveConfig, agen
 }
 
 /**
+ * Derive the project key used to resolve a project-specific agent JSON
+ * (e.g. "agents/pr_review.json" -> "ai_teammate/myproject/pr_review.json").
+ * Explicit rule.projectKey wins; otherwise the basename of the loaded
+ * project config path is used unless it is the generic "config".
+ *
+ * @param {Object|string} rule - Rule object or resolved config file path.
+ * @param {Object} effectiveConfig - Loaded project config.
+ * @returns {string} Project key ('' when none can be derived).
+ */
+function resolveProjectKey(rule, effectiveConfig) {
+    var projectKey = (rule && rule.projectKey) || '';
+    if (!projectKey && effectiveConfig && effectiveConfig._configPath) {
+        var cp = effectiveConfig._configPath;
+        var base = cp.substring(cp.lastIndexOf('/') + 1).replace(/\.js$/, '');
+        if (base && base !== 'config') projectKey = base;
+    }
+    return projectKey;
+}
+
+/**
+ * Resolve which agent JSON file to read: the project-specific variant
+ * ("ai_teammate/<projectKey>/<filename>") when it exists, otherwise the
+ * generic resolved config file.
+ */
+function resolveAgentJsonPath(resolvedCf, projectKey) {
+    var agentJsonPath = resolvedCf;
+    if (projectKey) {
+        var filename = resolvedCf.replace(/^.*\//, '');
+        var projectSpecific = 'ai_teammate/' + projectKey + '/' + filename;
+        if (tryReadJson(projectSpecific)) {
+            agentJsonPath = projectSpecific;
+        }
+    }
+    return agentJsonPath;
+}
+
+/**
+ * True when a string param carries a JQL placeholder that must be
+ * interpolated against the project config.
+ */
+function needsJqlInterpolation(value) {
+    return value.indexOf('{jiraProject}') !== -1 || value.indexOf('{parentTicket}') !== -1;
+}
+
+/**
+ * Copy a single agent-JSON param value into the encoded params payload,
+ * applying the JQL interpolation to strings carrying {jiraProject} /
+ * {parentTicket} placeholders and deep-copying structured values.
+ * cliPromptsByTracker is NOT copied: tracker prompts are already resolved
+ * and flattened into cliPrompts (resolveInstructions); copying the map
+ * would make the runtime merge them a second time.
+ */
+function copyParamValue(p, paramKey, value, effectiveConfig) {
+    if (typeof value === 'string') {
+        if (needsJqlInterpolation(value)) {
+            p[paramKey] = configLoader.interpolateJql(value, effectiveConfig);
+        } else {
+            p[paramKey] = value;
+        }
+    } else if (typeof value === 'boolean' || typeof value === 'number') {
+        p[paramKey] = value;
+    } else if (Array.isArray(value)) {
+        p[paramKey] = value.slice();
+    } else if (typeof value === 'object' && value !== null) {
+        p[paramKey] = JSON.parse(JSON.stringify(value));
+    }
+}
+
+/**
+ * Copy all scalar/array/object params from the resolved agent JSON into the
+ * encoded params payload (skipping inputJql and cliPromptsByTracker).
+ */
+function copyAgentParams(p, agentParamsRoot, effectiveConfig) {
+    var skipKeys = { inputJql: true, cliPromptsByTracker: true };
+    Object.keys(agentParamsRoot).forEach(function(paramKey) {
+        if (skipKeys[paramKey]) return;
+        copyParamValue(p, paramKey, agentParamsRoot[paramKey], effectiveConfig);
+    });
+}
+
+/**
+ * Copy the nested agentParams / customParams objects from the agent JSON
+ * into the encoded params payload (agentParams deep-merged from empty,
+ * customParams shallow-copied).
+ */
+function copyNestedAgentObjects(p, agentParamsRoot) {
+    var agentParams = agentParamsRoot.agentParams;
+    if (agentParams && typeof agentParams === 'object') {
+        p.agentParams = configLoader.deepMerge({}, agentParams);
+    }
+    var agentCustomParams = agentParamsRoot.customParams;
+    if (agentCustomParams && typeof agentCustomParams === 'object') {
+        p.customParams = Object.assign({}, agentCustomParams);
+    }
+}
+
+/**
+ * Apply the instruction-level resolutions from resolveInstructions():
+ * a full instructions override lands in agentParams.instructions;
+ * additionalInstructions are appended.
+ */
+function applyInstructionExtras(p, resolved) {
+    if (resolved.instructionsOverridden) {
+        if (!p.agentParams) p.agentParams = {};
+        p.agentParams.instructions = resolved.instructions;
+    }
+    if (resolved.additionalInstructions && resolved.additionalInstructions.length > 0) {
+        p.additionalInstructions = resolved.additionalInstructions;
+    }
+}
+
+/**
+ * Apply the resolved CLI prompts: 'replace' strategy swaps the JSON-inherited
+ * cliPrompts entirely, the default 'merge' strategy appends after them.
+ * A resolved cliPrompt override wins last.
+ */
+function applyCliPrompts(p, resolved) {
+    if (resolved.cliPrompts && resolved.cliPrompts.length > 0) {
+        if (resolved.cliPromptsStrategy === 'replace') {
+            // replace: config.js prompts replace the JSON-inherited cliPrompts entirely
+            p.cliPrompts = resolved.cliPrompts;
+        } else {
+            // merge (default): append config.js prompts after the JSON-inherited ones
+            var existing = Array.isArray(p.cliPrompts) ? p.cliPrompts : [];
+            p.cliPrompts = existing.concat(resolved.cliPrompts);
+        }
+    }
+    if (resolved.cliPrompt) {
+        p.cliPrompt = resolved.cliPrompt;
+    }
+}
+
+/**
+ * Apply the agentParamPatch / jobParamPatch from the project config. The
+ * jobParamPatch deep-merges into the whole params payload, so it is applied
+ * last and its result is returned (p may be replaced by the merge).
+ */
+function applyConfigPatches(p, resolved) {
+    if (resolved.agentParamPatch) {
+        if (!p.agentParams) p.agentParams = {};
+        p.agentParams = configLoader.deepMerge(p.agentParams, resolved.agentParamPatch);
+    }
+    if (resolved.jobParamPatch) {
+        p = configLoader.deepMerge(p, resolved.jobParamPatch);
+    }
+    return p;
+}
+
+/**
+ * Resolve the Jira field-name override for story_acceptance_criteria agents
+ * from config.jira.fields.acceptanceCriteria (null when not configured).
+ */
+function resolveFieldNameOverride(agentName, effectiveConfig) {
+    var jiraFields = effectiveConfig.jira && effectiveConfig.jira.fields;
+    if (!jiraFields) return null;
+    var fieldMap = {
+        'story_acceptance_criteria': jiraFields.acceptanceCriteria,
+        'story_acceptance_criterias': jiraFields.acceptanceCriteria
+    };
+    return fieldMap[agentName] || null;
+}
+
+/**
+ * Build the metadata block for the encoded payload: agentId and/or contextId
+ * (upper-cased project key). Returns null when both are absent.
+ */
+function buildMetadata(agentId, contextId) {
+    if (!agentId && !contextId) return null;
+    var metadata = {};
+    if (agentId) metadata.agentId = agentId;
+    if (contextId) metadata.contextId = contextId;
+    return metadata;
+}
+
+/**
  * Build the encoded config payload for a workflow dispatch.
  *
  * @param {string} ticketKey - Ticket key to process.
@@ -182,61 +357,16 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig, isLocal) {
     var provider = trackers.createTracker(effectiveConfig, {}).provider();
     var p = { inputJql: validateInputJql.inputJqlForKey(ticketKey, provider) };
     var resolvedCf = resolveConfigFile(rule, effectiveConfig);
-
-    // Derive project key to resolve project-specific agent JSON
-    // (e.g. "agents/pr_review.json" -> "ai_teammate/myproject/pr_review.json").
-    var projectKey = (rule && rule.projectKey) || '';
-    if (!projectKey && effectiveConfig && effectiveConfig._configPath) {
-        var cp = effectiveConfig._configPath;
-        var base = cp.substring(cp.lastIndexOf('/') + 1).replace(/\.js$/, '');
-        if (base && base !== 'config') projectKey = base;
-    }
-
+    var projectKey = resolveProjectKey(rule, effectiveConfig);
     var agentParamsRoot = {};
-    if (resolvedCf) {
-        var agentJsonPath = resolvedCf;
-        if (projectKey) {
-            var filename = resolvedCf.replace(/^.*\//, '');
-            var projectSpecific = 'ai_teammate/' + projectKey + '/' + filename;
-            if (tryReadJson(projectSpecific)) {
-                agentJsonPath = projectSpecific;
-            }
-        }
 
+    if (resolvedCf) {
+        var agentJsonPath = resolveAgentJsonPath(resolvedCf, projectKey);
         var agentJson = tryReadJson(agentJsonPath);
         if (agentJson && agentJson.params) {
             agentParamsRoot = resolveParentMerge(agentJson, agentJsonPath);
-            // cliPromptsByTracker is NOT copied into the encoded params: tracker prompts
-            // are already resolved and flattened into cliPrompts below (resolveInstructions).
-            // Copying the map would make the runtime (CliCommandBuilder) merge them a
-            // second time, duplicating the tracker prompts in the final CLI prompt.
-            var skipKeys = { inputJql: true, cliPromptsByTracker: true };
-            Object.keys(agentParamsRoot).forEach(function(paramKey) {
-                if (skipKeys[paramKey]) return;
-                var value = agentParamsRoot[paramKey];
-                if (typeof value === 'string') {
-                    if (value.indexOf('{jiraProject}') !== -1 || value.indexOf('{parentTicket}') !== -1) {
-                        p[paramKey] = configLoader.interpolateJql(value, effectiveConfig);
-                    } else {
-                        p[paramKey] = value;
-                    }
-                } else if (typeof value === 'boolean' || typeof value === 'number') {
-                    p[paramKey] = value;
-                } else if (Array.isArray(value)) {
-                    p[paramKey] = value.slice();
-                } else if (typeof value === 'object' && value !== null) {
-                    p[paramKey] = JSON.parse(JSON.stringify(value));
-                }
-            });
-
-            var agentParams = agentParamsRoot.agentParams;
-            if (agentParams && typeof agentParams === 'object') {
-                p.agentParams = configLoader.deepMerge({}, agentParams);
-            }
-            var agentCustomParams = agentParamsRoot.customParams;
-            if (agentCustomParams && typeof agentCustomParams === 'object') {
-                p.customParams = Object.assign({}, agentCustomParams);
-            }
+            copyAgentParams(p, agentParamsRoot, effectiveConfig);
+            copyNestedAgentObjects(p, agentParamsRoot);
         }
     }
 
@@ -246,44 +376,13 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig, isLocal) {
         var resolved = configLoader.resolveInstructions(agentName, null, effectiveConfig, agentParamsRoot.cliPromptsByTracker,
             trackerOverride ? { trackerOverride: trackerOverride } : undefined);
 
-        if (resolved.instructionsOverridden) {
-            if (!p.agentParams) p.agentParams = {};
-            p.agentParams.instructions = resolved.instructions;
-        }
-        if (resolved.additionalInstructions && resolved.additionalInstructions.length > 0) {
-            p.additionalInstructions = resolved.additionalInstructions;
-        }
-        if (resolved.cliPrompts && resolved.cliPrompts.length > 0) {
-            if (resolved.cliPromptsStrategy === 'replace') {
-                // replace: config.js prompts replace the JSON-inherited cliPrompts entirely
-                p.cliPrompts = resolved.cliPrompts;
-            } else {
-                // merge (default): append config.js prompts after the JSON-inherited ones
-                var existing = Array.isArray(p.cliPrompts) ? p.cliPrompts : [];
-                p.cliPrompts = existing.concat(resolved.cliPrompts);
-            }
-        }
-        if (resolved.cliPrompt) {
-            p.cliPrompt = resolved.cliPrompt;
-        }
-        if (resolved.agentParamPatch) {
-            if (!p.agentParams) p.agentParams = {};
-            p.agentParams = configLoader.deepMerge(p.agentParams, resolved.agentParamPatch);
-        }
-        if (resolved.jobParamPatch) {
-            p = configLoader.deepMerge(p, resolved.jobParamPatch);
-        }
+        applyInstructionExtras(p, resolved);
+        applyCliPrompts(p, resolved);
+        p = applyConfigPatches(p, resolved);
 
-        var jiraFields = effectiveConfig.jira && effectiveConfig.jira.fields;
-        if (jiraFields) {
-            var fieldMap = {
-                'story_acceptance_criteria': jiraFields.acceptanceCriteria,
-                'story_acceptance_criterias': jiraFields.acceptanceCriteria
-            };
-            var override = fieldMap[agentName];
-            if (override) {
-                p.fieldName = override;
-            }
+        var fieldName = resolveFieldNameOverride(agentName, effectiveConfig);
+        if (fieldName) {
+            p.fieldName = fieldName;
         }
     }
 
@@ -301,19 +400,30 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig, isLocal) {
 
     var agentId = resolvedCf ? extractAgentName(resolvedCf) : null;
     var contextId = projectKey ? projectKey.toUpperCase() : null;
-    if (agentId || contextId) {
-        p.metadata = {};
-        if (agentId) p.metadata.agentId = agentId;
-        if (contextId) p.metadata.contextId = contextId;
+    var metadata = buildMetadata(agentId, contextId);
+    if (metadata) {
+        p.metadata = metadata;
     }
 
     return encodeURIComponent(JSON.stringify({ params: p }));
 }
+
 
 module.exports = {
     extractAgentName: extractAgentName,
     resolveConfigFile: resolveConfigFile,
     resolveParentMerge: resolveParentMerge,
     resolveConfluenceTrackerOverride: resolveConfluenceTrackerOverride,
-    buildEncodedConfig: buildEncodedConfig
+    buildEncodedConfig: buildEncodedConfig,
+    resolveProjectKey: resolveProjectKey,
+    resolveAgentJsonPath: resolveAgentJsonPath,
+    copyParamValue: copyParamValue,
+    needsJqlInterpolation: needsJqlInterpolation,
+    copyAgentParams: copyAgentParams,
+    copyNestedAgentObjects: copyNestedAgentObjects,
+    applyInstructionExtras: applyInstructionExtras,
+    applyCliPrompts: applyCliPrompts,
+    applyConfigPatches: applyConfigPatches,
+    resolveFieldNameOverride: resolveFieldNameOverride,
+    buildMetadata: buildMetadata
 };
