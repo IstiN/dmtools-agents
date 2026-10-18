@@ -316,6 +316,52 @@ suite('developBugAndCreatePR', function() {
         assert.contains(loaded.comments[0].comment, 'Blocked Claim Needs CodeGraph Verification');
     });
 
+    test('accepts blocked output when CodeGraph usage was recorded → moves bug to Blocked (gh-1003)', function () {
+        // gh-1003: the accepted-blocked branch of completeBlockedPath had no
+        // characterization test (only the CodeGraph-rejection side was
+        // pinned) — its coverage is what keeps the extracted helper under
+        // the CRAP threshold.
+        var loaded = loadDevelopBugAndCreatePR({
+            file_read: function (args) {
+                if (args.path === 'outputs/blocked.json') {
+                    return JSON.stringify({
+                        reason: 'Session tooling did not return repository file contents',
+                        tried: ['Read input files', 'Reproduced locally'],
+                        needs: 'A working session'
+                    });
+                }
+                if (args.path === '.dmtools/codegraph-usage.log') {
+                    return '2026-05-31T00:00:00Z\tcodegraph search symbol\n';
+                }
+                throw new Error('missing ' + args.path);
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: {
+                key: 'TS-1310',
+                fields: { summary: 'Blocked claim with CodeGraph', description: '', labels: [] }
+            },
+            metadata: { contextId: 'bug_development' },
+            jobParams: {
+                customParams: { removeLabel: 'sm_bug_development_triggered' }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'blocked');
+        assert.deepEqual(loaded.moves, [
+            { key: 'TS-1310', statusName: 'Blocked' }
+        ]);
+        assert.contains(loaded.comments[0].comment, 'Bug Cannot Be Fixed Automatically');
+        assert.contains(loaded.comments[0].comment, '- Read input files');
+        assert.contains(loaded.comments[0].comment, '- Reproduced locally');
+        assert.deepEqual(loaded.removed, [
+            { key: 'TS-1310', label: 'bug_development_wip' },
+            { key: 'TS-1310', label: 'sm_bug_development_triggered' }
+        ]);
+    });
+
     test('accepts already_fixed output when CodeGraph usage was recorded', function() {
         var loaded = loadDevelopBugAndCreatePR({
             file_read: function(args) {
@@ -871,5 +917,316 @@ suite('developBugAndCreatePR > resume-before-cold-reset (gh-775)', function () {
         assert.equal(loaded.recoverCalls[0].developmentSummary,
             'Command failed (exit code 127): cursor-agent: not found in PATH');
         assert.equal(bugWrapperCommandCount(loaded.commands), 0, 'no doomed wrapper invocation');
+    });
+});
+
+// ── gh-1003: pure helpers extracted from action ──────────────────────
+// The CRAP refactor (gh-1003) splits pure parse/build/decide helpers out of
+// action (CC 78, CRAP 212.7). These tests pin the helpers' behaviour directly
+// and characterize the paths the extraction re-plumbs.
+suite('developBugAndCreatePR > pure helpers (gh-1003)', function () {
+
+    test('resolveActualParams: ticket-bearing params win, else jobParams, else params', function () {
+        var mod = loadDevelopBugAndCreatePR({}).mod;
+        assert.equal(typeof mod.resolveActualParams, 'function',
+            'gh-1003 extracts the actual-params resolution for direct characterization');
+        var withTicket = { ticket: { key: 'TS-1' } };
+        assert.equal(mod.resolveActualParams(withTicket), withTicket);
+        var wrapped = { jobParams: { ticket: { key: 'TS-2' } } };
+        assert.equal(mod.resolveActualParams(wrapped), wrapped.jobParams);
+        var bare = { ticketKey: 'TS-3' };
+        assert.equal(mod.resolveActualParams(bare), bare);
+    });
+
+    test('findOpenPrForBranch matches head.ref across multiple PRs and tolerates nulls', function () {
+        var mod = loadDevelopBugAndCreatePR({}).mod;
+        assert.equal(typeof mod.findOpenPrForBranch, 'function',
+            'gh-1003 extracts the open-PR finder for direct characterization');
+        var prs = [
+            { number: 1, head: { ref: 'ai/TS-1' } },
+            { number: 2, head: { ref: 'ai/TS-2' }, html_url: 'https://github.com/acme/widgets/pull/2' },
+            null,
+            { number: 3 }
+        ];
+        var found = mod.findOpenPrForBranch(prs, 'ai/TS-2');
+        assert.equal(found.number, 2);
+        assert.equal(mod.findOpenPrForBranch(prs, 'ai/TS-9'), undefined);
+        assert.equal(mod.findOpenPrForBranch([], 'ai/TS-2'), undefined);
+        assert.equal(mod.findOpenPrForBranch(null, 'ai/TS-2'), undefined);
+    });
+
+    test('buildPrAlreadyOpenComment renders heading, PR url and In Review bold', function () {
+        var mod = loadDevelopBugAndCreatePR({}).mod;
+        var comment = mod.buildPrAlreadyOpenComment('TS-77', 'https://github.com/acme/widgets/pull/77');
+        assert.contains(comment, 'PR Already Open');
+        assert.contains(comment, 'https://github.com/acme/widgets/pull/77');
+        assert.contains(comment, '*In Review*');
+    });
+
+    test('buildBlockedComment renders reason, one bullet per tried entry, and needs', function () {
+        var mod = loadDevelopBugAndCreatePR({}).mod;
+        var comment = mod.buildBlockedComment('TS-1', {
+            reason: 'Tooling unreachable',
+            tried: ['Read input files', 'Reproduced locally'],
+            needs: 'A working session'
+        });
+        assert.contains(comment, 'Bug Cannot Be Fixed Automatically');
+        assert.contains(comment, 'Tooling unreachable');
+        assert.contains(comment, '- Read input files');
+        assert.contains(comment, '- Reproduced locally');
+        assert.contains(comment, 'A working session');
+    });
+
+    test('buildBlockedComment defaults a missing reason and skips empty tried/needs', function () {
+        var mod = loadDevelopBugAndCreatePR({}).mod;
+        var comment = mod.buildBlockedComment('TS-1', { tried: [], needs: '' });
+        assert.contains(comment, '(see details below)');
+        assert.notContains(comment, 'Attempted');
+        assert.notContains(comment, 'Needs from human');
+    });
+
+    test('buildAlreadyFixedComment: codegraph wording variants and optional fields', function () {
+        var mod = loadDevelopBugAndCreatePR({}).mod;
+        var full = mod.buildAlreadyFixedComment('TS-1', {
+            rca: 'Off-by-one in the pager',
+            commit: 'abc123',
+            description: 'Verified on main'
+        }, true);
+        assert.contains(full, 'Bug Already Fixed');
+        assert.contains(full, 'Off-by-one in the pager');
+        assert.contains(full, '{code}abc123{code}');
+        assert.contains(full, 'Verified on main');
+        assert.contains(full, 'Moved to *Done*.');
+
+        var noGraph = mod.buildAlreadyFixedComment('TS-1', { commit: 'abc123' }, false);
+        assert.contains(noGraph, 'No CodeGraph usage was recorded');
+        assert.notContains(noGraph, 'Root Cause');
+
+        var minimal = mod.buildAlreadyFixedComment('TS-1', {}, true);
+        assert.contains(minimal, 'Bug Already Fixed');
+        assert.notContains(minimal, 'Root Cause');
+        assert.notContains(minimal, 'Fixed in commit');
+    });
+
+    test('buildInterruptedComment: partial-work vs no-work wording', function () {
+        var mod = loadDevelopBugAndCreatePR({}).mod;
+        var withWork = mod.buildInterruptedComment('TS-1', true);
+        assert.contains(withWork, 'Development Interrupted');
+        assert.contains(withWork, 'Partial analysis work was saved to the branch.');
+        var withoutWork = mod.buildInterruptedComment('TS-1', false);
+        assert.contains(withoutWork, 'No partial work was produced.');
+    });
+
+    test('isMeaningfulStatusLine keeps real work and drops factory-kit, runtime and script noise', function () {
+        var mod = loadDevelopBugAndCreatePR({}).mod;
+        assert.equal(typeof mod.isMeaningfulStatusLine, 'function',
+            'gh-1003 extracts the porcelain-line filter for direct characterization');
+        assert.equal(mod.isMeaningfulStatusLine(''), false);
+        assert.equal(mod.isMeaningfulStatusLine('   '), false);
+        assert.equal(mod.isMeaningfulStatusLine('A  outputs/rca.md'), true);
+        assert.equal(mod.isMeaningfulStatusLine(' M js/foo.js'), true);
+        assert.equal(mod.isMeaningfulStatusLine('?? factory-kit/'), false);
+        assert.equal(mod.isMeaningfulStatusLine('A  factory-kit/pom.xml'), false);
+        assert.equal(mod.isMeaningfulStatusLine('?? .dmtools/credential-helper.log'), false);
+        assert.equal(mod.isMeaningfulStatusLine('?? .dmtools/fa-sessions/'), false);
+        assert.equal(mod.isMeaningfulStatusLine('?? .dmtools-session-output.log'), false);
+        assert.equal(mod.isMeaningfulStatusLine('Script started on 2026-10-17'), false);
+        assert.equal(mod.isMeaningfulStatusLine('Script done on 2026-10-17'), false);
+    });
+
+    test('detectGitChanges: meaningful status → true; runtime-only status → false; cli failure → false', function () {
+        var mod = loadDevelopBugAndCreatePR({}).mod;
+        assert.equal(typeof mod.detectGitChanges, 'function',
+            'gh-1003 extracts the staging/status probe for direct characterization');
+        var calls = [];
+        var cli = function (args) {
+            calls.push(args.command);
+            if (args.command === 'git status --porcelain') return 'A  outputs/rca.md\n';
+            if (args.command.indexOf('git check-ignore') === 0) throw new Error('Command execution failed (exit code 1)');
+            return '';
+        };
+        assert.equal(mod.detectGitChanges(cli), true);
+        assert.ok(calls.some(function (c) { return c.indexOf('git ls-files -- ') === 0; }),
+            'runtime-artifact untrack probe runs first');
+        assert.ok(calls.some(function (c) { return c.indexOf('git add . --') === 0; }),
+            'staging add with pathspec exclusions runs');
+        assert.ok(calls.some(function (c) { return c === 'git status --porcelain'; }),
+            'porcelain status runs');
+
+        var runtimeOnly = function (args) {
+            if (args.command === 'git status --porcelain') {
+                return '?? .dmtools/credential-helper.log\n?? .dmtools-session-output.log\n';
+            }
+            if (args.command.indexOf('git check-ignore') === 0) throw new Error('Command execution failed (exit code 1)');
+            return '';
+        };
+        assert.equal(mod.detectGitChanges(runtimeOnly), false,
+            'runtime-artifact-only status means no agent work');
+
+        var failing = function (args) {
+            if (args.command.indexOf('git add') === 0) throw new Error('boom');
+            return '';
+        };
+        assert.equal(mod.detectGitChanges(failing), false,
+            'a staging failure degrades to no-git-changes, never a throw');
+    });
+
+    test('decidePartialPush: branch, checkout and force-with-lease decisions (multi-case)', function () {
+        var mod = loadDevelopBugAndCreatePR({}).mod;
+        assert.equal(typeof mod.decidePartialPush, 'function',
+            'gh-1003 extracts the partial-push planner for direct characterization');
+        assert.deepEqual(mod.decidePartialPush('main', 'ai/TS-1', 'main'),
+            { branch: 'ai/TS-1', needsCheckout: true, force: true },
+            'partial work on main must switch branches and force-push');
+        assert.deepEqual(mod.decidePartialPush('ai/TS-1', 'ai/TS-1', 'main'),
+            { branch: 'ai/TS-1', needsCheckout: false, force: false },
+            'already on the development branch: plain push');
+        assert.deepEqual(mod.decidePartialPush('', 'ai/TS-1', 'main'),
+            { branch: 'ai/TS-1', needsCheckout: true, force: false });
+        assert.deepEqual(mod.decidePartialPush('master', null, 'main'),
+            { branch: 'master', needsCheckout: false, force: true });
+        assert.deepEqual(mod.decidePartialPush('feature-x', null, 'main'),
+            { branch: 'feature-x', needsCheckout: false, force: false });
+        assert.deepEqual(mod.decidePartialPush('develop', 'develop', 'develop'),
+            { branch: 'develop', needsCheckout: false, force: true });
+        assert.equal(mod.decidePartialPush('', null, 'main'), null,
+            'no current and no expected branch → nothing to push');
+    });
+});
+
+// ── gh-1003: pr-already-open path + interrupted-leg push planning ────
+suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)', function () {
+
+    // gh-1003: the PR-scan shape needs an scm stub — with the real scm the
+    // node harness's github_list_prs network guard always throws inside
+    // listPrs, so existing suites never reach Path 0.
+    function loadBugWithScmStub(scmStub, cliImpl, extraMocks) {
+        var comments = [];
+        var moves = [];
+        var removed = [];
+        var delegated = 0;
+        var commentMarkupModuleLocal = loadModule('js/common/commentMarkup.js',
+            makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+        var gitStagingModuleLocal = loadModule('js/common/gitStaging.js');
+        var allMocks = Object.assign({
+            file_read: function (args) { throw new Error('missing ' + args.path); },
+            cli_execute_command: cliImpl || function () { return ''; },
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { moves.push(args); },
+            jira_remove_label: function (args) { removed.push(args); }
+        }, extraMocks || {});
+        var loaderWithScmStub = Object.assign({}, configLoaderModule, {
+            createScm: function () { return scmStub; }
+        });
+        var mod = loadModule(
+            'js/developBugAndCreatePR.js',
+            makeRequire({
+                './config.js': configModule,
+                './common/gitStaging.js': gitStagingModuleLocal,
+                './configLoader.js': loaderWithScmStub,
+                './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), allMocks),
+                './common/trackers.js': loadTrackersDev(allMocks),
+                './developTicketAndCreatePR.js': {
+                    action: function () { delegated++; return { success: true, path: 'delegated' }; },
+                    // Never invoked on the pr-already-open / delegated paths
+                    // under test; the REAL shared helper is pinned by the
+                    // gh-742 suite through loadDevelopBugAndCreatePR.
+                    throwInterruptedReset: function (ticketKey) {
+                        var err = new Error(ticketKey + ' was reset for retry');
+                        err.interruptedReset = true;
+                        throw err;
+                    },
+                    recoverMissingResponse: function () { return null; }
+                },
+                './common/commentMarkup.js': commentMarkupModuleLocal
+            }),
+            allMocks
+        );
+        return { mod: mod, comments: comments, moves: moves, removed: removed, delegatedCount: function () { return delegated; } };
+    }
+
+    test('existing open PR for the expected branch → move to In Review, remove labels, skip development', function () {
+        var loaded = loadBugWithScmStub({
+            listPrs: function (state) {
+                return [
+                    { number: 1, head: { ref: 'ai/TS-76' }, html_url: 'https://github.com/acme/widgets/pull/76' },
+                    { number: 2, head: { ref: 'ai/TS-77' }, html_url: 'https://github.com/acme/widgets/pull/77' }
+                ];
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-77', fields: { summary: 'PR already open', description: '', labels: [] } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_development_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'pr_already_open');
+        assert.equal(loaded.delegatedCount(), 0, 'development must be skipped entirely');
+        assert.deepEqual(loaded.moves, [{ key: 'TS-77', statusName: 'In Review' }]);
+        assert.equal(loaded.comments.length, 1);
+        assert.contains(loaded.comments[0].comment, 'https://github.com/acme/widgets/pull/77');
+        assert.deepEqual(loaded.removed, [
+            { key: 'TS-77', label: 'bug_development_wip' },
+            { key: 'TS-77', label: 'sm_bug_development_triggered' }
+        ]);
+    });
+
+    test('no matching open PR → development proceeds (delegated)', function () {
+        var loaded = loadBugWithScmStub({
+            listPrs: function () { return [{ number: 1, head: { ref: 'ai/TS-76' }, html_url: 'x' }]; }
+        }, function (args) {
+            if (args.command === 'git status --porcelain') return 'A  js/foo.js\n';
+            if (args.command.indexOf('git check-ignore') === 0) throw new Error('Command execution failed (exit code 1)');
+            return '';
+        }, {
+            file_read: function (args) {
+                if (args.path === 'outputs/response.md') return '### What changed\n- fix\n';
+                throw new Error('missing ' + args.path);
+            }
+        });
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-77', fields: { summary: 'normal', description: '', labels: [] } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_development_triggered' } }
+        });
+        assert.equal(result.path, 'delegated');
+        assert.equal(loaded.delegatedCount(), 1);
+        assert.deepEqual(loaded.moves, [], 'no status move on the normal path — the delegate owns it');
+    });
+
+    test('interrupted leg already on its development branch pushes without checkout or force', function () {
+        var commands = [];
+        var loaded = loadDevelopBugAndCreatePR({
+            cli_execute_command: function (args) {
+                commands.push(args.command);
+                if (args.command.indexOf('gh pr list --head ') === 0) return '';
+                if (args.command.indexOf('git check-ignore') === 0) throw new Error('Command execution failed (exit code 1)');
+                if (args.command === 'git status --porcelain') return 'A  outputs/rca.md\n';
+                if (args.command === 'git branch --show-current') return 'ai/TS-1401\n';
+                return '';
+            }
+        });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-1401', fields: { summary: 'interrupted on branch', description: '', labels: [] } },
+                metadata: { contextId: 'bug_development' },
+                jobParams: { customParams: { removeLabel: 'sm_bug_development_triggered' } }
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught && caught.interruptedReset === true);
+        assert.ok(commands.indexOf('git push -u origin ai/TS-1401') !== -1,
+            'plain push to the current development branch — commands: ' + JSON.stringify(commands));
+        assert.notOk(commands.some(function (c) { return c.indexOf('git checkout -B') === 0; }),
+            'no branch switch when already on the development branch');
+        assert.notOk(commands.some(function (c) { return c.indexOf('--force-with-lease') !== -1; }),
+            'no force push when the current branch is not base/main/master');
+        assert.deepEqual(loaded.moves, [{ key: 'TS-1401', statusName: 'Ready For Development' }]);
     });
 });
