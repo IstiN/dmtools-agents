@@ -203,16 +203,18 @@ function alarmSignatureOf(a) {
 }
 
 // Keep at most PHANTOM_ALARM_CAP (newest) records per holder signature —
-// oldest beyond the cap drop first.
+// oldest beyond the cap drop first (the tail's shift() semantics).
 function capAlarmsPerSignature(alarms) {
     var counts = {};
     var out = [];
-    (alarms || []).forEach(function (a) {
-        if (!a) return;
+    var list = (alarms || []).slice();
+    for (var i = list.length - 1; i >= 0; i--) {
+        var a = list[i];
+        if (!a) continue;
         var sig = alarmSignatureOf(a);
         counts[sig] = (counts[sig] || 0) + 1;
-        if (counts[sig] <= PHANTOM_ALARM_CAP) out.push(a);
-    });
+        if (counts[sig] <= PHANTOM_ALARM_CAP) out.unshift(a);
+    }
     return out;
 }
 

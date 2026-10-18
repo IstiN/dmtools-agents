@@ -10280,6 +10280,68 @@ suite('smAgent: ghost-cancel re-dispatch (gh-1000 AC3 — IT-2)', function () {
         assert.equal(sm.capturedPrComments.length, 0, 'no comment');
     });
 });
+
+suite('smAgent: mutex streak reset on clean ticks (gh-1000, rework thread 4)', function () {
+    // The rework thread pinned two compounding defects: the tick event
+    // omitted consecutivePhantomTicks (fixed in githubSource — the IT-1
+    // suite pins the key) and the cross-tick publish merge carried the
+    // streak forward across unrelated CLEAN ticks (prev + 0), so one
+    // phantom event would count "consecutive" forever. This test drives a
+    // tick with NO phantom event against a previous snapshot carrying a
+    // streak of 3: the published block must show 0.
+    var PREV_GET = 'gh api repos/o/r/contents/data/fa-state.json?ref=factory-data --jq .content | base64 -d';
+
+    function prevStateServes(state) {
+        return function (cmdOpts) {
+            if (cmdOpts.command === PREV_GET) {
+                // the real command pipes through `base64 -d` in the shell —
+                // the mock serves the DECODED body (branchServes parity)
+                return { output: JSON.stringify(state) };
+            }
+            return undefined;
+        };
+    }
+
+    test('clean tick (no phantom self-heal) → published consecutivePhantomTicks resets to 0; cumulative counters carry', function () {
+        var prev = { schema: 2, lanes: {}, mutex: {
+            mutexSelfHeals: 4,
+            phantomHolderTicks: 4,
+            consecutivePhantomTicks: 3,
+            alarms: [{ type: 'phantom_mutex_holder',
+                       title: 'phantom_mutex_holder',
+                       detail: 'cached ai_validating holders diverge from the live label layer',
+                       label: 'ai_validating',
+                       holders: { cached: [9], live: [] },
+                       at: '2026-10-17T19:00:00Z' }]
+        } };
+        // One quiet tick through the real statePublish block (same shape
+        // as the tokens suite's publishTick, which is suite-local there).
+        var sm = makeSmAgent({
+            fileMap: {},
+            github: { items: [{ key: 'T-1', labels: [], pr: null }], prList: '[]' },
+            onCliExecute: prevStateServes(prev)
+        });
+        sm.action({ jobParams: { owner: 'o', repo: 'r',
+            rules: [makeRule('project = T')],
+            statePublish: { channel: 'release', repo: 'o/r', asset: 'fa-state.json' } } });
+        var putCmd = null;
+        sm.capturedCliCommands.forEach(function (c) {
+            if (c.command.indexOf('-X PUT repos/o/r/contents/data/fa-state.json ') !== -1) {
+                putCmd = c.command;
+            }
+        });
+        assert.ok(putCmd, 'fa-state.json PUT captured — the tick published');
+        var m = putCmd.match(/printf %s '(.*)' \| base64/);
+        assert.ok(m, 'snapshot payload extractable from the PUT');
+        var state = JSON.parse(m[1]);
+        assert.ok(state.mutex, 'mutex block still published (carried from the previous snapshot)');
+        assert.equal(state.mutex.mutexSelfHeals, 4,
+            'cumulative lifetime counters carry across clean ticks');
+        assert.equal(state.mutex.consecutivePhantomTicks, 0,
+            'a clean tick RESETS the streak — the merge alone would carry 3 forward forever');
+        assert.equal(state.mutex.alarms.length, 1, 'alarm tail carried');
+    });
+});
 suite('smAgent: cancelled-only red is no-verdict — fail path skips (gh-755)', function () {
     // gh-755 ask 2: fail-validation / rework armers must treat a
     // cancelled-only rollup as NO verdict (skip, wait for the rerun) —

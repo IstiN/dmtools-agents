@@ -145,23 +145,28 @@ suite('mutexRegistry tick events — factory-state counter carry (second tier)',
         assert.equal(snap.alarms.length, registry.MAX_ALARMS);
     });
 
-    test('PHANTOM_ALARM_CAP is enforced per holder signature (newest kept), total cap still MAX_ALARMS', function () {
+    test('PHANTOM_ALARM_CAP is enforced per holder signature (newest kept) on the published tail', function () {
         // The rework thread pinned PHANTOM_ALARM_CAP as dead: declared,
-        // documented, never used. One signature flapping 5× must keep only
-        // the newest 3 records FOR THAT SIGNATURE — and the per-signature
-        // cap must also hold on the mergeSnapshot (published tail) path.
+        // documented, never used. The tail accumulates via mergeSnapshot
+        // tick events (the githubSource probe path — one alarm per phantom
+        // tick, distinct `at` keys so no dedupe): the same signature
+        // flapping 5 ticks must keep only the NEWEST 3 records for it.
         var snap = null;
         for (var i = 1; i <= 5; i++) {
-            var st = registry.recordPhantomHeal(snap, 'ai_validating', [997], [], '2026-10-17T19:0' + i + ':00Z');
-            snap = registry.mergeSnapshot(snap, { mutexSelfHeals: 1, phantomHolderTicks: 1, consecutivePhantomTicks: 1, alarm: st.alarms[st.alarms.length - 1] });
+            snap = registry.mergeSnapshot(snap, {
+                mutexSelfHeals: 1, phantomHolderTicks: 1, consecutivePhantomTicks: 1,
+                alarm: { type: 'phantom_mutex_holder', label: 'ai_validating',
+                         holders: { cached: [997], live: [] },
+                         at: '2026-10-17T19:0' + i + ':00Z' }
+            });
         }
         var sigAlarms = snap.alarms.filter(function (a) {
             return String(a.holders && a.holders.cached) === '997';
         });
         assert.equal(sigAlarms.length, registry.PHANTOM_ALARM_CAP,
             'at most PHANTOM_ALARM_CAP records for one holder signature');
-        assert.equal(sigAlarms[sigAlarms.length - 1].at, '2026-10-17T19:05:00Z',
-            'the NEWEST records survive the cap');
+        assert.equal(sigAlarms[0].at, '2026-10-17T19:03:00Z', 'the NEWEST three survive, oldest evicted');
+        assert.equal(sigAlarms[sigAlarms.length - 1].at, '2026-10-17T19:05:00Z');
     });
 
     test('reconcile alarms carry a human-readable title/detail pair (no "undefined — undefined")', function () {
