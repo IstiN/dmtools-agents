@@ -149,16 +149,24 @@ function commentAuthorLogin(item) {
     return login ? String(login).toLowerCase() : null;
 }
 
+// gh-1025 review: trust matching normalizes ONE trailing '[bot]' on both
+// sides — a verdict marker authored by the App identity
+// 'dmtools-factory-bot[bot]' is trusted under the bare knob entry
+// 'dmtools-factory-bot'. A different bot still never matches.
+function trustedLogin(login) {
+    return String(login || '').toLowerCase().replace(/\[bot\]$/i, '');
+}
+
 function parseVerdictRecords(comments, opts) {
     var list = Array.isArray(comments) ? comments : [];
     var allow = (opts && Array.isArray(opts.authorLogins)) ? opts.authorLogins : null;
     var records = [];
     for (var i = 0; i < list.length; i++) {
         if (allow) {
-            var who = commentAuthorLogin(list[i]);
+            var who = trustedLogin(commentAuthorLogin(list[i]));
             var trusted = false;
             for (var a = 0; a < allow.length; a++) {
-                if (who && who === String(allow[a] || '').toLowerCase()) { trusted = true; break; }
+                if (who && who === trustedLogin(allow[a])) { trusted = true; break; }
             }
             if (!trusted) continue;
         }

@@ -41,28 +41,44 @@ function _tryCall(fnName, message) {
  * @throws {Error}          — if no AI provider is available or all fail
  */
 function aiChat(message) {
+    validateChatMessage(message);
+    var attempt = tryChatProviders(message);
+    if (attempt.ok) {
+        return attempt.result;
+    }
+    if (attempt.lastError) {
+        throw new Error('aiChat: no AI provider succeeded. Last error: ' + (attempt.lastError.message || attempt.lastError));
+    }
+    throw new Error('aiChat: no AI provider available (tried ' + PROVIDERS.join(', ') + ')');
+}
+
+// Guard clause, extracted from aiChat so the dispatch loop is testable in isolation.
+function validateChatMessage(message) {
     if (!message || typeof message !== 'string') {
         throw new Error('aiChat: message must be a non-empty string');
     }
+}
 
+// Provider dispatch loop: tries every provider in priority order, warning per
+// failure (same warn line as the original inline loop) and remembering the
+// last error. Returns { ok: true, result } on the first usable response, or
+// { ok: false, lastError } so the caller can build the exact failure it did
+// when the loop was inline.
+function tryChatProviders(message) {
     var lastError = null;
     for (var i = 0; i < PROVIDERS.length; i++) {
         var fnName = PROVIDERS[i] + '_ai_chat';
         try {
             var result = _tryCall(fnName, message);
             if (result !== undefined) {
-                return result;
+                return { ok: true, result: result };
             }
         } catch (e) {
             lastError = e;
             console.warn('aiChat: ' + fnName + ' failed — trying next provider', e.message || e);
         }
     }
-
-    if (lastError) {
-        throw new Error('aiChat: no AI provider succeeded. Last error: ' + (lastError.message || lastError));
-    }
-    throw new Error('aiChat: no AI provider available (tried ' + PROVIDERS.join(', ') + ')');
+    return { ok: false, lastError: lastError };
 }
 
 module.exports = { aiChat: aiChat };

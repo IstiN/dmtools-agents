@@ -476,6 +476,39 @@ function _githubGetRemoteRepoInfo() {
     } catch (e) { return null; }
 }
 
+/**
+ * gh-960: machine-owned PR body rewrite via `gh api …/pulls/{id} -X PATCH`.
+ * Review thread js/postTestReworkResults.js:214 pinned that the previous
+ * updatePrBody seam was dead — no provider implemented it, so the rework-publish
+ * freeze + ensureClosesLine wrapping never executed outside mock-SCM tests.
+ * The body travels through a temp file because `gh api -F key=@file` sends the
+ * file's exact contents — no shell quoting/escaping can mangle a multi-line
+ * Markdown body that way. Returns the gh output, or null when the call failed
+ * (threw or returned nothing — gh prints the updated PR JSON on success).
+ */
+function _githubUpdatePrBody(workspace, repository, prId, body) {
+    var prIdStr = String(prId);
+    var tempBodyPath = 'pr_body_update_tmp_' + prIdStr + '.md';
+    try {
+        file_write(tempBodyPath, body === null || body === undefined ? '' : String(body));
+        var raw = cli_execute_command({
+            command: 'gh api repos/' + workspace + '/' + repository + '/pulls/' + prIdStr +
+                ' -X PATCH -F body=@' + tempBodyPath
+        });
+        var cleaned = _cleanCommandOutput(raw || '');
+        if (!cleaned) {
+            console.warn('SCM GitHub: updatePrBody for PR ' + prIdStr + ' returned no output — treating as failed');
+            return null;
+        }
+        return cleaned;
+    } catch (e) {
+        console.warn('SCM GitHub: updatePrBody for PR ' + prIdStr + ' failed:', e.message || e);
+        return null;
+    } finally {
+        try { file_delete({ path: tempBodyPath }); } catch (e) { /* best-effort cleanup */ }
+    }
+}
+
 function _createGithubProvider(workspace, repository) {
     return {
         listPrs: function(state) {
@@ -544,6 +577,9 @@ function _createGithubProvider(workspace, repository) {
         getCommitCheckRuns: function(sha) {
             return _githubGetCommitCheckRuns(workspace, repository, sha);
         },
+        getWorkflowRunJobs: function(runId) {
+            return github_get_workflow_run_jobs({ workspace: workspace, repository: repository, runId: runId });
+        },
         getJobLogs: function(jobId) {
             return github_get_job_logs({ workspace: workspace, repository: repository, jobId: String(jobId) });
         },
@@ -557,6 +593,13 @@ function _createGithubProvider(workspace, repository) {
             return cli_execute_command({
                 command: 'gh api repos/' + (owner || workspace) + '/' + (repo || repository) + '/pulls/' + prId + '/update-branch -X PUT'
             });
+        },
+        // gh-960: machine-owned body rewrite (was a dead seam — see
+        // _githubUpdatePrBody). Callers must gate on isPrBodyFrozen() before
+        // invoking: once validation is armed / the PR is merged, the body is
+        // final and must not be rewritten.
+        updatePrBody: function(prId, body) {
+            return _githubUpdatePrBody(workspace, repository, prId, body);
         },
         fetchDiscussions: function(prId) {
             return _githubFetchDiscussions(workspace, repository, prId);

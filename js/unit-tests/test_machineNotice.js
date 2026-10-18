@@ -64,7 +64,8 @@ function loadGithubHelpers(mocks) {
                 writePRContext: function() {}
             },
             './machineNotice.js': loadMachineNotice(),
-            './reviewThreadInventory.js': loadReviewThreadInventory()
+            './reviewThreadInventory.js': loadReviewThreadInventory(),
+            './ci.js': loadModule('js/common/ci.js')
         }),
         mocks || {}
     );

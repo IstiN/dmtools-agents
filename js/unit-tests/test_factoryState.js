@@ -1225,6 +1225,14 @@ suite('factoryState — zombiesSwept (gh-998 leak-rate metric)', function () {
     var stateNaN = fsModule.buildFactoryState(baseInput({ prev: prevNaN }));
     assert.equal(stateNaN.zombiesSwept, 0);
   });
+
+  test('a malformed THIS-tick count counts as 0 (the saneCount guard, both call sites)', function () {
+    var prev = { lanes: {}, zombiesSwept: 4 };
+    var stateStr = fsModule.buildFactoryState(baseInput({ prev: prev, zombiesSwept: 'bogus' }));
+    assert.equal(stateStr.zombiesSwept, 4, 'string tick count contributes 0, carry survives');
+    var stateNaN = fsModule.buildFactoryState(baseInput({ prev: prev, zombiesSwept: NaN }));
+    assert.equal(stateNaN.zombiesSwept, 4, 'NaN tick count contributes 0, carry survives');
+  });
 });
 
 // ── gh-816 — merge-lane citation integrity ───────────────────────────────────
