@@ -4,7 +4,8 @@
     "jsPath": "js/unit-tests/testRunner.js",
     "jobParams": {
       "testFiles": [
-        "js/unit-tests/test_preCliMobileTestAutomationSetup.js"
+        "js/unit-tests/test_preCliMobileTestAutomationSetup.js",
+        "js/unit-tests/test_preCliMobileTestAutomationSetupHelpers.js"
       ]
     }
   }

@@ -38,6 +38,7 @@ function loadPreCli(mocks) {
             './config.js': configModule,
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
             './mergeState.js': loadModule('js/common/mergeState.js'),
+            './preCliMobileTestAutomationSetupHelpers.js': loadModule('js/preCliMobileTestAutomationSetupHelpers.js'),
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks),
             // Real PR helper (gh-912): cleanCommandOutput + the remote-existence
             // probe live there — the strict ref-line parser must be exercised.
@@ -375,6 +376,453 @@ suite('preCliMobileTestAutomationSetup — Bitrise artifact download', function(
             assert.ok(e.message.indexOf('No successful') !== -1, 'error should mention no successful builds: ' + e.message);
         }
         assert.ok(threw, 'should throw when no builds found');
+    });
+
+    test('filters builds by commit message matching the feature branch', function() {
+        var writtenFiles = {};
+        var listBuildsArgs = [];
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onListBuilds: function(opts) {
+                listBuildsArgs.push(opts);
+                return JSON.stringify({ data: [
+                    { slug: 'other-build', build_number: 10316, status: 1, status_text: 'success', commit_message: 'unrelated work' },
+                    { slug: 'matching-build', build_number: 10317, status: 1, status_text: 'success', commit_message: 'iOS build for story/PROJ-5678' }
+                ]});
+            },
+            onListArtifacts: function() {
+                return JSON.stringify({ data: [{ slug: 's', title: 'app.zip', file_size_bytes: 1000 }] });
+            },
+            onGetArtifact: function() { return JSON.stringify({ data: { expiring_download_url: 'https://x.com/a.zip' } }); }
+        }));
+
+        m.action(makeParamsWithBitrise('PROJ-5678'));
+
+        var md = writtenFiles['input/PROJ-5678/app_info.md'];
+        assert.ok(md, 'app_info.md should be written');
+        assert.ok(md.indexOf('| Build Slug | matching-build |') !== -1,
+            'should use the branch-matched build: ' + md);
+    });
+
+    test('warns and uses latest successful build when no commit message matches', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onListBuilds: function() {
+                return JSON.stringify({ data: [
+                    { slug: 'latest-build', build_number: 10320, status: 1, status_text: 'success', commit_message: 'some other ticket' }
+                ]});
+            },
+            onListArtifacts: function() {
+                return JSON.stringify({ data: [{ slug: 's', title: 'app.zip', file_size_bytes: 1000 }] });
+            },
+            onGetArtifact: function() { return JSON.stringify({ data: { expiring_download_url: 'https://x.com/a.zip' } }); }
+        }));
+
+        m.action(makeParamsWithBitrise('PROJ-5678'));
+
+        var md = writtenFiles['input/PROJ-5678/app_info.md'];
+        assert.ok(md.indexOf('| Build Slug | latest-build |') !== -1,
+            'should fall back to the latest successful build');
+    });
+
+    test('returns early when the build has no artifacts', function() {
+        var writtenFiles = {};
+        var getArtifactCalled = false;
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onListArtifacts: function() { return JSON.stringify({ data: [] }); },
+            onGetArtifact: function() { getArtifactCalled = true; return JSON.stringify({ data: {} }); }
+        }));
+
+        m.action(makeParamsWithBitrise('PROJ-5678'));
+
+        assert.ok(!getArtifactCalled, 'should not fetch download URL without an artifact');
+        assert.ok(!writtenFiles['input/PROJ-5678/app_info.md'], 'should NOT write app_info.md');
+    });
+
+    test('falls back to the first artifact when none matches .zip/.app/simulator', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onListArtifacts: function() {
+                return JSON.stringify({ data: [
+                    { slug: 'log-slug', title: 'build-log.txt', file_size_bytes: 100 },
+                    { slug: 'zip-slug', title: 'app.zip', file_size_bytes: 1000 }
+                ]});
+            },
+            onGetArtifact: function() { return JSON.stringify({ data: { expiring_download_url: 'https://x.com/a.zip' } }); }
+        }));
+
+        m.action(makeParamsWithBitrise('PROJ-5678'));
+
+        var md = writtenFiles['input/PROJ-5678/app_info.md'];
+        assert.ok(md.indexOf('| Artifact | build-log.txt |') !== -1,
+            'should use the first artifact as fallback');
+    });
+
+    test('returns early when the artifact response has no download URL', function() {
+        var writtenFiles = {};
+        var cliCommands = [];
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onCliCommand: function(opts) { cliCommands.push(opts.command); return ''; },
+            onGetArtifact: function() { return JSON.stringify({ data: { slug: 's' } }); }
+        }));
+
+        m.action(makeParamsWithBitrise('PROJ-5678'));
+
+        assert.ok(!writtenFiles['input/PROJ-5678/app_info.md'], 'should NOT write app_info.md');
+        assert.ok(!cliCommands.some(function(c) { return c && c.indexOf('curl') !== -1; }),
+            'should NOT download without a URL');
+    });
+
+    test('returns early when artifact listing throws', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onListArtifacts: function() { throw new Error('bitrise API down'); }
+        }));
+
+        m.action(makeParamsWithBitrise('PROJ-5678'));
+
+        assert.ok(!writtenFiles['input/PROJ-5678/app_info.md'], 'should NOT write app_info.md');
+    });
+
+    test('returns early when download/unzip fails', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onCliCommand: function(opts) {
+                if (opts.command && opts.command.indexOf('curl') !== -1) {
+                    throw new Error('network error');
+                }
+                return '';
+            }
+        }));
+
+        m.action(makeParamsWithBitrise('PROJ-5678'));
+
+        assert.ok(!writtenFiles['input/PROJ-5678/app_info.md'],
+            'should NOT write app_info.md when download fails');
+    });
+
+    test('writes App Dir manual-locate markdown when no .app is found after unzip', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onCliCommand: function() { return ''; }
+        }));
+
+        m.action(makeParamsWithBitrise('PROJ-5678'));
+
+        var md = writtenFiles['input/PROJ-5678/app_info.md'];
+        assert.ok(md, 'app_info.md should still be written');
+        assert.ok(md.indexOf('| App Dir | `input/PROJ-5678/app` |') !== -1,
+            'should contain the App Dir fallback row: ' + md);
+        assert.ok(md.indexOf('locate the `.app` bundle manually') !== -1,
+            'should instruct manual locate');
+        assert.ok(md.indexOf('| App Path |') === -1, 'should NOT contain an App Path row');
+    });
+
+    test('skips .dSYM entries when locating the .app bundle', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onCliCommand: function(opts) {
+                if (opts.command && opts.command.indexOf('find') !== -1) {
+                    return 'input/PROJ-5678/app/Example Business.app.dSYM/Contents\n';
+                }
+                return '';
+            }
+        }));
+
+        m.action(makeParamsWithBitrise('PROJ-5678'));
+
+        var md = writtenFiles['input/PROJ-5678/app_info.md'];
+        assert.ok(md.indexOf('| App Dir |') !== -1, 'dSYM-only find output must not become the app path');
+    });
+
+    test('still writes app_info.md when the find command throws', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onCliCommand: function(opts) {
+                if (opts.command && opts.command.indexOf('find') !== -1) {
+                    throw new Error('find failed');
+                }
+                return '';
+            }
+        }));
+
+        m.action(makeParamsWithBitrise('PROJ-5678'));
+
+        var md = writtenFiles['input/PROJ-5678/app_info.md'];
+        assert.ok(md, 'app_info.md should be written despite find failure');
+        assert.ok(md.indexOf('| App Dir |') !== -1, 'should fall back to App Dir row');
+    });
+
+    test('writes environment.md and overrides workflowId for a configured environment', function() {
+        var writtenFiles = {};
+
+        var params = makeParamsWithBitrise('PROJ-5678');
+        params.jobParams.customParams.testEnvironment = 'staging';
+        params.jobParams.customParams.bitriseBuild = {
+            appSlug: 'e739ec8c-app-slug',
+            workflowId: 'build_ios_simulator',
+            environments: {
+                staging: {
+                    workflowId: 'build_ios_simulator_staging',
+                    appId: 'com.example.staging',
+                    userEnvVar: 'STAGE_USER',
+                    passwordEnvVar: 'STAGE_PASS',
+                    pinEnvVar: 'STAGE_PIN'
+                }
+            }
+        };
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; }
+        }));
+
+        m.action(params);
+
+        var envMd = writtenFiles['input/PROJ-5678/environment.md'];
+        assert.ok(envMd, 'environment.md should be written');
+        assert.ok(envMd.indexOf('# Test Environment: STAGING') !== -1);
+        assert.ok(envMd.indexOf('| Bitrise Workflow | build_ios_simulator_staging |') !== -1,
+            'should use the environment-specific workflow');
+        assert.ok(envMd.indexOf('`STAGE_USER`') !== -1, 'should use custom credential env var');
+        var appMd = writtenFiles['input/PROJ-5678/app_info.md'];
+        assert.ok(appMd.indexOf('| Bitrise Workflow | build_ios_simulator_staging |') !== -1,
+            'download should use the overridden workflow');
+    });
+
+    test('passes the environment appId through to the simulator install block', function() {
+        var writtenFiles = {};
+
+        var params = makeParamsWithBitrise('PROJ-5678');
+        params.jobParams.customParams.testEnvironment = 'staging';
+        params.jobParams.customParams.bitriseBuild = {
+            appSlug: 'e739ec8c-app-slug',
+            workflowId: 'build_ios_simulator',
+            environments: {
+                staging: { appId: 'com.example.staging' }
+            }
+        };
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onCliCommand: function(opts) {
+                if (opts.command && opts.command.indexOf('SIMULATOR_UDID') !== -1) {
+                    return 'SIM-UDID-1234';
+                }
+                if (opts.command && opts.command.indexOf('find') !== -1) {
+                    return 'input/PROJ-5678/app/Example Business.app';
+                }
+                return '';
+            }
+        }));
+
+        m.action(params);
+
+        var md = writtenFiles['input/PROJ-5678/app_info.md'];
+        assert.ok(md.indexOf('## Simulator & Maestro') !== -1, 'simulator block should be appended');
+        assert.ok(md.indexOf('| APP_ID | `com.example.staging` |') !== -1,
+            'should use the env-configured appId: ' + md);
+    });
+
+});
+
+// ── Suite: simulator install ─────────────────────────────────────────────────
+
+suite('preCliMobileTestAutomationSetup — simulator install', function() {
+
+    function makeInstallParams() {
+        var params = {
+            inputFolderPath: 'input/PROJ-5678',
+            jobParams: {
+                customParams: {
+                    targetRepository: {
+                        owner: 'ExampleOrg',
+                        repo: 'example-mobile-app-automation',
+                        baseBranch: 'main',
+                        workingDir: '/tmp/automation-repo'
+                    },
+                    featurePR: { owner: 'ExampleOrg', repo: 'example-mobile-app' },
+                    bitriseBuild: {
+                        appSlug: 'e739ec8c-app-slug',
+                        workflowId: 'build_ios_simulator'
+                    }
+                }
+            }
+        };
+        return params;
+    }
+
+    function makeInstallMocks(opts) {
+        opts = opts || {};
+        return {
+            jira_move_to_status: function() {},
+            jira_search_by_jql: function() { return []; },
+            file_write: opts.onFileWrite || function() {},
+            file_read: opts.onFileRead || function() { return '# existing app_info'; },
+            cli_execute_command: opts.onCliCommand || function(o) {
+                if (o.command && o.command.indexOf('find') !== -1) return 'input/PROJ-5678/app/Example Business.app';
+                if (o.command && o.command.indexOf('SIMULATOR_UDID') !== -1) return 'SIM-UDID-1234';
+                return '';
+            },
+            github_list_prs: function() {
+                return JSON.stringify({ data: [{ number: 963, head: { ref: 'story/PROJ-5678' } }]});
+            },
+            bitrise_list_builds: function() {
+                return JSON.stringify({ data: [{ slug: 'build-abc', build_number: 1, status: 1, status_text: 'success' }]});
+            },
+            bitrise_list_build_artifacts: function() {
+                return JSON.stringify({ data: [{ slug: 's', title: 'app.zip', file_size_bytes: 1000 }]});
+            },
+            bitrise_get_build_artifact: function() {
+                return JSON.stringify({ data: { expiring_download_url: 'https://x.com/a.zip' }});
+            }
+        };
+    }
+
+    test('installs app on simulator using SIMULATOR_UDID from env', function() {
+        var commands = [];
+        var writtenFiles = {};
+
+        var m = loadPreCli(makeInstallMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onCliCommand: function(o) {
+                commands.push(o.command);
+                if (o.command && o.command.indexOf('find') !== -1) return 'input/PROJ-5678/app/Example Business.app';
+                if (o.command && o.command.indexOf('SIMULATOR_UDID') !== -1) return 'SIM-UDID-1234';
+                return '';
+            }
+        }));
+
+        m.action(makeInstallParams());
+
+        var installCmd = commands.find(function(c) { return c && c.indexOf('xcrun simctl install') !== -1; });
+        assert.ok(installCmd, 'should run xcrun simctl install');
+        assert.ok(installCmd.indexOf('SIM-UDID-1234') !== -1, 'should install on the env UDID');
+        assert.ok(installCmd.indexOf('Example Business.app') !== -1, 'should install the app bundle');
+        var md = writtenFiles['input/PROJ-5678/app_info.md'];
+        assert.ok(md.indexOf('| MAESTRO_DEVICE | `SIM-UDID-1234` |') !== -1, 'should append simulator info');
+        assert.ok(md.indexOf('`com.example.internal.business.app`') !== -1, 'should use default appId');
+    });
+
+    test('falls back to a booted simulator when SIMULATOR_UDID is empty', function() {
+        var commands = [];
+
+        var m = loadPreCli(makeInstallMocks({
+            onCliCommand: function(o) {
+                commands.push(o.command);
+                if (o.command && o.command.indexOf('find') !== -1) return 'input/PROJ-5678/app/Example Business.app';
+                if (o.command && o.command.indexOf('SIMULATOR_UDID') !== -1) return '';
+                if (o.command && o.command.indexOf('simctl list devices booted') !== -1) {
+                    return '    iPhone 15 (ABCD1234-1111-2222-3333-444455556666) (Booted)';
+                }
+                return '';
+            }
+        }));
+
+        m.action(makeInstallParams());
+
+        var installCmd = commands.find(function(c) { return c && c.indexOf('xcrun simctl install') !== -1; });
+        assert.ok(installCmd, 'should install via the booted-simulator fallback');
+        assert.ok(installCmd.indexOf('ABCD1234-1111-2222-3333-444455556666') !== -1,
+            'should use the UDID parsed from simctl output');
+    });
+
+    test('skips install when no booted simulator is found', function() {
+        var commands = [];
+
+        var m = loadPreCli(makeInstallMocks({
+            onCliCommand: function(o) {
+                commands.push(o.command);
+                if (o.command && o.command.indexOf('find') !== -1) return 'input/PROJ-5678/app/Example Business.app';
+                return '';
+            }
+        }));
+
+        m.action(makeInstallParams());
+
+        var installCmd = commands.find(function(c) { return c && c.indexOf('xcrun simctl install') !== -1; });
+        assert.ok(!installCmd, 'should NOT install without a booted simulator');
+    });
+
+    test('continues when listing booted simulators throws', function() {
+        var commands = [];
+
+        var m = loadPreCli(makeInstallMocks({
+            onCliCommand: function(o) {
+                commands.push(o.command);
+                if (o.command && o.command.indexOf('find') !== -1) return 'input/PROJ-5678/app/Example Business.app';
+                if (o.command && o.command.indexOf('simctl list devices booted') !== -1) {
+                    throw new Error('xcrun not found');
+                }
+                return '';
+            }
+        }));
+
+        m.action(makeInstallParams());
+
+        var installCmd = commands.find(function(c) { return c && c.indexOf('xcrun simctl install') !== -1; });
+        assert.ok(!installCmd, 'should NOT install when simctl listing fails');
+    });
+
+    test('does not append simulator info when the install command fails', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli(makeInstallMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onCliCommand: function(o) {
+                if (o.command && o.command.indexOf('find') !== -1) return 'input/PROJ-5678/app/Example Business.app';
+                if (o.command && o.command.indexOf('SIMULATOR_UDID') !== -1) return 'SIM-UDID-1234';
+                if (o.command && o.command.indexOf('xcrun simctl install') !== -1) {
+                    throw new Error('install failed');
+                }
+                return '';
+            }
+        }));
+
+        m.action(makeInstallParams());
+
+        var md = writtenFiles['input/PROJ-5678/app_info.md'];
+        assert.ok(md, 'app_info.md from download should still exist');
+        assert.ok(md.indexOf('## Simulator & Maestro') === -1,
+            'should NOT append simulator info after a failed install');
+    });
+
+    test('warns but completes when appending simulator info fails', function() {
+        var commands = [];
+
+        var m = loadPreCli(makeInstallMocks({
+            onFileRead: function() { throw new Error('read denied'); },
+            onCliCommand: function(o) {
+                commands.push(o.command);
+                if (o.command && o.command.indexOf('find') !== -1) return 'input/PROJ-5678/app/Example Business.app';
+                if (o.command && o.command.indexOf('SIMULATOR_UDID') !== -1) return 'SIM-UDID-1234';
+                return '';
+            }
+        }));
+
+        // install itself succeeds; only the app_info.md append fails — action must not throw
+        m.action(makeInstallParams());
+
+        var installCmd = commands.find(function(c) { return c && c.indexOf('xcrun simctl install') !== -1; });
+        assert.ok(installCmd, 'install should still run');
     });
 
 });

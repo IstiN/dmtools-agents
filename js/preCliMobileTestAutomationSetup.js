@@ -498,44 +498,24 @@ function action(params) {
             var featureBranch = findFeatureBranch(ticketKey, customParams.featurePR);
 
             // Resolve environment-specific config if available
-            var buildConfig = customParams.bitriseBuild;
-            var testEnvironment = customParams.testEnvironment || 'prod';
-            if (buildConfig.environments && buildConfig.environments[testEnvironment]) {
-                var envConfig = buildConfig.environments[testEnvironment];
-                console.log('🌍 Using environment:', testEnvironment);
-                // Override workflowId from environment config
-                buildConfig = {
-                    appSlug: buildConfig.appSlug,
-                    workflowId: envConfig.workflowId || buildConfig.workflowId
-                };
+            var envResolution = setupHelpers.resolveEnvironmentBuildConfig(
+                customParams.bitriseBuild, customParams.testEnvironment || 'prod');
+            var buildConfig = envResolution.buildConfig;
+            if (envResolution.active) {
+                console.log('🌍 Using environment:', envResolution.environment);
                 // Write environment info for the agent prompt
-                var envLines = [];
-                envLines.push('# Test Environment: ' + testEnvironment.toUpperCase() + '\n');
-                envLines.push('| Setting | Value |');
-                envLines.push('|---------|-------|');
-                envLines.push('| Environment | ' + testEnvironment + ' |');
-                envLines.push('| Bitrise Workflow | ' + buildConfig.workflowId + ' |');
-                if (envConfig.appId) envLines.push('| APP_ID | `' + envConfig.appId + '` |');
-                envLines.push('\n## Credentials\n');
-                envLines.push('Login credentials are available as environment variables:');
-                envLines.push('- `' + (envConfig.userEnvVar || 'TEST_USER_EMAIL') + '` — user email');
-                envLines.push('- `' + (envConfig.passwordEnvVar || 'TEST_USER_PASSWORD') + '` — password');
-                envLines.push('- `' + (envConfig.pinEnvVar || 'TEST_USER_PIN') + '` — PIN code');
-                envLines.push('\nUse these env var names in Maestro flows for `inputText` steps.');
+                var envLines = setupHelpers.buildEnvironmentMarkdown(
+                    envResolution.environment, buildConfig.workflowId, envResolution.envConfig);
                 file_write(folder + '/environment.md', envLines.join('\n'));
-                console.log('✅ Written environment.md for', testEnvironment);
+                console.log('✅ Written environment.md for', envResolution.environment);
             }
 
             appPath = downloadBitriseApp(ticketKey, folder, buildConfig, featureBranch, config.workingDir);
         }
 
         // Resolve appId from environment config
-        var resolvedAppId = null;
-        if (customParams.bitriseBuild && customParams.bitriseBuild.environments) {
-            var testEnv = customParams.testEnvironment || 'prod';
-            var ec = customParams.bitriseBuild.environments[testEnv];
-            if (ec && ec.appId) resolvedAppId = ec.appId;
-        }
+        var resolvedAppId = setupHelpers.decideAppId(
+            customParams.bitriseBuild, customParams.testEnvironment || 'prod');
 
         // Step 5: Install app on the already-booted simulator
         if (appPath) {
