@@ -41,6 +41,12 @@ function decode(encoded) {
 
 suite('buildEncodedConfig helper functions', function() {
 
+    test('buildEncodedConfig JSDoc summary appears exactly once (no orphaned duplicate)', function() {
+        var src = file_read({ path: 'js/common/buildEncodedConfig.js' });
+        var count = src.split('Build the encoded config payload for a workflow dispatch.').length - 1;
+        assert.equal(count, 1, 'found an orphaned duplicated buildEncodedConfig docblock');
+    });
+
     test('extractAgentName strips directories and .json extension', function() {
         var builder = loadBuilder({});
         assert.equal(builder.extractAgentName('agents/story_development.json'), 'story_development');

@@ -1192,6 +1192,76 @@ suite('configLoader.loadHookFn', function() {
 
 });
 
+// ── loadCustomParamFnHook ────────────────────────────────────────────────────
+
+suite('configLoader.loadCustomParamFnHook', function() {
+
+    test('installs the exported function on the target under exportKey', function() {
+        var cl = makeIsolatedConfigLoaderForHooks({
+            '.dmtools/branchNaming/naming.js': 'module.exports = function(ticket, role, config) { return "ai/" + ticket; };'
+        });
+        var target = {};
+        cl.loadCustomParamFnHook(target, '.dmtools/branchNaming/naming.js', 'branchNamingFnPath', 'branchNamingFn');
+        assert.equal(typeof target.branchNamingFn, 'function');
+        assert.equal(target.branchNamingFn('gh-1'), 'ai/gh-1');
+    });
+
+    test('returns without loading when the path is falsy', function() {
+        var cl = makeIsolatedConfigLoaderForHooks({});
+        var target = {};
+        cl.loadCustomParamFnHook(target, undefined, 'branchNamingFnPath', 'branchNamingFn');
+        cl.loadCustomParamFnHook(target, '', 'prSearchFnPath', 'prSearchFn');
+        assert.deepEqual(target, {});
+    });
+
+    test('warns and ignores when the file does not export a function', function() {
+        var cl = makeIsolatedConfigLoaderForHooks({
+            '.dmtools/prSearch/not_a_fn.js': 'module.exports = 42;'
+        });
+        var target = {};
+        cl.loadCustomParamFnHook(target, '.dmtools/prSearch/not_a_fn.js', 'prSearchFnPath', 'prSearchFn');
+        assert.equal(target.prSearchFn, undefined);
+    });
+
+});
+
+// ── agentDocGenerator static-analysis contract (docs-freshness) ──────────────
+
+suite('configLoader customParams visibility for agentDocGenerator', function() {
+
+    // js/agentDocGenerator.js discovers supported customParams keys with two
+    // literal-access regexes; a dynamic customParams[key] read is invisible to
+    // them and silently drops keys from every generated agent doc (red
+    // docs-freshness CI). Pin the two hook keys as literal member reads here.
+    function discoverCustomParamsKeys(src) {
+        var found = [];
+        var seen = {};
+        var patterns = [
+            /customParams\.([a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*)*)/g,
+            /customParams\[['"]([\w.]+)['"]\]/g
+        ];
+        patterns.forEach(function(re) {
+            var match;
+            while ((match = re.exec(src)) !== null) {
+                if (!seen[match[1]]) {
+                    seen[match[1]] = true;
+                    found.push(match[1]);
+                }
+            }
+        });
+        return found.sort();
+    }
+
+    test('configLoader.js keeps branchNamingFnPath and prSearchFnPath statically visible', function() {
+        var src = file_read({ path: 'js/configLoader.js' });
+        var keys = discoverCustomParamsKeys(src);
+        assert.ok(keys.indexOf('branchNamingFnPath') !== -1,
+            'branchNamingFnPath must be discoverable by agentDocGenerator literal regexes, got: ' + keys.join(', '));
+        assert.ok(keys.indexOf('prSearchFnPath') !== -1,
+            'prSearchFnPath must be discoverable by agentDocGenerator literal regexes, got: ' + keys.join(', '));
+    });
+});
+
 // ── {status.KEY[:Literal]} placeholders (agents#855) ──────────────────────────
 
 suite('configLoader.interpolateJql — status placeholders (agents#855)', function() {

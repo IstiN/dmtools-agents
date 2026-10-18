@@ -158,21 +158,6 @@ function resolveConfluenceTrackerOverride(agentParamsRoot, effectiveConfig, agen
 }
 
 /**
- * Build the encoded config payload for a workflow dispatch.
- *
- * @param {string} ticketKey - Ticket key to process.
- * @param {Object|string} rule - Rule object or resolved config file path.
- * @param {Object} effectiveConfig - Project config from configLoader.
- * @param {boolean} [isLocal] - When true, marks the built config with
- *   `customParams.localTeammate = true` so the job it starts knows it is
- *   running locally (via smAgent's runTeammateLocally/forceLocalTeammate path)
- *   rather than as a GitHub Actions workflow_dispatch. Consumed by
- *   autoStart.js's triggerConfiguredWorkflowForTicket() to keep any further
- *   autoStartReview/autoStartRework chaining on the same machine instead of
- *   dispatching to GitHub Actions.
- * @returns {string} URL-encoded JSON string for workflow_dispatch `encoded_config`.
- */
-/**
  * Derive the project key used to resolve a project-specific agent JSON
  * (e.g. "agents/pr_review.json" -> "ai_teammate/myproject/pr_review.json").
  * Explicit rule.projectKey wins; otherwise the basename of the loaded

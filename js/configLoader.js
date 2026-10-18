@@ -452,10 +452,17 @@ function applyBranchResolverFn(config, params, pathKey, branchKey) {
  * Load a customParams.*FnPath hook file whose module.exports must be a
  * function, and install it on the given target under exportKey. Used for
  * branchNamingFnPath (target: config.git) and prSearchFnPath (target:
- * config); warns and ignores non-function exports.
+ * config); warns and ignores non-function exports. The path is read by the
+ * caller via a literal customParams.<key> member access (NOT a dynamic
+ * customParams[key]) so js/agentDocGenerator.js regex-based discovery keeps
+ * seeing the supported keys.
+ *
+ * @param {Object} target    - Object to receive the loaded function
+ * @param {string} path      - customParams.<key> value (hook file path)
+ * @param {string} key       - customParams key name, used in the warn line
+ * @param {string} exportKey - Target property to install the function on
  */
-function loadCustomParamFnHook(target, customParams, key, exportKey) {
-    var path = customParams[key];
+function loadCustomParamFnHook(target, path, key, exportKey) {
     if (!path) return;
     var fn = loadConfigFile(path);
     if (typeof fn === 'function') {
@@ -531,14 +538,13 @@ function loadProjectConfig(params) {
     // (ticket, branchRole, config) and overrides config.git.branchNamingFn;
     // prSearchFn takes (candidates, ticketKey, options). Both use the same
     // GraalJS-safe loadConfigFile() loader (new Function under the hood).
-    loadCustomParamFnHook(config.git, customParams, 'branchNamingFnPath', 'branchNamingFn');
-    loadCustomParamFnHook(config, customParams, 'prSearchFnPath', 'prSearchFn');
+    loadCustomParamFnHook(config.git, customParams.branchNamingFnPath, 'branchNamingFnPath', 'branchNamingFn');
+    loadCustomParamFnHook(config, customParams.prSearchFnPath, 'prSearchFnPath', 'prSearchFn');
 
     applyCustomParamOverrides(config, customParams);
 
     return config;
 }
-
 
 // ── Template utilities ───────────────────────────────────────────────────────
 
