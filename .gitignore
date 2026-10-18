@@ -34,3 +34,7 @@ site/factory/.playwright-cli/
 
 # fa session runtime artifacts (bash job logs/state — churn every session)
 .fah/
+
+# python bytecode caches — regenerated per-run, never commit
+__pycache__/
+*.pyc
