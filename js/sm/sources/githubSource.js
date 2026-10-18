@@ -28,6 +28,7 @@
 var smProviderModule = require('../../common/smProvider.js');
 var machineAuthorModule = require('../../common/machineAuthor.js');
 var smAsyncModule = require('../../common/smAsync.js');
+var mutexRegistryModule = require('../../common/mutexRegistry.js');
 
 // runAsync worker sources — STRING literals of CLOSURE-FREE functions.
 // The Dart runtime serializes them via fn.toString() and runs each on a
@@ -661,7 +662,166 @@ function linkedIssueNumber(body) {
     return m ? parseInt(m[2], 10) : null;
 }
 
-function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {    var q = rule.query || {};
+// gh-1000 — phantom mutex holder reconciliation (I1/I2/E4/AC2).
+// The mutex scan below reads the holder set from the provider's per-tick
+// ioCache. A holder that vanished from the live label layer (arm strip
+// racing the cached open-PR list) would otherwise stay a phantom turnstile
+// deferring every candidate with zero labeled open PRs (live 19:08Z:
+// `slots 1/1 taken` while factory lanes.validating was empty). On a
+// full-slot defer decision the holders are re-derived against a LIVE
+// github_list_prs re-read — divergence means the cached view was stale:
+// drop the cache entry (self-heal), record the alarm + counters, and let
+// the query proceed with the corrected holder set IN THE SAME TICK (a
+// queued candidate may arm immediately — AC2). Probe failure keeps the
+// cached decision for one more tick (fail-closed, E4).
+
+// Numbers of the PRs in `items` that hold the mutex label, honoring the
+// same guards the scan applies (mutexAmong scope; 'blocked' exempts).
+function mutexHoldersOf(items, q) {
+    var among = (q.mutexAmong && q.mutexAmong.length) ? q.mutexAmong : null;
+    return items.filter(function (p) {
+        var labels = p.labels || [];
+        if (labels.indexOf('blocked') !== -1) return false;
+        if (labels.indexOf(q.mutex) === -1) return false;
+        return !among || among.some(function (m) { return labels.indexOf(m) !== -1; });
+    }).map(function (p) { return p.number; });
+}
+
+// gh-1000 — per-tick event accumulator: the phantom-heal scan below
+// records self-heal events HERE; the SM (smAgent factory-state publish
+// rule) drains them once per tick via takeMutexTickSnapshot(). Module
+// state, not a global — githubSource and smAgent are separate modules.
+var mutexTickEvents = null;
+
+function recordMutexTickEvent(ev) {
+    mutexTickEvents = mutexRegistryModule.mergeSnapshot(mutexTickEvents, ev || {});
+}
+
+// gh-1000 — the phantom-heal probe timestamps its derived snapshots; the
+// module had no ISO clock helper (the WIP called a nowIso() that was never
+// defined — every live re-derive would have thrown into the fail-closed
+// catch, masking the phantom forever).
+function nowIso() {
+    return new Date().toISOString();
+}
+
+// Probe-payload normalizer: accepts the bridge's {items:[...]} envelope or
+// a bare array; anything else (junk payload) reads as null — fail-closed.
+function asItemsArray(liveData) {
+    var liveItems = ((liveData || {}).items || liveData || []);
+    return Array.isArray(liveItems) ? liveItems : null;
+}
+
+// Live open-PR re-read for the phantom-heal probe (E4 fail-closed: any
+// failure — no provider hook, malformed payload, thrown probe — reads as
+// null and the caller keeps the cached decision for one more tick). The
+// probe deliberately bypasses the provider's per-tick ioCache through the
+// facade's listOpenPrsLive() — the cache itself may be the stale layer a
+// phantom holder rides on, and the guard must name a method that really
+// exists on the smProvider facade (a githubApi-style indirection never did;
+// the rework review thread pinned the self-heal dead on that guard).
+function livePrItems(provider, repoInfo) {
+    if (!provider || typeof provider.listOpenPrsLive !== 'function' || !repoInfo) return null;
+    try {
+        var live = asItemsArray(provider.listOpenPrsLive());
+        // The live payload carries the same label shape github_list_prs
+        // returns (REST: {name} objects) — the probe's label scans read
+        // PLAIN strings (same contract as the query's prLabels mapping),
+        // so normalize here or every defer would misread as a phantom.
+        return live ? live.map(function (p) {
+            return { number: p.number, labels: prLabels(p) };
+        }) : null;
+    } catch (e) {
+        console.log('   ⚠️ gh-1000 phantom-heal live re-read failed: ' +
+            String((e && e.message) || e) + ' — keeping cached mutex decision (fail-closed)');
+        return null;
+    }
+}
+
+// The open-PR cache is module-level in smProvider (the provider object is
+// a facade) — drop via the module, guarded for minimal test stubs.
+function dropOpenPrsCache(repoInfo) {
+    if (!smProviderModule || typeof smProviderModule.ioCacheDrop !== 'function') return;
+    try {
+        smProviderModule.ioCacheDrop(repoInfo.owner, repoInfo.repo, 'openPrs', null);
+    } catch (e2) { /* probe-only */ }
+}
+
+// One holder leg of the self-heal alarm: the alarm record's normalized
+// pair wins (cachedHolders may still be the raw queryPrs item objects),
+// the caller's argument is the fallback. Branch-light for the CRAP gate.
+function alarmHoldersOf(alarm, fallbackHolders, key) {
+    var h = alarm && alarm.holders;
+    var v = h && h[key];
+    return v ? v : (fallbackHolders || []);
+}
+
+function logPhantomHeal(alarm, cachedHolders, liveHolders) {
+    console.log('   ⚠️ ' + alarm.title + ' — ' + alarm.detail +
+        ' (cached holders [' + alarmHoldersOf(alarm, cachedHolders, 'cached').join(', ') +
+        '] vs live [' + alarmHoldersOf(alarm, liveHolders, 'live').join(', ') +
+        ']; ioCache self-healed, defer cancelled)');
+}
+
+// gh-1000 I1/I2 — re-derive the full-slot holder set against the LIVE
+// label layer; a divergent cached holder is self-healed (cache drop +
+// alarm + tick counters) so a queued candidate arms in the SAME tick
+// (AC2). Returns the corrected holders; fail-closed keeps `holders`.
+function rederiveHoldersLive(holders, items, provider, repoInfo, q) {
+    var liveItems = livePrItems(provider, repoInfo);
+    if (!liveItems) return holders;
+    var repoName = repoInfo.owner + '/' + repoInfo.repo;
+    // The cached leg in NUMBER shape (matches the live leg) — `holders`
+    // here is the query's item-object array, not numbers.
+    var cachedHolders = mutexHoldersOf(items, q);
+    // The reconciliation is generic over the RULE's mutex label (q.mutex) —
+    // both label-layer legs derive against q.mutex, never a hardcoded
+    // 'ai_validating' (a second mutex label would otherwise mis-derive
+    // every full-slot defer for its rule).
+    var liveHolderSet = mutexRegistryModule.derive(
+        mutexHoldersOf(liveItems, q), liveItems,
+        mutexRegistryModule.noCompletedRuns, repoName, nowIso(), q.mutex);
+    var cachedSet = mutexRegistryModule.derive(
+        cachedHolders, items, mutexRegistryModule.noCompletedRuns, repoName, nowIso(), q.mutex);
+    var divergent = mutexRegistryModule.reconcile(cachedSet, liveHolderSet);
+    if (divergent.selfHealed) {
+        dropOpenPrsCache(repoInfo);
+        logPhantomHeal(divergent.alarm, cachedHolders, liveHolderSet.holders);
+        recordMutexTickEvent({
+            mutexSelfHeals: 1,
+            phantomHolderTicks: 1,
+            // gh-1000 (rework thread): the streak key MUST ride the event —
+            // without it num() coerces to 0 and the published
+            // consecutivePhantomTicks stays 0 forever (only the test-only
+            // recordPhantomHeal used to increment it).
+            consecutivePhantomTicks: 1,
+            alarm: divergent.alarm
+        });
+    }
+    return liveHolderSet.holders;
+}
+
+// Re-derive only on a full-slot decision — keeps the mutex gate's
+// zero-slot fast path allocation-free (and the query's branch count
+// identical to the pre-gh-1000 shape).
+function phantomHealIfFull(holders, items, provider, repoInfo, q, mutexMax) {
+    if (holders.length < mutexMax) return holders;
+    return rederiveHoldersLive(holders, items, provider, repoInfo, q);
+}
+
+function logMutexDefer(q, holderCount, mutexMax) {
+    console.log('   🔒 mutex "' + q.mutex + '" slots ' + holderCount + '/' + mutexMax +
+        ' taken — rule defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ')');
+}
+
+function takeMutexTickSnapshot() {
+    var s = mutexTickEvents;
+    mutexTickEvents = null;
+    return s;
+}
+
+function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {
+    var q = rule.query || {};
     // The open-PR list rides the provider's per-tick ioCache — this site
     // fired github_list_prs once PER RULE (measured: 18 calls, one idle
     // tick, all the same payload). Providers without the cache contract
@@ -787,9 +947,13 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
                 return !blocked;
             });
         } else {
+            // gh-1000 I1/I2 — phantom-holder reconciliation before deferring.
+            // The full-slot decision is re-derived against the LIVE label
+            // layer; a divergent cached holder is self-healed so a queued
+            // candidate arms in the SAME tick (AC2). Fail-closed (E4).
+            holders = phantomHealIfFull(holders, items, provider, repoInfo, q, mutexMax);
             if (holders.length >= mutexMax) {
-                console.log('   🔒 mutex "' + q.mutex + '" slots ' + holders.length + '/' + mutexMax +
-                    ' taken — rule defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ')');
+                logMutexDefer(q, holders.length, mutexMax);
                 return [];
             }
         }
@@ -927,5 +1091,8 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { query: query, matchesGuards: matchesGuards };
+    module.exports = { query: query, matchesGuards: matchesGuards,
+        takeMutexTickSnapshot: takeMutexTickSnapshot,
+        mutexHoldersOf: mutexHoldersOf, rederiveHoldersLive: rederiveHoldersLive,
+        logPhantomHeal: logPhantomHeal };
 }

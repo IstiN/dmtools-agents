@@ -682,6 +682,51 @@ function firstAssignee(it) {
  * published snapshot (parsed) or null — the timestamp AND history
  * accumulation source (see the schema 2 note above).
  */
+// gh-998 (I5): the zombie-swept leak counter — cumulative across snapshots
+// so operators see the leak rate, not just the fix. Always present (0 when
+// the sweeper never fired or the carry is absent) so snapshots keep a stable
+// shape; a malformed carry restarts at this tick's count rather than
+// NaN-poisoning the payload. The whole computation lives in its own helper so
+// buildFactoryState's complexity budget (quality.yml CRAP ratchet — CRAP may
+// only decrease) is not spent on bookkeeping guards.
+function zombiesSweptTotal(input) {
+    function saneCount(n) {
+        return typeof n === 'number' && !isNaN(n) ? n : 0;
+    }
+    var prevSwept = input.prev && input.prev.zombiesSwept;
+    return saneCount(prevSwept) + saneCount(input.zombiesSwept);
+}
+
+// gh-1000 — mutex metrics snapshot normalizer: caps the alarm tail,
+// coerces counters, drops a malformed blob rather than poisoning state.
+function mutexCounterNum(v) {
+    return Math.max(0, Math.floor(Number(v)) || 0);
+}
+
+function mutexSnapObject(input) {
+    return (input && typeof input === 'object') ? input : {};
+}
+
+function mutexAlarmsTail(snap) {
+    return Array.isArray(snap.alarms) ? snap.alarms.slice(-5) : [];
+}
+
+function normalizeMutexSnapshot(input) {
+    var snap = mutexSnapObject(input);
+    return {
+        mutexSelfHeals: mutexCounterNum(snap.mutexSelfHeals),
+        phantomHolderTicks: mutexCounterNum(snap.phantomHolderTicks),
+        consecutivePhantomTicks: mutexCounterNum(snap.consecutivePhantomTicks),
+        alarms: mutexAlarmsTail(snap)
+    };
+}
+
+// gh-1000 — phantom-holder bookkeeping (second tier). Present only when
+// the SM published a mutex snapshot this tick; malformed blobs drop.
+function applyMutexSnapshot(state, input) {
+    if (input.mutex) state.mutex = normalizeMutexSnapshot(input.mutex);
+}
+
 function buildFactoryState(input) {
     var prs = input.prs || [];
     var mergedPrs = input.mergedPrs || [];
@@ -960,6 +1005,9 @@ function buildFactoryState(input) {
             workflowFile: input.legWorkflow
         }).map;
 
+    // gh-998 (I5): cumulative zombie-swept leak counter — see zombiesSweptTotal.
+    var sweptTotal = zombiesSweptTotal(input);
+
     var state = {
         schema: 2,
         factory: input.factory || (input.repoInfo && input.repoInfo.repo) || 'unknown',
@@ -971,6 +1019,7 @@ function buildFactoryState(input) {
         },
         checks: checkNames,
         reworkInFlight: reworkInFlight,
+        zombiesSwept: sweptTotal,
         lanes: lanes,
         counts: LANE_ORDER.reduce(function (m, l) {
             m[l] = (lanes[l] || []).length; return m;
@@ -983,6 +1032,7 @@ function buildFactoryState(input) {
     // gh-825 — the board header's global Σ$ (all cards, 14d window). Absent
     // key when pricing is off/absent/malformed: the board renders tokens-only.
     if (costs) state.costs = costs;
+    applyMutexSnapshot(state, input);
     return state;
 }
 
@@ -1218,6 +1268,7 @@ module.exports = {
     backlogBucket: backlogBucket,
     nextHistory: nextHistory,
     normalizeTokens: normalizeTokens,
+    normalizeMutexSnapshot: normalizeMutexSnapshot,
     readTokensFile: readTokensFile,
     fetchTokensFromBranch: fetchTokensFromBranch,
     tokensMapOf: tokensMapOf,
