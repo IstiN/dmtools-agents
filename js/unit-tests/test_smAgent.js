@@ -354,6 +354,7 @@ function makeSmAgent(opts) {
             './sm/sources/githubSource.js': {
                 takeMutexTickSnapshot: function () { return null; }
             },
+            './common/branchLegGuard.js': loadModule('js/common/branchLegGuard.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {
@@ -9409,6 +9410,165 @@ suite('smAgent: duplicate rework dispatch — one leg wins (gh-715)', function (
     });
 });
 
+// ─── gh-1028: duplicate CONCURRENT rework legs on one PR (live 2026-10-18
+// 08:04–08:09Z: PR #1017 / gh-1000 / branch ai/gh-1000 got TWO concurrent
+// rework legs for ONE rework cycle — run 39110030366 PR-armed at 08:04:12Z
+// titled 'workflow_dispatch # rework' + run 39110364398 issue-armed at
+// 08:09:31Z titled 'workflow_dispatch #1000 rework'). The first leg pushed,
+// the head moved (c2e0d28f → 94988905), so the gh-806 (pr, head) latch keyed
+// a NEW head and never suppressed the second arm; and the PR-armed factory
+// run title carries NO '· gh-N'/'#N' anchor token, so the title guards
+// (gh-715/gh-944) were blind to it too. The branch-keyed probe (an ACTIVE
+// ai-teammate run whose head_branch IS the dispatch branch, regardless of
+// head sha) closes both holes for BOTH dispatch arms — the branch is the
+// leg's single writer and two concurrent legs race every push.
+suite('smAgent: branch-keyed leg dedupe (gh-1028)', function () {
+    var BRANCH = 'ai/gh-100';
+    var HEAD_OLD = 'c2e0d28f00000000000000000000000000000000';
+    var HEAD_NEW = '94988905000000000000000000000000000000000';
+    var LEG_PATH = '.github/workflows/ai-teammate.yml';
+
+    // The first leg's in-flight run — dispatched on the OLD head, no anchor
+    // token in the title (the exact PR-armed factory shape from the ticket).
+    function legRun(head) {
+        return { id: 39110030366, status: 'in_progress',
+                 display_title: 'workflow_dispatch # rework',
+                 path: LEG_PATH, head_branch: BRANCH, head_sha: head || HEAD_OLD };
+    }
+
+    function reworkSource(prLabels) {
+        return function (rule, ctx) {
+            var q = (rule && rule.query) || {};
+            if (q.type === 'issue') {
+                return [{ key: 'gh-100', labels: ['agent:rework'], issueNumber: 100,
+                          prNumber: 1017, branch: BRANCH, author: 'ai-teammate',
+                          headSha: HEAD_NEW, pr: { labels: prLabels } }];
+            }
+            return [{ key: 'pr-1017', labels: prLabels, issueNumber: 100,
+                      prNumber: 1017, branch: BRANCH, author: 'ai-teammate',
+                      headSha: HEAD_NEW }];
+        };
+    }
+
+    var FILEMAP = { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' };
+
+    // Local copies of the gh-715 suite helpers (they are suite-scoped there).
+    function deployedRules(ids) {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+        return ids.map(function (id) {
+            assert.ok(byId[id], 'deployed rule ' + id + ' exists');
+            return byId[id];
+        });
+    }
+
+    function ghParams(rules) {
+        return { jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                              machineAuthor: 'ai-teammate', rules: rules } };
+    }
+
+    test('AC2: a head move between dispatches does NOT bypass the probe — the active run on the OLD head still suppresses', function () {
+        var sm = makeSmAgent({
+            fileMap: FILEMAP,
+            github: { items: reworkSource([]),
+                      issue: { number: 100, state: 'open', labels: [{ name: 'agent:rework' }] } },
+            workflowRuns: { in_progress: [legRun(HEAD_OLD)] } // first leg on the MOVED-FROM head
+        });
+
+        sm.action(ghParams(deployedRules(['rework-on-red-ci'])));
+
+        assert.equal(sm.capturedTriggers.length, 0,
+            'the issue-armed dispatch sees the PR-armed leg in flight on the SAME branch even though the head moved');
+    });
+
+    test('AC1: issue-armed and PR-armed rework for the SAME PR in one tick dispatch EXACTLY ONE leg', function () {
+        // The first dispatch materializes its run (the live 08:04 leg); the
+        // second arm's probe must then see it. The run's head is the OLD
+        // head — the leg pushed mid-flight is exactly what moved the head
+        // before the second arm fired.
+        var opts = {
+            fileMap: FILEMAP,
+            github: { items: reworkSource(['agent:rework']),
+                      issue: { number: 100, state: 'open', labels: [{ name: 'agent:rework' }] } },
+            workflowRuns: { in_progress: [] },
+            onTrigger: function () { opts.workflowRuns.in_progress.push(legRun(HEAD_OLD)); }
+        };
+        var sm = makeSmAgent(opts);
+
+        sm.action(ghParams(deployedRules(['rework-on-red-ci', 'rework-on-label'])));
+
+        assert.equal(sm.capturedTriggers.length, 1,
+            'one leg wins — the second arm lands on the branch the first leg already owns');
+    });
+
+    test('a COMPLETED leg run on the branch does not suppress — the next arm dispatches (dead-letter re-fire intact)', function () {
+        var sm = makeSmAgent({
+            fileMap: FILEMAP,
+            github: { items: reworkSource([]),
+                      issue: { number: 100, state: 'open', labels: [{ name: 'agent:rework' }] } },
+            workflowRuns: { in_progress: [
+                Object.assign(legRun(HEAD_OLD), { status: 'completed', conclusion: 'success',
+                    updated_at: '2026-10-18T08:05:00.000Z' })
+            ] }
+        });
+
+        sm.action(ghParams(deployedRules(['rework-on-red-ci'])));
+
+        assert.equal(sm.capturedTriggers.length, 1,
+            'the concluded leg owns nothing — a consumed-without-work arm re-fires as designed');
+    });
+
+    test('an active leg run on a DIFFERENT branch does not suppress', function () {
+        var other = legRun(HEAD_OLD);
+        other.head_branch = 'ai/gh-999';
+        var sm = makeSmAgent({
+            fileMap: FILEMAP,
+            github: { items: reworkSource([]),
+                      issue: { number: 100, state: 'open', labels: [{ name: 'agent:rework' }] } },
+            workflowRuns: { in_progress: [other] }
+        });
+
+        sm.action(ghParams(deployedRules(['rework-on-red-ci'])));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'another branch is another writer — dispatch proceeds');
+    });
+
+    test('branch-guard suppression does NOT consume the PR arm — rework-on-label keeps its label for the next tick', function () {
+        var sm = makeSmAgent({
+            fileMap: FILEMAP,
+            github: { items: [{ key: 'pr-1017', labels: ['agent:rework'], issueNumber: 100,
+                                prNumber: 1017, branch: BRANCH, author: 'ai-teammate',
+                                headSha: HEAD_NEW }] },
+            workflowRuns: { in_progress: [legRun(HEAD_OLD)] }
+        });
+
+        sm.action(ghParams(deployedRules(['rework-on-label'])));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'suppressed — a leg already owns the branch');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'the arm survives the suppression (unlike the gh-715 cross-anchor consume) — if the in-flight leg dies silently, the arm re-fires next tick');
+    });
+
+    test('a dispatch that does NOT land on the branch (ref=main) is outside the guard', function () {
+        var rules = deployedRules(['rework-on-label']).map(function (r) {
+            var r2 = Object.assign({}, r); r2.workflowRef = 'main'; return r2;
+        });
+        var sm = makeSmAgent({
+            fileMap: FILEMAP,
+            github: { items: [{ key: 'pr-1017', labels: ['agent:rework'], issueNumber: 100,
+                                prNumber: 1017, branch: BRANCH, author: 'ai-teammate',
+                                headSha: HEAD_NEW }] },
+            workflowRuns: { in_progress: [legRun(HEAD_OLD)] }
+        });
+
+        sm.action(ghParams(rules));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'a main-ref leg is not the branch writer — no race to guard');
+    });
+});
+
 // ─── gh-682: standing cancelled-checks remedy. Live evidence: fa#1202
 // (head 898efd4) — all 4 kicker push-runs on ai/gh-1171 CANCELLED
 // 21:43–23:05 as refresh pushes landed, required checks ended CANCELLED →
@@ -13526,5 +13686,170 @@ suite('smAgent: validation_failed park reset on head change (gh-994)', function 
         assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
         assert.ok(!sm.capturedLogs.some(function (l) { return l.indexOf('park-reset:') !== -1; }),
             'no park-reset audit line without a recorded-sha head change');
+    });
+});
+
+suite('smAgent: gh-998 neutral sweep — rework thread regression (the main-merge amputation)', function () {
+    // PR #1017 rework leg 3, thread PRRT_kwDORYAuYs6tpb4l: merging origin/main
+    // amputated the shipped gh-998 fix (#1012) — the neutral-sweep else-if,
+    // sweepZombieCheckRunsNeutral, tickZombiesSwept and the factory-state
+    // zombiesSwept field were deleted while checkRunZombies.js + its tests
+    // stayed. The suite only caught the payload side (6 factoryState
+    // failures); NOTHING pinned the sweep leg's reachability, which is why
+    // the amputation shipped. This suite drives the live fa #1563 shape
+    // through validate_pr: a pending check-run whose owning run concluded
+    // FAILURE (terminal owner, no green verdict on the head, nothing
+    // active) must be PATCH-completed 'neutral' and counted into the
+    // published zombiesSwept payload — cumulatively with the prev snapshot.
+    var PREV_GET = 'gh api repos/o/r/contents/data/fa-state.json?ref=factory-data --jq .content | base64 -d';
+    var DEAD_RUN = { id: 381563001, event: 'push', path: '.github/workflows/kicker.yml',
+        head_branch: 'ai/gh-998', status: 'completed', conclusion: 'failure',
+        html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/381563001',
+        created_at: '2026-10-11T18:15:00Z', updated_at: '2026-10-11T18:33:24Z' };
+    var ZOMBIE = { id: 117469671401, name: 'Quality gate', status: 'in_progress',
+        conclusion: null, started_at: '2026-10-11T18:33:45Z',
+        details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/381563001' };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved', 'ai_validating'], issueNumber: null,
+                   prNumber: n, draft: false, branch: 'ai/gh-998', author: 'ai-teammate',
+                   headSha: '998ac1998ac1998ac1998ac1998ac1998ac1998' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+    function rule() {
+        return { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], checks: ['green'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
+            skipIfGreenCi: true };
+    }
+    function cli(prev) {
+        return function (cmdOpts) {
+            var c = cmdOpts.command;
+            if (c === PREV_GET) {
+                // the real command pipes through `base64 -d` in the shell —
+                // the mock serves the DECODED body (branchServes parity)
+                return { output: JSON.stringify(prev) };
+            }
+            if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1) {
+                return { workflow_runs: [] };   // no dispatched run on the head
+            }
+            if (c.indexOf('runs?head_sha=') !== -1) {
+                // whole-head rollup: the terminal-owner run ONLY — nothing active
+                return { workflow_runs: [DEAD_RUN] };
+            }
+            if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                return { workflow_runs: [] };
+            }
+            return undefined;
+        };
+    }
+    function makePrev() {
+        return { schema: 2, lanes: {}, zombiesSwept: 7 };
+    }
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    test('terminal-owner orphan on a no-verdict head is swept NEUTRAL and counted into zombiesSwept (cumulative)', function () {
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(998)], prList: '[]',
+                      commitCheckRuns: { check_runs: [ZOMBIE] },
+                      prComments: [],
+                      workflowApiRuns: [] },
+            onCliExecute: cli(makePrev())
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
+            rules: [rule()],
+            statePublish: { channel: 'release', repo: 'o/r', asset: 'fa-state.json' } } });
+
+        var patches = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('-X PATCH') !== -1 &&
+                   c.command.indexOf('/check-runs/') !== -1; });
+        assert.equal(patches.length, 1,
+            'the zombie check-run is PATCH-completed exactly once');
+        assert.ok(patches[0].command.indexOf('/check-runs/117469671401') !== -1,
+            'the PATCH targets the orphan check-run id');
+        assert.ok(patches[0].command.indexOf('conclusion=neutral') !== -1,
+            'a terminal owner carries NO verdict — neutral, never faked success');
+        assert.ok(patches[0].command.indexOf('status=completed') !== -1,
+            'the zombie retires as completed');
+        // the workflow token (checks:write) rides the PATCH, not the PAT
+        assert.ok(sm.capturedEnvSets.some(function (e) {
+            return e.name === 'GH_TOKEN' && e.value === 'app-token'; }),
+            'the App token is swapped in for the checks:write PATCH (gh-998 I4)');
+        // the I5 leak counter rides the published snapshot, cumulatively
+        var putCmd = null;
+        sm.capturedCliCommands.forEach(function (c) {
+            if (c.command.indexOf('-X PUT repos/o/r/contents/data/fa-state.json ') !== -1) {
+                putCmd = c.command;
+            }
+        });
+        assert.ok(putCmd, 'fa-state.json PUT captured — the tick published');
+        var m = putCmd.match(/printf %s '(.*)' \| base64/);
+        assert.ok(m, 'snapshot payload extractable from the PUT');
+        var state = JSON.parse(m[1]);
+        assert.equal(state.zombiesSwept, 8,
+            'prev 7 + this tick 1 — the cumulative leak-rate counter survives the publish');
+    });
+
+    test('a green-verdict head still takes the gh-857 conclude path — the sweep never mirrors a real verdict', function () {
+        // The merge must not have made the sweep fire on GREEN heads: with
+        // a concluded-success dispatched run covering the head, the orphan
+        // leg is concluded 'success' by the gh-865 path, never 'neutral'.
+        var GREEN_RUN = { id: 38157999999, event: 'workflow_dispatch',
+            head_branch: 'ai/gh-998', status: 'completed', conclusion: 'success',
+            html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38157999999',
+            created_at: '2026-10-11T19:04:35Z' };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(998)], prList: '[]',
+                      commitCheckRuns: { check_runs: [ZOMBIE,
+                          { id: 117470000002, name: 'Quality gate', status: 'completed',
+                            conclusion: 'success', started_at: '2026-10-11T19:04:35Z',
+                            details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38157999999' }] },
+                      prComments: [],
+                      workflowApiRuns: [] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c === PREV_GET) return { output: JSON.stringify(makePrev()) };
+                if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1) {
+                    return { workflow_runs: [GREEN_RUN] };
+                }
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    return { workflow_runs: [DEAD_RUN, GREEN_RUN] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
+            rules: [rule()],
+            statePublish: { channel: 'release', repo: 'o/r', asset: 'fa-state.json' } } });
+
+        var patches = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('-X PATCH') !== -1 &&
+                   c.command.indexOf('/check-runs/') !== -1; });
+        assert.equal(patches.length, 1, 'exactly the orphan is concluded');
+        assert.ok(patches[0].command.indexOf('/check-runs/117469671401') !== -1);
+        assert.ok(patches[0].command.indexOf('conclusion=success') !== -1,
+            'green cover present → the gh-857/865 mirror, never a neutral sweep');
+        assert.ok(patches[0].command.indexOf('conclusion=neutral') === -1,
+            'the sweep leg stays silent when a real verdict exists');
+        var putCmd = null;
+        sm.capturedCliCommands.forEach(function (c) {
+            if (c.command.indexOf('-X PUT repos/o/r/contents/data/fa-state.json ') !== -1) {
+                putCmd = c.command;
+            }
+        });
+        var m = putCmd && putCmd.match(/printf %s '(.*)' \| base64/);
+        var state = m && JSON.parse(m[1]);
+        assert.ok(state && typeof state.zombiesSwept === 'number',
+            'the counter stays present (stable shape) even when the sweeper did not fire');
     });
 });

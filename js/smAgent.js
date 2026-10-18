@@ -167,8 +167,21 @@ var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
 // ⚠️ trigger-failed marker math and the dead-head park cap. The pure
 // half lives in the module; recordDispatchFailure below wires transport.
 var triggerFailuresModule = require('./common/triggerFailures.js');
+// gh-1000 (hoisted, never lazy — the gh-823 pack-require rule): the
+// phantom ai_validating mutex holder — registry probes/heals, live-PR
+// re-derivation and the alarm/streak counter persistence.
 var mutexRegistryModule = require('./common/mutexRegistry.js');
+// gh-1000 (same pack-require rule): the github source layer the phantom
+// probe rides on (livePrItems guard + the tick-scan event below).
 var githubSourceModule = require('./sm/sources/githubSource.js');
+// gh-1028 (hoisted, never lazy — the gh-823 pack-require rule): the
+// branch-keyed in-flight leg probe — an ACTIVE ai-teammate run whose
+// head_branch IS the dispatch branch keeps a second leg off that branch
+// regardless of head_sha (the (pr, head) latch and the title guards both
+// missed the duplicate-concurrent-rework pathology, live PR #1017
+// 2026-10-18 08:04–08:09Z). Pure half here; the probe fan-out lives in
+// hasActiveLegRunOnBranch below.
+var branchLegGuardModule = require('./common/branchLegGuard.js');
 // gh-922 (same-tick dedup, review): PR numbers whose dispatch failure was
 // already recorded THIS tick. The already-parked guard in
 // recordDispatchFailure reads the query-time label snapshot — within one
@@ -184,6 +197,11 @@ var projectConfig = null;
 // paths, ridden into the published snapshot. Null until the first latch
 // touch; reset at the top of action().
 var tickReworkLatch = null;
+// gh-998: zombie-swept counter, one per tick — incremented by the neutral
+// sweeper for every terminal-owner placeholder force-completed in place;
+// ridden into the published factory-state snapshot (I5: operators see the
+// leak rate, not just the fix). Reset at the top of action().
+var tickZombiesSwept = 0;
 // gh-1000 (phantom ai_validating holder): per-tick snapshot carried from
 // the github-source mutex scan to the factory-state publish rule (second
 // tier — the publish merge keeps counters/alarm tail across ticks).
@@ -361,6 +379,35 @@ function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
         }
     }
 
+    return false;
+}
+
+// gh-1028: the branch-keyed in-flight leg probe (transport half — the
+// match itself is the pure branchLegGuardModule.hasActiveLegRunOnBranch).
+// Fan-out parity with hasActiveTargetWorkflowRun: the four active statuses
+// via scm.listWorkflowRuns, stale non-running zombies aged out by the same
+// 6h bound, per-status probe errors logged and skipped. FAIL-OPEN: a probe
+// error must not wedge the rework loop — one stacked leg is the same worst
+// case the title guards already accept on a broken read.
+function hasActiveLegRunOnBranch(scm, workflowFile, branch) {
+    if (!scm || typeof scm.listWorkflowRuns !== 'function' || !branch) return false;
+    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
+    for (var i = 0; i < statuses.length; i++) {
+        var runs = [];
+        try {
+            runs = parseWorkflowRuns(scm.listWorkflowRuns(statuses[i], workflowFile, 50));
+        } catch (eBranchLeg) {
+            console.warn('  ⚠️  Could not inspect active workflow runs (' + statuses[i] + '): ' + (eBranchLeg.message || eBranchLeg));
+            continue;
+        }
+        if (branchLegGuardModule.hasActiveLegRunOnBranch(runs, branch, {
+                workflowFile: workflowFile,
+                staleNonRunningMs: STALE_NON_RUNNING_WORKFLOW_MS,
+                nowMs: Date.now()
+            })) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -589,6 +636,32 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
                 if (skipInfo) skipInfo.crossAnchorActive = altKeys[altIx];
                 return false;
             }
+        }
+        // gh-1028 branch-keyed leg guard: BOTH rework dispatch arms
+        // (issue-anchored rework-on-red-ci AND PR-anchored
+        // rework-on-label) land the leg ON the PR branch
+        // (workflowRef={branch}), and the leg is the branch's SINGLE
+        // WRITER — two concurrent legs on one branch race every push
+        // (live PR #1017 / gh-1000, 2026-10-18 08:04–08:09Z: TWO
+        // concurrent rework legs for ONE rework cycle — the first leg's
+        // push moved the head c2e0d28f → 94988905, so the gh-806
+        // (pr, head) latch keyed a NEW head and never suppressed the
+        // second arm, and the PR-armed factory run titled
+        // 'workflow_dispatch # rework' carries no '· gh-N'/'#N' anchor
+        // token, so the title guards above were blind to it). This probe
+        // keys on the BRANCH, not the head: an ACTIVE ai-teammate run
+        // whose head_branch IS the dispatch branch — regardless of
+        // head_sha — owns the branch, and the dispatch is suppressed.
+        // The arm survives (no consumeLabels bookkeeping here, unlike
+        // the gh-715 cross-anchor path): a leg that dies silently leaves
+        // the arm armed, and the next quiet tick re-fires it — the
+        // dead-letter recovery the machine loop is built on.
+        if (it0.branch && workflowRef === String(it0.branch) &&
+                hasActiveLegRunOnBranch(scm, workflowFile, it0.branch)) {
+            console.log('  ⏭️  ' + ticketKey + ' skipped (leg already in flight on branch ' +
+                it0.branch + ' — gh-1028: the branch is the leg\'s single writer, ' +
+                'a second leg would race its push)');
+            return false;
         }
         var inputs;
         if (rule.inputs) {
@@ -2764,11 +2837,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // from checks:write, gh-848 belt); with no App token
                     // configured the in-place cure is skipped entirely —
                     // the reset below is the only working remedy.
-                    if (vProbe && vProbe.green && (RUN_JOB_PARAMS || {}).silentToken) {
+                    if ((RUN_JOB_PARAMS || {}).silentToken) {
                         var phHeadRuns = headWorkflowRunsSafe(effectiveRepoInfo, vHead0);
                         if (phHeadRuns !== null && !hasActiveHeadRun(phHeadRuns)) {
                             var phCover = greenCoverRun(effectiveRepoInfo, vCiWf, vHead0);
-                            if (phCover) {
+                            if (vProbe && vProbe.green && phCover) {
                                 // gh-865: conclude the link-less placeholders
                                 // AND the numeric-id orphans in ONE pass —
                                 // the generalized orphan rule (a pending
@@ -2815,6 +2888,60 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                                 ' failed: ' + (ePh403.message || ePh403));
                                         }
                                     }
+                                }
+                            } else if (vOrphans && vOrphans.length &&
+                                        !(vProbe && vProbe.green)) {
+                                // gh-998 NEUTRAL SWEEP — the finally-path
+                                // rows the gh-857 mirror never covered:
+                                // terminal-owner orphans (the gh-865
+                                // detector: pending check-runs whose owning
+                                // run concluded, past the grace) whose
+                                // cycle left NO verdict on the head (no
+                                // green cover — the failure/superseded/
+                                // cancelled/died rows of the gh-998
+                                // capability table). Live fa #1563
+                                // (2026-10-17, head f3d58647): the kicker-
+                                // suite placeholder Quality gate (check-run
+                                // 117469671401) stayed in_progress 40+ min
+                                // past its cycle and held mergeStateStatus=
+                                // BLOCKED with 58 green siblings; the
+                                // fall-through legacy cure (a same-sha
+                                // re-dispatch) cannot conclude a stamp
+                                // nothing will conclude (gh-865's own
+                                // note). The honest terminal state is
+                                // 'neutral' — a terminal owner carries no
+                                // live verdict about its head (I3) — closed
+                                // under the cycle's own app token (I4) with
+                                // the gh-857 AC2 fail-safe established
+                                // above (no ACTIVE run on the head).
+                                // Link-less placeholders deliberately keep
+                                // the gh-852 fresh-sha reset below: a
+                                // same-sha re-dispatch RE-MINTS them, so
+                                // only a fresh head cures that pathology
+                                // (gh-852 AC3). A neutral close is not a
+                                // green verdict — the PR still re-validates
+                                // via the legacy dispatch fall-through; the
+                                // sweep only retires the zombie. Every
+                                // swept check-run logs the zombie-swept
+                                // line and increments the tick counter
+                                // ridden into the factory-state payload
+                                // (I5); a close GitHub rejects (403
+                                // ownership, transient) is retried next
+                                // tick, never silently dropped (E2).
+                                var swConc = sweepZombieCheckRunsNeutral(
+                                    effectiveRepoInfo, vOrphans, vHead0);
+                                if (swConc.concluded > 0) {
+                                    console.log('  🧹 ' + key + ' zombie-swept ' +
+                                        swConc.concluded + ' terminal-owner check-run(s)' +
+                                        ' as neutral (gh-998)' +
+                                        (swConc.rejected
+                                            ? ' — ' + swConc.rejected + ' rejected, retry next tick'
+                                            : ''));
+                                    tickZombiesSwept += swConc.concluded;
+                                } else if (swConc.rejected) {
+                                    console.warn('  ⚠️  ' + key + ' zombie sweep' +
+                                        ' rejected (' + swConc.rejected + ') — retry next' +
+                                        ' tick (gh-998)');
                                 }
                             }
                         } else if (phHeadRuns !== null) {
@@ -4221,6 +4348,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // gh-806: this tick's rework latch rides the snapshot —
                     // the next tick's armer consults what this tick armed.
                     reworkInFlight: tickReworkLatch ? tickReworkLatch.map : {},
+                    // gh-998 (I5): this tick's zombie-swept count rides the
+                    // snapshot cumulatively — operators see the leak rate.
+                    zombiesSwept: tickZombiesSwept,
                     legWorkflow: reworkLatchModule.DEFAULT_LEG_WORKFLOW,
                     // gh-1000 (phantom ai_validating holder): this tick's
                     // mutex bookkeeping from the github-source scan —
@@ -5990,6 +6120,74 @@ function headOrphanedRunChecks(repoInfo, headSha) {
     });
 }
 
+// gh-998 sweper transport — force-complete terminal-owner zombie check-runs
+// as 'neutral'. Same creator-token contract as concludePlaceholderCheckRuns
+// (the check-runs belong to the github-actions App; the PATCH rides
+// jobParams.silentToken with checks:write, the tick PAT would 403 — gh-848
+// belt, gh-857): the close runs under the SAME app identity that minted the
+// stamps (I4 — GitHub rejects cross-app completion with 404 by design, live
+// fa #1563: operator REST close of check-run 117469671401 404'd). Every
+// successful close emits the I5 machine-log line
+// `zombie-swept: <check-run-id> head <sha>`; the caller accumulates the
+// count into the tick counter ridden into the factory-state snapshot.
+// Returns { concluded, rejected } — rejected carries the first failure
+// message; a rejection is a degradation retried next tick, never a silent
+// leak (gh-998 E2).
+function sweepZombieCheckRunsNeutral(repoInfo, zombies, headSha) {
+    var out = { concluded: 0, rejected: null };
+    if (!zombies || !zombies.length) return out;
+    var summary = 'Zombie-swept by the SM tick (gh-998): the check-run outlived its' +
+        ' validation cycle — the owning workflow run terminated without' +
+        ' concluding it. Closed as neutral: a dead cycle carries no verdict' +
+        ' about its head. The PR re-validates through the normal dispatch path.';
+    var appToken = (RUN_JOB_PARAMS || {}).silentToken;
+    var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
+    var swapped = false;
+    if (appToken) {
+        try {
+            set_env_variable('GH_TOKEN', appToken);
+            swapped = true;
+        } catch (eSwap) {
+            console.warn('  ⚠️  gh-998 token swap failed, sweep uses the PAT' +
+                         ' (may 403): ' + (eSwap.message || eSwap));
+        }
+    }
+    try {
+        zombies.forEach(function (z) {
+            if (!z || z.id === null || z.id === undefined) {
+                if (!out.rejected) out.rejected = 'check-run id missing (cannot PATCH)';
+                return;
+            }
+            if (DRY) {
+                console.log('  🧪 [dry] zombie-swept check-run ' + z.id + ' ("' +
+                            (z.name || '?') + '") completed/neutral on ' +
+                            String(headSha).slice(0, 7) + ' (gh-998)');
+                out.concluded++;
+                return;
+            }
+            try {
+                cli_execute_command({
+                    command: 'gh api -X PATCH repos/' + repoInfo.owner +
+                        '/' + repoInfo.repo + '/check-runs/' + z.id +
+                        ' -f status=completed' +
+                        ' -f conclusion=neutral' +
+                        ' -f "output[title]=SM swept a zombie check-run (gh-998)"' +
+                        ' -f "output[summary]=' + summary + '"'
+                });
+                out.concluded++;
+                console.log('  ' + checkRunZombiesModule.zombieSweptLine(z.id, headSha));
+            } catch (ePatch) {
+                if (!out.rejected) out.rejected = (ePatch && ePatch.message) || String(ePatch);
+            }
+        });
+    } finally {
+        if (swapped && sourceTok) {
+            try { set_env_variable('GH_TOKEN', sourceTok); } catch (e3) {}
+        }
+    }
+    return out;
+}
+
 // ── gh-857: in-place placeholder conclusion ────────────────────────────────
 //
 // Live fa #1457 (head fd1b9aa2): the placeholder check-run (18:51:25)
@@ -7095,6 +7293,7 @@ function action(params) {
     var p     = params.jobParams || params;
     RUN_JOB_PARAMS = p;    DRY = p.dryRun === true;
     tickReworkLatch = null;
+    tickZombiesSwept = 0; // gh-998 (I5): fresh per-tick sweep counter
     tickParkedRecorded = {}; // gh-922: fresh same-tick dedup window (see recordDispatchFailure)
     if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
     var rules = p.rules;
