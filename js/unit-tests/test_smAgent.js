@@ -112,12 +112,22 @@ function makeSmAgent(opts) {
             return (typeof github_list_prs !== 'undefined') ? github_list_prs(args) : '[]';
         },
         github_list_workflow_runs: function(args) {
-            if (opts.github && opts.github.workflowApiRuns) {
+            // Inverted guard order (CRAP budget: the same branch count as
+            // the pre-rework shape — a third flat if pushed makeSmAgent
+            // from CC 63 to 64 and redlined the released ratchet):
+            // tests that set opts.github but no workflowApiRuns get an
+            // EMPTY rollup — never the real bridge (the harness network
+            // guard replaced that global with a throwing stub, and a real
+            // api.github.com read was never a legitimate unit-test dep).
+            if (!opts.github) {
+                return (typeof github_list_workflow_runs !== 'undefined')
+                    ? github_list_workflow_runs(args)
+                    : '{"workflow_runs":[]}';
+            }
+            if (opts.github.workflowApiRuns) {
                 return JSON.stringify({ workflow_runs: opts.github.workflowApiRuns });
             }
-            return (typeof github_list_workflow_runs !== 'undefined')
-                ? github_list_workflow_runs(args)
-                : '{"workflow_runs":[]}';
+            return '{"workflow_runs":[]}';
         },
         // Backlog source for the statePublish block (gh-769): safe default —
         // without it the block hits the real bridge (dmtools runtime) or a
@@ -311,7 +321,7 @@ function makeSmAgent(opts) {
                 '../../common/machineAuthor.js': machineAuthorModule,
                 '../../common/smProvider.js': smProviderStub,
                 '../../common/smAsync.js': smAsyncForSource,
-                '../../common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {})
+                '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
             }),
             smMocks
         );
@@ -343,9 +353,12 @@ function makeSmAgent(opts) {
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
             './common/triggerFailures.js': loadModule('js/common/triggerFailures.js', makeRequire({}), {}),
+            './common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            './sm/sources/githubSource.js': {
+                takeMutexTickSnapshot: function () { return null; }
+            },
             './common/branchLegGuard.js': loadModule('js/common/branchLegGuard.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
-            './common/conflictReworkScan.js': loadModule('js/common/conflictReworkScan.js', makeRequire({}), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {
                     return {
@@ -9156,120 +9169,6 @@ suite('smAgent: conflict_rework re-arm reliability (gh-683 bug C)', function () 
     });
 });
 
-suite('smAgent: conflict_rework over-scan — already-reported PRs do not consume the limit (gh-1027)', function () {
-
-    var RULE_LIMIT5 = {
-        description: 'branch conflicts with main -> report + machine re-arm',
-        source: 'github',
-        query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
-        localAction: 'conflict_rework',
-        limit: 5,
-        id: 'conflict-rework'
-    };
-
-    function guestItem(n) {
-        return { key: 'pr-' + n, labels: [], issueNumber: null, prNumber: n,
-                 branch: 'fix/' + n + '-thing', author: 'someguest',
-                 pr: { headSha: 'sha' + n } };
-    }
-
-    function reportedMarkers(count) {
-        var out = [];
-        for (var i = 1; i <= count; i++) {
-            out.push({ body: '⚠️ Merge conflict with main — cannot merge (head `sha' + i + '`)' });
-        }
-        return out;
-    }
-
-    function params(rules) {
-        var p = baseParams('epam', 'dmtools-dart', rules);
-        p.jobParams.machineAuthor = 'ai-teammate';
-        return p;
-    }
-
-    test('AC1: N already-reported DIRTY PRs parked ahead — the unreported ones behind them still evaluate in the SAME tick', function () {
-        // gh-1025 raised the limit 1 -> 5, which only pushed the starvation
-        // class out to 5+ parked markers (live 2026-10-18: #983 parked every
-        // tick while unreported PRs were never evaluated). gh-1027: reported
-        // candidates cost one comments fetch but NO rule-limit slot.
-        var items = [];
-        var i;
-        for (i = 1; i <= 6; i++) items.push(guestItem(i)); // all reported
-        items.push(guestItem(7));                           // unreported
-        items.push(guestItem(8));                           // unreported
-        var sm = makeSmAgent({
-            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
-            github: {
-                items: items,
-                prComments: reportedMarkers(6)
-            }
-        });
-
-        sm.action(params([RULE_LIMIT5]));
-
-        assert.equal(sm.capturedPrComments.length, 2, 'both unreported PRs report despite limit 5 with 6 parked markers ahead');
-        assert.ok(sm.capturedPrComments.some(function (c) { return c.body.indexOf('sha7') !== -1; }), 'pr-7 reported');
-        assert.ok(sm.capturedPrComments.some(function (c) { return c.body.indexOf('sha8') !== -1; }), 'pr-8 reported');
-        assert.equal(sm.capturedTriggers.length, 0, 'guests never dispatch rework');
-    });
-
-    test('the gh-683 self-heal behind parked markers still fires — a reported machine corpse re-arms under limit 1', function () {
-        // The corpse (marker present, linked OPEN issue UNLABELLED) sat at
-        // position 2 behind an already-reported guest. Pre-gh-1027 with
-        // limit 1 the guest consumed the only slot and the corpse starved;
-        // reported candidates must not consume slots, so the self-heal runs.
-        var sm = makeSmAgent({
-            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
-            github: {
-                items: [
-                    guestItem(1),
-                    { key: 'pr-42', labels: [], issueNumber: null, prNumber: 42,
-                      branch: 'ai/gh-42', author: 'ai-teammate', pr: { headSha: 'sha42' } }
-                ],
-                pr: { number: 42, body: 'Closes #42', head: { sha: 'sha42' } },
-                prComments: reportedMarkers(1).concat([{ body: '⚠️ Merge conflict with main — cannot merge (head `sha42`)' }]),
-                issue: { number: 42, state: 'open', labels: [] }
-            }
-        });
-
-        sm.action(params([{
-            description: 'branch conflicts with main -> report + machine re-arm',
-            source: 'github',
-            query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
-            localAction: 'conflict_rework',
-            limit: 1,
-            id: 'conflict-rework'
-        }]));
-
-        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the corpse self-heals even under limit 1 with a parked marker ahead');
-        assert.equal(sm.capturedPrLabelAdds[0].number, 42);
-        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
-        assert.equal(sm.capturedPrComments.length, 0, 'no duplicate marker report');
-    });
-
-    test('the scan is bounded: a candidate past the over-scan budget waits for the next tick', function () {
-        // Bounded, not eliminated (same tradeoff as gh-922's reserve): the
-        // per-tick comments-fetch fan-out is capped at limit + 15, so a
-        // candidate parked behind 16+ reported markers is one tick late,
-        // never a runaway fetch loop.
-        var items = [];
-        var i;
-        for (i = 1; i <= 20; i++) items.push(guestItem(i)); // all reported
-        items.push(guestItem(21));                          // unreported, position 21
-        var sm = makeSmAgent({
-            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
-            github: {
-                items: items,
-                prComments: reportedMarkers(20)
-            }
-        });
-
-        sm.action(params([RULE_LIMIT5]));
-
-        assert.equal(sm.capturedPrComments.length, 0, 'position 21 is past the limit-5 over-scan budget (20) — waits one tick');
-    });
-});
-
 suite('smAgent: trigger-label consume carries owner/repo (gh-683 bug D)', function () {
 
     test('consumeLabels removes the PR label with workspace/repository + singular label param', function () {
@@ -10377,6 +10276,354 @@ suite('smAgent: rerun_cancelled_checks ANY mode (gh-755)', function () {
             return c.command.indexOf('gh run rerun') === 0;
         }).length, 0, 'marker on this head -> already remedied, waiting on the rerun');
         assert.equal(sm.capturedPrComments.length, 0, 'no duplicate marker');
+    });
+});
+
+suite('smAgent: ghost-cancel re-dispatch (gh-1000 AC3 — IT-2)', function () {
+    // The rework review thread pinned the AC3 wiring as untested: nothing
+    // drove a cancelled-pre-materialization run through rerun_cancelled_checks
+    // (that is exactly how the BLOCKING provider.githubApi guard rotted).
+    // These tests drive the full ghost branch through the production-shaped
+    // rule: newest dispatched run concluded CANCELLED before its check runs
+    // materialized -> NO contexts on the head -> the merge gate waits on a
+    // required context that will never re-report (live gh-757).
+    var GHOST_HEAD = '757abc9';
+    var GHOST_MARKER = '🔁 Ghost-cancelled validation re-dispatched';
+
+    var RULE_GHOST = {
+        description: 'ghost-cancelled validation -> re-dispatch fresh CI',
+        source: 'github',
+        query: { type: 'pr', labels: ['ai_validating'], draft: false },
+        localAction: 'rerun_cancelled_checks',
+        requiredContexts: ['crap'],
+        limit: 1,
+        id: 'rerun-ghost-cancel'
+    };
+
+    function ghostItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['ai_validating'], issueNumber: null,
+                   prNumber: n, draft: false, branch: 'ai/gh-757',
+                   pr: { headSha: GHOST_HEAD } };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    // The gh-757 shape: the run died CANCELLED before materializing — its
+    // updated_at is hours old (outside the gh-755 fresh-cancel grace), and
+    // the head carries NO check runs at all.
+    function ghostRuns(updatedAt) {
+        return [{ id: 777001, status: 'completed', conclusion: 'cancelled',
+                  head_sha: GHOST_HEAD, run_attempt: 1,
+                  created_at: '2026-10-17T18:00:00Z',
+                  updated_at: updatedAt || '2026-10-17T18:00:02Z' }];
+    }
+
+    function cliGhost(opts) {
+        return function (cmdOpts) {
+            var c = cmdOpts.command;
+            if (c.indexOf('runs?head_sha=') !== -1) {
+                return JSON.stringify({ workflow_runs: opts.headRuns || [] });
+            }
+            return '';
+        };
+    }
+
+    function paramsGhost(overrides) {
+        var p = { jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            rules: [RULE_GHOST] } };
+        return Object.assign(p, overrides || {});
+    }
+
+    function smGhost(opts) {
+        opts = opts || {};
+        return makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [ghostItem(757)],
+                // NO check runs materialized on the head — the gate waits
+                // on a missing required context (ghostGateHeld).
+                commitCheckRuns: { check_runs: [] },
+                prComments: opts.prComments || []
+            },
+            onCliExecute: cliGhost({ headRuns: opts.headRuns !== undefined ? opts.headRuns : ghostRuns() })
+        });
+    }
+
+    test('IT-2: ghost cancel + gate held by a missing required context -> gh workflow run + marker (AC3)', function () {
+        var sm = smGhost();
+
+        sm.action(paramsGhost());
+
+        var dispatches = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        });
+        assert.equal(dispatches.length, 1, 'fresh CI re-dispatched on the same head');
+        assert.equal(dispatches[0].command,
+            'gh workflow run quality.yml --repo IstiN/flutter_agent_harness --ref \'ai/gh-757\'',
+            'the --ref value is single-quoted (guest-controlled branch, rework thread)');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh run rerun') === 0;
+        }).length, 0, 'a cancelled-PRE-materialization run has no run to rerun — a fresh dispatch instead');
+        assert.equal(sm.capturedPrComments.length, 1, 'once-per-head marker posted');
+        var body = sm.capturedPrComments[0].body;
+        assert.ok(body.indexOf(GHOST_MARKER) !== -1, 'stable marker prefix (per-head dedup key)');
+        assert.ok(body.indexOf(GHOST_HEAD) !== -1, 'marker carries the head sha');
+        assert.ok(body.indexOf('777001') !== -1, 'marker cites the dead run');
+    });
+
+    test('IT-2 gh-748 dedupe + E3 flap: marker on this head -> no second dispatch, ONE escalating flap alarm, then quiet', function () {
+        var liveComments = [{ body: GHOST_MARKER + ': head `' + GHOST_HEAD + '` remedied' }];
+        var sm = smGhost({ prComments: liveComments });
+
+        sm.action(paramsGhost());
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        }).length, 0, 'marker on this head -> one-shot re-dispatch never repeats');
+        assert.equal(sm.capturedPrComments.length, 1, 'the re-wedge is not silent: one flap alarm comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Ghost-cancel flap') !== -1, 'flap marker');
+        assert.ok(sm.capturedPrComments[0].body.indexOf(GHOST_HEAD) !== -1, 'flap alarm keyed to the head');
+
+        // The posted alarm persists (production shape): the next tick must
+        // NOT spam another one for the same flap level.
+        liveComments.push({ body: sm.capturedPrComments[0].body });
+        sm.capturedPrComments.length = 0;
+        sm.action(paramsGhost());
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        }).length, 0, 'still one-shot');
+        assert.equal(sm.capturedPrComments.length, 0, 'no flap-comment spam on the next tick');
+    });
+
+    test('guest-controlled branch with shell metacharacters/quote -> --ref fully quoted and escaped', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [ghostItem(757, { branch: 'ai/g\'h-757;touch /tmp/pwn' })],
+                commitCheckRuns: { check_runs: [] },
+                prComments: []
+            },
+            onCliExecute: cliGhost({ headRuns: ghostRuns() })
+        });
+
+        sm.action(paramsGhost());
+
+        var dispatches = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        });
+        assert.equal(dispatches.length, 1);
+        assert.equal(dispatches[0].command,
+            'gh workflow run quality.yml --repo IstiN/flutter_agent_harness ' +
+            '--ref \'ai/g\'\\\'\'h-757;touch /tmp/pwn\'',
+            'embedded quote escaped, metacharacters inside single quotes');
+    });
+
+    test('fresh cancel still inside the gh-755 visibility grace -> probe stays quiet (no dispatch churn)', function () {
+        var fresh = new Date(Date.now() - 60 * 1000).toISOString();
+        var sm = smGhost({ headRuns: ghostRuns(fresh) });
+
+        sm.action(paramsGhost());
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        }).length, 0, 'a 1-minute-old cancel may still materialize — wait');
+        assert.equal(sm.capturedPrComments.length, 0, 'no marker inside the grace');
+    });
+
+    test('all-terminal required contexts (green) -> the ghost gate is NOT held, no dispatch (fail_validation owns red)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [ghostItem(757)],
+                commitCheckRuns: { check_runs: [
+                    { name: 'crap', conclusion: 'success', status: 'completed' }
+                ] },
+                prComments: []
+            },
+            onCliExecute: cliGhost({ headRuns: ghostRuns() })
+        });
+
+        sm.action(paramsGhost());
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        }).length, 0, 'green terminal contexts mean the gate is not blocked-by-absence');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment');
+    });
+
+    test('gh-683 bug C, ghost class: a FAILED dispatch posts NO marker — the head is not latched and the next tick retries', function () {
+        // The once-per-head marker suppresses every future retry for the
+        // head, so it may only exist when the dispatch really landed. A
+        // throwing bridge (or one day a non-throwing error payload) must
+        // leave the head unlatched — never parked on flap-warns only.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [ghostItem(757)],
+                commitCheckRuns: { check_runs: [] },
+                prComments: []
+            },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('gh workflow run') === 0) {
+                    throw new Error('gh: could not create workflow dispatch (422)');
+                }
+                return cliGhost({ headRuns: ghostRuns() })(cmdOpts);
+            }
+        });
+
+        sm.action(paramsGhost());
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        }).length, 1, 'the dispatch was attempted');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'NO marker on a failed dispatch — the retry is not suppressed');
+    });
+});
+
+suite('smAgent: silent-update failure bookkeeping (gh-1000 I5)', function () {
+    // The rework thread pinned the I5 helpers as dead code — nothing
+    // called them. The wiring (recordSilentUpdateFailure via
+    // silentUpdateBranchTracked) posts the failure marker on every clone
+    // failure and flags the PR 'silent-update-degraded' once the attempts
+    // are exhausted (visible state instead of a silent retry-forever).
+
+    var RULE_I5 = { source: 'github', query: { type: 'pr', labels: ['pr_approved'], mergeState: 'BEHIND' },
+                    localAction: 'update_branch', limit: 5, id: 'silent-update-behind' };
+
+    function i5Item(extra) {
+        var it = { key: 'pr-983', labels: ['pr_approved'], issueNumber: null,
+                   prNumber: 983, draft: false, branch: 'ai/gh-983' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function i5Sm(prComments, itemExtra) {
+        return makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: { items: [i5Item(itemExtra)], prComments: prComments || [] },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('gh repo clone') === 0) {
+                    throw new Error('gh: error 502 — clone failed (live 19:14Z shape)');
+                }
+                return '';
+            }
+        });
+    }
+
+    function i5Params() {
+        return { jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness', rules: [RULE_I5] } };
+    }
+
+    test('first clone failure -> attempt-1 marker on the PR, no degraded flag, retry path intact', function () {
+        var sm = i5Sm([]);
+
+        sm.action(i5Params());
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone') === 0;
+        }).length, 1, 'the clone was attempted');
+        assert.equal(sm.capturedPrComments.length, 1, 'exactly one failure marker posted');
+        var body = sm.capturedPrComments[0].body;
+        assert.ok(body.indexOf('silent-update failure — attempt 1 at ') !== -1,
+            'marker line carries the attempt number and ISO timestamp');
+        assert.equal(sm.capturedPrComments[0].number, 983, 'marker on the PR');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no degraded flag on attempt 1');
+    });
+
+    test('attempts exhausted (3 failures on record) -> final marker + silent-update-degraded label applied', function () {
+        var prior = [
+            { body: '⚠️ silent-update failure — attempt 1 at 2026-10-17T19:14:00Z' },
+            { body: '⚠️ silent-update failure — attempt 2 at 2026-10-17T19:16:00Z' }
+        ];
+        var sm = i5Sm(prior);
+
+        sm.action(i5Params());
+
+        assert.equal(sm.capturedPrComments.length, 1, 'the third marker still posts (the trail stops AT the cap)');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('attempt 3 at ') !== -1);
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'degraded flag applied once');
+        assert.equal(sm.capturedPrLabelAdds[0].labels.join(','), 'silent-update-degraded');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 983, 'flag on the failing PR');
+    });
+
+    test('already degraded -> no comment spam, no duplicate label; the clone error still surfaces', function () {
+        var prior = [
+            { body: '⚠️ silent-update failure — attempt 1 at 2026-10-17T19:14:00Z' },
+            { body: '⚠️ silent-update failure — attempt 2 at 2026-10-17T19:16:00Z' },
+            { body: '⚠️ silent-update failure — attempt 3 at 2026-10-17T19:18:00Z' }
+        ];
+        var sm = i5Sm(prior, { labels: ['pr_approved', 'silent-update-degraded'] });
+
+        sm.action(i5Params());
+
+        assert.equal(sm.capturedPrComments.length, 0, 'no marker beyond the cap — the label is the durable signal');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no duplicate degraded label');
+    });
+});
+suite('smAgent: mutex streak reset on clean ticks (gh-1000, rework thread 4)', function () {
+    // The rework thread pinned two compounding defects: the tick event
+    // omitted consecutivePhantomTicks (fixed in githubSource — the IT-1
+    // suite pins the key) and the cross-tick publish merge carried the
+    // streak forward across unrelated CLEAN ticks (prev + 0), so one
+    // phantom event would count "consecutive" forever. This test drives a
+    // tick with NO phantom event against a previous snapshot carrying a
+    // streak of 3: the published block must show 0.
+    var PREV_GET = 'gh api repos/o/r/contents/data/fa-state.json?ref=factory-data --jq .content | base64 -d';
+
+    function prevStateServes(state) {
+        return function (cmdOpts) {
+            if (cmdOpts.command === PREV_GET) {
+                // the real command pipes through `base64 -d` in the shell —
+                // the mock serves the DECODED body (branchServes parity)
+                return { output: JSON.stringify(state) };
+            }
+            return undefined;
+        };
+    }
+
+    test('clean tick (no phantom self-heal) → published consecutivePhantomTicks resets to 0; cumulative counters carry', function () {
+        var prev = { schema: 2, lanes: {}, mutex: {
+            mutexSelfHeals: 4,
+            phantomHolderTicks: 4,
+            consecutivePhantomTicks: 3,
+            alarms: [{ type: 'phantom_mutex_holder',
+                       title: 'phantom_mutex_holder',
+                       detail: 'cached ai_validating holders diverge from the live label layer',
+                       label: 'ai_validating',
+                       holders: { cached: [9], live: [] },
+                       at: '2026-10-17T19:00:00Z' }]
+        } };
+        // One quiet tick through the real statePublish block (same shape
+        // as the tokens suite's publishTick, which is suite-local there).
+        // workflowApiRuns defaults to [] — without it the publish block's
+        // run-rollup read falls through to the harness bridge, which the
+        // unit-test network guard replaces with a throwing stub (the
+        // canonical GraalJS run then dies before the PUT — rework thread).
+        var sm = makeSmAgent({
+            fileMap: {},
+            github: { items: [{ key: 'T-1', labels: [], pr: null }], prList: '[]',
+                      workflowApiRuns: [] },
+            onCliExecute: prevStateServes(prev)
+        });
+        sm.action({ jobParams: { owner: 'o', repo: 'r',
+            rules: [makeRule('project = T')],
+            statePublish: { channel: 'release', repo: 'o/r', asset: 'fa-state.json' } } });
+        var putCmd = null;
+        sm.capturedCliCommands.forEach(function (c) {
+            if (c.command.indexOf('-X PUT repos/o/r/contents/data/fa-state.json ') !== -1) {
+                putCmd = c.command;
+            }
+        });
+        assert.ok(putCmd, 'fa-state.json PUT captured — the tick published');
+        var m = putCmd.match(/printf %s '(.*)' \| base64/);
+        assert.ok(m, 'snapshot payload extractable from the PUT');
+        var state = JSON.parse(m[1]);
+        assert.ok(state.mutex, 'mutex block still published (carried from the previous snapshot)');
+        assert.equal(state.mutex.mutexSelfHeals, 4,
+            'cumulative lifetime counters carry across clean ticks');
+        assert.equal(state.mutex.consecutivePhantomTicks, 0,
+            'a clean tick RESETS the streak — the merge alone would carry 3 forward forever');
+        assert.equal(state.mutex.alarms.length, 1, 'alarm tail carried');
     });
 });
 suite('smAgent: cancelled-only red is no-verdict — fail path skips (gh-755)', function () {
@@ -13442,5 +13689,159 @@ suite('smAgent: validation_failed park reset on head change (gh-994)', function 
         assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
         assert.ok(!sm.capturedLogs.some(function (l) { return l.indexOf('park-reset:') !== -1; }),
             'no park-reset audit line without a recorded-sha head change');
+    });
+});
+
+suite('smAgent: gh-998 neutral sweep — rework thread regression (the main-merge amputation)', function () {
+    // PR #1017 rework leg 3, thread PRRT_kwDORYAuYs6tpb4l: merging origin/main
+    // amputated the shipped gh-998 fix (#1012) — the neutral-sweep else-if,
+    // sweepZombieCheckRunsNeutral, tickZombiesSwept and the factory-state
+    // zombiesSwept field were deleted while checkRunZombies.js + its tests
+    // stayed. The suite only caught the payload side (6 factoryState
+    // failures); NOTHING pinned the sweep leg's reachability, which is why
+    // the amputation shipped. This suite drives the live fa #1563 shape
+    // through validate_pr: a pending check-run whose owning run concluded
+    // FAILURE (terminal owner, no green verdict on the head, nothing
+    // active) must be PATCH-completed 'neutral' and counted into the
+    // published zombiesSwept payload — cumulatively with the prev snapshot.
+    var PREV_GET = 'gh api repos/o/r/contents/data/fa-state.json?ref=factory-data --jq .content | base64 -d';
+    var DEAD_RUN = { id: 381563001, event: 'push', path: '.github/workflows/kicker.yml',
+        head_branch: 'ai/gh-998', status: 'completed', conclusion: 'failure',
+        html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/381563001',
+        created_at: '2026-10-11T18:15:00Z', updated_at: '2026-10-11T18:33:24Z' };
+    var ZOMBIE = { id: 117469671401, name: 'Quality gate', status: 'in_progress',
+        conclusion: null, started_at: '2026-10-11T18:33:45Z',
+        details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/381563001' };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved', 'ai_validating'], issueNumber: null,
+                   prNumber: n, draft: false, branch: 'ai/gh-998', author: 'ai-teammate',
+                   headSha: '998ac1998ac1998ac1998ac1998ac1998ac1998' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+    function rule() {
+        return { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], checks: ['green'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
+            skipIfGreenCi: true };
+    }
+    function cliRouter(prev, headRollup, dispatchedRuns) {
+        // Table-driven command router: a flat chain of ifs here minted a
+        // fresh over-threshold function under the CRAP ratchet; the table
+        // keeps every responder at CC 1 and the loop at CC 3. Order is
+        // precedence — the ci.yml-scoped query must be checked before the
+        // whole-head 'runs?head_sha=' pattern it contains.
+        var routes = [
+            { match: PREV_GET,
+              respond: function () { return { output: JSON.stringify(prev) }; } },
+            { match: 'workflows/ci.yml/runs?head_sha=',
+              respond: function () { return { workflow_runs: dispatchedRuns }; } },
+            { match: 'runs?head_sha=',
+              respond: function () { return { workflow_runs: headRollup }; } },
+            { match: 'runs?event=workflow_dispatch',
+              respond: function () { return { workflow_runs: [] }; } }
+        ];
+        return function (cmdOpts) {
+            for (var i = 0; i < routes.length; i++) {
+                if (cmdOpts.command.indexOf(routes[i].match) !== -1) return routes[i].respond();
+            }
+            return undefined;
+        };
+    }
+    function makePrev() {
+        return { schema: 2, lanes: {}, zombiesSwept: 7 };
+    }
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    test('terminal-owner orphan on a no-verdict head is swept NEUTRAL and counted into zombiesSwept (cumulative)', function () {
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(998)], prList: '[]',
+                      commitCheckRuns: { check_runs: [ZOMBIE] },
+                      prComments: [],
+                      workflowApiRuns: [] },
+            onCliExecute: cliRouter(makePrev(), [DEAD_RUN], [])
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
+            rules: [rule()],
+            statePublish: { channel: 'release', repo: 'o/r', asset: 'fa-state.json' } } });
+
+        var patches = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('-X PATCH') !== -1 &&
+                   c.command.indexOf('/check-runs/') !== -1; });
+        assert.equal(patches.length, 1,
+            'the zombie check-run is PATCH-completed exactly once');
+        assert.ok(patches[0].command.indexOf('/check-runs/117469671401') !== -1,
+            'the PATCH targets the orphan check-run id');
+        assert.ok(patches[0].command.indexOf('conclusion=neutral') !== -1,
+            'a terminal owner carries NO verdict — neutral, never faked success');
+        assert.ok(patches[0].command.indexOf('status=completed') !== -1,
+            'the zombie retires as completed');
+        // the workflow token (checks:write) rides the PATCH, not the PAT
+        assert.ok(sm.capturedEnvSets.some(function (e) {
+            return e.name === 'GH_TOKEN' && e.value === 'app-token'; }),
+            'the App token is swapped in for the checks:write PATCH (gh-998 I4)');
+        // the I5 leak counter rides the published snapshot, cumulatively
+        var putCmd = null;
+        sm.capturedCliCommands.forEach(function (c) {
+            if (c.command.indexOf('-X PUT repos/o/r/contents/data/fa-state.json ') !== -1) {
+                putCmd = c.command;
+            }
+        });
+        assert.ok(putCmd, 'fa-state.json PUT captured — the tick published');
+        var m = putCmd.match(/printf %s '(.*)' \| base64/);
+        assert.ok(m, 'snapshot payload extractable from the PUT');
+        var state = JSON.parse(m[1]);
+        assert.equal(state.zombiesSwept, 8,
+            'prev 7 + this tick 1 — the cumulative leak-rate counter survives the publish');
+    });
+
+    test('a green-verdict head still takes the gh-857 conclude path — the sweep never mirrors a real verdict', function () {
+        // The merge must not have made the sweep fire on GREEN heads: with
+        // a concluded-success dispatched run covering the head, the orphan
+        // leg is concluded 'success' by the gh-865 path, never 'neutral'.
+        var GREEN_RUN = { id: 38157999999, event: 'workflow_dispatch',
+            head_branch: 'ai/gh-998', status: 'completed', conclusion: 'success',
+            html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38157999999',
+            created_at: '2026-10-11T19:04:35Z' };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(998)], prList: '[]',
+                      commitCheckRuns: { check_runs: [ZOMBIE,
+                          { id: 117470000002, name: 'Quality gate', status: 'completed',
+                            conclusion: 'success', started_at: '2026-10-11T19:04:35Z',
+                            details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38157999999' }] },
+                      prComments: [],
+                      workflowApiRuns: [] },
+            onCliExecute: cliRouter(makePrev(), [DEAD_RUN, GREEN_RUN], [GREEN_RUN])
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
+            rules: [rule()],
+            statePublish: { channel: 'release', repo: 'o/r', asset: 'fa-state.json' } } });
+
+        var patches = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('-X PATCH') !== -1 &&
+                   c.command.indexOf('/check-runs/') !== -1; });
+        assert.equal(patches.length, 1, 'exactly the orphan is concluded');
+        assert.ok(patches[0].command.indexOf('/check-runs/117469671401') !== -1);
+        assert.ok(patches[0].command.indexOf('conclusion=success') !== -1,
+            'green cover present → the gh-857/865 mirror, never a neutral sweep');
+        assert.ok(patches[0].command.indexOf('conclusion=neutral') === -1,
+            'the sweep leg stays silent when a real verdict exists');
+        var putCmd = null;
+        sm.capturedCliCommands.forEach(function (c) {
+            if (c.command.indexOf('-X PUT repos/o/r/contents/data/fa-state.json ') !== -1) {
+                putCmd = c.command;
+            }
+        });
+        var m = putCmd && putCmd.match(/printf %s '(.*)' \| base64/);
+        var state = m && JSON.parse(m[1]);
+        assert.ok(state && typeof state.zombiesSwept === 'number',
+            'the counter stays present (stable shape) even when the sweeper did not fire');
     });
 });

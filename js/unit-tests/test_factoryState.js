@@ -2041,3 +2041,42 @@ suite('factoryState — priceTokens through buildFactoryState (gh-825)', functio
       '(48210+12980)/1e6*3 = 0.18357 → 0.18');
   });
 });
+
+suite('factoryState — normalizeMutexSnapshot (gh-1000 phantom-holder bookkeeping)', function () {
+    test('absent/garbage blob → zeroed counters, empty alarms', function () {
+        assert.deepEqual(fsModule.normalizeMutexSnapshot(null),
+            { mutexSelfHeals: 0, phantomHolderTicks: 0, consecutivePhantomTicks: 0, alarms: [] });
+        assert.deepEqual(fsModule.normalizeMutexSnapshot('junk'),
+            { mutexSelfHeals: 0, phantomHolderTicks: 0, consecutivePhantomTicks: 0, alarms: [] });
+    });
+
+    test('numeric strings coerce; negatives and NaN drop to 0', function () {
+        var out = fsModule.normalizeMutexSnapshot({
+            mutexSelfHeals: '2', phantomHolderTicks: -1, consecutivePhantomTicks: 'x'
+        });
+        assert.equal(out.mutexSelfHeals, 2);
+        assert.equal(out.phantomHolderTicks, 0);
+        assert.equal(out.consecutivePhantomTicks, 0);
+    });
+
+    test('alarm tail caps at the last 5 entries', function () {
+        var alarms = [1, 2, 3, 4, 5, 6, 7].map(function (i) { return { at: 't' + i }; });
+        var out = fsModule.normalizeMutexSnapshot({ alarms: alarms });
+        assert.equal(out.alarms.length, 5);
+        assert.equal(out.alarms[0].at, 't3');
+        assert.equal(out.alarms[4].at, 't7');
+    });
+
+    test('buildFactoryState carries state.mutex only when the SM published one', function () {
+        var base = { repoInfo: { owner: 'o', repo: 'r' }, now: '2026-10-17T20:00:00Z',
+            prs: [], runs: [] };
+        var withMutex = fsModule.buildFactoryState(Object.assign({}, base, {
+            mutex: { mutexSelfHeals: 1, phantomHolderTicks: 1, consecutivePhantomTicks: 1,
+                alarms: [{ type: 'phantom_mutex_holder' }] }
+        }));
+        assert.equal(withMutex.mutex.mutexSelfHeals, 1);
+        assert.equal(withMutex.mutex.alarms.length, 1);
+        var without = fsModule.buildFactoryState(base);
+        assert.equal(without.mutex, undefined, 'absent input.mutex → no mutex key');
+    });
+});

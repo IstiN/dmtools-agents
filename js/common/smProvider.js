@@ -237,6 +237,19 @@ function githubProvider(cfg) {
         return list;
     }
 
+    // gh-1000 — LIVE open-PR re-read for the phantom-mutex self-heal probe
+    // (githubSource.queryPrs): the per-tick ioCache is exactly the stale
+    // layer a phantom holder rides on, so the probe must bypass it. The
+    // fresh list also REFRESHES the cache entry — after a self-heal the
+    // rest of the tick reads the corrected layer instead of re-fetching.
+    function listOpenPrsLive() {
+        var list = asList(parseMcp(github_list_prs({
+            workspace: owner, repository: repo, state: 'open'
+        })));
+        ioCachePut(owner, repo, 'openPrs', null, list);
+        return list;
+    }
+
     function listMergedPrs() {
         var cached = ioCacheGet(owner, repo, 'mergedPrs', null);
         if (cached) return cached;
@@ -396,6 +409,7 @@ function githubProvider(cfg) {
         provider: 'github',
 
         listOpenPrs: listOpenPrs,
+        listOpenPrsLive: listOpenPrsLive,
         listMergedPrs: listMergedPrs,
 
         // branchExists(name) — gh-922 dead-head park bench oracle: does
