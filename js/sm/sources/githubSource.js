@@ -748,9 +748,13 @@ function dropOpenPrsCache(repoInfo) {
 }
 
 function logPhantomHeal(alarm, cachedHolders, liveHolders) {
+    // cachedHolders may be the raw queryPrs item objects (prNumber-keyed) —
+    // the alarm record already carries the normalized pair; log that.
+    var cached = (alarm && alarm.holders && alarm.holders.cached) || cachedHolders || [];
+    var live = (alarm && alarm.holders && alarm.holders.live) || liveHolders || [];
     console.log('   ⚠️ ' + alarm.title + ' — ' + alarm.detail +
-        ' (cached holders [' + cachedHolders.join(', ') + '] vs live [' +
-        liveHolders.join(', ') + ']; ioCache self-healed, defer cancelled)');
+        ' (cached holders [' + cached.join(', ') + '] vs live [' +
+        live.join(', ') + ']; ioCache self-healed, defer cancelled)');
 }
 
 // gh-1000 I1/I2 — re-derive the full-slot holder set against the LIVE

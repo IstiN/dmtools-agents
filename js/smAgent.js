@@ -2985,14 +2985,6 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     console.log('  ⏭️  ' + key + ' rerun_cancelled_checks: no head sha — skip');
                     continue;
                 }
-                var rcContexts = [];
-                if (Array.isArray(rule.requiredContexts)) {
-                    rcContexts = rule.requiredContexts;
-                } else if (typeof rule.requiredContexts === 'string' && rule.requiredContexts) {
-                    rcContexts = rule.requiredContexts.split(',').map(function (s) {
-                        return s.trim();
-                    }).filter(Boolean);
-                }
                 // gh-755 (owner directive 2026-10-05 'если что-то
                 // канселится — надо повторно запускать'): rule.anyCancelled
                 // switches the rule to the ANY-cancelled mode — no name
@@ -6184,7 +6176,8 @@ function ghostFlapEscalate(repoInfo, ticket, head, comments, key, dispatchMarker
     return true;
 }
 
-function cancelledRequiredContexts(repoInfo, headSha, contexts) {    // Which check contexts currently read CANCELLED on this head — the
+function cancelledRequiredContexts(repoInfo, headSha, contexts) {
+    // Which check contexts currently read CANCELLED on this head — the
     // check-runs rollup is the source of truth, read with
     // BRANCH-PROTECTION semantics: a context's verdict is the LATEST
     // check run carrying its name, not any historical one (#695 review:
