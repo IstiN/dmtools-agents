@@ -13882,15 +13882,22 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         return it;
     }
 
-    function forkSm(extraItemFields, githubExtra) {
+    function forkSm(extraItemFields, githubExtra, topExtra) {
         var github = Object.assign({
             items: [forkItem(1591, extraItemFields)],
             pr: { number: 1591, head: { sha: HEAD_NEW } }
         }, githubExtra || {});
-        return makeSmAgent(Object.assign({
+        var opts = Object.assign({
             fileMap: { '../.dmtools/config.js':
-                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' }
-        }, { github: github }));
+                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: github
+        }, topExtra || {});
+        // onCliExecute is read at the harness top level, not under github
+        if (githubExtra && githubExtra.onCliExecute) {
+            opts.onCliExecute = githubExtra.onCliExecute;
+            delete github.onCliExecute;
+        }
+        return makeSmAgent(opts);
     }
 
     function clones(sm) {
@@ -13996,7 +14003,6 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
                 }
             });
             sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
-            console.log('DEBUG tick ' + tick + ' clones=' + clones(sm).length + ' newComments=' + sm.capturedPrComments.length + ' ' + JSON.stringify(sm.capturedPrComments.map(function(c){return (c.body||'').slice(0,60));}));
             sm.capturedPrComments.forEach(function (c) { thread.push(c.body); });
             sm.capturedPrLabelAdds.forEach(function (a) {
                 (a.labels || []).forEach(function (l) { if (labelAdds.indexOf(l) === -1) labelAdds.push(l); });
