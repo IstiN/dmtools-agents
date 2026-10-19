@@ -331,7 +331,8 @@ function makeSmAgent(opts) {
             }
         };
         var smProviderRealMod = loadModule('js/common/smProvider.js', makeRequire({
-            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
         }), {});
         var smProviderStub = { createSmProvider: function () { return realProvider; },
             // gh-1059: pin the REAL shared head-repo resolver (githubSource
@@ -15375,5 +15376,316 @@ suite('smAgent: naked-PR reconciliation sweep (gh-1097 IT-1)', function () {
             body: '<!-- dmtools:naked-pr-rearm {"pr":10,"head":"sha10"} -->' }]);
         assert.equal(sm.capturedPrLabelAdds.length, 0);
         assert.equal(sm.capturedPrComments.length, 0);
+    });
+});
+
+// ── gh-1106: fork silent-update workflow-write escalation ────────────────────
+// Live fa PR #1591 (2026-10-19 17:16Z): the fork silent-update push with the
+// silent token (github.token) is refused the moment the merge touches
+// `.github/workflows/*` — GITHUB_TOKEN can never gain `workflows`, so the
+// failure is DETERMINISTIC and gh-1070's "maintainer edits revoked" 3-strike
+// trail ends in a guest-park deadlock (no push → park holds → no push). The
+// cure: classify the refusal from the captured stderr tail, escalate ONCE
+// with the workflow-write token (jobParams.sourceToken, env-swapped like
+// every silent-op swap, restored in finally), park with a DISTINCT reason
+// when the escalation is refused too — never on the 3-strike trail.
+
+suite('smAgent: fork silent-update workflow-write escalation (gh-1106)', function () {
+
+    var RULE_1106 = { source: 'github', query: { type: 'pr', labels: ['pr_approved'], mergeState: 'BEHIND' },
+                      localAction: 'update_branch', limit: 5, id: 'silent-update-behind' };
+    var BASE = 'epam/dmtools-dart';
+    var FORK = 'YuryBY/dmtools-dart';
+    var BRANCH = 'fix/android-dap-home-sandbox';
+    var HEAD_OLD = '1111111111111111111111111111111111111111';
+    var HEAD_NEW = '2222222222222222222222222222222222222222';
+    var SILENT_TOK = 'silent-app-token';
+    var SOURCE_TOK = 'source-write-token';
+    var STDERR_PATH_RE = /2>(\/tmp\/sm-silent-update-\S+?\.stderr)/;
+    var CONFIG_1106 = 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };';
+
+    // The #1591 stderr shape: progress head, the decisive refusal at the END.
+    function workflowsStderr() {
+        var lines = [];
+        for (var i = 1; i <= 25; i++) lines.push('Updating files: ' + i + '%');
+        lines.push('remote: error: GH013: refusing to allow a GitHub App to create or update ' +
+            'workflow `.github/workflows/build-mobile.yml` without `workflows` permission.');
+        lines.push('To https://github.com/' + FORK + '.git');
+        lines.push(' ! [remote rejected] HEAD -> ' + BRANCH + ' (refusing to allow ' +
+            'a GitHub App to create or update workflow `.github/workflows/build-mobile.yml` ' +
+            'without `workflows` permission)');
+        lines.push("error: failed to push some refs to 'https://github.com/" + FORK + ".git'");
+        return lines.join('\n') + '\n';
+    }
+
+    function escItem(extra) {
+        return Object.assign({ key: 'pr-1591', labels: ['pr_approved'], issueNumber: null,
+            prNumber: 1591, draft: false, branch: BRANCH,
+            headRepo: FORK, maintainerCanModify: true }, extra || {});
+    }
+
+    // failPlan: per clone attempt — null = succeeds, 'workflows' = refused
+    // with the #1591 stderr, else an Error to throw verbatim.
+    //
+    // gh-1106 CRAP-ratchet split (gh-107 convention): the per-attempt
+    // decision branches live in small named helpers so every function
+    // stays under the CRAP_THRESHOLD=8 gate. escalationSm stays the
+    // assembler; behavior is identical to the single-closure version the
+    // UT-1..UT-5/IT/REG suite pins.
+    function escAttemptOutcome(fail) {
+        if (fail === 'workflows') {
+            return { stderr: workflowsStderr(),
+                     thrown: new Error('Tool execution failed: ' + workflowsStderr()) };
+        }
+        if (fail instanceof Error) return { stderr: String(fail.message), thrown: fail };
+        // the success shape: progress-free output, nothing thrown
+        return { stderr: '', thrown: null };
+    }
+
+    function escFileRead(stderrByPath) {
+        return function (readOpts) {
+            var p = readOpts.path;
+            if (stderrByPath[p] !== undefined) return stderrByPath[p];
+            if (p.indexOf('.dmtools/config') !== -1) return CONFIG_1106;
+            return null;
+        };
+    }
+
+    // the gh repo clone stub: record the command, teach the captured
+    // stderr file THIS attempt's outcome class, then fail per the plan.
+    function escOnCliExecute(failPlan, stderrByPath, cloneCommands) {
+        return function (cmdOpts) {
+            var cmd = cmdOpts.command;
+            if (cmd.indexOf('gh repo clone ') === -1) return '';
+            var m = STDERR_PATH_RE.exec(cmd);
+            var fail = (failPlan || [])[cloneCommands.length];
+            cloneCommands.push(cmd);
+            var outcome = escAttemptOutcome(fail);
+            if (m) stderrByPath[m[1]] = outcome.stderr;
+            if (outcome.thrown) throw outcome.thrown;
+            return '';
+        };
+    }
+
+    function escalationSm(itemExtra, failPlan, githubExtra, topExtra) {
+        var stderrByPath = {};
+        var cloneCommands = [];
+        var sm = makeSmAgent(Object.assign({
+            fileMap: { '../.dmtools/config.js': CONFIG_1106 },
+            github: Object.assign({
+                items: [escItem(itemExtra)],
+                prComments: [],
+                pr: { number: 1591, head: { sha: HEAD_OLD } }
+            }, githubExtra || {}),
+            captureConsole: true,
+            extraMocks: { file_read: escFileRead(stderrByPath) },
+            onCliExecute: escOnCliExecute(failPlan, stderrByPath, cloneCommands)
+        }, topExtra || {}));
+        sm.cloneCommands = cloneCommands;
+        return sm;
+    }
+
+    function jobParams(extra) {
+        return Object.assign({ owner: 'epam', repo: 'dmtools-dart', rules: [RULE_1106],
+            silentToken: SILENT_TOK, sourceToken: SOURCE_TOK }, extra || {});
+    }
+
+    function trailMarkers(comments) {
+        return (comments || []).filter(function (c) {
+            return String((c && c.body) || '').indexOf('silent-update failure — attempt') !== -1;
+        });
+    }
+
+    test('UT-1/AC1/IT-1: workflows refusal escalates EXACTLY ONCE with sourceToken; env restored (AC7)', function () {
+        var sm = escalationSm(null, ['workflows', null]);
+        sm.action(jobParams());
+
+        assert.equal(sm.cloneCommands.length, 2, 'one silent attempt + exactly ONE escalated attempt');
+        var cmd1 = sm.cloneCommands[0];
+        var cmd2 = sm.cloneCommands[1];
+        // the push target proper — up to the stderr-tee suffix, which
+        // carries a Date.now() dir stamp that differs per attempt
+        var pushOf = function (c) {
+            var start = c.indexOf('git push ');
+            var end = c.indexOf('; } 2>>', start);
+            return c.slice(start, end === -1 ? undefined : end);
+        };
+        assert.equal(pushOf(cmd2), pushOf(cmd1),
+            'the escalated chain reuses the identical push target (fork token URL, HEAD:<branch>) — only the env changes');
+        assert.deepEqual(sm.capturedEnvSets, [
+            { name: 'GH_TOKEN', value: SOURCE_TOK },
+            { name: 'GH_TOKEN', value: SILENT_TOK }
+        ], 'the escalation swaps GH_TOKEN to sourceToken and restores it in finally (AC7)');
+        assert.deepEqual(trailMarkers(sm.capturedPrComments), [],
+            'AC2: the workflows refusal NEVER increments the gh-1070 3-strike trail');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no park on the successful escalation');
+        var logs = sm.capturedLogs.join('\n');
+        assert.ok(logs.indexOf('workflow-write escalation succeeded') !== -1,
+            'the escalated head move is logged');
+        assert.ok(logs.indexOf('branch silently updated') !== -1,
+            'the caller sees a SUCCESSFUL refresh — the standard lanes resume (AC4)');
+    });
+
+    test('UT-2/AC2: workflows refusal with NO sourceToken — distinct park, one marker, zero trail (E1)', function () {
+        var sm = escalationSm(null, ['workflows']);
+        var jp = jobParams();
+        delete jp.sourceToken;
+        sm.action(jp);
+
+        assert.equal(sm.cloneCommands.length, 1, 'no escalation without a workflow-write token');
+        assert.equal(sm.capturedEnvSets.length, 0, 'no env swap without a token to swap to');
+        assert.deepEqual(trailMarkers(sm.capturedPrComments), [],
+            'the deterministic refusal is never counted as a push-failure strike');
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the park still happens (E1)');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['validation_failed']);
+        assert.equal(sm.capturedPrComments.length, 1, 'exactly one distinct marker');
+        var body = sm.capturedPrComments[0].body;
+        assert.ok(body.indexOf('workflow-write park (gh-1106)') !== -1,
+            'AC3: the marker names the missing token capability');
+        assert.ok(body.indexOf('parked-head: ' + HEAD_OLD) !== -1,
+            'the parked-head sha records — a later successful escalation clears the park (gh-994)');
+        assert.ok(body.indexOf('edits') === -1 || body.indexOf('revoked') === -1,
+            'the park never claims maintainer edits were revoked');
+    });
+
+    test('UT-3/AC3: escalation also refused — distinct park, NOT the gh-1070 trail, one marker across ticks', function () {
+        var sm = escalationSm(null, ['workflows', 'workflows']);
+        sm.action(jobParams());
+
+        assert.equal(sm.cloneCommands.length, 2, 'the escalation ran once');
+        assert.deepEqual(sm.capturedEnvSets, [
+            { name: 'GH_TOKEN', value: SOURCE_TOK },
+            { name: 'GH_TOKEN', value: SILENT_TOK }
+        ], 'UT-5/AC7: even on the refused escalation the swap is undone in finally');
+        assert.deepEqual(trailMarkers(sm.capturedPrComments), [],
+            'AC2/AC3: neither the silent nor the escalated refusal counts on the 3-strike trail');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels; }),
+            [['validation_failed']], 'the PR parks (distinct reason, not silent-update-degraded)');
+        var parks = sm.capturedPrComments.filter(function (c) {
+            return String(c.body || '').indexOf('workflow-write park (gh-1106)') !== -1;
+        });
+        assert.equal(parks.length, 1, 'exactly one distinct park marker');
+
+        // Next tick: the same head, the marker already on the timeline —
+        // the doomed retry stays silent (one marker, no infinite retries).
+        var sm2 = escalationSm({ labels: ['pr_approved', 'validation_failed'] },
+            ['workflows', 'workflows'], { prComments: [{ body: parks[0].body }] });
+        sm2.action(jobParams());
+        assert.equal(sm2.cloneCommands.length, 2, 'the retry stays every-tick (self-healing when the capability arrives)');
+        assert.equal(sm2.capturedPrComments.length, 0, 'no duplicate marker for the SAME parked head');
+        assert.equal(sm2.capturedPrLabelAdds.length, 0, 'no duplicate label add');
+    });
+
+    test('IT-2/AC4: parked PR + successful escalation — the head moves, the gh-994 reset releases the park', function () {
+        // Tick 1: parked at HEAD_OLD (a legacy gh-1070 park from before the
+        // fix), the silent push refused, the escalation SUCCEEDS → head NEW.
+        var parkComment = '🛑 validation_failed — fork park (gh-1070): parked-head: ' + HEAD_OLD;
+        var sm1 = escalationSm({ labels: ['pr_approved', 'validation_failed'] },
+            ['workflows', null],
+            { prComments: [{ body: parkComment }], prAfterRefresh: { number: 1591, head: { sha: HEAD_NEW } } });
+        sm1.action(jobParams());
+        assert.equal(sm1.cloneCommands.length, 2, 'the escalation fired');
+        assert.deepEqual(sm1.capturedPrLabelRemoves.map(function (r) { return r.label; }), [],
+            'tick 1: the park still holds (the head at pass start was the parked one)');
+
+        // Tick 2: the head now post-dates the park — the existing
+        // "new push since park" rule releases it (no new machinery).
+        var sm2 = escalationSm({ labels: ['pr_approved', 'validation_failed'] }, [],
+            { prComments: [{ body: parkComment }],
+              pr: { number: 1591, head: { sha: HEAD_NEW } } });
+        sm2.action(jobParams());
+        assert.deepEqual(sm2.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['validation_failed'], 'AC4: the park is released by the head-change reset');
+        var logs = sm2.capturedLogs.join('\n');
+        assert.ok(logs.indexOf('park-reset') !== -1 || logs.indexOf('cleared') !== -1,
+            'the release rides the existing reset path');
+    });
+
+    test('E2: a genuine maintainer-edit revocation keeps the OLD gh-1070 path (no escalation, no env churn)', function () {
+        var sm = escalationSm(null, [new Error('denied — edits revoked mid-flight')]);
+        sm.action(jobParams());
+
+        assert.equal(sm.cloneCommands.length, 1, 'no escalation for a non-workflows refusal');
+        assert.equal(sm.capturedEnvSets.length, 0, 'no token swap');
+        assert.equal(trailMarkers(sm.capturedPrComments).length, 1,
+            'the gh-1070 trail counts it exactly like today (REG-1)');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no park below the cap');
+    });
+
+    test('E3: dry-run logs the planned escalation and pushes nothing more', function () {
+        var sm = escalationSm(null, ['workflows']);
+        sm.action(jobParams({ dryRun: true }));
+
+        assert.equal(sm.cloneCommands.length, 1, 'only the (existing) silent attempt — the escalation is logged, not pushed');
+        assert.equal(sm.capturedEnvSets.length, 0, 'no env swap in dry-run');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'DRY never parks');
+        assert.equal(sm.capturedPrComments.length, 0, 'DRY posts nothing');
+        var logs = sm.capturedLogs.join('\n');
+        assert.ok(logs.indexOf('[dry]') !== -1 && logs.indexOf('workflow-write escalation') !== -1,
+            'the planned escalation is visible in the dry log');
+    });
+
+    test('AC1 same-tick guard: two rules routing the SAME PR escalate at most once per tick', function () {
+        // A parked BEHIND fork matches BOTH park-reset and
+        // silent-update-behind; the tick-start label snapshot cannot see
+        // the sibling rule's label add (the gh-922 tickParkedRecorded
+        // problem) — the escalation map claims the PR before the push.
+        var doubleRule = { source: 'github', query: { type: 'pr', labels: ['validation_failed'] },
+                           localAction: 'update_branch', limit: 5, id: 'park-reset' };
+        var items = function () {
+            return [escItem({ labels: ['pr_approved', 'validation_failed'] })];
+        };
+        var stderrByPath = {};
+        var cloneCommands = [];
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': CONFIG_1106 },
+            github: { items: items, prComments: [],
+                      pr: { number: 1591, head: { sha: HEAD_OLD } } },
+            captureConsole: true,
+            extraMocks: {
+                file_read: function (readOpts) {
+                    var p = readOpts.path;
+                    if (stderrByPath[p] !== undefined) return stderrByPath[p];
+                    if (p.indexOf('.dmtools/config') !== -1) return CONFIG_1106;
+                    return null;
+                }
+            },
+            onCliExecute: function (cmdOpts) {
+                var cmd = cmdOpts.command;
+                if (cmd.indexOf('gh repo clone ') !== -1) {
+                    var m = STDERR_PATH_RE.exec(cmd);
+                    cloneCommands.push(cmd);
+                    if (m) stderrByPath[m[1]] = workflowsStderr();
+                    throw new Error('Tool execution failed: ' + workflowsStderr());
+                }
+                return '';
+            }
+        });
+        sm.action(jobParams({ rules: [doubleRule, RULE_1106] }));
+
+        // Rule 1: silent + escalated; rule 2 re-runs the (deterministically
+        // refused) silent refresh but its escalation is claim-blocked. The
+        // AC constrains the ESCALATED push: exactly one per PR per tick.
+        assert.equal(cloneCommands.length, 3,
+            'rule 1: silent + escalated; rule 2: silent retry only');
+        var swaps = sm.capturedEnvSets.filter(function (e) {
+            return e.name === 'GH_TOKEN' && e.value === SOURCE_TOK;
+        });
+        assert.equal(swaps.length, 1, 'AC1: exactly ONE escalated push (sourceToken) in the tick');
+        var parks = sm.capturedPrComments.filter(function (c) {
+            return String(c.body || '').indexOf('workflow-write park (gh-1106)') !== -1;
+        });
+        assert.equal(parks.length, 1, 'exactly one distinct park marker in the tick');
+    });
+
+    test('REG-1: a non-workflows fork refusal with escalation wired stays byte-identical (no env reads, no park)', function () {
+        var sm = escalationSm(null, [new Error('Tool execution failed: ! [remote rejected] HEAD:' + BRANCH +
+            ' (protected branch hook declined)')]);
+        sm.action(jobParams());
+
+        assert.equal(sm.cloneCommands.length, 1);
+        assert.equal(sm.capturedEnvSets.length, 0);
+        assert.equal(trailMarkers(sm.capturedPrComments).length, 1);
+        assert.equal(sm.capturedPrLabelAdds.length, 0);
     });
 });
