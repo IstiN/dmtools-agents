@@ -966,6 +966,7 @@ module.exports = {
     getPRDetails: getPRDetails,
     fetchDiscussionsAndRawData: fetchDiscussionsAndRawData,
     detectFailedChecks: detectFailedChecks,
+    _runsOfPayload: runsOfPayload,
 
     // Pure helpers extracted from detectFailedChecks (gh-1007, extended by
     // gh-1045) — exported for unit testing. gh-1045 DELIBERATELY changed

@@ -2552,3 +2552,25 @@ suite('githubHelpers.fetchDiscussionsAndRawData — dmtools: machine markers (na
         assert.ok(!res.markdown || res.markdown.indexOf('Naked-PR reconciliation') === -1, 'not in pr_discussions.md');
     });
 });
+
+suite('githubHelpers.runsOfPayload — payload shapes (orphan fallback)', function() {
+    var h = loadGithubHelpers();
+    test('array payload is returned as-is', function() {
+        assert.equal(h._runsOfPayload([{ id: 1 }]).length, 1);
+    });
+    test('workflow_runs and workflowRuns objects', function() {
+        assert.equal(h._runsOfPayload({ workflow_runs: [{ id: 1 }, { id: 2 }] }).length, 2);
+        assert.equal(h._runsOfPayload({ workflowRuns: [{ id: 3 }] })[0].id, 3);
+    });
+    test('JSON string payloads (plain and tool-result wrapped)', function() {
+        assert.equal(h._runsOfPayload(JSON.stringify({ workflow_runs: [{ id: 4 }] }))[0].id, 4);
+        assert.equal(h._runsOfPayload(JSON.stringify({ result: [{ id: 5 }] }))[0].id, 5);
+        assert.equal(h._runsOfPayload(JSON.stringify({ result: JSON.stringify([{ id: 6 }]) }))[0].id, 6);
+    });
+    test('garbage, null and runless objects yield []', function() {
+        assert.equal(h._runsOfPayload('not json').length, 0);
+        assert.equal(h._runsOfPayload(JSON.stringify({ result: 'nope{' })).length, 0);
+        assert.equal(h._runsOfPayload(null).length, 0);
+        assert.equal(h._runsOfPayload({ other: 1 }).length, 0);
+    });
+});
