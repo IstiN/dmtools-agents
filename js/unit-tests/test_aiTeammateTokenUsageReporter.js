@@ -1406,30 +1406,43 @@ suite('aiTeammateTokenUsageReporter publishTokensMap (gh-1108 IT-pub-1)', functi
     var MAP = { 'pr-31': [{ leg: 'review', at: '2026-10-13T09:00:00Z',
         prompt: 2000, completion: 300, total: 2300, cacheRead: 1500, model: '' }] };
 
+    function stubGhPut(state, map) {
+        state.puts += 1;
+        if (state.puts <= (map.failPuts || 0)) {
+            state.failed += 1;
+            throw new Error('gh: 409 sha was not supplied');
+        }
+        return { output: '' };
+    }
+
+    function stubGhSha(map) {
+        if (map.sha == null) throw new Error('gh: Not Found (404)');
+        return { output: map.sha };
+    }
+
+    function stubGhBody(map) {
+        if (map.body == null) throw new Error('gh: Not Found (404)');
+        return { output: map.body };
+    }
+
+    function stubGhCommand(state, map, cmd) {
+        if (cmd.indexOf('-X PUT') !== -1) return stubGhPut(state, map);
+        if (cmd.indexOf('--jq .sha') !== -1) return stubGhSha(map);
+        if (cmd.indexOf('base64 -d') !== -1) return stubGhBody(map);
+        return { output: '' }; // bootstrap ref POST
+    }
+
     function publishExec(map) {
+        // map: { sha: '…', body: '…', failPuts: N } — failPuts PUTs throw
+        // before succeeding, mirroring the Contents API 409 dance between
+        // concurrent publishers.
         var state = { commands: [], puts: 0, failed: 0 };
         return {
             state: state,
             exec: function (args) {
                 var cmd = String((args && args.command) || args || '');
                 state.commands.push(cmd);
-                if (cmd.indexOf('-X PUT') !== -1) {
-                    state.puts++;
-                    if (state.puts <= (map.failPuts || 0)) {
-                        state.failed++;
-                        throw new Error('gh: 409 sha was not supplied');
-                    }
-                    return { output: '' };
-                }
-                if (cmd.indexOf('--jq .sha') !== -1) {
-                    if (map.sha == null) throw new Error('gh: Not Found (404)');
-                    return { output: map.sha };
-                }
-                if (cmd.indexOf('base64 -d') !== -1) {
-                    if (map.body == null) throw new Error('gh: Not Found (404)');
-                    return { output: map.body };
-                }
-                return { output: '' }; // bootstrap ref POST
+                return stubGhCommand(state, map, cmd);
             }
         };
     }
