@@ -34,6 +34,7 @@
         "js/unit-tests/test_reworkConsumption.js",
         "js/unit-tests/test_reviewThreadInventory.js",
         "js/unit-tests/test_reworkLoopGuard.js",
+        "js/unit-tests/test_nakedPrReconcile.js",
         "js/unit-tests/test_validationLiveness.js",
         "js/unit-tests/test_checkRunZombies.js",
         "js/unit-tests/test_triggerFailures.js",
