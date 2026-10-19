@@ -670,14 +670,12 @@ function readResponseMd(ticketKey) {
  * applicable / did not land — the caller then continues into its existing
  * cold-reset path unchanged.
  */
-function recoverMissingResponse(ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage, ctx) {
-    // gh-1087 AC1/AC2: quota classification runs BEFORE everything else —
-    // before the fatal-environment throw and before the bounded resume. A
-    // resume against an exhausted provider chain is a guaranteed 403 burn,
-    // and a quota wall is not a CLI-environment defect. Optional ctx (the
-    // caller's development context) lets the park label the open PR and
-    // resolve jobParams config; without it a minimal context is derived.
-    var quotaCtx = ctx || {
+// gh-1087: the caller's development context for the quota gate — the park
+// labels the open PR and resolves jobParams config. Callers without a full
+// ctx (standalone recovery) get a minimal derived one.
+function quotaContextOf(ctx, ticketKey, customParams) {
+    if (ctx) return ctx;
+    return {
         ticketKey: ticketKey,
         customParams: customParams,
         metadata: null,
@@ -685,12 +683,24 @@ function recoverMissingResponse(ticketKey, customParams, developmentSummary, cli
         branchName: null,
         jobParams: {}
     };
-    quotaCtx.cliErrorMessage = cliErrorMessage;
-    quotaCtx.developmentSummary = developmentSummary;
+}
+
+// gh-1087 AC1/AC2 gate: runs BEFORE the fatal-environment throw and the
+// bounded resume — a resume against an exhausted provider chain is a
+// guaranteed 403 burn, and a quota wall is not a CLI-environment defect.
+// No-op unless the failure text classifies as quota_exhausted.
+function quotaParkGate(quotaCtx) {
     var quota = quotaClassificationOf(quotaCtx);
     if (quota) {
         parkQuotaExhaustedDevelopment(quotaCtx, quota);
     }
+}
+
+function recoverMissingResponse(ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage, ctx) {
+    var quotaCtx = quotaContextOf(ctx, ticketKey, customParams);
+    quotaCtx.cliErrorMessage = cliErrorMessage;
+    quotaCtx.developmentSummary = developmentSummary;
+    quotaParkGate(quotaCtx);
     if (isFatalCliEnvironmentError(developmentSummary, cliHasFatalError)) {
         console.error('CLI/environment failure detected (e.g. AI CLI binary missing from PATH, or a fatal provider/network error reported by dmtools) — failing the job explicitly instead of resetting for retry.');
         throwFatalCliEnvironmentError(ticketKey, cliErrorMessage || developmentSummary);
@@ -1232,6 +1242,20 @@ function quotaClassificationOf(ctx) {
  * The run still fails loudly (marked quotaPark error, same dead-letter
  * contract as gh-742) so a parked no-PR leg never reads as green success.
  */
+// gh-1087 AC2: the open PR for the leg's branch (if any) carries the park
+// label too, so the PR reads parked to humans and review automation.
+function parkLabelOpenPr(parkLabel, branchName) {
+    try {
+        var pr = findOpenPrForBranch(_scm, branchName);
+        if (pr && pr.number) {
+            _scm.addLabel(pr.number, parkLabel);
+            console.log('🅿️  Added quota park label', parkLabel, 'to PR #' + pr.number);
+        }
+    } catch (e) {
+        console.warn('Failed to label the open PR with the quota park label (non-fatal):', e);
+    }
+}
+
 function parkQuotaExhaustedDevelopment(ctx, classification) {
     var jobParams = ctx.jobParams || {};
     var parkLabel = quotaBreaker.parkLabelOf(jobParams);
@@ -1246,15 +1270,7 @@ function parkQuotaExhaustedDevelopment(ctx, classification) {
     } catch (e) {
         console.warn('Failed to add quota park label ' + parkLabel + ':', e);
     }
-    try {
-        var pr = findOpenPrForBranch(_scm, ctx.expectedBranch || ctx.branchName);
-        if (pr && pr.number) {
-            _scm.addLabel(pr.number, parkLabel);
-            console.log('🅿️  Added quota park label', parkLabel, 'to PR #' + pr.number);
-        }
-    } catch (e) {
-        console.warn('Failed to label the open PR with the quota park label (non-fatal):', e);
-    }
+    parkLabelOpenPr(parkLabel, ctx.expectedBranch || ctx.branchName);
     removeWipLabelQuietly(ctx.ticketKey, wipLabelFor(ctx.metadata));
     console.log('🅿️  Quota-exhausted leg parked — ticket NOT reset; the SM will skip the', parkLabel,
         'lane until the quota window resets (probe every', everyN, 'ticks) or a human removes the label.');

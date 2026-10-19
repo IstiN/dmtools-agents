@@ -152,7 +152,7 @@ suite('quotaCircuitBreaker > config readers + probe cadence (AC3)', function () 
         // an operator override with an inline credential must be masked
         var leaked = quotaBreaker.redactCommand(
             'curl -H "Authorization: Bearer sk-live-1234567890abcdef" https://api.example.com');
-        assert.contains(leaked, 'Authorization: ***');
+        assert.contains(leaked, 'Bearer ***');
         assert.notContains(leaked, 'sk-live-1234567890abcdef');
         // header-shaped and key=value secrets are masked too
         var keyed = quotaBreaker.redactCommand('my-ping --api-key=AKIAIOSFODNN7EXAMPLE');
@@ -365,7 +365,7 @@ suite('quotaParkProbe > bounded probe + un-park (UT-2, AC2/AC3)', function () {
         }
         var joined = logs.join('\n');
         assert.notContains(joined, 'sk-live-1234567890abcdef', 'the raw credential must never be logged');
-        assert.contains(joined, 'Authorization: ***');
+        assert.contains(joined, 'Bearer ***');
         assert.contains(joined, 'Running probe #1');
     });
 

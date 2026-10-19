@@ -124,7 +124,7 @@ function probeCommandOf(jobParams) {
 // Sensitive header / credential shapes that must never reach SM job logs or
 // CI artifacts when an operator overrides jobParams.quotaProbeCommand with an
 // inline secret (e.g. -H "Authorization: Bearer sk-...").
-var SENSITIVE_VALUE_RE = /((?:authorization|x-api-key|api[-_]?key|token|secret)[\w-]*\s*[:=]\s*"?)([^'"\s]+)("?)/gi;
+var SENSITIVE_VALUE_RE = /((?:authorization|x-api-key|api[-_]?key|token|secret)[\w-]*\s*[:=]\s*(?:bearer\s+)?"?)([^\s'"]+)("?)/gi;
 var ENV_REF_RE = /^\$[\w{}]/;
 
 /**
@@ -186,6 +186,11 @@ function countProbeMarkers(bodies) {
     return maxMarkerNumber(bodies, /^\s*quota-probe:\s*(\d+)\s*$/gm);
 }
 
+function labelsOf(ticket) {
+    return (ticket && ticket.labels) ||
+        (ticket && ticket.fields && ticket.fields.labels) || [];
+}
+
 /**
  * gh-1087 AC2/AC3 — the SM dispatch-lane exclusion. A ticket carrying the
  * park label is skipped by EVERY rule except the quota-probe rule itself
@@ -196,9 +201,7 @@ function shouldSkipForQuotaPark(ticket, rule, jobParams) {
     var label = parkLabelOf(jobParams);
     if (!label) return false;
     if (rule && rule.quotaParkProbe === true) return false;
-    var labels = (ticket && ticket.labels) ||
-        (ticket && ticket.fields && ticket.fields.labels) || [];
-    return labels.indexOf(label) !== -1;
+    return labelsOf(ticket).indexOf(label) !== -1;
 }
 
 function parkComment(m, classification, parkLabel, everyN) {
@@ -236,8 +239,11 @@ module.exports = {
     parkLabelOf: parkLabelOf,
     probeEveryOf: probeEveryOf,
     probeCommandOf: probeCommandOf,
+    redactCommand: redactCommand,
     probeDue: probeDue,
+    tickMarkerLine: tickMarkerLine,
     probeMarkerLine: probeMarkerLine,
+    countTickMarkers: countTickMarkers,
     countProbeMarkers: countProbeMarkers,
     shouldSkipForQuotaPark: shouldSkipForQuotaPark,
     parkComment: parkComment,

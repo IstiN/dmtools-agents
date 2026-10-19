@@ -347,6 +347,20 @@ function completeAlreadyFixedPath(ticketKey, alreadyFixed, hasCodeGraph, tracker
  * wall. The SM dispatch lanes skip the park label; a bounded probe or a
  * human lifts it (AC3).
  */
+// gh-1087 AC2: the open PR for the branch (if any) carries the park label
+// too, so the PR reads parked to humans and review automation.
+function parkLabelOpenPr(parkLabel, config, ticket, scm) {
+    try {
+        var pr = findOpenPrForBranch(scm.listPrs('open'), configLoader.resolveBranchName(config, ticket, 'development'));
+        if (pr && pr.number) {
+            scm.addLabel(pr.number, parkLabel);
+            console.log('🅿️  Added quota park label', parkLabel, 'to PR #' + pr.number);
+        }
+    } catch (e) {
+        console.warn('Could not label the open PR with the quota park label (non-fatal):', e);
+    }
+}
+
 function parkQuotaPath(ticketKey, config, ticket, tracker, params, scm, classification) {
     var jobParams = (params && params.jobParams) || {};
     var parkLabel = quotaBreaker.parkLabelOf(jobParams);
@@ -361,15 +375,7 @@ function parkQuotaPath(ticketKey, config, ticket, tracker, params, scm, classifi
     } catch (e) {
         console.warn('Failed to add quota park label ' + parkLabel + ':', e);
     }
-    try {
-        var pr = findOpenPrForBranch(scm.listPrs('open'), configLoader.resolveBranchName(config, ticket, 'development'));
-        if (pr && pr.number) {
-            scm.addLabel(pr.number, parkLabel);
-            console.log('🅿️  Added quota park label', parkLabel, 'to PR #' + pr.number);
-        }
-    } catch (e) {
-        console.warn('Could not label the open PR with the quota park label (non-fatal):', e);
-    }
+    parkLabelOpenPr(parkLabel, config, ticket, scm);
     console.log('🅿️  Quota-exhausted leg parked — ticket NOT reset; the SM will skip the', parkLabel,
         'lane until the quota window resets (probe every', everyN, 'ticks) or a human removes the label.');
 }
@@ -386,37 +392,8 @@ function parkQuotaPath(ticketKey, config, ticket, tracker, params, scm, classifi
  * the run fails via the shared throwQuotaPark marker instead.
  */
 function completeInterruptedPath(ticketKey, hasGitChanges, cliTool, config, ticket, tracker, statuses, params, scm, quotaClassification) {
-    if (hasGitChanges) {
-        console.log('Partial git changes found — pushing to preserve analysis work...');
-        try {
-            const currentBranch = cleanCliOutput(cliTool({ command: 'git branch --show-current' }));
-            const expectedBranch = configLoader.resolveBranchName(config, ticket, 'development');
-            const baseBranch = (config.git && config.git.baseBranch) || 'main';
-            const plan = decidePartialPush(currentBranch, expectedBranch, baseBranch);
-            if (plan) {
-                if (plan.needsCheckout) {
-                    console.log('Switching partial work from ' + (currentBranch || '(unknown)') +
-                        ' to development branch: ' + plan.branch);
-                    cliTool({ command: 'git checkout -B ' + plan.branch });
-                }
-                pushPartialWork(cliTool, config, ticketKey, plan);
-            }
-        } catch (pushErr) {
-            console.warn('Could not push partial work:', pushErr);
-        }
-    } else {
-        console.log('No git changes — nothing to push.');
-    }
-
-    if (quotaClassification && quotaClassification.kind === 'quota_exhausted') {
-        parkQuotaPath(ticketKey, config, ticket, tracker, params, scm, quotaClassification);
-        removeLabels(ticketKey, params, tracker);
-        // gh-1087: parked (not reset) — fail the run with the shared marked
-        // error so the parked no-PR leg is a visible dead letter, never a
-        // green leg that arms review downstream.
-        developTicket.throwQuotaPark(ticketKey, quotaBreaker.parkLabelOf((params && params.jobParams) || {}));
-    }
-
+    pushPreservedAnalysisWork(hasGitChanges, cliTool, config, ticket, ticketKey);
+    parkQuotaInterruptedGate(ticketKey, config, ticket, tracker, params, scm, quotaClassification);
     resetTicketForRetry(ticketKey, hasGitChanges, tracker, statuses);
 
     removeLabels(ticketKey, params, tracker);
@@ -427,6 +404,75 @@ function completeInterruptedPath(ticketKey, hasGitChanges, cliTool, config, tick
     // developTicketAndCreatePR (required above) so the
     // marker/message contract lives in exactly one place.
     developTicket.throwInterruptedReset(ticketKey);
+}
+
+// gh-1003: the partial-work push from the interrupted path — the branch
+// probe + decidePartialPush plan live in executePartialPushPlan.
+function pushPreservedAnalysisWork(hasGitChanges, cliTool, config, ticket, ticketKey) {
+    if (!hasGitChanges) {
+        console.log('No git changes — nothing to push.');
+        return;
+    }
+    console.log('Partial git changes found — pushing to preserve analysis work...');
+    try {
+        const currentBranch = cleanCliOutput(cliTool({ command: 'git branch --show-current' }));
+        const expectedBranch = configLoader.resolveBranchName(config, ticket, 'development');
+        const baseBranch = (config.git && config.git.baseBranch) || 'main';
+        executePartialPushPlan(cliTool, config, ticketKey, decidePartialPush(currentBranch, expectedBranch, baseBranch), currentBranch);
+    } catch (pushErr) {
+        console.warn('Could not push partial work:', pushErr);
+    }
+}
+
+function executePartialPushPlan(cliTool, config, ticketKey, plan, currentBranch) {
+    if (!plan) {
+        return;
+    }
+    if (plan.needsCheckout) {
+        console.log('Switching partial work from ' + (currentBranch || '(unknown)') +
+            ' to development branch: ' + plan.branch);
+        cliTool({ command: 'git checkout -B ' + plan.branch });
+    }
+    pushPartialWork(cliTool, config, ticketKey, plan);
+}
+
+/**
+ * gh-1087 AC1/AC2: the quota variant of the interrupted-leg completion —
+ * when the leg's failure text classifies as quota_exhausted the ticket is
+ * PARKED (label + comment + NO status reset) and the run fails with the
+ * shared quotaPark marker (same dead-letter contract as gh-742). Transient
+ * or unknown classifications are a no-op here (the classic gh-742 reset
+ * below handles them).
+ */
+function parkQuotaInterruptedGate(ticketKey, config, ticket, tracker, params, scm, quotaClassification) {
+    if (!quotaClassification || quotaClassification.kind !== 'quota_exhausted') {
+        return;
+    }
+    parkQuotaPath(ticketKey, config, ticket, tracker, params, scm, quotaClassification);
+    removeLabels(ticketKey, params, tracker);
+    developTicket.throwQuotaPark(ticketKey, quotaBreaker.parkLabelOf((params && params.jobParams) || {}));
+}
+
+/**
+ * gh-1087: the development context the delegated quota gate needs — the park
+ * labels the open PR and resolves jobParams (park label / probe cadence
+ * config). The CLI outcome signals are classified by the shared text
+ * contract so both legs classify byte-identically.
+ */
+function quotaGateContextOf(actualParams, params, ticketKey, customParams, expectedBranch) {
+    return {
+        ticketKey: ticketKey,
+        customParams: customParams,
+        metadata: actualParams.metadata || null,
+        expectedBranch: expectedBranch,
+        branchName: null,
+        jobParams: params.jobParams || {}
+    };
+}
+
+function quotaFailureClassificationOf(actualParams) {
+    return quotaBreaker.classifyFailure(
+        developTicket.classifyInterruptedText(actualParams.currentCliErrorMessage || null, actualParams.response || ''));
 }
 
 /**
@@ -562,22 +608,14 @@ function action(params) {
                 // gh-1087: context for the delegated quota gate — the park
                 // labels the open PR and resolves jobParams (park label /
                 // probe cadence config).
-                {
-                    ticketKey: ticketKey,
-                    customParams: _customParams,
-                    metadata: actualParams.metadata || null,
-                    expectedBranch: expectedBranch,
-                    branchName: null,
-                    jobParams: params.jobParams || {}
-                });
+                quotaGateContextOf(actualParams, params, ticketKey, _customParams, expectedBranch));
             hasResponseMd = !!(recovered && recovered.trim());
         }
 
         // gh-1087 AC1: classify the leg's failure text BEFORE the interrupted
         // path decides — a hard quota failure parks the lane instead of
         // resetting for a guaranteed-fail retry (transient keeps gh-742).
-        var quotaCls = quotaBreaker.classifyFailure(
-            developTicket.classifyInterruptedText(actualParams.currentCliErrorMessage || null, actualParams.response || ''));
+        var quotaCls = quotaFailureClassificationOf(actualParams);
 
         if (!hasResponseMd) {
             // CLI agent did not finish (rate limit / crash). Push whatever partial work exists
