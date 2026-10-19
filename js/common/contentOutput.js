@@ -95,12 +95,16 @@ function resolveConfig(params, defaults) {
     return cfg;
 }
 
+// gh-1112: 'wiki' is a provider-neutral alias of 'confluence' (a future wiki
+// backend behind publishPage keeps child agent configs stable) and
+// 'tracker_field' is the neutral alias of 'jira_field'. 'both' keeps meaning
+// "field AND page" regardless of the aliases used.
 function isConfluenceTarget(cfg) {
-    return cfg.target === 'confluence' || cfg.target === 'both';
+    return cfg.target === 'confluence' || cfg.target === 'wiki' || cfg.target === 'both';
 }
 
 function isJiraFieldTarget(cfg) {
-    return cfg.target === 'jira_field' || cfg.target === 'both';
+    return cfg.target === 'jira_field' || cfg.target === 'tracker_field' || cfg.target === 'both';
 }
 
 // ── Jira field write ─────────────────────────────────────────────────────────

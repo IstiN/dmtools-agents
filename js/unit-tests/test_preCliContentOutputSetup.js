@@ -14,11 +14,12 @@
  */
 
 function makeStep(name, behavior) {
+    var calls = [];
     return {
         name: name,
-        calls: [],
+        calls: calls,
         action: function(params) {
-            this.calls.push(params || null);
+            calls.push(params || null);
             if (behavior && behavior.throws) {
                 throw new Error(name + ' exploded');
             }
