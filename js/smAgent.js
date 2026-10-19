@@ -206,6 +206,15 @@ var branchLegGuardModule = require('./common/branchLegGuard.js');
 // Reset per tick in action() (the tickReworkLatch pattern).
 var tickParkedRecorded = null;
 
+// gh-1106: PR numbers whose workflow-write escalation already ran THIS
+// tick (one escalated attempt per PR per tick — AC1). A parked BEHIND
+// fork matches BOTH park-reset and silent-update-behind, and the
+// query-time label snapshot cannot see the sibling rule's park (the
+// tickParkedRecorded problem) — without the claim, one tick would fire
+// two silent + two escalated pushes at the same fork. Reset per tick in
+// action() (the tickParkedRecorded pattern).
+var tickWorkflowEscalations = null;
+
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
 // gh-806: the rework in-flight latch, one map per tick — lazily loaded from
@@ -2469,14 +2478,167 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             var stderrFile = silentUpdateStderrFile(branchName);
             try {
                 forkSilentUpdateBranch(branchName, forkFull, stderrFile);
+                return;
             } catch (eFork) {
+                var tail = readSilentUpdateStderrTail(stderrFile);
+                // gh-1106 AC1/AC2: classify BEFORE the gh-1070 trail — a
+                // workflows-permission rejection is a deterministic token-
+                // capability fact (GITHUB_TOKEN can never create or update
+                // workflow files), never a maintainer-edit revocation. It
+                // escalates once with the workflow-write token and is NEVER
+                // counted on the 3-strike trail. Every other class keeps
+                // the gh-1074 surface byte-identical (REG-1).
+                if (validationLivenessModule.isWorkflowsPermissionRejection(tail)) {
+                    if (escalateForkSilentUpdate(branchName, forkFull)) return;
+                    throw silentUpdateErrorWithTail(eFork, tail);
+                }
                 // gh-1074: same failure surface as the base lane — the
                 // marker gains the rejection reason, the propagated error
                 // carries the redacted stderr tail.
-                var tail = readSilentUpdateStderrTail(stderrFile);
                 recordForkSilentUpdateFailure(
                     validationLivenessModule.silentUpdateRejectionReason(tail));
                 throw silentUpdateErrorWithTail(eFork, tail);
+            }
+        }
+
+        // ── gh-1106: the workflow-write escalation ────────────────────
+        // Live fa PR #1591 (2026-10-19 17:16Z): every fork silent-update
+        // push touching `.github/workflows/*` is refused with the silent
+        // token — no `permissions:` key can grant `workflows` to a
+        // GITHUB_TOKEN, so the 3-strike trail ended in a guest park the
+        // author cannot clear (no push → park holds → no push). The cure:
+        // ONE escalated push with the workflow-write token
+        // (jobParams.sourceToken — the App installation token with
+        // "Workflows: write", or a PAT with the `workflow` scope), same
+        // token-in-env pattern as every silent-op swap: GH_TOKEN is
+        // swapped, ${GH_TOKEN} interpolates in the child push URL, and
+        // the swap is undone in finally even on exception (AC7). Success
+        // moves the head and the standard lanes take over (gh-994 park
+        // reset + validation re-dispatch — AC4). A second workflows-class
+        // refusal parks with a DISTINCT reason naming the missing
+        // capability (AC3) — not counted on the gh-1070 trail (AC2).
+        function parkForkWorkflowWrite() {
+            // gh-1070 same-tick double-park guard: a red-head park fired
+            // earlier in THIS pass already parked the PR — one comment.
+            if (parkedRedHeadThisPass) return;
+            var head = resolveHeadSha(effectiveRepoInfo, ticket) || 'unknown';
+            var marker = validationLivenessModule.workflowWriteParkLine(
+                head, new Date().toISOString());
+            // One marker per parked head (ghost-guard dedupe parity): the
+            // doomed retry stays every-tick (self-healing when the token
+            // capability arrives), the distinct reason posts once. A
+            // degraded comment read posts anyway — a duplicate marker is
+            // audit noise, a missing one leaves the PR parked on the WRONG
+            // "edits revoked" wording forever.
+            var alreadyMarked = false;
+            try {
+                var raw = github_get_pr_comments({
+                    workspace: effectiveRepoInfo.owner,
+                    repository: effectiveRepoInfo.repo,
+                    pullRequestId: ticket.prNumber
+                });
+                var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
+                var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+                alreadyMarked = validationLivenessModule.workflowWriteParkMarked(
+                    list.map(function (c) { return String((c && c.body) || ''); }), head);
+            } catch (eRead) { alreadyMarked = false; }
+            if (!alreadyMarked) {
+                try {
+                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(
+                        ticket.prNumber,
+                        '🛑 validation_failed — fork park (gh-1106): the silent-update of main into ' +
+                        'this branch was refused because the token pushing it cannot create or update ' +
+                        'workflow files — a platform capability, not a maintainer decision. The escalated ' +
+                        'push with the workflow-write token (sourceToken) was refused too, so no token ' +
+                        'available to this tick can finish the update. Grant the App "Workflows: write" ' +
+                        '(or set sourceToken to a PAT with the `workflow` scope) — the machine lifts this ' +
+                        'park itself on the first successful escalation; ANY head-moving push clears it.\n' +
+                        marker);
+                } catch (ePost) {
+                    console.warn('  ⚠️  ' + key + ' workflow-write park comment failed: ' +
+                                 (ePost.message || ePost));
+                }
+            }
+            if ((ticket.labels || []).indexOf('validation_failed') === -1) {
+                try {
+                    githubTracker(effectiveRepoInfo.owner,
+                        effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'validation_failed');
+                } catch (eLabel) {
+                    console.warn('  ⚠️  ' + key + ' park label failed: ' + (eLabel.message || eLabel));
+                }
+            }
+            console.error('  ❌ ' + key + ' fork silent-update needs a workflow-write token — ' +
+                'parked with a distinct reason, NOT counted on the gh-1070 trail (gh-1106 AC3)');
+        }
+
+        function escalateForkSilentUpdate(branchName, forkFull) {
+            // Returns true when the escalated push moved the head.
+            if (DRY) {
+                // E3: dry-run means NO side effects — the planned
+                // escalation is logged, nothing pushed, nothing parked.
+                console.log('  🧪 [dry] ' + key + ' workflow-write escalation planned ' +
+                    '(push ' + forkFull + ' with sourceToken) — skipped');
+                return false;
+            }
+            if (tickWorkflowEscalations && tickWorkflowEscalations[ticket.prNumber]) {
+                // AC1: one escalated attempt per PR per tick — a sibling
+                // rule already claimed this PR earlier in the pass.
+                console.warn('  ⏭️  ' + key + ' workflow-write escalation already ' +
+                    'attempted this tick — deferred to the next tick');
+                return false;
+            }
+            if (tickWorkflowEscalations) {
+                tickWorkflowEscalations[ticket.prNumber] = true; // claim before any I/O
+            }
+            var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
+            if (!sourceTok) {
+                // E1: no workflow-capable token is wired — the capability
+                // gap is the finding. Distinct park, one marker, no trail,
+                // no infinite retries.
+                console.warn('  ⚠️  ' + key + ' no sourceToken on the tick — ' +
+                    'cannot escalate the workflows-permission rejection');
+                parkForkWorkflowWrite();
+                return false;
+            }
+            var silentTok = (RUN_JOB_PARAMS || {}).silentToken;
+            var escStderrFile = silentUpdateStderrFile(branchName);
+            var swapped = false;
+            try {
+                try {
+                    set_env_variable('GH_TOKEN', sourceTok);
+                    swapped = true;
+                } catch (eSwap) {
+                    console.warn('  ⚠️  ' + key + ' escalation token swap failed — ' +
+                        'the push retries with the silent token (will be refused): ' +
+                        (eSwap.message || eSwap));
+                }
+                try {
+                    // The identical chain (clone → fetch head → merge main →
+                    // push the fork token URL) — ONLY the child env differs,
+                    // so the secret never enters the script source or logs.
+                    forkSilentUpdateBranch(branchName, forkFull, escStderrFile);
+                    console.log('  🔐 ' + key + ' workflow-write escalation succeeded — ' +
+                        'fork head moved (gh-1106 AC1); the park reset and validation ' +
+                        're-dispatch ride the standard lanes (AC4)');
+                    return true;
+                } finally {
+                    if (swapped) {
+                        try { set_env_variable('GH_TOKEN', silentTok || sourceTok); } catch (eRes) {} // AC7: restored even on exception
+                    }
+                }
+            } catch (eEsc) {
+                var escTail = readSilentUpdateStderrTail(escStderrFile);
+                if (validationLivenessModule.isWorkflowsPermissionRejection(escTail)) {
+                    // AC3: the escalation token ALSO lacks workflow write.
+                    parkForkWorkflowWrite();
+                    return false;
+                }
+                // A different class on the escalated attempt (network flake,
+                // race) is a genuine push failure again — the trail counts it
+                // exactly like the pre-gh-1106 surface.
+                recordForkSilentUpdateFailure(
+                    validationLivenessModule.silentUpdateRejectionReason(escTail));
+                return false;
             }
         }
 
@@ -8125,6 +8287,7 @@ function action(params) {
     tickZombiesSwept = 0; // gh-998 (I5): fresh per-tick sweep counter
     tickFreshResets = {}; // gh-1101 follow-up: one fresh-sha reset per PR per tick
     tickParkedRecorded = {}; // gh-922: fresh same-tick dedup window (see recordDispatchFailure)
+    tickWorkflowEscalations = {}; // gh-1106: one workflow-write escalation per PR per tick
     if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
     var rules = p.rules;
 
