@@ -51,8 +51,7 @@ _Fetch Epics To Input Pre-CLI Action_
 
 - Source: `agents/js/fetchEpicsToInput.js`
 - Writes:
-  - `input/<KEY>/existing_epics.json`
-  - `input/<KEY>/existing_stories.json`
+  - `input/<KEY>/`
 - Parameters (customParams):
   - `adoTextFormat`
   - `customStatuses`
