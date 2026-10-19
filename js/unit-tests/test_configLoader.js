@@ -1371,6 +1371,43 @@ suite('configLoader customParams visibility for agentDocGenerator', function() {
     });
 });
 
+suite('agentDocGenerator static-analysis contract — intake write artifacts (docs-freshness)', function() {
+
+    // js/agentDocGenerator.js discovers written artifacts with literal-path
+    // regexes over the action source (the folder + 'literal' variant). A write
+    // path assembled from a spec variable (`folder + '/' + spec.fileName`)
+    // matches only the bare-slash capture and collapses the generated
+    // "Writes" list to `input/<KEY>/` — stale docs/agents/generated/intake.md
+    // → red docs-freshness CI. Keep every concrete artifact file name as a
+    // literal inside the file_write call, same contract as the customParams
+    // keys pinned above.
+    function generatorWriteArtifacts(src) {
+        var re = /file_write\s*\(\s*(?:inputFolder|inputFolderPath|folder)\s*\+\s*['"`]([^'"`\n]+)['"`]/g;
+        var found = [];
+        var m;
+        while ((m = re.exec(src)) !== null) {
+            found.push('input/<KEY>' + m[1]);
+        }
+        return found.sort();
+    }
+
+    test('fetchEpicsToInput.js keeps both intake artifacts statically visible', function() {
+        var writes = generatorWriteArtifacts(file_read({ path: 'js/fetchEpicsToInput.js' }));
+        assert.deepEqual(writes, [
+            'input/<KEY>/existing_epics.json',
+            'input/<KEY>/existing_stories.json'
+        ]);
+    });
+
+    test('intakePreAction.js keeps both intake artifacts statically visible', function() {
+        var writes = generatorWriteArtifacts(file_read({ path: 'js/intakePreAction.js' }));
+        assert.deepEqual(writes, [
+            'input/<KEY>/existing_epics.json',
+            'input/<KEY>/existing_stories.json'
+        ]);
+    });
+});
+
 // ── {status.KEY[:Literal]} placeholders (agents#855) ──────────────────────────
 
 suite('configLoader.interpolateJql — status placeholders (agents#855)', function() {
