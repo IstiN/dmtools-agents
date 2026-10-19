@@ -360,6 +360,12 @@ function makeSmAgent(opts) {
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
             './common/triggerFailures.js': loadModule('js/common/triggerFailures.js', makeRequire({}), {}),
+            // gh-1075: the real fork-dispatch module (its validationLiveness
+            // dependency is pure) — fork PRs reroute onto the base machine
+            // ref with a refs/pull/<N>/head checkout plan.
+            './common/forkDispatch.js': loadModule('js/common/forkDispatch.js', makeRequire({
+                './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
+            }), {}),
             './common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
             './sm/sources/githubSource.js': {
                 takeMutexTickSnapshot: function () { return null; }
@@ -7102,7 +7108,7 @@ suite('smAgent: trigger fail-open dispatch (gh-922)', function () {
         sm2.action({ jobParams: { owner: 'o', repo: 'r', machineAuthor: 'ai-teammate',
                                   rules: twoRules() } });
 
-        assert.deepEqual(parkAdds(sm2), [302],
+        assert.deepEqual(parkAdds(sm), [302],
             'exactly one validation_failed label add for the tick');
         assert.equal(bodyOf(sm2, 'parked-head: ').length, 1,
             'exactly one park comment — the stale second lane did not re-park');
@@ -14100,5 +14106,260 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         });
         assert.equal(parked.length, 1, 'exactly one guest park (the non-editable fork)');
         assert.equal(parked[0].number, 1592, 'the non-editable PR is the parked one');
+    });
+});
+
+// ── gh-1075: fork PR dispatch — base ref + refs/pull/<N>/head checkout plan ──
+// Live fa PR #1591 (YuryBY fork): the fork branch never exists in the base
+// repo, so workflow_dispatch with ref:<fork-branch> 422'd every tick and the
+// gh-922 no-ref bookkeeping (correct for same-repo heads) parked a live PR
+// after 3 failures — a fork PR was permanently undispatchable. The fix: a
+// HEAD-TARGETED dispatch for a cross-repo PR reroutes onto the base machine
+// ref ('main') with the PR number + a refs/pull/<N>/head checkout plan in
+// the run inputs (AC1); a 422 naming a fork branch is never head-dead while
+// the pull ref is fetchable (AC2); a genuinely dead fork head (unfetchable
+// pull ref) still parks via the existing no-ref path, keyed on the pull ref
+// (AC3); same-repo dispatches are byte-identical (regression guard).
+
+suite('smAgent: fork PR dispatch (gh-1075)', function () {
+
+    var BASE = 'epam/dmtools-dart';
+    var FORK = 'yuryby/dmtools-dart';
+    var BRANCH = 'fix/android-dap-home-sandbox';
+    var NO_REF_ERR = '422: No ref found for: ' + BRANCH;
+    var PULL_REF = 'refs/pull/1591/head';
+
+    // The PR-leg rule shape every review/rework lane uses: head-targeted
+    // dispatch ({branch}) with the PR number carried in inputs.
+    var LEG_RULE = { source: 'github', id: 'review-on-label-gh1075',
+        query: { type: 'pr', labels: ['agent:review'], draft: false },
+        inputs: { pr: '{prNumber}', leg: 'review' },
+        workflowRef: '{branch}', limit: 1 };
+
+    function fxConfig() {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' } };
+    }
+
+    function fxItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['agent:review'], issueNumber: null,
+                   prNumber: n, draft: false, branch: BRANCH, headRepo: FORK };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function fxSm(itemExtra, githubExtra, topExtra) {
+        var github = Object.assign({
+            items: [fxItem(1591, itemExtra)],
+            prComments: [],
+            pr: { number: 1591, head: { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } }
+        }, githubExtra || {});
+        var opts = Object.assign({ github: github }, fxConfig(), topExtra || {});
+        if (githubExtra && githubExtra.onCliExecute) {
+            opts.onCliExecute = githubExtra.onCliExecute;
+            delete github.onCliExecute;
+        }
+        return makeSmAgent(opts);
+    }
+
+    function triggerInputs(sm) {
+        return sm.capturedTriggers.length ? JSON.parse(sm.capturedTriggers[0].inputs) : null;
+    }
+
+    function parkAdds(sm) {
+        return sm.capturedPrLabelAdds.filter(function (a) {
+            return (a.labels || []).indexOf('validation_failed') !== -1;
+        });
+    }
+
+    function markerBodies(sm) {
+        return sm.capturedPrComments.filter(function (c) {
+            return String(c.body || '').indexOf('trigger-failed') !== -1;
+        }).map(function (c) { return String(c.body); });
+    }
+
+    // The ls-remote probe mock: fetchable pull ref by default.
+    function probeCli(fetchable) {
+        return function (cmdOpts) {
+            if (cmdOpts.command.indexOf('ls-remote') !== -1) {
+                return fetchable
+                    ? 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\t' + PULL_REF + '\n'
+                    : '';
+            }
+            return '';
+        };
+    }
+
+    test('UT-1/IT-1/AC1: fork PR — dispatch fires ONCE on the base machine ref with the checkout plan in the run inputs', function () {
+        var sm = fxSm();
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                                 machineAuthor: 'ai-teammate', rules: [LEG_RULE] } });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'the fork PR dispatches — no 422, no dead head');
+        assert.equal(sm.capturedTriggers[0].ref, 'main',
+            'the dispatch targets the base repo\'s standard machine ref, never the fork branch');
+        var inputs = triggerInputs(sm);
+        assert.equal(inputs.checkout_ref, PULL_REF,
+            'the leg\'s checkout step resolves refs/pull/<N>/head (always fetchable, even with the fork branch deleted)');
+        assert.equal(inputs.pr, '1591', 'the PR number rides the inputs (AC1)');
+        assert.equal(inputs.leg, 'review', 'the rule inputs are otherwise untouched');
+        assert.deepEqual(parkAdds(sm), [], 'no park labels on the happy path');
+        assert.deepEqual(sm.capturedPrComments, [], 'no trigger-failure markers on the happy path');
+    });
+
+    test('UT-1 regression guard: same-repo PR keeps ref:<branch> with NO checkout_ref input', function () {
+        var sm = makeSmAgent(Object.assign({
+            github: { items: [fxItem(42, { headRepo: BASE })], prComments: [] }
+        }, fxConfig()));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                                 machineAuthor: 'ai-teammate', rules: [LEG_RULE] } });
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        assert.equal(sm.capturedTriggers[0].ref, BRANCH,
+            'same-repo legs still land ON the PR head so GitHub links the run to the PR');
+        var inputs = triggerInputs(sm);
+        assert.ok(!inputs.checkout_ref, 'no new inputs for same-repo PRs');
+        assert.equal(inputs.pr, '42');
+    });
+
+    test('UT-1 regression guard: casing drift between config and head.repo.full_name keeps the same-repo dispatch', function () {
+        var sm = makeSmAgent(Object.assign({
+            github: { items: [fxItem(43, { headRepo: 'EPAM/Dmtools-Dart' })], prComments: [] }
+        }, fxConfig()));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                                 machineAuthor: 'ai-teammate', rules: [LEG_RULE] } });
+
+        assert.equal(sm.capturedTriggers[0].ref, BRANCH, 'the head-targeted same-repo dispatch is unchanged');
+        assert.ok(!triggerInputs(sm).checkout_ref, 'no checkout plan on the same-repo path');
+    });
+
+    test('AC2: a 422 naming the fork branch with a FETCHABLE pull ref is never head-dead — no markers, no park', function () {
+        var sm = makeSmAgent(Object.assign({
+            github: { items: [fxItem(1591)], prComments: [],
+                      pr: { number: 1591, head: { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } } },
+            onTrigger: function () { throw new Error(NO_REF_ERR); },
+            onCliExecute: probeCli(true)
+        }, fxConfig()));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                                 machineAuthor: 'ai-teammate', rules: [LEG_RULE] } });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'the dispatch was attempted (the failure is real)');
+        assert.deepEqual(sm.capturedPrComments, [],
+            'NO trigger-failure marker — the pull ref is fetchable, the head is LIVE (AC2)');
+        assert.deepEqual(parkAdds(sm), [], 'NO park accumulation (AC2)');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('ls-remote') !== -1; }).length, 1,
+            'the liveness probe ran exactly once (refs/pull/<N>/head oracle)');
+    });
+
+    test('AC2 deployment shape: a no-ref failure on the BASE ref with a fetchable pull ref records nothing', function () {
+        // The fork PR now dispatches on 'main'; if THAT 422s the base ref is
+        // missing (deployment problem) — with a live pull ref it must still
+        // not park the PR.
+        var sm = makeSmAgent(Object.assign({
+            github: { items: [fxItem(1591)], prComments: [],
+                      pr: { number: 1591, head: { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } } },
+            onTrigger: function () { throw new Error('422: No ref found for: main'); },
+            onCliExecute: probeCli(true)
+        }, fxConfig()));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                                 machineAuthor: 'ai-teammate', rules: [LEG_RULE] } });
+
+        assert.deepEqual(sm.capturedPrComments, [], 'a base-ref failure is not head-dead evidence');
+        assert.deepEqual(parkAdds(sm), [], 'no park on a deployment-shaped failure');
+    });
+
+    test('AC3: an UNFETCHABLE pull ref is a genuinely dead fork head — marker keyed on the pull ref, park at the cap', function () {
+        // Tick 1: below the cap — one marker keyed on refs/pull/<N>/head,
+        // NEVER on the fork branch name.
+        var sm1 = makeSmAgent(Object.assign({
+            github: { items: [fxItem(1591)], prComments: [],
+                      pr: { number: 1591, head: { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } } },
+            onTrigger: function () { throw new Error(NO_REF_ERR); },
+            onCliExecute: probeCli(false)
+        }, fxConfig()));
+        sm1.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                                  machineAuthor: 'ai-teammate', rules: [LEG_RULE] } });
+
+        var markers = markerBodies(sm1);
+        assert.equal(markers.length, 1, 'the dead head is recorded on the existing no-ref path');
+        assert.ok(markers[0].indexOf('trigger-failed ' + PULL_REF + ' — attempt 1/3') !== -1,
+            'the marker is keyed on the pull-ref probe, not the branch name');
+        assert.ok(markers[0].indexOf(BRANCH) === -1 || markers[0].indexOf(NO_REF_ERR) !== -1,
+            'the branch name only appears inside the flattened error message, never as the marker key');
+        assert.deepEqual(parkAdds(sm1), [], 'no park below the cap');
+
+        // Tick 3 (cap): prior pull-ref markers 1/3 + 2/3 → park.
+        var prior = [1, 2].map(function (n) {
+            return { body: '⚠️ trigger-failed ' + PULL_REF + ' — attempt ' + n +
+                '/3 at 2026-10-19T06:1' + n + ':00Z — prior failure' };
+        });
+        var sm3 = makeSmAgent(Object.assign({
+            github: { items: [fxItem(1591)], prComments: prior,
+                      pr: { number: 1591, head: { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } } },
+            onTrigger: function () { throw new Error(NO_REF_ERR); },
+            onCliExecute: probeCli(false)
+        }, fxConfig()));
+        sm3.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                                  machineAuthor: 'ai-teammate', rules: [LEG_RULE] } });
+
+        assert.deepEqual(parkAdds(sm3).map(function (a) { return a.number; }), [1591],
+            'the third consecutive dead-head failure parks validation_failed (gh-922 cap)');
+        var parks = sm3.capturedPrComments.filter(function (c) {
+            return String(c.body || '').indexOf('parked-head: ') !== -1; });
+        assert.equal(parks.length, 1, 'exactly one park comment');
+        assert.ok(parks[0].body.indexOf(PULL_REF) !== -1, 'the park names the pull ref');
+        assert.ok(parks[0].body.indexOf('parked-head: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') !== -1,
+            'the parked-head sha records — a restored fork clears the park through the gh-994 head-change reset');
+    });
+
+    test('AC3 probe fail-open: a broken ls-remote never parks — a blind tick records nothing', function () {
+        var sm = makeSmAgent(Object.assign({
+            github: { items: [fxItem(1591)], prComments: [],
+                      pr: { number: 1591, head: { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } } },
+            onTrigger: function () { throw new Error(NO_REF_ERR); },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('ls-remote') !== -1) {
+                    throw new Error('network unreachable');
+                }
+                return '';
+            }
+        }, fxConfig()));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                                 machineAuthor: 'ai-teammate', rules: [LEG_RULE] } });
+
+        assert.deepEqual(sm.capturedPrComments, [],
+            'a probe failure degrades to LIVE (fail-open) — the gh-922 blind-tick-never-parks invariant');
+        assert.deepEqual(parkAdds(sm), []);
+    });
+
+    test('REG-1: a same-repo dead head still parks via the branch-keyed no-ref path (gh-922 unchanged)', function () {
+        // Same-repo shape with headRepo missing entirely (legacy payload):
+        // the pre-gh-1075 bookkeeping must fire byte-for-byte — branch-keyed
+        // marker, cap park, parked-head sha.
+        var DEAD = 'gone/same-repo-branch';
+        var prior = [1, 2].map(function (n) {
+            return { body: '⚠️ trigger-failed ' + DEAD + ' — attempt ' + n +
+                '/3 at 2026-10-16T13:0' + n + ':00Z — prior failure' };
+        });
+        var sm = makeSmAgent(Object.assign({
+            github: { items: [{ key: 'pr-302', labels: ['agent:review'], issueNumber: null,
+                                prNumber: 302, draft: false, branch: DEAD }],
+                      prComments: prior,
+                      pr: { number: 302, head: { sha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' } } },
+            onTrigger: function () { throw new Error('422: No ref found for: ' + DEAD); }
+        }, fxConfig()));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                                 machineAuthor: 'ai-teammate', rules: [LEG_RULE] } });
+
+        assert.deepEqual(parkAdds(sm).map(function (a) { return a.number; }), [302],
+            'the same-repo dead head parks exactly as before gh-1075');
+        var markers = markerBodies(sm);
+        assert.equal(markers.length, 1, 'one cap marker');
+        assert.ok(markers[0].indexOf('trigger-failed ' + DEAD + ' — attempt 3/3') !== -1,
+            'the marker stays keyed on the BRANCH for same-repo heads');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('ls-remote') !== -1; }).length, 0,
+            'same-repo heads never pay the pull-ref probe');
     });
 });
