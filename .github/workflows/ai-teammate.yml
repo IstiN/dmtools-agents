@@ -44,7 +44,15 @@ name: AI Teammate
 # gh-1076: the trailing `|| github.event.label.name` fallback is gone with
 # the labeled trigger — labeled events can no longer start this workflow,
 # and assigned/dispatch events resolve their leg from the labels above.
-run-name: "teammate: ${{ github.event_name }} #${{ github.event.issue.number || github.event.inputs.issue }} ${{ github.event.inputs.leg || (contains(github.event.issue.labels.*.name, 'agent:rework') && 'rework') || (contains(github.event.issue.labels.*.name, 'agent:review') && 'review') || (contains(github.event.issue.labels.*.name, 'pr_approved') && 'review') || (contains(github.event.issue.labels.*.name, 'agent:dev') && 'dev') || (contains(github.event.issue.labels.*.name, 'agent:develop') && 'dev') }}"
+# gh-1075: a PR-anchored dispatch ALSO carries the `· pr-<N>` anchor right
+# after the issue slot, BEFORE the leg — the gh-1075 fork path always
+# backfills inputs.pr, and the SM's pull-keyed leg probe
+# (branchLegGuard.hasActiveLegRunForPull) keys on this whole-token anchor
+# to suppress a second rework arm on the same fork PR. The anchor sits
+# BEFORE the trailing-leg token on purpose: stubTailLegOf (the teammate:
+# title family in legOfRunName) parses the leg at the END of the title,
+# and the gh-1065 completed-owner leg precision depends on it.
+run-name: "teammate: ${{ github.event_name }} #${{ github.event.issue.number || github.event.inputs.issue }}${{ (github.event.inputs.pr || '') != '' && format(' · pr-{0}', github.event.inputs.pr) || '' }} ${{ github.event.inputs.leg || (contains(github.event.issue.labels.*.name, 'agent:rework') && 'rework') || (contains(github.event.issue.labels.*.name, 'agent:review') && 'review') || (contains(github.event.issue.labels.*.name, 'pr_approved') && 'review') || (contains(github.event.issue.labels.*.name, 'agent:dev') && 'dev') || (contains(github.event.issue.labels.*.name, 'agent:develop') && 'dev') }}"
 
 on:
   # gh-1076: `assigned` ONLY — see the header. The labeled trigger used to
