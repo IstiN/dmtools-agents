@@ -1387,3 +1387,143 @@ suite('postTestReworkResults > PR body finality (gh-960)', function() {
     });
 
 });
+
+// ── gh-1083: action() split — pure planners pinned before extraction ─────────
+
+suite('postTestReworkResults — action-split helpers (gh-1083)', function() {
+
+    function helperModule() {
+        return loadReworkActionHarness({ files: {} }).module;
+    }
+
+    suite('resolveActionContext', function() {
+
+        test('ticket-shaped params resolve to themselves', function() {
+            var m = helperModule();
+            var params = { ticket: { key: 'PROJ-77' }, response: 'done' };
+            var ctx = m.resolveActionContext(params);
+            assert.equal(ctx.actualParams, params, 'actualParams is the params object itself');
+            assert.equal(ctx.ticketKey, 'PROJ-77');
+        });
+
+        test('jobParams-wrapped params unwrap to the jobParams body', function() {
+            var m = helperModule();
+            var inner = { ticket: { key: 'PROJ-78' } };
+            var ctx = m.resolveActionContext({ jobParams: inner });
+            assert.equal(ctx.actualParams, inner, 'actualParams is the jobParams body');
+            assert.equal(ctx.ticketKey, 'PROJ-78');
+        });
+
+    });
+
+    suite('fixSummaryOf', function() {
+
+        test('returns the response when present', function() {
+            var m = helperModule();
+            assert.equal(m.fixSummaryOf({ response: 'Fixed the flaky assertion' }), 'Fixed the flaky assertion');
+        });
+
+        test('empty string response degrades to the placeholder', function() {
+            var m = helperModule();
+            assert.equal(m.fixSummaryOf({ response: '' }), '_(No fix summary)_');
+        });
+
+        test('missing response degrades to the placeholder', function() {
+            var m = helperModule();
+            assert.equal(m.fixSummaryOf({}), '_(No fix summary)_');
+            assert.equal(m.fixSummaryOf(null), '_(No fix summary)_');
+        });
+
+    });
+
+    suite('isMissingResult', function() {
+
+        test('null/unreadable result is missing', function() {
+            var m = helperModule();
+            assert.equal(m.isMissingResult(null), true);
+            assert.equal(m.isMissingResult(undefined), true);
+        });
+
+        test('result without a status field is missing', function() {
+            var m = helperModule();
+            assert.equal(m.isMissingResult({}), true);
+            assert.equal(m.isMissingResult({ foo: 1 }), true);
+            assert.equal(m.isMissingResult({ status: '' }), true);
+        });
+
+        test('result with a status (any value) is present', function() {
+            var m = helperModule();
+            assert.equal(m.isMissingResult({ status: 'passed' }), false);
+            assert.equal(m.isMissingResult({ status: 'failed' }), false);
+            assert.equal(m.isMissingResult({ status: 'flaky' }), false, 'unknown statuses are NOT missing — normalizeTestStatus handles them');
+        });
+
+    });
+
+    suite('decidePrIsDirty', function() {
+
+        test('no PR is never dirty', function() {
+            var m = helperModule();
+            assert.equal(m.decidePrIsDirty(null), false);
+            assert.equal(m.decidePrIsDirty(undefined), false);
+        });
+
+        test('mergeable_state "dirty" marks the PR dirty', function() {
+            var m = helperModule();
+            assert.equal(m.decidePrIsDirty({ number: 1, mergeable_state: 'dirty' }), true);
+        });
+
+        test('mergeStateStatus "DIRTY" marks the PR dirty', function() {
+            var m = helperModule();
+            assert.equal(m.decidePrIsDirty({ number: 1, mergeStateStatus: 'DIRTY' }), true);
+        });
+
+        test('mergeable === false marks the PR dirty', function() {
+            var m = helperModule();
+            assert.equal(m.decidePrIsDirty({ number: 1, mergeable: false }), true);
+        });
+
+        test('clean PR (all indicators good) is not dirty', function() {
+            var m = helperModule();
+            assert.equal(m.decidePrIsDirty({
+                number: 1, mergeable_state: 'clean', mergeStateStatus: 'CLEAN', mergeable: true
+            }), false);
+        });
+
+        test('empty PR shape is not dirty', function() {
+            var m = helperModule();
+            assert.equal(m.decidePrIsDirty({ number: 1 }), false);
+            assert.equal(m.decidePrIsDirty({ mergeable: undefined }), false, 'strict === false — undefined is not dirty');
+        });
+
+    });
+
+    suite('decideReworkTargetStatus', function() {
+
+        var STATUSES = {
+            IN_REVIEW_PASSED: 'In Review - Passed',
+            IN_REVIEW_FAILED: 'In Review - Failed'
+        };
+
+        test('passed moves to In Review - Passed', function() {
+            var m = helperModule();
+            assert.deepEqual(m.decideReworkTargetStatus(true, STATUSES),
+                { stageKey: 'IN_REVIEW_PASSED', targetStatus: 'In Review - Passed' });
+        });
+
+        test('failed moves to In Review - Failed', function() {
+            var m = helperModule();
+            assert.deepEqual(m.decideReworkTargetStatus(false, STATUSES),
+                { stageKey: 'IN_REVIEW_FAILED', targetStatus: 'In Review - Failed' });
+        });
+
+        test('status values flow through from the config verbatim', function() {
+            var m = helperModule();
+            var custom = { IN_REVIEW_PASSED: 'Review OK', IN_REVIEW_FAILED: 'Review NG' };
+            assert.equal(m.decideReworkTargetStatus(true, custom).targetStatus, 'Review OK');
+            assert.equal(m.decideReworkTargetStatus(false, custom).targetStatus, 'Review NG');
+        });
+
+    });
+
+});

@@ -733,3 +733,72 @@ suite('postMobileTestAutomationResults — automation PR link injection', functi
     });
 
 });
+
+// ── Suite: updateFeaturePRLabel — github-globals variant (gh-1083) ───────────
+// Characterization of the direct github_* label path (kept for flows without
+// the SCM abstraction — no deletion): remove-then-add order, stringified PR
+// id, error tolerance. The SCM variant (updateFeaturePRLabelWithScm) is
+// pinned through action() in the suites above.
+
+suite('postMobileTestAutomationResults — updateFeaturePRLabel (github globals)', function() {
+
+    test('passed → removes tests_failed first, then adds tests_passed (string PR id, scoped workspace/repo)', function() {
+        var calls = [];
+        var m = loadPostCli({
+            github_remove_pr_label: function(opts) { calls.push(['remove', opts]); },
+            github_add_pr_label: function(opts) { calls.push(['add', opts]); }
+        });
+
+        m.updateFeaturePRLabel('ExampleOrg', 'example-mobile-app', 963, true, 'tests_passed', 'tests_failed');
+
+        assert.equal(calls.length, 2, 'exactly one remove + one add');
+        assert.equal(calls[0][0], 'remove', 'the opposite label goes first');
+        assert.equal(calls[0][1].label, 'tests_failed');
+        assert.equal(calls[1][0], 'add');
+        assert.equal(calls[1][1].label, 'tests_passed');
+        assert.equal(calls[1][1].pullRequestId, '963', 'PR number must be stringified');
+        assert.equal(calls[1][1].workspace, 'ExampleOrg');
+        assert.equal(calls[1][1].repository, 'example-mobile-app');
+    });
+
+    test('failed → removes tests_passed and adds tests_failed', function() {
+        var added = [], removed = [], addedOpts = [];
+        var m = loadPostCli({
+            github_remove_pr_label: function(opts) { removed.push(opts.label); },
+            github_add_pr_label: function(opts) { added.push(opts.label); addedOpts.push(opts); }
+        });
+
+        m.updateFeaturePRLabel('ExampleOrg', 'example-mobile-app', 5, false, 'tests_passed', 'tests_failed');
+
+        assert.deepEqual(added, ['tests_failed']);
+        assert.deepEqual(removed, ['tests_passed']);
+        assert.equal(addedOpts[0].pullRequestId, '5', 'numeric PR id is stringified');
+    });
+
+    test('removeLabel throw is swallowed — the add still runs', function() {
+        var added = [];
+        var m = loadPostCli({
+            github_remove_pr_label: function() { throw new Error('remove failed'); },
+            github_add_pr_label: function(opts) { added.push(opts.label); }
+        });
+
+        m.updateFeaturePRLabel('ExampleOrg', 'example-mobile-app', 7, true, 'tests_passed', 'tests_failed');
+
+        assert.deepEqual(added, ['tests_passed'], 'inner remove failure must not block the add');
+    });
+
+    test('addLabel throw is caught — no propagation to the caller', function() {
+        var m = loadPostCli({
+            github_add_pr_label: function() { throw new Error('add failed'); }
+        });
+
+        var threw = null;
+        try {
+            m.updateFeaturePRLabel('ExampleOrg', 'example-mobile-app', 8, true, 'tests_passed', 'tests_failed');
+        } catch (e) {
+            threw = e;
+        }
+        assert.notOk(threw, 'add failure must not escape updateFeaturePRLabel: ' + threw);
+    });
+
+});
