@@ -2166,7 +2166,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             postForkParkComment(reason);
         }
 
-        function forkSilentUpdateBranch(branchName, forkFull) {
+        function forkSilentUpdateBranch(branchName, forkFull, stderrFile) {
             // The editable-fork refresh (gh-1070 AC1): clone the BASE
             // repo, fetch the PR head via refs/pull/<N>/head (always
             // fetchable — even when the fork branch was deleted, gh-1057),
@@ -2188,13 +2188,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     headSetup: ' && git fetch --no-tags --depth 200 origin refs/pull/' +
                                ticket.prNumber + '/head' +
                                ' && git checkout -B ' + branchName + ' FETCH_HEAD',
+                    stderrFile: stderrFile,
                     pushTarget: validationLivenessModule.forkPushTokenUrl(forkFull) +
                                 ' HEAD:' + branchName
                 })
             });
         }
 
-        function recordForkSilentUpdateFailure() {
+        function recordForkSilentUpdateFailure(reason) {
             // AC3: the maintainer-edit push failed DESPITE the probe (the
             // race: the author disabled edits mid-flight). Counted once
             // per failed tick on the shared silent-update marker trail
@@ -2202,14 +2203,17 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // to gh-1000 I5); the retry itself stays every-tick
             // (self-healing). Once the attempts run out the PR parks
             // GUEST-STYLE — NEVER silent-update-degraded: the workspace
-            // is not dead, the permission is gone.
+            // is not dead, the permission is gone. gh-1074: the marker
+            // gains the one-line rejection reason from the captured
+            // stderr tail (the fa PR #1591 streak class).
             try {
-                var trail = silentUpdateFailureTrail();
+                var trail = silentUpdateFailureTrail(reason);
                 var attempt = trail.attempt;
                 if (trail.left > 0) {
                     console.warn('  ⚠️  ' + key + ' fork silent-update push failure #' +
                         attempt + ' recorded on the PR — ' + trail.left +
-                        ' attempt(s) left before the guest park (gh-1070 AC3)');
+                        ' attempt(s) left before the guest park (gh-1070 AC3)' +
+                        (reason ? ' — ' + reason : ''));
                     return;
                 }
                 if ((ticket.labels || []).indexOf('validation_failed') === -1) {
@@ -2228,11 +2232,17 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
 
         function forkSilentUpdateBranchTracked(branchName, forkFull) {
+            var stderrFile = silentUpdateStderrFile(branchName);
             try {
-                forkSilentUpdateBranch(branchName, forkFull);
+                forkSilentUpdateBranch(branchName, forkFull, stderrFile);
             } catch (eFork) {
-                recordForkSilentUpdateFailure();
-                throw eFork;
+                // gh-1074: same failure surface as the base lane — the
+                // marker gains the rejection reason, the propagated error
+                // carries the redacted stderr tail.
+                var tail = readSilentUpdateStderrTail(stderrFile);
+                recordForkSilentUpdateFailure(
+                    validationLivenessModule.silentUpdateRejectionReason(tail));
+                throw silentUpdateErrorWithTail(eFork, tail);
             }
         }
 

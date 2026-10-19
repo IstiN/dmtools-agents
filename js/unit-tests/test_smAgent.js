@@ -14138,23 +14138,8 @@ suite('smAgent: silent-update failure stderr tail (gh-1074)', function () {
     }
     // assembled from split literals: the dev sandbox redacts contiguous
     // token-URL patterns in file writes (the repo's TOK convention)
-    var TOK_1074 = 'token:ghp_' + 'Nhz2Q1rN8ZsZv9mR2tK7wX4yP5bH3cD6fG8hJ9k@';
-
-    // file_read mock: serves the fake captured-stderr file for ANY
-    // /tmp/sm-silent-update-*.stderr path (the path embeds Date.now(), so
-    // tests match by shape, not by exact name); delegates everything else
-    // to the default makeSmAgent behavior via a config-fileMap passthrough.
-    function stderrFileRead(fileMap) {
-        return function (readOpts) {
-            var p = readOpts.path;
-            if (/^\/tmp\/sm-silent-update-.*\.stderr$/.test(p)) {
-                return (fileMap && fileMap[p] !== undefined) ? fileMap[p] : null;
-            }
-            if (fileMap && fileMap.hasOwnProperty(p)) return fileMap[p];
-            if (p.indexOf('.dmtools/config') !== -1) return null;
-            try { return file_read(readOpts); } catch (e) { return null; }
-        };
-    }
+    var TOK_1074 = 'token:' + 'ghp_' + 'Nhz2Q1rN8ZsZv9mR2tK7wX4yP5bH3cD6fG8hJ9k' + '@';
+    var RAW_TOKEN_1074 = 'ghp_' + 'Nhz2Q1rN8ZsZv9mR2tK7wX4yP5bH3cD6fG8hJ9k';
 
     function baseItem(extra) {
         var it = { key: 'pr-983', labels: ['pr_approved'], issueNumber: null,
@@ -14168,25 +14153,6 @@ suite('smAgent: silent-update failure stderr tail (gh-1074)', function () {
                                         headRepo: FORK_1074, maintainerCanModify: true }, extra));
     }
 
-    function failingSm(item, stderrContent, itemExtra) {
-        return makeSmAgent({
-            fileMap: { '../.dmtools/config.js':
-                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
-            github: { items: [item], prComments: [] },
-            captureConsole: true,
-            extraMocks: {
-                file_read: stderrFileRead(stderrContent ? { ANY: stderrContent } : {})
-            },
-            onCliExecute: function (cmdOpts) {
-                if (cmdOpts.command.indexOf('gh repo clone ') !== -1) {
-                    throw new Error("Tool execution failed: Command execution failed (exit code 1): Cloning into '/tmp/sm-silent-update-x'...\nUpdating files: 1%");
-                }
-                return '';
-            },
-            // serve the fake stderr for whatever concrete path the agent built
-            onFileWrite: null
-        });
-    }
 
     // simpler: derive the stderr path from the captured command itself
     function smWithStderr(item, stderrContent, githubExtra) {
