@@ -185,40 +185,6 @@ function tryComment(owner, name, number, body, log) {
 }
 
 /**
- * The shared state machine (bash `case "$state"` parity). Returns
- * 'merged' | 'skipped'. `onMerged(mergedPrNumber)` performs the
- * post-merge label/comment bookkeeping for the caller's path.
- */
-function runStateMachine(ctx, prNumber, onMerged) {
-    var pr = parseMcp(github_get_pr({
-        workspace: ctx.owner, repository: ctx.name, pullRequestId: prNumber
-    }));
-    var ms = mergeStateOf(pr);
-    var stateLabel = (ms.mergeable ? 'MERGEABLE' : 'CONFLICTING') + ':' + ms.state;
-    ctx.log.push('linked PR #' + prNumber + ' — ' + stateLabel);
-
-    if (ms.mergeable && ms.state === 'CLEAN') {
-        var res = squashMerge(ctx.owner, ctx.name, prNumber);
-        if (res.merged) {
-            onMerged(prNumber);
-            return 'merged';
-        }
-        ctx.log.push('❌ merge of #' + prNumber + ' failed: ' + res.error);
-        return 'skipped'; // bash parity: a refused merge is skipped, exit 0
-    }
-    if (ms.mergeable && ms.state === 'BEHIND') {
-        ctx.log.push('⏳ #' + prNumber + ' behind main — the SM (silent-update-behind) refreshes it, then re-dispatches CI');
-        return 'skipped';
-    }
-    if (ms.mergeable && (ms.state === 'BLOCKED' || ms.state === 'UNSTABLE')) {
-        ctx.log.push('⏳ #' + prNumber + ' required checks not green yet');
-        return 'skipped';
-    }
-    ctx.log.push('⛔ #' + prNumber + ' not mergeable (' + stateLabel + ') — needs manual attention');
-    return 'skipped';
-}
-
-/**
  * Repo/flag parsing (gh-1081): the owner/name split and the jobParams flag
  * defaults live in pure helpers so the sweep decisions are unit-testable.
  * resolveRepo reads the GH_REPO env-global the same way action always did.
@@ -296,7 +262,7 @@ function scanLabeledPrs(openPrs, label, owner, name, issueNumbers, seenIssues, c
         } catch (e) {
             // Per-item isolation: a bad PR record never kills the scan.
             ctx.say('⚠️ map-back failed for PR #' + prn + ' (treated as orphan): ' +
-                ((e && e.message) || e));
+                failureReason(e));
             orphanPrs.push(prn);
         }
     });
@@ -414,65 +380,102 @@ function action(params) {
     function say(line) { log.push(line); console.log(line); }
     var ctx = { owner: owner, name: name, log: log, say: say };
 
-    // Candidates come from BOTH sides: the issue label (human/bot) and
-    // the PR label (pr_review approves via scm.addLabel on the PR).
+
+
+/**
+ * Candidate collection — the two sweeps that decide WHAT gets processed.
+ * Candidates come from BOTH sides: the issue label (human/bot) and the PR
+ * label (pr_review approves via scm.addLabel on the PR). The open-PR list
+ * drives BOTH the label map-back and the issue→PR link scan (gh pr list
+ * --json number,body,headRefName parity; structured JSON, no tab/newline
+ * sanitizing needed). github_search_issues → github_list_prs → one
+ * github_get_issue per labeled PR with an extractable issue, in list order.
+ */
+function collectCandidates(owner, name, opts, ctx) {
     var issueSearch = parseMcp(github_search_issues({
         workspace: owner, repository: name,
         query: 'repo:' + owner + '/' + name + ' is:issue is:open label:"' + opts.label + '"'
     }));
     var issues = collectIssueNumbers(issueSearch);
-    var issueNumbers = issues.issueNumbers;
-    var seenIssues = issues.seenIssues;
 
-    // Open PRs — one list drives BOTH the label map-back and the
-    // issue→PR link scan (gh pr list --json number,body,headRefName
-    // parity; structured JSON, no tab/newline sanitizing needed).
     var openPrs = numericPrs(asList(parseMcp(github_list_prs({
         workspace: owner, repository: name, state: 'open'
     }))));
 
     var orphanPrs = [];
     if (opts.mapPrLabels) {
-        orphanPrs = scanLabeledPrs(openPrs, opts.label, owner, name, issueNumbers, seenIssues, ctx);
+        orphanPrs = scanLabeledPrs(openPrs, opts.label, owner, name,
+            issues.issueNumbers, issues.seenIssues, ctx);
     }
+    return { issueNumbers: issues.issueNumbers, openPrs: openPrs, orphanPrs: orphanPrs };
+}
 
-    if (!issueNumbers.length && !orphanPrs.length) {
-        say("no issues labeled '" + opts.label + "' — nothing to merge");
-        return { success: true, merged: 0, skipped: 0, failed: 0, log: log };
-    }
+function failureReason(e) {
+    return (e && e.message) || e;
+}
 
-    var tally = { merged: 0, skipped: 0, failed: 0 };
-
+/**
+ * The two merge loops (issue path, then the PR-carrier path). Per-item
+ * isolation: a thrown error counts as failed and the sweep continues.
+ */
+function runSweep(ctx, candidates, opts, tally) {
     // Issue loop.
-    issueNumbers.forEach(function (n) {
+    candidates.issueNumbers.forEach(function (n) {
         try {
-            processIssueItem(ctx, n, openPrs, opts, tally);
+            processIssueItem(ctx, n, candidates.openPrs, opts, tally);
         } catch (e) {
             tally.failed++;
-            say('❌ issue #' + n + ' processing failed: ' + ((e && e.message) || e));
+            ctx.say('❌ issue #' + n + ' processing failed: ' + failureReason(e));
         }
     });
 
     // PR-carrier path: labeled PRs with no OPEN linked issue merge
     // directly — there is no issue to un-label or comment on.
-    orphanPrs.forEach(function (prn) {
+    candidates.orphanPrs.forEach(function (prn) {
         try {
             processOrphanPr(ctx, prn, opts, tally);
         } catch (e) {
             tally.failed++;
-            say('❌ PR #' + prn + ' processing failed: ' + ((e && e.message) || e));
+            ctx.say('❌ PR #' + prn + ' processing failed: ' + failureReason(e));
         }
     });
+}
 
+/**
+ * Aggregate exit code at END of run (never mid-loop): the JSRunner
+ * surfaces a thrown error as job failure.
+ */
+function summarizeSweep(tally, log, say) {
     var summary = 'summary: merged=' + tally.merged + ' skipped=' + tally.skipped +
         ' failed=' + tally.failed;
     say(summary);
     if (tally.failed > 0) {
-        // Aggregate exit code at END of run (never mid-loop): the JSRunner
-        // surfaces a thrown error as job failure.
         throw new Error('mergeTrigger: ' + tally.failed + ' item(s) failed — ' + summary);
     }
     return { success: true, merged: tally.merged, skipped: tally.skipped, failed: tally.failed, log: log };
+}
+
+function action(params) {
+    var job = (params && params.jobParams) || {};
+    var repoInfo = resolveRepo(job);
+    var owner = repoInfo.owner;
+    var name = repoInfo.name;
+    var opts = parseFlags(job);
+
+    var log = [];
+    function say(line) { log.push(line); console.log(line); }
+    var ctx = { owner: owner, name: name, log: log, say: say };
+
+    var candidates = collectCandidates(owner, name, opts, ctx);
+
+    if (!candidates.issueNumbers.length && !candidates.orphanPrs.length) {
+        say("no issues labeled '" + opts.label + "' — nothing to merge");
+        return { success: true, merged: 0, skipped: 0, failed: 0, log: log };
+    }
+
+    var tally = { merged: 0, skipped: 0, failed: 0 };
+    runSweep(ctx, candidates, opts, tally);
+    return summarizeSweep(tally, log, say);
 }
 
 if (typeof module !== 'undefined' && module.exports) {
