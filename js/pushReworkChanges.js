@@ -109,6 +109,12 @@ function inputFolderNameOf(inputFolderPath) {
     return segments[segments.length - 1] || null;
 }
 
+// The folder name the runtime passed, from whichever params layer carries it; null when none does.
+function runInputFolderName(params, actualParams) {
+    var jobParams = params.jobParams || {};
+    return inputFolderNameOf(params.inputFolderPath || actualParams.inputFolderPath || jobParams.inputFolderPath);
+}
+
 function inputFolderFor(ticketKey) {
     return 'input/' + (currentInputFolderName || ticketKeyShapes.inputFolderNameFor(ticketKey));
 }
@@ -2296,8 +2302,7 @@ function action(params) {
     try {
         const actualParams = params.ticket ? params : (params.jobParams || params);
         const ticketKey = actualParams.ticket.key;
-        currentInputFolderName = inputFolderNameOf(params.inputFolderPath || actualParams.inputFolderPath ||
-            (params.jobParams && params.jobParams.inputFolderPath));
+        currentInputFolderName = runInputFolderName(params, actualParams);
         const fixSummary = actualParams.response || '_(No fix summary generated)_';
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = scmModule.createScm(config);
