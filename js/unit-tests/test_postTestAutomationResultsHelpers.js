@@ -428,7 +428,18 @@ suite('postTestAutomationResultsHelpers: decideGitStageRoute (gh-1083)', functio
         var helpers = loadHelpers();
         assert.equal(helpers.decideGitStageRoute({ success: false, error: 'boom' }), 'git-failure');
         assert.equal(helpers.decideGitStageRoute({}), 'git-failure');
-        assert.equal(helpers.decideGitStageRoute(null), 'git-failure');
+    });
+
+    test('noNewCommit is honoured even without success (original else-if ignores success)', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.decideGitStageRoute({ noNewCommit: true }), 'no-new-commit');
+    });
+
+    test('null gitResult throws like the original field access did', function() {
+        var helpers = loadHelpers();
+        var threw = null;
+        try { helpers.decideGitStageRoute(null); } catch (e) { threw = e; }
+        assert.ok(threw, 'null gitResult must throw, not silently route');
     });
 
 });
