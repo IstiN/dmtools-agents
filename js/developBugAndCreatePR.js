@@ -178,10 +178,22 @@ function buildAlreadyFixedComment(ticketKey, alreadyFixed, codeGraphUsed) {
 /**
  * gh-1003: Path 3 interrupted-leg comment builder — the partial-work wording
  * depends only on whether any git changes were found.
+ *
+ * gh-1121: when the leg's failure text classified as a whole-provider-chain
+ * transient outage (kind provider_transient) the comment names the real
+ * cause — the failing models and codes — instead of guessing a rate limit.
+ * The header shape is shared with the story leg via
+ * quotaBreaker.outageResetHeaderOf so both legs word the reset identically.
  */
-function buildInterruptedComment(ticketKey, hasGitChanges) {
+function buildInterruptedComment(ticketKey, hasGitChanges, outage) {
     const m = commentMarkup.forTicket(ticketKey);
-    return m.h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to ' + m.bold('Ready For Development') + ' and will be automatically retried.\n\n' +
+    var header = '⏸️ Development Interrupted';
+    var causeLine = 'The AI agent was interrupted (likely hit a rate limit) before completing the implementation.';
+    if (outage && outage.kind === 'provider_transient') {
+        header = quotaBreaker.outageResetHeaderOf(outage);
+        causeLine = 'The whole provider chain failed with transient errors, interrupting the AI agent before it could finish.';
+    }
+    return m.h(3, header) + '\n\n' + causeLine + ' The ticket has been reset to ' + m.bold('Ready For Development') + ' and will be automatically retried.\n\n' +
             (hasGitChanges ? 'Partial analysis work was saved to the branch.' : 'No partial work was produced.');
 }
 
@@ -394,7 +406,10 @@ function parkQuotaPath(ticketKey, config, ticket, tracker, params, scm, classifi
 function completeInterruptedPath(ticketKey, hasGitChanges, cliTool, config, ticket, tracker, statuses, params, scm, quotaClassification) {
     pushPreservedAnalysisWork(hasGitChanges, cliTool, config, ticket, ticketKey);
     parkQuotaInterruptedGate(ticketKey, config, ticket, tracker, params, scm, quotaClassification);
-    resetTicketForRetry(ticketKey, hasGitChanges, tracker, statuses);
+    // gh-1121: the interrupted reset comment names a provider-chain outage
+    // (models + codes) instead of guessing a rate limit when the leg's
+    // failure text classified as provider_transient.
+    resetTicketForRetry(ticketKey, hasGitChanges, tracker, statuses, quotaClassification);
 
     removeLabels(ticketKey, params, tracker);
     // gh-742: ticket is reset for retry — fail the RUN so this
@@ -514,9 +529,9 @@ function pushPartialWork(cliTool, config, ticketKey, plan) {
  * first, then the Ready For Development reset (comment → move order
  * preserved).
  */
-function resetTicketForRetry(ticketKey, hasGitChanges, tracker, statuses) {
+function resetTicketForRetry(ticketKey, hasGitChanges, tracker, statuses, outage) {
     try {
-        tracker.postComment(ticketKey, buildInterruptedComment(ticketKey, hasGitChanges));
+        tracker.postComment(ticketKey, buildInterruptedComment(ticketKey, hasGitChanges, outage));
     } catch (e) {}
 
     try {
