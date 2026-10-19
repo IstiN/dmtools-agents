@@ -85,7 +85,8 @@ function loadPushReworkChanges() {
             './cacheToReleases.js': {}
         ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': reworkLoopGuardModule
+            './common/reworkLoopGuard.js': reworkLoopGuardModule,
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         {}
     );
@@ -170,7 +171,8 @@ function loadPushReworkChangesForAction(mocks) {
             './cacheToReleases.js': { action: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': reworkLoopGuardModule
+            './common/reworkLoopGuard.js': reworkLoopGuardModule,
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         toolMocks
     );

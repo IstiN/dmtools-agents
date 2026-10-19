@@ -87,6 +87,28 @@ function sameFile(violationPath, diffPath) {
     return v.length > d.length + 1 && v.substring(v.length - d.length - 1) === '/' + d;
 }
 
+/** Add one diff-header path (old+new of the `diff --git` line) to the set. */
+function addDiffHeaderPaths(add, line) {
+    var m = line.match(/^diff --git a\/(.*) b\/(.*)$/);
+    if (m) {
+        add(m[1]);
+        add(m[2]);
+    }
+}
+
+/** Add `--- a/<old>` / `+++ b/<new>` paths; /dev/null sides are skipped. */
+function addDiffTargetPath(add, line) {
+    var m = line.match(/^--- (?:(?:a\/)?(.+))$/);
+    if (m && m[1] !== '/dev/null') {
+        add(m[1]);
+        return;
+    }
+    m = line.match(/^\+\+\+ (?:(?:b\/)?(.+))$/);
+    if (m && m[1] !== '/dev/null') {
+        add(m[1]);
+    }
+}
+
 /**
  * Repo-root-relative file paths touched by a PR diff — old AND new names
  * (E1: a violation in a renamed file is still owned via the old path).
@@ -104,12 +126,12 @@ function parseDiffPaths(diffText) {
         out.push(n);
     };
     String(diffText).split('\n').forEach(function(line) {
-        var m;
-        if ((m = line.match(/^diff --git a\/(.*) b\/(.*)$/))) { add(m[1]); add(m[2]); return; }
-        if ((m = line.match(/^rename from (.+)$/))) { add(m[1]); return; }
-        if ((m = line.match(/^rename to (.+)$/))) { add(m[1]); return; }
-        if ((m = line.match(/^--- (?:(?:a\/)?(.+))$/)) && m[1] !== '/dev/null') { add(m[1]); return; }
-        if ((m = line.match(/^\+\+\+ (?:(?:b\/)?(.+))$/)) && m[1] !== '/dev/null') { add(m[1]); }
+        addDiffHeaderPaths(add, line);
+        if ((line.match(/^rename (from|to) (.+)$/))) {
+            add(line.replace(/^rename (?:from|to) /, ''));
+            return;
+        }
+        addDiffTargetPath(add, line);
     });
     return out;
 }
@@ -181,57 +203,59 @@ function dartTestViolations(lines, checkName, taken, out) {
  * jscpd: each "Clone found" block lists the duplicated file pair; the first
  * entry is the violation location, the counterpart goes into the detail.
  */
+function jscpdEntryOf(line) {
+    var m = line.match(/^\s*(?:[-*]\s*)?(.+?):\s*(\d+)-(\d+)\s*$/);
+    return m ? { path: m[1], start: m[2], end: m[3] } : null;
+}
+
+/** Emit the block's violation — first file as location, counterpart in detail. */
+function flushJscpdBlock(checkName, blockEntries, out) {
+    if (blockEntries.length === 0) return;
+    var first = blockEntries[0];
+    var second = blockEntries[1] || null;
+    var detail = second
+        ? 'lines ' + first.start + '-' + first.end + ' duplicate of ' +
+          second.path + ':' + second.start + '-' + second.end
+        : 'duplicated lines ' + first.start + '-' + first.end;
+    out.push({
+        check: checkName,
+        rule: 'jscpd',
+        path: first.path,
+        line: parseInt(first.start, 10),
+        detail: detail
+    });
+}
+
 function jscpdViolations(lines, checkName, taken, out) {
-    var entryRe = /^\s*(?:[-*]\s*)?(.+?):\s*(\d+)-(\d+)\s*$/;
     var inBlock = false;
     var blockEntries = [];
-    var flush = function() {
-        if (blockEntries.length > 0) {
-            var first = blockEntries[0];
-            var detail = blockEntries.length > 1
-                ? 'lines ' + first.start + '-' + first.end + ' duplicate of ' +
-                  first.other.path + ':' + first.other.start + '-' + first.other.end
-                : 'duplicated lines ' + first.start + '-' + first.end;
-            out.push({
-                check: checkName,
-                rule: 'jscpd',
-                path: first.path,
-                line: parseInt(first.start, 10),
-                detail: detail
-            });
-        }
-        blockEntries = [];
-    };
     lines.forEach(function(line, idx) {
-        if (taken[idx]) { flush(); inBlock = false; return; }
+        if (taken[idx]) {
+            inBlock = false;
+            blockEntries = [];
+            return;
+        }
         if (/\bClone found\b/.test(line)) {
-            flush();
+            flushJscpdBlock(checkName, blockEntries, out);
+            blockEntries = [];
             inBlock = true;
             taken[idx] = true;
             return;
         }
         if (!inBlock) return;
-        var m = line.match(entryRe);
-        if (m) {
-            blockEntries.push({
-                path: m[1],
-                start: m[2],
-                end: m[3],
-                other: null
-            });
-            if (blockEntries.length === 2) {
-                blockEntries[0].other = { path: m[1], start: m[2], end: m[3] };
-                inBlock = false;
-            }
+        var entry = jscpdEntryOf(line);
+        if (entry) {
+            blockEntries.push(entry);
             taken[idx] = true;
             return;
         }
         if (String(line).trim() !== '') {
-            flush();
+            flushJscpdBlock(checkName, blockEntries, out);
+            blockEntries = [];
             inBlock = false;
         }
     });
-    flush();
+    flushJscpdBlock(checkName, blockEntries, out);
 }
 
 /** First path-like token (contains a separator and an extension) in a text. */
