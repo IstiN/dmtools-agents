@@ -462,3 +462,89 @@ suite('validationLiveness silent-update stderr tail (gh-1074)', function () {
         assert.ok(noisy.indexOf('\n') === -1, 'the marker stays a single line');
     });
 });
+
+// ── gh-1106: the workflows-permission rejection classifier ─────────────────
+// Live fa PR #1591 (2026-10-19 17:16Z): the fork silent-update push with the
+// silent token (github.token) is refused the moment the merge touches
+// `.github/workflows/*` — GITHUB_TOKEN can never gain that capability (no
+// `permissions:` key grants `workflows`), so the failure is deterministic
+// and gh-1070's "maintainer edits revoked" 3-strike trail mis-frames a
+// platform fact as an author decision. The classifier is the pure half: the
+// smAgent/provider wiring escalates exactly once with a workflow-write
+// token; anything NOT matching stays on the existing trails untouched.
+
+suite('validationLiveness workflows-permission rejection (gh-1106)', function () {
+    var live = loadModule('js/common/validationLiveness.js', makeRequire({}), {});
+
+    // The exact IstiN/flutter_agent_harness#1591 stderr tail shape (17:16Z):
+    // progress head, the decisive refusal at the END.
+    function appRejectionTail() {
+        var lines = [];
+        for (var i = 1; i <= 25; i++) lines.push('Updating files: ' + i + '%');
+        lines.push('remote: error: GH013: refusing to allow a GitHub App to create or update ' +
+            'workflow `build-mobile.yml` without `workflows` permission.');
+        lines.push('To https://github.com/YuryBY/flutter_agent_harness.git');
+        lines.push(' ! [remote rejected] HEAD -> fix/android-dap-home-sandbox (refusing to allow ' +
+            'a GitHub App to create or update workflow `.github/workflows/build-mobile.yml` ' +
+            'without `workflows` permission)');
+        lines.push("error: failed to push some refs to 'https://github.com/YuryBY/flutter_agent_harness.git'");
+        return lines.join('\n') + '\n';
+    }
+
+    test('UT-1 fixture: the exact #1591 App-App refusal classifies as workflows-permission', function () {
+        assert.equal(live.isWorkflowsPermissionRejection(appRejectionTail()), true);
+    });
+
+    test('the OAuth-App / classic-PAT variant (missing `workflow` scope) classifies too', function () {
+        var tail = 'remote: error: GH013: refusing to allow an OAuth App to create or update ' +
+            'workflow `ci.yml` without `workflow` scope.\n' +
+            ' ! [remote rejected] HEAD:main (refusing to allow an OAuth App to create or update ' +
+            'workflow `.github/workflows/ci.yml` without `workflow` scope)\n';
+        assert.equal(live.isWorkflowsPermissionRejection(tail), true);
+        assert.equal(live.isWorkflowsPermissionRejection(
+            'refusing to allow an OAuth App to create or update workflow `ci.yml` without `workflow` scope'), true,
+            'the bare gh API error line classifies as well');
+    });
+
+    test('REG-1 guard: unrelated rejections stay generic — the escalation is a targeted cure', function () {
+        assert.equal(live.isWorkflowsPermissionRejection(
+            ' ! [remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)'), false);
+        assert.equal(live.isWorkflowsPermissionRejection(
+            'denied — edits revoked mid-flight'), false,
+            'E2: a genuine maintainer-edit revocation keeps the old gh-1070 path');
+        assert.equal(live.isWorkflowsPermissionRejection(
+            'fatal: could not read Username for \'https://github.com\': No such device'), false);
+        assert.equal(live.isWorkflowsPermissionRejection(''), false);
+        assert.equal(live.isWorkflowsPermissionRejection(null), false);
+        assert.equal(live.isWorkflowsPermissionRejection(undefined), false);
+    });
+
+    test('E4: a tail truncated BEFORE the marker phrase is generic (safe default)', function () {
+        // cli_execute_command embeds the output HEAD; a long clone progress
+        // log can push the refusal past the truncation point — no phrase,
+        // no classification, the failure stays on the old surface.
+        var truncated = appRejectionTail().split('\n').slice(0, 25).join('\n');
+        assert.equal(truncated.indexOf('refusing to allow'), -1, 'fixture sanity: the phrase is gone');
+        assert.equal(live.isWorkflowsPermissionRejection(truncated), false);
+    });
+
+    test('workflowWriteParkLine marks the parked head; workflowWriteParkMarked dedupes per head', function () {
+        var SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+        var line = live.workflowWriteParkLine(SHA, '2026-10-19T17:20:00Z');
+        assert.ok(line.indexOf('workflow-write park (gh-1106)') !== -1,
+            'the marker names the distinct reason');
+        assert.ok(line.indexOf('parked-head: ' + SHA) !== -1,
+            'the marker carries parked-head: <sha> — the gh-994 reset keys on it');
+        assert.equal(live.workflowWriteParkMarked([line, 'chatter'], SHA), true,
+            'the marker for THIS head is found');
+        assert.equal(live.workflowWriteParkMarked([line], 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'), false,
+            'a DIFFERENT head is not deduped — the new park event must post');
+        assert.equal(live.workflowWriteParkMarked([], SHA), false);
+        assert.equal(live.workflowWriteParkMarked(null, SHA), false);
+        // R5: multiple bodies, marker in the last one, mixed-case sha —
+        // a single-item scan can pass while multi-item logic is wrong.
+        var other = live.workflowWriteParkLine('cccccccccccccccccccccccccccccccccccccccc', '2026-10-19T17:21:00Z');
+        assert.equal(live.workflowWriteParkMarked(['x', other, line], SHA.toUpperCase()), true,
+            'multi-body scan finds the marker (sha compare is case-insensitive)');
+    });
+});
