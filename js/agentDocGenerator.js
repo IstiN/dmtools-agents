@@ -190,20 +190,7 @@ function collectArtifacts(src, phase) {
     patterns.forEach(function(pattern) {
         var m;
         while ((m = pattern.re.exec(src)) !== null) {
-            var file;
-            if (pattern.concat) {
-                // Insert a placeholder for the variable between the two string literals.
-                var left = m[1];
-                var right = m[2] || '';
-                if (left.slice(-1) === '/' && right.charAt(0) === '/') {
-                    file = left + '<KEY>' + right;
-                } else {
-                    file = left + '<KEY>' + right;
-                }
-            } else {
-                file = m[1];
-            }
-            if (pattern.prefix) file = withPrefix(pattern.prefix, file);
+            var file = matchedArtifactFile(m, pattern);
             if (pattern.dir === 'write') add(writes, file);
             else add(reads, file);
         }
