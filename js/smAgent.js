@@ -2096,7 +2096,21 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                      // clone` form (the fork path had dropped it —
                      // incidental drift this unification also fixes).
                      ' -- ' + opts.headFlags +
-                     ' && cd ' + opts.dir +
+                     // gh-1074: tee the chain's stderr to a side file —
+                     // the cli tool's failure message embeds only the
+                     // HEAD of the output, while git writes the decisive
+                     // rejection ("remote: error: …", "! [remote
+                     // rejected] HEAD:branch (reason)") at the END of
+                     // stderr (live fa PR #1591: a 3-failure streak left
+                     // only "Cloning into '…' / Updating files: N%" in
+                     // the run log — undebugable). The clone truncates
+                     // the file, the brace group appends, so the file
+                     // always holds THIS attempt's stderr. The command
+                     // stays gh-FIRST (the executor whitelists the first
+                     // token only — mid-string braces are fine, a leading
+                     // brace is not).
+                     ' 2>' + opts.stderrFile +
+                     ' && { chmod 600 ' + opts.stderrFile + ' && cd ' + opts.dir +
                      opts.headSetup +
                      ' && git fetch --no-tags --depth 200 origin main' +
                      // Skip when main is already contained: two ticks racing
@@ -2130,13 +2144,24 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                      // ${GH_TOKEN} from the child env (the workflow
                      // token there), and the token never appears in
                      // this script or the logged command line.
-                     ' && git push ' + opts.pushTarget;
+                     ' && git push ' + opts.pushTarget +
+                     // gh-1074: close the stderr-tee brace group opened
+                     // after the clone redirect (appends — the clone's
+                     // 2> already truncated the file for this attempt).
+                     '; } 2>>' + opts.stderrFile +
+                     // Review gh-1074: a SUCCESSFUL chain removes its own
+                     // capture (it may hold the expanded push token); on
+                     // failure the caller reads the tail, then removes it.
+                     ' && rm -f ' + opts.stderrFile;
         }
 
-        // The classic same-repo refresh (AC4): the base-repush command
-        // stays BYTE-IDENTICAL to the pre-gh-1070 form (the regression
-        // test pins it) — this wrapper only parameterizes the builder.
-        function silentUpdateBranch(branchName) {
+        // The classic same-repo refresh (AC4): the base-repush GIT CHAIN
+        // stays byte-identical to the pre-gh-1070 form — the gh-1074
+        // regression test pins it INSIDE the stderr-tee wrapper (the
+        // builder now redirects stderr to opts.stderrFile; see the
+        // builder's gh-1074 note) — this wrapper only parameterizes the
+        // builder.
+        function silentUpdateBranch(branchName, stderrFile) {
             var dir = '/tmp/sm-silent-update-' + Date.now() + '-' +
                       String(branchName).replace(/[^a-zA-Z0-9._-]/g, '_');
             cli_execute_command({
@@ -2145,11 +2170,59 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     headFlags: '--no-tags --single-branch --branch ' + branchName +
                                ' --depth 200',
                     headSetup: '',
+                    stderrFile: stderrFile,
                     pushTarget: 'https://x-access-' + 'token:${GH_TOKEN}@github.com/' + // assembled from split literals: the sandbox redacts the contiguous token-URL pattern in file writes (the unit tests' TOK convention)
                          effectiveRepoInfo.owner + '/' + effectiveRepoInfo.repo +
                          '.git ' + branchName
                 })
             });
+        }
+
+        // ── gh-1074: the failure surface (stderr tail) ────────────────
+        // The captured-stderr file written by the chain's redirects. Read
+        // + redact + window it; null when the capture is missing or empty
+        // (mocks, or an executor that rejected the command before the
+        // redirect ran) — callers then keep the pre-gh-1074 surface.
+        // Review gh-1074: the raw capture may hold the expanded push token
+        // (git echoes the credential URL) — never leave it on disk.
+        function removeSilentUpdateStderrFile(stderrFile) {
+            try { cli_execute_command({ command: 'bash -c "rm -f ' + stderrFile + '"' }); } catch (eRm) {}
+        }
+
+        function readSilentUpdateStderrTail(stderrFile) {
+            try {
+                var raw = file_read({ path: stderrFile });
+                removeSilentUpdateStderrFile(stderrFile);
+                var text = (raw == null) ? '' : String(raw);
+                if (!text) return null;
+                var tail = validationLivenessModule.silentUpdateStderrTail(text);
+                tail = validationLivenessModule.redactSilentUpdateSecrets(tail);
+                return tail || null;
+            } catch (eTail) {
+                return null;
+            }
+        }
+
+        // The propagated error: the original cli failure message (output
+        // head) PLUS the redacted stderr tail — git writes the rejection
+        // reason at the END (AC1: the caller's 'update_branch failed' log
+        // entry now carries WHY git said no).
+        function silentUpdateErrorWithTail(e, tail) {
+            var base = (e && e.message) ? e.message : String(e);
+            if (!tail) return e;
+            var wrapped = new Error(base + '\n[silent-update stderr tail — last ' +
+                validationLivenessModule.SILENT_UPDATE_STDERR_TAIL_LINES +
+                ' lines, secrets redacted]\n' + tail);
+            if (e && e.stack) wrapped.stack = e.stack + '\nCaused by: wrapped with stderr tail (gh-1074)';
+            return wrapped;
+        }
+
+        // One stderr side file per attempt, next to the throwaway clone's
+        // dir naming — unique per attempt, so no stale-tail risk across
+        // ticks.
+        function silentUpdateStderrFile(branchName) {
+            return '/tmp/sm-silent-update-' + Date.now() + '-' +
+                   String(branchName).replace(/[^a-zA-Z0-9._-]/g, '_') + '.stderr';
         }
 
         // gh-1000 I5 — silent-update clone-failure bookkeeping (the pure
@@ -2170,7 +2243,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // two callers keep their deliberate divergence (the I5
         // silent-update-degraded flag vs the AC3 guest park). Returns
         // { attempt, left }.
-        function silentUpdateFailureTrail() {
+        function silentUpdateFailureTrail(reason) {
             var tracker = githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo);
             var comments = tracker.getComments(ticket.prNumber) || [];
             var count = validationLivenessModule.silentUpdateFailureCount(comments);
@@ -2178,22 +2251,26 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             var iso = new Date().toISOString();
             // The marker trail covers attempts 1..MAX — the durable
             // signal beyond the cap lives with the caller (no spam).
+            // gh-1074 AC2: the marker gains the one-line rejection reason
+            // extracted from the captured stderr tail (null → the exact
+            // pre-gh-1074 marker).
             if (attempt <= validationLivenessModule.SILENT_UPDATE_MAX_FAILURES) {
                 tracker.postComment(ticket.prNumber,
-                    validationLivenessModule.silentUpdateFailureLine(attempt, iso));
+                    validationLivenessModule.silentUpdateFailureLine(attempt, iso, reason));
             }
             return { attempt: attempt,
                      left: validationLivenessModule.silentUpdateAttemptsLeft(attempt) };
         }
 
-        function recordSilentUpdateFailure() {
+        function recordSilentUpdateFailure(reason) {
             try {
-                var trail = silentUpdateFailureTrail();
+                var trail = silentUpdateFailureTrail(reason);
                 var attempt = trail.attempt;
                 if (trail.left > 0) {
                     console.warn('  ⚠️  ' + key + ' silent-update clone failure #' + attempt +
                         ' recorded on the PR — ' + trail.left +
-                        ' attempt(s) left before the degraded flag (I5)');
+                        ' attempt(s) left before the degraded flag (I5)' +
+                        (reason ? ' — ' + reason : ''));
                     return;
                 }
                 // Attempts exhausted: flag the PR once (REST add-label is
@@ -2214,13 +2291,19 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
 
         function silentUpdateBranchTracked(branchName) {
+            var stderrFile = silentUpdateStderrFile(branchName);
             try {
-                silentUpdateBranch(branchName);
+                silentUpdateBranch(branchName, stderrFile);
             } catch (eClone) {
-                // I5: only CLONE/refresh failures get the marker trail —
-                // the caller's catch still reports the rule failure.
-                recordSilentUpdateFailure();
-                throw eClone;
+                // I5 + gh-1074: the marker trail fires on the refresh
+                // failure, now carrying the one-line rejection reason
+                // extracted from the captured stderr tail (null-safe —
+                // no capture → the exact pre-gh-1074 surface). The
+                // caller's catch still reports the rule failure.
+                var tail = readSilentUpdateStderrTail(stderrFile);
+                recordSilentUpdateFailure(
+                    validationLivenessModule.silentUpdateRejectionReason(tail));
+                throw silentUpdateErrorWithTail(eClone, tail);
             }
         }
 
@@ -2289,7 +2372,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             postForkParkComment(reason);
         }
 
-        function forkSilentUpdateBranch(branchName, forkFull) {
+        function forkSilentUpdateBranch(branchName, forkFull, stderrFile) {
             // The editable-fork refresh (gh-1070 AC1): clone the BASE
             // repo, fetch the PR head via refs/pull/<N>/head (always
             // fetchable — even when the fork branch was deleted, gh-1057),
@@ -2311,13 +2394,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     headSetup: ' && git fetch --no-tags --depth 200 origin refs/pull/' +
                                ticket.prNumber + '/head' +
                                ' && git checkout -B ' + branchName + ' FETCH_HEAD',
+                    stderrFile: stderrFile,
                     pushTarget: validationLivenessModule.forkPushTokenUrl(forkFull) +
                                 ' HEAD:' + branchName
                 })
             });
         }
 
-        function recordForkSilentUpdateFailure() {
+        function recordForkSilentUpdateFailure(reason) {
             // AC3: the maintainer-edit push failed DESPITE the probe (the
             // race: the author disabled edits mid-flight). Counted once
             // per failed tick on the shared silent-update marker trail
@@ -2325,14 +2409,17 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // to gh-1000 I5); the retry itself stays every-tick
             // (self-healing). Once the attempts run out the PR parks
             // GUEST-STYLE — NEVER silent-update-degraded: the workspace
-            // is not dead, the permission is gone.
+            // is not dead, the permission is gone. gh-1074: the marker
+            // gains the one-line rejection reason from the captured
+            // stderr tail (the fa PR #1591 streak class).
             try {
-                var trail = silentUpdateFailureTrail();
+                var trail = silentUpdateFailureTrail(reason);
                 var attempt = trail.attempt;
                 if (trail.left > 0) {
                     console.warn('  ⚠️  ' + key + ' fork silent-update push failure #' +
                         attempt + ' recorded on the PR — ' + trail.left +
-                        ' attempt(s) left before the guest park (gh-1070 AC3)');
+                        ' attempt(s) left before the guest park (gh-1070 AC3)' +
+                        (reason ? ' — ' + reason : ''));
                     return;
                 }
                 if ((ticket.labels || []).indexOf('validation_failed') === -1) {
@@ -2351,11 +2438,17 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
 
         function forkSilentUpdateBranchTracked(branchName, forkFull) {
+            var stderrFile = silentUpdateStderrFile(branchName);
             try {
-                forkSilentUpdateBranch(branchName, forkFull);
+                forkSilentUpdateBranch(branchName, forkFull, stderrFile);
             } catch (eFork) {
-                recordForkSilentUpdateFailure();
-                throw eFork;
+                // gh-1074: same failure surface as the base lane — the
+                // marker gains the rejection reason, the propagated error
+                // carries the redacted stderr tail.
+                var tail = readSilentUpdateStderrTail(stderrFile);
+                recordForkSilentUpdateFailure(
+                    validationLivenessModule.silentUpdateRejectionReason(tail));
+                throw silentUpdateErrorWithTail(eFork, tail);
             }
         }
 

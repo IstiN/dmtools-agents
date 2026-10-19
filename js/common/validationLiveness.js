@@ -272,8 +272,16 @@ var SILENT_UPDATE_MAX_FAILURES = 3;
 var SILENT_UPDATE_DEGRADED_LABEL = 'silent-update-degraded';
 var SILENT_UPDATE_MARKER_RE = /⚠️ silent-update failure — attempt (\d+) at (\S+)/g;
 
-function silentUpdateFailureLine(attempt, iso) {
-    return '⚠️ silent-update failure — attempt ' + attempt + ' at ' + (iso || '');
+function silentUpdateFailureLine(attempt, iso, reason) {
+    var line = '⚠️ silent-update failure — attempt ' + attempt + ' at ' + (iso || '');
+    // gh-1074 AC2: the marker gains the one-line rejection reason when the
+    // captured stderr tail carries one — the PR timeline alone then explains
+    // the streak. The reason rides the SAME line AFTER the ISO timestamp,
+    // so the counting regex above (attempt / ISO char-class) keeps parsing;
+    // it collapses to one bounded line — the marker stays a marker.
+    var r = String(reason == null ? '' : reason).trim();
+    if (r) line += ' — ' + r.split('\n')[0].slice(0, 200);
+    return line;
 }
 
 function commentBodyOf(c) {
@@ -307,6 +315,70 @@ function silentUpdateFailureCount(comments) {
 function silentUpdateAttemptsLeft(count) {
     var left = SILENT_UPDATE_MAX_FAILURES - (Math.floor(Number(count)) || 0);
     return left > 0 ? left : 0;
+}
+
+// ── Silent-update failure surface: the stderr tail (gh-1074) ────────────────
+//
+// Live fa PR #1591 (2026-10-19 05:51/05:52Z): the fork silent-update push
+// failed 3× and the SM run log preserved only the BEGINNING of stderr
+// ("Cloning into '…' / Updating files: N%"). cli_execute_command's failure
+// message embeds the command output from the START (head-truncated), while
+// git writes the decisive rejection ("remote: error: …", "! [remote
+// rejected] HEAD:branch (reason)") at the END — exactly the part that is
+// cut. The smAgent chain tees its stderr to a side file (clone truncates,
+// the brace group appends — the file always holds THIS attempt's stderr);
+// these pure helpers turn the capture into the failure surface:
+//
+//   silentUpdateStderrTail      — the LAST ~20 lines (the propagated error
+//                                 carries these, not the head)
+//   silentUpdateRejectionReason — the one-line reason for the marker
+//                                 comment (AC2)
+//   redactSilentUpdateSecrets   — the same secrets hygiene the command
+//                                 line gets (AC3): git echoes the push URL
+//                                 with the EXPANDED credential ("To
+//                                 https://x-access-token:<token>@…") and a
+//                                 hook can echo token-shaped strings.
+
+var SILENT_UPDATE_STDERR_TAIL_LINES = 20;
+
+function silentUpdateStderrTail(text, maxLines) {
+    var n = (typeof maxLines === 'number' && maxLines > 0)
+        ? Math.floor(maxLines) : SILENT_UPDATE_STDERR_TAIL_LINES;
+    var s = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+    var lines = s.split('\n');
+    // a final newline is not a content line
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+    if (lines.length > n) lines = lines.slice(lines.length - n);
+    return lines.join('\n');
+}
+
+function silentUpdateRejectionReason(tail) {
+    var s = String(tail == null ? '' : tail);
+    // the fragment the ticket calls out: "! [remote rejected] HEAD:branch
+    // (reason)" — the '!' prefix stays on its own context, the bracketed
+    // fragment is the durable one-line reason.
+    var m = /\[remote rejected\][^\n]*/.exec(s);
+    if (m) return m[0].trim().slice(0, 200);
+    // fallback: the first "remote: error: …" line (hook/permission refusals
+    // that never produce a refspec rejection)
+    var lines = s.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+        var r = /remote:\s*error:\s*(.+)/.exec(lines[i]);
+        if (r) return ('remote: error: ' + r[1].trim()).slice(0, 200);
+    }
+    return null;
+}
+
+function redactSilentUpdateSecrets(text) {
+    var s = String(text == null ? '' : text);
+    // the maintainer-edit token URL git echoes back on push — collapse the
+    // credential exactly like the redacted command-line form
+    s = s.replace(/(x-access-token:)[^@\s]+@/gi, '$1[REDACTED]@');
+    // token-shaped strings a verbose git/hook output could echo (classic
+    // ghp_/gho_/ghu_/ghs_/ghr_ prefixes and fine-grained github_pat_)
+    s = s.replace(/\bgh[opsur]_[A-Za-z0-9]{6,}\b/g, '[REDACTED:token]');
+    s = s.replace(/\bgithub_pat_[A-Za-z0-9_]{6,}\b/g, '[REDACTED:token]');
+    return s;
 }
 
 // ── Fork-aware silent-update routing (gh-1070) ──────────────────────────────
@@ -384,6 +456,10 @@ module.exports = {
     silentUpdateFailureLine: silentUpdateFailureLine,
     silentUpdateFailureCount: silentUpdateFailureCount,
     silentUpdateAttemptsLeft: silentUpdateAttemptsLeft,
+    SILENT_UPDATE_STDERR_TAIL_LINES: SILENT_UPDATE_STDERR_TAIL_LINES,
+    silentUpdateStderrTail: silentUpdateStderrTail,
+    silentUpdateRejectionReason: silentUpdateRejectionReason,
+    redactSilentUpdateSecrets: redactSilentUpdateSecrets,
     forkHeadFull: forkHeadFull,
     forkSilentUpdateRoute: forkSilentUpdateRoute,
     forkPushTokenUrl: forkPushTokenUrl

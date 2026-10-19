@@ -2073,7 +2073,14 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.ok(cmd.indexOf('epam/dmtools-dart') !== -1, 'clones the TARGET repo');
         assert.ok(cmd.indexOf('--branch feat/x') !== -1, 'single-branch clone of the head ref');
         assert.ok(cmd.indexOf('merge --no-edit FETCH_HEAD') !== -1, 'merges fetched main');
-        assert.equal(cmd.slice(-'git push https://x-access-token:${GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x'.length),
+        // gh-1074: the command tees its stderr to a side file (clone `2>`,
+        // the rest in a `{ …; } 2>>` brace group) — the git chain stays
+        // byte-identical INSIDE the wrapper, so the pin targets the chain
+        // up to the tee, not the vessel.
+        var teeAt = cmd.lastIndexOf('; } 2>>/tmp/sm-silent-update-');
+        assert.ok(teeAt !== -1, 'gh-1074: the chain tees its stderr to a side file');
+        var chain = cmd.slice(0, teeAt);
+        assert.equal(chain.slice(-'git push https://x-access-token:${GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x'.length),
             'git push https://x-access-token:${GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x');
         // No env swap: the push rides the checkout's stored credentials.
         assert.equal(sm.capturedEnvSets.length, 0, 'no token swap');
@@ -13934,7 +13941,12 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         assert.ok(cmd.indexOf('git checkout -B feat/fork FETCH_HEAD') !== -1,
             'checks the PR head out as the branch to push');
         assert.ok(cmd.indexOf('merge --no-edit FETCH_HEAD') !== -1, 'merges main under the head');
-        assert.ok(cmd.slice(-('HEAD:feat/fork').length) === 'HEAD:feat/fork', 'pushes HEAD to the PR branch');
+        // gh-1074: the chain now tees its stderr ('; } 2>>…' tail) — the
+        // push-target pin reads the chain up to the tee.
+        var teeAt = cmd.lastIndexOf('; } 2>>/tmp/sm-silent-update-');
+        assert.ok(teeAt !== -1, 'gh-1074: the chain tees its stderr to a side file');
+        var chain = cmd.slice(0, teeAt);
+        assert.ok(chain.slice(-('HEAD:feat/fork').length) === 'HEAD:feat/fork', 'pushes HEAD to the PR branch');
         assert.ok(cmd.indexOf('git push https://x-access-token:' + TOK + '@github.com/' + FORK + '.git') !== -1,
             'the push targets the FORK built from head.repo.full_name');
         assert.ok(cmd.indexOf('@github.com/' + BASE + '.git') === -1,
@@ -14059,9 +14071,15 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         assert.equal(clones(sm).length, 1, 'one base-repush command');
         var cmd = clones(sm)[0].command;
         assert.ok(cmd.indexOf('--single-branch --branch feat/x') !== -1, 'the classic single-branch clone');
-        assert.equal(cmd.slice(-('git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/x').length),
+        // gh-1074: the base repush GIT CHAIN stays byte-identical to the
+        // pre-gh-1070 form — the pin now reads the chain up to the stderr
+        // tee wrapper the builder appends ('; } 2>>…').
+        var teeAt = cmd.lastIndexOf('; } 2>>/tmp/sm-silent-update-');
+        assert.ok(teeAt !== -1, 'gh-1074: the chain tees its stderr to a side file');
+        var chain = cmd.slice(0, teeAt);
+        assert.equal(chain.slice(-('git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/x').length),
             'git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/x',
-            'the base repush is byte-identical to the pre-gh-1070 form');
+            'the base repush chain is byte-identical to the pre-gh-1070 form');
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no fork park on a same-repo PR');
     });
 
@@ -14081,9 +14099,14 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         assert.equal(clones(sm).length, 1, 'one base-repush command — the fork paths never engaged');
         var cmd = clones(sm)[0].command;
         assert.ok(cmd.indexOf('refs/pull/') === -1, 'no refs/pull fetch on a same-repo head');
-        assert.equal(cmd.slice(-('git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/y').length),
+        // gh-1074: pin the chain up to the stderr tee wrapper (see the
+        // AC4 test above).
+        var teeAt = cmd.lastIndexOf('; } 2>>/tmp/sm-silent-update-');
+        assert.ok(teeAt !== -1, 'gh-1074: the chain tees its stderr to a side file');
+        var chain = cmd.slice(0, teeAt);
+        assert.equal(chain.slice(-('git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/y').length),
             'git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/y',
-            'the base repush is byte-identical to the pre-gh-1070 form');
+            'the base repush chain is byte-identical to the pre-gh-1070 form');
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'NO false guest park on a same-repo PR');
         assert.equal(sm.capturedPrComments.length, 0, 'no park comment on a same-repo PR');
     });
@@ -14497,5 +14520,199 @@ suite('smAgent: fork PR dispatch (gh-1075)', function () {
         assert.equal(sm.capturedTriggers.length, 1,
             'another fork PR\'s leg owns nothing here — the probe keys on the PR anchor, not the shared main head_branch');
         assert.equal(sm.capturedTriggers[0].ref, 'main');
+    });
+});
+
+// ── gh-1074: silent-update failures surface the stderr TAIL ──────────────────
+// Live fa PR #1591: the fork push failed 3× with maintainerCanModify:true and
+// the run log preserved only "Cloning into '…' / Updating files: N%" — the
+// cli tool's failure message embeds the output head, while git writes the
+// rejection at the END of stderr. The chain now tees stderr to a side file;
+// on failure the propagated error carries the redacted last-20-lines tail
+// (UT-1/AC1) and the marker comment gains the one-line rejection reason
+// (UT-2/AC2), scrubbed with the same token redaction the command line gets
+// (UT-3/AC3). REG-1: the gh-1000 I5 / gh-1070 bookkeeping suites above stay
+// green untouched.
+
+suite('smAgent: silent-update failure stderr tail (gh-1074)', function () {
+    var RULE_1074 = { source: 'github', query: { type: 'pr', labels: ['pr_approved'], mergeState: 'BEHIND' },
+                      localAction: 'update_branch', limit: 5, id: 'silent-update-behind' };
+    var FORK_1074 = 'YuryBY/dmtools-dart';
+
+    // A push-refusal stderr the way git actually writes it: progress first,
+    // the decisive rejection at the END. 30 progress lines > the 20-line
+    // tail window, so the head must be dropped and the tail preserved.
+    function refusalStderr(withToken) {
+        var lines = [];
+        for (var i = 1; i <= 30; i++) lines.push('Updating files: ' + i + '%');
+        lines.push("remote: error: GH006: Protected branch update failed for refs/heads/ai/gh-1591");
+        if (withToken) {
+            lines.push('To https://x-access-' + TOK_1074 + '@github.com/' + FORK_1074 + '.git');
+        } else {
+            lines.push('To https://github.com/' + FORK_1074 + '.git');
+        }
+        lines.push(' ! [remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)');
+        lines.push("error: failed to push some refs to 'https://github.com/" + FORK_1074 + ".git'");
+        return lines.join('\n') + '\n';
+    }
+    // assembled from split literals: the dev sandbox redacts contiguous
+    // token-URL patterns in file writes (the repo's TOK convention)
+    var TOK_1074 = 'token:' + 'ghp_' + 'Nhz2Q1rN8ZsZv9mR2tK7wX4yP5bH3cD6fG8hJ9k' + '@';
+    var RAW_TOKEN_1074 = 'ghp_' + 'Nhz2Q1rN8ZsZv9mR2tK7wX4yP5bH3cD6fG8hJ9k';
+
+    function baseItem(extra) {
+        var it = { key: 'pr-983', labels: ['pr_approved'], issueNumber: null,
+                   prNumber: 983, draft: false, branch: 'ai/gh-983' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function forkItem1074(extra) {
+        return baseItem(Object.assign({ key: 'pr-1591', prNumber: 1591, branch: 'ai/gh-1591',
+                                        headRepo: FORK_1074, maintainerCanModify: true }, extra));
+    }
+
+
+    var CONFIG_1074_PATH = '../.dmtools/config.js';
+    var CONFIG_1074 = 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };';
+    var STDERR_PATH_1074 = /2>(\/tmp\/sm-silent-update-\S+?\.stderr)/;
+    var CLONE_FAILURE_1074 = 'Tool execution failed: Command execution failed (exit code 1): ' +
+        "Cloning into '/tmp/sm-silent-update-x'...\nUpdating files: 1%\nUpdating files: 2%";
+
+    // file_read mock: captured stderr side files first, then the repo config.
+    function makeStderrFileRead(stderrByPath) {
+        return function (readOpts) {
+            var p = readOpts.path;
+            if (stderrByPath[p] !== undefined) return stderrByPath[p];
+            return p === CONFIG_1074_PATH ? CONFIG_1074 : null;
+        };
+    }
+
+    // Records the stderr side file named by the command's redirect.
+    function registerStderrPath(stderrByPath, command, stderrContent) {
+        var m = STDERR_PATH_1074.exec(command);
+        if (m) stderrByPath[m[1]] = stderrContent;
+    }
+
+    // derive the stderr path from the captured command itself
+    function smWithStderr(item, stderrContent, githubExtra) {
+        var stderrByPath = {};
+        return makeSmAgent({
+            fileMap: { '../.dmtools/config.js': CONFIG_1074 },
+            github: Object.assign({ items: [item], prComments: [] }, githubExtra),
+            captureConsole: true,
+            extraMocks: { file_read: makeStderrFileRead(stderrByPath) },
+            onCliExecute: function (cmdOpts) {
+                registerStderrPath(stderrByPath, cmdOpts.command, stderrContent);
+                if (cmdOpts.command.indexOf('gh repo clone ') !== -1) throw new Error(CLONE_FAILURE_1074);
+                return '';
+            }
+        });
+    }
+
+    test('review gh-1074: a failed refresh removes the token-bearing stderr capture after reading it', function () {
+        var sm = smWithStderr(forkItem1074(), refusalStderr(false));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [RULE_1074] } });
+        var rm = sm.capturedCliCommands.filter(function (c) {
+            return /^bash -c "rm -f \/tmp\/sm-silent-update-\S+\.stderr"$/.test(c.command);
+        });
+        assert.equal(rm.length, 1, 'stderr capture removed once');
+    });
+
+    test('UT-1/AC1: the propagated failure log carries the LAST stderr lines, not the head', function () {
+        var sm = smWithStderr(baseItem(), refusalStderr(false));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [RULE_1074] } });
+
+        var logged = sm.capturedLogs.join('\n');
+        assert.ok(logged.indexOf('update_branch failed') !== -1, 'the update_branch failure is logged');
+        assert.ok(logged.indexOf('[remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)') !== -1,
+            'the log entry carries the stderr TAIL with the rejection reason');
+        assert.ok(logged.indexOf('silent-update stderr tail') !== -1,
+            'the tail is labelled as the stderr tail');
+        // the chain tees its stderr: clone truncates, the tail appends
+        var cmd = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone ') !== -1;
+        })[0].command;
+        assert.ok(cmd.indexOf('gh repo clone ') === 0, 'still a gh-first whitelisted command');
+        assert.ok(/2>\/tmp\/sm-silent-update-\S+\.stderr/.test(cmd), 'clone stderr redirect present');
+        assert.ok(/; \} 2>>\/tmp\/sm-silent-update-\S+\.stderr && rm -f \/tmp\/sm-silent-update-\S+\.stderr$/.test(cmd),
+            'the brace group appends the remaining stderr, a clean run removes the capture');
+        assert.ok(/&& \{ chmod 600 \/tmp\/sm-silent-update-\S+\.stderr && cd /.test(cmd),
+            'the capture is restricted to the owner before git writes to it');
+    });
+
+    test('UT-2/AC2: the failure marker comment gains the one-line rejection reason', function () {
+        var sm = smWithStderr(forkItem1074(), refusalStderr(false));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [RULE_1074] } });
+
+        assert.equal(sm.capturedPrComments.length, 1, 'exactly one failure marker posted');
+        var body = sm.capturedPrComments[0].body;
+        assert.ok(body.indexOf('silent-update failure — attempt 1 at ') === 0 ||
+                  body.indexOf('⚠️ silent-update failure — attempt 1 at ') === 0,
+            'the marker prefix is unchanged');
+        assert.ok(body.indexOf('[remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)') !== -1,
+            'the marker carries the one-line rejection reason');
+        // AC2 also requires the timeline alone to explain the streak: the
+        // attempt counter must still parse the extended marker.
+        var vl = loadModule('js/common/validationLiveness.js', makeRequire({}), {});
+        assert.deepEqual(vl.silentUpdateFailureCount([body]).count, 1);
+    });
+
+    test('UT-2 multi-item: a 2-tick streak — attempt counting stays correct with reason-bearing markers', function () {
+        // R5: marker counting must hold across MULTIPLE extended markers,
+        // not just one (the single-item case can pass while multi-item
+        // parsing of the extended line is still wrong).
+        var thread = []; // accumulated PR comment bodies across ticks
+        for (var tick = 1; tick <= 2; tick++) {
+            var sm = smWithStderr(forkItem1074(), refusalStderr(false),
+                { prComments: thread.map(function (b) { return { body: b }; }) });
+            sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [RULE_1074] } });
+            assert.equal(sm.capturedPrComments.length, 1, 'tick ' + tick + ': exactly one marker posted');
+            thread.push(sm.capturedPrComments[0].body);
+        }
+        assert.ok(thread[0].indexOf('attempt 1 at ') !== -1, 'first tick posts attempt 1');
+        assert.ok(thread[1].indexOf('attempt 2 at ') !== -1,
+            'second tick counts the reason-bearing attempt-1 marker correctly');
+        assert.ok(thread[1].indexOf('[remote rejected]') !== -1,
+            'the second marker carries the reason too');
+    });
+
+    test('UT-3/AC3: token-shaped strings in the tail are redacted in the log and the marker', function () {
+        var sm = smWithStderr(forkItem1074(), refusalStderr(true));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [RULE_1074] } });
+
+        var logged = sm.capturedLogs.join('\n');
+        assert.ok(logged.indexOf(RAW_TOKEN_1074) === -1, 'the raw token never reaches the log');
+        assert.ok(logged.indexOf('x-access-token:[REDACTED]@') !== -1,
+            'the echoed push URL is redacted in the log');
+        var body = sm.capturedPrComments.length ? sm.capturedPrComments[0].body : '';
+        assert.ok(body.indexOf(RAW_TOKEN_1074) === -1, 'the raw token never reaches the PR comment');
+        assert.ok(body.indexOf('[remote rejected]') !== -1,
+            'the reason is still present after the redaction');
+    });
+
+    test('AC1 fallback: no captured stderr (missing/unreadable file) → the old surface, no reason', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: { items: [baseItem()], prComments: [] },
+            captureConsole: true,
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('gh repo clone ') !== -1) {
+                    throw new Error('denied — edits revoked mid-flight');
+                }
+                return '';
+            }
+        });
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [RULE_1074] } });
+
+        assert.equal(sm.capturedPrComments.length, 1, 'the marker still posts');
+        var body = sm.capturedPrComments[0].body;
+        assert.ok(body.indexOf('— attempt 1 at ') !== -1, 'marker present');
+        assert.ok(body.indexOf('[remote rejected]') === -1, 'no fabricated reason without a capture');
+        var logged = sm.capturedLogs.join('\n');
+        assert.ok(logged.indexOf('update_branch failed') !== -1, 'the failure is still logged');
+        assert.ok(logged.indexOf('denied — edits revoked mid-flight') !== -1,
+            'the original error message is preserved');
     });
 });
