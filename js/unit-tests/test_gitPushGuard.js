@@ -288,3 +288,145 @@ suite('gitPushGuard — shim parity (scripts/git-push-guard.sh)', function() {
         assert.contains(runAgent, 'already armed on PATH');
     });
 });
+
+// ── gh-1082 characterization: commitMessageText arg-form matrix ──────────────
+// Pins the exact message-text extraction for every git commit flag shape the
+// shim can see. These tests existed BEFORE the CRAP decomposition of
+// commitMessageText (extract part-decision helpers) — they must keep passing
+// byte-identically through any refactor.
+suite('gitPushGuard.commitMessageText — arg-form matrix (gh-1082 characterization)', function() {
+    var guard = loadGitPushGuard();
+
+    test('empty args and no flags yield an empty message', function() {
+        assert.equal(guard.commitMessageText([], {}), '');
+        assert.equal(guard.commitMessageText(['commit', '--amend'], {}), '');
+        assert.equal(guard.commitMessageText(['-a', 'file.txt'], {}), '');
+    });
+
+    test('-m <msg> takes the following token as one part', function() {
+        assert.equal(guard.commitMessageText(['-m', 'one'], {}), 'one');
+    });
+
+    test('--message <msg> takes the following token as one part', function() {
+        assert.equal(guard.commitMessageText(['--message', 'two'], {}), 'two');
+    });
+
+    test('clustered short flags ending in m (-cm, -am) consume the next token', function() {
+        assert.equal(guard.commitMessageText(['-cm', 'three'], {}), 'three');
+        assert.equal(guard.commitMessageText(['-am', 'four'], {}), 'four');
+    });
+
+    test('-m as the last argument contributes nothing (no dangling value)', function() {
+        assert.equal(guard.commitMessageText(['-m'], {}), '');
+        assert.equal(guard.commitMessageText(['a', '-m'], {}), '');
+    });
+
+    test('an empty-string value is kept ("-m \u0027\u0027")', function() {
+        assert.equal(guard.commitMessageText(['-m', ''], {}), '');
+        // Two parts where one is empty: the join separator still appears.
+        assert.equal(guard.commitMessageText(['-m', '', '-m', 'x'], {}), '\nx');
+    });
+
+    test('--message=<msg> inline form', function() {
+        assert.equal(guard.commitMessageText(['--message=five'], {}), 'five');
+        assert.equal(guard.commitMessageText(['--message='], {}), '');
+    });
+
+    test('joined -m<text> form contributes the remainder of the token', function() {
+        assert.equal(guard.commitMessageText(['-msix'], {}), 'six');
+        assert.equal(guard.commitMessageText(['-m=x'], {}), '=x');
+    });
+
+    test('-F <file> contributes the registered file content and consumes its value', function() {
+        var files = { 'msg.txt': 'file body' };
+        assert.equal(guard.commitMessageText(['-F', 'msg.txt'], files), 'file body');
+        // The value token is consumed even when nothing is registered for it.
+        assert.equal(guard.commitMessageText(['-F', 'msg.txt'], {}), '');
+        assert.equal(guard.commitMessageText(['--file', 'msg.txt'], files), 'file body');
+    });
+
+    test('-F as the last argument contributes nothing', function() {
+        assert.equal(guard.commitMessageText(['-F'], { 'x': 'y' }), '');
+    });
+
+    test('--file=<path> inline form', function() {
+        var files = { 'f.txt': 'inline file' };
+        assert.equal(guard.commitMessageText(['--file=f.txt'], files), 'inline file');
+        assert.equal(guard.commitMessageText(['--file=f.txt'], {}), '');
+        assert.equal(guard.commitMessageText(['--file='], files), '');
+    });
+
+    test('a cluster token ending in F (-cF) reads the next token as a file path', function() {
+        var files = { 'n.txt': 'cluster file' };
+        assert.equal(guard.commitMessageText(['-cF', 'n.txt'], files), 'cluster file');
+    });
+
+    test('-mF is a joined -m token ("F"), not a file flag — the joined -m form is checked first', function() {
+        var files = { 'p.txt': 'mF cluster' };
+        assert.equal(guard.commitMessageText(['-mF', 'p.txt'], files), 'F');
+        assert.equal(guard.commitMessageText(['-mF', 'p.txt'], {}), 'F');
+    });
+
+    test('unrelated tokens are skipped, not treated as values', function() {
+        assert.equal(guard.commitMessageText(['-S', 'keyid', '-m', 'signed'], {}), 'signed');
+    });
+
+    test('multiple parts are joined with a single newline, in order', function() {
+        var files = { 'body.txt': 'from file' };
+        var text = guard.commitMessageText(
+            ['-m', 'subject', '--message=mid', '-mbody', '-F', 'body.txt'],
+            files
+        );
+        assert.equal(text, 'subject\nmid\nbody\nfrom file');
+    });
+
+    test('evaluation through evaluateCommit sees file and inline content alike', function() {
+        assert.equal(guard.evaluateCommit(['-F', 'm.txt'], { 'm.txt': 'resolves #7' }).allowed, false);
+        assert.equal(guard.evaluateCommit(['--message=resolves #8']).allowed, false);
+        assert.equal(guard.evaluateCommit(['-mresolves #9']).allowed, false);
+        assert.equal(guard.evaluateCommit(['-cm', 'resolves #10']).allowed, false);
+    });
+
+    test('helper predicates classify single tokens (gh-1082 extraction surface)', function() {
+        assert.equal(guard.isMessageValueFlag('-m'), true);
+        assert.equal(guard.isMessageValueFlag('--message'), true);
+        assert.equal(guard.isMessageValueFlag('-cm'), true);
+        assert.equal(guard.isMessageValueFlag('-mx'), false);
+        assert.equal(guard.isMessageValueFlag('--message=x'), false);
+        assert.equal(guard.isMessageValueFlag('-F'), false);
+
+        assert.equal(guard.isInlineMessageOption('--message=x'), true);
+        assert.equal(guard.isInlineMessageOption('--message='), true);
+        assert.equal(guard.isInlineMessageOption('--message'), false);
+
+        assert.equal(guard.isJoinedShortMessage('-mx'), true);
+        assert.equal(guard.isJoinedShortMessage('-m'), false);
+        assert.equal(guard.isJoinedShortMessage('--mx'), false);
+        assert.equal(guard.isJoinedShortMessage('-cm'), false);
+
+        assert.equal(guard.isFileValueFlag('-F'), true);
+        assert.equal(guard.isFileValueFlag('--file'), true);
+        assert.equal(guard.isFileValueFlag('-cF'), true);
+        assert.equal(guard.isFileValueFlag('-mF'), true);
+        assert.equal(guard.isFileValueFlag('--file=x'), false);
+        assert.equal(guard.isFileValueFlag('-m'), false);
+
+        assert.equal(guard.isInlineFileOption('--file=f.txt'), true);
+        assert.equal(guard.isInlineFileOption('--file='), true);
+        assert.equal(guard.isInlineFileOption('--file'), false);
+
+        assert.equal(guard.messageValueAfter(['-m', 'v'], 0), 'v');
+        assert.equal(guard.messageValueAfter(['-m'], 0), null);
+
+        assert.equal(guard.fileContentFor({ 'a': 'x' }, 'a'), 'x');
+        assert.equal(guard.fileContentFor({}, 'a'), null);
+        assert.equal(guard.fileContentFor(null, 'a'), null);
+        assert.equal(guard.fileContentFor({ 'a': '' }, 'a'), null);
+
+        var part = guard.commitMessagePartAt(['-m', 'v'], 0, {});
+        assert.deepEqual(part, { text: 'v', next: 2 });
+        assert.deepEqual(guard.commitMessagePartAt(['-m'], 0, {}), { text: null, next: 1 });
+        assert.deepEqual(guard.commitMessagePartAt(['--message='], 0, {}), { text: '', next: 1 });
+        assert.deepEqual(guard.commitMessagePartAt(['zzz'], 0, {}), { text: null, next: 1 });
+    });
+});
