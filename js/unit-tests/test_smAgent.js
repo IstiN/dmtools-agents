@@ -147,6 +147,7 @@ function makeSmAgent(opts) {
             return '{"items":[]}';
         },
         file_write: function(writeOpts) {
+            capturedFileWrites.push(writeOpts);
             if (opts.onFileWrite) opts.onFileWrite(writeOpts);
             return true;
         },
@@ -157,6 +158,13 @@ function makeSmAgent(opts) {
     // runAsync fake injection (spec: probeDispatchedState delegation pin) —
     // shadows the (absent) global inside the smAgent module scope.
     if (opts.runAsync) smMocks.runAsync = opts.runAsync;
+    var capturedFileWrites = [];
+    var capturedFileDeletes = [];
+    smMocks.file_delete = function (delOpts) {
+        capturedFileDeletes.push(delOpts);
+        if (opts.onFileDelete) opts.onFileDelete(delOpts);
+        return true;
+    };
     if (opts.extraMocks) { for (var em in opts.extraMocks) { if (opts.extraMocks.hasOwnProperty(em)) smMocks[em] = opts.extraMocks[em]; } }
 
     // Console capture (owner directive 2026-10-08 priority-tier tests): the
@@ -369,6 +377,11 @@ function makeSmAgent(opts) {
             './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
+            // gh-1107: the check-run stamp transport (temp-file JSON body).
+            './common/checkRunStamp.js': loadModule('js/common/checkRunStamp.js',
+                makeRequire({
+                    '../factory/token_usage.js': loadModule('js/factory/token_usage.js', makeRequire({}), {})
+                }), {}),
             './common/invisibleRequiredChecks.js': loadModule('js/common/invisibleRequiredChecks.js', makeRequire({}), {}),
             './common/triggerFailures.js': loadModule('js/common/triggerFailures.js', makeRequire({}), {}),
             './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js', makeRequire({}), {}),
@@ -439,6 +452,8 @@ function makeSmAgent(opts) {
         capturedEnvSets: capturedEnvSets,
         capturedScmConfigs: capturedScmConfigs,
         capturedIoCacheDrops: capturedIoCacheDrops,
+        capturedFileWrites: capturedFileWrites,
+        capturedFileDeletes: capturedFileDeletes,
         capturedLogs: capturedLogs
     };
 }
