@@ -366,3 +366,99 @@ suite('validationLiveness fork-aware silent-update routing (gh-1070)', function 
         assert.ok(url.indexOf('${GH_TOKEN}') !== -1, 'the token rides the child env, never the source');
     });
 });
+
+// ── gh-1074: failure-surface stderr tail ─────────────────────────────────────
+// Live fa PR #1591: the fork silent-update push failed 3× and the run log
+// preserved only the BEGINNING of stderr ("Cloning into '…' / Updating
+// files: N%") — cli_execute_command's exception embeds the output head,
+// while git writes the decisive rejection ("remote: error: …",
+// "! [remote rejected] HEAD:branch (reason)") at the END. The silent-update
+// chain now tees its stderr to a side file; these helpers turn the capture
+// into the failure surface: the propagated error (UT-1), the one-line
+// rejection reason on the marker comment (UT-2/AC2), and the same secrets
+// hygiene the command line gets (UT-3/AC3).
+
+suite('validationLiveness silent-update stderr tail (gh-1074)', function () {
+
+    function longStderr(lines) {
+        var out = [];
+        for (var i = 1; i <= lines; i++) out.push('Updating files: ' + i + '%');
+        out.push("remote: error: GH006: Protected branch update failed for refs/heads/ai/gh-1591");
+        out.push('To https://github.com/YuryBY/dmtools-dart.git');
+        out.push(' ! [remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)');
+        out.push("error: failed to push some refs to 'https://github.com/YuryBY/dmtools-dart.git'");
+        return out.join('\n') + '\n';
+    }
+
+    test('UT-1: silentUpdateStderrTail keeps the LAST ~20 lines of a long stderr, not the head', function () {
+        var tail = live.silentUpdateStderrTail(longStderr(60));
+        var tailLines = tail.split('\n');
+        assert.equal(tailLines.length, 20, 'bounded to the last 20 lines');
+        assert.ok(tail.indexOf('Updating files: 1%') === -1, 'the head progress is dropped');
+        assert.ok(tail.indexOf('Updating files: 41%') === -1, 'lines older than the window are dropped');
+        assert.ok(tail.indexOf('[remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)') !== -1,
+            'the decisive rejection at the END is preserved');
+        assert.ok(tail.indexOf('Updating files: 60%') !== -1, 'the window boundary line is preserved');
+    });
+
+    test('silentUpdateStderrTail: short stderr passes through whole; CRLR line-endings normalize; empty → empty', function () {
+        assert.equal(live.silentUpdateStderrTail('only\nthree\nlines\n'), 'only\nthree\nlines');
+        assert.equal(live.silentUpdateStderrTail('a\r\nb\r\nc'), 'a\nb\nc');
+        assert.equal(live.silentUpdateStderrTail(''), '');
+        assert.equal(live.silentUpdateStderrTail(null), '');
+        assert.equal(live.silentUpdateStderrTail('x\ny', 1), 'y', 'maxLines overrides the default');
+    });
+
+    test('UT-2: silentUpdateRejectionReason extracts the [remote rejected] … (reason) fragment', function () {
+        var reason = live.silentUpdateRejectionReason(live.silentUpdateStderrTail(longStderr(60)));
+        assert.ok(reason.indexOf('[remote rejected]') !== -1, 'the rejection fragment is found');
+        assert.ok(reason.indexOf('(protected branch hook declined)') !== -1, 'the reason parenthetical is kept');
+        assert.ok(reason.indexOf('\n') === -1, 'one line');
+    });
+
+    test('UT-2: the remote: error line is the fallback when no [remote rejected] fragment exists', function () {
+        var reason = live.silentUpdateRejectionReason('Cloning into x\nremote: error: hook declined the push\n');
+        assert.ok(reason.indexOf('remote: error: hook declined the push') !== -1);
+        assert.equal(live.silentUpdateRejectionReason('Cloning into x\nUpdating files: 10%\n'), null,
+            'a progress-only tail carries no reason');
+        assert.equal(live.silentUpdateRejectionReason(null), null);
+        assert.equal(live.silentUpdateRejectionReason(''), null);
+    });
+
+    test('UT-3: redactSilentUpdateSecrets scrubs the token URL git echoes and token-shaped strings', function () {
+        // the token-shaped strings are assembled from split literals: the
+        // dev sandbox redacts contiguous token patterns in file writes
+        // (the repo's TOK convention — see smAgent's split-literal note)
+        var TOK = 'ghp_' + 'Nhz2Q1rN8ZsZv9mR2tK7wX4yP5bH3cD6fG8hJ9k';
+        var PAT = 'github' + '_pat_' + '11ABCDEFGH0klmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQR';
+        var scrubbed = live.redactSilentUpdateSecrets(
+            'To https://x-access-' + 'token:' + TOK + '@github.com/o/r.git\n' +
+            'fatal: token ' + TOK + ' leaked in hook output\n' +
+            'and a fine-grained ' + PAT + ' too\n');
+        assert.ok(scrubbed.indexOf(TOK) === -1, 'the raw token is gone');
+        assert.ok(scrubbed.indexOf(PAT) === -1, 'the fine-grained PAT is gone');
+        assert.ok(scrubbed.indexOf('x-access-token:[REDACTED]@') !== -1,
+            'the token URL collapses to the redacted credential form');
+        assert.ok(scrubbed.indexOf('ghp_') === -1, 'the ghp_ token shape is redacted');
+        var clean = live.redactSilentUpdateSecrets('remote: error: declined\n');
+        assert.equal(clean, 'remote: error: declined\n', 'clean text passes through untouched');
+    });
+
+    test('AC2: silentUpdateFailureLine appends the one-line reason and still round-trips through the counter', function () {
+        var line = live.silentUpdateFailureLine(2, '2026-10-19T05:51:00Z',
+            '[remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)');
+        assert.ok(line.indexOf('silent-update failure — attempt 2 at 2026-10-19T05:51:00Z') === 0,
+            'the marker prefix is unchanged');
+        assert.ok(line.indexOf('[remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)') !== -1,
+            'the reason rides the same marker line');
+        var out = live.silentUpdateFailureCount([line]);
+        assert.deepEqual(out, { count: 2, newest: '2026-10-19T05:51:00Z' },
+            'the counting regex still parses the extended marker');
+        // absent reason → byte-identical to the pre-gh-1074 marker
+        assert.equal(live.silentUpdateFailureLine(1, '2026-10-17T19:14:00Z'),
+            '⚠️ silent-update failure — attempt 1 at 2026-10-17T19:14:00Z');
+        // a multi-line / oversized reason collapses to one bounded line
+        var noisy = live.silentUpdateFailureLine(1, '2026-10-19T05:51:00Z', 'line one\nline two');
+        assert.ok(noisy.indexOf('\n') === -1, 'the marker stays a single line');
+    });
+});
