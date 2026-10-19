@@ -378,3 +378,50 @@ suite('dfManager.asArray', function() {
         assert.deepEqual(loadDf().asArray(42), []);
     });
 });
+
+suite('isActiveRun', function() {
+    function loadDf() {
+        return makeDfManager().module;
+    }
+
+    test('the five active run statuses are active (gh-1085 characterization)', function() {
+        assert.equal(loadDf().isActiveRun({ status: 'queued' }), true);
+        assert.equal(loadDf().isActiveRun({ status: 'pending' }), true);
+        assert.equal(loadDf().isActiveRun({ status: 'requested' }), true);
+        assert.equal(loadDf().isActiveRun({ status: 'waiting' }), true);
+        assert.equal(loadDf().isActiveRun({ status: 'in_progress' }), true);
+    });
+
+    test('status casing is normalized (runStatus lowercases before the check)', function() {
+        assert.equal(loadDf().isActiveRun({ status: 'IN_PROGRESS' }), true);
+        assert.equal(loadDf().isActiveRun({ status: 'Queued' }), true);
+    });
+
+    test('terminal / unknown statuses are NOT active', function() {
+        assert.equal(loadDf().isActiveRun({ status: 'completed', conclusion: 'success' }), false);
+        assert.equal(loadDf().isActiveRun({ status: 'completed', conclusion: 'failure' }), false);
+        assert.equal(loadDf().isActiveRun({ status: 'completed', conclusion: 'cancelled' }), false);
+        assert.equal(loadDf().isActiveRun({ status: '' }), false);
+        assert.equal(loadDf().isActiveRun({ status: 'mystery' }), false);
+    });
+
+    test('missing status or missing run is NOT active', function() {
+        assert.equal(loadDf().isActiveRun({}), false);
+        assert.equal(loadDf().isActiveRun(null), false);
+        assert.equal(loadDf().isActiveRun(undefined), false);
+    });
+
+    test('MULTI-ITEM: a mixed workflow-run batch classifies every run (same verdicts as single calls)', function() {
+        var runs = [
+            { status: 'completed', conclusion: 'success' },
+            { status: 'queued' },
+            { status: 'in_progress' },
+            { status: 'completed', conclusion: 'failure' },
+            { status: 'waiting' }
+        ];
+        var mod = loadDf();
+        var active = runs.filter(function(run) { return mod.isActiveRun(run); });
+        assert.equal(active.length, 3);
+        assert.equal(mod.isActiveRun(runs[0]) + mod.isActiveRun(runs[3]), 0);
+    });
+});

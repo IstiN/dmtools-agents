@@ -146,10 +146,14 @@ function runUrl(run) {
     return run && (run.html_url || run.url) || '';
 }
 
+// Run statuses that mean "a runner is (or will be) behind this run" — the
+// ACTIVE vocabulary shared by every workflow-run liveness check below.
+// A set-style list keeps isActiveRun branch-free (CC 1); membership and
+// casing semantics are identical to the former ||-chain.
+var ACTIVE_RUN_STATUSES = ['queued', 'pending', 'requested', 'waiting', 'in_progress'];
+
 function isActiveRun(run) {
-    var status = runStatus(run);
-    return status === 'queued' || status === 'pending' || status === 'requested' ||
-        status === 'waiting' || status === 'in_progress';
+    return ACTIVE_RUN_STATUSES.indexOf(runStatus(run)) !== -1;
 }
 
 function isFailedRun(run) {
@@ -605,6 +609,7 @@ if (typeof module !== 'undefined' && module.exports) {
         detectDuplicateRuns: detectDuplicateRuns,
         buildLabelStatusMap: buildLabelStatusMap,
         extractStatusesFromJql: extractStatusesFromJql,
-        extractExcludedStatusesFromJql: extractExcludedStatusesFromJql
+        extractExcludedStatusesFromJql: extractExcludedStatusesFromJql,
+        isActiveRun: isActiveRun
     };
 }
