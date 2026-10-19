@@ -14409,7 +14409,7 @@ suite('smAgent: fork PR dispatch (gh-1075)', function () {
             'no pull-ref probe on the null-headRepo path — the probe covers only populated-headRepo fork PRs');
     });
 
-    test('the liveness probe targets the runner\'s authenticated origin remote — never a hardcoded public URL', function () {
+    test('the liveness probe targets the TARGET repo from repoInfo — authenticated, never the engine origin', function () {
         var sm = makeSmAgent(Object.assign({
             github: { items: [fxItem(1591)], prComments: [],
                       pr: { number: 1591, head: { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } } },
@@ -14422,10 +14422,13 @@ suite('smAgent: fork PR dispatch (gh-1075)', function () {
         var probes = sm.capturedCliCommands.filter(function (c) {
             return c.command.indexOf('ls-remote') !== -1; });
         assert.equal(probes.length, 1);
-        assert.ok(probes[0].command.indexOf(' ls-remote origin ') !== -1,
-            'the probe rides the runner\'s authenticated origin (private-repo parity with js/prepareTestPRForReview.js et al.)');
-        assert.ok(probes[0].command.indexOf('https://github.com/') === -1,
-            'no unauthenticated hardcoded URL — on a private base repo that errors "Repository not found" and AC3 silently never fires');
+        var TOK = '${' + 'GH_TOKEN}'; // split literal — the secret never appears contiguously in source
+        assert.ok(probes[0].command.indexOf('epam/dmtools-dart.git') !== -1,
+            'the probe names the TARGET repo from repoInfo — the SM runtime cwd is the ENGINE checkout, so `origin` there is the engine repo and every non-self-host SM would probe the wrong repository (gh-1075 review round 2, BLOCKING)');
+        assert.ok(probes[0].command.indexOf('x-access-token:' + TOK + '@github.com/') !== -1,
+            'the probe rides the established split-literal token URL — the token interpolates in the child env, never appearing in source or the captured command string, and the probe authenticates on private base repos');
+        assert.ok(probes[0].command.indexOf(' ls-remote origin ') === -1,
+            'never the engine origin remote');
     });
 
     test('AC3 probe fail-open: a private-repo-shaped auth failure degrades with a distinct DEGRADED warning — never parks', function () {

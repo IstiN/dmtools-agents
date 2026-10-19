@@ -887,12 +887,21 @@ function recordDispatchFailure(repoInfo, ticketKey, item, err, expandedRef, fail
 }
 
 // gh-1075 AC2/AC3: the fork head's liveness oracle — a targeted
-// ls-remote of refs/pull/<N>/head. The probe rides the runner's
-// AUTHENTICATED origin remote (the SM runs in a checkout of the base
-// repo whose origin already carries the token — private-repo parity with
-// js/prepareTestPRForReview.js et al.): a hardcoded public https URL
-// answers "Repository not found" on a private base repo, which would
-// fail open to LIVE forever and silently void AC3 exactly where most of
+// ls-remote of refs/pull/<N>/head. gh-1075 review round 2 (BLOCKING):
+// the probe must name the TARGET repo from repoInfo, NEVER `origin` —
+// the SM's runtime cwd is the ENGINE checkout (the gh-1070 silent-update
+// comment, live-verified: `git fetch origin` there fetched dmtools-agents
+// and every PR pathspec 404'd; the builder clones the TARGET repo
+// instead), so `origin` names the engine repo and every non-self-host SM
+// would ask the WRONG repository about the pull ref — a live fork head in
+// the target repo misclassified 'dead' (AC2 inverted: wrong markers,
+// wrong park). The probe rides the established split-literal token URL
+// (validationLiveness.forkPushTokenUrl): '${GH_TOKEN}' interpolates in
+// the child env exactly like the existing silent-update commands, so the
+// secret never appears in source or the captured command string — and
+// the token URL authenticates against a PRIVATE base repo, where a
+// hardcoded public https URL answers "Repository not found" and would
+// fail open to LIVE forever, silently voiding AC3 exactly where most of
 // the fleet runs. The pull ref is served by GitHub regardless of where
 // the fork branch lives or whether it still exists; empty output
 // (ls-remote exits 0 on a missing ref) means the fork is gone entirely.
@@ -901,14 +910,16 @@ function recordDispatchFailure(repoInfo, ticketKey, item, err, expandedRef, fail
 // auth failure is greppable in the SM logs.
 function forkPullRefLive(repoInfo, prNumber) {
     var ref = forkDispatchModule.pullHeadRef(prNumber);
+    var full = String(repoInfo.owner || '') + '/' + String(repoInfo.repo || '');
+    var targetUrl = validationLivenessModule.forkPushTokenUrl(full);
     try {
         var out = cli_execute_command({
-            command: 'git ls-remote origin ' + ref
+            command: 'git ls-remote ' + targetUrl + ' ' + ref
         });
         return String(out || '').indexOf(ref) !== -1;
     } catch (eProbe) {
-        console.warn('  ⚠️  fork pull-ref probe DEGRADED for pr-' + prNumber +
-            ' (ls-remote origin failed: ' + (eProbe.message || eProbe) +
+        console.warn('  ⚠️  fork pull-ref probe DEGRADED for ' + ref + ' (pr-' + prNumber +
+            ', ' + full + ' probe failed: ' + (eProbe.message || eProbe) +
             ') — treating the head as LIVE (fail-open, gh-1075)');
         return true;
     }
