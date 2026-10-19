@@ -15,7 +15,9 @@
         "maxLogDownloads": 4000,
         "logDownloadSleepMs": 250,
         "cacheWriteEvery": 25,
-        "outputDir": "outputs/token_usage"
+        "outputDir": "outputs/token_usage",
+        "publishTokens": true,
+        "tokensAsset": "agents-tokens.json"
       }
     },
     "metadata": {
