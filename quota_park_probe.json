@@ -1,0 +1,16 @@
+{
+    "name": "Teammate",
+    "params": {
+        "metadata": {
+            "contextId": "quota_park_probe",
+            "descriptionPath": "agents/docs/agents/quota_park_probe.md"
+        },
+        "outputType": "none",
+        "ticketContextDepth": 1,
+        "skipAIProcessing": true,
+        "alwaysPostComments": true,
+        "postJSAction": "agents/js/quotaParkProbe.js",
+        "customParams": {},
+        "inputJql": "key = PROJ-111"
+    }
+}

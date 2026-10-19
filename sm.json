@@ -72,6 +72,14 @@
           "enabled": true
         },
         {
+          "description": "Provider-quota parked tickets → probe the quota window (gh-1087)",
+          "jql": "labels = provider_quota",
+          "configFile": "agents/quota_park_probe.json",
+          "localExecution": true,
+          "quotaParkProbe": true,
+          "enabled": true
+        },
+        {
           "description": "Failed Test Cases with linked Bugs → recover Bug To Fix",
           "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND {stage.FAILED:Failed} ORDER BY updated ASC",
           "configFile": "agents/recover_failed_tc_bug_status.json",

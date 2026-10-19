@@ -360,6 +360,7 @@ function makeSmAgent(opts) {
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
             './common/triggerFailures.js': loadModule('js/common/triggerFailures.js', makeRequire({}), {}),
+            './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js', makeRequire({}), {}),
             // gh-1075: the real fork-dispatch module (its validationLiveness
             // dependency is pure) — fork PRs reroute onto the base machine
             // ref with a refs/pull/<N>/head checkout plan.
