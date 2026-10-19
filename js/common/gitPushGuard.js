@@ -235,6 +235,89 @@ function evaluatePush(args, ctx) {
 }
 
 /**
+ * True when the token is an -m/--message-style flag whose message value is
+ * the FOLLOWING token: exact -m, exact --message, or a clustered short-flag
+ * group ending in m (-cm, -am).
+ */
+function isMessageValueFlag(a) {
+    return a === '-m' || a === '--message' || /^-[a-zA-Z]*m$/.test(a);
+}
+
+/**
+ * True for the --message=<text> inline option.
+ */
+function isInlineMessageOption(a) {
+    return a.indexOf('--message=') === 0;
+}
+
+/**
+ * True for the joined -m<text> form (e.g. -m"text"): starts with -m, is
+ * longer than two chars, and is not a long option.
+ */
+function isJoinedShortMessage(a) {
+    return a.indexOf('-m') === 0 && a.length > 2 && a.indexOf('--') !== 0;
+}
+
+/**
+ * True when the token is an -F/--file-style flag whose file path is the
+ * FOLLOWING token: exact -F, exact --file, or a clustered group ending in F.
+ */
+function isFileValueFlag(a) {
+    return a === '-F' || a === '--file' || /^-[a-zA-Z]*F$/.test(a);
+}
+
+/**
+ * True for the --file=<path> inline option.
+ */
+function isInlineFileOption(a) {
+    return a.indexOf('--file=') === 0;
+}
+
+/**
+ * The token following args[i] when one exists, else null. Distinguishes a
+ * missing value (null) from an empty-string value ('').
+ */
+function messageValueAfter(args, i) {
+    return i + 1 < args.length ? args[i + 1] : null;
+}
+
+/**
+ * The registered content for a -F/--file path — null when the caller has no
+ * content for it (unknown path, empty map, or no map). The caller reads the
+ * file; this module stays I/O-free.
+ */
+function fileContentFor(fileContents, path) {
+    return (fileContents && fileContents[path]) ? fileContents[path] : null;
+}
+
+/**
+ * The part contributed by an -F/--file flag at args[i]: the registered file
+ * content (null when unknown), and i always advances past the path token.
+ */
+function fileFlagPart(args, i, fileContents) {
+    var content = (i + 1 < args.length) ? fileContentFor(fileContents, args[i + 1]) : null;
+    return { text: content, next: i + 2 };
+}
+
+/**
+ * The message part contributed by args[i] and the next index to scan:
+ * { text, next } — text is null when the token contributes no part (empty
+ * string '' is a real part and is preserved).
+ */
+function commitMessagePartAt(args, i, fileContents) {
+    var a = args[i];
+    if (isMessageValueFlag(a)) {
+        var value = messageValueAfter(args, i);
+        return { text: value, next: value === null ? i + 1 : i + 2 };
+    }
+    if (isInlineMessageOption(a)) return { text: a.substring('--message='.length), next: i + 1 };
+    if (isJoinedShortMessage(a)) return { text: a.substring(2), next: i + 1 };
+    if (isFileValueFlag(a)) return fileFlagPart(args, i, fileContents);
+    if (isInlineFileOption(a)) return { text: fileContentFor(fileContents, a.substring('--file='.length)), next: i + 1 };
+    return { text: null, next: i + 1 };
+}
+
+/**
  * Extracts the commit message text from `git commit` args: all -m/--message
  * values plus the contents the caller provides for -F/--file (the caller
  * reads the file; this module stays I/O-free).
@@ -247,29 +330,9 @@ function commitMessageText(args, fileContents) {
     var parts = [];
     var i = 0;
     while (i < args.length) {
-        var a = args[i];
-        if (a === '-m' || a === '--message' || /^-[a-zA-Z]*m$/.test(a)) {
-            if (i + 1 < args.length) { parts.push(args[i + 1]); i += 2; continue; }
-            i += 1; continue;
-        }
-        if (a.indexOf('--message=') === 0) { parts.push(a.substring('--message='.length)); i += 1; continue; }
-        if (a.indexOf('-m') === 0 && a.length > 2 && a.indexOf('--') !== 0) {
-            // joined form: -m"text"
-            parts.push(a.substring(2));
-            i += 1; continue;
-        }
-        if (a === '-F' || a === '--file' || /^-[a-zA-Z]*F$/.test(a)) {
-            if (i + 1 < args.length && fileContents && fileContents[args[i + 1]]) {
-                parts.push(fileContents[args[i + 1]]);
-            }
-            i += 2; continue;
-        }
-        if (a.indexOf('--file=') === 0) {
-            var f = a.substring('--file='.length);
-            if (fileContents && fileContents[f]) parts.push(fileContents[f]);
-            i += 1; continue;
-        }
-        i += 1;
+        var part = commitMessagePartAt(args, i, fileContents);
+        if (part.text !== null) parts.push(part.text);
+        i = part.next;
     }
     return parts.join('\n');
 }
@@ -328,6 +391,14 @@ if (typeof module !== 'undefined' && module.exports) {
         evaluatePush: evaluatePush,
         evaluateCommit: evaluateCommit,
         commitMessageText: commitMessageText,
+        commitMessagePartAt: commitMessagePartAt,
+        isMessageValueFlag: isMessageValueFlag,
+        isInlineMessageOption: isInlineMessageOption,
+        isJoinedShortMessage: isJoinedShortMessage,
+        isFileValueFlag: isFileValueFlag,
+        isInlineFileOption: isInlineFileOption,
+        messageValueAfter: messageValueAfter,
+        fileContentFor: fileContentFor,
         refusalMessage: refusalMessage
     };
 }
