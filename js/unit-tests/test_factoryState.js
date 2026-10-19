@@ -2313,3 +2313,99 @@ suite('factoryState — gh-1036 extracted helpers', function () {
         assert.deepEqual(dry.tick.processed, ['a']);
     });
 });
+
+// ── gh-1108 — REG guards: schema stays 2, degradation stays honest, ──────────
+// merged cards keep their rows (the agents factory's token stream rides all
+// of these; a regression here blanks the board's TOKENS · R/W line).
+
+suite('factoryState — gh-1108 REG guards (agents token stream)', function () {
+  var NOW = '2026-10-03T13:10:00Z';
+  function pr(n) {
+    return { number: n, title: 't' + n, labels: [],
+      head: { ref: 'b' + n, sha: 'sha' + n }, user: { login: 'bot' },
+      created_at: '2026-10-03T06:00:00Z' };
+  }
+  var TOKENS = { 'pr-31': [
+    { leg: 'review', at: '2026-10-03T09:00:00Z',
+      prompt: 2000, completion: 300, total: 2300, cacheRead: 1500, model: '' },
+    { leg: 'rework', at: '2026-10-03T11:00:00Z',
+      prompt: 3000, completion: 700, total: 3700, cacheRead: 2500, model: '' }
+  ] };
+
+  test('REG-schema-1: tokens present ⇒ schema stays 2 (additive-key contract)', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(31)], runs: [], tokens: TOKENS
+    });
+    assert.equal(st.schema, 2, 'card.tokens rides schema 2 — no version bump');
+    assert.equal(st.lanes.pr_created[0].tokens.length, 2);
+  });
+
+  test('AC1: card rows match the normTokenRow contract exactly (snake + camel)', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prs: [pr(31)], runs: [],
+      tokens: {
+        'pr-31': TOKENS['pr-31'].concat([{
+          leg: 'dev', at: '2026-10-03T12:00:00Z',
+          prompt: 10, completion: 5, total: 15, cache_read: 900, model: '' }])
+      }
+    });
+    var rows = st.lanes.pr_created[0].tokens;
+    assert.equal(rows.length, 3);
+    rows.forEach(function (row) {
+      assert.deepEqual(Object.keys(row).sort(),
+        ['at', 'cacheRead', 'completion', 'leg', 'model', 'prompt', 'total']);
+    });
+    assert.equal(rows[0].model, null, "model '' normalizes to null — honest unknown");
+    assert.equal(rows[2].cacheRead, 900, 'snake cache_read survives end-to-end');
+  });
+
+  test('AC2: tokens source absent ⇒ token-less cards, no failure, no partial rows', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(31), pr(32)], runs: [], tokens: null
+    });
+    assert.equal(st.schema, 2);
+    assert.equal(st.lanes.pr_created.length, 2, 'the tick still publishes');
+    st.lanes.pr_created.concat(st.lanes.merged_recent).forEach(function (card) {
+      assert.notOk('tokens' in card, 'no partial token rows on ' + card.pr);
+    });
+    assert.equal(fsModule.tokensLegCount(null), 0, 'the 🪙 leg count stays 0');
+  });
+
+  test('AC2: a malformed tokens source degrades the same way', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(31)], runs: [], tokens: { 'pr-31': 'not-an-array' }
+    });
+    assert.notOk('tokens' in st.lanes.pr_created[0]);
+  });
+
+  test('AC6: merged_recent cards inside the 24h window keep their tokens rows', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prs: [], runs: [],
+      tokens: TOKENS,
+      mergedPrs: [{ number: 31, title: 'merged', labels: [],
+        user: { login: 'bot' },
+        created_at: '2026-10-03T06:00:00Z',
+        merged_at: '2026-10-03T12:30:00Z' }]
+    });
+    var card = st.lanes.merged_recent[0];
+    assert.ok(card, 'merged inside the window');
+    assert.equal(card.tokens.length, 2, 'tmap keyed pr-31 attaches post-merge');
+    assert.equal(card.tokens[1].leg, 'rework');
+  });
+
+  test('AC6: a merged PR outside the window keeps the join silent (no orphan rows)', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prs: [], runs: [],
+      tokens: TOKENS,
+      mergedPrs: [{ number: 31, title: 'old merge', labels: [],
+        user: { login: 'bot' },
+        created_at: '2026-10-01T06:00:00Z',
+        merged_at: '2026-10-01T12:30:00Z' }]
+    });
+    assert.equal(st.lanes.merged_recent.length, 0,
+      'outside the window the card (and its rows) drop — E1 honesty');
+  });
+});
