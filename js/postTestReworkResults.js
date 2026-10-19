@@ -226,10 +226,10 @@ function decideReworkTargetStatus(passed, statuses) {
 function reportMissingResult(ticketKey, result, config, customParams, releaseLock) {
     var errMsg = buildResultErrorMessage(result);
     console.error(errMsg);
-    var missingTracker = trackersModule.createTracker(config, customParams);
+    var tracker = trackersModule.createTracker(config, customParams);
     var mErr = commentMarkup.forTicket(ticketKey, customParams);
     try {
-        missingTracker.postComment(
+        tracker.postComment(
             ticketKey,
             mErr.h(3, '⚠️ Rework Error') + '\n\n' + errMsg + '\n\nCheck CI logs for the agent output.'
         );
