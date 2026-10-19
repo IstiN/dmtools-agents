@@ -2,6 +2,19 @@
  * from awf factory-merge-trigger.yml (bash → structured github_* bridge). */
 /* global loadModule, assert, test, suite, makeRequire */
 
+/* REST-vs-GraphQL get_pr payload shapes (gh-1081): kept out of fixture()
+ * so its complexity stays at its baseline value. */
+function prPayload(a, st) {
+    if (st.rest) {
+        return {
+            number: a.pullRequestId,
+            mergeable: st.mergeable,
+            mergeable_state: String(st.state).toLowerCase()
+        };
+    }
+    return { number: a.pullRequestId, mergeable: st.mergeable, mergeStateStatus: st.state };
+}
+
 function fixture(opts) {
     opts = opts || {};
     var calls = { merges: [], removes: [], comments: [], gets: [], issueGets: [] };
@@ -39,19 +52,7 @@ function fixture(opts) {
                 throw new Error('boom pr ' + a.pullRequestId);
             }
             var st = prStates[a.pullRequestId] || { mergeable: true, state: 'CLEAN' };
-            if (st.rest) {
-                // REST shape: lowercase mergeable_state, no mergeStateStatus.
-                return JSON.stringify({
-                    number: a.pullRequestId,
-                    mergeable: st.mergeable,
-                    mergeable_state: String(st.state).toLowerCase()
-                });
-            }
-            return JSON.stringify({
-                number: a.pullRequestId,
-                mergeable: st.mergeable,
-                mergeStateStatus: st.state
-            });
+            return JSON.stringify(prPayload(a, st));
         },
         github_merge_pr: function (m) {
             calls.merges.push(m);
@@ -63,7 +64,9 @@ function fixture(opts) {
         github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
         github_create_comment: function (c) { calls.comments.push(c); return '{}'; }
     };
-    if (opts.ghRepo) mods.GH_REPO = opts.ghRepo;
+    // ghRepo is injected unconditionally: when absent it lands as undefined,
+    // which keeps typeof-GH_REPO paths exactly where they were.
+    mods.GH_REPO = opts.ghRepo;
     var mod = loadModule('js/mergeTrigger.js', makeRequire({}), mods);
     return { mod: mod, calls: calls };
 }

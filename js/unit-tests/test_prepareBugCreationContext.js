@@ -347,32 +347,15 @@ suite('creation automation queries follow jira.statuses when the project opts in
 // ── gh-1081: characterization of the bulk action wiring (pinned before the
 // CRAP refactor — outputs, file writes and search order must not move).
 
-function bulkLoaderWith(jiraOverrides, extraConfigModule) {
-    // real loader, but loadProjectConfig returns defaults patched with the given jira overrides
+function bulkLoaderWithFields(fields) {
+    // real loader, but loadProjectConfig patches jira.fields with the given map
     return {
         loadProjectConfig: function() {
             var base = configLoaderModule.loadProjectConfig({});
-            var jira = Object.assign({}, base.jira);
-            Object.keys(jiraOverrides || {}).forEach(function(k) {
-                jira[k] = (k === 'statuses') ? Object.assign({}, base.jira.statuses, jiraOverrides[k]) : jiraOverrides[k];
-            });
-            return Object.assign({}, base, { jira: jira });
+            return Object.assign({}, base, { jira: Object.assign({}, base.jira, { fields: fields }) });
         },
         interpolateJql: configLoaderModule.interpolateJql
     };
-}
-
-function bulkTrackersFor(searches, tcResults, bugResults) {
-    // the open-bugs query only runs after at least one failed Test Case was found
-    return loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), {
-        jira_search_by_jql: function(args) {
-            searches.push(args);
-            if (args.jql.indexOf('issuetype = "Test Case"') !== -1) return tcResults;
-            if (args.jql.indexOf('issuetype in (Bug)') !== -1) return bugResults;
-            return [];
-        },
-        jira_get_ticket: function() { return JSON.stringify({ key: 'TS-9', fields: { summary: 'tc' } }); }
-    });
 }
 
 function loadBulk(mocks, requireOverrides, configModuleOverride) {
@@ -583,13 +566,7 @@ suite('prepareBulkBugsCreationContext: action wiring characterization (gh-1081)'
     test('failedReason resolves from config.jira.fields.failedReason when customParams does not override', function() {
         var searches = [];
         var w = makeBulkWrites();
-        var loader = bulkLoaderWith({});
-        loader.loadProjectConfig = function() {
-            var base = configLoaderModule.loadProjectConfig({});
-            return Object.assign({}, base, {
-                jira: Object.assign({}, base.jira, { fields: { failedReason: 'Cfg Failed Reason' } })
-            });
-        };
+        var loader = bulkLoaderWithFields({ failedReason: 'Cfg Failed Reason' });
         var trackersMod = loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), {
             jira_search_by_jql: function(args) {
                 searches.push(args);
