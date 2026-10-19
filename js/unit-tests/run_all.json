@@ -56,6 +56,7 @@
         "js/unit-tests/test_ticketKeyShapes.js",
         "js/unit-tests/test_gitOps.js",
         "js/unit-tests/test_gitStaging.js",
+        "js/unit-tests/test_commitAndPushToBaseBranch.js",
         "js/unit-tests/test_submodules.js",
         "js/unit-tests/test_scmReadFileMaybe.js",
         "js/unit-tests/test_pullRequestHelper.js",
