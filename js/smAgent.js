@@ -2092,6 +2092,22 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // the TARGET repo instead. `gh repo clone` rides GH_TOKEN; with
         // the workflow token that push is silent (a PAT in its place
         // would fire CI — do not point silent-token at a PAT).
+        // gh-1101 follow-up (live dart #435): a fresh-sha RESET must mint
+        // a new head even when the branch already contains main — the
+        // plain no-op exit left the head unchanged while the reset was
+        // counted. forceFresh: empty commit (same identity) + push.
+        function upToDateClause(forceFresh, pushTarget) {
+            var onUpToDate = forceFresh
+                ? ' echo "silent-update: up to date — fresh-sha empty commit"' +
+                  ' && git -c user.name=sm-silent-update' +
+                  ' -c user.email=sm-silent-update@users.noreply.github.com' +
+                  ' commit --allow-empty -m "chore: fresh-sha reset (gh-1101) [sm]"' +
+                  ' && git push ' + pushTarget + ' && exit 0; fi'
+                : ' echo "silent-update: already up to date"' +
+                  ' && exit 0; fi';
+            return ' && if git merge-base --is-ancestor FETCH_HEAD HEAD; then' + onUpToDate;
+        }
+
         function silentUpdateCommand(opts) {
             return 'gh repo clone ' + effectiveRepoInfo.owner + '/' +
                      effectiveRepoInfo.repo + ' ' + opts.dir +
@@ -2135,9 +2151,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                      // the ancestor check ONLY: failures now propagate,
                      // the caller logs 'update_branch failed', and the
                      // next tick retries (self-healing by design).
-                     ' && if git merge-base --is-ancestor FETCH_HEAD HEAD; then' +
-                     ' echo "silent-update: already up to date"' +
-                     ' && exit 0; fi' +
+                     upToDateClause(opts.forceFresh, opts.pushTarget) +
                      ' && git -c user.name=sm-silent-update' +
                      ' -c user.email=sm-silent-update@users.noreply.github.com' +
                      ' merge --no-edit FETCH_HEAD' +
@@ -2164,7 +2178,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // builder now redirects stderr to opts.stderrFile; see the
         // builder's gh-1074 note) — this wrapper only parameterizes the
         // builder.
-        function silentUpdateBranch(branchName, stderrFile) {
+        function silentUpdateBranch(branchName, stderrFile, forceFresh) {
             var dir = '/tmp/sm-silent-update-' + Date.now() + '-' +
                       String(branchName).replace(/[^a-zA-Z0-9._-]/g, '_');
             cli_execute_command({
@@ -2174,6 +2188,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                ' --depth 200',
                     headSetup: '',
                     stderrFile: stderrFile,
+                    forceFresh: forceFresh === true,
                     pushTarget: 'https://x-access-' + 'token:${GH_TOKEN}@github.com/' + // assembled from split literals: the sandbox redacts the contiguous token-URL pattern in file writes (the unit tests' TOK convention)
                          effectiveRepoInfo.owner + '/' + effectiveRepoInfo.repo +
                          '.git ' + branchName
@@ -2293,10 +2308,20 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             }
         }
 
-        function silentUpdateBranchTracked(branchName) {
+        // gh-1101 follow-up: the fresh-sha RESET entry point (invisible-
+        // required + gh-852 placeholder resets). Always mints a new sha,
+        // at most once per PR per tick, and reports whether the head
+        // actually moved — callers count/mark ONLY on a verified move.
+        function freshShaReset(branchName, oldHead) {
+            return freshShaResetOnce(effectiveRepoInfo, ticket, key, oldHead, function () {
+                silentUpdateBranchTracked(branchName, true);
+            });
+        }
+
+        function silentUpdateBranchTracked(branchName, forceFresh) {
             var stderrFile = silentUpdateStderrFile(branchName);
             try {
-                silentUpdateBranch(branchName, stderrFile);
+                silentUpdateBranch(branchName, stderrFile, forceFresh);
             } catch (eClone) {
                 // I5 + gh-1074: the marker trail fires on the refresh
                 // failure, now carrying the one-line rejection reason
@@ -3020,7 +3045,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // dispatch follows on a later tick once the push suite
                 // exists on the new head (dispatch-ordering guard below).
                 if (vHead0 && invisibleRequiredReset(effectiveRepoInfo, ticket, key, vHead0,
-                                                     silentUpdateBranchTracked)) {
+                                                     freshShaReset)) {
                     processedKeys.push(key);
                     continue;
                 }
@@ -3574,12 +3599,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                         ' fresh sha + validation dispatch on ' + ticket.branch + ')');
                             continue;
                         }
-                        try {
-                            silentUpdateBranchTracked(ticket.branch);
-                        } catch (ePhUp) {
-                            console.warn('  ⚠️  ' + key + ' placeholder fresh-sha refresh failed: ' +
-                                         (ePhUp.message || ePhUp) + ' — head unchanged, retry next tick');
-                            continue;
+                        if (!freshShaReset(ticket.branch, vHead0)) {
+                            continue; // refresh failed / head did not move: not counted
                         }
                         // Re-read the fresh head for the in_progress stamp (the
                         // dispatch rides the branch ref and lands on it; a
@@ -6563,7 +6584,7 @@ function detectInvisibleRequired(repoInfo, ticket, headSha) {
 
 // Fresh-sha reset for the invisible shape, bounded by the gh-852 cap and
 // marker (one per tick; a capped PR stays put).
-function invisibleRequiredReset(repoInfo, ticket, key, headSha, silentUpdate) {
+function invisibleRequiredReset(repoInfo, ticket, key, headSha, freshReset) {
     if (!detectInvisibleRequired(repoInfo, ticket, headSha)) return false;
     console.log('  👻 ' + key + ' required checks invisible to PR — green on ' +
                 headSha.slice(0, 8) + ' (workflow_dispatch suite) but absent from the PR rollup');
@@ -6574,13 +6595,50 @@ function invisibleRequiredReset(repoInfo, ticket, key, headSha, silentUpdate) {
         return true;
     }
     if (DRY) { console.log('  🧪 [dry] invisible-required fresh-sha reset skipped'); return true; }
-    try {
-        silentUpdate(ticket.branch);
-    } catch (eUp) {
-        console.warn('  ⚠️  ' + key + ' invisible-required fresh-sha refresh failed: ' + (eUp.message || eUp));
-        return true;
-    }
+    if (!freshReset(ticket.branch, headSha)) return true; // not moved: not counted
     postInvisibleResetNotice(repoInfo, ticket, headSha, marks.count + 1, cap);
+    return true;
+}
+
+// ── gh-1101 follow-up: fresh-sha reset guard ─────────────────────────────
+var tickFreshResets = {};
+
+function prHeadShaSafe(repoInfo, prNumber) {
+    try {
+        var pr = mcpParse(github_get_pr({ workspace: repoInfo.owner,
+            repository: repoInfo.repo, pullRequestId: prNumber })) || {};
+        return (pr.head && (pr.head.sha || pr.head)) || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function headMoved(oldHead, newHead) {
+    return typeof newHead === 'string' && !!newHead && newHead !== oldHead;
+}
+
+// One reset per PR per tick; runs `refresh`, then verifies the PR head
+// actually moved off oldHead. true = moved (caller counts + marks).
+function freshShaResetOnce(repoInfo, ticket, key, oldHead, refresh) {
+    if (tickFreshResets[ticket.prNumber]) {
+        console.log('  ⏭️  ' + key + ' fresh-sha reset already done this tick — skip');
+        return false;
+    }
+    tickFreshResets[ticket.prNumber] = true;
+    try {
+        refresh();
+    } catch (eUp) {
+        console.warn('  ⚠️  ' + key + ' fresh-sha refresh failed: ' + (eUp.message || eUp) +
+                     ' — head unchanged, retry next tick');
+        return false;
+    }
+    var newHead = prHeadShaSafe(repoInfo, ticket.prNumber);
+    if (!headMoved(oldHead, newHead)) {
+        console.warn('  ⚠️  ' + key + ' fresh-sha reset did not move the head (' +
+                     String(oldHead || '?').slice(0, 8) + ' → ' + String(newHead || '?').slice(0, 8) +
+                     ') — not counted, retry next tick');
+        return false;
+    }
     return true;
 }
 
@@ -8065,6 +8123,7 @@ function action(params) {
     RUN_JOB_PARAMS = p;    DRY = p.dryRun === true;
     tickReworkLatch = null;
     tickZombiesSwept = 0; // gh-998 (I5): fresh per-tick sweep counter
+    tickFreshResets = {}; // gh-1101 follow-up: one fresh-sha reset per PR per tick
     tickParkedRecorded = {}; // gh-922: fresh same-tick dedup window (see recordDispatchFailure)
     if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
     var rules = p.rules;

@@ -37,6 +37,14 @@ function smRealKeyModules() {
     };
 }
 
+function cloneRan(cmds) {
+    return cmds.some(function (c) { return c.command.indexOf('gh repo clone') !== -1; });
+}
+function mockPrPayload(gh, cmds) {
+    if (gh.prAfterRefresh && cloneRan(cmds)) return gh.prAfterRefresh;
+    return gh.pr || { number: 1, body: gh.prBody || '' };
+}
+
 function makeSmAgent(opts) {
     opts = opts || {};
 
@@ -257,8 +265,10 @@ function makeSmAgent(opts) {
         smMocks.github_add_labels = function (labelOpts) { capturedPrLabelAdds.push(normalizedGithubCall(labelOpts)); };
         smMocks.github_remove_label = function (remOpts) { capturedPrLabelRemoves.push(normalizedGithubCall(remOpts)); };
         smMocks.github_create_comment = function (cOpts) { capturedPrComments.push(normalizedGithubCall(cOpts)); };
+        // gh-1101 follow-up: opts.github.prAfterRefresh = the PR payload once
+        // a silent-update clone ran (the fresh-sha reset's head-moved check).
         smMocks.github_get_pr = function () {
-            return JSON.stringify(opts.github.pr || { number: 1, body: opts.github.prBody || '' });
+            return JSON.stringify(mockPrPayload(opts.github, capturedCliCommands));
         };
         // #544: linked-issue existence probe — a scraped #N that 404s
         // (cross-repo/dangling) must degrade to a PR-anchored dispatch.
@@ -2959,6 +2969,7 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
                                             labels: ['pr_approved', 'ai_validating'] })],
                       commitCheckRuns: checkRuns,
                       prComments: [],
+                      prAfterRefresh: { number: 1457, head: { sha: 'f00df00d' } },
                       workflowApiRuns: [] },
             onCliExecute: function (cmdOpts) {
                 var c = cmdOpts.command;
@@ -3001,7 +3012,7 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
     // ── gh-1101 invisible required checks (live dart #435) ────────────────
     var INV_HEAD = 'abcdef12abcdef12abcdef12abcdef12abcdef12';
     var INV_DEFAULTS = { head: INV_HEAD, mergeState: 'BLOCKED', prComments: [], visible: [],
-                         runStatus: null, headRuns: [], jobParams: {} };
+                         runStatus: null, headRuns: [], jobParams: {}, moved: true };
     function invDispatchedRun(o) {
         return { id: 1, event: 'workflow_dispatch', head_sha: o.head,
                  status: o.runStatus || 'completed', conclusion: o.runStatus ? null : 'success',
@@ -3039,6 +3050,8 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
                     { name: 'gate', status: 'completed', conclusion: 'success', started_at: '2026-10-12T14:00:00Z' }
                 ] },
                 prComments: o.prComments,
+                prAfterRefresh: o.moved ? { number: 435, labels: [{ name: 'pr_approved' }], base: { ref: 'main' },
+                                            head: { sha: 'f00df00df00df00d' } } : null,
                 mergeResult: JSON.stringify({ merged: false, message: 'blocked' }),
                 workflowApiRuns: []
             },
@@ -3059,6 +3072,58 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.ok(sm.capturedPrComments[0].body.indexOf('<!-- dmtools:invisible-required-reset') === 0, 'machine notice');
         assert.ok(sm.capturedPrComments[0].body.indexOf('placeholder reset 1/3') !== -1, 'counted on the gh-852 cap');
         assert.equal(sm.capturedPrMerges.length, 0);
+    });
+
+    test('gh-1101 follow-up: fresh-sha reset uses force-fresh (empty commit when up to date)', function () {
+        var sm = invisibleSm({});
+        var c = clones(sm)[0].command;
+        assert.contains(c, 'commit --allow-empty -m "chore: fresh-sha reset (gh-1101) [sm]"');
+        assert.contains(c, 'user.name=sm-silent-update');
+    });
+
+    test('gh-1101 follow-up: head did not move ⇒ no marker, not counted', function () {
+        var sm = invisibleSm({ moved: false });
+        assert.equal(clones(sm).length, 1, 'refresh attempted');
+        assert.equal(sm.capturedPrComments.length, 0, 'no notice / no count');
+        assert.ok(/did not move the head/.test(sm.capturedLogs.join('\n')));
+    });
+
+    test('gh-1101 follow-up: one reset per PR per tick (rule matching twice)', function () {
+        var rule = { source: 'github', query: { type: 'pr', labels: ['pr_approved'], draft: false },
+                     localAction: 'validate_pr', limit: 1, id: 'validate-approved' };
+        var sm = invisibleSm({ jobParams: { rules: [rule, Object.assign({}, rule, { id: 'twin' })] } });
+        assert.equal(clones(sm).length, 1, 'second match skipped');
+        assert.equal(sm.capturedPrComments.length, 1, 'counted once');
+    });
+
+    test('gh-1101 follow-up: plain update_branch stays no-op when up to date (no empty commit)', function () {
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: { items: [prItem(681, { branch: 'feat/x' })] }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [RULES.update] } });
+        var c = clones(sm)[0].command;
+        assert.contains(c, 'echo "silent-update: already up to date" && exit 0; fi');
+        assert.ok(c.indexOf('allow-empty') === -1);
+    });
+
+    test('gh-1101 follow-up: gh-852 placeholder reset with an unmoved head ⇒ no marker, no dispatch', function () {
+        var CUR = 'd29efb16d29efb16d29efb16d29efb16d29efb16';
+        var run = { id: 7, event: 'workflow_dispatch', head_sha: CUR, status: 'completed',
+                    conclusion: 'success', created_at: '2026-10-11T12:08:00Z' };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'fah'), {
+            github: { items: [prItem(1457, { branch: 'ai/gh-852', headSha: CUR, labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: { check_runs: [{ name: 'Quality gate', status: 'in_progress', conclusion: null,
+                                                        started_at: '2026-10-11T12:06:29Z' }] },
+                      pr: { number: 1457, head: { sha: CUR } }, prComments: [], workflowApiRuns: [] },
+            onCliExecute: tableCli([['runs?head_sha=', { workflow_runs: [run] }],
+                                    ['runs?event=workflow_dispatch', { workflow_runs: [] }]])
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'fah', ciWorkflow: 'ci.yml', rules: [{ source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green', skipIfGreenCi: true }] } });
+        assert.equal(clones(sm).length, 1, 'refresh attempted');
+        assert.equal(ciRuns(sm).length, 0, 'no dispatch on an unmoved head');
+        assert.equal(sm.capturedPrComments.length, 0, 'not counted');
     });
 
     test('gh-1101 invisible: required contexts visible to the PR ⇒ no reset', function () {
