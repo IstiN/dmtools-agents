@@ -14501,7 +14501,7 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         // HEAD:<branch> refspec — both are shell-interpreted and the
         // branch is PR-author-controlled. Both must carry the branch
         // single-quote-escaped through the ONE shellQuote helper.
-        var sm = forkSm({ branch: "f'$(reboot)`id` x" });
+        var sm = forkSm({ branch: "f'$(reboot)`id` x", maintainerCanModify: true });
         sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
 
         assert.equal(clones(sm).length, 1, 'one refresh command');
