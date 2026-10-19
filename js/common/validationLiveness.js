@@ -89,6 +89,11 @@ function concludedWithin(run, nowMs, ms) {
  * 'zombie-no-run' — the deliberate gh-821 bias documented in the header:
  * worst case one bounded duplicate CI run, never a wedge.
  */
+function cancelledState(run) {
+    return concludedWithin(run, Date.now(), CONCLUDED_REDISPATCH_GRACE_MS)
+        ? 'running' : 'zombie-cancelled';
+}
+
 function classify(probe) {
     var newest = (probe && probe.newest) || null;
     if (!probe) return 'running';                 // no probe at all — fail safe
@@ -100,10 +105,7 @@ function classify(probe) {
     // gh-1101: the check-visibility grace moved here from the active
     // probe — a FRESH cancel is still owned by the rerun-cancelled-checks
     // remedy (no re-dispatch), but a concluded run is never "active".
-    if (c === 'cancelled') {
-        return concludedWithin(newest, Date.now(), CONCLUDED_REDISPATCH_GRACE_MS)
-            ? 'running' : 'zombie-cancelled';
-    }
+    if (c === 'cancelled') return cancelledState(newest);
     if (c === 'success') return 'green';
     return 'red';
 }

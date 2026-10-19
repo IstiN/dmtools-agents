@@ -17,13 +17,20 @@ var MARKER_PREFIX = '<!-- dmtools:invisible-required-reset';
 var MARKER_RE = /<!-- dmtools:invisible-required-reset sha=(\S+) at=(\S+) -->/g;
 var DEFAULT_PUSH_SUITE_WAIT_MS = 10 * 60 * 1000;
 
+function runTime(c) {
+    return Date.parse(c.started_at || c.completed_at || '') || 0;
+}
+
+function keepNewer(out, c) {
+    var t = runTime(c);
+    var prev = out[c.name];
+    if (!prev || t >= prev.t) out[c.name] = { t: t, run: c };
+}
+
 function latestByName(checkRuns) {
     var out = {};
-    (checkRuns || []).forEach(function (c) {
-        if (!c || !c.name) return;
-        var prev = out[c.name];
-        var t = Date.parse(c.started_at || c.completed_at || '') || 0;
-        if (!prev || t >= prev.t) out[c.name] = { t: t, run: c };
+    checkRuns.forEach(function (c) {
+        if (c && c.name) keepNewer(out, c);
     });
     return out;
 }
@@ -79,12 +86,19 @@ function lastResetAtMs(bodies) {
  * dispatch suite wins the race again). Bounded by waitMs so a repo with no
  * push workflows is never wedged.
  */
+function waitMsOf(waitMs) {
+    return typeof waitMs === 'number' ? waitMs : DEFAULT_PUSH_SUITE_WAIT_MS;
+}
+
+function hasPushSuite(headRuns) {
+    if (headRuns === null) return false; // probe failed: hold (fail closed, bounded)
+    return headRuns.some(function (r) { return !!r && r.event === 'push'; });
+}
+
 function shouldHoldDispatch(lastResetMs, headRuns, nowMs, waitMs) {
     if (lastResetMs === null || lastResetMs === undefined) return false;
-    var w = typeof waitMs === 'number' ? waitMs : DEFAULT_PUSH_SUITE_WAIT_MS;
-    if (nowMs - lastResetMs >= w) return false;
-    if (headRuns === null) return true; // probe failed: hold (fail closed, bounded)
-    return !(headRuns || []).some(function (r) { return r && r.event === 'push'; });
+    if (nowMs - lastResetMs >= waitMsOf(waitMs)) return false;
+    return !hasPushSuite(headRuns);
 }
 
 module.exports = {

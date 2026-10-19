@@ -436,24 +436,33 @@ function smRunLive(io, repo, smWorkflow) {
         shellQuote(smWorkflow) + ' --limit 20 --json status --jq ' + shellQuote(SM_LIVE_JQ)) !== 0;
 }
 
-function kickSmOnGreenHead(opts, io, pr) {
-    if (!smKickEnabled(opts)) return false;
-    var log = io.log || function () {};
-    var repo = opts.repo;
-    var sha = headShaOf(io, repo, pr);
-    if (!/^[0-9a-f]{7,40}$/.test(sha)) return false;
-    if (!headHasGreenRun(io, repo, opts.ciWorkflow || 'quality.yml', sha)) return false;
-    var smWorkflow = opts.smWorkflow || 'machine-sm.yml';
-    if (smRunLive(io, repo, smWorkflow)) {
-        log('→ head ' + sha.slice(0, 8) + ' already green; SM tick already queued/running — no kick');
-        return false;
-    }
+function greenHeadSha(opts, io, pr) {
+    var sha = headShaOf(io, opts.repo, pr);
+    if (!/^[0-9a-f]{7,40}$/.test(sha)) return '';
+    return headHasGreenRun(io, opts.repo, opts.ciWorkflow || 'quality.yml', sha) ? sha : '';
+}
+
+function dispatchSmTick(io, repo, smWorkflow, log) {
     try {
         io.exec('gh workflow run ' + shellQuote(smWorkflow) + ' --repo ' + shellQuote(repo));
+        return true;
     } catch (e) {
         log('::warning::SM tick dispatch failed: ' + (e && e.message || e));
         return false;
     }
+}
+
+function kickSmOnGreenHead(opts, io, pr) {
+    if (!smKickEnabled(opts)) return false;
+    var log = io.log || function () {};
+    var sha = greenHeadSha(opts, io, pr);
+    if (!sha) return false;
+    var smWorkflow = opts.smWorkflow || 'machine-sm.yml';
+    if (smRunLive(io, opts.repo, smWorkflow)) {
+        log('→ head ' + sha.slice(0, 8) + ' already green; SM tick already queued/running — no kick');
+        return false;
+    }
+    if (!dispatchSmTick(io, opts.repo, smWorkflow, log)) return false;
     log('→ head ' + sha.slice(0, 8) + ' already green — dispatched one SM tick (' + smWorkflow + ') to merge now');
     return true;
 }

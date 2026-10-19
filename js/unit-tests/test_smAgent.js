@@ -2999,40 +2999,53 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
     });
 
     // ── gh-1101 invisible required checks (live dart #435) ────────────────
-    function invisibleSm(o) {
-        var CUR = o.head || 'abcdef12abcdef12abcdef12abcdef12abcdef12';
+    var INV_HEAD = 'abcdef12abcdef12abcdef12abcdef12abcdef12';
+    var INV_DEFAULTS = { head: INV_HEAD, mergeState: 'BLOCKED', prComments: [], visible: [],
+                         runStatus: null, headRuns: [], jobParams: {} };
+    function invDispatchedRun(o) {
+        return { id: 1, event: 'workflow_dispatch', head_sha: o.head,
+                 status: o.runStatus || 'completed', conclusion: o.runStatus ? null : 'success',
+                 created_at: new Date(Date.now() - 60000).toISOString(),
+                 updated_at: new Date(Date.now() - 30000).toISOString() };
+    }
+    // Ordered [substring, response] table — first match wins.
+    function invCliTable(o) {
+        return [
+            ['/branches/main', JSON.stringify(['static', 'gate'])],
+            ['gh api graphql', JSON.stringify(o.visible)],
+            ['workflows/ci.yml/runs?head_sha=', { workflow_runs: [invDispatchedRun(o)] }],
+            ['actions/runs?head_sha=', { workflow_runs: o.headRuns }]
+        ];
+    }
+    function tableCli(table) {
+        return function (cmdOpts) {
+            var hit = table.filter(function (row) { return cmdOpts.command.indexOf(row[0]) !== -1; })[0];
+            return hit ? hit[1] : undefined;
+        };
+    }
+    function invisibleSm(over) {
+        var o = Object.assign({}, INV_DEFAULTS, over);
         var rule = { source: 'github', query: { type: 'pr', labels: ['pr_approved'], draft: false },
                      localAction: 'validate_pr', limit: 1, id: 'validate-approved' };
         var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            captureConsole: true,
             github: {
-                items: [prItem(435, { branch: 'ai/gh-435', headSha: CUR, labels: ['pr_approved'],
-                                      pr: { mergeState: o.mergeState || 'BLOCKED', mergeable: true } })],
+                items: [prItem(435, { branch: 'ai/gh-435', headSha: o.head, labels: ['pr_approved'],
+                                      pr: { mergeState: o.mergeState, mergeable: true } })],
                 pr: { number: 435, labels: [{ name: 'pr_approved' }], base: { ref: 'main' },
-                      head: { sha: CUR } },
+                      head: { sha: o.head } },
                 commitCheckRuns: { check_runs: [
                     { name: 'static', status: 'completed', conclusion: 'success', started_at: '2026-10-12T14:00:00Z' },
                     { name: 'gate', status: 'completed', conclusion: 'success', started_at: '2026-10-12T14:00:00Z' }
                 ] },
-                prComments: o.prComments || [],
+                prComments: o.prComments,
                 mergeResult: JSON.stringify({ merged: false, message: 'blocked' }),
                 workflowApiRuns: []
             },
-            onCliExecute: function (cmdOpts) {
-                var c = cmdOpts.command;
-                if (c.indexOf('/branches/main') !== -1) return JSON.stringify(['static', 'gate']);
-                if (c.indexOf('gh api graphql') !== -1) return JSON.stringify(o.visible || []);
-                if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1) {
-                    return { workflow_runs: [{ id: 1, event: 'workflow_dispatch', head_sha: CUR,
-                        status: o.runStatus || 'completed', conclusion: o.runStatus ? null : 'success',
-                        created_at: new Date(Date.now() - 60000).toISOString(),
-                        updated_at: new Date(Date.now() - 30000).toISOString() }] };
-                }
-                if (c.indexOf('actions/runs?head_sha=') !== -1) return { workflow_runs: o.headRuns || [] };
-                return undefined;
-            }
+            onCliExecute: tableCli(invCliTable(o))
         }));
         sm.action({ jobParams: Object.assign({ owner: 'epam', repo: 'dmtools-dart', ciWorkflow: 'ci.yml',
-            rules: [rule] }, o.jobParams || {}) });
+            rules: [rule] }, o.jobParams) });
         return sm;
     }
     function clones(sm) { return sm.capturedCliCommands.filter(function (c) { return c.command.indexOf('gh repo clone') !== -1; }); }
@@ -3081,7 +3094,8 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         var go = invisibleSm({ head: 'feedbeeffeedbeeffeedbeeffeedbeeffeedbeef', visible: ['static', 'gate'],
             mergeState: 'BEHIND', prComments: [{ body: marker }],
             headRuns: [{ id: 9, event: 'push', status: 'completed', conclusion: 'success' }] });
-        assert.ok(!go.capturedLogs || !go.capturedLogs.join('\n').match(/CI dispatch held/), 'push suite present — no hold');
+        assert.ok(/CI dispatch held/.test(held.capturedLogs.join('\n')), 'hold logged');
+        assert.ok(!/CI dispatch held/.test(go.capturedLogs.join('\n')), 'push suite present — no hold');
     });
 
     test('validate_pr: gh-852 AC2 — a BUSY pool defers the fresh-sha reset (no churn)', function () {
