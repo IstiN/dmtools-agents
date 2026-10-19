@@ -172,7 +172,8 @@
         "js/unit-tests/test_completionGuard.js",
         "js/unit-tests/test_networkGuard.js",
         "js/unit-tests/test_wave2d2Tracker.js",
-        "js/unit-tests/test_wave2d1Tracker.js"
+        "js/unit-tests/test_wave2d1Tracker.js",
+        "js/unit-tests/test_forkCheckout.js"
       ]
     }
   }

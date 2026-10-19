@@ -22,6 +22,7 @@
 const { GIT_CONFIG } = require('../config.js');
 const prHelper = require('./pullRequest.js');
 var gitStaging = require('./gitStaging.js');
+var forkCheckout = require('./forkCheckout.js');
 
 var MAX_PR_DIFF_CONTEXT_CHARS = 12000;
 
@@ -89,6 +90,23 @@ function _switchToBranch(branchName, cmd) {
 }
 
 /**
+ * gh-1096: a fork PR's head branch never exists on origin — check the PR
+ * head out through its always-fetchable pull ref (refs/pull/<N>/head) onto
+ * a local branch named after the PR branch.
+ */
+function _checkoutPullRef(branchName, cmd, pullRef) {
+    console.log('Fork PR head: checking out ' + pullRef + ' as ' + branchName);
+    cmd(prHelper.buildOriginFetchCommand(pullRef));
+    cmd('git checkout -B ' + branchName + ' FETCH_HEAD');
+}
+
+// gh-1096: pull-ref checkout for a fork head, the origin-branch switch otherwise.
+function _switchOrPullRef(branchName, cmd, pullRef) {
+    if (pullRef) return _checkoutPullRef(branchName, cmd, pullRef);
+    return _switchToBranch(branchName, cmd);
+}
+
+/**
  * Checks out `branchName`, self-healing around a dirty/untracked working tree
  * instead of ever failing the whole setup step or leaving HEAD parked on
  * `baseBranch` (the failure mode that causes WIP auto-save commits to land on
@@ -113,9 +131,11 @@ function _switchToBranch(branchName, cmd) {
  *        baseBranch" invariant (step 4). Omit only for call sites that don't
  *        know the base branch; the stash-based self-healing (steps 1-3) still
  *        applies either way.
+ * @param {string} [pullRef] - gh-1096: refs/pull/<N>/head for a FORK PR head
+ *        (the branch is absent on origin); omitted for same-repo PRs.
  * @returns {{ branch: string, hadConflict: boolean }}
  */
-function checkoutPRBranch(branchName, workingDir, baseBranch) {
+function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef) {
     console.log('Checking out PR branch:', branchName);
     var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
     var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
@@ -151,7 +171,7 @@ function checkoutPRBranch(branchName, workingDir, baseBranch) {
 
     // 2. Switch branches — tree is clean now, so this should never fail on
     //    "untracked files would be overwritten" again.
-    _switchToBranch(branchName, cmd);
+    _switchOrPullRef(branchName, cmd, pullRef);
 
     // 3. Reapply the snapshot on top of the target branch.
     var hadConflict = false;
@@ -530,6 +550,7 @@ function writePRContext(inputFolder, prDetails, diff, markdown, rawThreads) {
     prInfo += '- **Author**: ' + (prDetails.user ? prDetails.user.login : 'unknown') + '\n';
     prInfo += '- **Branch**: `' + (prDetails.head ? prDetails.head.ref : 'unknown') +
               '` → `' + (prDetails.base ? prDetails.base.ref : 'unknown') + '`\n';
+    prInfo += forkCheckout.forkHeadInfoLine(prDetails);
     prInfo += '- **State**: ' + prDetails.state + '\n';
     prInfo += '- **Files Changed**: ' + (prDetails.changed_files || 0) + '\n';
     prInfo += '- **Additions**: +' + (prDetails.additions || 0) + '\n';

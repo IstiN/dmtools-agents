@@ -4,6 +4,7 @@
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var gitStagingModule = loadModule('js/common/gitStaging.js');
+var forkCheckoutModule = loadModule('js/common/forkCheckout.js', makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}) }), {});
 // gh-957: githubHelpers + pushReworkChanges now require the no-op loop guard.
 var reworkLoopGuardModule = loadModule('js/common/reworkLoopGuard.js');
 // Real PR helper (gh-912): the modules under test delegate cleanCommandOutput
@@ -62,6 +63,7 @@ function loadPushReworkChanges() {
         makeRequire({
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
+            './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/submodules.js': {},
@@ -118,6 +120,7 @@ function loadPushReworkChangesForAction(mocks) {
         makeRequire({
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
+            './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
             './common/scm.js': {
                 createScm: function() {
@@ -178,6 +181,7 @@ function loadPostTestReworkResults() {
         makeRequire({
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
+            './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
             './common/feedbackLoop.js': {},

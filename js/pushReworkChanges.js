@@ -19,6 +19,7 @@ var feedbackLoop = require('./common/feedbackLoop.js');
 var autoStart = require('./common/autoStart.js');
 var outputFiles = require('./common/outputFiles.js');
 var gitStaging = require('./common/gitStaging.js');
+var forkCheckout = require('./common/forkCheckout.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 var cacheToReleases = require('./cacheToReleases.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
@@ -416,14 +417,17 @@ function commitAndPush(ticketKey, config, customParams) {
         throw new Error('Could not sync PR branch with origin/' + baseBranch + ' before rework push: ' + syncResult.error);
     }
 
+    // gh-1096: a fork PR head is pushed back to the FORK's token URL
+    // (gh-1070 maintainer-edit contract); same-repo commands unchanged.
+    var pushPlan = forkCheckout.reworkPushPlan(forkCheckout.readForkHead(prInfo), branchName, squashed);
     try {
-        cmd(squashed ? 'git push -u --force-with-lease origin ' + branchName : 'git push -u origin ' + branchName);
+        cmd(pushPlan.push);
     } catch (pushError) {
         console.warn('Normal push failed; synchronizing with origin/' + branchName + ' before retry:', pushError.message || pushError);
         try {
-            cmd('git -c fetch.recurseSubmodules=no fetch origin ' + branchName + ':refs/remotes/origin/' + branchName);
-            cmd('git merge --no-edit origin/' + branchName);
-            cmd('git push -u origin ' + branchName);
+            cmd(pushPlan.fetch);
+            cmd(pushPlan.merge);
+            cmd(pushPlan.retry);
         } catch (syncPushError) {
             throw new Error(
                 'Could not push rework branch after synchronizing with origin/' + branchName +
@@ -433,10 +437,19 @@ function commitAndPush(ticketKey, config, customParams) {
         }
     }
 
+    verifyReworkPushed(cmd, branchName, pushPlan.fork);
+
+    console.log('✅ Pushed to remote branch:', branchName);
+    return { branch: branchName, hasChanges: hasChanges };
+}
+
+// gh-912: verify the push produced a real refs/heads/<branch> ref line on
+// origin — stderr noise never counts as the branch existing. gh-1096: a fork
+// head lives on the fork, not origin; the push itself is the proof there.
+function verifyReworkPushed(cmd, branchName, isFork) {
+    if (isFork) return;
     var remoteBranchExists = false;
     try {
-        // gh-912: verify the push produced a real refs/heads/<branch> ref
-        // line — stderr noise never counts as the branch existing.
         remoteBranchExists = prHelper.remoteBranchExists(cmd, null, branchName);
     } catch (lsRemoteErr) {
         console.warn('Error checking remote branches:', lsRemoteErr);
@@ -444,9 +457,6 @@ function commitAndPush(ticketKey, config, customParams) {
     if (!remoteBranchExists) {
         throw new Error('Branch was not successfully pushed to remote');
     }
-
-    console.log('✅ Pushed to remote branch:', branchName);
-    return { branch: branchName, hasChanges: hasChanges };
 }
 
 /**
