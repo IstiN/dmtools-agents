@@ -205,5 +205,14 @@ suite('smRuleLayers: gh-1114 verdict guard + merge-first capacity helpers', func
         assert.equal(smRuleLayers.reservationFor(1, 2), 2, 'parallel mode → validationMutexMax');
         assert.equal(smRuleLayers.reservationFor(1, 3), 3, 'parallel mode → validationMutexMax');
         assert.equal(smRuleLayers.reservationFor(0, 1), 0, 'disabled stays disabled');
+        // gh-1114 review (PR #1120 thread smRuleLayers.js:167): the kill
+        // switch must kill in EVERY mode — an explicit mergeReservedSlots 0
+        // is "bit-identical with the pre-gh-1114 capacity behavior", so the
+        // parallel override must not resurrect the reservation.
+        assert.equal(smRuleLayers.reservationFor(0, 3), 0, 'explicit disable wins in parallel mode');
+        assert.equal(smRuleLayers.reservationFor(0, 2), 0, 'explicit disable wins in parallel mode (mutex 2)');
+        assert.equal(smRuleLayers.reservationFor(
+            smRuleLayers.mergeReservedSlots({ mergeReservedSlots: 'false' }), 3), 0,
+            "string 'false' disable survives the parallel override");
     });
 });

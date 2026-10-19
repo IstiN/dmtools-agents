@@ -143,6 +143,10 @@ var validationLivenessModule = require('./common/validationLiveness.js');
 // run is gone/cancelled/stale (check-RUN zombies); the run-level gh-821
 // twin cannot see them while a green run still exists on the head.
 var checkRunZombiesModule = require('./common/checkRunZombies.js');
+// gh-1107: the check-run stamp transport — temp-file JSON body, zero
+// untrusted bytes in the shell string; also re-exports the ONE shellQuote
+// helper every converted call site shares.
+var checkRunStampModule = require('./common/checkRunStamp.js');
 var invisibleRequiredModule = require('./common/invisibleRequiredChecks.js');
 var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
@@ -254,6 +258,11 @@ var tickMergeReservationReleased = false;
 // Set once the L1→L2 boundary dropped the openPrs ioCache so verdict
 // queries re-read current heads (post-freshness).
 var tickL1CacheDropped = false;
+// gh-1114 (PR #1120 review, thread smAgent.js:8684): every distinct
+// effective repo the tick's rules used — the L1→L2 boundary drops the
+// openPrs ioCache for ALL of them, not just the global repo (rules can
+// carry configPath; the cache is keyed per (owner, repo)). Reset per tick.
+var tickReposSeen = {};
 
 // gh-1114 merge-first capacity: the dispatch budget THIS rule may spend.
 // Merge-path rules (the approved merge window + rework-on-red-ci) always
@@ -263,7 +272,15 @@ var tickL1CacheDropped = false;
 // I7). Callers guard on workflowBudget being non-null.
 function ruleBudgetRemaining(rule, workflowBudget) {
     if (!workflowBudget) return 0;
-    if (smRuleLayersModule.isMergePathRule(rule)) return workflowBudget.remaining;
+    // PR #1120 review (thread smAgent.js:264): NO merge-path exemption
+    // here — while the reservation is held, `remaining` can never exceed
+    // `initial − reserved` (the upfront hold subtracts before any rule
+    // runs, and ensureWorkflowBudgetActiveCount / agent dispatches only
+    // subtract further), so the capped return below ALREADY bounds every
+    // dispatch rule — merge-path ones included — at the reservation line;
+    // the raw-remaining result is identical in every reachable state. The
+    // real merge-first enforcement is the upfront hold plus layer order,
+    // not this arithmetic.
     if (tickMergeReservationReleased || tickMergeReservedSlots <= 0) {
         return workflowBudget.remaining;
     }
@@ -1626,6 +1643,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     var effectiveOwner = (effectiveConfig.repository && effectiveConfig.repository.owner) || globalRepoInfo.owner;
     var effectiveRepo  = (effectiveConfig.repository && effectiveConfig.repository.repo)  || globalRepoInfo.repo;
     var effectiveRepoInfo = { owner: effectiveOwner, repo: effectiveRepo };
+    // gh-1114 (PR #1120 review, thread smAgent.js:8684): remember the repo
+    // so the L1→L2 boundary drops ITS openPrs ioCache too — a multi-repo
+    // custom smRules tick must not keep a stale cached open-PR list for a
+    // non-global repo across the freshness→verdict boundary.
+    tickReposSeen[effectiveOwner + '/' + effectiveRepo] = effectiveRepoInfo;
 
     // Bridge-free checks: refresh tick-stamped validation verdicts BEFORE
     // this rule's source reads the rollup, so green/red rules see the
@@ -2256,22 +2278,48 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // builder now redirects stderr to opts.stderrFile; see the
         // builder's gh-1074 note) — this wrapper only parameterizes the
         // builder.
+        // gh-1114 E4 (PR #1120 review): the pushed sha — `git rev-parse
+        // HEAD` in the attempt's checkout RIGHT AFTER the push chain
+        // succeeded. Locally computed, zero API reads — immune to the
+        // read-after-write lag a fresh github_get_pr re-read can hit
+        // (ticket E4, live 2026-10-19 16:43). null when the probe fails
+        // (mocks, executor limits) — the caller falls back to the
+        // post-push re-read (E1 semantics unchanged).
+        function pushedHeadShaOf(dir) {
+            try {
+                var out = cli_execute_command({ command: 'git -C ' + dir + ' rev-parse HEAD' });
+                var text = String((out && (out.output || out.stdout)) || out || '').trim();
+                return /^[0-9a-f]{40}$/i.test(text) ? text : null;
+            } catch (eRev) {
+                return null;
+            }
+        }
+
+        function silentUpdateDirFor(branchName) {
+            return '/tmp/sm-silent-update-' + Date.now() + '-' +
+                String(branchName).replace(/[^a-zA-Z0-9._-]/g, '_');
+        }
+
         function silentUpdateBranch(branchName, stderrFile, forceFresh) {
-            var dir = '/tmp/sm-silent-update-' + Date.now() + '-' +
-                      String(branchName).replace(/[^a-zA-Z0-9._-]/g, '_');
+            var dir = silentUpdateDirFor(branchName);
             cli_execute_command({
                 command: silentUpdateCommand({
                     dir: dir,
-                    headFlags: '--no-tags --single-branch --branch ' + branchName +
+                    // gh-1107: branchName is the PR head ref — quote every
+                    // place it meets the shell (--branch, push refspec).
+                    headFlags: '--no-tags --single-branch --branch ' +
+                               checkRunStampModule.shellQuote(branchName) +
                                ' --depth 200',
                     headSetup: '',
                     stderrFile: stderrFile,
                     forceFresh: forceFresh === true,
                     pushTarget: 'https://x-access-' + 'token:${GH_TOKEN}@github.com/' + // assembled from split literals: the sandbox redacts the contiguous token-URL pattern in file writes (the unit tests' TOK convention)
                          effectiveRepoInfo.owner + '/' + effectiveRepoInfo.repo +
-                         '.git ' + branchName
+                         '.git ' + checkRunStampModule.shellQuote(branchName)
                 })
             });
+            // The chain succeeded — HEAD in the checkout IS the pushed sha.
+            return pushedHeadShaOf(dir);
         }
 
         // ── gh-1074: the failure surface (stderr tail) ────────────────
@@ -2399,7 +2447,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         function silentUpdateBranchTracked(branchName, forceFresh) {
             var stderrFile = silentUpdateStderrFile(branchName);
             try {
-                silentUpdateBranch(branchName, stderrFile, forceFresh);
+                // gh-1114 E4: the pushed sha flows back to the caller —
+                // the move record verifies against it, not a re-read.
+                return silentUpdateBranch(branchName, stderrFile, forceFresh);
             } catch (eClone) {
                 // I5 + gh-1074: the marker trail fires on the refresh
                 // failure, now carrying the one-line rejection reason
@@ -2491,20 +2541,26 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // gh-1070 rework: the chain is the shared silentUpdateCommand
             // skeleton — only the head-obtainment seam and the push
             // target differ from the base repush (see the builder).
-            var dir = '/tmp/sm-silent-update-' + Date.now() + '-' +
-                      String(branchName).replace(/[^a-zA-Z0-9._-]/g, '_');
+            var dir = silentUpdateDirFor(branchName);
             cli_execute_command({
                 command: silentUpdateCommand({
                     dir: dir,
                     headFlags: '--no-tags --depth 200',
+                    // gh-1107: branchName is PR-author-controlled — quote it
+                    // at both shell touchpoints (checkout -B, the fork push
+                    // refspec).
                     headSetup: ' && git fetch --no-tags --depth 200 origin refs/pull/' +
                                ticket.prNumber + '/head' +
-                               ' && git checkout -B ' + branchName + ' FETCH_HEAD',
+                               ' && git checkout -B ' +
+                               checkRunStampModule.shellQuote(branchName) + ' FETCH_HEAD',
                     stderrFile: stderrFile,
                     pushTarget: validationLivenessModule.forkPushTokenUrl(forkFull) +
-                                ' HEAD:' + branchName
+                                ' HEAD:' + checkRunStampModule.shellQuote(branchName)
                 })
             });
+            // The chain succeeded — HEAD in the checkout IS the pushed sha
+            // (gh-1114 E4: locally computed, no re-read lag).
+            return pushedHeadShaOf(dir);
         }
 
         function recordForkSilentUpdateFailure(reason) {
@@ -2546,8 +2602,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         function forkSilentUpdateBranchTracked(branchName, forkFull) {
             var stderrFile = silentUpdateStderrFile(branchName);
             try {
-                forkSilentUpdateBranch(branchName, forkFull, stderrFile);
-                return;
+                // gh-1114 E4: the pushed sha flows back to the caller —
+                // the move record verifies against it, not a re-read.
+                return forkSilentUpdateBranch(branchName, forkFull, stderrFile);
             } catch (eFork) {
                 var tail = readSilentUpdateStderrTail(stderrFile);
                 // gh-1106 AC1/AC2: classify BEFORE the gh-1070 trail — a
@@ -2558,7 +2615,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // counted on the 3-strike trail. Every other class keeps
                 // the gh-1074 surface byte-identical (REG-1).
                 if (validationLivenessModule.isWorkflowsPermissionRejection(tail)) {
-                    if (escalateForkSilentUpdate(branchName, forkFull)) return;
+                    var escSha = escalateForkSilentUpdate(branchName, forkFull);
+                    if (escSha) return escSha;
                     throw silentUpdateErrorWithTail(eFork, tail);
                 }
                 // gh-1074: same failure surface as the base lane — the
@@ -2685,11 +2743,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // The identical chain (clone → fetch head → merge main →
                     // push the fork token URL) — ONLY the child env differs,
                     // so the secret never enters the script source or logs.
-                    forkSilentUpdateBranch(branchName, forkFull, escStderrFile);
+                    // gh-1114 E4: the escalated push's own sha flows back —
+                    // truthy (any 40-hex sha, or null → false) so the
+                    // tracked wrapper returns it to the move record.
+                    var escSha = forkSilentUpdateBranch(branchName, forkFull, escStderrFile);
                     console.log('  🔐 ' + key + ' workflow-write escalation succeeded — ' +
                         'fork head moved (gh-1106 AC1); the park reset and validation ' +
                         're-dispatch ride the standard lanes (AC4)');
-                    return true;
+                    return escSha || true;
                 } finally {
                     if (swapped) {
                         try { set_env_variable('GH_TOKEN', silentTok || sourceTok); } catch (eRes) {} // AC7: restored even on exception
@@ -2786,10 +2847,15 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // the hold covers the whole approved queue width). Fresh
             // validations (validate-fresh) never spend it.
             if (smRuleLayersModule.isMergePathRule(rule)) tickMergeSlotSpent = 'dispatched';
+            // gh-1107: the head ref is PR-author-controlled and git refs
+            // permit shell metacharacters — single-quote it through the
+            // ONE shellQuote helper (same discipline as the gh-757 ghost
+            // dispatch).
             cli_execute_command({
                 command: 'gh workflow run ' + ciWorkflow +
                          ' --repo ' + effectiveRepoInfo.owner + '/' +
-                         effectiveRepoInfo.repo + ' --ref ' + branchName
+                         effectiveRepoInfo.repo +
+                         ' --ref ' + checkRunStampModule.shellQuote(branchName)
             });
         }
 
@@ -3090,25 +3156,30 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // The routed refresh: the FORK path pushes to the fork's
                 // PR branch (maintainer-edit URL); same-repo rides the
                 // classic base repush untouched. Returns the FRESH
-                // post-push head sha (one github_get_pr — the gh-846 seam),
-                // or null when the read failed / DRY (E3: a dry tick never
-                // records a move).
+                // post-push head sha — the PUSH'S OWN sha when the
+                // checkout probe answered (gh-1114 E4: locally computed,
+                // lag-immune), else one github_get_pr re-read (the gh-846
+                // seam fallback), or null when the read failed / DRY (E3:
+                // a dry tick never records a move).
                 function refreshHeadSilent() {
-                    if (forkGateU.forkFull) {
-                        forkSilentUpdateBranchTracked(ticket.branch, forkGateU.forkFull);
-                    } else {
-                        silentUpdateBranchTracked(ticket.branch);
-                    }
+                    var pushedShaMtt = forkGateU.forkFull
+                        ? forkSilentUpdateBranchTracked(ticket.branch, forkGateU.forkFull)
+                        : silentUpdateBranchTracked(ticket.branch);
                     // gh-1114: fill the tick's movedThisTick set. The move
-                    // is verified against the FRESH post-push head read —
-                    // never the ticket's cached sha or the per-tick ioCache
-                    // (E4); an unverified move (up-to-date no-op push, probe
-                    // failure, failed push — E1) records nothing and the L2
-                    // verdicts behave exactly as today.
+                    // is verified against the push's own sha first (E4 —
+                    // the re-read's read-after-write lag once returned the
+                    // pre-push sha, live 2026-10-19 16:43), falling back to
+                    // the FRESH post-push head read when the local probe
+                    // has no answer. Never the ticket's cached sha or the
+                    // per-tick ioCache; an unverified move (up-to-date
+                    // no-op push, probe failure, failed push — E1) records
+                    // nothing and the L2 verdicts behave exactly as today.
                     var newHeadMtt = null;
                     if (!DRY) {
-                        newHeadMtt = freshHeadSha(effectiveRepoInfo, ticket.prNumber);
-                        if (headMoved(uHead, newHeadMtt)) {
+                        newHeadMtt = (typeof pushedShaMtt === 'string' && pushedShaMtt)
+                            ? pushedShaMtt
+                            : freshHeadSha(effectiveRepoInfo, ticket.prNumber);
+                        if (uHead && headMoved(uHead, newHeadMtt)) {
                             tickMovedPrs[ticket.prNumber] = true;
                             console.log('  🔖 ' + key + ' head moved this tick (' +
                                 String(uHead || '?').slice(0, 8) + ' → ' +
@@ -4156,7 +4227,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         // not this dispatch), and git ref names permit
                         // shell metacharacters: single-quote the value and
                         // escape any embedded quote (rework review thread).
-                        var ghostRef = String(ticket.branch || '').replace(/'/g, "'\\''");
+                        // gh-1107 audit: same escaping as the ONE shellQuote
+                        // helper — normalized to it so the discipline has a
+                        // single implementation (byte-identical output).
+                        var ghostRef = checkRunStampModule.shellQuote(String(ticket.branch || ''));
                         // gh-683 bug C invariant, ghost class (rework review
                         // thread): the once-per-head marker latches every
                         // future retry for this head, so it may post ONLY
@@ -4169,7 +4243,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 command: 'gh workflow run ' + ghostCi +
                                          ' --repo ' + effectiveRepoInfo.owner + '/' +
                                          effectiveRepoInfo.repo +
-                                         ' --ref \'' + ghostRef + '\''
+                                         ' --ref ' + ghostRef
                             });
                             ghostDispatched = true;
                         } catch (eGhostDispatch) {
@@ -6715,7 +6789,13 @@ function attemptMergeProbe(repoInfo, ticket, key) {
     }
     // gh-1114: a resolved merge frees the whole reservation (the mutex
     // claim is DONE — no in-flight validation holds the width anymore).
-    tickMergeSlotSpent = 'merged';
+    // First resolution wins (PR #1120 review, thread smAgent.js:6718):
+    // when a merge-path validation dispatched earlier this tick, its
+    // width is STILL in flight — overwriting 'dispatched' with 'merged'
+    // would refund the hold at the L3→L4 boundary and oversubscribe the
+    // cap by the in-flight dispatch. Conservative direction: the width
+    // stays held (a later tick with no spend releases it as today).
+    if (!tickMergeSlotSpent) tickMergeSlotSpent = 'merged';
     try {
         githubTracker(repoInfo.owner, repoInfo.repo).removeLabel(ticket.prNumber, 'ai_validating');
         githubTracker(repoInfo.owner, repoInfo.repo).removeLabel(ticket.prNumber, 'pr_approved');
@@ -7231,12 +7311,15 @@ function sweepZombieCheckRunsNeutral(repoInfo, zombies, headSha) {
             }
             try {
                 cli_execute_command({
+                    // gh-1107: the summary is a fixed literal today, but the
+                    // flag value goes through the ONE shellQuote helper so
+                    // the shape cannot regress if it ever carries run text.
                     command: 'gh api -X PATCH repos/' + repoInfo.owner +
                         '/' + repoInfo.repo + '/check-runs/' + z.id +
                         ' -f status=completed' +
                         ' -f conclusion=neutral' +
-                        ' -f "output[title]=SM swept a zombie check-run (gh-998)"' +
-                        ' -f "output[summary]=' + summary + '"'
+                        ' -f ' + checkRunStampModule.shellQuote('output[title]=SM swept a zombie check-run (gh-998)') +
+                        ' -f ' + checkRunStampModule.shellQuote('output[summary]=' + summary)
                 });
                 out.concluded++;
                 console.log('  ' + checkRunZombiesModule.zombieSweptLine(z.id, headSha));
@@ -7336,14 +7419,17 @@ function concludePlaceholderCheckRuns(repoInfo, placeholders, coverRun) {
                 return;
             }
             try {
+                // gh-1107: the cover URL is run-derived (a PR can shape it
+                // via workflow-run fields) — quote the flag values through
+                // the ONE shellQuote helper instead of double quotes.
                 cli_execute_command({
                     command: 'gh api -X PATCH repos/' + repoInfo.owner +
                         '/' + repoInfo.repo + '/check-runs/' + ph.id +
                         ' -f status=completed' +
                         ' -f conclusion=success' +
-                        (coverUrl ? (' -f details_url="' + coverUrl + '"') : '') +
-                        ' -f "output[title]=SM concluded a placeholder check-run (gh-857)"' +
-                        ' -f "output[summary]=' + coverLine + '"'
+                        (coverUrl ? (' -f details_url=' + checkRunStampModule.shellQuote(coverUrl)) : '') +
+                        ' -f ' + checkRunStampModule.shellQuote('output[title]=SM concluded a placeholder check-run (gh-857)') +
+                        ' -f ' + checkRunStampModule.shellQuote('output[summary]=' + coverLine)
                 });
                 out.concluded++;
             } catch (ePatch) {
@@ -8063,11 +8149,14 @@ function stampLinkBlock(repoInfo, runUrl, conclusion) {
             var verdict = j.conclusion ? (j.status === 'completed' ? j.conclusion : j.status)
                                        : j.status;
             var link = j.html_url || runUrl;
-            lines.push('| [' + String(j.name).replace(/"/g, "'") + '](' + link + ') | ' +
+            // gh-1107: NO byte mangling — the name rides the JSON body
+            // verbatim (the old `"` → `'` swap existed for the shell string
+            // that no longer exists; the byte-for-byte contract forbids it).
+            lines.push('| [' + String(j.name) + '](' + link + ') | ' +
                        verdict + ' |');
         });
         block.summary = ('Dispatched run: ' + runUrl + '\n' + lines.join('\n') +
-                         '\n_Stamped by the SM tick (bridge-free mode)._').replace(/"/g, "'");
+                         '\n_Stamped by the SM tick (bridge-free mode)._');
         // Red verdict: land the reviewer on the FAILING JOB directly, not
         // the umbrella run (success keeps the umbrella — one click lists
         // every job).
@@ -8083,6 +8172,10 @@ function stampLinkBlock(repoInfo, runUrl, conclusion) {
     }
     return block;
 }
+
+// gh-1107: temp-body uniqueness — one /tmp file per stamp, monotonic so
+// same-millisecond stamps in the forEach never collide.
+var stampTempSeq = 0;
 
 function stampValidationChecksForModule(repoInfo, headSha, status, conclusion, runUrl) {
             var names = validationCheckNames();
@@ -8114,26 +8207,36 @@ function stampValidationChecksForModule(repoInfo, headSha, status, conclusion, r
                                     status + (conclusion ? '/' + conclusion : ''));
                         return;
                     }
-                    // POST /repos/{o}/{r}/check-runs — head_sha is a FIELD,
-                    // never a path segment (sha-in-path 404s). github_create
-                    // _check_run is MCP-registry-only (not a JS-bridge tool).
-                    // details_url + the jobs table (stampLinkBlock) turn the
-                    // PR Checks-tab entry into a clickable path to the real
-                    // workflow run / failing job (owner 2026-09-27).
+                    // POST /repos/{o}/{r}/check-runs via a temp-file JSON
+                    // body (gh-1107): the jobs table can carry ANY bytes a
+                    // PR-editable workflow job name pleases (`Lockfile
+                    // smoke (${{ matrix.os }} release)` made dash die with
+                    // `Bad substitution` on the old -f summary="…" form —
+                    // exit 2, no stamp, PR blocked). The body travels as a
+                    // temp file (--input, the scm.js gh-960 PR-body
+                    // precedent); the shell string carries ONLY the fixed
+                    // repo path and the temp-file path, and the file is
+                    // deleted in finally on success AND failure.
                     try {
-                        var cmd = 'gh api -X POST repos/' + repoInfo.owner +
-                                  '/' + repoInfo.repo + '/check-runs' +
-                                  ' -f name="' + checkName + '"' +
-                                  ' -f head_sha=' + headSha +
-                                  ' -f status="' + status + '"' +
-                                  (conclusion ? (' -f conclusion="' + conclusion + '"') : '') +
-                                  (linkBlock.detailsUrl ?
-                                      (' -f details_url="' + linkBlock.detailsUrl + '"') : '') +
-                                  ' -f title="SM validation' +
-                                  (conclusion ? (': ' + conclusion) : ' (tick-dispatched)') + '"' +
-                                  ' -f summary="' + linkBlock.summary + '"';
-                        cli_execute_command({ command: cmd });
+                        var body = checkRunStampModule.buildCheckRunBody({
+                            name: checkName,
+                            headSha: headSha,
+                            status: status,
+                            conclusion: conclusion,
+                            detailsUrl: linkBlock.detailsUrl,
+                            title: 'SM validation' +
+                                (conclusion ? (': ' + conclusion) : ' (tick-dispatched)'),
+                            summary: linkBlock.summary
+                        });
+                        var tempPath = checkRunStampModule.tempBodyPath(
+                            Date.now(), ++stampTempSeq);
+                        checkRunStampModule.postCheckRunStamp(repoInfo, body, tempPath, {
+                            write: file_write, exec: cli_execute_command, del: file_delete
+                        });
                     } catch (e) {
+                        // Same failure mode as before gh-1107 (E2 included —
+                        // an unwritable temp dir degrades identically):
+                        // warn and move on to the next check name.
                         console.warn('  ⚠️  stamp "' + checkName + '" on ' +
                                      String(headSha).slice(0, 7) + ': ' + (e.message || e));
                     }
@@ -8410,6 +8513,7 @@ function action(params) {
     tickMergeSlotAccounted = false;
     tickMergeReservationReleased = false;
     tickL1CacheDropped = false;
+    tickReposSeen = {}; // gh-1114: distinct effective repos seen this tick (L1→L2 drop set)
     tickWorkflowEscalations = {}; // gh-1106: one workflow-write escalation per PR per tick
     if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
     var rules = p.rules;
@@ -8556,6 +8660,10 @@ function action(params) {
     }
 
     var globalRepoInfo = { owner: owner, repo: repo };
+    // gh-1114 (PR #1120 review, thread smAgent.js:8684): the tick's base
+    // repo is always "seen" — the L1→L2 boundary drops its cache even when
+    // every rule targets other repos (the pre-fix behavior kept).
+    tickReposSeen[globalRepoInfo.owner + '/' + globalRepoInfo.repo] = globalRepoInfo;
     console.log('SM Agent — ' + globalRepoInfo.owner + '/' + globalRepoInfo.repo + ' (' + rules.length + ' rules)');
     if (projectConfig.jira.project) {
         console.log('  Jira project: ' + projectConfig.jira.project);
@@ -8679,9 +8787,18 @@ function action(params) {
             nextLayerIdx !== null && nextLayerIdx > smRuleLayersModule.L1_IDX) {
             // L1→L2: every freshness mutation has landed — drop the cached
             // open-PR list so the verdict window re-queries CURRENT heads
-            // (the post-freshness head re-read; live #435).
+            // (the post-freshness head re-read; live #435). gh-1114 (PR
+            // #1120 review, thread smAgent.js:8684): the cache is keyed per
+            // (owner, repo) — drop it for EVERY repo the tick's rules used
+            // (configPath rules can target non-global repos; a stale list
+            // there is exactly the staleness this boundary removes).
             tickL1CacheDropped = true;
-            dropOpenPrsCache(globalRepoInfo);
+            Object.keys(tickReposSeen).forEach(function (repoKey) {
+                var repoInfoMtt = tickReposSeen[repoKey];
+                if (repoInfoMtt && repoInfoMtt.owner && repoInfoMtt.repo) {
+                    dropOpenPrsCache(repoInfoMtt);
+                }
+            });
             console.log('  🔄 gh-1114 L1→L2: openPrs ioCache dropped — verdict queries read current heads');
         }
         if (!tickMergeReservationReleased &&

@@ -164,8 +164,13 @@ function mergeReservedSlots(jobParams) {
 
 // The reservation width for the tick: the whole gh-837 parallel width when
 // parallel validation is active (queue ≥ watermark), else mergeReservedSlots.
+// An EXPLICIT disable (slots <= 0) wins in every mode — mergeReservedSlots
+// documents 0/false as the kill switch ("bit-identical with the pre-gh-1114
+// capacity behavior"), so the parallel override must never resurrect the
+// reservation (PR #1120 review, thread smRuleLayers.js:167).
 function reservationFor(mergeSlots, validationMutexMax) {
     var slots = mergeSlots || 0;
+    if (slots <= 0) return 0;
     var mutexMax = validationMutexMax || 1;
     return mutexMax > 1 ? mutexMax : slots;
 }
