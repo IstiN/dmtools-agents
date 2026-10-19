@@ -48,12 +48,14 @@
  * concludes failure (the gh-676 phantom pattern) — it can never own the
  * freshness window without having run a leg.
  *
- * FOLLOW-UP (deferred scope, gh-1065): the consumer-repo copy
- * workflows/ai-teammate.yml.template still carries the UN-DEDUPED event
- * path — every consumer repo burns duplicate teammate runs on
- * assign-while-labels-change. Its run titles already carry the leg, so
- * this module slots in directly; mirroring the gate there is tracked as a
- * follow-up ticket linked to gh-1065.
+ * FOLLOW-UP — RESOLVED (gh-1073): the consumer-repo copy
+ * workflows/ai-teammate.yml.template now mirrors the same gated dedup job
+ * (its probe requires THIS module from the mounted agents-pack checkout at
+ * dmtools-agents/js/common/, and its issues-event run-name resolves the
+ * strongest arming label into the emoji title family parsed below). The
+ * stub and the template stay in lockstep — a gate change here must land in
+ * both files (pinned by test_teammateEventDedup.js and
+ * test_aiTeammateTemplate.js).
  *
  * Pure functions, no tool globals — the workflow wires the transport
  * (gh api per-status fan-out, smAgent parity). GraalJS-clean: var + plain
@@ -65,7 +67,8 @@
 // The leg workflow this dedup guards — the same default branchLegGuard and
 // the SM dispatch side use. NOTE: the consumer-repo copies of
 // workflows/ai-teammate.yml.template point at the same default workflow
-// file; see the FOLLOW-UP note in the header.
+// file (their probe rides WORKFLOW_FILE: ai-teammate.yml); see the
+// FOLLOW-UP note in the header.
 var DEFAULT_WORKFLOW_FILE = 'ai-teammate.yml';
 
 // Active-state vocabulary — branchLegGuard parity, one list.
