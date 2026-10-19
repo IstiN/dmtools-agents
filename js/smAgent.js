@@ -239,7 +239,7 @@ var tickMovedPrs = {};
 // merge-path rule spent it, whether the spend was accounted against the
 // workflow cap once, and whether the L3 boundary released it to agent legs.
 var tickMergeReservedSlots = 0;
-var tickMergeSlotUsed = false;
+var tickMergeSlotSpent = null; // null | 'dispatched' | 'merged'
 var tickMergeSlotAccounted = false;
 var tickMergeReservationReleased = false;
 // Set once the L1→L2 boundary dropped the openPrs ioCache so verdict
@@ -2619,10 +2619,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 return;
             }
             // gh-1114 merge-first capacity (priority 3): a merge-path rule's
-            // validation dispatch SPENDS the reserved slot — accounted
-            // against the workflow cap once per tick, after the rule
-            // completes. Fresh validations (validate-fresh) never spend it.
-            if (smRuleLayersModule.isMergePathRule(rule)) tickMergeSlotUsed = true;
+            // validation dispatch SPENDS the reservation — the tick's
+            // upfront hold is not returned to agent legs (in parallel mode
+            // the hold covers the whole approved queue width). Fresh
+            // validations (validate-fresh) never spend it.
+            if (smRuleLayersModule.isMergePathRule(rule)) tickMergeSlotSpent = 'dispatched';
             cli_execute_command({
                 command: 'gh workflow run ' + ciWorkflow +
                          ' --repo ' + effectiveRepoInfo.owner + '/' +
@@ -6550,6 +6551,9 @@ function attemptMergeProbe(repoInfo, ticket, key) {
         throw new Error('merge refused: ' +
             (typeof mergeRaw === 'string' ? mergeRaw : JSON.stringify(mergeRaw)));
     }
+    // gh-1114: a resolved merge frees the whole reservation (the mutex
+    // claim is DONE — no in-flight validation holds the width anymore).
+    tickMergeSlotSpent = 'merged';
     try {
         githubTracker(repoInfo.owner, repoInfo.repo).removeLabel(ticket.prNumber, 'ai_validating');
         githubTracker(repoInfo.owner, repoInfo.repo).removeLabel(ticket.prNumber, 'pr_approved');
@@ -8240,7 +8244,7 @@ function action(params) {
     tickParkedRecorded = {}; // gh-922: fresh same-tick dedup window (see recordDispatchFailure)
     tickMovedPrs = {}; // gh-1114: heads moved by THIS tick's freshness layer
     tickMergeReservedSlots = 0; // gh-1114: merge-first capacity (resolved below)
-    tickMergeSlotUsed = false;
+    tickMergeSlotSpent = null;
     tickMergeSlotAccounted = false;
     tickMergeReservationReleased = false;
     tickL1CacheDropped = false;
@@ -8468,6 +8472,14 @@ function action(params) {
             smRuleLayersModule.mergeReservedSlots(p), validationMutexMax)
         : 0;
     if (tickMergeReservedSlots > 0) {
+        // Upfront hold: the reservation is deducted from the tick's
+        // dispatch budget BEFORE any rule runs (AC9: agent lanes can never
+        // outrun the merge path). Merge-path rules bypass the hold — they
+        // spend it.
+        if (workflowBudget) {
+            workflowBudget.remaining = Math.max(0,
+                workflowBudget.remaining - tickMergeReservedSlots);
+        }
         console.log('  🎯 merge-first capacity: ' + tickMergeReservedSlots +
             ' workflow slot(s) reserved for the approved merge path' +
             (validationMutexMax > 1
@@ -8483,13 +8495,19 @@ function action(params) {
         allProcessedKeys = allProcessedKeys.concat(result.processedKeys);
         allSkippedKeys   = allSkippedKeys.concat(result.skippedKeys);
         // gh-1114 merge-first capacity: a merge-path rule dispatched its
-        // validation — the reserved slot is now a spent slot; account it
-        // against the cap once, before the next rule computes its budget
-        // (AC9: the approved validation counts toward the cap).
-        if (tickMergeSlotUsed && !tickMergeSlotAccounted) {
+        // validation — the reservation is spent (held for the tick). In
+        // serial mode the held slot IS the validation slot: refund the
+        // dispatch's own charge so agent lanes see cap − validations (AC9).
+        // In parallel mode the dispatch pays from the held width — no
+        // refund (the whole mutex width stays claimed while a validation
+        // is in flight).
+        if (tickMergeSlotSpent === 'dispatched' && !tickMergeSlotAccounted) {
             tickMergeSlotAccounted = true;
             if (workflowBudget) {
-                workflowBudget.remaining = Math.max(0, workflowBudget.remaining - 1);
+                if (tickMergeReservedSlots === 1) {
+                    workflowBudget.remaining = Math.min(workflowBudget.initial,
+                        workflowBudget.remaining + 1);
+                }
                 console.log('  🎯 merge-path validation dispatched — reserved slot spent, ' +
                     workflowBudget.remaining + ' dispatch slot(s) left');
             }
@@ -8512,9 +8530,23 @@ function action(params) {
             (nextLayerIdx === null /* end of rules */
                 || nextLayerIdx > smRuleLayersModule.L3_IDX)) {
             tickMergeReservationReleased = true;
-            if (tickMergeReservedSlots > 0 && !tickMergeSlotUsed) {
-                console.log('  🔓 gh-1114: no merge-candidate validation this tick — ' +
-                    'the reserved slot is released to agent legs');
+            if (tickMergeReservedSlots > 0 && workflowBudget) {
+                if (!tickMergeSlotSpent) {
+                    // L3 never spent the hold — release it to agent legs.
+                    workflowBudget.remaining = Math.min(workflowBudget.initial,
+                        workflowBudget.remaining + tickMergeReservedSlots);
+                    console.log('  🔓 gh-1114: no merge-candidate validation this tick — ' +
+                        'the reserved slot is released to agent legs');
+                } else if (tickMergeSlotSpent === 'merged') {
+                    // The merge window RESOLVED — the mutex claim is done,
+                    // the whole hold returns to agent legs (AC11).
+                    workflowBudget.remaining = Math.min(workflowBudget.initial,
+                        workflowBudget.remaining + tickMergeReservedSlots);
+                    console.log('  🔓 gh-1114: merge resolved — the reservation is released to agent legs');
+                }
+                // 'dispatched': the hold stays spent for the tick — an
+                // approved validation is in flight (and in parallel mode
+                // the rest of the width covers the approved queue).
             }
         }
     });
