@@ -303,62 +303,100 @@ function hasRealCodeChanges(ticketKey, config) {
     }
 }
 
-function commitAndPush(ticketKey, config, customParams) {
-    var workingDir = config.workingDir || null;
-    var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
-    var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
+// ── gh-1082: pure parse/build/decide helpers for commitAndPush() ─────────────
+// Extracted from commitAndPush() without changing the tracker/SCM/git/file
+// call order or any observable text. Each helper is directly unit-tested in
+// js/unit-tests/test_pushReworkChanges.js (commitAndPush — branch decisions).
 
-    // Read expected branch from pr_info.md (written by preCliReworkSetup).
-    // Do NOT trust git branch --show-current — the CLI agent may have switched branches.
-    var expectedBranch = null;
+/**
+ * The command-local cli_execute_command option bag for a workingDir.
+ */
+function reworkCmdOpts(workingDir) {
+    return workingDir ? { workingDirectory: workingDir } : {};
+}
+
+/**
+ * Reads input/<ticketKey>/pr_info.md (written by preCliReworkSetup) and
+ * parses the expected PR **Branch** head from it. Throws the refusing
+ * "Missing PR context file" error when the file cannot be read.
+ * Returns { prInfo, headBranch } — headBranch null when the header is absent.
+ */
+function readReworkPrInfoHeadBranch(ticketKey) {
     try {
-        var prInfoPath = 'input/' + ticketKey + '/pr_info.md';
-        var prInfo = file_read({ path: prInfoPath }) || '';
+        var prInfo = file_read({ path: 'input/' + ticketKey + '/pr_info.md' }) || '';
         var branchMatch = prInfo.match(/\*\*Branch\*\*:\s*`([^`]+)`/);
-        if (branchMatch) expectedBranch = branchMatch[1].trim();
+        return { prInfo: prInfo, headBranch: branchMatch ? branchMatch[1].trim() : null };
     } catch (e) {
         throw new Error('Missing PR context file input/' + ticketKey + '/pr_info.md. Rework setup did not find or checkout a PR; refusing to commit or push.');
     }
-    if (!expectedBranch) {
-        throw new Error('Could not determine expected PR branch from input/' + ticketKey + '/pr_info.md; refusing to commit or push.');
-    }
-    var baseBranch = (config.git && config.git.baseBranch) || 'main';
+}
+
+/**
+ * The PR's base branch parsed from the pr_info.md **Branch** head line
+ * ("**Branch**: `head` → `base`") — null when absent/unparsable.
+ */
+function parseReworkBaseBranch(prInfo) {
     try {
         var baseMatch = prInfo.match(/\*\*Branch\*\*:\s*`[^`]+`\s*→\s*`([^`]+)`/);
-        if (baseMatch && baseMatch[1]) baseBranch = baseMatch[1].trim();
-    } catch (e) {}
+        return (baseMatch && baseMatch[1]) ? baseMatch[1].trim() : null;
+    } catch (e) { return null; }
+}
 
-    var currentBranch = cleanCommandOutput(cmd('git branch --show-current') || '');
-    console.log('Current branch:', currentBranch, '| Expected:', expectedBranch);
+/**
+ * The base branch a rework push must never touch: the pr_info.md base line
+ * first, then config.git.baseBranch, then main.
+ */
+function resolveReworkBaseBranch(config, prInfo) {
+    return parseReworkBaseBranch(prInfo) || (config.git && config.git.baseBranch) || 'main';
+}
 
-    var branchName = currentBranch;
-    if (expectedBranch && currentBranch !== expectedBranch) {
-        console.warn('⚠️ Branch mismatch — forcing checkout to expected branch:', expectedBranch);
-        try {
-            cmd('git checkout ' + expectedBranch);
-            branchName = expectedBranch;
-            console.log('✅ Switched to expected branch:', branchName);
-        } catch (e) {
-            console.warn('Could not checkout expected branch, using current:', currentBranch, e);
-        }
+/**
+ * True when the checked-out branch differs from the expected PR branch and
+ * a forced checkout is required.
+ */
+function reworkBranchMismatch(expectedBranch, currentBranch) {
+    return !!expectedBranch && currentBranch !== expectedBranch;
+}
+
+/**
+ * Forces the expected PR branch when the CLI agent switched branches.
+ * Returns the branch name the subsequent commit/push must run on: the
+ * expected branch after a successful checkout, else the current branch.
+ */
+function checkoutExpectedBranch(cmd, expectedBranch, currentBranch) {
+    if (!reworkBranchMismatch(expectedBranch, currentBranch)) return currentBranch;
+    console.warn('⚠️ Branch mismatch — forcing checkout to expected branch:', expectedBranch);
+    try {
+        cmd('git checkout ' + expectedBranch);
+        console.log('✅ Switched to expected branch:', expectedBranch);
+        return expectedBranch;
+    } catch (e) {
+        console.warn('Could not checkout expected branch, using current:', currentBranch, e);
+        return currentBranch;
     }
+}
 
-    // Hard invariant: never commit/push while sitting on the base branch —
-    // if the forced checkout above didn't work and we're still parked on
-    // baseBranch, refuse rather than pushing WIP straight into the mainline.
-    if (branchName && branchName === baseBranch) {
-        throw new Error('Refusing to commit/push: current branch "' + branchName +
-            '" is the base branch (' + baseBranch + '), not the expected PR branch "' + expectedBranch + '".');
-    }
+/**
+ * The hard base-branch invariant: true when the branch about to be
+ * committed/pushed IS the base branch (the forced checkout above failed).
+ */
+function isBaseBranchViolation(branchName, baseBranch) {
+    return !!branchName && branchName === baseBranch;
+}
 
-    submoduleHelper.pushManagedSubmodules({
-        run: cmd,
-        cleanOutput: cleanCommandOutput,
-        config: config,
-        customParams: customParams,
-        ticketKey: ticketKey
-    });
+/**
+ * The refusal error for the base-branch invariant.
+ */
+function baseBranchRefusalMessage(branchName, baseBranch, expectedBranch) {
+    return 'Refusing to commit/push: current branch "' + branchName +
+        '" is the base branch (' + baseBranch + '), not the expected PR branch "' + expectedBranch + '".';
+}
 
+/**
+ * gh-628 runtime-artifact untrack cleanup — best-effort: a failure is
+ * warned about and never blocks staging.
+ */
+function untrackRuntimeArtifactsQuietly(cmd) {
     try {
         // gh-628: untrack machine-local runtime logs carried by
         // already-poisoned branches (a broad add swept the credential
@@ -369,6 +407,105 @@ function commitAndPush(ticketKey, config, customParams) {
     } catch (cleanupErr) {
         console.warn('Could not remove tracked Copilot session cache before staging:', cleanupErr);
     }
+}
+
+/**
+ * True when the staged diff stat is non-empty (something to commit).
+ */
+function hasStagedChanges(status) {
+    return !!status.trim();
+}
+
+/**
+ * The rework commit message: the configured format template with
+ * {ticketKey}, with any CI-skip directive stripped (gh-711).
+ */
+function buildReworkCommitMessage(config, ticketKey) {
+    return stripCiSkipTokens(configLoader.formatTemplate(config.formats.commitMessage.rework, {ticketKey: ticketKey}));
+}
+
+/**
+ * Commits the staged changes when the diff stat is non-empty; warns and
+ * leaves the history alone otherwise. Returns whether a commit was made.
+ */
+function commitStagedReworkChanges(cmd, status, config, ticketKey) {
+    if (!hasStagedChanges(status)) {
+        console.warn('No file changes detected — pushing existing commits only');
+        return false;
+    }
+    cmd('git commit -m "' + buildReworkCommitMessage(config, ticketKey) + '"');
+    console.log('✅ Committed rework changes');
+    return true;
+}
+
+/**
+ * agents#895 opt-in switch: fold WIP auto-save commits only when
+ * customParams.squashReworkWip is exactly true.
+ */
+function squashEnabled(customParams) {
+    return !!(customParams && customParams.squashReworkWip === true);
+}
+
+/**
+ * The push ladder for the rework head: a normal push first; when it fails,
+ * synchronize with origin/<branch> (fetch + merge) and retry once. A failed
+ * retry throws — never a force-push over remote updates.
+ */
+function pushReworkBranch(cmd, branchName, pushPlan) {
+    try {
+        cmd(pushPlan.push);
+    } catch (pushError) {
+        console.warn('Normal push failed; synchronizing with origin/' + branchName + ' before retry:', pushError.message || pushError);
+        try {
+            cmd(pushPlan.fetch);
+            cmd(pushPlan.merge);
+            cmd(pushPlan.retry);
+        } catch (syncPushError) {
+            throw new Error(
+                'Could not push rework branch after synchronizing with origin/' + branchName +
+                '. Refusing to force-push over remote updates. Error: ' +
+                (syncPushError.message || syncPushError)
+            );
+        }
+    }
+}
+
+function commitAndPush(ticketKey, config, customParams) {
+    var workingDir = config.workingDir || null;
+    var cmdOpts = reworkCmdOpts(workingDir);
+    var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
+
+    // Read expected branch from pr_info.md (written by preCliReworkSetup).
+    // Do NOT trust git branch --show-current — the CLI agent may have switched branches.
+    var prInfoCtx = readReworkPrInfoHeadBranch(ticketKey);
+    var prInfo = prInfoCtx.prInfo;
+    var expectedBranch = prInfoCtx.headBranch;
+    if (!expectedBranch) {
+        throw new Error('Could not determine expected PR branch from input/' + ticketKey + '/pr_info.md; refusing to commit or push.');
+    }
+    var baseBranch = resolveReworkBaseBranch(config, prInfo);
+
+    var currentBranch = cleanCommandOutput(cmd('git branch --show-current') || '');
+    console.log('Current branch:', currentBranch, '| Expected:', expectedBranch);
+
+    var branchName = checkoutExpectedBranch(cmd, expectedBranch, currentBranch);
+
+    // Hard invariant: never commit/push while sitting on the base branch —
+    // if the forced checkout above didn't work and we're still parked on
+    // baseBranch, refuse rather than pushing WIP straight into the mainline.
+    if (isBaseBranchViolation(branchName, baseBranch)) {
+        throw new Error(baseBranchRefusalMessage(branchName, baseBranch, expectedBranch));
+    }
+
+    submoduleHelper.pushManagedSubmodules({
+        run: cmd,
+        cleanOutput: cleanCommandOutput,
+        config: config,
+        customParams: customParams,
+        ticketKey: ticketKey
+    });
+
+    untrackRuntimeArtifactsQuietly(cmd);
 
     // `:!factory-kit` — nested machine-infra gitlink must not kill rework staging (#648 class)
     // `:!.dmtools/...` runtime logs (gh-628) — excluded by pathspec because
@@ -385,22 +522,13 @@ function commitAndPush(ticketKey, config, customParams) {
     }, ['factory-kit']));
 
     const status = prHelper.readStagedDiffStat(cmd, workingDir);
-
-    var hasChanges = false;
-    if (status.trim()) {
-        const commitMsg = stripCiSkipTokens(configLoader.formatTemplate(config.formats.commitMessage.rework, {ticketKey: ticketKey}));
-        cmd('git commit -m "' + commitMsg + '"');
-        console.log('✅ Committed rework changes');
-        hasChanges = true;
-    } else {
-        console.warn('No file changes detected — pushing existing commits only');
-    }
+    var hasChanges = commitStagedReworkChanges(cmd, status, config, ticketKey);
 
     // agents#895: the timer already committed (and pushed) the work as "WIP auto-save" commits, so the
     // clean rework commit above is often never created. Opt-in (customParams.squashReworkWip): when EVERY
     // commit since the rework base is a WIP auto-save (or the commit just made) and none is a merge, fold
     // them into one commit with the rework message and push it with --force-with-lease.
-    var squashed = (customParams && customParams.squashReworkWip === true) ?
+    var squashed = squashEnabled(customParams) ?
         squashReworkWipCommits(cmd, ticketKey, config, workingDir) : false;
 
     var syncResult = prHelper.syncBranchWithBase({
@@ -420,22 +548,7 @@ function commitAndPush(ticketKey, config, customParams) {
     // gh-1096: a fork PR head is pushed back to the FORK's token URL
     // (gh-1070 maintainer-edit contract); same-repo commands unchanged.
     var pushPlan = forkCheckout.reworkPushPlan(forkCheckout.readForkHead(prInfo), branchName, squashed);
-    try {
-        cmd(pushPlan.push);
-    } catch (pushError) {
-        console.warn('Normal push failed; synchronizing with origin/' + branchName + ' before retry:', pushError.message || pushError);
-        try {
-            cmd(pushPlan.fetch);
-            cmd(pushPlan.merge);
-            cmd(pushPlan.retry);
-        } catch (syncPushError) {
-            throw new Error(
-                'Could not push rework branch after synchronizing with origin/' + branchName +
-                '. Refusing to force-push over remote updates. Error: ' +
-                (syncPushError.message || syncPushError)
-            );
-        }
-    }
+    pushReworkBranch(cmd, branchName, pushPlan);
 
     verifyReworkPushed(cmd, branchName, pushPlan.fork);
 
@@ -2441,5 +2554,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked };
+    module.exports = { action, hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch };
 }
