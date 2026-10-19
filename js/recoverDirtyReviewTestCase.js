@@ -109,6 +109,10 @@ function resolveCustomParams(params) {
     return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
 }
 
+function loadConfig(params) {
+    return configLoader.loadProjectConfig(params.jobParams || params || {});
+}
+
 // True when the PR list row already carries mergeability info, so the extra
 // getPr call can be avoided.
 function prHasMergeInfo(pr) {
@@ -156,7 +160,7 @@ function postRecoveryComment(tracker, ticketKey, prNumber) {
 
 function action(params) {
     var ticketKey = resolveTicketKey(params);
-    var config = configLoader.loadProjectConfig(params.jobParams || params || {});
+    var config = loadConfig(params);
     var jiraConfig = config.jira;
     var tracker = trackersModule.createTracker(config, resolveCustomParams(params));
 

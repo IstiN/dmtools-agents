@@ -9,15 +9,12 @@
 
 var CACHE_PATH = 'outputs/.recover_dirty_prs_cache.json';
 
-function setupRecoverDirty(mocks) {
-    mocks = mocks || {};
-    var calls = [];
+// The three mock factories below are top-level on purpose: crap4js counts
+// nested function expressions towards the ENCLOSING function's complexity, so
+// inline object-literal mocks would inflate their factory past the CRAP gate.
 
-    function note(name, args) {
-        calls.push({ name: name, args: args });
-    }
-
-    var scm = {
+function makeScmMock(mocks, note) {
+    return {
         listPrs: function(state) {
             note('listPrs', [state]);
             if (mocks.listPrsError) throw mocks.listPrsError;
@@ -29,8 +26,10 @@ function setupRecoverDirty(mocks) {
             return mocks.prDetail !== undefined ? mocks.prDetail : { number: number };
         }
     };
+}
 
-    var tracker = {
+function makeTrackerMock(mocks, note) {
+    return {
         moveToStatus: function(key, status) {
             note('moveToStatus', [key, status]);
             if (mocks.moveError) throw mocks.moveError;
@@ -44,9 +43,10 @@ function setupRecoverDirty(mocks) {
             if (mocks.commentError) throw mocks.commentError;
         }
     };
+}
 
-    var files = mocks.files || {};
-    var globalMocks = {
+function makeGlobalMocks(mocks, files, note) {
+    return {
         file_read: function(opts) {
             var p = opts && (opts.path || opts);
             if (mocks.fileReadError) throw mocks.fileReadError;
@@ -59,6 +59,19 @@ function setupRecoverDirty(mocks) {
             files[opts.path] = opts.content;
         }
     };
+}
+
+function setupRecoverDirty(mocks) {
+    mocks = mocks || {};
+    var calls = [];
+
+    function note(name, args) {
+        calls.push({ name: name, args: args });
+    }
+
+    var files = mocks.files || {};
+    var scm = makeScmMock(mocks, note);
+    var tracker = makeTrackerMock(mocks, note);
 
     var module = loadModule(
         'js/recoverDirtyReviewTestCase.js',
@@ -74,7 +87,7 @@ function setupRecoverDirty(mocks) {
                 return tracker;
             } }
         }),
-        globalMocks
+        makeGlobalMocks(mocks, files, note)
     );
 
     return { module: module, calls: calls, files: files };
@@ -250,17 +263,21 @@ suite('recoverDirtyReviewTestCase.action — dirty/clean decision and rework flo
         );
     });
 
-    test('getPr failure falls back to the list row (clean fallback → no recovery)', function() {
+    test('getPr failure falls back to the list row — a bare row can only yield clean', function() {
         var setup = setupRecoverDirty({
-            openPrs: [makePr(7, { mergeable: true })],
+            openPrs: [makePr(7)],
             getPrError: new Error('secondary rate limit')
         });
         var result = setup.module.action(paramsFor());
 
         assert.equal(result.action, 'clean');
+        assert.equal(
+            setup.calls.filter(function(c) { return c.name === 'getPr'; }).length, 1,
+            'the fallback fetch must actually run for a row without merge info'
+        );
     });
 
-    test('getPr failure with dirty list row still moves to rework', function() {
+    test('dirty list row short-circuits the fetch: getPr is skipped even when it would fail', function() {
         var setup = setupRecoverDirty({
             openPrs: [makePr(7, { mergeable_state: 'conflicting' })],
             getPrError: new Error('boom')
@@ -268,6 +285,10 @@ suite('recoverDirtyReviewTestCase.action — dirty/clean decision and rework flo
         var result = setup.module.action(paramsFor());
 
         assert.equal(result.action, 'moved_to_rework');
+        assert.equal(
+            setup.calls.filter(function(c) { return c.name === 'getPr'; }).length, 0,
+            'merge info on the row must avoid the extra getPr call'
+        );
     });
 
     test('moveToStatus failure → success:false with the error, no labels stripped, no comment', function() {
