@@ -260,106 +260,184 @@ function getConfiguredGates(customParams, section, legacyKey) {
     return Array.isArray(gates) ? gates : [];
 }
 
+// ── gh-1079: runConfiguredGates decomposed into pure helpers ────────────────
+// Behavior contract is unchanged (the characterization suite in
+// test_feedbackLoop.js pins every branch); this section only splits the
+// former 37-complexity monolith into single-purpose pieces:
+//   resolveGateEntry   — skip rules + name/command/workingDir/maxAttempts
+//   runGateAttempt     — one console.log + runCommand attempt
+//   classifyGateFailure— exhausted? resume? return-after-resume? retry?
+//   gateExhaustedOutcome / recordNonBlockingGateFailure / gateFailureResult
+//                      — the three failure exits (non-blocking record,
+//                        blocking bubble, resumeAttempted bubble)
+// Every exec/console call keeps its original position in the sequence.
+
+function errorTextOf(error) {
+    return error && error.message ? error.message : String(error);
+}
+
+function gateRunnable(gate) {
+    return !!gate && gate.enabled !== false;
+}
+
+function gateCommand(gate, ticketKey) {
+    return gate.command ? String(gate.command).replace(/\{ticketKey\}/g, ticketKey || '') : null;
+}
+
+function gateWorkingDir(gate, options, config) {
+    return gate.workingDir || options.workingDir || config.workingDir || null;
+}
+
+function gateMaxAttempts(gate) {
+    var maxAttempts = gate.maxAttempts;
+    if (maxAttempts === undefined || maxAttempts === null) maxAttempts = DEFAULT_MAX_ATTEMPTS;
+    return parseInt(maxAttempts, 10) || 0;
+}
+
+// Exact key order of the pre-refactor failure results (success, failedGate,
+// error, [resumeAttempted], results, nonBlockingFailures) — keep it stable.
+function gateFailureResult(name, errorText, ctx, resumeAttempted) {
+    return resumeAttempted ? {
+        success: false,
+        failedGate: name,
+        error: errorText,
+        resumeAttempted: true,
+        results: ctx.results,
+        nonBlockingFailures: ctx.nonBlockingFailures
+    } : {
+        success: false,
+        failedGate: name,
+        error: errorText,
+        results: ctx.results,
+        nonBlockingFailures: ctx.nonBlockingFailures
+    };
+}
+
+function recordNonBlockingGateFailure(name, attempts, errorText, ctx, warnWhy) {
+    console.warn('⚠️ Non-blocking ' + ctx.gateType + ' "' + name + '" failed ' + warnWhy +
+        ' — continuing without blocking: ' + errorText);
+    ctx.results.push({ name: name, success: false, attempts: attempts, error: errorText, blocking: false });
+    ctx.nonBlockingFailures.push({ name: name, error: errorText });
+}
+
+// A gate that gave up: blocking gates bubble the failure result, non-blocking
+// gates are recorded and the run moves to the next gate ('next-gate').
+function gateExhaustedOutcome(gate, name, attempts, errorText, ctx, warnWhy) {
+    if (gate.blocking !== false) return gateFailureResult(name, errorText, ctx, false);
+    recordNonBlockingGateFailure(name, attempts, errorText, ctx, warnWhy);
+    return 'next-gate';
+}
+
+function gateFeedbackConfig(section, gate, maxAttempts) {
+    var feedbackLoopConfig = { feedbackLoop: {} };
+    feedbackLoopConfig.feedbackLoop[section] = {
+        enabled: true,
+        maxAttempts: maxAttempts,
+        resumeArgs: gate.resumeArgs || undefined,
+        nonRecoverablePatterns: gate.nonRecoverablePatterns || undefined
+    };
+    return feedbackLoopConfig;
+}
+
+function gateResumeOptions(ctx, gate, name, command, workingDir, maxAttempts, errorText) {
+    return {
+        ticketKey: ctx.options.ticketKey,
+        customParams: gateFeedbackConfig(ctx.section, gate, maxAttempts),
+        section: ctx.section,
+        stage: ctx.stagePrefix + '_' + name,
+        error: 'Command failed: ' + command +
+            (workingDir ? '\nWorking directory: ' + workingDir : '') +
+            '\n\n' + errorText
+    };
+}
+
+function gateWantsReturnAfterResume(ctx, gate) {
+    return !!(ctx.options.returnAfterResume || ctx.config.returnAfterResume || gate.returnAfterResume);
+}
+
+// Outcome protocol: 'retry' → run the command again; 'next-gate' → give up on
+// this gate without failing the run (non-blocking); object → bubble the
+// failure result to the caller.
+function classifyGateFailure(gate, entry, attempts, error, ctx) {
+    var errorText = errorTextOf(error);
+    if (attempts > entry.maxAttempts || gate.retryWithAgent === false) {
+        return gateExhaustedOutcome(gate, entry.name, attempts, errorText, ctx, 'after ' + attempts + ' attempt(s)');
+    }
+    var resume = resumeAgent(gateResumeOptions(ctx, gate, entry.name, entry.command,
+        entry.workingDir, entry.maxAttempts, errorText));
+    if (!resume.attempted) {
+        return gateExhaustedOutcome(gate, entry.name, attempts, errorText, ctx, '(no resume attempted)');
+    }
+    if (gateWantsReturnAfterResume(ctx, gate)) {
+        return gateFailureResult(entry.name, errorText, ctx, true);
+    }
+    return 'retry';
+}
+
+function runGateAttempt(gate, entry, attempts, ctx) {
+    try {
+        console.log('Running ' + ctx.gateType + ' "' + entry.name + '": ' + entry.command);
+        var output = runCommand(entry.command, entry.workingDir) || '';
+        ctx.results.push({ name: entry.name, success: true, attempts: attempts, output: output });
+        return true;
+    } catch (e) {
+        return classifyGateFailure(gate, entry, attempts, e, ctx);
+    }
+}
+
+function resolveGateEntry(gate, index, ctx) {
+    if (!gateRunnable(gate)) return null;
+    var command = gateCommand(gate, ctx.options.ticketKey);
+    if (!command) return null;
+    return {
+        name: gate.name || ('gate_' + (index + 1)),
+        command: command,
+        workingDir: gateWorkingDir(gate, ctx.options, ctx.config),
+        maxAttempts: gateMaxAttempts(gate)
+    };
+}
+
+function runGate(gate, index, ctx) {
+    var entry = resolveGateEntry(gate, index, ctx);
+    if (!entry) return null;
+    var attempts = 0;
+    while (true) {
+        attempts += 1;
+        var outcome = runGateAttempt(gate, entry, attempts, ctx);
+        if (outcome === 'retry') continue;
+        if (outcome === 'next-gate') return null;
+        return outcome === true ? null : outcome;
+    }
+}
+
+function gateSection(options, section) {
+    return options.section || section;
+}
+
+function runGateContext(options, section, stagePrefix) {
+    var customParams = options.customParams || {};
+    return {
+        options: options,
+        section: section,
+        stagePrefix: stagePrefix,
+        gateType: section === 'policyGates' ? 'policy gate' : 'quality gate',
+        config: normalizeConfig(customParams, gateSection(options, section)),
+        results: [],
+        nonBlockingFailures: []
+    };
+}
+
 function runConfiguredGates(options, section, stagePrefix) {
     options = options || {};
     section = section || 'qualityGates';
     stagePrefix = stagePrefix || 'quality_gate';
-    var gateType = section === 'policyGates' ? 'policy gate' : 'quality gate';
-    var customParams = options.customParams || {};
-    var config = normalizeConfig(customParams, options.section || section);
-    var gates = getConfiguredGates(customParams, options.section || section, section);
-    var results = [];
-    var nonBlockingFailures = [];
-
+    var ctx = runGateContext(options, section, stagePrefix);
+    var gates = getConfiguredGates(options.customParams || {}, gateSection(options, section), section);
     for (var i = 0; i < gates.length; i++) {
-        var gate = gates[i];
-        if (!gate || gate.enabled === false) continue;
-        var name = gate.name || ('gate_' + (i + 1));
-        var command = gate.command ? String(gate.command).replace(/\{ticketKey\}/g, options.ticketKey || '') : null;
-        if (!command) continue;
-        var workingDir = gate.workingDir || options.workingDir || config.workingDir || null;
-        // blocking defaults to true (backward compatible): set "blocking": false on a gate
-        // (e.g. spotbugs on a codebase with pre-existing findings unrelated to the PR) to
-        // report its failure without aborting the push/PR-reply flow for the whole ticket.
-        var isBlocking = gate.blocking !== false;
-
-        var attempts = 0;
-        var maxAttempts = gate.maxAttempts;
-        if (maxAttempts === undefined || maxAttempts === null) maxAttempts = DEFAULT_MAX_ATTEMPTS;
-        maxAttempts = parseInt(maxAttempts, 10) || 0;
-
-        while (true) {
-            attempts += 1;
-            try {
-                console.log('Running ' + gateType + ' "' + name + '": ' + command);
-                var output = runCommand(command, workingDir) || '';
-                results.push({ name: name, success: true, attempts: attempts, output: output });
-                break;
-            } catch (e) {
-                var errorText = e && e.message ? e.message : String(e);
-                if (attempts > maxAttempts || gate.retryWithAgent === false) {
-                    if (!isBlocking) {
-                        console.warn('⚠️ Non-blocking ' + gateType + ' "' + name + '" failed after ' + attempts +
-                            ' attempt(s) — continuing without blocking: ' + errorText);
-                        results.push({ name: name, success: false, attempts: attempts, error: errorText, blocking: false });
-                        nonBlockingFailures.push({ name: name, error: errorText });
-                        break;
-                    }
-                    return {
-                        success: false,
-                        failedGate: name,
-                        error: errorText,
-                        results: results,
-                        nonBlockingFailures: nonBlockingFailures
-                    };
-                }
-
-                var feedbackLoopConfig = { feedbackLoop: {} };
-                feedbackLoopConfig.feedbackLoop[section] = {
-                    enabled: true,
-                    maxAttempts: maxAttempts,
-                    resumeArgs: gate.resumeArgs || undefined,
-                    nonRecoverablePatterns: gate.nonRecoverablePatterns || undefined
-                };
-                var resume = resumeAgent({
-                    ticketKey: options.ticketKey,
-                    customParams: feedbackLoopConfig,
-                    section: section,
-                    stage: stagePrefix + '_' + name,
-                    error: 'Command failed: ' + command +
-                        (workingDir ? '\nWorking directory: ' + workingDir : '') +
-                        '\n\n' + errorText
-                });
-                if (!resume.attempted) {
-                    if (!isBlocking) {
-                        console.warn('⚠️ Non-blocking ' + gateType + ' "' + name + '" failed (no resume attempted) — continuing without blocking: ' + errorText);
-                        results.push({ name: name, success: false, attempts: attempts, error: errorText, blocking: false });
-                        nonBlockingFailures.push({ name: name, error: errorText });
-                        break;
-                    }
-                    return {
-                        success: false,
-                        failedGate: name,
-                        error: errorText,
-                        results: results,
-                        nonBlockingFailures: nonBlockingFailures
-                    };
-                }
-                if (options.returnAfterResume || config.returnAfterResume || gate.returnAfterResume) {
-                    return {
-                        success: false,
-                        failedGate: name,
-                        error: errorText,
-                        resumeAttempted: true,
-                        results: results,
-                        nonBlockingFailures: nonBlockingFailures
-                    };
-                }
-            }
-        }
+        var outcome = runGate(gates[i], i, ctx);
+        if (outcome) return outcome;
     }
-
-    return { success: true, results: results, nonBlockingFailures: nonBlockingFailures };
+    return { success: true, results: ctx.results, nonBlockingFailures: ctx.nonBlockingFailures };
 }
 
 function runQualityGates(options) {
@@ -390,5 +468,20 @@ module.exports = {
     runPostPublishGates: runPostPublishGates,
     normalizeConfig: normalizeConfig,
     isFeedbackEnabled: isFeedbackEnabled,
-    sanitizeId: sanitizeId
+    sanitizeId: sanitizeId,
+    getConfiguredGates: getConfiguredGates,
+    errorTextOf: errorTextOf,
+    gateRunnable: gateRunnable,
+    gateCommand: gateCommand,
+    gateWorkingDir: gateWorkingDir,
+    gateMaxAttempts: gateMaxAttempts,
+    gateFailureResult: gateFailureResult,
+    gateFeedbackConfig: gateFeedbackConfig,
+    gateResumeOptions: gateResumeOptions,
+    gateWantsReturnAfterResume: gateWantsReturnAfterResume,
+    classifyGateFailure: classifyGateFailure,
+    resolveGateEntry: resolveGateEntry,
+    runGate: runGate,
+    gateSection: gateSection,
+    runGateContext: runGateContext
 };

@@ -818,9 +818,12 @@ suite('factoryReviewVerdict — applyReviewVerdict characterization (gh-1079)', 
   });
 
   test('parser env: MAX_ROUNDS empty when undefined; RUN_OUTPUT falls back to the sh default', function () {
+    var opts = baseOpts();
+    delete opts.maxRounds;
+    delete opts.runOutput;
     var st = withParser(execStub(baseRules()), contractLines({ decision: 'rework' }));
     var io = ioStub(st);
-    rvModule.applyReviewVerdict(baseOpts({ maxRounds: undefined, runOutput: undefined }), io);
+    rvModule.applyReviewVerdict(opts, io);
     var c = st.lastParserCmd;
     assert.contains(c, "MAX_ROUNDS=''");
     assert.contains(c, "RUN_OUTPUT='.dmtools/run-output.txt'");
@@ -862,18 +865,22 @@ suite('factoryReviewVerdict — applyReviewVerdict characterization (gh-1079)', 
   });
 
   test('rework with maxRounds undefined: the queue log renders an empty cap', function () {
+    var opts = baseOpts();
+    delete opts.maxRounds;
     var st = withParser(execStub(baseRules()), contractLines({ decision: 'rework' }));
     var io = ioStub(st);
-    rvModule.applyReviewVerdict(baseOpts({ maxRounds: undefined }), io);
+    rvModule.applyReviewVerdict(opts, io);
     assert.contains(io.logs.join('\n'),
       '→ labeled agent:rework (round 3/) — rework run queued (re-review follows automatically)');
   });
 
   test('escalate with maxRounds undefined: the comment renders an empty cap', function () {
+    var opts = baseOpts();
+    delete opts.maxRounds;
     var st = withParser(execStub(baseRules()), contractLines({ decision: 'rework', escalate: 'true' }),
       'thread summary line\n');
     var io = ioStub(st);
-    var r = rvModule.applyReviewVerdict(baseOpts({ maxRounds: undefined }), io);
+    var r = rvModule.applyReviewVerdict(opts, io);
     assert.equal(r.status, 'escalated');
     var commentCmds = st.commands.filter(function (c) { return c.indexOf('issue comment') !== -1; });
     var bodyPath = commentCmds[0].replace(/^.*--body-file '/, '').replace(/'$/, '');
@@ -881,11 +888,10 @@ suite('factoryReviewVerdict — applyReviewVerdict characterization (gh-1079)', 
       '🛑 **Auto-rework loop capped** — 2 automatic rework rounds without an APPROVE verdict (cap: ). The machine stopped labeling `agent:rework`.');
   });
 
-  test('approve path tolerates a log-less, clock-less io (new Date() clock, no crash)', function () {
+  test('approve path tolerates a clock-less io (new Date() clock, no crash)', function () {
     var st = withParser(execStub(baseRules({ rollup: 'SUCCESS\n' })),
       contractLines({ decision: 'approve' }));
     var io = ioStub(st);
-    delete io.log;
     delete io.clock;
     var r = rvModule.applyReviewVerdict(baseOpts(), io);
     assert.equal(r.status, 'approved');
@@ -894,14 +900,18 @@ suite('factoryReviewVerdict — applyReviewVerdict characterization (gh-1079)', 
   });
 
   test('SM dispatch failure with a non-Error throw warns via String(e)', function () {
-    var rules = [['workflow run', 'throw', 'gh: plain string']];
-    Array.prototype.push.apply(rules, kickRules(1, 0));
-    var st = withParser(execStub(rules), contractLines({ decision: 'approve' }));
+    var st = withParser(execStub(kickRules(1, 0)), contractLines({ decision: 'approve' }));
+    st.exec = (function (orig) {
+      return function (cmd) {
+        if (cmd.indexOf('gh workflow run') === 0) { throw 'plain-string-failure'; }
+        return orig(cmd);
+      };
+    })(st.exec);
     var io = ioStub(st);
     var r = rvModule.applyReviewVerdict(baseOpts(), io);
     assert.equal(r.status, 'approved');
     assert.equal(r.smKicked, false);
-    assert.contains(io.logs.join('\n'), '::warning::SM tick dispatch failed: gh: plain string');
+    assert.contains(io.logs.join('\n'), '::warning::SM tick dispatch failed: plain-string-failure');
   });
 
   test('kickSmOnGreenHead works with a log-less io (default no-op logger)', function () {
