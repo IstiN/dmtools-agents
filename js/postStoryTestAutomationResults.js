@@ -11,6 +11,9 @@
  *
  * gh-1008 CRAP split: tracker/git/marker/wiki helpers live in
  * js/postStoryTestAutomationShared.js; action() is a thin orchestrator.
+ * gh-1080 CRAP split: the remaining action() phases (context build, result
+ * validation, branch publish, finalization) are top-level step helpers —
+ * tracker/git/file calls and their order are unchanged.
  */
 
 var configLoader = require('./configLoader.js');
@@ -395,63 +398,261 @@ function removeAutomationLabels(storyKey, params) {
     });
 }
 
-// ── action() step helpers (gh-1008 CRAP split) ───────────────────────────────
+// ── action() step helpers (gh-1008 + gh-1080 CRAP split) ─────────────────────
 
 /**
- * Bug with a real product failure: the fix did not work — finalize the
- * failing Test Cases as Failed (stage + final status).
+ * Pure parameter parse: ticket identity and the customParams-derived knobs.
  */
-function finalizeFailedBugTestCases(failedResults, workingDir, storyKey, config, jiraConfig) {
-    failedResults.forEach(function(item) {
-        updateTestCaseStatus(item.testCaseKey, 'failed', workingDir, storyKey, config);
-        finalizeTestCaseStatus(item.testCaseKey, 'failed', jiraConfig);
-    });
+function parseResultParams(params) {
+    var source = params.jobParams || params;
+    var customParams = source.customParams || {};
+    return {
+        storyKey: params.ticket.key,
+        storySummary: params.ticket.fields ? params.ticket.fields.summary : params.ticket.key,
+        customParams: customParams,
+        testFilesPath: customParams.testFilesGlob || 'testing/'
+    };
 }
 
-/** Moves the Bug back to Ready For Development and posts the failure summary. */
-function returnBugToDevelopment(storyKey, failedResults, statuses) {
-    var bugReturnStatus = statuses.READY_FOR_DEVELOPMENT;
-    try {
-        getTracker().moveToStatus(storyKey, bugReturnStatus);
-        console.log('✅ Moved Bug', storyKey, 'back to', bugReturnStatus);
-    } catch (moveErr) {
-        console.warn('Failed to move Bug', storyKey, 'to', bugReturnStatus, ':', moveErr);
+function resolveResultStatuses(jiraConfig, customParams) {
+    // Legacy override channel: customParams.customStatuses still wins over .dmtools/config.js statuses
+    return Object.assign({}, jiraConfig.statuses, customParams.customStatuses || {});
+}
+
+/**
+ * Everything the action steps need, resolved in the original order:
+ * project config → tracker init → SCM → output-file comment read.
+ */
+function buildResultContext(params) {
+    var parsed = parseResultParams(params);
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var jiraConfig = config.jira;
+    initTracker(config, parsed.customParams);
+    var scm = configLoader.createScm(config);
+    var workingDir = config.workingDir || null;
+    var testCaseType = (jiraConfig.issueTypes && jiraConfig.issueTypes.TEST_CASE) || 'Test Case';
+    return {
+        storyKey: parsed.storyKey,
+        storySummary: parsed.storySummary,
+        customParams: parsed.customParams,
+        testFilesPath: parsed.testFilesPath,
+        config: config,
+        jiraConfig: jiraConfig,
+        statuses: resolveResultStatuses(jiraConfig, parsed.customParams),
+        scm: scm,
+        workingDir: workingDir,
+        testCaseType: testCaseType,
+        jiraComment: readJiraComment(params, workingDir, parsed.storyKey)
+    };
+}
+
+/**
+ * Reads the structured result, resuming the agent when linked Test Cases are
+ * missing. Returns { result } on success or { failure } (already announced on
+ * the tracker) when the run cannot proceed.
+ */
+function loadValidatedResult(ctx, params) {
+    // Step 1: Read structured result and ensure all linked Test Cases were checked
+    var linkedTestCases = readLinkedTestCases(ctx.storyKey, ctx.testCaseType);
+
+    var result = readResultJson(ctx.workingDir, ctx.storyKey);
+    if (linkedTestCases.length > 0) {
+        var resumeInfo = attemptResumeIfOutputsIncomplete(ctx.storyKey, result, linkedTestCases, ctx.workingDir);
+        if (resumeInfo.attempted) {
+            result = readResultJson(ctx.workingDir, ctx.storyKey);
+        }
     }
 
+    if (!result) {
+        var commentMsg = 'h3. ⚠️ Story Test Automation Error\n\nCLI exited without producing result JSON. The Story will stay in Ready For Testing so SM can retry.';
+        getTracker().postComment(ctx.storyKey, commentMsg);
+        removeAutomationLabels(ctx.storyKey, params);
+        return { failure: { success: false, error: 'No story test result JSON found' } };
+    }
+
+    var stillMissingKeys = getMissingTestCaseKeys(result, linkedTestCases);
+    if (stillMissingKeys.length > 0) {
+        console.warn('Linked Test Cases still missing from result after resume:', stillMissingKeys.join(', '));
+        var missingComment = 'h3. ⚠️ Story Test Automation Incomplete\n\n' +
+            'The automation could not verify all linked Test Cases. Missing results for:\n\n' +
+            stillMissingKeys.map(function(k) { return '* ' + k; }).join('\n') + '\n\n' +
+            'The Story will stay in Ready For Testing so SM can retry.';
+        getTracker().postComment(ctx.storyKey, missingComment);
+        removeAutomationLabels(ctx.storyKey, params);
+        return { failure: { success: false, error: 'Missing Test Case results: ' + stillMissingKeys.join(', ') } };
+    }
+
+    return { result: result };
+}
+
+/**
+ * Creates the PR for freshly pushed test code, or returns a failure result
+ * (already announced on the tracker) when creation failed.
+ */
+function createPrOrFail(ctx, params, branchName) {
+    const prTitle = configLoader.formatTemplate(ctx.config.formats.prTitle.testAutomation, {ticketKey: ctx.storyKey, ticketSummary: ctx.storySummary});
+    const prResult = createPullRequest(prTitle, branchName, ctx.config.git.baseBranch, ctx.workingDir, ctx.scm, ctx.storyKey);
+    const prUrl = prResult.prUrl;
+    if (!prResult.success || !prUrl) {
+        console.error('PR creation failed');
+        getTracker().postComment(ctx.storyKey, 'h3. ⚠️ PR Creation Failed\n\nTest code was pushed to branch {code}' + branchName + '{code} but the Pull Request could not be created.');
+        removeAutomationLabels(ctx.storyKey, params);
+        return { failure: { success: false, error: 'PR creation failed' } };
+    }
+    return { prUrl: prUrl };
+}
+
+/**
+ * Branches the three git outcomes into: PR created / no code changes / failure.
+ */
+function handleGitOutcome(ctx, params, branchName, gitResult) {
+    if (gitResult.success && !gitResult.noNewCommit) {
+        return createPrOrFail(ctx, params, branchName);
+    }
+
+    if (gitResult.noNewCommit) {
+        noCodeChangesLog();
+        return { prUrl: null, noCodeChanges: true };
+    }
+
+    console.warn('Git operations failed:', gitResult.error);
+    getTracker().postComment(ctx.storyKey, 'h3. ⚠️ Git Operations Failed\n\n' + gitResult.error);
+    removeAutomationLabels(ctx.storyKey, params);
+    return { failure: { success: false, error: 'Git operations failed: ' + gitResult.error } };
+}
+
+function noCodeChangesLog() {
+    console.log('ℹ️ No test code changes — skipping PR review, moving Story directly');
+}
+
+/**
+ * Step 2-4: configure the git author, read the current branch, then
+ * commit + push + create PR. Returns { prUrl, noCodeChanges } or { failure }.
+ */
+function publishBranchAndPr(ctx, params) {
+    // Step 2: Configure git author
     try {
-        var failureList = failedResults.map(function(r) { return '* ' + r.testCaseKey + (r.failureSummary ? ' — ' + r.failureSummary : ''); }).join('\n');
-        getTracker().postComment(storyKey, 'h3. ⚠️ Bug Fix Did Not Pass Automated Tests\n\nThe following Test Cases failed with a product regression:\n' + failureList + '\n\nThe Bug is being returned to *Ready For Development* for a corrected fix.');
+        runInRepo('git config user.name "' + ctx.config.git.authorName + '"', ctx.workingDir);
+        runInRepo('git config user.email "' + ctx.config.git.authorEmail + '"', ctx.workingDir);
     } catch (e) {
-        console.warn('Failed to post bug return comment:', e);
+        console.warn('Failed to configure git author:', e);
+    }
+
+    // Step 3: Read current branch
+    var rawBranch = runInRepo('git branch --show-current', ctx.workingDir) || '';
+    const branchName = cleanCommandOutput(rawBranch);
+    console.log('Cleaned branch name:', JSON.stringify(branchName));
+
+    if (!branchName) {
+        return { prUrl: null, noCodeChanges: false };
+    }
+
+    const commitMessage = configLoader.formatTemplate(ctx.config.formats.commitMessage.testAutomation, {ticketKey: ctx.storyKey, ticketSummary: ctx.storySummary});
+    const gitResult = gitOps.performGitOperations(branchName, commitMessage, ctx.workingDir, ctx.testFilesPath);
+
+    // Step 4: Commit + push + create PR
+    return handleGitOutcome(ctx, params, branchName, gitResult);
+}
+
+function moveStoryToInTesting(ctx) {
+    // Step 8: Move Story to In Testing
+    try {
+        // gh-916: IN_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback.
+        var inTestingMove = getTracker().moveToStatusOrMark(ctx.storyKey, ctx.jiraConfig.statuses.IN_TESTING, 'IN_TESTING');
+        if (inTestingMove.moved || inTestingMove.marked) {
+            console.log('✅ Moved Story', ctx.storyKey, 'to', ctx.jiraConfig.statuses.IN_TESTING);
+        }
+    } catch (e) {
+        console.warn('Failed to move Story to In Testing:', e);
+    }
+}
+
+function cleanupAndNotify(ctx, params) {
+    // Step 10: Labels cleanup
+    removeAutomationLabels(ctx.storyKey, params);
+    try {
+        getTracker().addLabel(ctx.storyKey, LABELS.AI_TEST_AUTOMATION);
+    } catch (e) {
+        console.warn('Failed to add ai_test_automation label:', e);
+    }
+
+    // Step 11: Token usage comments
+    try {
+        tokenUsageComment.postTokenUsageComments(ctx.storyKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
     }
 }
 
 /**
- * Bug with a real product failure: the fix did not work — send the Bug
- * straight back to development and finalize the failing Test Cases as Failed.
- * Returns the action result when this path handled the run, null otherwise.
+ * Steps 5-11: comment, blocked-by-human gate, per-TC statuses, story move,
+ * review trigger and cleanup. Returns the action result.
  */
-function handleBugWithProductFailure(params, result, storyKey, jiraConfig, statuses, config, workingDir) {
-    var issueType = (params.ticket && params.ticket.fields &&
-        params.ticket.fields.issuetype && params.ticket.fields.issuetype.name) || 'Story';
-    var failedResults = (result.results || []).filter(function(r) {
-        return r.status === 'failed';
-    });
-    if (issueType !== jiraConfig.issueTypes.BUG || failedResults.length === 0) {
-        return null;
+function finalizeResultActions(ctx, params, result, prUrl, noCodeChanges, overall) {
+    // Step 5: Post Story Jira comment
+    postStoryResultComment(ctx.storyKey, ctx.jiraComment, prUrl, noCodeChanges);
+
+    // Step 6: Handle blocked_by_human
+    if (overall === 'blocked_by_human') {
+        return handleBlockedByHuman(ctx.storyKey, result, ctx.jiraConfig, params);
     }
 
-    console.log('Bug', storyKey, 'has', failedResults.length, 'product failure(s) — returning to development');
-    finalizeFailedBugTestCases(failedResults, workingDir, storyKey, config, jiraConfig);
-    returnBugToDevelopment(storyKey, failedResults, statuses);
+    // Step 7: Update per-Test Case statuses
+    applyTestCaseResults(result, noCodeChanges, ctx.workingDir, ctx.storyKey, ctx.config, ctx.jiraConfig, ctx.statuses, ctx.testFilesPath);
 
-    removeAutomationLabels(storyKey, params);
+    moveStoryToInTesting(ctx);
+
+    // Step 9: Trigger review
+    if (!autoStartStoryTestReview(ctx.storyKey, ctx.config, ctx.customParams, noCodeChanges)) {
+        autoStart.triggerSmIfIdle({ config: ctx.config, customParams: ctx.customParams });
+    }
+
+    cleanupAndNotify(ctx, params);
+
     return {
         success: true,
-        status: 'failed',
-        storyKey: storyKey,
-        failedTestCases: failedResults.map(function(r) { return r.testCaseKey; })
+        status: overall,
+        storyKey: ctx.storyKey,
+        prUrl: prUrl
     };
+}
+
+function action(params) {
+    try {
+        var ctx = buildResultContext(params);
+
+        console.log('=== Processing story test automation results for', ctx.storyKey, '===');
+
+        var loaded = loadValidatedResult(ctx, params);
+        if (loaded.failure) {
+            return loaded.failure;
+        }
+        var result = loaded.result;
+
+        const overall = (result.overall || '').toLowerCase();
+
+        // For a Bug, a product failure means the fix did not work. Send the Bug
+        // straight back to development and finalize the failing Test Cases as Failed.
+        var bugResult = handleBugWithProductFailure(params, result, ctx.storyKey, ctx.jiraConfig, ctx.statuses, ctx.config, ctx.workingDir);
+        if (bugResult) {
+            return bugResult;
+        }
+
+        var published = publishBranchAndPr(ctx, params);
+        if (published.failure) {
+            return published.failure;
+        }
+
+        return finalizeResultActions(ctx, params, result, published.prUrl, published.noCodeChanges, overall);
+
+    } catch (error) {
+        console.error('❌ Error in postStoryTestAutomationResults:', error);
+        try {
+            getTracker().postComment(params.ticket.key, 'h3. ❌ Story Test Automation Error\n\n{code}' + error.toString() + '{code}');
+        } catch (e) {}
+        removeAutomationLabels(params.ticket.key, params);
+        return { success: false, error: error.toString() };
+    }
 }
 
 function postStoryResultComment(storyKey, jiraComment, prUrl, noCodeChanges) {
@@ -518,163 +719,61 @@ function applyTestCaseResults(result, noCodeChanges, workingDir, storyKey, confi
     });
 }
 
-function action(params) {
+/**
+ * Bug with a real product failure: the fix did not work — finalize the
+ * failing Test Cases as Failed (stage + final status).
+ */
+function finalizeFailedBugTestCases(failedResults, workingDir, storyKey, config, jiraConfig) {
+    failedResults.forEach(function(item) {
+        updateTestCaseStatus(item.testCaseKey, 'failed', workingDir, storyKey, config);
+        finalizeTestCaseStatus(item.testCaseKey, 'failed', jiraConfig);
+    });
+}
+
+/** Moves the Bug back to Ready For Development and posts the failure summary. */
+function returnBugToDevelopment(storyKey, failedResults, statuses) {
+    var bugReturnStatus = statuses.READY_FOR_DEVELOPMENT;
     try {
-        const storyKey = params.ticket.key;
-        const storySummary = params.ticket.fields ? params.ticket.fields.summary : storyKey;
-        var config = configLoader.loadProjectConfig(params.jobParams || params);
-        var jiraConfig = config.jira;
-        var customParams = (params.jobParams || params).customParams || {};
-        initTracker(config, customParams);
-        // Legacy override channel: customParams.customStatuses still wins over .dmtools/config.js statuses
-        var statuses = Object.assign({}, jiraConfig.statuses, customParams.customStatuses || {});
-        var scm = configLoader.createScm(config);
-        var workingDir = config.workingDir || null;
-        var testFilesPath = customParams.testFilesGlob || 'testing/';
-        const jiraComment = readJiraComment(params, workingDir, storyKey);
-
-        console.log('=== Processing story test automation results for', storyKey, '===');
-
-        // Step 1: Read structured result and ensure all linked Test Cases were checked
-        var testCaseType = (jiraConfig.issueTypes && jiraConfig.issueTypes.TEST_CASE) || 'Test Case';
-        var linkedTestCases = readLinkedTestCases(storyKey, testCaseType);
-
-        var result = readResultJson(workingDir, storyKey);
-        var resumeInfo = null;
-        if (linkedTestCases.length > 0) {
-            resumeInfo = attemptResumeIfOutputsIncomplete(storyKey, result, linkedTestCases, workingDir);
-            if (resumeInfo.attempted) {
-                result = readResultJson(workingDir, storyKey);
-            }
-        }
-
-        if (!result) {
-            var commentMsg = 'h3. ⚠️ Story Test Automation Error\n\nCLI exited without producing result JSON. The Story will stay in Ready For Testing so SM can retry.';
-            getTracker().postComment(storyKey, commentMsg);
-            removeAutomationLabels(storyKey, params);
-            return { success: false, error: 'No story test result JSON found' };
-        }
-
-        var stillMissingKeys = getMissingTestCaseKeys(result, linkedTestCases);
-        if (stillMissingKeys.length > 0) {
-            console.warn('Linked Test Cases still missing from result after resume:', stillMissingKeys.join(', '));
-            var missingComment = 'h3. ⚠️ Story Test Automation Incomplete\n\n' +
-                'The automation could not verify all linked Test Cases. Missing results for:\n\n' +
-                stillMissingKeys.map(function(k) { return '* ' + k; }).join('\n') + '\n\n' +
-                'The Story will stay in Ready For Testing so SM can retry.';
-            getTracker().postComment(storyKey, missingComment);
-            removeAutomationLabels(storyKey, params);
-            return { success: false, error: 'Missing Test Case results: ' + stillMissingKeys.join(', ') };
-        }
-
-        const overall = (result.overall || '').toLowerCase();
-        const blockedByHuman = overall === 'blocked_by_human';
-
-        // For a Bug, a product failure means the fix did not work. Send the Bug
-        // straight back to development and finalize the failing Test Cases as Failed.
-        var bugResult = handleBugWithProductFailure(params, result, storyKey, jiraConfig, statuses, config, workingDir);
-        if (bugResult) {
-            return bugResult;
-        }
-
-        // Step 2: Configure git author
-        try {
-            runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
-            runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
-        } catch (e) {
-            console.warn('Failed to configure git author:', e);
-        }
-
-        // Step 3: Read current branch
-        var rawBranch = runInRepo('git branch --show-current', workingDir) || '';
-        const branchName = cleanCommandOutput(rawBranch);
-        console.log('Cleaned branch name:', JSON.stringify(branchName));
-
-        // Step 4: Commit + push + create PR
-        let prUrl = null;
-        let noCodeChanges = false;
-        if (branchName) {
-            const commitMessage = configLoader.formatTemplate(config.formats.commitMessage.testAutomation, {ticketKey: storyKey, ticketSummary: storySummary});
-            const gitResult = gitOps.performGitOperations(branchName, commitMessage, workingDir, testFilesPath);
-
-            if (gitResult.success && !gitResult.noNewCommit) {
-                const prTitle = configLoader.formatTemplate(config.formats.prTitle.testAutomation, {ticketKey: storyKey, ticketSummary: storySummary});
-                const prResult = createPullRequest(prTitle, branchName, config.git.baseBranch, workingDir, scm, storyKey);
-                prUrl = prResult.prUrl;
-                if (!prResult.success || !prUrl) {
-                    console.error('PR creation failed');
-                    getTracker().postComment(storyKey, 'h3. ⚠️ PR Creation Failed\n\nTest code was pushed to branch {code}' + branchName + '{code} but the Pull Request could not be created.');
-                    removeAutomationLabels(storyKey, params);
-                    return { success: false, error: 'PR creation failed' };
-                }
-            } else if (gitResult.noNewCommit) {
-                noCodeChanges = true;
-                console.log('ℹ️ No test code changes — skipping PR review, moving Story directly');
-            } else {
-                console.warn('Git operations failed:', gitResult.error);
-                getTracker().postComment(storyKey, 'h3. ⚠️ Git Operations Failed\n\n' + gitResult.error);
-                removeAutomationLabels(storyKey, params);
-                return { success: false, error: 'Git operations failed: ' + gitResult.error };
-            }
-        }
-
-        // Step 5: Post Story Jira comment
-        postStoryResultComment(storyKey, jiraComment, prUrl, noCodeChanges);
-
-        // Step 6: Handle blocked_by_human
-        if (blockedByHuman) {
-            return handleBlockedByHuman(storyKey, result, jiraConfig, params);
-        }
-
-        // Step 7: Update per-Test Case statuses
-        applyTestCaseResults(result, noCodeChanges, workingDir, storyKey, config, jiraConfig, statuses, testFilesPath);
-
-        // Step 8: Move Story to In Testing
-        try {
-            // gh-916: IN_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback.
-            var inTestingMove = getTracker().moveToStatusOrMark(storyKey, jiraConfig.statuses.IN_TESTING, 'IN_TESTING');
-            if (inTestingMove.moved || inTestingMove.marked) {
-                console.log('✅ Moved Story', storyKey, 'to', jiraConfig.statuses.IN_TESTING);
-            }
-        } catch (e) {
-            console.warn('Failed to move Story to In Testing:', e);
-        }
-
-        // Step 9: Trigger review
-        if (!autoStartStoryTestReview(storyKey, config, customParams, noCodeChanges)) {
-            autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
-        }
-
-        // Step 10: Labels cleanup
-        removeAutomationLabels(storyKey, params);
-        try {
-            getTracker().addLabel(storyKey, LABELS.AI_TEST_AUTOMATION);
-        } catch (e) {
-            console.warn('Failed to add ai_test_automation label:', e);
-        }
-
-        // Step 11: Token usage comments
-        try {
-            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
-
-        return {
-            success: true,
-            status: overall,
-            storyKey: storyKey,
-            prUrl: prUrl
-        };
-
-    } catch (error) {
-        console.error('❌ Error in postStoryTestAutomationResults:', error);
-        try {
-            getTracker().postComment(params.ticket.key, 'h3. ❌ Story Test Automation Error\n\n{code}' + error.toString() + '{code}');
-        } catch (e) {}
-        removeAutomationLabels(params.ticket.key, params);
-        return { success: false, error: error.toString() };
+        getTracker().moveToStatus(storyKey, bugReturnStatus);
+        console.log('✅ Moved Bug', storyKey, 'back to', bugReturnStatus);
+    } catch (moveErr) {
+        console.warn('Failed to move Bug', storyKey, 'to', bugReturnStatus, ':', moveErr);
     }
+
+    try {
+        var failureList = failedResults.map(function(r) { return '* ' + r.testCaseKey + (r.failureSummary ? ' — ' + r.failureSummary : ''); }).join('\n');
+        getTracker().postComment(storyKey, 'h3. ⚠️ Bug Fix Did Not Pass Automated Tests\n\nThe following Test Cases failed with a product regression:\n' + failureList + '\n\nThe Bug is being returned to *Ready For Development* for a corrected fix.');
+    } catch (e) {
+        console.warn('Failed to post bug return comment:', e);
+    }
+}
+
+/**
+ * Bug with a real product failure: the fix did not work — send the Bug
+ * straight back to development and finalize the failing Test Cases as Failed.
+ * Returns the action result when this path handled the run, null otherwise.
+ */
+function handleBugWithProductFailure(params, result, storyKey, jiraConfig, statuses, config, workingDir) {
+    var issueType = (params.ticket && params.ticket.fields &&
+        params.ticket.fields.issuetype && params.ticket.fields.issuetype.name) || 'Story';
+    var failedResults = (result.results || []).filter(function(r) {
+        return r.status === 'failed';
+    });
+    if (issueType !== jiraConfig.issueTypes.BUG || failedResults.length === 0) {
+        return null;
+    }
+
+    console.log('Bug', storyKey, 'has', failedResults.length, 'product failure(s) — returning to development');
+    finalizeFailedBugTestCases(failedResults, workingDir, storyKey, config, jiraConfig);
+    returnBugToDevelopment(storyKey, failedResults, statuses);
+
+    removeAutomationLabels(storyKey, params);
+    return {
+        success: true,
+        status: 'failed',
+        storyKey: storyKey,
+        failedTestCases: failedResults.map(function(r) { return r.testCaseKey; })
+    };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
