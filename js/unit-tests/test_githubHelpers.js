@@ -2295,11 +2295,11 @@ suite('githubHelpers.detectFailedChecks — gh-1045 bare check-run URLs + loud f
         assert.contains(fullLogWrite.content, 'LOG-FOR-117677126855', 'actions-job check log present');
         assert.contains(fullLogWrite.content, 'LOG-FOR-117677625675', 'bare check-run check log present');
         assert.contains(fullLogWrite.content, 'LOG FETCH FAILED for: agents-gate', 'per-check fetch diagnostics for the rest');
-        assert.contains(fullLogWrite.content, 'Reason: check-run log fetch failed: check-run gone');
+        assert.contains(fullLogWrite.content, 'Reason: orphan check-run (no job logs; mirrored verdict)'); assert.contains(fullLogWrite.content, '[check-run log fetch failed: check-run gone]');
 
         var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
         assert.ok(mdWrite, 'ci_failures.md written');
-        assert.contains(mdWrite.content, 'log fetch failed: check-run log fetch failed: check-run gone',
+        assert.contains(mdWrite.content, '[check-run log fetch failed: check-run gone]',
             'per-check failure is loud in ci_failures.md');
         assert.contains(mdWrite.content, 'ci_failures_full.log', 'md references the full log that WAS written');
     });
@@ -2331,12 +2331,12 @@ suite('githubHelpers.detectFailedChecks — gh-1045 bare check-run URLs + loud f
         assert.ok(fullLogWrite, 'full log written');
         assert.contains(fullLogWrite.content, 'healthy log content', 'resolvable check log survives another check\'s failure');
         assert.contains(fullLogWrite.content, 'LOG FETCH FAILED for: broken-check');
-        assert.contains(fullLogWrite.content, 'Reason: check-run log fetch failed: boom');
+        assert.contains(fullLogWrite.content, '[check-run log fetch failed: boom]');
 
         var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
         assert.ok(mdWrite);
         assert.contains(mdWrite.content, 'healthy log content');
-        assert.contains(mdWrite.content, 'log fetch failed: check-run log fetch failed: boom');
+        assert.contains(mdWrite.content, 'log fetch failed: orphan check-run'); assert.contains(mdWrite.content, '[check-run log fetch failed: boom]');
     });
 
     test('ci_failures.md never references ci_failures_full.log when the full-log write failed (AC2)', function() {
@@ -2442,10 +2442,10 @@ suite('githubHelpers.detectFailedChecks — gh-1045 bare check-run URLs + loud f
 
         var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
         assert.ok(mdWrite);
-        assert.contains(mdWrite.content, 'log fetch failed: check-run 4242 log came back empty');
+        assert.contains(mdWrite.content, '[check-run 4242 log came back empty');
         var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
         assert.ok(fullLogWrite, 'full log written');
-        assert.contains(fullLogWrite.content, 'Reason: check-run 4242 log came back empty');
+        assert.contains(fullLogWrite.content, '[check-run 4242 log came back empty');
     });
 
     test('empty-log branches of the resolvers return loud reasons (direct)', function() {
@@ -2465,5 +2465,90 @@ suite('githubHelpers.detectFailedChecks — gh-1045 bare check-run URLs + loud f
         assert.deepEqual(checkRunResult,
             { reason: 'check-run 4242 log came back empty (check run is not backed by a GitHub Actions job?)' },
             'bare /runs/{id} empty log pins the loud contract');
+    });
+});
+
+suite('githubHelpers.detectFailedChecks — orphan/placeholder check-runs (dart #432)', function() {
+
+    function findWrite(writes, path) {
+        return writes.filter(function(w) { return w.path === path; })[0] || null;
+    }
+
+    function orphanMocks(writes, checkRuns, extra) {
+        var m = {
+            github_get_commit_check_runs: function() { return { check_runs: checkRuns }; },
+            github_get_job_logs: function(args) {
+                if (args.jobId === '118070885373') throw new Error('HTTP 404 {"message":"Not Found"}');
+                return 'REAL-LOG-' + args.jobId;
+            },
+            github_list_workflow_runs: function() {
+                return { workflow_runs: [
+                    { id: 39254074760, head_sha: 'other', html_url: 'https://x/actions/runs/39254074760' },
+                    { id: 39254356497, head_sha: '0d76ffe9abc', html_url: 'https://x/actions/runs/39254356497' }
+                ] };
+            },
+            github_get_workflow_run_jobs: function(args) {
+                assert.equal(args.runId, '39254356497', 'only runs on the head are scanned');
+                return { jobs: [
+                    { id: 118066596584, name: 'test (1)', conclusion: 'failure' },
+                    { id: 118070072955, name: 'gate', conclusion: 'failure' }
+                ] };
+            },
+            file_write: function(args) { writes.push(args); }
+        };
+        Object.keys(extra || {}).forEach(function(k) { m[k] = extra[k]; });
+        return m;
+    }
+
+    test('orphan 404 falls back to the same-named failed job logs of the CI run on the head', function() {
+        var writes = [];
+        var gh = loadGithubHelpers(orphanMocks(writes, [
+            { name: 'gate', conclusion: 'failure', details_url: 'https://github.com/o/r/runs/118070885373' }
+        ]));
+        var failed = gh.detectFailedChecks('o', 'r', '0d76ffe9abc', '/tmp/in');
+        assert.equal(failed.length, 1);
+        var full = findWrite(writes, '/tmp/in/ci_failures_full.log').content;
+        assert.contains(full, 'REAL-LOG-118070072955', 'real gate job logs used');
+        assert.contains(full, 'orphan check-run', 'fallback provenance noted');
+        assert.notContains(full, 'LOG FETCH FAILED', 'no 404 section');
+    });
+
+    test('orphan is deduped into a same-named failed check that has real logs', function() {
+        var writes = [];
+        var gh = loadGithubHelpers(orphanMocks(writes, [
+            { name: 'gate', conclusion: 'failure', details_url: 'https://github.com/o/r/runs/118070885373' },
+            { name: 'gate', conclusion: 'failure', details_url: 'https://github.com/o/r/actions/runs/39254356497/job/118070072955' }
+        ], { github_get_workflow_run_jobs: function() { throw new Error('no fallback needed'); } }));
+        var failed = gh.detectFailedChecks('o', 'r', '0d76ffe9abc', '/tmp/in');
+        assert.equal(failed.length, 1, 'one gate entry');
+        var md = findWrite(writes, '/tmp/in/ci_failures.md').content;
+        assert.contains(md, '1 check(s) failed');
+        assert.notContains(md, '118070885373', 'orphan section dropped');
+        assert.notContains(md, 'log fetch failed');
+    });
+
+    test('orphan with no same-named job on the head gets a clear orphan reason', function() {
+        var writes = [];
+        var gh = loadGithubHelpers(orphanMocks(writes, [
+            { name: 'agents-gate', conclusion: 'failure', details_url: 'https://github.com/o/r/runs/118070885373' }
+        ]));
+        gh.detectFailedChecks('o', 'r', '0d76ffe9abc', '/tmp/in');
+        var md = findWrite(writes, '/tmp/in/ci_failures.md').content;
+        assert.contains(md, 'orphan check-run (no job logs; mirrored verdict) — see run https://github.com/o/r/runs/118070885373');
+    });
+});
+
+suite('githubHelpers.fetchDiscussionsAndRawData — dmtools: machine markers (naked-pr-rearm)', function() {
+    test('naked-pr-rearm notice is not an open thread nor a general comment', function() {
+        var body = '<!-- dmtools:naked-pr-rearm {"pr":432,"issue":1,"label":"x","head":"abc"} -->\n🩹 **Naked-PR reconciliation (gh-1097)**: re-armed';
+        var gh = loadGithubHelpers({
+            github_get_pr_conversations: function() { return [{ rootComment: { id: 9, body: body, user: { login: 'ai-teammate' } }, replies: [] }]; },
+            github_get_pr_review_threads: function() { return null; },
+            github_get_pr_comments: function() { return [{ body: body, user: { login: 'ai-teammate' }, created_at: '2026-10-19' }]; }
+        });
+        var res = gh.fetchDiscussionsAndRawData('o', 'r', '432');
+        var open = ((res.rawThreads && res.rawThreads.threads) || []).filter(function(t) { return !t.resolved; });
+        assert.equal(open.length, 0, 'no open thread from the rearm notice');
+        assert.ok(!res.markdown || res.markdown.indexOf('Naked-PR reconciliation') === -1, 'not in pr_discussions.md');
     });
 });

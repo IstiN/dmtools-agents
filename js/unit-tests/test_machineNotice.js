@@ -436,3 +436,13 @@ suite('gh-808 AC3 — notices-only PR keeps the verdict contract', function() {
 function mn_isNoticeBody(body) {
     return loadMachineNotice().isMachineNoticeBody(body);
 }
+
+suite('machineNotice — hidden dmtools: markers (gh-1097 naked-pr-rearm)', function() {
+    test('naked-pr-rearm and other dmtools: markers classify as notices; quotes do not', function() {
+        var mn = loadMachineNotice();
+        assert.ok(mn.isMachineNoticeBody('<!-- dmtools:naked-pr-rearm {"pr":1} -->\n🩹 re-armed'));
+        assert.ok(mn.isMachineNoticeBody('<!-- dmtools:rework-lap {} -->'));
+        assert.notOk(mn.isMachineNoticeBody('please see `<!-- dmtools:naked-pr-rearm` above'));
+        assert.ok(mn.isDmtoolsMarkerBody('  <!-- dmtools:x -->'));
+    });
+});
