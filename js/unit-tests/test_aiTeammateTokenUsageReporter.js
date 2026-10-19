@@ -1636,3 +1636,43 @@ suite('gh-1108 action wiring — publish rides the scan', function() {
         assert.equal(execCalls.length, 0, 'zero gh traffic without the knob');
     });
 });
+
+suite('gh-1108 publish hardening — decorative by contract', function() {
+
+    test('no exec transport skips without throwing', function() {
+        var reporter = loadReporter();
+        var res = reporter.publishTokensMap(
+            { 'pr-31': [{ leg: 'dev', at: 't', prompt: 1, completion: 2,
+                total: 3, cacheRead: 0, model: '' }] },
+            { repo: 'o/r', asset: 'agents-tokens.json' },
+            { exec: null, log: function () {} });
+        assert.equal(res.status, 'skipped');
+        assert.equal(res.reason, 'no-exec');
+    });
+
+    test('a failing local keyed copy never blocks the branch publish', function() {
+        var execCalls = [];
+        var reporter = loadReporter({
+            file_write: function () { throw new Error('disk full'); },
+            cli_execute_command: function (args) {
+                var cmd = String((args && args.command) || '');
+                execCalls.push(cmd);
+                if (cmd.indexOf('-X PUT') !== -1) return { output: '' };
+                if (cmd.indexOf('--jq .sha') !== -1) throw new Error('gh: Not Found (404)');
+                return { output: '' };
+            }
+        });
+        var res = reporter.publishKeyedTokens(
+            { publishTokens: true, workspace: 'o', repository: 'r',
+              tokensAsset: 'agents-tokens.json' },
+            { outputDir: 'outputs/token_usage' },
+            [{ runId: '1', createdAt: '2026-10-13T09:00:00Z', agent: 'pr_review',
+               title: 'teammate: workflow_dispatch #1040 · pr-1123 review',
+               readTokens: 10, writeTokens: 20, cachedTokens: 5 }]);
+        assert.ok(res, 'publish summary returned');
+        assert.equal(res.status, 'published');
+        assert.ok(execCalls.some(function (c) {
+            return c.indexOf('-X PUT') !== -1;
+        }), 'the branch publish still ran');
+    });
+});
