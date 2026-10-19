@@ -62,6 +62,8 @@ function makeSmAgent(opts) {
     var capturedScmConfigs = [];
     var capturedIoCacheDrops = [];
     var capturedLogs = [];
+    var capturedFileWrites = [];
+    var capturedFileDeletes = [];
 
     // Controlled file_read: config discovery paths from fileMap only; other paths from disk.
     var fileReadMock = function(readOpts) {
@@ -147,7 +149,14 @@ function makeSmAgent(opts) {
             return '{"items":[]}';
         },
         file_write: function(writeOpts) {
+            capturedFileWrites.push(writeOpts);
             if (opts.onFileWrite) opts.onFileWrite(writeOpts);
+            return true;
+        },
+        // gh-1118 stamp payload cleanup — the stamp writes its request body
+        // through a temp file and deletes it (scm.js updatePrBody pattern).
+        file_delete: function(delOpts) {
+            capturedFileDeletes.push(delOpts);
             return true;
         },
         encodeURIComponent: encodeURIComponent,
