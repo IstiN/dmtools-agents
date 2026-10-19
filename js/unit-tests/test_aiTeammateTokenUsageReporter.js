@@ -1689,3 +1689,31 @@ suite('gh-1108 publish hardening — decorative by contract', function() {
         }), 'the branch publish still ran');
     });
 });
+
+suite('gh-1108 asset default — the derivation path', function() {
+
+    test('publishKeyedTokens derives <repoName>-tokens.json when the knob is omitted', function() {
+        var writes = [];
+        var reporter = loadReporter({
+            file_write: function (o) { writes.push(o); },
+            cli_execute_command: function (args) {
+                var cmd = String((args && args.command) || '');
+                if (cmd.indexOf('-X PUT') !== -1) return { output: '' };
+                if (cmd.indexOf('--jq .sha') !== -1) throw new Error('gh: Not Found (404)');
+                return { output: '' };
+            }
+        });
+        var res = reporter.publishKeyedTokens(
+            { publishTokens: true, workspace: 'o', repository: 'coolwidgets' },
+            { outputDir: 'outputs/token_usage' },
+            [{ runId: '1', createdAt: '2026-10-13T09:00:00Z', agent: 'pr_review',
+               title: 'teammate: workflow_dispatch #1040 · pr-31 review',
+               readTokens: 10, writeTokens: 20, cachedTokens: 5 }]);
+        assert.equal(res.status, 'published');
+        assert.equal(res.asset, 'coolwidgets-tokens.json',
+            'fetchPreviousState-style derivation, not a fixed cross-factory asset');
+        assert.ok(writes.some(function (w) {
+            return w.path === 'outputs/token_usage/coolwidgets-tokens.json';
+        }), 'the local keyed copy rides the derived asset name');
+    });
+});
