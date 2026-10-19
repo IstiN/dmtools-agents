@@ -3,6 +3,7 @@
  */
 
 function loadUnblockResolvedDependencies(mocks) {
+    var m = mocks || {};
     var calls = {
         statusMoves: [],
         comments: [],
@@ -15,19 +16,19 @@ function loadUnblockResolvedDependencies(mocks) {
         },
         jira_move_to_status: function(args) {
             calls.statusMoves.push(args);
-            if (mocks && mocks.moveThrows) throw new Error('transition down');
+            throwIfFlagged(m, 'moveThrows', 'transition down');
         },
         jira_post_comment: function(args) {
             calls.comments.push(args);
-            if (mocks && mocks.commentThrows) throw new Error('comment down');
+            throwIfFlagged(m, 'commentThrows', 'comment down');
         }
     };
 
-    var allMocks = Object.assign({}, defaults, mocks || {});
+    var allMocks = Object.assign({}, defaults, m);
     allMocks.token_usage = {
         postTokenUsageComments: function(key, opts) {
             calls.tokenUsage.push({ key: key, opts: opts });
-            if (mocks && mocks.tokenUsageThrows) throw new Error('token usage down');
+            throwIfFlagged(m, 'tokenUsageThrows', 'token usage down');
         },
         customParamsOf: function(params) {
             return (params && params.jobParams && params.jobParams.customParams) || {};
@@ -48,6 +49,11 @@ function loadUnblockResolvedDependencies(mocks) {
     );
 
     return { mod: mod, calls: calls };
+}
+
+// Scripted failure switch: throws when the mock opts carry the named flag.
+function throwIfFlagged(m, flag, message) {
+    if (m && m[flag]) throw new Error(message);
 }
 
 function ticketBlockedBy(statusName) {

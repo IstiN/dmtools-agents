@@ -18,9 +18,7 @@ function loadIntakePreAction(opts) {
     var tracker = {
         searchIssues: function (jql, searchOpts) {
             calls.search.push({ jql: jql, opts: searchOpts });
-            var spec = opts.searchResults ? opts.searchResults[jql] : null;
-            if (spec && spec.throwOnSearch) throw new Error('search down: ' + jql);
-            return (spec && spec.results) || [];
+            return searchResultsFor(opts, jql);
         },
         postComment: function (key, body) {
             calls.comments.push({ key: key, body: body });
@@ -51,6 +49,13 @@ function loadIntakePreAction(opts) {
     );
 
     return { mod: mod, calls: calls };
+}
+
+// Scripted searchIssues outcome for one JQL: results list, or a thrown error.
+function searchResultsFor(opts, jql) {
+    var spec = (opts.searchResults || {})[jql];
+    if (spec && spec.throwOnSearch) throw new Error('search down: ' + jql);
+    return (spec && spec.results) || [];
 }
 
 var EPIC_JQL = 'project = PROJ AND issuetype = Epic ORDER BY created DESC';

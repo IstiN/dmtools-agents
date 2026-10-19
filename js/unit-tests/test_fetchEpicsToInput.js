@@ -18,16 +18,11 @@ function loadFetchEpicsToInput(opts) {
     var tracker = {
         searchIssues: function (jql, searchOpts) {
             calls.search.push({ jql: jql, opts: searchOpts });
-            var spec = opts.searchResults ? opts.searchResults[jql] : null;
-            if (spec && spec.throwOnSearch) throw new Error('search down: ' + jql);
-            return (spec && spec.results) || [];
+            return searchResultsFor(opts, jql);
         },
         getIssue: function (key) {
             calls.getIssue.push(key);
-            var behavior = opts.getIssue ? opts.getIssue[key] : null;
-            if (behavior === 'throw') throw new Error('issue fetch down: ' + key);
-            if (behavior) return behavior;
-            return { key: key, fields: {} };
+            return issueFor(opts, key);
         }
     };
 
@@ -53,6 +48,22 @@ function loadFetchEpicsToInput(opts) {
     );
 
     return { mod: mod, calls: calls };
+}
+
+// Scripted searchIssues outcome for one JQL: results list, or a thrown error.
+function searchResultsFor(opts, jql) {
+    var spec = (opts.searchResults || {})[jql];
+    if (spec && spec.throwOnSearch) throw new Error('search down: ' + jql);
+    return (spec && spec.results) || [];
+}
+
+// Scripted getIssue outcome for one key: canned issue, a thrown error, or an
+// empty default issue.
+function issueFor(opts, key) {
+    var behavior = (opts.getIssue || {})[key];
+    if (behavior === 'throw') throw new Error('issue fetch down: ' + key);
+    if (behavior) return behavior;
+    return { key: key, fields: {} };
 }
 
 var EPIC_JQL = 'project = PROJ AND issuetype = Epic ORDER BY created DESC';
