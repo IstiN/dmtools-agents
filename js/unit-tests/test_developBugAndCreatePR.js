@@ -60,6 +60,8 @@ function loadDevelopBugAndCreatePR(mocks) {
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var gitStagingModule = loadModule('js/common/gitStaging.js');
+// gh-1087: real quota circuit-breaker (pure module — no requires of its own).
+var quotaBreakerModule = loadModule('js/common/quotaCircuitBreaker.js');
 
 // gh-742 rework: the bug flow's interrupted path calls
 // developTicket.throwInterruptedReset, so the mock below exposes the REAL
@@ -80,6 +82,7 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         './common/outputFiles.js': { readOutputFile: function () { return null; } },
         './cacheToReleases.js': {},
         './common/gitStaging.js': gitStagingModule,
+        './common/quotaCircuitBreaker.js': quotaBreakerModule,
         './configLoader.js': configLoaderModule,
         './config.js': configModule,
         './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
@@ -91,12 +94,15 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         makeRequire({
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
+            './common/quotaCircuitBreaker.js': quotaBreakerModule,
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': outputFiles,
             './common/trackers.js': loadTrackersDev(allMocks),
             './developTicketAndCreatePR.js': {
                 action: function() { return { success: true, path: 'delegated' }; },
                 throwInterruptedReset: developTicketRealModule.throwInterruptedReset,
+                // gh-1087: real shared classification contract (pure concat).
+                classifyInterruptedText: developTicketRealModule.classifyInterruptedText,
                 recoverMissingResponse: function () { return null; }
             }
         ,
@@ -537,6 +543,7 @@ suite('developBugAndCreatePR', function() {
                 './common/trackers.js': loadTrackersDev(inlineMocks),
                 './config.js': configModule,
                 './common/gitStaging.js': gitStagingMod,
+                './common/quotaCircuitBreaker.js': quotaBreakerModule,
                 './configLoader.js': configLoaderModule,
                 './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), {
                     file_read: function (args) {
@@ -544,7 +551,7 @@ suite('developBugAndCreatePR', function() {
                         throw new Error('missing ' + args.path);
                     }
                 }),
-                './developTicketAndCreatePR.js': { action: function () { throw marked; } },
+                './developTicketAndCreatePR.js': { action: function () { throw marked; }, classifyInterruptedText: function (e, r) { return String(e || '') + '\n' + String(r || ''); } },
                 './common/feedbackLoop.js': {
                     runQualityGates: function () { return { success: true }; },
                     runPolicyGates: function () { return { success: true }; },
@@ -649,6 +656,7 @@ function loadBugForMissingResponseResume(opts) {
             './common/outputFiles.js': realOutputFiles,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModuleLocal,
+            './common/quotaCircuitBreaker.js': quotaBreakerModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
@@ -673,6 +681,7 @@ function loadBugForMissingResponseResume(opts) {
             './common/trackers.js': loadTrackersDev(spyMocks),
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModuleLocal,
+            './common/quotaCircuitBreaker.js': quotaBreakerModule,
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': realOutputFiles,
             // SPY: a direct resumeOnceForMissingResponse call from the bug leg
@@ -686,6 +695,7 @@ function loadBugForMissingResponseResume(opts) {
             },
             './developTicketAndCreatePR.js': {
                 action: function () { delegated++; return { success: true, path: 'delegated' }; },
+                classifyInterruptedText: sharedGateModule.classifyInterruptedText,
                 throwInterruptedReset: sharedGateModule.throwInterruptedReset,
                 recoverMissingResponse: function (ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage) {
                     recoverCalls.push({
@@ -1123,11 +1133,13 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
             makeRequire({
                 './config.js': configModule,
                 './common/gitStaging.js': gitStagingModuleLocal,
+                './common/quotaCircuitBreaker.js': quotaBreakerModule,
                 './configLoader.js': loaderWithScmStub,
                 './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), allMocks),
                 './common/trackers.js': loadTrackersDev(allMocks),
                 './developTicketAndCreatePR.js': {
                     action: function () { delegated++; return { success: true, path: 'delegated' }; },
+                    classifyInterruptedText: function (e, r) { return String(e || '') + '\n' + String(r || ''); },
                     // Never invoked on the pr-already-open / delegated paths
                     // under test; the REAL shared helper is pinned by the
                     // gh-742 suite through loadDevelopBugAndCreatePR.

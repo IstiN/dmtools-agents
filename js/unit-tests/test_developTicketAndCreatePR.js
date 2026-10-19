@@ -20,6 +20,8 @@ function trackersWith(mocks) {
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var gitStagingModule = loadModule('js/common/gitStaging.js');
+// gh-1087: real quota circuit-breaker (pure module — no requires of its own).
+var quotaBreakerModule = loadModule('js/common/quotaCircuitBreaker.js');
 
 function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
     return (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
@@ -37,6 +39,7 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
             './common/outputFiles.js': { readOutputFile: function () { return null; } },
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
+            './common/quotaCircuitBreaker.js': quotaBreakerModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
@@ -74,6 +77,7 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks) {
             './common/outputFiles.js': { readOutputFile: function () { return null; } },
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
+            './common/quotaCircuitBreaker.js': quotaBreakerModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
@@ -629,6 +633,7 @@ function loadForLandingGuard(mocks, opts) {
             },
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
+            './common/quotaCircuitBreaker.js': quotaBreakerModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
@@ -834,6 +839,7 @@ function loadForPrTail(mocks, opts) {
             },
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
+            './common/quotaCircuitBreaker.js': quotaBreakerModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
@@ -1108,6 +1114,7 @@ function loadForMissingResponseResume(opts) {
             './common/outputFiles.js': realOutputFiles,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModule,
+            './common/quotaCircuitBreaker.js': quotaBreakerModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },

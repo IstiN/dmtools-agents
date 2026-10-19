@@ -360,6 +360,7 @@ function makeSmAgent(opts) {
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
             './common/triggerFailures.js': loadModule('js/common/triggerFailures.js', makeRequire({}), {}),
+            './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js', makeRequire({}), {}),
             './common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
             './sm/sources/githubSource.js': {
                 takeMutexTickSnapshot: function () { return null; }
