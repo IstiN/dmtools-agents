@@ -60,6 +60,8 @@ function loadDevelopBugAndCreatePR(mocks) {
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var gitStagingModule = loadModule('js/common/gitStaging.js');
+// gh-1087: real quota circuit-breaker (pure module — no requires of its own).
+var quotaBreakerModule = loadModule('js/common/quotaCircuitBreaker.js');
 
 // gh-742 rework: the bug flow's interrupted path calls
 // developTicket.throwInterruptedReset, so the mock below exposes the REAL
@@ -80,6 +82,7 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         './common/outputFiles.js': { readOutputFile: function () { return null; } },
         './cacheToReleases.js': {},
         './common/gitStaging.js': gitStagingModule,
+        './common/quotaCircuitBreaker.js': quotaBreakerModule,
         './configLoader.js': configLoaderModule,
         './config.js': configModule,
         './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
@@ -91,12 +94,17 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         makeRequire({
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
+            './common/quotaCircuitBreaker.js': quotaBreakerModule,
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': outputFiles,
             './common/trackers.js': loadTrackersDev(allMocks),
             './developTicketAndCreatePR.js': {
                 action: function() { return { success: true, path: 'delegated' }; },
                 throwInterruptedReset: developTicketRealModule.throwInterruptedReset,
+                // gh-1087: real shared helpers (single source of truth for
+                // the classification concat + the quotaPark marker contract).
+                classifyInterruptedText: developTicketRealModule.classifyInterruptedText,
+                throwQuotaPark: developTicketRealModule.throwQuotaPark,
                 recoverMissingResponse: function () { return null; }
             }
         ,
@@ -207,6 +215,46 @@ suite('developBugAndCreatePR', function() {
             }),
             'CodeGraph setup/cleanup belongs to setup scripts, not JS post-actions'
         );
+    });
+
+    test('gh-1087 UT-2/AC2: bug leg parks on a 403 quota failure — park label + comment, NO status reset, quotaPark marker', function() {
+        var addedLabels = [];
+        var loaded = loadDevelopBugAndCreatePR({
+            jira_add_label: function (args) { addedLabels.push(args.label); }
+        });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: {
+                    key: 'TS-1301',
+                    fields: { summary: 'Quota wall', description: '', labels: [] }
+                },
+                metadata: { contextId: 'bug_development' },
+                response: '',
+                currentCliErrorMessage: 'z.ai glm-5.3-flash answered 403 "weekly (7-day) usage limit" (9 retries); Provider chain exhausted: 2 of 2',
+                jobParams: {
+                    customParams: { removeLabel: 'sm_bug_development_triggered' }
+                }
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught, 'a parked bug leg must fail the run (throw), not return plain success');
+        assert.ok(caught && caught.quotaPark === true,
+            'thrown error carries the quotaPark marker via the shared developTicket.throwQuotaPark helper');
+        assert.deepEqual(loaded.moves, [],
+            'quota park must NOT reset the ticket to Ready For Development (AC2)');
+        assert.deepEqual(addedLabels, ['provider_quota'],
+            'park label added to the ticket (AC2)');
+        assert.equal(loaded.comments.length, 1);
+        assert.contains(loaded.comments[0].comment, 'Provider Quota Exhausted');
+        assert.contains(loaded.comments[0].comment, 'weekly (7-day)');
+        assert.deepEqual(loaded.removed, [
+            { key: 'TS-1301', label: 'bug_development_wip' },
+            { key: 'TS-1301', label: 'sm_bug_development_triggered' }
+        ], 'WIP + SM labels still cleaned up so a later un-park can re-dispatch');
     });
 
     test('accepts already_fixed output without CodeGraph and moves bug to Done', function() {
@@ -537,6 +585,7 @@ suite('developBugAndCreatePR', function() {
                 './common/trackers.js': loadTrackersDev(inlineMocks),
                 './config.js': configModule,
                 './common/gitStaging.js': gitStagingMod,
+                './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
                 './configLoader.js': configLoaderModule,
                 './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), {
                     file_read: function (args) {
@@ -544,7 +593,7 @@ suite('developBugAndCreatePR', function() {
                         throw new Error('missing ' + args.path);
                     }
                 }),
-                './developTicketAndCreatePR.js': { action: function () { throw marked; } },
+                './developTicketAndCreatePR.js': { action: function () { throw marked; }, classifyInterruptedText: function (e, r) { return String(e || '') + '\n' + String(r || ''); } },
                 './common/feedbackLoop.js': {
                     runQualityGates: function () { return { success: true }; },
                     runPolicyGates: function () { return { success: true }; },
@@ -649,6 +698,7 @@ function loadBugForMissingResponseResume(opts) {
             './common/outputFiles.js': realOutputFiles,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModuleLocal,
+            './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
@@ -673,6 +723,7 @@ function loadBugForMissingResponseResume(opts) {
             './common/trackers.js': loadTrackersDev(spyMocks),
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModuleLocal,
+            './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': realOutputFiles,
             // SPY: a direct resumeOnceForMissingResponse call from the bug leg
@@ -686,6 +737,8 @@ function loadBugForMissingResponseResume(opts) {
             },
             './developTicketAndCreatePR.js': {
                 action: function () { delegated++; return { success: true, path: 'delegated' }; },
+                classifyInterruptedText: sharedGateModule.classifyInterruptedText,
+                throwQuotaPark: sharedGateModule.throwQuotaPark,
                 throwInterruptedReset: sharedGateModule.throwInterruptedReset,
                 recoverMissingResponse: function (ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage) {
                     recoverCalls.push({
@@ -1123,11 +1176,13 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
             makeRequire({
                 './config.js': configModule,
                 './common/gitStaging.js': gitStagingModuleLocal,
+                './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
                 './configLoader.js': loaderWithScmStub,
                 './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), allMocks),
                 './common/trackers.js': loadTrackersDev(allMocks),
                 './developTicketAndCreatePR.js': {
                     action: function () { delegated++; return { success: true, path: 'delegated' }; },
+                    classifyInterruptedText: function (e, r) { return String(e || '') + '\n' + String(r || ''); },
                     // Never invoked on the pr-already-open / delegated paths
                     // under test; the REAL shared helper is pinned by the
                     // gh-742 suite through loadDevelopBugAndCreatePR.
