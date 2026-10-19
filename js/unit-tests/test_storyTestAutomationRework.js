@@ -438,3 +438,220 @@ suite('storyTestAutomationRework: postThreadReplies (gh-1006)', function () {
         assert.equal(m.postThreadReplies(scm, 7), 1);
     });
 });
+
+// ── gh-1080: characterization tests pinning current action() behaviour before
+// the CRAP split. PR announcement, status moves, review triggers and the
+// error paths are exercised here. ──
+
+function loadReworkWith(autoStartModule, scmFactory, mocks, tokenUsageModule) {
+    var allMocks = Object.assign({
+        cli_execute_command: function () { return ''; },
+        file_read: function () { return null; },
+        file_write: function () {}
+    }, mocks || {});
+    var requireMap = {
+        './configLoader.js': {
+            formatTemplate: function (template, values) {
+                return template.replace(/\{ticketKey\}/g, values.ticketKey);
+            },
+            loadProjectConfig: function () {
+                return {
+                    jira: makeDefaultJiraConfig(),
+                    workingDir: null,
+                    git: { authorName: 'AI Teammate', authorEmail: 'ai@example.com' },
+                    formats: { commitMessage: { testRework: '{ticketKey}: address review comments' } }
+                };
+            },
+            createScm: scmFactory
+        },
+        './common/autoStart.js': autoStartModule,
+        './common/pullRequest.js': loadModule('js/common/pullRequest.js',
+            makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
+        './common/mergeState.js': loadModule('js/common/mergeState.js'),
+        './config.js': { LABELS: {} },
+        './common/tokenUsageComment.js': tokenUsageModule || { postTokenUsageComments: function () {} },
+        './common/trackers.js': loadTrackersSr(allMocks)
+    };
+    return loadModule('js/storyTestAutomationRework.js', makeRequire(requireMap), allMocks);
+}
+
+function recordingAutoStart(configuredBehavior) {
+    return {
+        configuredCalls: [],
+        smIdleCalls: [],
+        triggerConfiguredWorkflowForTicket: function (opts) {
+            this.configuredCalls.push(opts);
+            if (configuredBehavior === 'throw') throw new Error('workflow dispatch down');
+            return true;
+        },
+        triggerSmIfIdle: function (opts) {
+            this.smIdleCalls.push(opts);
+            if (configuredBehavior === 'sm-throws') throw new Error('sm down');
+        }
+    };
+}
+
+function reworkCliMock(commands, overrides) {
+    return function(args) {
+        commands.push(args.command);
+        if (overrides && overrides[args.command]) return overrides[args.command](args);
+        if (args.command === 'git rev-parse --quiet --verify MERGE_HEAD') throw new Error('exit 1');
+        if (args.command === 'git branch --show-current') return 'test/TS-900';
+        if (args.command === 'git diff --cached --stat') return ' testing/tests/TS-900/x.py | 1 +';
+        if (args.command.indexOf('git ls-remote --heads origin test/TS-900') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/TS-900';
+        return '';
+    };
+}
+
+function makeScm(openPrs) {
+    return {
+        prs: openPrs || [],
+        replies: [],
+        resolves: [],
+        comments: [],
+        labelRemovals: [],
+        listPrs: function () { return this.prs; },
+        replyToThread: function (prId, target, text) { this.replies.push({ prId: prId, target: target, text: text }); },
+        resolveThread: function (prId, target) { this.resolves.push({ prId: prId, target: target }); },
+        addComment: function (prId, body) { this.comments.push({ prId: prId, body: body }); },
+        removeLabel: function (prId, label) { this.labelRemovals.push({ prId: prId, label: label }); }
+    };
+}
+
+var REWORK_OPEN_PR = [{ number: 7, head: { ref: 'test/TS-900' }, html_url: 'https://example.com/repo/pull/7' }];
+
+suite('storyTestAutomationRework: action characterization (gh-1080 CRAP split)', function() {
+
+    // gh-1080 CRAP ratchet: the jira_* recorders live in their own helper so the
+    // action-invocation plumbing stays below the new-function threshold (>8).
+    function reworkJiraMocks(opts, jiraCalls) {
+        return {
+            jira_post_comment: function (args) { jiraCalls.comments.push(args.comment); },
+            jira_remove_label: function (args) { jiraCalls.labelsRemoved.push(args.label); },
+            jira_add_label: function (args) { jiraCalls.labelsAdded.push(args.label); },
+            jira_move_to_status: function (args) {
+                jiraCalls.moves.push(args.statusName);
+                if (opts.rejectInTesting && args.statusName === 'In Testing') throw new Error('state rejected');
+                return {};
+            }
+        };
+    }
+
+    function runReworkAction(opts) {
+        opts = opts || {};
+        var commands = [];
+        var autoStart = opts.autoStart || recordingAutoStart();
+        var scm = opts.scm !== undefined ? opts.scm : makeScm([]);
+        var jiraCalls = { comments: [], labelsRemoved: [], labelsAdded: [], moves: [] };
+        var mocks = Object.assign({
+            cli_execute_command: reworkCliMock(commands, opts.cliOverrides),
+            file_read: opts.fileRead || function () { return null; }
+        }, reworkJiraMocks(opts, jiraCalls), opts.mocks || {});
+        var module = loadReworkWith(autoStart, function () { return scm; }, mocks, opts.tokenUsage);
+        var params = {
+            ticket: { key: 'TS-900' },
+            response: 'addressed flaky locator',
+            initiator: 'sm',
+            metadata: { contextId: 'story_test_automation_rework' },
+            jobParams: { customParams: opts.customParams || {} }
+        };
+        var result = module.action(params);
+        return { result: result, commands: commands, autoStart: autoStart, scm: scm, jira: jiraCalls };
+    }
+
+    test('an open test PR gets thread replies, an SCM comment, a Jira comment with the PR link', function() {
+        var scm = makeScm(REWORK_OPEN_PR);
+        var run = runReworkAction({
+            scm: scm,
+            fileRead: function (args) {
+                if (args.path === 'outputs/review_replies.json') {
+                    return JSON.stringify({ replies: [{ inReplyToId: 55, threadId: 't-9', reply: 'done' }] });
+                }
+                return null;
+            }
+        });
+
+        assert.equal(run.result.success, true);
+        assert.equal(run.result.prUrl, 'https://example.com/repo/pull/7');
+        assert.deepEqual(run.scm.replies, [
+            { prId: 7, target: { rootCommentId: 55, threadId: 't-9' }, text: 'done' }
+        ]);
+        assert.equal(run.scm.comments.length, 1);
+        assert.contains(run.scm.comments[0].body, 'Story Test Rework Complete — TS-900');
+        assert.contains(run.scm.comments[0].body, 'addressed flaky locator');
+        assert.ok(run.jira.comments.some(function(c) { return c.indexOf('Story Test Rework Completed') !== -1; }));
+        assert.ok(run.jira.comments.some(function(c) { return c.indexOf('*Pull Request*: https://example.com/repo/pull/7') !== -1; }));
+        assert.equal(run.autoStart.smIdleCalls.length, 1, 'review falls back to the SM trigger');
+        assert.equal(run.autoStart.configuredCalls.length, 0);
+        assert.equal(run.scm.labelRemovals.length, 1, 'the rework-needed label is removed from the PR');
+    });
+
+    test('a failing SCM comment only warns — the rework still succeeds', function() {
+        var scm = makeScm(REWORK_OPEN_PR);
+        scm.addComment = function () { throw new Error('scm comment denied'); };
+        var run = runReworkAction({ scm: scm });
+
+        assert.equal(run.result.success, true);
+        assert.ok(run.jira.comments.some(function(c) { return c.indexOf('Story Test Rework Completed') !== -1; }),
+            'the Jira comment is still posted');
+    });
+
+    test('In Testing move success logs the move; a rejected none-mode move is caught', function() {
+        var run = runReworkAction({});
+        assert.equal(run.result.success, true);
+        assert.deepEqual(run.jira.moves, ['In Testing']);
+
+        var rejected = runReworkAction({ rejectInTesting: true });
+        assert.equal(rejected.result.success, true, 'a rejected story move must not fail the rework');
+        assert.deepEqual(rejected.jira.moves, ['In Testing']);
+    });
+
+    test('autoStartReview routes to the configured workflow and skips the SM fallback', function() {
+        var run = runReworkAction({
+            customParams: {
+                autoStartReview: true,
+                autoStartReviewConfigFile: 'agents/pr_story_test_automation_review.json',
+                removeLabel: 'sm_story_test_rework_triggered'
+            }
+        });
+
+        assert.equal(run.result.success, true);
+        assert.equal(run.autoStart.configuredCalls.length, 1);
+        assert.equal(run.autoStart.configuredCalls[0].ticketKey, 'TS-900');
+        assert.equal(run.autoStart.configuredCalls[0].configFile, 'agents/pr_story_test_automation_review.json');
+        assert.equal(run.autoStart.configuredCalls[0].label, 'pr_story_test_automation_review');
+        assert.deepEqual(run.autoStart.configuredCalls[0].stripKeys, ['removeLabel', 'autoStartReview', 'autoStartReviewConfigFile']);
+        assert.equal(run.autoStart.smIdleCalls.length, 0);
+        assert.ok(run.jira.labelsRemoved.indexOf('sm_story_test_rework_triggered') !== -1,
+            'the custom SM trigger label is removed');
+    });
+
+    test('a failing workflow dispatch falls back to the SM trigger', function() {
+        var run = runReworkAction({
+            customParams: { autoStartReview: true, autoStartReviewConfigFile: 'agents/pr_story_test_automation_review.json' },
+            autoStart: recordingAutoStart('throw')
+        });
+
+        assert.equal(run.result.success, true);
+        assert.equal(run.autoStart.smIdleCalls.length, 1, 'SM fallback ran after the dispatch failure');
+    });
+
+    test('a failing token usage comment does not fail the rework', function() {
+        var run = runReworkAction({
+            tokenUsage: { postTokenUsageComments: function () { throw new Error('ledger down'); } }
+        });
+
+        assert.equal(run.result.success, true);
+    });
+
+    test('a failing SM fallback fails the run through the outer error path and releases the lock', function() {
+        var run = runReworkAction({ autoStart: recordingAutoStart('sm-throws') });
+
+        assert.equal(run.result.success, false);
+        assert.contains(run.result.error, 'sm down');
+        assert.ok(run.jira.labelsRemoved.indexOf('sm_story_test_rework_triggered') !== -1,
+            'the SM trigger label is released by the error path');
+        assert.ok(run.jira.labelsRemoved.indexOf('story_test_automation_rework_wip') !== -1,
+            'the WIP lock is released by the error path');
+    });
+});
