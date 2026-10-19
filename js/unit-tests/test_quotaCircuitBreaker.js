@@ -106,11 +106,16 @@ suite('quotaCircuitBreaker > config readers + probe cadence (AC3)', function () 
         assert.equal(quotaBreaker.probeCommandOf({ quotaProbeCommand: 'my-ping' }), 'my-ping');
     });
 
-    test('probe cadence: probe on multiples of N (first tick probes so a misclassification self-corrects)', function () {
+    test('probe cadence: probe when the completed park ticks are a multiple of N (first tick probes so a misclassification self-corrects)', function () {
+        // probeDue(priorCompletedTicks, everyN) — tick-based, NOT attempts-based:
+        // every tick records a `quota-park-tick: n` marker, so the completed
+        // tick count advances even between probes (gh-1087 review thread 1 —
+        // an attempts-only counter deadlocks after the first failed probe).
         assert.ok(quotaBreaker.probeDue(0, 3));
         assert.notOk(quotaBreaker.probeDue(1, 3));
         assert.notOk(quotaBreaker.probeDue(2, 3));
         assert.ok(quotaBreaker.probeDue(3, 3));
+        assert.ok(quotaBreaker.probeDue(6, 3));
         assert.ok(quotaBreaker.probeDue(0, 1));
         assert.ok(quotaBreaker.probeDue(2, 1));
     });
@@ -124,6 +129,35 @@ suite('quotaCircuitBreaker > config readers + probe cadence (AC3)', function () 
             'quota-probe: 3'
         ]), 5);
         assert.equal(quotaBreaker.countProbeMarkers(['quota-probe: x']), 0);
+    });
+
+    test('tick markers: the durable per-tick cadence clock (gh-1087 review thread 1)', function () {
+        assert.equal(quotaBreaker.tickMarkerLine(4), 'quota-park-tick: 4');
+        assert.equal(quotaBreaker.countTickMarkers([]), 0);
+        assert.equal(quotaBreaker.countTickMarkers(['quota-park-tick: 2']), 2);
+        assert.equal(quotaBreaker.countTickMarkers([
+            'quota-park-tick: 1',
+            { body: 'quota-park-tick: 7' },
+            'quota-park-tick: 3\nquota-park-tick: 5'
+        ]), 7);
+        // probe markers must NOT feed the tick counter and vice versa
+        assert.equal(quotaBreaker.countTickMarkers(['quota-probe: 9']), 0);
+        assert.equal(quotaBreaker.countProbeMarkers(['quota-park-tick: 9']), 0);
+    });
+
+    test('redactCommand: masks inline credentials, keeps env-var name references (review thread 2)', function () {
+        // default command only references env-var NAMES — must pass through
+        var dflt = quotaBreaker.probeCommandOf({});
+        assert.equal(quotaBreaker.redactCommand(dflt), dflt);
+        // an operator override with an inline credential must be masked
+        var leaked = quotaBreaker.redactCommand(
+            'curl -H "Authorization: Bearer sk-live-1234567890abcdef" https://api.example.com');
+        assert.contains(leaked, 'Authorization: ***');
+        assert.notContains(leaked, 'sk-live-1234567890abcdef');
+        // header-shaped and key=value secrets are masked too
+        var keyed = quotaBreaker.redactCommand('my-ping --api-key=AKIAIOSFODNN7EXAMPLE');
+        assert.notContains(keyed, 'AKIAIOSFODNN7EXAMPLE');
+        assert.contains(keyed, '***');
     });
 });
 
@@ -197,21 +231,24 @@ suite('quotaParkProbe > bounded probe + un-park (UT-2, AC2/AC3)', function () {
         });
     }
 
-    test('probe not due (cadence) → no CLI call, park stays, no side effects', function () {
+    test('probe not due (tick cadence) → no CLI call, tick marker still recorded, park stays', function () {
         var cliCalls = 0;
         var comments = [];
         var mocks = probeMocks({
             cli_execute_command: function () { cliCalls++; return ''; },
-            jira_get_comments: function () { return '{"comments":[{"body":"quota-probe: 1"}]}' },
+            // two park ticks already recorded, cadence 3 → this tick (3rd) is off-cadence
+            jira_get_comments: function () { return '{"comments":[{"body":"quota-park-tick: 1"},{"body":"quota-park-tick: 2"}]}' },
             jira_post_comment: function (args) { comments.push(args); }
         });
         var res = runProbe(mocks, { quotaProbeEveryNTicks: 3 });
         assert.equal(res.action, 'probe_not_due');
+        assert.equal(res.tick, 3);
         assert.equal(cliCalls, 0, 'no provider ping off-cadence');
-        assert.equal(comments.length, 0);
+        assert.equal(comments.length, 1, 'every tick records its durable tick marker');
+        assert.contains(comments[0].comment, 'quota-park-tick: 3');
     });
 
-    test('probe failure → park stays, one marker comment recorded', function () {
+    test('probe failure → park stays, tick marker + probe marker recorded', function () {
         var comments = [];
         var moves = [];
         var removed = [];
@@ -224,10 +261,67 @@ suite('quotaParkProbe > bounded probe + un-park (UT-2, AC2/AC3)', function () {
         });
         var res = runProbe(mocks, {});
         assert.equal(res.action, 'probe_failed');
+        assert.equal(res.tick, 1);
         assert.equal(moves.length, 0, 'failed probe must not move the ticket (park stays — AC2)');
         assert.equal(removed.length, 0, 'failed probe must not remove the park label');
-        assert.equal(comments.length, 1);
-        assert.contains(comments[0].comment, 'quota-probe: 1');
+        assert.equal(comments.length, 2, 'tick marker + probe marker');
+        assert.contains(comments[0].comment, 'quota-park-tick: 1');
+        assert.contains(comments[1].comment, 'quota-probe: 1');
+    });
+
+    test('cadence keeps firing while quota-blocked: 2×everyN+1 failing ticks → probes on ticks 1, N+1, 2N+1 (review thread 1, AC3)', function () {
+        var bodies = [];
+        var comments = [];
+        var probes = 0;
+        var mocks = probeMocks({
+            cli_execute_command: function () { probes++; throw new Error('HTTP 403: usage limit'); },
+            jira_get_comments: function () { return JSON.stringify({ comments: bodies.map(function (b) { return { body: b }; }) }); },
+            jira_post_comment: function (args) { bodies.push(args.comment); comments.push(args); }
+        });
+        var everyN = 3;
+        var results = [];
+        for (var tick = 1; tick <= 2 * everyN + 1; tick++) {
+            results.push(runProbe(mocks, { quotaProbeEveryNTicks: everyN }));
+        }
+        assert.equal(probes, 3, 'probe #2 and #3 fire at ticks N+1 and 2N+1 — the cadence must not deadlock after the first failed probe');
+        assert.equal(results[0].action, 'probe_failed');
+        assert.equal(results[0].probes, 1);
+        assert.equal(results[1].action, 'probe_not_due');
+        assert.equal(results[2].action, 'probe_not_due');
+        assert.equal(results[3].action, 'probe_failed', 'second probe fires on tick N+1');
+        assert.equal(results[3].probes, 2);
+        assert.equal(results[6].action, 'probe_failed', 'third probe fires on tick 2N+1');
+        assert.equal(results[6].probes, 3);
+        var tickMarkers = bodies.filter(function (b) { return b.indexOf('quota-park-tick:') !== -1; });
+        assert.equal(tickMarkers.length, 2 * everyN + 1, 'every tick records its tick marker — the durable cadence clock');
+        var probeMarkers = bodies.filter(function (b) { return b.indexOf('quota-probe:') !== -1; });
+        assert.equal(probeMarkers.length, 3);
+    });
+
+    test('park self-lifts on the first successful probe after repeated failures (AC3)', function () {
+        var comments = [];
+        var moves = [];
+        var removed = [];
+        // post-fix ticket shape: 6 recorded ticks, 2 failed probes → due, probe #3
+        var mocks = probeMocks({
+            cli_execute_command: function () { return ''; },
+            jira_get_comments: function () {
+                return '{"comments":[' +
+                    '{"body":"quota-probe: 1"},{"body":"quota-probe: 2"},' +
+                    '{"body":"quota-park-tick: 1"},{"body":"quota-park-tick: 2"},{"body":"quota-park-tick: 3"},' +
+                    '{"body":"quota-park-tick: 4"},{"body":"quota-park-tick: 5"},{"body":"quota-park-tick: 6"}]}';
+            },
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { moves.push(args); },
+            jira_remove_label: function (args) { removed.push(args); }
+        });
+        var res = runProbe(mocks, {});
+        assert.equal(res.action, 'unparked');
+        assert.equal(res.probes, 3, 'probe numbering follows the recorded probe markers, ticks only drive the cadence');
+        var unpark = comments.filter(function (c) { return c.comment.indexOf('Un-Parked') !== -1; });
+        assert.equal(unpark.length, 1);
+        assert.contains(unpark[0].comment, '#3');
+        assert.deepEqual(moves, [{ key: 'TS-77', statusName: 'Ready For Development' }]);
     });
 
     test('probe success → un-park: label removed, trigger labels cleared, ticket back to Ready For Development', function () {
@@ -249,8 +343,30 @@ suite('quotaParkProbe > bounded probe + un-park (UT-2, AC2/AC3)', function () {
         var removedLabels = removed.map(function (r) { return r.label; });
         assert.ok(removedLabels.indexOf('provider_quota') !== -1, 'park label removed');
         assert.ok(removedLabels.indexOf('sm_story_development_triggered') !== -1, 'dev trigger label cleared so the lane re-fires');
-        assert.equal(comments.length, 1);
-        assert.contains(comments[0].comment, 'Un-Parked');
+        var unpark = comments.filter(function (c) { return c.comment.indexOf('Un-Parked') !== -1; });
+        assert.equal(unpark.length, 1);
+        assert.contains(unpark[0].comment, '#4');
+        var tickMarkers = comments.filter(function (c) { return c.comment.indexOf('quota-park-tick:') !== -1; });
+        assert.equal(tickMarkers.length, 1, 'the tick is recorded even on the un-park tick');
+    });
+
+    test('probe command is logged redacted — an inline override credential never reaches the logs (review thread 2)', function () {
+        var logs = [];
+        var origLog = console.log;
+        console.log = function () { logs.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            var mocks = probeMocks({
+                cli_execute_command: function () { throw new Error('boom'); },
+                jira_get_comments: function () { return '{"comments":[]}' }
+            });
+            runProbe(mocks, { quotaProbeCommand: 'curl -H "Authorization: Bearer sk-live-1234567890abcdef" https://api.example.com' });
+        } finally {
+            console.log = origLog;
+        }
+        var joined = logs.join('\n');
+        assert.notContains(joined, 'sk-live-1234567890abcdef', 'the raw credential must never be logged');
+        assert.contains(joined, 'Authorization: ***');
+        assert.contains(joined, 'Running probe #1');
     });
 
     test('custom park label + custom probe command flow end to end', function () {

@@ -16,8 +16,11 @@
  *   parkLabelOf(jobParams)             → park label name (default 'provider_quota')
  *   probeEveryOf(jobParams)            → probe cadence in SM ticks (default 3)
  *   probeCommandOf(jobParams)          → cheap provider ping shell command
- *   probeDue(priorCount, everyN)       → is a probe due this tick?
- *   probeMarkerLine(n)                 → durable per-ticket probe counter line
+ *   redactCommand(command)             → log-safe probe command (credentials masked)
+ *   probeDue(completedTicks, everyN)   → is a probe due this tick?
+ *   tickMarkerLine(n)                  → durable per-tick cadence marker line
+ *   probeMarkerLine(n)                 → durable per-probe counter line
+ *   countTickMarkers(bodies)           → park ticks already recorded
  *   countProbeMarkers(bodies)          → probe attempts already recorded
  *   shouldSkipForQuotaPark(t,rule,jp)  → SM dispatch-lane exclusion predicate
  *   parkComment(m, cls, label, everyN) → ticket/PR park comment (markup-object driven)
@@ -61,27 +64,36 @@ function extractProvider(text) {
 function classifyFailure(text) {
     var t = String(text || '');
     if (!t.trim()) return null;
-    var has403 = FORBIDDEN_RE.test(t);
-    var quotaBody = QUOTA_BODY_RE.test(t);
-    var chainExhausted = CHAIN_EXHAUSTED_RE.test(t);
     var window = extractQuotaWindow(t);
-    // Quota evidence: a 403 carrying a quota/billing body, an explicit quota
-    // window, or an exhausted-provider-chain tail that follows quota/403
-    // responses. Quota ALWAYS wins over transient signals — a mixed chain
-    // (429 retries first, 403 usage-limit last) is a quota wall, not a blip.
-    var quota = (has403 && quotaBody) || window || (chainExhausted && (quotaBody || has403));
-    if (quota) {
+    // Quota ALWAYS wins over transient signals — a mixed chain (429 retries
+    // first, 403 usage-limit last) is a quota wall, not a blip.
+    if (hasQuotaEvidence(t, window)) {
         return {
             kind: 'quota_exhausted',
             provider: extractProvider(t),
             window: window,
-            evidence: (has403 ? 'HTTP 403' : (chainExhausted ? 'provider chain exhausted' : 'usage limit'))
+            evidence: quotaEvidenceOf(t)
         };
     }
     if (RATE_LIMIT_RE.test(t) || TIMEOUT_RE.test(t)) {
         return { kind: 'transient', provider: extractProvider(t), window: null, evidence: null };
     }
     return null;
+}
+
+// Quota evidence: a 403 carrying a quota/billing body, an explicit quota
+// window, or an exhausted-provider-chain tail that follows quota/403
+// responses.
+function hasQuotaEvidence(t, window) {
+    var has403 = FORBIDDEN_RE.test(t);
+    var quotaBody = QUOTA_BODY_RE.test(t);
+    return (has403 && quotaBody) || window || (CHAIN_EXHAUSTED_RE.test(t) && (quotaBody || has403));
+}
+
+function quotaEvidenceOf(t) {
+    if (FORBIDDEN_RE.test(t)) return 'HTTP 403';
+    if (CHAIN_EXHAUSTED_RE.test(t)) return 'provider chain exhausted';
+    return 'usage limit';
 }
 
 function parkLabelOf(jobParams) {
@@ -109,33 +121,69 @@ function probeCommandOf(jobParams) {
         '-d "{\\"model\\":\\"$FA_PROVIDER_MODEL\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"ping\\"}],\\"max_tokens\\":1}"\'';
 }
 
-// Probe cadence is COUNT-based, not wall-clock: each recorded probe posts a
-// 'quota-probe: <n>' marker line on the ticket, so a probe fires on ticks
-// where the recorded count is a multiple of everyN (0 = first tick after the
-// park — a misclassification self-corrects immediately).
-function probeDue(priorProbeCount, everyN) {
+// Sensitive header / credential shapes that must never reach SM job logs or
+// CI artifacts when an operator overrides jobParams.quotaProbeCommand with an
+// inline secret (e.g. -H "Authorization: Bearer sk-...").
+var SENSITIVE_VALUE_RE = /((?:authorization|x-api-key|api[-_]?key|token|secret)[\w-]*\s*[:=]\s*"?)([^'"\s]+)("?)/gi;
+var ENV_REF_RE = /^\$[\w{}]/;
+
+/**
+ * gh-1087 review thread 2: the probe command is logged on every probe. The
+ * default only references env-var NAMES ($FA_PROVIDER_API_KEY — safe), but a
+ * free-form operator override may inline a credential. Mask sensitive values
+ * while leaving env-var references (and the safe default) untouched.
+ */
+function redactCommand(command) {
+    return String(command || '').replace(SENSITIVE_VALUE_RE, function (match, prefix, value, suffix) {
+        if (ENV_REF_RE.test(value)) return match;
+        return prefix + '***' + suffix;
+    });
+}
+
+// Probe cadence is TICK-based, not attempts-based (gh-1087 review thread 1):
+// every SM tick the probe handler records a lightweight 'quota-park-tick: n'
+// marker on the ticket, so the completed-tick count advances even between
+// probes. A probe fires when the completed tick count is a multiple of
+// everyN (0 = first tick after the park — a misclassification self-corrects
+// immediately). An attempts-only counter would deadlock: after the first
+// failed probe the count is 1 forever and 1 % N never fires probe #2.
+function probeDue(completedTicks, everyN) {
     var n = (typeof everyN === 'number' && everyN > 0) ? everyN : DEFAULT_PROBE_EVERY_TICKS;
-    return (priorProbeCount % n) === 0;
+    return (completedTicks % n) === 0;
+}
+
+function tickMarkerLine(count) {
+    return 'quota-park-tick: ' + count;
 }
 
 function probeMarkerLine(count) {
     return 'quota-probe: ' + count;
 }
 
-function countProbeMarkers(bodies) {
+// Highest <n> across all 'markerRe' lines in the comment bodies (each body is
+// a string or a { body: ... } object). The shared counter behind
+// countTickMarkers / countProbeMarkers.
+function maxMarkerNumber(bodies, markerRe) {
     var count = 0;
-    var re = /^\s*quota-probe:\s*(\d+)\s*$/gm;
     var list = Array.isArray(bodies) ? bodies : [];
     for (var i = 0; i < list.length; i++) {
         var body = String((list[i] && (list[i].body || list[i])) || '');
-        re.lastIndex = 0;
+        markerRe.lastIndex = 0;
         var m;
-        while ((m = re.exec(body)) !== null) {
+        while ((m = markerRe.exec(body)) !== null) {
             var n = parseInt(m[1], 10);
             if (n > count) count = n;
         }
     }
     return count;
+}
+
+function countTickMarkers(bodies) {
+    return maxMarkerNumber(bodies, /^\s*quota-park-tick:\s*(\d+)\s*$/gm);
+}
+
+function countProbeMarkers(bodies) {
+    return maxMarkerNumber(bodies, /^\s*quota-probe:\s*(\d+)\s*$/gm);
 }
 
 /**
