@@ -14724,12 +14724,13 @@ suite('smAgent: naked-PR reconciliation sweep (gh-1097 IT-1)', function () {
         return { number: n, labels: labels.map(function (l) { return { name: l }; }),
             head: { ref: ref, sha: 'sha' + n }, user: { login: login }, body: '', title: 't' + n };
     }
-    function nakedTick(jobExtra) {
+    function nakedTick(jobExtra, prComments) {
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js':
                 'module.exports = { repository: { owner: "o", repo: "r" } };' },
             github: {
                 items: [],
+                prComments: prComments || [],
                 prList: JSON.stringify([
                     nakedFixturePr(10, [], 'ai/gh-1', 'ai-teammate'),
                     nakedFixturePr(11, [], 'ai/gh-2', 'ai-teammate'),
@@ -14765,5 +14766,12 @@ suite('smAgent: naked-PR reconciliation sweep (gh-1097 IT-1)', function () {
             assert.equal(sm.capturedPrLabelAdds.length, 0);
             assert.equal(sm.capturedPrComments.length, 0);
         });
+    });
+
+    test('a marker for the same head blocks the re-arm loop', function () {
+        var sm = nakedTick({}, [{ user: { login: 'ai-teammate' },
+            body: '<!-- dmtools:naked-pr-rearm {"pr":10,"head":"sha10"} -->' }]);
+        assert.equal(sm.capturedPrLabelAdds.length, 0);
+        assert.equal(sm.capturedPrComments.length, 0);
     });
 });

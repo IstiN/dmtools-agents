@@ -14,6 +14,13 @@
 // Excluded by design (AC2): blocked / needs-human / validation_failed on
 // the PR or the issue, and human-authored PRs (not machine-authored and
 // not on a machine `ai/` branch).
+//
+// Re-arm loop guard: the marker carries the PR head sha; a PR already
+// re-armed on the same head (marker present) is skipped — a lane that
+// consumes the label must not get a fresh arm + comment every tick. A new
+// head re-opens the sweep. Limit: the caller lists open PRs with a single
+// github_list_prs call (the bridge exposes no page/perPage), so only the
+// first page of open PRs is swept.
 'use strict';
 
 var LIFECYCLE_LABELS = [
@@ -59,8 +66,8 @@ function rearmLabelFor(issueLabels) {
     return null;
 }
 
-function buildAuditComment(prNumber, issueNumber, label) {
-    var meta = { pr: prNumber, issue: issueNumber, label: label };
+function buildAuditComment(prNumber, issueNumber, label, head) {
+    var meta = { pr: prNumber, issue: issueNumber, label: label, head: head || null };
     return MARKER_PREFIX + JSON.stringify(meta) + ' -->\n' +
         '🩹 **Naked-PR reconciliation (gh-1097)**: this PR carried no lifecycle labels while ' +
         'linked issue #' + issueNumber + ' is still in flow — re-armed `' + label + '`. ' +
@@ -90,7 +97,31 @@ function planFor(pr, deps) {
     var issueLabels = deps.issueLabels(issue) || [];
     if (excluded(prLabels, issueLabels, { machine: deps.isMachine(pr) })) return null;
     var label = rearmLabelFor(issueLabels);
-    return label ? { pr: pr.number, issue: issue, label: label } : null;
+    return label ? { pr: pr.number, issue: issue, label: label, head: headSha(pr) } : null;
+}
+
+function headSha(pr) {
+    return (pr.head && pr.head.sha) || null;
+}
+
+var MARKER_RE = /<!-- dmtools:naked-pr-rearm (\{[^\n]*?\}) -->/;
+
+// Head sha recorded in one comment's marker, or null.
+function markerHead(comment) {
+    var m = MARKER_RE.exec(String((comment && comment.body) || ''));
+    if (!m) return null;
+    try { return JSON.parse(m[1]).head || null; } catch (e) { return null; }
+}
+
+function alreadyRearmed(comments, head) {
+    if (!head) return false;
+    return (comments || []).some(function (c) { return markerHead(c) === head; });
+}
+
+function notYetRearmed(plan, deps) {
+    if (!alreadyRearmed(deps.prComments(plan.pr), plan.head)) return true;
+    deps.log('  🩹 naked-PR sweep: pr#' + plan.pr + ' already re-armed on head ' + plan.head + ' — skip');
+    return false;
 }
 
 function applyPlan(plan, deps) {
@@ -98,14 +129,14 @@ function applyPlan(plan, deps) {
         (deps.dry ? ' [DRY]' : ''));
     if (deps.dry) return;
     deps.addLabel(plan.pr, plan.label);
-    deps.comment(plan.pr, buildAuditComment(plan.pr, plan.issue, plan.label));
+    deps.comment(plan.pr, buildAuditComment(plan.pr, plan.issue, plan.label, plan.head));
 }
 
-// deps: { bodyLinker, issueLabels(n), isMachine(pr), addLabel(n,l),
+// deps: { bodyLinker, prComments(n), issueLabels(n), isMachine(pr), addLabel(n,l),
 //         comment(n,body), log, dry }. Returns the applied plans.
 function sweep(prs, deps) {
     var plans = (prs || []).map(function (pr) { return planFor(pr, deps); })
-        .filter(function (p) { return p; });
+        .filter(function (p) { return p && notYetRearmed(p, deps); });
     plans.forEach(function (p) { applyPlan(p, deps); });
     return plans;
 }
@@ -114,6 +145,6 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         LIFECYCLE_LABELS: LIFECYCLE_LABELS, isNakedPr: isNakedPr, excluded: excluded,
         rearmLabelFor: rearmLabelFor, buildAuditComment: buildAuditComment,
-        linkedIssueOf: linkedIssueOf, planFor: planFor, sweep: sweep
+        linkedIssueOf: linkedIssueOf, markerHead: markerHead, alreadyRearmed: alreadyRearmed, planFor: planFor, sweep: sweep
     };
 }

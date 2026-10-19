@@ -7844,6 +7844,7 @@ function nakedPrSweepDeps(repoInfo) {
     return {
         bodyLinker: githubSourceModule.linkedIssueNumber || function () { return null; },
         issueLabels: function (n) { return linkedIssueLabels(repoInfo, n); },
+        prComments: function (n) { return nakedPrComments(repoInfo, n); },
         isMachine: function (pr) {
             var branch = String((pr.head && pr.head.ref) || '');
             return branch.indexOf('ai/') === 0 || machineAuthorModule.isMachineAuthored(
@@ -7855,6 +7856,15 @@ function nakedPrSweepDeps(repoInfo) {
         log: function (m) { console.log(m); },
         dry: DRY
     };
+}
+
+// Raw PR comments for the gh-1097 re-arm dedup (one read per candidate).
+function nakedPrComments(repoInfo, prNumber) {
+    var obj = mcpParse(github_get_pr_comments({
+        workspace: repoInfo.owner, repository: repoInfo.repo,
+        pullRequestId: String(prNumber)
+    }));
+    return Array.isArray(obj) ? obj : ((obj && obj.comments) || []);
 }
 
 function runNakedPrSweep(repoInfo) {

@@ -10,11 +10,12 @@ function nakedMod() {
 
 function nakedPr(n, labels, ref, body) {
     return { number: n, labels: labels.map(function (l) { return { name: l }; }),
-        head: { ref: ref }, body: body || '' };
+        head: { ref: ref, sha: 'h' + n }, body: body || '' };
 }
 
-function nakedDeps(issues, sink, dry) {
+function nakedDeps(issues, sink, dry, comments) {
     return {
+        prComments: function (n) { return (comments || {})[n] || []; },
         bodyLinker: function (b) { var m = /closes #(\d+)/i.exec(b || ''); return m ? +m[1] : null; },
         issueLabels: function (n) { return issues[n] || null; },
         isMachine: function (pr) { return pr.head.ref.indexOf('ai/') === 0; },
@@ -56,8 +57,13 @@ suite('nakedPrReconcile predicates (gh-1097 UT-1..3)', function () {
     });
 
     test('audit comment carries the stable hidden marker', function () {
-        var body = nakedMod().buildAuditComment(5, 7, 'agent:review');
-        assert.ok(body.indexOf('<!-- dmtools:naked-pr-rearm {"pr":5,"issue":7,"label":"agent:review"} -->') === 0);
+        var m = nakedMod();
+        var body = m.buildAuditComment(5, 7, 'agent:review', 'abc');
+        assert.ok(body.indexOf('<!-- dmtools:naked-pr-rearm {"pr":5,"issue":7,"label":"agent:review","head":"abc"} -->') === 0);
+        assert.equal(m.markerHead({ body: body }), 'abc');
+        assert.equal(m.markerHead({ body: '<!-- dmtools:naked-pr-rearm {bad} -->' }), null);
+        assert.equal(m.markerHead(null), null);
+        assert.equal(m.alreadyRearmed([{ body: body }], null), false);
     });
 
     test('linkedIssueOf: ai/gh-N branch first, then closing keyword', function () {
@@ -97,5 +103,17 @@ suite('nakedPrReconcile.sweep (gh-1097)', function () {
         assert.equal(sink.labels.length + sink.comments.length, 0);
         assert.ok(sink.logs[0].indexOf('[DRY]') !== -1);
         assert.equal(m.sweep(null, nakedDeps(issues, sink)).length, 0);
+    });
+
+    test('same head already re-armed → untouched; new head → re-armed', function () {
+        var m = nakedMod();
+        var sink = { labels: [], comments: [], logs: [] };
+        var same = { 10: [{ body: m.buildAuditComment(10, 1, 'agent:review', 'h10') }] };
+        assert.equal(m.sweep(prs, nakedDeps(issues, sink, false, same)).length, 0);
+        assert.equal(sink.labels.length, 0);
+        assert.ok(sink.logs[0].indexOf('already re-armed on head h10') !== -1);
+        var old = { 10: [{ body: m.buildAuditComment(10, 1, 'agent:review', 'old') }] };
+        assert.equal(m.sweep(prs, nakedDeps(issues, sink, false, old)).length, 1);
+        assert.deepEqual(sink.labels, [[10, 'agent:review']]);
     });
 });
