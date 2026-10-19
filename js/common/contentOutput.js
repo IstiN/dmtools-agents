@@ -310,14 +310,79 @@ function injectCommentPlaceholders(markdown, anchors) {
 
 
 
+// Inline comment body representations, checked in order: v2 storage, ADR
+// document, v1 view. The first representation carrying a string value wins.
+var COMMENT_BODY_REPRESENTATIONS = ['storage', 'atlas_doc_format', 'view'];
+
+/**
+ * First structured string body among the known representations, or null.
+ * Pure helper (gh-1086 extraction from extractCommentBody).
+ */
+function extractStructuredCommentBody(body) {
+    if (!body) return null;
+    for (var i = 0; i < COMMENT_BODY_REPRESENTATIONS.length; i++) {
+        var repr = body[COMMENT_BODY_REPRESENTATIONS[i]];
+        if (repr && typeof repr.value === 'string') return repr.value;
+    }
+    return null;
+}
+
 function extractCommentBody(comment) {
     if (!comment) return '';
     var body = comment.body;
     if (typeof body === 'string') return body;
-    if (body && body.storage && typeof body.storage.value === 'string') return body.storage.value;
-    if (body && body.atlas_doc_format && typeof body.atlas_doc_format.value === 'string') return body.atlas_doc_format.value;
-    if (body && body.view && typeof body.view.value === 'string') return body.view.value;
+    var structured = extractStructuredCommentBody(body);
+    if (structured !== null) return structured;
     return JSON.stringify(body);
+}
+
+// Pure mappers for one inline comment payload entry (gh-1086 extraction from
+// fetchPageInlineComments).
+
+function parseInlineCommentResults(parsed) {
+    return parsed.results || parsed.comments || (Array.isArray(parsed) ? parsed : []);
+}
+
+function inlineCommentAuthor(c) {
+    return (c.author && (c.author.displayName || c.author.emailAddress)) || 'Unknown';
+}
+
+function inlineCommentCreated(c) {
+    return c.createdDate || (c.version && c.version.createdAt) || c.created || '';
+}
+
+function inlineCommentResolved(c) {
+    var statusActive = c.resolutionStatus === 'resolved' || c.resolutionStatus === 'closed';
+    var markerPresent = !!(c.resolvedDate || c.resolved || c.status === 'resolved' || c.status === 'closed');
+    return statusActive || markerPresent;
+}
+
+function inlineMarkerRef(props, inlineProps) {
+    return props.inlineMarkerRef || props['inline-marker-ref'] || inlineProps.markerRef || null;
+}
+
+function inlineOriginalSelection(props, inlineProps) {
+    return props.inlineOriginalSelection || props['inline-original-selection'] || inlineProps.originalSelection || null;
+}
+
+function mapInlineComment(pageId, pageTitle, c) {
+    var props = c.properties || {};
+    // Anchor info for inline comment preservation across page rewrites.
+    // v2 API exposes it under properties (camelCase and dash-case variants),
+    // v1 under extensions.inlineProperties.
+    var inlineProps = (c.extensions && c.extensions.inlineProperties) || {};
+    return {
+        pageId: String(pageId),
+        pageTitle: pageTitle || 'untitled',
+        commentId: c.id || null,
+        parentCommentId: c.parentCommentId || c.parentId || null,
+        author: inlineCommentAuthor(c),
+        created: inlineCommentCreated(c),
+        resolved: inlineCommentResolved(c),
+        markerRef: inlineMarkerRef(props, inlineProps),
+        originalSelection: inlineOriginalSelection(props, inlineProps),
+        body: extractCommentBody(c)
+    };
 }
 
 function fetchPageInlineComments(pageId, pageTitle, limit) {
@@ -325,29 +390,9 @@ function fetchPageInlineComments(pageId, pageTitle, limit) {
     try {
         var raw = confluence_get_page_inline_comments({ pageId: String(pageId), limit: limit || 100 });
         var parsed = JSON.parse(raw || '{}');
-        var results = parsed.results || parsed.comments || (Array.isArray(parsed) ? parsed : []);
+        var results = parseInlineCommentResults(parsed);
         for (var i = 0; i < results.length; i++) {
-            var c = results[i];
-            var props = c.properties || {};
-            var inlineProps = (c.extensions && c.extensions.inlineProperties) || {};
-            comments.push({
-                pageId: String(pageId),
-                pageTitle: pageTitle || 'untitled',
-                commentId: c.id || null,
-                parentCommentId: c.parentCommentId || c.parentId || null,
-                author: (c.author && (c.author.displayName || c.author.emailAddress)) || 'Unknown',
-                created: c.createdDate || (c.version && c.version.createdAt) || c.created || '',
-                resolved: c.resolutionStatus === 'resolved' || c.resolutionStatus === 'closed' ||
-                    !!(c.resolvedDate || c.resolved || c.status === 'resolved' || c.status === 'closed'),
-                // Anchor info for inline comment preservation across page rewrites.
-                // v2 API exposes it under properties (camelCase and dash-case variants),
-                // v1 under extensions.inlineProperties.
-                markerRef: props.inlineMarkerRef || props['inline-marker-ref'] ||
-                    inlineProps.markerRef || null,
-                originalSelection: props.inlineOriginalSelection || props['inline-original-selection'] ||
-                    inlineProps.originalSelection || null,
-                body: extractCommentBody(c)
-            });
+            comments.push(mapInlineComment(pageId, pageTitle, results[i]));
         }
     } catch (e) {
         console.warn('contentOutput: failed to fetch inline comments for page ' + pageId + ':', e);
@@ -439,6 +484,9 @@ if (typeof module !== 'undefined' && module.exports) {
         writeCommentsFiles: writeCommentsFiles,
         publishCommentReplies: publishCommentReplies,
         extractCommentBody: extractCommentBody,
+        extractStructuredCommentBody: extractStructuredCommentBody,
+        parseInlineCommentResults: parseInlineCommentResults,
+        mapInlineComment: mapInlineComment,
         extractInlineCommentMarkers: extractInlineCommentMarkers,
         injectCommentPlaceholders: injectCommentPlaceholders,
         COMMENTS_BASE_NAME: COMMENTS_BASE_NAME,

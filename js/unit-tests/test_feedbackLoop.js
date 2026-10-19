@@ -341,6 +341,104 @@ suite('feedbackLoop helper', function() {
 
 });
 
+suite('feedbackLoop > resumeOnceForProviderOutage (gh-1121)', function() {
+
+    var feedbackLoopMod = loadModule('js/common/feedbackLoop.js');
+
+    test('providerTransientBackoffSeconds: default 90, configured override, garbage/0/negative fall back', function() {
+        assert.equal(feedbackLoopMod.providerTransientBackoffSeconds({}), 90);
+        assert.equal(feedbackLoopMod.providerTransientBackoffSeconds(null), 90);
+        assert.equal(feedbackLoopMod.providerTransientBackoffSeconds({ providerTransientBackoffSec: 7 }), 7);
+        assert.equal(feedbackLoopMod.providerTransientBackoffSeconds({ providerTransientBackoffSec: '12' }), 12);
+        assert.equal(feedbackLoopMod.providerTransientBackoffSeconds({ providerTransientBackoffSec: 'garbage' }), 90);
+        assert.equal(feedbackLoopMod.providerTransientBackoffSeconds({ providerTransientBackoffSec: 0 }), 90);
+        assert.equal(feedbackLoopMod.providerTransientBackoffSeconds({ providerTransientBackoffSec: -5 }), 90);
+    });
+
+    test('UT-5 default: backs off 90s (through the whitelisted bash token) BEFORE the bounded wrapper', function() {
+        var loaded = loadFeedbackLoop();
+        var result = loaded.mod.resumeOnceForProviderOutage({ ticketKey: 'TS-900', customParams: {} });
+
+        assert.equal(result.attempted, true, 'the outage resume ignores the generic feedbackLoop flag');
+        assert.equal(loaded.commands.length, 3);
+        assert.equal(loaded.commands[0], 'bash -c "sleep 90"', 'the default backoff sleep precedes the resume mechanics');
+        assert.equal(loaded.commands[1], 'bash -c "mkdir -p outputs/feedback"');
+        assert.contains(loaded.commands[2], 'bash agents/scripts/run-agent.sh --continue outputs/feedback/TS-900_missing_response.md');
+    });
+
+    test('UT-5 configurable: providerTransientBackoffSec is honored verbatim', function() {
+        var loaded = loadFeedbackLoop();
+        loaded.mod.resumeOnceForProviderOutage({
+            ticketKey: 'TS-901',
+            customParams: { providerTransientBackoffSec: 7 }
+        });
+
+        assert.contains(loaded.commands[0], 'bash -c "sleep 7"');
+    });
+
+    test('UT-2: the outage resume fires even when the feedback loop is disabled globally', function() {
+        var loaded = loadFeedbackLoop();
+        var result = loaded.mod.resumeOnceForProviderOutage({
+            ticketKey: 'TS-902',
+            customParams: {} // no feedbackLoop config at all
+        });
+
+        assert.equal(result.attempted, true);
+        var wrapperCalls = loaded.commands.filter(function(c) { return c.indexOf('run-agent.sh') !== -1; });
+        assert.equal(wrapperCalls.length, 1);
+    });
+
+    test('an explicit missingResponse.enabled=false still opts out of the outage resume', function() {
+        var loaded = loadFeedbackLoop();
+        var result = loaded.mod.resumeOnceForProviderOutage({
+            ticketKey: 'TS-903',
+            customParams: { feedbackLoop: { missingResponse: { enabled: false } } }
+        });
+
+        assert.equal(result.attempted, false);
+        assert.equal(result.reason, 'disabled');
+        assert.deepEqual(loaded.commands, []);
+    });
+
+    test('I2: exactly ONE outage resume per leg — the missing_response attempt marker is shared', function() {
+        var loaded = loadFeedbackLoop();
+        var first = loaded.mod.resumeOnceForProviderOutage({ ticketKey: 'TS-904', customParams: {} });
+        var second = loaded.mod.resumeOnceForProviderOutage({ ticketKey: 'TS-904', customParams: {} });
+
+        assert.equal(first.attempted, true);
+        assert.equal(second.attempted, false);
+        assert.equal(second.reason, 'attempts-exhausted');
+        var wrapperCalls = loaded.commands.filter(function(c) { return c.indexOf('run-agent.sh') !== -1; });
+        assert.equal(wrapperCalls.length, 1, 'never more than one resume per leg');
+        assert.equal(loaded.files['outputs/feedback/TS-904_missing_response.attempt'], '1');
+    });
+
+    test('the outage resume shares the marker with the generic missing-response resume', function() {
+        var loaded = loadFeedbackLoop();
+        var generic = loaded.mod.resumeOnceForMissingResponse({
+            ticketKey: 'TS-905',
+            customParams: { feedbackLoop: { enabled: true } }
+        });
+        var outage = loaded.mod.resumeOnceForProviderOutage({ ticketKey: 'TS-905', customParams: {} });
+
+        assert.equal(generic.attempted, true);
+        assert.equal(outage.attempted, false, 'a leg that already resumed generically never resumes again');
+        assert.equal(outage.reason, 'attempts-exhausted');
+    });
+
+    test('the outage prompt names the transient outage, the deliverable and the no-push contract', function() {
+        var loaded = loadFeedbackLoop();
+        loaded.mod.resumeOnceForProviderOutage({ ticketKey: 'TS-906', customParams: {} });
+
+        var prompt = loaded.files['outputs/feedback/TS-906_missing_response.md'];
+        assert.contains(prompt, 'Ticket: TS-906');
+        assert.contains(prompt, 'provider outage');
+        assert.contains(prompt, 'outputs/response.md');
+        assert.contains(prompt, 'Do not push');
+    });
+
+});
+
 suite('feedbackLoop > resumeOnceForMissingResponse (gh-775)', function() {
 
     test('disabled when the feedback loop is not enabled', function() {

@@ -908,6 +908,146 @@ function resolveConfluenceUrls(items, config) {
     });
 }
 
+// ── resolveInstructions helpers (gh-1086 extraction) ─────────────────────────
+// Pure deciders pulled out of resolveInstructions; each is exported for unit
+// testing. resolveInstructions keeps the exact original call/merge order.
+
+/**
+ * Base instructions for an agent: instructionOverrides fully replace the agent
+ * JSON defaults; otherwise default Confluence URLs are resolved against the
+ * project config.
+ *
+ * @returns {{ instructions: string[], instructionsOverridden: boolean }}
+ */
+function resolveBaseInstructions(agentName, defaultInstructions, config) {
+    if (config.instructionOverrides && config.instructionOverrides[agentName]) {
+        return {
+            instructions: config.instructionOverrides[agentName],
+            instructionsOverridden: true
+        };
+    }
+    return {
+        instructions: resolveConfluenceUrls(defaultInstructions || [], config),
+        instructionsOverridden: false
+    };
+}
+
+/**
+ * Per-agent additional instructions plus the global inject-to-all entries,
+ * appended in that order (per-agent array reference is kept when no globals
+ * are configured).
+ */
+function collectAdditionalInstructions(agentName, config) {
+    var additional = [];
+    if (config.additionalInstructions && config.additionalInstructions[agentName]) {
+        additional = config.additionalInstructions[agentName];
+    }
+    if (config.globalAdditionalInstructions && config.globalAdditionalInstructions.length > 0) {
+        additional = additional.concat(config.globalAdditionalInstructions);
+    }
+    return additional;
+}
+
+/**
+ * Per-agent CLI prompt entries: short array form (merge strategy, backward
+ * compatible) or long { strategy, prompts } form. The configured array
+ * reference is returned untouched.
+ *
+ * @returns {{ prompts: string[], strategy: string }}
+ */
+function resolveConfiguredCliPrompts(agentName, config) {
+    var prompts = [];
+    var strategy = 'merge'; // default: append to existing JSON cliPrompts
+    if (config.cliPrompts && config.cliPrompts[agentName]) {
+        var entry = config.cliPrompts[agentName];
+        if (Array.isArray(entry)) {
+            // Short form: array → merge strategy (default, backward compatible)
+            prompts = entry;
+        } else if (entry && typeof entry === 'object' && Array.isArray(entry.prompts)) {
+            // Long form: { strategy: 'merge'|'replace', prompts: [...] }
+            prompts = entry.prompts;
+            if (entry.strategy === 'replace') {
+                strategy = 'replace';
+            }
+        }
+    }
+    return { prompts: prompts, strategy: strategy };
+}
+
+/**
+ * Per-agent CLI entry prompt replacement, or null.
+ */
+function resolveCliPromptOverride(agentName, config) {
+    if (config.cliPromptOverrides && config.cliPromptOverrides[agentName]) {
+        return config.cliPromptOverrides[agentName];
+    }
+    return null;
+}
+
+/**
+ * Tracker type driving cliPromptsByTracker selection: DEFAULT_TRACKER env var,
+ * then config.defaultTracker, then 'jira'. options.trackerOverride (content
+ * routed exclusively to Confluence must be authored in Markdown, not in the
+ * tracker's markup) wins over all of them.
+ */
+function resolveTrackerType(config, options) {
+    var trackerType = null;
+    try {
+        trackerType = java.lang.System.getenv('DEFAULT_TRACKER');
+    } catch (e) {
+        // Not running in GraalJS environment
+    }
+    if (!trackerType && config.defaultTracker) {
+        trackerType = config.defaultTracker;
+    }
+    if (!trackerType) {
+        trackerType = 'jira';
+    }
+    if (options && options.trackerOverride) {
+        trackerType = options.trackerOverride;
+    }
+    return trackerType;
+}
+
+/**
+ * Tracker-specific prompts from a cliPromptsByTracker object. Flat structure:
+ * tracker → array of prompts (used in agent JSON files). Nested structure:
+ * tracker → agentName → array of prompts (legacy / unit tests).
+ */
+function extractTrackerPrompts(source, trackerType, agentName) {
+    if (!source || !source[trackerType]) {
+        return null;
+    }
+    var trackerSpecific = source[trackerType];
+    if (Array.isArray(trackerSpecific)) {
+        return trackerSpecific;
+    } else if (trackerSpecific && typeof trackerSpecific === 'object') {
+        return trackerSpecific[agentName];
+    }
+    return null;
+}
+
+/**
+ * Append tracker prompts to cliPrompts when present (concat always yields a
+ * new array; the reference is kept otherwise, as before the extraction).
+ */
+function appendTrackerPrompts(cliPrompts, trackerPrompts) {
+    if (trackerPrompts && trackerPrompts.length > 0) {
+        return cliPrompts.concat(trackerPrompts);
+    }
+    return cliPrompts;
+}
+
+/**
+ * Per-agent patch entry from a patches map, or null.
+ */
+function pickAgentPatch(patches, agentName) {
+    if (patches && patches[agentName]) {
+        return patches[agentName];
+    }
+    return null;
+}
+
 /**
  * Resolve instructions for a specific agent, applying overrides and additions from config.
  *
@@ -923,119 +1063,32 @@ function resolveConfluenceUrls(items, config) {
  * @returns {Object} { instructions: string[], instructionsOverridden: boolean, additionalInstructions: string[], cliPrompts: string[], cliPrompt: string|null, agentParamPatch: Object|null, jobParamPatch: Object|null }
  */
 function resolveInstructions(agentName, defaultInstructions, config, agentCliPromptsByTracker, options) {
-    var instructions = defaultInstructions || [];
-    var instructionsOverridden = false;
-    var additional = [];
-    var cliPrompts = [];
-    var cliPromptsStrategy = 'merge'; // default: append to existing JSON cliPrompts
-    var cliPrompt = null;
-    var agentParamPatch = null;
-    var jobParamPatch = null;
+    var base = resolveBaseInstructions(agentName, defaultInstructions, config);
+    var additional = collectAdditionalInstructions(agentName, config);
+    var configuredPrompts = resolveConfiguredCliPrompts(agentName, config);
 
-    // Full override if instructionOverrides has this agent
-    if (config.instructionOverrides && config.instructionOverrides[agentName]) {
-        instructions = config.instructionOverrides[agentName];
-        instructionsOverridden = true;
-    } else {
-        // Resolve Confluence URLs in default instructions
-        instructions = resolveConfluenceUrls(instructions, config);
-    }
-
-    // Additional instructions (appended via dmtools-core's additionalInstructions field)
-    if (config.additionalInstructions && config.additionalInstructions[agentName]) {
-        additional = config.additionalInstructions[agentName];
-    }
-    // Global additional instructions injected into every agent
-    if (config.globalAdditionalInstructions && config.globalAdditionalInstructions.length > 0) {
-        additional = additional.concat(config.globalAdditionalInstructions);
-    }
-
-    if (config.cliPrompts && config.cliPrompts[agentName]) {
-        var entry = config.cliPrompts[agentName];
-        if (Array.isArray(entry)) {
-            // Short form: array → merge strategy (default, backward compatible)
-            cliPrompts = entry;
-        } else if (entry && typeof entry === 'object' && Array.isArray(entry.prompts)) {
-            // Long form: { strategy: 'merge'|'replace', prompts: [...] }
-            cliPrompts = entry.prompts;
-            if (entry.strategy === 'replace') {
-                cliPromptsStrategy = 'replace';
-            }
-        }
-    }
+    var cliPrompts = configuredPrompts.prompts;
     // Global CLI prompts injected into every agent
     if (config.globalCliPrompts && config.globalCliPrompts.length > 0) {
         cliPrompts = cliPrompts.concat(config.globalCliPrompts);
     }
 
-    if (config.cliPromptOverrides && config.cliPromptOverrides[agentName]) {
-        cliPrompt = config.cliPromptOverrides[agentName];
-    }
-
-    // Merge tracker-specific CLI prompts based on DEFAULT_TRACKER env var
-    var trackerType = null;
-    try {
-        trackerType = java.lang.System.getenv('DEFAULT_TRACKER');
-    } catch (e) {
-        // Not running in GraalJS environment
-    }
-    if (!trackerType && config.defaultTracker) {
-        trackerType = config.defaultTracker;
-    }
-    if (!trackerType) {
-        trackerType = 'jira';
-    }
-    // Content routed exclusively to Confluence must be authored in Markdown,
-    // not in the tracker's markup — switch the tracker-prompt selection key.
-    if (options && options.trackerOverride) {
-        trackerType = options.trackerOverride;
-    }
-
-    // Helper to extract tracker-specific prompts from a cliPromptsByTracker object
-    function extractTrackerPrompts(source) {
-        if (!source || !source[trackerType]) {
-            return null;
-        }
-        var trackerSpecific = source[trackerType];
-        if (Array.isArray(trackerSpecific)) {
-            // Flat structure: tracker -> array of prompts (used in agent JSON files)
-            return trackerSpecific;
-        } else if (trackerSpecific && typeof trackerSpecific === 'object') {
-            // Nested structure: tracker -> agentName -> array of prompts (legacy / unit tests)
-            return trackerSpecific[agentName];
-        }
-        return null;
-    }
-
-    // Merge tracker prompts from agent JSON first, then from project config.
-    // This ensures .dmtools/config.js EXTENDS the agent's base tracker prompts
-    // rather than replacing them.
-    var agentTrackerPrompts = extractTrackerPrompts(agentCliPromptsByTracker);
-    if (agentTrackerPrompts && agentTrackerPrompts.length > 0) {
-        cliPrompts = cliPrompts.concat(agentTrackerPrompts);
-    }
-
-    var configTrackerPrompts = extractTrackerPrompts(config.cliPromptsByTracker);
-    if (configTrackerPrompts && configTrackerPrompts.length > 0) {
-        cliPrompts = cliPrompts.concat(configTrackerPrompts);
-    }
-
-    if (config.agentParamPatches && config.agentParamPatches[agentName]) {
-        agentParamPatch = config.agentParamPatches[agentName];
-    }
-    if (config.jobParamPatches && config.jobParamPatches[agentName]) {
-        jobParamPatch = config.jobParamPatches[agentName];
-    }
+    // Merge tracker-specific CLI prompts based on the resolved tracker type:
+    // agent JSON first, then project config. This ensures .dmtools/config.js
+    // EXTENDS the agent's base tracker prompts rather than replacing them.
+    var trackerType = resolveTrackerType(config, options);
+    cliPrompts = appendTrackerPrompts(cliPrompts, extractTrackerPrompts(agentCliPromptsByTracker, trackerType, agentName));
+    cliPrompts = appendTrackerPrompts(cliPrompts, extractTrackerPrompts(config.cliPromptsByTracker, trackerType, agentName));
 
     return {
-        instructions: instructions,
-        instructionsOverridden: instructionsOverridden,
+        instructions: base.instructions,
+        instructionsOverridden: base.instructionsOverridden,
         additionalInstructions: additional,
         cliPrompts: cliPrompts,
-        cliPromptsStrategy: cliPromptsStrategy,
-        cliPrompt: cliPrompt,
-        agentParamPatch: agentParamPatch,
-        jobParamPatch: jobParamPatch
+        cliPromptsStrategy: configuredPrompts.strategy,
+        cliPrompt: resolveCliPromptOverride(agentName, config),
+        agentParamPatch: pickAgentPatch(config.agentParamPatches, agentName),
+        jobParamPatch: pickAgentPatch(config.jobParamPatches, agentName)
     };
 }
 
@@ -1057,6 +1110,14 @@ module.exports = {
     resolvePRTargetBranch: resolvePRTargetBranch,
     resolveConfluenceUrls: resolveConfluenceUrls,
     resolveInstructions: resolveInstructions,
+    resolveBaseInstructions: resolveBaseInstructions,
+    collectAdditionalInstructions: collectAdditionalInstructions,
+    resolveConfiguredCliPrompts: resolveConfiguredCliPrompts,
+    resolveCliPromptOverride: resolveCliPromptOverride,
+    resolveTrackerType: resolveTrackerType,
+    extractTrackerPrompts: extractTrackerPrompts,
+    appendTrackerPrompts: appendTrackerPrompts,
+    pickAgentPatch: pickAgentPatch,
     loadConfigFile: loadConfigFile,
     loadAgentConfig: loadAgentConfig,
     loadHookFn: loadHookFn,

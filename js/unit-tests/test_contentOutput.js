@@ -147,3 +147,263 @@ suite('contentOutput target aliases (gh-1112 AC4)', function() {
         assert.equal(threw, true);
     });
 });
+// ── extractCommentBody (gh-1086 characterization) ─────────────────────────────
+
+suite('contentOutput.extractCommentBody', function() {
+
+    test('returns empty string for a missing comment', function() {
+        var lib = loadLib();
+        assert.equal(lib.extractCommentBody(null), '');
+        assert.equal(lib.extractCommentBody(undefined), '');
+    });
+
+    test('returns a plain string body untouched', function() {
+        var lib = loadLib();
+        assert.equal(lib.extractCommentBody({ body: 'plain text' }), 'plain text');
+        assert.equal(lib.extractCommentBody({ body: '' }), '');
+    });
+
+    test('unwraps storage.value (v2 storage format)', function() {
+        var lib = loadLib();
+        assert.equal(
+            lib.extractCommentBody({ body: { storage: { value: '<p>stored</p>' } } }),
+            '<p>stored</p>'
+        );
+    });
+
+    test('unwraps atlas_doc_format.value (ADR format)', function() {
+        var lib = loadLib();
+        var doc = '{"type":"paragraph","content":[]}';
+        assert.equal(
+            lib.extractCommentBody({ body: { atlas_doc_format: { value: doc } } }),
+            doc
+        );
+    });
+
+    test('unwraps view.value (v1 view format)', function() {
+        var lib = loadLib();
+        assert.equal(lib.extractCommentBody({ body: { view: { value: 'viewed' } } }), 'viewed');
+    });
+
+    test('representation order is storage, atlas_doc_format, view', function() {
+        var lib = loadLib();
+        assert.equal(
+            lib.extractCommentBody({ body: {
+                storage: { value: 'S' },
+                atlas_doc_format: { value: 'A' },
+                view: { value: 'V' }
+            } }),
+            'S'
+        );
+        assert.equal(
+            lib.extractCommentBody({ body: { atlas_doc_format: { value: 'A' }, view: { value: 'V' } } }),
+            'A'
+        );
+    });
+
+    test('skips representations whose value is not a string', function() {
+        var lib = loadLib();
+        assert.equal(
+            lib.extractCommentBody({ body: { storage: { value: 42 }, view: { value: 'V' } } }),
+            'V'
+        );
+        assert.equal(
+            lib.extractCommentBody({ body: { storage: {} } }),
+            JSON.stringify({ storage: {} })
+        );
+    });
+
+    test('falls back to JSON.stringify for unrecognized body shapes', function() {
+        var lib = loadLib();
+        assert.equal(lib.extractCommentBody({ body: { unknown: 1 } }), '{"unknown":1}');
+        assert.equal(lib.extractCommentBody({ body: null }), 'null');
+        assert.equal(lib.extractCommentBody({ body: 7 }), '7');
+    });
+});
+
+// ── fetchPageInlineComments (gh-1086 characterization) ────────────────────────
+
+function loadLibWithGlobals(globalMocks) {
+    return loadModule(
+        'js/common/contentOutput.js',
+        makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock() }),
+        globalMocks || {}
+    );
+}
+
+suite('contentOutput.fetchPageInlineComments', function() {
+
+    test('maps a full v2 comment (properties camelCase, extensions.inlineProperties)', function() {
+        var raw = JSON.stringify({ results: [{
+            id: 'c1',
+            parentCommentId: 'p1',
+            author: { displayName: 'Ann' },
+            createdDate: '2026-01-01T00:00:00Z',
+            resolutionStatus: 'open',
+            properties: { 'inline-marker-ref': REF_A, 'inline-original-selection': 'sel text' },
+            extensions: { inlineProperties: { markerRef: 'ignored-older', originalSelection: 'ignored-older' } },
+            body: { storage: { value: '<p>body</p>' } }
+        }] });
+        var lib = loadLibWithGlobals({
+            confluence_get_page_inline_comments: function() { return raw; }
+        });
+        var comments = lib.fetchPageInlineComments('123', 'My Page');
+        assert.equal(comments.length, 1);
+        var c = comments[0];
+        assert.equal(c.pageId, '123');
+        assert.equal(c.pageTitle, 'My Page');
+        assert.equal(c.commentId, 'c1');
+        assert.equal(c.parentCommentId, 'p1');
+        assert.equal(c.author, 'Ann');
+        assert.equal(c.created, '2026-01-01T00:00:00Z');
+        assert.equal(c.resolved, false);
+        // v2 properties win over extensions.inlineProperties
+        assert.equal(c.markerRef, REF_A);
+        assert.equal(c.originalSelection, 'sel text');
+        assert.equal(c.body, '<p>body</p>');
+    });
+
+    test('maps multiple comments with varying shapes (v1 fallbacks and defaults)', function() {
+        var raw = JSON.stringify({ results: [
+            {
+                // v1 shape: marker info under extensions.inlineProperties, no properties
+                id: 'c2',
+                parentId: 'p2',
+                author: { emailAddress: 'a@x.io' },
+                version: { createdAt: '2026-02-02T00:00:00Z' },
+                extensions: { inlineProperties: { markerRef: REF_B, originalSelection: 'old sel' } },
+                body: 'string body'
+            },
+            {
+                // minimal shape: every optional field missing
+                body: { atlas_doc_format: { value: 'adr' } }
+            }
+        ] });
+        var lib = loadLibWithGlobals({
+            confluence_get_page_inline_comments: function() { return raw; }
+        });
+        var comments = lib.fetchPageInlineComments(987, null);
+        assert.equal(comments.length, 2);
+
+        assert.equal(comments[0].pageId, '987');
+        assert.equal(comments[0].pageTitle, 'untitled');
+        assert.equal(comments[0].commentId, 'c2');
+        assert.equal(comments[0].parentCommentId, 'p2');
+        assert.equal(comments[0].author, 'a@x.io');
+        assert.equal(comments[0].created, '2026-02-02T00:00:00Z');
+        assert.equal(comments[0].markerRef, REF_B);
+        assert.equal(comments[0].originalSelection, 'old sel');
+        assert.equal(comments[0].body, 'string body');
+
+        assert.equal(comments[1].commentId, null);
+        assert.equal(comments[1].parentCommentId, null);
+        assert.equal(comments[1].author, 'Unknown');
+        assert.equal(comments[1].created, '');
+        assert.equal(comments[1].markerRef, null);
+        assert.equal(comments[1].originalSelection, null);
+        assert.equal(comments[1].body, 'adr');
+    });
+
+    test('parses the comments-array payload shape', function() {
+        var raw = JSON.stringify({ comments: [{ id: 'k', body: 'b' }] });
+        var lib = loadLibWithGlobals({
+            confluence_get_page_inline_comments: function() { return raw; }
+        });
+        var comments = lib.fetchPageInlineComments('1', 'T');
+        assert.equal(comments.length, 1);
+        assert.equal(comments[0].commentId, 'k');
+    });
+
+    test('parses a bare array payload', function() {
+        var raw = JSON.stringify([{ id: 'arr', body: 'b' }, { id: 'arr2', body: 'b2' }]);
+        var lib = loadLibWithGlobals({
+            confluence_get_page_inline_comments: function() { return raw; }
+        });
+        var comments = lib.fetchPageInlineComments('1', 'T');
+        assert.equal(comments.length, 2);
+        assert.equal(comments[1].commentId, 'arr2');
+    });
+
+    test('empty payload object yields no comments', function() {
+        var lib = loadLibWithGlobals({
+            confluence_get_page_inline_comments: function() { return '{}'; }
+        });
+        assert.deepEqual(lib.fetchPageInlineComments('1', 'T'), []);
+    });
+
+    test('passes limit through, defaulting to 100, and stringifies pageId', function() {
+        var seen = [];
+        var lib = loadLibWithGlobals({
+            confluence_get_page_inline_comments: function(opts) {
+                seen.push(opts);
+                return '{"results":[]}';
+            }
+        });
+        lib.fetchPageInlineComments(55, 'T');
+        lib.fetchPageInlineComments('66', 'T', 7);
+        assert.equal(seen.length, 2);
+        assert.equal(seen[0].pageId, '55');
+        assert.equal(seen[0].limit, 100);
+        assert.equal(seen[1].pageId, '66');
+        assert.equal(seen[1].limit, 7);
+    });
+
+    test('returns no comments when the fetch throws', function() {
+        var lib = loadLibWithGlobals({
+            confluence_get_page_inline_comments: function() { throw new Error('boom'); }
+        });
+        assert.deepEqual(lib.fetchPageInlineComments('1', 'T'), []);
+    });
+
+    test('returns no comments when the payload is invalid JSON', function() {
+        var lib = loadLibWithGlobals({
+            confluence_get_page_inline_comments: function() { return 'not-json'; }
+        });
+        assert.deepEqual(lib.fetchPageInlineComments('1', 'T'), []);
+    });
+});
+
+suite('contentOutput.fetchPageInlineComments — resolution status matrix', function() {
+
+    function commentWith(field) {
+        var c = { body: 'b' };
+        if (field === 'resolutionStatus-resolved') c.resolutionStatus = 'resolved';
+        else if (field === 'resolutionStatus-closed') c.resolutionStatus = 'closed';
+        else if (field === 'resolutionStatus-open') c.resolutionStatus = 'open';
+        else if (field === 'resolvedDate') c.resolvedDate = '2026-01-01';
+        else if (field === 'resolved') c.resolved = true;
+        else if (field === 'status-resolved') c.status = 'resolved';
+        else if (field === 'status-closed') c.status = 'closed';
+        return c;
+    }
+
+    var CASES = [
+        ['resolutionStatus-resolved', true],
+        ['resolutionStatus-closed', true],
+        ['resolvedDate', true],
+        ['resolved', true],
+        ['status-resolved', true],
+        ['status-closed', true],
+        ['resolutionStatus-open', false]
+    ];
+
+    CASES.forEach(function(pair) {
+        test('resolved=' + pair[1] + ' for ' + pair[0], function() {
+            var raw = JSON.stringify({ results: [commentWith(pair[0])] });
+            var lib = loadLibWithGlobals({
+                confluence_get_page_inline_comments: function() { return raw; }
+            });
+            var comments = lib.fetchPageInlineComments('1', 'T');
+            assert.equal(comments.length, 1);
+            assert.equal(comments[0].resolved, pair[1]);
+        });
+    });
+
+    test('status values that merely look like resolution words do not resolve', function() {
+        var raw = JSON.stringify({ results: [{ status: 'open', resolved: false, body: 'b' }] });
+        var lib = loadLibWithGlobals({
+            confluence_get_page_inline_comments: function() { return raw; }
+        });
+        assert.equal(lib.fetchPageInlineComments('1', 'T')[0].resolved, false);
+    });
+});
