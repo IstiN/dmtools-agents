@@ -15091,6 +15091,47 @@ suite('smAgent: fork silent-update workflow-write escalation (gh-1106)', functio
 
     // failPlan: per clone attempt — null = succeeds, 'workflows' = refused
     // with the #1591 stderr, else an Error to throw verbatim.
+    //
+    // gh-1106 CRAP-ratchet split (gh-107 convention): the per-attempt
+    // decision branches live in small named helpers so every function
+    // stays under the CRAP_THRESHOLD=8 gate. escalationSm stays the
+    // assembler; behavior is identical to the single-closure version the
+    // UT-1..UT-5/IT/REG suite pins.
+    function escAttemptOutcome(fail) {
+        if (fail === 'workflows') {
+            return { stderr: workflowsStderr(),
+                     thrown: new Error('Tool execution failed: ' + workflowsStderr()) };
+        }
+        if (fail instanceof Error) return { stderr: String(fail.message), thrown: fail };
+        // the success shape: progress-free output, nothing thrown
+        return { stderr: '', thrown: null };
+    }
+
+    function escFileRead(stderrByPath) {
+        return function (readOpts) {
+            var p = readOpts.path;
+            if (stderrByPath[p] !== undefined) return stderrByPath[p];
+            if (p.indexOf('.dmtools/config') !== -1) return CONFIG_1106;
+            return null;
+        };
+    }
+
+    // the gh repo clone stub: record the command, teach the captured
+    // stderr file THIS attempt's outcome class, then fail per the plan.
+    function escOnCliExecute(failPlan, stderrByPath, cloneCommands) {
+        return function (cmdOpts) {
+            var cmd = cmdOpts.command;
+            if (cmd.indexOf('gh repo clone ') === -1) return '';
+            var m = STDERR_PATH_RE.exec(cmd);
+            var fail = (failPlan || [])[cloneCommands.length];
+            cloneCommands.push(cmd);
+            var outcome = escAttemptOutcome(fail);
+            if (m) stderrByPath[m[1]] = outcome.stderr;
+            if (outcome.thrown) throw outcome.thrown;
+            return '';
+        };
+    }
+
     function escalationSm(itemExtra, failPlan, githubExtra, topExtra) {
         var stderrByPath = {};
         var cloneCommands = [];
@@ -15102,37 +15143,8 @@ suite('smAgent: fork silent-update workflow-write escalation (gh-1106)', functio
                 pr: { number: 1591, head: { sha: HEAD_OLD } }
             }, githubExtra || {}),
             captureConsole: true,
-            extraMocks: {
-                file_read: function (readOpts) {
-                    var p = readOpts.path;
-                    if (stderrByPath[p] !== undefined) return stderrByPath[p];
-                    if (p.indexOf('.dmtools/config') !== -1) return CONFIG_1106;
-                    return null;
-                }
-            },
-            onCliExecute: function (cmdOpts) {
-                var cmd = cmdOpts.command;
-                if (cmd.indexOf('gh repo clone ') !== -1) {
-                    var m = STDERR_PATH_RE.exec(cmd);
-                    var idx = cloneCommands.length;
-                    cloneCommands.push(cmd);
-                    var fail = (failPlan || [])[idx];
-                    if (m) {
-                        // the captured stderr matches THIS attempt's class:
-                        // the workflows refusal, the error's own message,
-                        // or progress-free success output
-                        stderrByPath[m[1]] = (fail === 'workflows')
-                            ? workflowsStderr()
-                            : (fail instanceof Error ? String(fail.message) : '');
-                    }
-                    if (fail === 'workflows') {
-                        throw new Error('Tool execution failed: ' + workflowsStderr());
-                    }
-                    if (fail instanceof Error) throw fail;
-                    return '';
-                }
-                return '';
-            }
+            extraMocks: { file_read: escFileRead(stderrByPath) },
+            onCliExecute: escOnCliExecute(failPlan, stderrByPath, cloneCommands)
         }, topExtra || {}));
         sm.cloneCommands = cloneCommands;
         return sm;
