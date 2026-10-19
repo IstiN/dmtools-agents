@@ -14140,7 +14140,6 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
 suite('smAgent: silent-update failure stderr tail (gh-1074)', function () {
     var RULE_1074 = { source: 'github', query: { type: 'pr', labels: ['pr_approved'], mergeState: 'BEHIND' },
                       localAction: 'update_branch', limit: 5, id: 'silent-update-behind' };
-    var BASE_1074 = 'epam/dmtools-dart';
     var FORK_1074 = 'YuryBY/dmtools-dart';
 
     // A push-refusal stderr the way git actually writes it: progress first,
