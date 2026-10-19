@@ -420,6 +420,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './common/outputFiles.js': { readOutputFile: function () { return null; } },
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
+                './common/quotaCircuitBreaker.js': quotaBreakerModule,
                 './configLoader.js': loaderWithGitDefaults,
                 './config.js': configModule,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
@@ -495,6 +496,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './common/outputFiles.js': { readOutputFile: function () { return null; } },
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
+                './common/quotaCircuitBreaker.js': quotaBreakerModule,
                 './configLoader.js': loaderWithGitDefaults,
                 './config.js': configModule,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
@@ -570,6 +572,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './common/outputFiles.js': { readOutputFile: function () { return null; } },
                 './cacheToReleases.js': {},
                 './common/gitStaging.js': gitStagingModule,
+                './common/quotaCircuitBreaker.js': quotaBreakerModule,
                 './configLoader.js': loaderWithGitDefaults,
                 './config.js': configModule,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
@@ -1602,6 +1605,7 @@ function loadForOutcomePinning(mocks, opts) {
                 action: function () { telemetry.cache++; }
             },
             './common/gitStaging.js': gitStagingModule,
+            './common/quotaCircuitBreaker.js': quotaBreakerModule,
             './configLoader.js': loaderConfigLoader,
             './config.js': configModule,
             './common/tokenUsageComment.js': {

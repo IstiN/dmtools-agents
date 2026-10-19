@@ -585,7 +585,7 @@ suite('developBugAndCreatePR', function() {
                 './common/trackers.js': loadTrackersDev(inlineMocks),
                 './config.js': configModule,
                 './common/gitStaging.js': gitStagingMod,
-                './common/quotaCircuitBreaker.js': quotaBreakerModule,
+                './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
                 './configLoader.js': configLoaderModule,
                 './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), {
                     file_read: function (args) {
@@ -698,7 +698,7 @@ function loadBugForMissingResponseResume(opts) {
             './common/outputFiles.js': realOutputFiles,
             './cacheToReleases.js': {},
             './common/gitStaging.js': gitStagingModuleLocal,
-            './common/quotaCircuitBreaker.js': quotaBreakerModule,
+            './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
@@ -723,7 +723,7 @@ function loadBugForMissingResponseResume(opts) {
             './common/trackers.js': loadTrackersDev(spyMocks),
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModuleLocal,
-            './common/quotaCircuitBreaker.js': quotaBreakerModule,
+            './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': realOutputFiles,
             // SPY: a direct resumeOnceForMissingResponse call from the bug leg
@@ -1176,7 +1176,7 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
             makeRequire({
                 './config.js': configModule,
                 './common/gitStaging.js': gitStagingModuleLocal,
-                './common/quotaCircuitBreaker.js': quotaBreakerModule,
+                './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
                 './configLoader.js': loaderWithScmStub,
                 './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), allMocks),
                 './common/trackers.js': loadTrackersDev(allMocks),
