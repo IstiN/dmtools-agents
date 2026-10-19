@@ -1816,20 +1816,33 @@ function buildOwnedViolationsRejectedComment(violations, verdict) {
     return lines.join('\n');
 }
 
+/**
+ * The head a lap marker anchors to: the setup-time base head
+ * (rework_base_head.txt) when known, else the PR's current head.
+ */
+function lapMarkerHeadOf(ticketKey, pr) {
+    return readReworkBaseHead(ticketKey) ||
+        ((pr && pr.head && (pr.head.sha || pr.head)) || null);
+}
+
+/** Best-effort rejection comment on the PR — a post failure never rethrows. */
+function postRejectionComment(scm, prNumber, message) {
+    try {
+        scm.addComment(prNumber, message);
+    } catch (e) {
+        console.warn('Failed to post owned-violations rejection comment on PR #' + prNumber + ':', e.message || e);
+    }
+}
+
 /** Marks the leg failed: PR comment + an EMPTY lap marker (pushed 0) for the loop guard. */
 function handleOwnedViolationsRejected(scm, ticketKey, pr, violations, verdict) {
     var message = buildOwnedViolationsRejectedComment(violations, verdict);
     console.error('❌ Rework rejected — owned CI violations not accounted: ' +
         (verdict.errors || []).join(' | '));
-    try {
-        scm.addComment(pr.number, message);
-    } catch (e) {
-        console.warn('Failed to post owned-violations rejection comment on PR #' + pr.number + ':', e.message || e);
-    }
+    postRejectionComment(scm, pr.number, message);
     // gh-957: the leg closed without an owned fix — it counts as an empty lap
     // regardless of any WIP housekeeping commits that were pushed.
-    postLapMarker(scm, pr.number,
-        readReworkBaseHead(ticketKey) || (pr.head && (pr.head.sha || pr.head)) || null, false, 0);
+    postLapMarker(scm, pr.number, lapMarkerHeadOf(ticketKey, pr), false, 0);
     return {
         success: false,
         path: 'owned-violations-rejected',
@@ -2273,6 +2286,13 @@ function requirePrForTicket(scm, ticketKey, branchName) {
 // line even with zero pushed commits; incomplete coverage keeps the
 // historical blocked path.
 function runLapGate(ticketKey, config, codeChangesCommitted, actualParams, statuses, scm, tracker, pr, fixSummary) {
+    // gh-1119 AC6: with owned CI violations open, a fix summary that dismisses
+    // them ("not caused by this PR") or leaves them unaccounted fails the leg
+    // BEFORE any lap/audit logic — the completion path never runs.
+    var violationsGate = runOwnedViolationsGate(ticketKey, config, scm, tracker, pr, fixSummary);
+    if (violationsGate.rejected) {
+        return { blocked: true, result: violationsGate.result };
+    }
     var realCodeChanges = hasRealCodeChanges(ticketKey, config);
     var outputOptsForCoverage = { ticketKey: ticketKey, workingDir: config.workingDir || null };
     var inputSnapshotThreads = readInputRawThreads(ticketKey, outputOptsForCoverage);
@@ -2460,15 +2480,6 @@ function action(params) {
         // Find PR to post comment — prefer targetRepository from config over git remote
         var repoInfo = resolveRepoInfo(config, scm, ticketKey);
         const pr = requirePrForTicket(scm, ticketKey, branchName);
-
-        // gh-1119 AC6: with owned CI violations open, a fix summary that
-        // dismisses them ("not caused by this PR") or leaves them unaccounted
-        // fails the leg here — the completion path never runs.
-        var violationsGate = runOwnedViolationsGate(ticketKey, config, scm, tracker, pr, fixSummary);
-        if (violationsGate.rejected) {
-            return violationsGate.result;
-        }
-
         // agents#827 + gh-957: rework only reworks — but a pass that changed no
         // production file while review threads are open is BLOCKED only when
         // the reply coverage is INCOMPLETE. A leg that put a targeted,
