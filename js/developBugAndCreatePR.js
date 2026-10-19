@@ -25,6 +25,9 @@ const developTicket = require('./developTicketAndCreatePR.js');
 const commentMarkup = require('./common/commentMarkup.js');
 const outputFiles = require('./common/outputFiles.js');
 const gitStaging = require('./common/gitStaging.js');
+// gh-1087: quota circuit-breaker — shared classification/comment contract
+// with the story leg (both legs park the lane on a hard quota failure).
+var quotaBreaker = require('./common/quotaCircuitBreaker.js');
 var trackersModule = require('./common/trackers.js');
 
 function cleanCliOutput(output) {
