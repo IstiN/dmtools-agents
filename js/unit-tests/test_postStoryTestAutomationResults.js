@@ -654,3 +654,169 @@ suite('postStoryTestAutomationResults: stage-label fallback (gh-916)', function(
         assert.ok(added.some(function(a) { return a.key === 'TS-302' && a.label === 'stage_irrelevant'; }));
     });
 });
+
+// ── gh-1080: characterization tests pinning current action() behaviour before
+// the CRAP split. Failure/exception branches of the git/PR phase and the
+// per-step guards are exercised here. ──
+
+suite('postStoryTestAutomationResults: characterization (gh-1080 CRAP split)', function() {
+
+    function resultJsonOf(storyKey) {
+        return JSON.stringify({
+            storyKey: storyKey,
+            overall: 'passed',
+            summary: 'Characterization',
+            results: [{ testCaseKey: storyKey + '-1', status: 'passed', testPath: 'testing/tests/' + storyKey + '-1/test.py' }]
+        });
+    }
+
+    function standardResultFileRead(storyKey) {
+        return function(opts) {
+            if (opts.path === 'outputs/story_test_automation_result.json') return resultJsonOf(storyKey);
+            if (opts.path === 'outputs/tracker_comment.md') return 'h3. Story Test Result';
+            if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+            return null;
+        };
+    }
+
+    test('a failing git author configuration only warns — the run continues', function() {
+        var commands = [];
+        var module = loadPostStoryTestAutomationResults({
+            file_read: standardResultFileRead('TS-400'),
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command === 'git config user.name "AI Teammate"') throw new Error('git config boom');
+                if (opts.command === 'git branch --show-current') return 'test/TS-400';
+                if (opts.command === 'git status --short -- testing') return '?? testing/tests/TS-400-1/test.py';
+                if (opts.command === 'git diff --cached --stat') return ' testing/tests/TS-400-1/test.py | 1 +';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-400') === 0) return '9a7e2aec\trefs/heads/test/TS-400';
+                if (opts.command.indexOf('gh pr list --head test/TS-400') === 0) return '';
+                if (opts.command.indexOf('gh pr create') === 0) return 'https://github.com/example/repo/pull/400';
+                return '';
+            },
+            jira_move_to_status: function() {},
+            jira_attach_file_to_ticket: function() {},
+            jira_update_field: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-400', fields: { summary: 'Author config failure' } },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, true, 'the author config failure must not fail the run');
+        assert.ok(commands.indexOf('git config user.name "AI Teammate"') !== -1);
+    });
+
+    test('failing git operations post the failure comment and return an error result', function() {
+        var comments = [];
+        var removedLabels = [];
+        var statusMoves = [];
+        var module = loadPostStoryTestAutomationResults({
+            file_read: standardResultFileRead('TS-401'),
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git add testing/') throw new Error('index.lock exists');
+                if (opts.command === 'git branch --show-current') return 'test/TS-401';
+                return '';
+            },
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            jira_remove_label: function(args) { removedLabels.push(args); },
+            jira_move_to_status: function(args) { statusMoves.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-401', fields: { summary: 'Git failure' } },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'Git operations failed: Error: index.lock exists');
+        assert.ok(comments.some(function(c) { return c.indexOf('Git Operations Failed') !== -1 && c.indexOf('index.lock') !== -1; }));
+        assert.ok(removedLabels.length > 0, 'labels are cleaned up on the failure path');
+        assert.deepEqual(statusMoves, [], 'no status moves after the git failure');
+    });
+
+    test('a failed PR creation posts the failure comment and returns an error result', function() {
+        var comments = [];
+        var removedLabels = [];
+        var statusMoves = [];
+        var module = loadPostStoryTestAutomationResults({
+            file_read: standardResultFileRead('TS-402'),
+            cli_execute_command: function(opts) {
+                if (opts.command.indexOf('gh pr create') === 0) throw new Error('gh: Permission denied');
+                if (opts.command === 'git branch --show-current') return 'test/TS-402';
+                if (opts.command === 'git status --short -- testing') return '?? testing/tests/TS-402-1/test.py';
+                if (opts.command === 'git diff --cached --stat') return ' testing/tests/TS-402-1/test.py | 1 +';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-402') === 0) return '9a7e2aec\trefs/heads/test/TS-402';
+                if (opts.command.indexOf('gh pr list --head test/TS-402') === 0) return '';
+                return '';
+            },
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            jira_remove_label: function(args) { removedLabels.push(args); },
+            jira_move_to_status: function(args) { statusMoves.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-402', fields: { summary: 'PR failure' } },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'PR creation failed');
+        assert.ok(comments.some(function(c) { return c.indexOf('PR Creation Failed') !== -1 && c.indexOf('test/TS-402') !== -1; }));
+        assert.ok(removedLabels.length > 0, 'labels are cleaned up on the failure path');
+        assert.deepEqual(statusMoves, [], 'no status moves after the PR failure');
+    });
+
+    test('a throwing git branch query fails through the outer error path', function() {
+        var comments = [];
+        var module = loadPostStoryTestAutomationResults({
+            file_read: standardResultFileRead('TS-403'),
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --show-current') throw new Error('not a git repo');
+                return '';
+            },
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            jira_remove_label: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-403', fields: { summary: 'Branch failure' } },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'not a git repo');
+        assert.ok(comments.some(function(c) { return c.indexOf('Story Test Automation Error') !== -1 && c.indexOf('not a git repo') !== -1; }));
+    });
+
+    test("'none' mode: a rejected In Testing story move is caught — the run still succeeds", function() {
+        var statusMoves = [];
+        var module = loadPostStoryTestAutomationResults({
+            file_read: standardResultFileRead('TS-404'),
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --show-current') return 'test/TS-404';
+                if (opts.command === 'git status --short -- testing') return '';
+                if (opts.command === 'git diff --cached --stat') return '';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-404') === 0) return '9a7e2aec\trefs/heads/test/TS-404';
+                return '';
+            },
+            jira_move_to_status: function(args) {
+                if (args.statusName === 'In Testing') throw new Error('state rejected');
+                statusMoves.push(args);
+            },
+            jira_attach_file_to_ticket: function() {},
+            jira_update_field: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-404', fields: { summary: 'In Testing rejection' } },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.status, 'passed');
+        assert.ok(statusMoves.some(function(m) { return m.statusName === 'Passed'; }), 'TC finalization still ran');
+        assert.ok(!statusMoves.some(function(m) { return m.statusName === 'In Testing'; }), 'the story move was rejected');
+    });
+});
