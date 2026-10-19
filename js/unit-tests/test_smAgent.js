@@ -15200,6 +15200,10 @@ suite('smAgent: fork silent-update workflow-write escalation (gh-1106)', functio
         sm.action(jobParams());
 
         assert.equal(sm.cloneCommands.length, 2, 'the escalation ran once');
+        assert.deepEqual(sm.capturedEnvSets, [
+            { name: 'GH_TOKEN', value: SOURCE_TOK },
+            { name: 'GH_TOKEN', value: SILENT_TOK }
+        ], 'UT-5/AC7: even on the refused escalation the swap is undone in finally');
         assert.deepEqual(trailMarkers(sm.capturedPrComments), [],
             'AC2/AC3: neither the silent nor the escalated refusal counts on the 3-strike trail');
         assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels; }),
