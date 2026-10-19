@@ -2574,3 +2574,134 @@ suite('githubHelpers.runsOfPayload — payload shapes (orphan fallback)', functi
         assert.equal(h._runsOfPayload({ other: 1 }).length, 0);
     });
 });
+
+// ── fetchDiscussionsAndRawData — scm delegation + general comments (gh-1086) ──
+
+suite('githubHelpers.fetchDiscussionsAndRawData — SCM delegation', function() {
+    test('SCM-object first argument delegates to provider.fetchDiscussions', function() {
+        var fetched = [];
+        var scm = {
+            listPrs: function() { return []; },
+            fetchDiscussions: function(prId) {
+                fetched.push(prId);
+                return { markdown: 'MD', rawThreads: { threads: [] } };
+            }
+        };
+        var gh = loadGithubHelpers({});
+        var result = gh.fetchDiscussionsAndRawData(scm, 'PR-42');
+        assert.equal(fetched.length, 1);
+        assert.equal(fetched[0], 'PR-42');
+        assert.equal(result.markdown, 'MD');
+        assert.deepEqual(result.rawThreads, { threads: [] });
+    });
+});
+
+suite('githubHelpers.fetchDiscussionsAndRawData — general PR comments section', function() {
+
+    function ghWith(comments, overrides) {
+        var mocks = {
+            github_get_pr_conversations: function() { return []; },
+            github_get_pr_review_threads: function() { return null; },
+            github_get_pr_comments: function() { return comments; }
+        };
+        if (overrides) {
+            for (var k in overrides) mocks[k] = overrides[k];
+        }
+        return loadGithubHelpers(mocks);
+    }
+
+    test('no conversations, threads or comments → null markdown and null rawThreads', function() {
+        var gh = ghWith([]);
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '7');
+        assert.equal(result.markdown, null);
+        assert.equal(result.rawThreads, null);
+    });
+
+    test('general comments render with author, date and separator', function() {
+        var gh = ghWith([
+            { user: { login: 'alice' }, created_at: '2026-03-26T10:00:00Z', body: 'first note' },
+            { user: { login: 'bob' }, created_at: '2026-03-27T09:00:00Z', body: 'second note' }
+        ]);
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '7');
+        assert.ok(result.markdown, 'markdown built');
+        assert.contains(result.markdown, '# PR Discussion History');
+        assert.contains(result.markdown, '_Previous review discussions for PR #7._');
+        assert.contains(result.markdown, '## General PR Comments');
+        assert.contains(result.markdown, '**alice** (2026-03-26):');
+        assert.contains(result.markdown, '**bob** (2026-03-27):');
+        assert.contains(result.markdown, 'first note');
+        assert.contains(result.markdown, 'second note');
+        assert.contains(result.markdown, '---');
+        assert.equal(result.rawThreads, null);
+    });
+
+    test('dmtools: marker comments are excluded from the general section', function() {
+        var marker = '<!-- dmtools:naked-pr-rearm {"pr":7} --> rearm';
+        var gh = ghWith([
+            { user: { login: 'bot' }, created_at: '2026-03-26T10:00:00Z', body: marker },
+            { user: { login: 'human' }, created_at: '2026-03-26T11:00:00Z', body: 'real feedback' }
+        ]);
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '7');
+        assert.notContains(result.markdown, 'naked-pr-rearm');
+        assert.contains(result.markdown, 'real feedback');
+    });
+
+    test('missing author and created_at fall back to unknown/empty', function() {
+        var gh = ghWith([{ body: 'anon note' }]);
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '7');
+        assert.contains(result.markdown, '**unknown** ():');
+        assert.contains(result.markdown, 'anon note');
+    });
+
+    test('comment body whitespace is trimmed', function() {
+        var gh = ghWith([{ user: { login: 'a' }, created_at: '2026-01-01T00:00:00Z', body: '   padded   \n' }]);
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '7');
+        assert.ok(result.markdown.indexOf('padded') !== -1);
+        assert.ok(result.markdown.indexOf('   padded   ') === -1, 'raw padding must be trimmed');
+    });
+
+    test('comments fetch failure still yields no markdown when nothing else exists', function() {
+        var gh = ghWith(null, {
+            github_get_pr_comments: function() { throw new Error('comments down'); }
+        });
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '7');
+        assert.equal(result.markdown, null);
+        assert.equal(result.rawThreads, null);
+    });
+
+    test('comments alone produce the markdown header wrapper', function() {
+        var gh = ghWith([{ user: { login: 'a' }, created_at: '2026-01-01', body: 'x' }]);
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '99');
+        assert.ok(result.markdown.indexOf('# PR Discussion History') === 0, 'header first');
+        assert.ok(result.markdown.indexOf('_Previous review discussions for PR #99._') !== -1);
+    });
+
+    test('inventory with open threads but no general comments keeps raw census', function() {
+        var gh = loadGithubHelpers({
+            github_get_pr_conversations: function() {
+                return [makeConversation({ id: 11, body: 'open thread', isResolved: false })];
+            },
+            github_get_pr_review_threads: function() {
+                return makeGraphQLResponse([makeGraphQLThread({ dbId: 11, graphqlId: 'PRRT_11', isResolved: false })]);
+            },
+            github_get_pr_comments: function() { return []; }
+        });
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '11');
+        assert.ok(result.markdown, 'inventory section present');
+        assert.ok(result.rawThreads, 'rawThreads present');
+        assert.equal(result.rawThreads.threads.length, 1);
+        assert.ok(result.rawThreads.census, 'census propagated');
+        assert.equal(result.rawThreads.threads[0].rootCommentId, 11);
+    });
+
+    test('conversations and GraphQL both failing yields empty result', function() {
+        var gh = loadGithubHelpers({
+            github_get_pr_conversations: function() { throw new Error('conversations down'); },
+            github_get_pr_review_threads: function() { throw new Error('graphql down'); },
+            github_get_pr_comments: function() { return []; }
+        });
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '3');
+        assert.equal(result.markdown, null);
+        assert.equal(result.rawThreads, null);
+    });
+});

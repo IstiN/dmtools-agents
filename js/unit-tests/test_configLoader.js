@@ -974,6 +974,115 @@ suite('configLoader.resolveInstructions', function() {
 
 });
 
+// ── resolveInstructions — global injection & tracker fallback (gh-1086 characterization) ──
+
+suite('configLoader.resolveInstructions — global injections and tracker fallback', function() {
+
+    var defaults = configLoaderModule.DEFAULTS;
+
+    test('globalAdditionalInstructions are appended after per-agent additionalInstructions', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            additionalInstructions: { my_agent: ['./per-agent.md'] },
+            globalAdditionalInstructions: ['./global-a.md', './global-b.md']
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.additionalInstructions, ['./per-agent.md', './global-a.md', './global-b.md']);
+    });
+
+    test('globalAdditionalInstructions alone produce the global list', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            globalAdditionalInstructions: ['./only-global.md']
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.additionalInstructions, ['./only-global.md']);
+    });
+
+    test('globalCliPrompts are appended after per-agent cliPrompts', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPrompts: { my_agent: ['./agent-prompt.md'] },
+            globalCliPrompts: ['./inject-to-all.md']
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.cliPrompts, ['./agent-prompt.md', './inject-to-all.md']);
+    });
+
+    test('globalCliPrompts alone produce the global list', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            globalCliPrompts: ['./all-agents.md']
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.cliPrompts, ['./all-agents.md']);
+    });
+
+    test('config.defaultTracker selects tracker prompts when DEFAULT_TRACKER env is unset', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            defaultTracker: 'ado',
+            cliPromptsByTracker: {
+                jira: { my_agent: ['./jira.md'] },
+                ado: { my_agent: ['./ado.md'] }
+            }
+        });
+        var originalGetenv = java.lang.System.getenv;
+        java.lang.System.getenv = function() { return null; };
+        try {
+            var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+            assert.deepEqual(result.cliPrompts, ['./ado.md']);
+        } finally {
+            java.lang.System.getenv = originalGetenv;
+        }
+    });
+
+    test('tracker falls back to jira when neither env nor config.defaultTracker is set', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPromptsByTracker: {
+                jira: { my_agent: ['./jira.md'] },
+                ado: { my_agent: ['./ado.md'] }
+            }
+        });
+        var originalGetenv = java.lang.System.getenv;
+        java.lang.System.getenv = function() { return null; };
+        try {
+            var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+            assert.deepEqual(result.cliPrompts, ['./jira.md']);
+        } finally {
+            java.lang.System.getenv = originalGetenv;
+        }
+    });
+
+    test('cliPrompts entry that is neither array nor {prompts} object is ignored', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPrompts: { my_agent: 'not-an-array' }
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.cliPrompts, []);
+        assert.equal(result.cliPromptsStrategy, 'merge');
+    });
+
+    test('cliPrompts object without a prompts array is ignored', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPrompts: { my_agent: { strategy: 'replace' } }
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.cliPrompts, []);
+        assert.equal(result.cliPromptsStrategy, 'merge');
+    });
+
+    test('cliPromptOverrides absent leaves cliPrompt null', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {});
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.equal(result.cliPrompt, null);
+        assert.equal(result.agentParamPatch, null);
+        assert.equal(result.jobParamPatch, null);
+    });
+
+    test('result carries cliPromptsStrategy merge by default with no cliPrompts at all', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {});
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.cliPrompts, []);
+        assert.equal(result.cliPromptsStrategy, 'merge');
+    });
+});
+
 
 
 suite('configLoader.loadProjectConfig top-level configPath', function() {
