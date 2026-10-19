@@ -2,6 +2,12 @@
  * Unit tests for aiTeammateTokenUsageReporter.js
  */
 
+// gh-1108: the reporter now requires two pure siblings at the top (hoisted
+// per the pack-require rule) — map them to the REAL modules so every
+// loadReporter call below exercises the production wiring.
+var dedupModule = loadModule('js/common/teammateEventDedup.js', makeRequire({}), {});
+var tokenUsageModule = loadModule('js/factory/token_usage.js', makeRequire({}), {});
+
 function loadReporter(overrides, projectConfig) {
     var configLoaderMock = {
         loadProjectConfig: function() {
@@ -12,7 +18,13 @@ function loadReporter(overrides, projectConfig) {
         file_write: function() {},
         github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); }
     }, overrides || {});
-    return loadModule('js/aiTeammateTokenUsageReporter.js', makeRequire({ './configLoader.js': configLoaderMock }), globals);
+    return loadModule('js/aiTeammateTokenUsageReporter.js',
+        makeRequire({
+            './configLoader.js': configLoaderMock,
+            './common/teammateEventDedup.js': dedupModule,
+            './factory/token_usage.js': tokenUsageModule
+        }),
+        globals);
 }
 
 suite('aiTeammateTokenUsageReporter parsing', function() {
@@ -1199,5 +1211,361 @@ suite('aiTeammateTokenUsageReporter action helpers', function() {
         assert.equal(disabled.enabled, false);
         assert.equal(disabled.path, '');
         assert.equal(disabled.maxLogDownloads, null);
+    });
+});
+
+// ── gh-1108 — run-title anchor + leg (one vocabulary with the dedup module) ──
+
+suite('aiTeammateTokenUsageReporter parseRunAnchor (gh-1108)', function() {
+
+    test('stub title with a PR anchor keys pr-N and keeps the leg', function() {
+        var reporter = loadReporter();
+        var a = reporter.parseRunAnchor('teammate: workflow_dispatch #1040 · pr-1123 review');
+        assert.equal(a.key, 'pr-1123');
+        assert.equal(a.pr, 1123);
+        assert.equal(a.issue, 1040);
+        assert.equal(a.leg, 'review');
+    });
+
+    test('issue-only stub title keys issue-N', function() {
+        var reporter = loadReporter();
+        var a = reporter.parseRunAnchor('teammate: workflow_dispatch #1040 dev');
+        assert.equal(a.key, 'issue-1040');
+        assert.equal(a.pr, null);
+        assert.equal(a.issue, 1040);
+        assert.equal(a.leg, 'dev');
+    });
+
+    test('bare event-path title keys issue-N with an unknown leg', function() {
+        var reporter = loadReporter();
+        var a = reporter.parseRunAnchor('teammate: assigned #1040');
+        assert.equal(a.key, 'issue-1040');
+        assert.equal(a.leg, '');
+    });
+
+    test('factory SM title family keys issue-N via the gh-<n> anchor', function() {
+        var reporter = loadReporter();
+        var a = reporter.parseRunAnchor('▶ review (SM) · gh-1040');
+        assert.equal(a.key, 'issue-1040');
+        assert.equal(a.leg, 'review');
+    });
+
+    test('template emoji title family keys issue-N via the gh-<n> anchor', function() {
+        var reporter = loadReporter();
+        var a = reporter.parseRunAnchor('⚒️ dev · gh-1041');
+        assert.equal(a.key, 'issue-1041');
+        assert.equal(a.leg, 'dev');
+    });
+
+    test('trailing-digit guard: #1040 is never #104, pr-1123 never pr-112', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.parseRunAnchor('teammate: assigned #1040').issue, 1040);
+        assert.equal(reporter.parseRunAnchor('· pr-1123 review').pr, 1123);
+    });
+
+    test('PR anchor wins when a title carries both anchors', function() {
+        var reporter = loadReporter();
+        var a = reporter.parseRunAnchor('teammate: workflow_dispatch #1040 · pr-1123 rework');
+        assert.equal(a.key, 'pr-1123', 'the PR is the finer anchor');
+        assert.equal(a.leg, 'rework');
+    });
+
+    test('unresolvable title (Jira-key family) yields a null key — never a wrong key', function() {
+        var reporter = loadReporter();
+        var a = reporter.parseRunAnchor('agents/bug_development.json : TS-1307 : bug_development');
+        assert.equal(a.key, null);
+        assert.equal(a.pr, null);
+        assert.equal(a.issue, null);
+    });
+
+    test('empty / absent title yields a null key', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.parseRunAnchor('').key, null);
+        assert.equal(reporter.parseRunAnchor(null).key, null);
+    });
+});
+
+// ── gh-1108 — the keyed tokens projection (UT-prod-1/2) ──────────────────────
+
+suite('aiTeammateTokenUsageReporter buildTokensMap (gh-1108 UT-prod)', function() {
+
+    function row(over) {
+        return Object.assign({
+            runId: '1', createdAt: '2026-10-13T10:00:00Z',
+            agent: 'story_development', ticketKey: '',
+            title: 'teammate: workflow_dispatch #1040 dev',
+            readTokens: 1000, writeTokens: 500, cachedTokens: 900
+        }, over || {});
+    }
+
+    test('maps runs to pr-N rows; a multi-row key keeps every leg (2+ items)', function() {
+        var reporter = loadReporter();
+        var map = reporter.buildTokensMap([
+            row({ title: 'teammate: workflow_dispatch #1040 · pr-1123 review',
+                  agent: 'pr_review', createdAt: '2026-10-13T09:00:00Z',
+                  readTokens: 2000, writeTokens: 300, cachedTokens: 1500 }),
+            row({ title: 'teammate: workflow_dispatch #1040 · pr-1123 rework',
+                  agent: 'pr_rework', createdAt: '2026-10-13T11:00:00Z',
+                  readTokens: 3000, writeTokens: 700, cachedTokens: 2500 }),
+            row()
+        ]);
+        assert.equal(map['pr-1123'].length, 2, 'both PR legs ride the same key');
+        assert.equal(map['issue-1040'].length, 1);
+    });
+
+    test('row shape is the printf contract the tick normalizes', function() {
+        var reporter = loadReporter();
+        var map = reporter.buildTokensMap([row({
+            title: 'teammate: workflow_dispatch #1040 · pr-1123 review',
+            agent: 'pr_review', createdAt: '2026-10-13T09:00:00Z',
+            readTokens: 2000, writeTokens: 300, cachedTokens: 1500 })]);
+        assert.deepEqual(map['pr-1123'], [{
+            leg: 'review', at: '2026-10-13T09:00:00Z',
+            prompt: 2000, completion: 300, total: 2300,
+            cacheRead: 1500, model: ''
+        }]);
+    });
+
+    test('unresolvable run yields NO row (never a wrong key)', function() {
+        var reporter = loadReporter();
+        var map = reporter.buildTokensMap([
+            row({ title: 'agents/bug_development.json : TS-1307 : bug_development',
+                  readTokens: 999999, writeTokens: 999999 }),
+            row({ title: '', agent: '' })
+        ]);
+        assert.deepEqual(map, {}, 'an unanchorable run is dropped, not mis-keyed');
+    });
+
+    test('agent basename recovers the leg when the title carries none', function() {
+        var reporter = loadReporter();
+        var map = reporter.buildTokensMap([
+            row({ title: 'teammate: assigned #1040', agent: 'pr_rework' }),
+            row({ title: 'teammate: assigned #1041', agent: 'story_development' }),
+            row({ title: 'teammate: assigned #1042', agent: 'pr_review' })
+        ]);
+        assert.equal(map['issue-1040'][0].leg, 'rework');
+        assert.equal(map['issue-1041'][0].leg, 'dev');
+        assert.equal(map['issue-1042'][0].leg, 'review');
+    });
+
+    test('rows sort by at ascending inside a key', function() {
+        var reporter = loadReporter();
+        var map = reporter.buildTokensMap([
+            row({ runId: '2', createdAt: '2026-10-13T11:00:00Z' }),
+            row({ runId: '1', createdAt: '2026-10-13T09:00:00Z' })
+        ]);
+        assert.equal(map['issue-1040'][0].at, '2026-10-13T09:00:00Z');
+        assert.equal(map['issue-1040'][1].at, '2026-10-13T11:00:00Z');
+    });
+
+    test('retention: rows older than the window drop, keep-per-key caps the tail', function() {
+        var reporter = loadReporter();
+        var rows = [];
+        for (var i = 1; i <= 5; i++) {
+            rows.push(row({ runId: String(i), agent: 'pr_review',
+                title: 'teammate: workflow_dispatch #1040 · pr-1123 review',
+                createdAt: '2026-10-' + (10 + i) + 'T10:00:00Z' }));
+        }
+        rows.push(row({ runId: '9', createdAt: '2026-09-01T10:00:00Z' })); // stale
+        var map = reporter.buildTokensMap(rows, { now: '2026-10-16T10:00:00Z',
+            windowDays: 14, keepPerKey: 3 });
+        assert.equal(map['pr-1123'].length, 3, 'capped to the newest 3');
+        assert.equal(map['pr-1123'][0].at, '2026-10-13T10:00:00Z');
+        assert.equal(map['pr-1123'][2].at, '2026-10-15T10:00:00Z');
+    });
+
+    test('rows outside the 14d window are dropped entirely', function() {
+        var reporter = loadReporter();
+        var map = reporter.buildTokensMap(
+            [row({ createdAt: '2026-09-01T10:00:00Z' })],
+            { now: '2026-10-16T10:00:00Z', windowDays: 14, keepPerKey: 40 });
+        assert.deepEqual(map, {});
+    });
+
+    test('numbers only: the serialized map carries no log text and no URLs', function() {
+        var reporter = loadReporter();
+        var json = JSON.stringify(reporter.buildTokensMap([
+            row({ url: 'https://example.test/run/1' })
+        ]));
+        assert.notContains(json, 'http', 'no URLs beyond the state snapshot');
+        assert.notContains(json, 'rawTokensLine', 'no raw log excerpts');
+        assert.notContains(json, 'resumeStages', 'no log metadata');
+    });
+
+    test('empty / null rows produce an empty map', function() {
+        var reporter = loadReporter();
+        assert.deepEqual(reporter.buildTokensMap([]), {});
+        assert.deepEqual(reporter.buildTokensMap(null), {});
+    });
+});
+
+// ── gh-1108 — the publish step (IT-pub-1): keyed map → factory-data branch ───
+
+suite('aiTeammateTokenUsageReporter publishTokensMap (gh-1108 IT-pub-1)', function() {
+
+    var MAP = { 'pr-31': [{ leg: 'review', at: '2026-10-13T09:00:00Z',
+        prompt: 2000, completion: 300, total: 2300, cacheRead: 1500, model: '' }] };
+
+    function publishExec(map) {
+        var state = { commands: [], puts: 0, failed: 0 };
+        return {
+            state: state,
+            exec: function (args) {
+                var cmd = String((args && args.command) || args || '');
+                state.commands.push(cmd);
+                if (cmd.indexOf('-X PUT') !== -1) {
+                    state.puts++;
+                    if (state.puts <= (map.failPuts || 0)) {
+                        state.failed++;
+                        throw new Error('gh: 409 sha was not supplied');
+                    }
+                    return { output: '' };
+                }
+                if (cmd.indexOf('--jq .sha') !== -1) {
+                    if (map.sha == null) throw new Error('gh: Not Found (404)');
+                    return { output: map.sha };
+                }
+                if (cmd.indexOf('base64 -d') !== -1) {
+                    if (map.body == null) throw new Error('gh: Not Found (404)');
+                    return { output: map.body };
+                }
+                return { output: '' }; // bootstrap ref POST
+            }
+        };
+    }
+
+    function embeddedJson(putCommand) {
+        var marker = "printf %s '";
+        var start = putCommand.indexOf(marker);
+        var end = putCommand.indexOf("' | base64", start);
+        return JSON.parse(putCommand.substring(start + marker.length, end));
+    }
+
+    test('first publish: bootstraps the branch, PUTs the keyed JSON at the exact asset path', function() {
+        var reporter = loadReporter();
+        var stub = publishExec({});
+        var res = reporter.publishTokensMap(MAP, { repo: 'o/r', asset: 'agents-tokens.json' },
+            { exec: stub.exec, log: function () {} });
+        assert.equal(res.status, 'published');
+        assert.equal(res.path, 'data/agents-tokens.json');
+        var put = stub.state.commands.filter(function (c) { return c.indexOf('-X PUT') !== -1; })[0];
+        assert.ok(put.indexOf('repos/o/r/contents/data/agents-tokens.json ') !== -1,
+            'PUT hits data/agents-tokens.json');
+        assert.contains(put, '-f branch=factory-data');
+        assert.deepEqual(embeddedJson(put), MAP, 'the branch file IS the keyed map');
+        var boot = stub.state.commands[0];
+        assert.contains(boot, 'git/refs -f ref=refs/heads/factory-data', 'branch bootstrap first');
+    });
+
+    test('update: the existing-file sha rides the PUT', function() {
+        var reporter = loadReporter();
+        var stub = publishExec({ sha: 'abc123' });
+        var res = reporter.publishTokensMap(MAP, { repo: 'o/r', asset: 'agents-tokens.json' },
+            { exec: stub.exec, log: function () {} });
+        assert.equal(res.status, 'published');
+        var put = stub.state.commands.filter(function (c) { return c.indexOf('-X PUT') !== -1; })[0];
+        assert.contains(put, "-f sha='abc123'");
+    });
+
+    test('PUT conflict refetches and retries; exhaustion gives up without throwing', function() {
+        var reporter = loadReporter();
+        var retry = publishExec({ failPuts: 1 });
+        var ok = reporter.publishTokensMap(MAP, { repo: 'o/r', asset: 'agents-tokens.json' },
+            { exec: retry.exec, log: function () {} });
+        assert.equal(ok.status, 'published');
+        assert.equal(ok.attempts, 2);
+
+        var dead = publishExec({ failPuts: 99 });
+        var gaveUp = reporter.publishTokensMap(MAP, { repo: 'o/r', asset: 'agents-tokens.json' },
+            { exec: dead.exec, log: function () {} });
+        assert.equal(gaveUp.status, 'gave-up');
+        assert.equal(gaveUp.attempts, 3, 'default 3 attempts, then honest surrender');
+    });
+
+    test('empty map skips with ZERO gh traffic (never erase the previous file)', function() {
+        var reporter = loadReporter();
+        var stub = publishExec({});
+        var res = reporter.publishTokensMap({}, { repo: 'o/r', asset: 'agents-tokens.json' },
+            { exec: stub.exec, log: function () {} });
+        assert.equal(res.status, 'skipped');
+        assert.equal(res.reason, 'no-rows');
+        assert.equal(stub.state.commands.length, 0);
+    });
+
+    test('asset defaults to <repoName>-tokens.json (fetchPreviousState derivation)', function() {
+        var reporter = loadReporter();
+        var stub = publishExec({});
+        var res = reporter.publishTokensMap(MAP, { repo: 'o/coolwidgets' },
+            { exec: stub.exec, log: function () {} });
+        assert.equal(res.path, 'data/coolwidgets-tokens.json');
+    });
+
+    test('missing repo skips — nothing to publish against', function() {
+        var reporter = loadReporter();
+        var stub = publishExec({});
+        var res = reporter.publishTokensMap(MAP, {}, { exec: stub.exec, log: function () {} });
+        assert.equal(res.status, 'skipped');
+        assert.equal(stub.state.commands.length, 0);
+    });
+
+    test('AC1: the published map fed to buildFactoryState lands on cards in the normTokenRow contract shape', function() {
+        var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+        var reworkLatchModule = loadModule('js/common/reworkLatch.js', makeRequire({}), {});
+        var fsModule = loadModule('js/factoryState.js',
+            makeRequire({
+                './common/machineAuthor.js': machineAuthorModule,
+                './common/reworkLatch.js': reworkLatchModule
+            }), {});
+        var reporter = loadReporter();
+        function row2(title, agent, at, read, write, cached) {
+            return { runId: '1', createdAt: at, agent: agent, title: title,
+                readTokens: read, writeTokens: write, cachedTokens: cached };
+        }
+        var map = reporter.buildTokensMap([
+            row2('teammate: workflow_dispatch #1040 · pr-31 review', 'pr_review',
+                '2026-10-13T09:00:00Z', 2000, 300, 1500)
+        ]);
+        var st = fsModule.buildFactoryState({
+            repoInfo: { owner: 'o', repo: 'r' }, now: '2026-10-13T13:10:00Z',
+            prs: [{ number: 31, title: 't', labels: [],
+                head: { ref: 'b', sha: 's' }, user: { login: 'bot' },
+                created_at: '2026-10-13T06:00:00Z' }],
+            runs: [], tokens: map
+        });
+        var tokens = st.lanes.pr_created[0].tokens;
+        assert.equal(tokens.length, 1);
+        assert.deepEqual(Object.keys(tokens[0]).sort(),
+            ['at', 'cacheRead', 'completion', 'leg', 'model', 'prompt', 'total'],
+            'exactly the normTokenRow contract, nothing more');
+        assert.equal(tokens[0].prompt, 2000);
+        assert.equal(tokens[0].completion, 300);
+        assert.equal(tokens[0].total, 2300);
+        assert.equal(tokens[0].cacheRead, 1500);
+        assert.equal(tokens[0].model, null, 'logs carry no model id — honest unknown');
+    });
+});
+
+// ── gh-1108 — deployment wiring (AC3): asset isolation is a CONFIG fact ──────
+
+suite('gh-1108 deployment wiring (AC3)', function() {
+
+    test('machine-sm.yml statePublish carries tokensAsset agents-tokens.json, never fa-tokens.json', function() {
+        var yml = file_read({ path: '.github/workflows/machine-sm.yml' });
+        assert.ok(yml, 'machine-sm.yml readable');
+        var m = /state-publish:\s*'([^']+)'/.exec(yml);
+        assert.ok(m, 'state-publish payload present');
+        var cfg = JSON.parse(m[1]);
+        assert.equal(cfg.tokensAsset, 'agents-tokens.json',
+            'the agents tick resolves ITS asset — asset isolation (AC3)');
+        assert.notContains(yml, 'fa-tokens.json',
+            'data/fa-tokens.json is never consulted by this deployment');
+    });
+
+    test('the producer config publishes the same asset', function() {
+        var cfg = JSON.parse(file_read({ path: 'ai_teammate_token_usage_reporter.json' }));
+        var custom = cfg.params.jobParams.customParams;
+        assert.equal(custom.tokensAsset, 'agents-tokens.json',
+            'producer and tick must agree on the asset name');
+        assert.equal(custom.publishTokens, true, 'publish path is wired on');
     });
 });
