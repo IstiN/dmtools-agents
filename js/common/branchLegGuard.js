@@ -166,7 +166,7 @@ function pullHeadRefOf(prNumber) {
 // letter/'-' prefix rejects ('pr-1591' never matches 'gh-pr-1591-x').
 function titleHasPrToken(title, prNumber) {
     var s = String(title || '');
-    var token = '[REDACTED:Sensitive Value]' + prNumber;
+    var token = '· pr-' + prNumber;
     var from = 0;
     while (from <= s.length - token.length) {
         var idx = s.indexOf(token, from);
@@ -221,5 +221,9 @@ module.exports = {
     isStaleNonRunning: isStaleNonRunning,
     matchesBranch: matchesBranch,
     legRunOwnsBranch: legRunOwnsBranch,
-    hasActiveLegRunOnBranch: hasActiveLegRunOnBranch
+    hasActiveLegRunOnBranch: hasActiveLegRunOnBranch,
+    pullHeadRefOf: pullHeadRefOf,
+    titleHasPrToken: titleHasPrToken,
+    legRunOwnsPull: legRunOwnsPull,
+    hasActiveLegRunForPull: hasActiveLegRunForPull
 };

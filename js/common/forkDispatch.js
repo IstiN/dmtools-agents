@@ -27,7 +27,10 @@
  *      a fork branch with a FETCHABLE pull ref is NOT head-dead (AC2 — no
  *      trigger-failure markers, no park); an UNFETCHABLE pull ref is a
  *      genuinely dead head (AC3 — parks via the existing gh-922 no-ref
- *      path, keyed on the pull ref).
+ *      path, keyed on the pull ref). Reached ONLY for a POPULATED-headRepo
+ *      fork PR: a deleted fork's head.repo:null fails closed to same-repo
+ *      (forkFullOf below), so the deleted-fork shape parks BRANCH-keyed
+ *      through the legacy gh-922 path instead — same AC3 outcome, no probe.
  *
  * Pure functions, no tool globals — smAgent wires the transport (the
  * ls-remote pull-ref probe and the dispatch), tests inject nothing.
@@ -57,9 +60,16 @@ function pullHeadRef(prNumber) {
 // the PR is CROSS-REPO. Delegates to the ONE shared gh-1070 resolver
 // (validationLiveness.forkHeadFull): case-insensitive same-repo compare
 // (config casing vs API casing must never reclassify a same-repo PR as a
-// fork), null/malformed headRepo fails closed to same-repo (the base
-// probe — a deleted fork's REST payload carries head.repo:null, exactly
-// the genuinely-dead-head shape AC3 parks through the pull-ref probe).
+// fork), null/malformed headRepo fails closed to same-repo. NOTE the
+// consequence for the deleted-fork shape: a deleted fork's REST payload
+// carries head.repo:null, so forkFullOf is NULL for it — the dispatch is
+// NOT rerouted, and its no-ref failure parks BRANCH-keyed through the
+// legacy gh-922 path (recordDispatchFailure's same-repo leg), never
+// through the pull-ref probe. The pull-ref-keyed AC3 park covers only the
+// populated-headRepo fork case; the null-headRepo case still parks at the
+// cap (same outcome, branch key) and is pinned by the REG-1 deleted-shape
+// test — a null headRepo is indistinguishable from a legacy same-repo
+// payload missing head.repo, which REG-1 requires to fail closed.
 function forkFullOf(item, baseOwner, baseRepo) {
     var head = item && (item.headRepo || (item.pr && item.pr.headRepo));
     return validationLivenessModule.forkHeadFull(head, baseOwner, baseRepo);
