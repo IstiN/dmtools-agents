@@ -2705,3 +2705,49 @@ suite('githubHelpers.fetchDiscussionsAndRawData — general PR comments section'
         assert.equal(result.rawThreads, null);
     });
 });
+
+suite('githubHelpers.fetchDiscussionsAndRawData — inventory build failure', function() {
+    test('inventory build failure falls back to no inventory section (census dropped)', function() {
+        var machineNoticeModule = loadModule('js/common/machineNotice.js');
+        var brokenInventory = {
+            collectThreadInventory: function() { throw new Error('inventory exploded'); },
+            parseGraphQLNodes: function() { return []; }
+        };
+        var gh = loadModule(
+            'js/common/githubHelpers.js',
+            makeRequire({
+                '../config.js': configModule,
+                'config': configModule,
+                './pullRequest.js': PR_HELPER_REAL_GH,
+                './gitOps.js': gitOpsStub,
+                './machineNotice.js': machineNoticeModule,
+                './reviewThreadInventory.js': brokenInventory,
+                './ci.js': loadModule('js/common/ci.js')
+            }),
+            {
+                github_get_pr_conversations: function() { return [makeConversation({ id: 1, body: 'b' })]; },
+                github_get_pr_review_threads: function() { return makeGraphQLResponse([]); },
+                github_get_pr_comments: function() { return [{ user: { login: 'a' }, created_at: '2026-01-01', body: 'note' }]; }
+            }
+        );
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '5');
+        // inventory section dropped, general comments still render
+        assert.ok(result.markdown, 'markdown from general comments only');
+        assert.notContains(result.markdown, 'PR Review Threads');
+        assert.contains(result.markdown, '## General PR Comments');
+        assert.equal(result.rawThreads, null, 'no inventory → no rawThreads payload');
+    });
+
+    test('fetchPrConversations passes non-array payloads through to the inventory', function() {
+        var seen = [];
+        var gh = loadGithubHelpers({
+            github_get_pr_conversations: function() { return 5; },
+            github_get_pr_review_threads: function() { return null; },
+            github_get_pr_comments: function() { return []; }
+        });
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '5');
+        seen.push(result);
+        assert.equal(result.markdown, null);
+        assert.equal(result.rawThreads, null);
+    });
+});

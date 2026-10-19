@@ -345,3 +345,104 @@ suite('createSolutionDesignTicketsAndAssignForReview.action — workflow errors'
         assert.equal(result.createdTickets.length, 1);
     });
 });
+
+// ── extracted helpers (gh-1086) ───────────────────────────────────────────────
+
+suite('createSolutionDesignTicketsAndAssignForReview — extracted helpers', function() {
+
+    function loadWithTracker(tracker) {
+        return loadActionModule(tracker);
+    }
+
+    test('parseAiJson separates parse success from failure', function() {
+        var tracker = makeTrackerMock();
+        var mod = loadWithTracker(tracker);
+        assert.deepEqual(mod.parseAiJson('{"a":1}'), { value: { a: 1 } });
+        assert.ok(mod.parseAiJson('{nope').error);
+        assert.deepEqual(mod.parseAiJson('null'), { value: null });
+    });
+
+    test('hasValidModuleAnalysisFields requires three booleans and a string', function() {
+        var tracker = makeTrackerMock();
+        var mod = loadWithTracker(tracker);
+        assert.equal(mod.hasValidModuleAnalysisFields({ core: true, api: false, ui: true, description: 'd' }), true);
+        assert.equal(mod.hasValidModuleAnalysisFields({ core: 1, api: false, ui: true, description: 'd' }), false);
+        assert.equal(mod.hasValidModuleAnalysisFields({ core: true, api: false, ui: true, description: 5 }), false);
+        assert.equal(mod.hasValidModuleAnalysisFields({ api: false, ui: true, description: 'd' }), false);
+    });
+
+    test('parseModuleAnalysisResponse — direct matrix', function() {
+        var tracker = makeTrackerMock();
+        var mod = loadWithTracker(tracker);
+        var valid = { core: true, api: false, ui: false, description: 'd' };
+        assert.equal(mod.parseModuleAnalysisResponse(valid), valid, 'valid object passes through by reference');
+        assert.deepEqual(mod.parseModuleAnalysisResponse(JSON.stringify(valid)), valid);
+        // JSON string "null" parses fine but fails the object check
+        assert.equal(mod.parseModuleAnalysisResponse('null'), null);
+        assert.equal(mod.parseModuleAnalysisResponse('{broken'), null);
+        assert.equal(mod.parseModuleAnalysisResponse(null), null);
+        assert.equal(mod.parseModuleAnalysisResponse(42), null);
+        assert.equal(mod.parseModuleAnalysisResponse([]), null);
+        assert.equal(mod.parseModuleAnalysisResponse({ core: 'x', api: true, ui: true, description: 'd' }), null);
+    });
+
+    test('resolveWipLabel — contextId present, absent, and null metadata', function() {
+        var tracker = makeTrackerMock();
+        var mod = loadWithTracker(tracker);
+        assert.equal(mod.resolveWipLabel({ metadata: { contextId: 'ctx' } }), 'ctx_wip');
+        assert.equal(mod.resolveWipLabel({ metadata: {} }), null);
+        assert.equal(mod.resolveWipLabel({}), null);
+    });
+
+    test('invalidAnalysisResult posts the error comment and returns the failure', function() {
+        var tracker = makeTrackerMock();
+        var mod = loadWithTracker(tracker);
+        var result = mod.invalidAnalysisResult('PROJ-9');
+        assert.deepEqual(result, { success: false, error: 'Invalid AI response format for module analysis' });
+        assert.equal(tracker._calls.comments.length, 1);
+        assert.equal(tracker._calls.comments[0][0], 'PROJ-9');
+        assert.ok(tracker._calls.comments[0][1].indexOf('Please check logs for details and retry the workflow.') !== -1);
+    });
+
+    test('addSolutionDesignCreatedLabel swallows tracker failures', function() {
+        var tracker = makeTrackerMock();
+        tracker.addLabel = function() { throw new Error('label down'); };
+        var mod = loadWithTracker(tracker);
+        mod.addSolutionDesignCreatedLabel('PROJ-1');
+        assert.equal(tracker._calls.labels.length, 0);
+    });
+
+    test('successResult counts only successful tickets in the message', function() {
+        var tracker = makeTrackerMock();
+        var mod = loadWithTracker(tracker);
+        var tickets = [
+            { module: 'core', success: true },
+            { module: 'api', success: false, error: 'x' },
+            { module: 'ui', success: true }
+        ];
+        var result = mod.successResult('PROJ-2', { core: true }, tickets);
+        assert.equal(result.success, true);
+        assert.equal(result.message, 'Ticket PROJ-2 assigned, moved to In Review, created 2 solution design subtasks');
+        assert.equal(result.createdTickets, tickets, 'createdTickets passed through by reference');
+        assert.deepEqual(result.moduleAnalysis, { core: true });
+    });
+
+    test('postWorkflowErrorComment guards on ticket presence and swallows failures', function() {
+        var tracker = makeTrackerMock();
+        var mod = loadWithTracker(tracker);
+        var err = new Error('boom');
+        mod.postWorkflowErrorComment({ ticket: { key: 'PROJ-3' } }, err);
+        assert.equal(tracker._calls.comments.length, 1);
+        assert.equal(tracker._calls.comments[0][0], 'PROJ-3');
+        assert.ok(tracker._calls.comments[0][1].indexOf('Error: boom') !== -1);
+        assert.ok(tracker._calls.comments[0][1].indexOf('Please check server logs for details.') !== -1);
+
+        mod.postWorkflowErrorComment(null, err);
+        mod.postWorkflowErrorComment({}, err);
+        mod.postWorkflowErrorComment({ ticket: {} }, err);
+        assert.equal(tracker._calls.comments.length, 1, 'no comment without a ticket key');
+
+        tracker.postComment = function() { throw new Error('down'); };
+        mod.postWorkflowErrorComment({ ticket: { key: 'PROJ-3' } }, err);
+    });
+});
