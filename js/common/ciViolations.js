@@ -270,35 +270,42 @@ function findPathToken(text) {
     return (token.indexOf('/') !== -1 || token.indexOf('\\') !== -1) ? token : null;
 }
 
+/** One "::error file=..,line=..::message" annotation → violation, or null. */
+function errorAnnotationViolation(line, checkName) {
+    var props = line.match(/::error\s+([^:]*)::(.*?)\s*$/);
+    if (!props) return null;
+    var file = (props[1].match(/file=([^,\s]+)/) || [])[1] || null;
+    var ln = (props[1].match(/line=(\d+)/) || [])[1];
+    return {
+        check: checkName,
+        rule: 'error',
+        path: file,
+        line: ln ? parseInt(ln, 10) : null,
+        detail: props[2]
+    };
+}
+
+/** One "##[error]message" line → violation (path via token fallback), or null. */
+function ghErrorViolation(line, checkName) {
+    var ghErr = line.match(/^.*##\[error\]\s?(.*?)\s*$/);
+    if (!ghErr) return null;
+    return {
+        check: checkName,
+        rule: 'error',
+        path: findPathToken(ghErr[1]),
+        line: null,
+        detail: ghErr[1]
+    };
+}
+
 /** Generic fallback: "::error file=..,line=..::msg" annotations and "##[error]" lines. */
 function genericErrorViolations(lines, checkName, taken, out) {
     lines.forEach(function(line, idx) {
         if (taken[idx]) return;
-        var props = line.match(/::error\s+([^:]*)::(.*?)\s*$/);
-        if (props) {
+        var violation = errorAnnotationViolation(line, checkName) || ghErrorViolation(line, checkName);
+        if (violation) {
             taken[idx] = true;
-            var file = (props[1].match(/file=([^,\s]+)/) || [])[1] || null;
-            var ln = (props[1].match(/line=(\d+)/) || [])[1];
-            out.push({
-                check: checkName,
-                rule: 'error',
-                path: file,
-                line: ln ? parseInt(ln, 10) : null,
-                detail: props[2]
-            });
-            return;
-        }
-        var ghErr = line.match(/^.*##\[error\]\s?(.*?)\s*$/);
-        if (ghErr) {
-            taken[idx] = true;
-            var token = findPathToken(ghErr[1]);
-            out.push({
-                check: checkName,
-                rule: 'error',
-                path: token,
-                line: null,
-                detail: ghErr[1]
-            });
+            out.push(violation);
         }
     });
 }
@@ -408,6 +415,26 @@ function violationsTable(items) {
     return md;
 }
 
+function ownershipBuckets(items) {
+    return {
+        owned: items.filter(function(v) { return v.ownership === 'owned'; }),
+        foreign: items.filter(function(v) { return v.ownership === 'foreign'; }),
+        unknown: items.filter(function(v) {
+            return v.ownership !== 'owned' && v.ownership !== 'foreign';
+        })
+    };
+}
+
+function appendViolationsSection(md, heading, note, items) {
+    if (items.length === 0) return md;
+    return md + heading + '\n\n' + violationsTable(items) + '\n' + note + '\n';
+}
+
+function unknownViolationsNote(count) {
+    return '_ℹ️ ' + count + ' additional error line(s) had no attributable file path — ' +
+        'judge them from the raw log sections below._\n';
+}
+
 /**
  * The violations block that opens ci_failures.md: the owned table first,
  * the foreign list second (AC3). Unknown-ownership items (no path, or no
@@ -418,21 +445,12 @@ function violationsTable(items) {
 function buildViolationsMarkdown(violations) {
     var items = violations || [];
     if (items.length === 0) return '';
-    var owned = items.filter(function(v) { return v.ownership === 'owned'; });
-    var foreign = items.filter(function(v) { return v.ownership === 'foreign'; });
-    var unknown = items.filter(function(v) { return v.ownership !== 'owned' && v.ownership !== 'foreign'; });
-    if (owned.length === 0 && foreign.length === 0 && unknown.length === 0) return '';
-    var md = '';
-    if (owned.length > 0) {
-        md += '## 🚨 Violations you must fix (' + owned.length + ' owned)\n\n' +
-            violationsTable(owned) + '\n' + OWNED_RULE_NOTE + '\n';
-    }
-    if (foreign.length > 0) {
-        md += '## 🌐 Foreign / infra reds (do not chase)\n\n' + violationsTable(foreign) + '\n' + FOREIGN_NOTE + '\n';
-    }
-    if (unknown.length > 0) {
-        md += '_ℹ️ ' + unknown.length + ' additional error line(s) had no attributable file path — ' +
-            'judge them from the raw log sections below._\n';
+    var buckets = ownershipBuckets(items);
+    var md = appendViolationsSection('',
+        '## 🚨 Violations you must fix (' + buckets.owned.length + ' owned)', OWNED_RULE_NOTE, buckets.owned);
+    md = appendViolationsSection(md, '## 🌐 Foreign / infra reds (do not chase)', FOREIGN_NOTE, buckets.foreign);
+    if (buckets.unknown.length > 0) {
+        md += unknownViolationsNote(buckets.unknown.length);
     }
     return md;
 }
@@ -466,16 +484,23 @@ function findDismissalClaim(summary) {
     return null;
 }
 
-/** True when a line names the violation (path, basename or rule) AND carries fixed/disputed. */
-function lineAccountsFor(line, v) {
-    var normalized = String(line).toLowerCase();
+/** True when a summary line names the violation (path, basename or rule). */
+function mentionsViolation(normalizedLine, v) {
     var path = normalizePath(v.path).toLowerCase();
     var basename = path.split('/').pop();
-    var named = (path && normalized.indexOf(path) !== -1) ||
-        (basename.length > 3 && normalized.indexOf(basename) !== -1) ||
-        (v.rule && normalized.indexOf(String(v.rule).toLowerCase()) !== -1);
-    if (!named) return false;
+    return (path.length > 0 && normalizedLine.indexOf(path) !== -1) ||
+        (basename.length > 3 && normalizedLine.indexOf(basename) !== -1) ||
+        (!!v.rule && normalizedLine.indexOf(String(v.rule).toLowerCase()) !== -1);
+}
+
+/** True when the line carries the `fixed` / `disputed:` accounting marker. */
+function carriesAccountingMarker(line) {
     return /\bfixed\b/i.test(line) || /disputed\s*:/i.test(line);
+}
+
+/** True when a line names the violation (path, basename or rule) AND carries fixed/disputed. */
+function lineAccountsFor(line, v) {
+    return carriesAccountingMarker(line) && mentionsViolation(String(line).toLowerCase(), v);
 }
 
 /** True when the summary accounts for one owned violation (fixed / disputed per item). */

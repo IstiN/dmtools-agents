@@ -108,6 +108,15 @@ suite('ciViolations.extractViolations — jscpd duplication blocks (UT-7)', func
         assert.equal(items[1].path, 'lib/services/auth_service.dart');
         assert.equal(items[1].line, 100);
     });
+
+    test('a clone block with a single entry degrades to a pathless-counterpart detail', function() {
+        var items = cv.extractViolations(
+            'Clone found (dart):\n lib/solo.dart: 40-70\n', 'gate');
+        assert.equal(items.length, 1);
+        assert.equal(items[0].path, 'lib/solo.dart');
+        assert.equal(items[0].line, 40);
+        assert.equal(items[0].detail, 'duplicated lines 40-70');
+    });
 });
 
 suite('ciViolations.extractViolations — generic error lines (fallback)', function() {
@@ -178,6 +187,14 @@ suite('ciViolations.parseDiffPaths + tagOwnership', function() {
         var paths = cv.parseDiffPaths(diff);
         assert.ok(paths.indexOf('js/old_name.dart') !== -1, 'old name in the list');
         assert.ok(paths.indexOf('js/new_name.dart') !== -1, 'new name in the list');
+    });
+
+    test('deleted files (--- a/.., +++ /dev/null) still count as diff paths', function() {
+        var diff = 'diff --git a/lib/gone.dart b/lib/gone.dart\n' +
+            '--- a/lib/gone.dart\n' +
+            '+++ /dev/null\n';
+        var paths = cv.parseDiffPaths(diff);
+        assert.deepEqual(paths, ['lib/gone.dart']);
     });
 
     test('UT-1 (AC1): the #433 gate log yields exactly one OWNED violation — the file the PR added', function() {

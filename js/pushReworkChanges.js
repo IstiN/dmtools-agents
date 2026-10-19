@@ -1781,17 +1781,22 @@ function handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, 
 // over an open owned red. The empty lap marker keeps the gh-957 no-op loop
 // guard counting.
 
+/** Parse one snapshot file's content into a violation array, or []. */
+function violationsFromSnapshot(raw) {
+    if (!raw || !String(raw).trim()) return [];
+    var parsed = JSON.parse(raw);
+    var violations = (parsed && parsed.violations) ? parsed.violations : (Array.isArray(parsed) ? parsed : []);
+    return (violations && violations.length > 0) ? violations : [];
+}
+
 /** Reads the setup-time violation snapshot (input/<ticketKey>/ci_violations.json). */
 function readInputViolations(ticketKey, workingDir) {
     var candidates = ['input/' + ticketKey + '/ci_violations.json'];
     if (workingDir) candidates.push(workingDir + '/input/' + ticketKey + '/ci_violations.json');
     for (var i = 0; i < candidates.length; i++) {
         try {
-            var raw = file_read({ path: candidates[i] });
-            if (!raw || !String(raw).trim()) continue;
-            var parsed = JSON.parse(raw);
-            var violations = (parsed && parsed.violations) ? parsed.violations : (Array.isArray(parsed) ? parsed : []);
-            if (violations && violations.length > 0) return violations;
+            var violations = violationsFromSnapshot(file_read({ path: candidates[i] }));
+            if (violations.length > 0) return violations;
         } catch (e) { /* try next candidate */ }
     }
     return [];
