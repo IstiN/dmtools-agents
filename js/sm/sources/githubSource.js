@@ -1276,6 +1276,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { query: query, matchesGuards: matchesGuards,
+        linkedIssueNumber: linkedIssueNumber,
         takeMutexTickSnapshot: takeMutexTickSnapshot,
         mutexHoldersOf: mutexHoldersOf, rederiveHoldersLive: rederiveHoldersLive,
         logPhantomHeal: logPhantomHeal };

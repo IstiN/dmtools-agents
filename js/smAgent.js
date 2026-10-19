@@ -187,6 +187,8 @@ var mutexRegistryModule = require('./common/mutexRegistry.js');
 // gh-1000 (same pack-require rule): the github source layer the phantom
 // probe rides on (livePrItems guard + the tick-scan event below).
 var githubSourceModule = require('./sm/sources/githubSource.js');
+// gh-1097: post-lane naked-PR reconciliation sweep (label re-arm only).
+var nakedPrReconcileModule = require('./common/nakedPrReconcile.js');
 // gh-1028 (hoisted, never lazy — the gh-823 pack-require rule): the
 // branch-keyed in-flight leg probe — an ACTIVE ai-teammate run whose
 // head_branch IS the dispatch branch keeps a second leg off that branch
@@ -7834,6 +7836,50 @@ function armReworkLatch(ticket, headOverride) {
     reworkLatchModule.arm(latchState.map, prNumber, head, null, 'sm');
 }
 
+// gh-1097: wiring for js/common/nakedPrReconcile.js — the orchestration
+// lives in the module; this only binds the bridge tools. Fail-open.
+function nakedPrSweepDeps(repoInfo) {
+    var machineAuthor = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, projectConfig);
+    var tr = githubTracker(repoInfo.owner, repoInfo.repo);
+    return {
+        bodyLinker: githubSourceModule.linkedIssueNumber || function () { return null; },
+        issueLabels: function (n) { return linkedIssueLabels(repoInfo, n); },
+        prComments: function (n) { return nakedPrComments(repoInfo, n); },
+        isMachine: function (pr) {
+            var branch = String((pr.head && pr.head.ref) || '');
+            return branch.indexOf('ai/') === 0 || machineAuthorModule.isMachineAuthored(
+                { author: (pr.user && pr.user.login) || '', branch: branch, title: pr.title },
+                machineAuthor, repoInfo.owner);
+        },
+        addLabel: function (n, l) { tr.addLabel(n, l); },
+        comment: function (n, body) { tr.postComment(n, body); },
+        log: function (m) { console.log(m); },
+        dry: DRY
+    };
+}
+
+// Raw PR comments for the gh-1097 re-arm dedup (one read per candidate).
+function nakedPrComments(repoInfo, prNumber) {
+    var obj = mcpParse(github_get_pr_comments({
+        workspace: repoInfo.owner, repository: repoInfo.repo,
+        pullRequestId: String(prNumber)
+    }));
+    return Array.isArray(obj) ? obj : ((obj && obj.comments) || []);
+}
+
+function runNakedPrSweep(repoInfo) {
+    try {
+        var prs = mcpParse(github_list_prs({
+            workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open'
+        }));
+        var list = Array.isArray(prs) ? prs : [];
+        return nakedPrReconcileModule.sweep(list, nakedPrSweepDeps(repoInfo));
+    } catch (e) {
+        console.warn('  ⚠️ naked-PR sweep failed (fail-open): ' + (e.message || e));
+        return [];
+    }
+}
+
 function action(params) {
     var p     = params.jobParams || params;
     RUN_JOB_PARAMS = p;    DRY = p.dryRun === true;
@@ -8057,6 +8103,10 @@ function action(params) {
         allProcessedKeys = allProcessedKeys.concat(result.processedKeys);
         allSkippedKeys   = allSkippedKeys.concat(result.skippedKeys);
     });
+
+    // gh-1097 — naked-PR reconciliation: AFTER every dispatch lane, labels
+    // only (never dispatches; the next tick's lanes pick the PR up).
+    if (p.nakedPrSweep !== false) runNakedPrSweep(globalRepoInfo);
 
     // gh-837 AC2 — runner-cost report (validation-minutes) — after every
     // rule so the arm counts reflect this tick's mutations.

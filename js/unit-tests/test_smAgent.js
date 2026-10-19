@@ -372,6 +372,7 @@ function makeSmAgent(opts) {
                 takeMutexTickSnapshot: function () { return null; }
             },
             './common/branchLegGuard.js': loadModule('js/common/branchLegGuard.js', makeRequire({}), {}),
+            './common/nakedPrReconcile.js': loadModule('js/common/nakedPrReconcile.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {
@@ -14714,5 +14715,63 @@ suite('smAgent: silent-update failure stderr tail (gh-1074)', function () {
         assert.ok(logged.indexOf('update_branch failed') !== -1, 'the failure is still logged');
         assert.ok(logged.indexOf('denied — edits revoked mid-flight') !== -1,
             'the original error message is preserved');
+    });
+});
+
+// gh-1097 IT-1 — post-lane naked-PR reconciliation sweep over a fixture tick.
+suite('smAgent: naked-PR reconciliation sweep (gh-1097 IT-1)', function () {
+    function nakedFixturePr(n, labels, ref, login) {
+        return { number: n, labels: labels.map(function (l) { return { name: l }; }),
+            head: { ref: ref, sha: 'sha' + n }, user: { login: login }, body: '', title: 't' + n };
+    }
+    function nakedTick(jobExtra, prComments) {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "o", repo: "r" } };' },
+            github: {
+                items: [],
+                prComments: prComments || [],
+                prList: JSON.stringify([
+                    nakedFixturePr(10, [], 'ai/gh-1', 'ai-teammate'),
+                    nakedFixturePr(11, [], 'ai/gh-2', 'ai-teammate'),
+                    nakedFixturePr(12, ['agent:review'], 'ai/gh-1', 'ai-teammate'),
+                    nakedFixturePr(13, [], 'feature/x', 'human')
+                ]),
+                issues: {
+                    1: { number: 1, labels: [{ name: 'status:In Review' }] },
+                    2: { number: 2, labels: [{ name: 'agent:review' }, { name: 'needs-human' }] }
+                }
+            }
+        });
+        var jp = { owner: 'o', repo: 'r', machineAuthor: 'ai-teammate',
+            rules: [{ description: 'noop', jql: 'key = X-1', configFile: 'agents/x.json', enabled: false }] };
+        Object.keys(jobExtra || {}).forEach(function (k) { jp[k] = jobExtra[k]; });
+        sm.action({ jobParams: jp });
+        return sm;
+    }
+
+    test('only the naked in-flow PR is re-armed with exactly one audit comment; no dispatch', function () {
+        var sm = nakedTick();
+        assert.equal(sm.capturedPrLabelAdds.length, 1);
+        assert.equal(String(sm.capturedPrLabelAdds[0].number), '10');
+        assert.ok(JSON.stringify(sm.capturedPrLabelAdds[0]).indexOf('agent:review') !== -1);
+        assert.equal(sm.capturedPrComments.length, 1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('<!-- dmtools:naked-pr-rearm ') === 0);
+        assert.equal(sm.capturedTriggers.length, 0);
+    });
+
+    test('opt-out flag and dry run perform no writes', function () {
+        [{ nakedPrSweep: false }, { dryRun: true }].forEach(function (extra) {
+            var sm = nakedTick(extra);
+            assert.equal(sm.capturedPrLabelAdds.length, 0);
+            assert.equal(sm.capturedPrComments.length, 0);
+        });
+    });
+
+    test('a marker for the same head blocks the re-arm loop', function () {
+        var sm = nakedTick({}, [{ user: { login: 'ai-teammate' },
+            body: '<!-- dmtools:naked-pr-rearm {"pr":10,"head":"sha10"} -->' }]);
+        assert.equal(sm.capturedPrLabelAdds.length, 0);
+        assert.equal(sm.capturedPrComments.length, 0);
     });
 });
