@@ -14496,6 +14496,23 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         });
     }
 
+    test('gh-1107/AC5: a hostile fork branch name is quoted at BOTH shell touchpoints', function () {
+        // The fork refresh checks the branch out (-B) and pushes a
+        // HEAD:<branch> refspec — both are shell-interpreted and the
+        // branch is PR-author-controlled. Both must carry the branch
+        // single-quote-escaped through the ONE shellQuote helper.
+        var sm = forkSm({ branch: "f'$(reboot)`id` x" });
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [FORK_RULE] } });
+
+        assert.equal(clones(sm).length, 1, 'one refresh command');
+        var cmd = clones(sm)[0].command;
+        assert.ok(cmd.indexOf("git checkout -B 'f'\\''$(reboot)`id` x' FETCH_HEAD") !== -1,
+            'the checkout -B operand is single-quote-escaped');
+        assert.ok(cmd.indexOf("HEAD:'f'\\''$(reboot)`id` x'") !== -1,
+            'the fork push refspec is single-quote-escaped');
+        assert.ok(cmd.indexOf('$(reboot)`id`') !== -1, 'the payload survives verbatim for git');
+    });
+
     function markerCount(comments) {
         var n = 0;
         (comments || []).forEach(function (c) {
