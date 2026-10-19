@@ -1451,3 +1451,169 @@ suite('smAgent builds every rule query through selectRuleQuery (agents#855)', fu
     });
 });
 
+
+// ── gh-1112 AC7: agent JSON "parent" inheritance (wiki_publisher base agent) ──
+
+suite('configLoader.loadAgentConfig — parent inheritance (gh-1112 AC7)', function() {
+
+    var PARENT_PATH = './wiki_publisher.json';
+    var CHILD_PATH = './wiki_checklist.json';
+    var GRANDCHILD_PATH = './wiki_release_notes.json';
+
+    var parentJson = JSON.stringify({
+        name: 'Teammate',
+        params: {
+            metadata: { contextId: 'wiki_publisher', descriptionPath: 'agents/docs/agents/wiki_publisher.md' },
+            cliCommands: ['./agents/scripts/run-agent.sh'],
+            ticketContextDepth: 0,
+            cliPrompts: [
+                'Technical Writer',
+                './agents/instructions/wiki_publisher/workflow.md',
+                './agents/prompts/wiki_publisher_prompt.md'
+            ],
+            customParams: {
+                contentOutput: { target: 'wiki', updateTrackerField: false }
+            }
+        }
+    });
+
+    var childJson = JSON.stringify({
+        parent: { path: PARENT_PATH, merge: ['params.cliPrompts'] },
+        params: {
+            metadata: { contextId: 'story_checklist' },
+            cliPrompts: ['./.dmtools/skills/checklist_rules.md'],
+            customParams: {
+                contentOutput: { space: 'DOC', parentPageId: '42', pageTitleSuffix: 'Checklist' }
+            }
+        }
+    });
+
+    var grandchildJson = JSON.stringify({
+        parent: { path: CHILD_PATH, merge: ['params.cliPrompts'] },
+        params: {
+            metadata: { contextId: 'release_notes' },
+            cliPrompts: ['./.dmtools/skills/release_notes_format.md']
+        }
+    });
+
+    function loaderWithFiles(files) {
+        return loadModule('js/configLoader.js',
+            makeRequire({ './config.js': configModule }),
+            {
+                file_read: function(opts) {
+                    var p = opts && (opts.path || opts);
+                    if (files[p] !== undefined) return files[p];
+                    if (p && p.indexOf('.dmtools/config') !== -1) return null; // block real config
+                    return null;
+                }
+            });
+    }
+
+    test('merges parent cliPrompts first, then the child entries (AC7)', function() {
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_checklist.json': childJson });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, [
+            'Technical Writer',
+            './agents/instructions/wiki_publisher/workflow.md',
+            './agents/prompts/wiki_publisher_prompt.md',
+            './.dmtools/skills/checklist_rules.md'
+        ]);
+    });
+
+    test('child params override parent params; parent-only params are inherited (deep merge)', function() {
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_checklist.json': childJson });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.equal(merged.params.metadata.contextId, 'story_checklist', 'child metadata wins');
+        assert.equal(merged.params.metadata.descriptionPath, 'agents/docs/agents/wiki_publisher.md',
+            'parent-only metadata inherited');
+        assert.deepEqual(merged.params.cliCommands, ['./agents/scripts/run-agent.sh'], 'inherited from parent');
+        assert.equal(merged.name, 'Teammate', 'top-level fields inherited');
+        assert.equal(merged.params.customParams.contentOutput.target, 'wiki', 'parent customParams kept');
+        assert.equal(merged.params.customParams.contentOutput.updateTrackerField, false, 'parent customParams kept');
+        assert.equal(merged.params.customParams.contentOutput.space, 'DOC', 'child customParams merged in');
+        assert.equal(merged.params.customParams.contentOutput.pageTitleSuffix, 'Checklist', 'child customParams merged in');
+    });
+
+    test('the parent marker is resolved away — the merged config carries no parent key', function() {
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_checklist.json': childJson });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.equal(merged.parent, undefined, 'parent marker must not leak into the resolved config');
+    });
+
+    test('a config without a parent is returned unchanged', function() {
+        var plain = JSON.stringify({ name: 'JSRunner', params: { jsPath: 'js/x.js' } });
+        var loader = loaderWithFiles({ 'plain.json': plain });
+        var merged = loader.loadAgentConfig('plain.json');
+        assert.equal(merged.name, 'JSRunner');
+        assert.equal(merged.params.jsPath, 'js/x.js');
+    });
+
+    test('a missing parent file warns and returns the child config as-is (non-fatal)', function() {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warns.push(m); };
+        try {
+            var loader = loaderWithFiles({ 'wiki_checklist.json': childJson });
+            var merged = loader.loadAgentConfig(CHILD_PATH);
+            assert.equal(merged.params.metadata.contextId, 'story_checklist');
+            assert.deepEqual(merged.params.cliPrompts, ['./.dmtools/skills/checklist_rules.md'],
+                'child prompts kept when the parent cannot be loaded');
+            assert.equal(warns.length > 0, true, 'a warning must be logged');
+        } finally {
+            console.warn = origWarn;
+        }
+    });
+
+    test('merge defaults to params.cliPrompts when the merge list is omitted', function() {
+        var childNoMerge = JSON.stringify({
+            parent: { path: PARENT_PATH },
+            params: { metadata: { contextId: 'story_checklist' }, cliPrompts: ['child_only.md'] }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_checklist.json': childNoMerge });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, [
+            'Technical Writer',
+            './agents/instructions/wiki_publisher/workflow.md',
+            './agents/prompts/wiki_publisher_prompt.md',
+            'child_only.md'
+        ]);
+    });
+
+    test('grandchild → child → parent chains resolve recursively with stable order', function() {
+        var loader = loaderWithFiles({
+            'wiki_publisher.json': parentJson,
+            'wiki_checklist.json': childJson,
+            'wiki_release_notes.json': grandchildJson
+        });
+        var merged = loader.loadAgentConfig(GRANDCHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, [
+            'Technical Writer',
+            './agents/instructions/wiki_publisher/workflow.md',
+            './agents/prompts/wiki_publisher_prompt.md',
+            './.dmtools/skills/checklist_rules.md',
+            './.dmtools/skills/release_notes_format.md'
+        ]);
+        assert.equal(merged.params.metadata.contextId, 'release_notes');
+    });
+
+    test('IT-inh-1: base → child → project cliPrompts → globalCliPrompts, in that order', function() {
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_checklist.json': childJson });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        var resolved = loader.resolveInstructions('wiki_publisher', merged.params.cliPrompts, {
+            cliPrompts: { wiki_publisher: ['./.dmtools/prompts/wiki_focus.md'] },
+            globalCliPrompts: ['./agents/instructions/common/codegraph_tools.md']
+        });
+        // The agent JSON carries base + child prompts; resolveInstructions appends
+        // the project-config and global prompts after them.
+        var fullList = merged.params.cliPrompts.concat(resolved.cliPrompts);
+        assert.deepEqual(fullList, [
+            'Technical Writer',
+            './agents/instructions/wiki_publisher/workflow.md',
+            './agents/prompts/wiki_publisher_prompt.md',
+            './.dmtools/skills/checklist_rules.md',
+            './.dmtools/prompts/wiki_focus.md',
+            './agents/instructions/common/codegraph_tools.md'
+        ]);
+        assert.equal(resolved.cliPromptsStrategy, 'merge');
+    });
+});

@@ -1089,3 +1089,165 @@ suite('assignForReview without an initiator (agents#874)', function() {
     });
 });
 
+
+// ── gh-1112: wiki_publisher base agent — target aliases, tracker-agnostic
+//    notification and publish ordering ────────────────────────────────────────
+
+suite('writeContentOutput — wiki target + tracker-agnostic notify (gh-1112)', function() {
+
+    /** Confluence-backed mocks recording every publish-side call. */
+    function wikiMocks(overrides) {
+        var calls = { sequence: [], comments: [], fields: [], syncArgs: null, created: null };
+        var mocks = {
+            __outputs: { 'response.md': '# Wiki page\n\nBody' },
+            confluence_get_children_by_id: function() {
+                calls.sequence.push('children');
+                return [];
+            },
+            confluence_create_page: function(a) {
+                calls.created = a;
+                calls.sequence.push('create');
+                return { id: 'p1', _links: { webui: '/pages/p1', base: 'https://wiki.example.com' } };
+            },
+            confluence_sync_markdown_directory: function(a) {
+                calls.syncArgs = a;
+                calls.sequence.push('sync');
+                return JSON.stringify({ syncedPages: ['index'] });
+            },
+            confluence_reply_to_inline_comment: function(a) {
+                calls.sequence.push('reply');
+                return {};
+            },
+            file_write: function() {},
+            file_read: function() { return '[]'; },
+            jira_post_comment: function(a) { calls.comments.push(['jira', a]); },
+            github_create_comment: function(a) { calls.comments.push(['github', a]); },
+            ado_add_work_item_comment: function(a) { calls.comments.push(['ado', a]); },
+            jira_update_field: function(a) { calls.fields.push(a); return {}; }
+        };
+        Object.keys(overrides || {}).forEach(function(k) { mocks[k] = overrides[k]; });
+        return { calls: calls, mocks: mocks };
+    }
+
+    test("target 'wiki' publishes the Confluence page exactly like 'confluence' (AC4)", function() {
+        var w = wikiMocks({});
+        var mod = loadWriteContentOutput(w.mocks);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'wiki', space: 'DOC', parentPageId: '42', updateTrackerField: false } }
+        }));
+        assert.equal(result.success, true, 'wiki target must publish: ' + result.error);
+        assert.equal(result.target, 'wiki');
+        assert.equal(result.pageId, 'p1');
+        assert.equal(result.pageUrl, 'https://wiki.example.com/pages/p1');
+        assert.notEqual(w.calls.syncArgs, null, 'markdown directory sync must run');
+        assert.equal(w.calls.syncArgs.parentId, 'p1');
+    });
+
+    test("target 'wiki' with updateTrackerField:false (the wiki_publisher default) writes ZERO tracker fields (E3)", function() {
+        var w = wikiMocks({});
+        var mod = loadWriteContentOutput(w.mocks);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'wiki', space: 'DOC', parentPageId: '42', updateTrackerField: false } }
+        }));
+        assert.equal(result.success, true);
+        assert.equal(w.calls.fields.length, 0, 'no jira_update_field calls under updateTrackerField:false');
+        assert.equal(w.calls.comments.length, 1, 'link comment still posted');
+    });
+
+    test("target 'wiki' with updateTrackerField:true writes the link field like 'confluence' (alias parity)", function() {
+        var w = wikiMocks({});
+        var mod = loadWriteContentOutput(w.mocks);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'wiki', field: 'Description', space: 'DOC', parentPageId: '42' } }
+        }));
+        assert.equal(result.success, true);
+        assert.equal(w.calls.fields.length, 1, 'link written to the field under updateTrackerField:true');
+        assert.contains(w.calls.fields[0].value, 'https://wiki.example.com/pages/p1');
+    });
+
+    test("target 'tracker_field' writes the field exactly like 'jira_field' (AC4)", function() {
+        var fieldCalls = [];
+        var mocks = {
+            __outputs: { 'response.md': '# Description' },
+            jira_update_field: function(a) { fieldCalls.push(a); }
+        };
+        var mod = loadWriteContentOutput(mocks);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'tracker_field', field: 'Description' } }
+        }));
+        assert.equal(result.success, true, 'tracker_field alias must write the field: ' + result.error);
+        assert.equal(result.target, 'tracker_field');
+        assert.equal(fieldCalls.length, 1);
+        assert.equal(fieldCalls[0].field, 'Description');
+        assert.contains(fieldCalls[0].value, '# Description');
+    });
+
+    test('github tracker receives the wiki link comment via github_create_comment; jira tools are never called (AC6)', function() {
+        var jiraCalls = [];
+        var w = wikiMocks({
+            jira_post_comment: function(a) { jiraCalls.push(a); }
+        });
+        var mod = loadWriteContentOutput(w.mocks);
+        var result = mod.action(makeParams({
+            ticket: { key: 'gh-1112', fields: { summary: 'wiki publisher' } },
+            customParams: {
+                trackerProvider: 'github',
+                contentOutput: { target: 'wiki', space: 'DOC', parentPageId: '42', updateTrackerField: false }
+            }
+        }));
+        assert.equal(result.success, true, 'github + wiki target must succeed: ' + result.error);
+        assert.equal(w.calls.comments.length, 1, 'exactly one link comment');
+        assert.equal(w.calls.comments[0][0], 'github', 'comment posted through the github provider');
+        assert.equal(String(w.calls.comments[0][1].pullRequestId), '1112');
+        assert.equal(jiraCalls.length, 0, 'jira_post_comment must not fire on a github tracker');
+        assert.equal(w.calls.fields.length, 0, 'no field writes on github (no custom fields)');
+    });
+
+    test('ado tracker receives the wiki link comment via ado_add_work_item_comment (AC6)', function() {
+        var jiraCalls = [];
+        var w = wikiMocks({
+            jira_post_comment: function(a) { jiraCalls.push(a); }
+        });
+        var mod = loadWriteContentOutput(w.mocks);
+        var result = mod.action(makeParams({
+            ticket: { key: '2039670', fields: { summary: 'wiki publisher' } },
+            customParams: {
+                trackerProvider: 'ado',
+                contentOutput: { target: 'wiki', space: 'DOC', parentPageId: '42', updateTrackerField: false }
+            }
+        }));
+        assert.equal(result.success, true, 'ado + wiki target must succeed: ' + result.error);
+        assert.equal(w.calls.comments.length, 1);
+        assert.equal(w.calls.comments[0][0], 'ado', 'comment posted through the ado provider');
+        assert.equal(String(w.calls.comments[0][1].id), '2039670');
+        assert.equal(jiraCalls.length, 0);
+    });
+
+    test('inline replies are posted BEFORE the page body sync (E5 ordering)', function() {
+        var w = wikiMocks({
+            file_read: function() {
+                return JSON.stringify([{ pageId: 'p1', commentId: 'c1', body: 'Fixed' }]);
+            }
+        });
+        var mod = loadWriteContentOutput(w.mocks);
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'wiki', space: 'DOC', parentPageId: '42', updateTrackerField: false } }
+        }));
+        assert.equal(result.success, true, 'publish must succeed: ' + result.error);
+        assert.equal(result.replies.posted, 1);
+        var replyIdx = w.calls.sequence.indexOf('reply');
+        var syncIdx = w.calls.sequence.indexOf('sync');
+        assert.ok(replyIdx !== -1, 'a reply must have been posted');
+        assert.ok(syncIdx !== -1, 'the directory sync must have run');
+        assert.ok(replyIdx < syncIdx, 'replies must be posted before the page body is replaced, sequence: ' + w.calls.sequence.join(','));
+    });
+
+    test('missing confluence config under target wiki returns Confluence publish failed without crashing (E2)', function() {
+        var mod = loadWriteContentOutput({ __outputs: { 'response.md': '# Wiki page' } });
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'wiki' } }
+        }));
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Confluence publish failed:');
+    });
+});

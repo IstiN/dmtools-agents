@@ -87,3 +87,63 @@ suite('contentOutput anchor helpers — sync integration notes', function() {
     });
 });
 
+
+// ── gh-1112 AC4: provider-neutral target aliases ─────────────────────────────
+
+suite('contentOutput target aliases (gh-1112 AC4)', function() {
+
+    test("isConfluenceTarget accepts 'confluence', 'wiki' and 'both'", function() {
+        var lib = loadLib();
+        assert.equal(lib.isConfluenceTarget({ target: 'confluence' }), true);
+        assert.equal(lib.isConfluenceTarget({ target: 'wiki' }), true);
+        assert.equal(lib.isConfluenceTarget({ target: 'both' }), true);
+    });
+
+    test("isConfluenceTarget rejects tracker-field-only and unknown targets", function() {
+        var lib = loadLib();
+        assert.equal(lib.isConfluenceTarget({ target: 'jira_field' }), false);
+        assert.equal(lib.isConfluenceTarget({ target: 'tracker_field' }), false);
+        assert.equal(lib.isConfluenceTarget({ target: 'something_else' }), false);
+        assert.equal(lib.isConfluenceTarget({}), false);
+    });
+
+    test("isJiraFieldTarget accepts 'jira_field', 'tracker_field' and 'both'", function() {
+        var lib = loadLib();
+        assert.equal(lib.isJiraFieldTarget({ target: 'jira_field' }), true);
+        assert.equal(lib.isJiraFieldTarget({ target: 'tracker_field' }), true);
+        assert.equal(lib.isJiraFieldTarget({ target: 'both' }), true);
+    });
+
+    test("isJiraFieldTarget rejects wiki-only and unknown targets", function() {
+        var lib = loadLib();
+        assert.equal(lib.isJiraFieldTarget({ target: 'wiki' }), false);
+        assert.equal(lib.isJiraFieldTarget({ target: 'confluence' }), false);
+        assert.equal(lib.isJiraFieldTarget({ target: 'nope' }), false);
+        assert.equal(lib.isJiraFieldTarget({}), false);
+    });
+
+    test("resolveConfig passes 'wiki' and 'tracker_field' targets through untouched", function() {
+        var lib = loadLib();
+        var wikiCfg = lib.resolveConfig({
+            customParams: { contentOutput: { target: 'wiki', space: 'DOC', parentPageId: '7' } }
+        });
+        assert.equal(wikiCfg.target, 'wiki');
+        assert.equal(wikiCfg.space, 'DOC');
+        var tfCfg = lib.resolveConfig({
+            customParams: { contentOutput: { target: 'tracker_field', field: 'Description' } }
+        });
+        assert.equal(tfCfg.target, 'tracker_field');
+        assert.equal(tfCfg.field, 'Description');
+    });
+
+    test('publishPage still validates config before any confluence call under target wiki (E2)', function() {
+        var lib = loadLib();
+        var threw = false;
+        try {
+            lib.publishPage({ target: 'wiki' }, 'PROJ-1', 's', 'body');
+        } catch (e) {
+            threw = true;
+        }
+        assert.equal(threw, true);
+    });
+});
