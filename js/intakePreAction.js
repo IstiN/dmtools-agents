@@ -77,6 +77,19 @@ function mapStory(issue) {
     };
 }
 
+// Static-analysis hooks (docs-freshness): agentDocGenerator discovers written
+// artifacts with literal-path regexes, so each family keeps its concrete file
+// name inside the file_write call — a dynamic spec.fileName path would
+// collapse the generated "Writes" list to input/<KEY>/ and red the
+// docs-freshness CI (pinned in test_configLoader.js).
+function writeEpicsFile(inputFolder, payload) {
+    file_write(inputFolder + '/existing_epics.json', payload);
+}
+
+function writeStoriesFile(inputFolder, payload) {
+    file_write(inputFolder + '/existing_stories.json', payload);
+}
+
 // Search spec for one issue family (provider-specific query: WIQL on ado).
 function epicSpec(project) {
     return {
@@ -85,6 +98,7 @@ function epicSpec(project) {
         map: mapEpic,
         listKey: 'epics',
         fileName: 'existing_epics.json',
+        writeFile: writeEpicsFile,
         plural: 'epics'
     };
 }
@@ -96,6 +110,7 @@ function storySpec(project) {
         map: mapStory,
         listKey: 'stories',
         fileName: 'existing_stories.json',
+        writeFile: writeStoriesFile,
         plural: 'stories'
     };
 }
@@ -106,7 +121,7 @@ function fetchAndWrite(tracker, inputFolder, spec) {
     try {
         var issues = tracker.searchIssues(spec.jql, { fields: spec.fields }).map(spec.map);
         console.log('Found ' + issues.length + ' ' + spec.plural);
-        file_write(inputFolder + '/' + spec.fileName, '{"' + spec.listKey + '":' + JSON.stringify(issues, null, 2) + '}');
+        spec.writeFile(inputFolder, '{"' + spec.listKey + '":' + JSON.stringify(issues, null, 2) + '}');
         console.log('Wrote ' + spec.fileName + ' to ' + inputFolder);
     } catch (fetchError) {
         console.error('Failed to fetch ' + spec.plural + ', continuing without file:', fetchError);
