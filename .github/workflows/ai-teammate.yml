@@ -20,6 +20,18 @@
 # from the real triggers below. There is NO push trigger by design; the
 # trigger set (issues + workflow_dispatch only) and the duplicate-key
 # ban are guarded by js/unit-tests/test_workflowLint.js.
+#
+# gh-1076 (live 2026-10-19, #1074): ONE owner assign spawned THREE runs —
+# the `assigned` event plus two `labeled` events from dmtools-factory-
+# bot's OWN consequence labels. `types: [assigned, labeled]` fired on
+# EVERY label write, so the workflow re-triggered itself on its own
+# status:* consequences; gh-1065 dedup made the duplicates self-skip, but
+# each still started a run, occupied the concurrency group, spammed the
+# run list and cost a probe. GitHub cannot filter label names in `on:`,
+# and a job-level `if:` still starts and LISTS the run (the owner's
+# explicit complaint) — so the event trigger is `assigned` ONLY.
+# Label-driven pickup (arming labels agent:*) continues through the SM
+# tick's workflow_dispatch path (gh-1028 dedup), the governed lane.
 name: AI Teammate
 
 # gh-1065: the title carries the LEG for every path — the dispatch input
@@ -29,11 +41,16 @@ name: AI Teammate
 # COMPLETED owner stays title-precise: the strict completed-owner leg rule
 # (a leg-less completed run never swallows a KNOWN new leg) can only work
 # when real leg runs carry their leg in the title.
-run-name: "teammate: ${{ github.event_name }} #${{ github.event.issue.number || github.event.inputs.issue }} ${{ github.event.inputs.leg || (contains(github.event.issue.labels.*.name, 'agent:rework') && 'rework') || (contains(github.event.issue.labels.*.name, 'agent:review') && 'review') || (contains(github.event.issue.labels.*.name, 'pr_approved') && 'review') || (contains(github.event.issue.labels.*.name, 'agent:dev') && 'dev') || (contains(github.event.issue.labels.*.name, 'agent:develop') && 'dev') || github.event.label.name }}"
+# gh-1076: the trailing `|| github.event.label.name` fallback is gone with
+# the labeled trigger — labeled events can no longer start this workflow,
+# and assigned/dispatch events resolve their leg from the labels above.
+run-name: "teammate: ${{ github.event_name }} #${{ github.event.issue.number || github.event.inputs.issue }} ${{ github.event.inputs.leg || (contains(github.event.issue.labels.*.name, 'agent:rework') && 'rework') || (contains(github.event.issue.labels.*.name, 'agent:review') && 'review') || (contains(github.event.issue.labels.*.name, 'pr_approved') && 'review') || (contains(github.event.issue.labels.*.name, 'agent:dev') && 'dev') || (contains(github.event.issue.labels.*.name, 'agent:develop') && 'dev') }}"
 
 on:
+  # gh-1076: `assigned` ONLY — see the header. The labeled trigger used to
+  # re-fire this workflow on the factory's own consequence labels.
   issues:
-    types: [assigned, labeled]
+    types: [assigned]
   workflow_dispatch:
     inputs:
       issue:
@@ -81,31 +98,26 @@ jobs:
   # of a burst is never silently swallowed. The decision itself is the
   # unit-tested pure module js/common/teammateEventDedup.js (AC4) — this
   # step is transport only. The probe short-circuits BEFORE any API call
-  # for workflow_dispatch (SM-side gh-1028 governs it), non-arming
-  # lifecycle labels and non-teammate assignees.
+  # for workflow_dispatch (SM-side gh-1028 governs it) and non-teammate
+  # assignees. gh-1076: with the `labeled` trigger removed, the labeled
+  # preflight went with it — labeled events can no longer reach this job.
   dedup:
     name: Event-path dedup probe (gh-1065)
     runs-on: ubuntu-latest
     # gh-1065 rework (review thread — gh-1029 zero-burn parity): this gate
-    # MIRRORS the teammate call gate below. `on:` fires on EVERY label
-    # write repo-wide, and an unguarded dedup job would allocate a runner
-    # (checkout + node boot) per lifecycle-label storm — the exact burn
-    # gh-1029 eliminated. Rejected events now execute ZERO jobs: the run
-    # concludes failure (the gh-676 phantom pattern) and — because only
-    # conclusion 'success' owns the freshness window — can never suppress
-    # a trigger for an issue whose leg never ran.
+    # MIRRORS the teammate call gate below. Rejected events execute ZERO
+    # jobs: the run concludes failure (the gh-676 phantom pattern) and —
+    # because only conclusion 'success' owns the freshness window — can
+    # never suppress a trigger for an issue whose leg never ran.
+    # gh-1076: the `labeled` trigger is gone (the gate's labeled mirror
+    # branch went with it), so the remaining event path is `assigned`
+    # addressed to ai-teammate; the dispatch path skips the probe by
+    # preflight below.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'issues' &&
        github.event.action == 'assigned' &&
-       contains(github.event.issue.assignees.*.login, 'ai-teammate')) ||
-      (github.event_name == 'issues' &&
-       github.event.action == 'labeled' &&
-       (github.event.label.name == 'agent:dev' ||
-        github.event.label.name == 'agent:develop' ||
-        github.event.label.name == 'agent:review' ||
-        github.event.label.name == 'agent:rework' ||
-        github.event.label.name == 'pr_approved'))
+       contains(github.event.issue.assignees.*.login, 'ai-teammate'))
     outputs:
       proceed: ${{ steps.probe.outputs.proceed }}
       audit: ${{ steps.probe.outputs.audit }}
@@ -118,7 +130,6 @@ jobs:
           REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           ACTION: ${{ github.event.action }}
-          LABEL_NAME: ${{ github.event.label.name }}
           ISSUE_LABELS: ${{ toJson(github.event.issue.labels.*.name) }}
           ISSUE: ${{ github.event.issue.number || github.event.inputs.issue }}
           ASSIGNEES: ${{ toJson(github.event.issue.assignees.*.login) }}
@@ -154,15 +165,14 @@ jobs:
           };
 
           try {
-            // Mirror of the teammate job gate: skip the probe entirely (no
-            // API burn, gh-1029 parity) for everything the gate below would
-            // reject, and for the dispatch path (SM-side dedup governs it).
+            // gh-1076: the `labeled` trigger is gone — `labeled` never
+            // reaches this probe. Skip the probe entirely (no API burn)
+            // for the dispatch path (SM-side gh-1028 dedup governs it) and
+            // for assigns not addressed to ai-teammate (the job gate
+            // rejects them; zero jobs execute).
             let preflight = null;
             if (env.EVENT_NAME === 'workflow_dispatch') {
               preflight = 'dispatch path: governed by the SM-side gh-1028 dedup';
-            } else if (env.ACTION === 'labeled' &&
-                       !dedup.ARMING_LABEL_LEGS.hasOwnProperty(env.LABEL_NAME || '')) {
-              preflight = 'non-arming label: the teammate gate rejects it; no probe spent';
             } else if (env.ACTION === 'assigned' && assignees.indexOf('ai-teammate') === -1) {
               preflight = 'not assigned to ai-teammate: the teammate gate rejects it; no probe spent';
             }
@@ -200,7 +210,7 @@ jobs:
             const verdict = dedup.decideEventDedup({
               eventName: env.EVENT_NAME,
               action: env.ACTION,
-              labelName: env.LABEL_NAME || undefined,
+              labelName: undefined, // gh-1076: no labeled trigger — only assigned/dispatch reach the probe
               issueLabelNames: issueLabels,
               issue: parseInt(env.ISSUE, 10),
               workflowFile: env.WORKFLOW_FILE,
@@ -230,15 +240,16 @@ jobs:
           DEDUP_PROBE_EOF
 
   teammate:
-    # gh-1029: the `labeled` trigger fires on EVERY label write — including
-    # the leg's own lifecycle labels (status:*, ai_developed, ...) — and
-    # `on:` cannot filter by label name. The old assignee-only clause
-    # admitted any labeled event on an assigned issue, so each leg
-    # re-triggered a guaranteed no-op run that parked in the same
-    # concurrency group (live: run 39111715487 → 39111765329 on #1027,
-    # 2026-10-18). The gate therefore keys the action: `assigned` requires
-    # the ai-teammate assignee; `labeled` proceeds ONLY for the arming
-    # labels — lifecycle labels never allocate a runner.
+    # gh-1076: the `labeled` trigger is GONE — this workflow used to
+    # re-fire on its own consequence labels (live #1074: 3 runs for one
+    # assign). Label-driven pickup (arming labels agent:*) now comes ONLY
+    # through the SM tick's workflow_dispatch (gh-1028 dedup). The
+    # remaining event path is `assigned`, still keyed to the ai-teammate
+    # assignee — the gh-1029 origin: the old assignee-only clause matched
+    # ANY labeled event on an assigned issue, so each leg re-triggered a
+    # guaranteed no-op run (run 39111715487 → 39111765329 on #1027,
+    # 2026-10-18). The gate has keyed the action ever since; gh-1076 made
+    # the labeled branch unreachable and it was removed.
     #
     # gh-1065: the call additionally needs the event-path dedup probe
     # (needs.dedup) — the probe outputs proceed=true unconditionally for
@@ -249,14 +260,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'issues' &&
         github.event.action == 'assigned' &&
-        contains(github.event.issue.assignees.*.login, 'ai-teammate')) ||
-       (github.event_name == 'issues' &&
-        github.event.action == 'labeled' &&
-        (github.event.label.name == 'agent:dev' ||
-         github.event.label.name == 'agent:develop' ||
-         github.event.label.name == 'agent:review' ||
-         github.event.label.name == 'agent:rework' ||
-         github.event.label.name == 'pr_approved')))
+        contains(github.event.issue.assignees.*.login, 'ai-teammate')))
     uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-teammate.yml@main
     with:
       issue: ${{ github.event.issue.number || github.event.inputs.issue }}

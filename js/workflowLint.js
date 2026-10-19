@@ -41,6 +41,21 @@ function unquote(key) {
     return key;
 }
 
+// Parse the inline `[a, b, ...]` payload of a flow list, dropping comments
+// and blank entries, unquoting each item.
+function flowItems(inline) {
+    var flow = inline.replace(/^\[[ \t]*/, '').replace(/[ \t]*\].*$/, '');
+    var parts = flow === '' ? [] : flow.split(',');
+    var out = [];
+    for (var k = 0; k < parts.length; k++) {
+        var item = parts[k].replace(/[ \t]+#.*$/, '').trim();
+        if (item !== '') {
+            out.push(unquote(item));
+        }
+    }
+    return out;
+}
+
 /**
  * Top-level event triggers of a workflow file: ['issues', 'workflow_dispatch'].
  * Handles the block form (on:\n  issues:) and the flow list form
@@ -83,20 +98,114 @@ function extractTriggers(text) {
             return triggers;
         }
         if (inline.charAt(0) === '[') {
-            var flow = inline.replace(/^\[[ \t]*/, '').replace(/[ \t]*\].*$/, '');
-            var items = flow === '' ? [] : flow.split(',');
-            var out = [];
-            for (var k = 0; k < items.length; k++) {
-                var item = items[k].replace(/[ \t]+#.*$/, '').trim();
-                if (item !== '') {
-                    out.push(unquote(item));
-                }
-            }
-            return out;
+            return flowItems(inline);
         }
         return [inline]; // flow mapping form — report as one opaque entry
     }
     return [];
+}
+
+/**
+ * The `types:` list of the `issues:` trigger, e.g. ['assigned'] (gh-1076:
+ * the ai-teammate stub must fire on assigned ONLY — the labeled trigger
+ * re-fired the workflow on the factory's own consequence labels). Parses
+ * the flow form (types: [assigned, labeled]) and the block list form
+ * (types:\n      - assigned). Returns null when the file has no issues
+ * trigger, the issues trigger declares no types key, or `on:` is in the
+ * flow-list form (no per-trigger options there).
+ */
+function extractIssueTypes(text) {
+    var lines = String(text).split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) {
+        var m = /^on:[ \t]*(.*)$/.exec(lines[i]);
+        if (!m) {
+            continue;
+        }
+        if (m[1].replace(/[ \t]+#.*$/, '').trim() !== '') {
+            continue; // flow form — no per-trigger options to read
+        }
+        // Block form: locate the `issues:` key at the trigger indent.
+        var childIndent = -1;
+        for (var j = i + 1; j < lines.length; j++) {
+            var line = lines[j];
+            if (line.trim() === '') {
+                continue;
+            }
+            if (line.trim().charAt(0) === '#') {
+                continue;
+            }
+            var indent = indentOf(line);
+            if (indent === 0) {
+                break;
+            }
+            var km = KEY_LINE_RE.exec(line.trim());
+            if (!km) {
+                continue;
+            }
+            if (childIndent === -1) {
+                childIndent = indent;
+            }
+            if (indent !== childIndent) {
+                continue;
+            }
+            if (unquote(km[2].trim()) !== 'issues') {
+                continue;
+            }
+            // Inside the issues: block — the first `types:` key at its own
+            // indent level; a dedent back to the issues level ends the scan.
+            var typesIndent = -1;
+            for (var k = j + 1; k < lines.length; k++) {
+                var tl = lines[k];
+                if (tl.trim() === '') {
+                    continue;
+                }
+                if (tl.trim().charAt(0) === '#') {
+                    continue;
+                }
+                var ti = indentOf(tl);
+                if (ti <= indent) {
+                    break;
+                }
+                var tkm = KEY_LINE_RE.exec(tl.trim());
+                if (!tkm) {
+                    continue;
+                }
+                if (typesIndent === -1) {
+                    typesIndent = ti;
+                }
+                if (ti !== typesIndent) {
+                    continue;
+                }
+                if (unquote(tkm[2].trim()) !== 'types') {
+                    continue;
+                }
+                var inline = (tkm[3] || '').replace(/[ \t]+#.*$/, '').trim();
+                if (inline.charAt(0) === '[') {
+                    return flowItems(inline);
+                }
+                // Block list form: `- item` entries deeper than types:.
+                var items = [];
+                for (var q = k + 1; q < lines.length; q++) {
+                    var ql = lines[q];
+                    if (ql.trim() === '') {
+                        continue;
+                    }
+                    var qi = indentOf(ql);
+                    if (qi <= ti) {
+                        break;
+                    }
+                    var qm = /^-[ \t]+(.*?)[ \t]*$/.exec(ql.trim());
+                    if (qm) {
+                        items.push(unquote(qm[1].replace(/[ \t]+#.*$/, '').trim()));
+                    }
+                }
+                return items;
+            }
+            return null; // issues: block without a types: key
+        }
+        return null; // no issues: trigger
+    }
+    return null;
 }
 
 /**
@@ -174,5 +283,6 @@ function findDuplicateKeys(text) {
 
 module.exports = {
     extractTriggers: extractTriggers,
+    extractIssueTypes: extractIssueTypes,
     findDuplicateKeys: findDuplicateKeys
 };
