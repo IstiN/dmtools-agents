@@ -3315,6 +3315,26 @@ suite('pushReworkChanges.runOwnedViolationsGate (gh-1119 AC6b / UT-8 wiring)', f
     });
 });
 
+// Shared file_read mock for the AC6b rejection-path tests below. Table-driven
+// so complexity stays ≤ 8: the quality ratchet (crap4js, CRAP_THRESHOLD=8)
+// fails the PR on any NEW function with CRAP > 8, and the two former inline
+// copies were cyclomatic-complexity 9 (CRAP 9 at full coverage).
+function makeOwnedGateFileRead(owned) {
+    var snapshot = JSON.stringify({ owned: 1, foreign: 0, unknown: 0, violations: owned });
+    var routes = [
+        ['ci_violations.json', function() { return snapshot; }],
+        ['rework_setup_failed.md', function() { throw new Error('File does not exist'); }],
+        ['pr_info.md', function() { return '**Branch**: `bug/PROJ-123` → `develop`'; }]
+    ];
+    return function(args) {
+        var p = args && (args.path || args);
+        for (var i = 0; i < routes.length; i++) {
+            if (p && p.indexOf(routes[i][0]) !== -1) return routes[i][1]();
+        }
+        return null;
+    };
+}
+
 suite('pushReworkChanges.action — owned-violations rejection marks the leg failed (gh-1119 AC6b)', function() {
 
     var OWNED = [{ check: 'gate', rule: 'method_size', path: 'test/js/require_base_resolution_test.dart',
@@ -3323,19 +3343,7 @@ suite('pushReworkChanges.action — owned-violations rejection marks the leg fai
     test('a dismissal summary over owned violations fails the leg BEFORE the completion path', function() {
         var prComments = [];
         var loaded = loadPushReworkChangesForAction({
-            file_read: function(args) {
-                var p = args && (args.path || args);
-                if (p && p.indexOf('ci_violations.json') !== -1) {
-                    return JSON.stringify({ owned: 1, foreign: 0, unknown: 0, violations: OWNED });
-                }
-                if (p && p.indexOf('rework_setup_failed.md') !== -1) {
-                    throw new Error('File does not exist');
-                }
-                if (p && p.indexOf('pr_info.md') !== -1) {
-                    return '**Branch**: `bug/PROJ-123` → `develop`';
-                }
-                return null;
-            }
+            file_read: makeOwnedGateFileRead(OWNED)
         }, {
             scm: {
                 listPrs: function() {
@@ -3369,19 +3377,7 @@ suite('pushReworkChanges.action — owned-violations rejection marks the leg fai
 
     test('with the violations fixed and accounted, the normal completion path is unchanged', function() {
         var loaded = loadPushReworkChangesForAction({
-            file_read: function(args) {
-                var p = args && (args.path || args);
-                if (p && p.indexOf('ci_violations.json') !== -1) {
-                    return JSON.stringify({ owned: 1, foreign: 0, unknown: 0, violations: OWNED });
-                }
-                if (p && p.indexOf('rework_setup_failed.md') !== -1) {
-                    throw new Error('File does not exist');
-                }
-                if (p && p.indexOf('pr_info.md') !== -1) {
-                    return '**Branch**: `bug/PROJ-123` → `develop`';
-                }
-                return null;
-            }
+            file_read: makeOwnedGateFileRead(OWNED)
         });
 
         var result = loaded.mod.action({
