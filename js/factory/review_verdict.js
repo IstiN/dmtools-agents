@@ -64,6 +64,10 @@ var CI_DEADLINE_MS = 600000; // ≤10 min, the sh's SECONDS+600
 
 var RED_CHECKS = 'FAILURE|ERROR|CANCELLED|TIMED_OUT|ACTION_REQUIRED|STARTUP_FAILURE|STALE';
 var GREEN_CHECKS = 'SUCCESS|SKIPPED|NEUTRAL';
+// gh-1079: the per-poll rollup matchers, compiled once (the pre-refactor
+// loop built these on every poll — same patterns, same anchors).
+var RED_CHECK_RE = new RegExp('^(' + RED_CHECKS + ')$');
+var GREEN_CHECK_RE = new RegExp('^(' + GREEN_CHECKS + ')$');
 
 var THREADS_QUERY =
     'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name)' +
@@ -172,31 +176,49 @@ function unwrap(res) {
  * no-token | rework | escalated | approved | approve-no-pr | ci-red |
  * ci-timeout; throws on the loud no-verdict path (exit-1 parity).
  */
-function applyReviewVerdict(opts, io) {
-    opts = opts || {};
-    io = io || {};
+// ── gh-1079: applyReviewVerdict decomposed into single-purpose helpers ───────
+// Behavior contract is unchanged (the characterization suite in
+// test_factoryReviewVerdict.js + the sh-parity harness pin every branch);
+// this only splits the former 39-complexity monolith along its existing
+// seams: entry guards, the fallback-source fetch prologue, the parser probe,
+// and one handler per verdict outcome (rework / escalated / missing /
+// approve). Every exec, writeFile and log call keeps its original position
+// in the sequence — the parity harness byte-compares the transport.
+
+function tryExec(io, cmd, fallback) {
+    try { return unwrap(io.exec(cmd)); } catch (e) { return fallback; }
+}
+
+// The sh's load-bearing-call contract: the token gate precedes everything,
+// the numeric-NUMBER guard precedes any gh call (the raw jq-splice guard).
+function entryGuard(opts, io) {
     var log = io.log || function () {};
     if (!opts.ghToken) {
         log('::warning::SOURCE_GITHUB_TOKEN not set — verdict labels would not trigger workflows; skipping (a maintainer must label manually)');
         return { status: 'no-token' };
     }
-    var repo = opts.repo;
-    var number = opts.number;
-    var q = shellQuote;
     // `number` is spliced INSIDE the single-quoted pr-list jq program (the
     // sh's '"$NUMBER"' splice) — the one interpolation that cannot go
     // through shellQuote. A non-numeric value would break out of the shell
     // string at the argv level; fail loud instead of exec-weird (the sh
     // dies under bash -e on the same condition — the loud-fail contract).
-    if (!/^\d+$/.test(String(number))) {
-        throw new Error('review verdict: NUMBER must be numeric, got: ' + number);
+    if (!/^\d+$/.test(String(opts.number))) {
+        throw new Error('review verdict: NUMBER must be numeric, got: ' + opts.number);
     }
+    return null;
+}
 
-    function tryExec(cmd, fallback) {
-        try { return unwrap(io.exec(cmd)); } catch (e) { return fallback; }
-    }
+// Verdict fallback sources beyond the run output (gh-305): a failed
+// fetch leaves the file absent — the parser reports `missing`.
+// Call order is load-bearing: labels → pr list → pr comments → issue
+// comments → machineAuthor (.dmtools/config.js read) → parser selection.
+function buildReviewContext(opts, io) {
+    var q = shellQuote;
+    var log = io.log || function () {};
+    var repo = opts.repo;
+    var number = opts.number;
 
-    var labels = tryExec('gh issue view ' + q(number) + ' --repo ' + q(repo) +
+    var labels = tryExec(io, 'gh issue view ' + q(number) + ' --repo ' + q(repo) +
         " --json labels --jq '" + LABELS_JQ + "'", '');
     var pr = unwrap(io.exec(
         'gh pr list --repo ' + q(repo) + ' --state open ' +
@@ -211,192 +233,280 @@ function applyReviewVerdict(opts, io) {
         '          or (.headRefName | test("(^|[-_./])gh-0*' + number + '$")))\n' +
         "        | .number] | first // empty'")).trim();
 
-    // Verdict fallback sources beyond the run output (gh-305): a failed
-    // fetch leaves the file absent — the parser reports `missing`.
     var prCommentsPath = io.tempFile('pr_comments.json');
     var issueCommentsPath = io.tempFile('issue_comments.json');
     if (pr) {
-        var pc = tryExec('gh pr view ' + q(pr) + ' --repo ' + q(repo) +
+        var pc = tryExec(io, 'gh pr view ' + q(pr) + ' --repo ' + q(repo) +
             " --json comments,reviews --jq '" + PR_COMMENTS_JQ + "'", null);
         if (pc !== null) io.writeFile(prCommentsPath, pc);
     }
-    var ic = tryExec('gh issue view ' + q(number) + ' --repo ' + q(repo) +
+    var ic = tryExec(io, 'gh issue view ' + q(number) + ' --repo ' + q(repo) +
         " --json comments --jq '" + ISSUE_COMMENTS_JQ + "'", null);
     if (ic !== null) io.writeFile(issueCommentsPath, ic);
 
     var machineAuthor = resolveMachineAuthor(opts.machineAuthor, io);
     var verdictSh = pickVerdictSh(opts, io);
 
-    // The sh runs the probe as `eval "$(VERDICT_SH decide)"` — a failing
-    // substitution yields NO output (its rc is swallowed), the contract
-    // vars stay unset → decision=unknown → the loud diagnosis path. Keep
-    // that: probe failure is 'unknown', not a transport abort.
+    return {
+        log: log,
+        repo: repo,
+        number: number,
+        labels: labels,
+        pr: pr,
+        prCommentsPath: prCommentsPath,
+        issueCommentsPath: issueCommentsPath,
+        machineAuthor: machineAuthor,
+        verdictSh: verdictSh
+    };
+}
+
+// The sh runs the probe as `eval "$(VERDICT_SH decide)"` — a failing
+// substitution yields NO output (its rc is swallowed), the contract
+// vars stay unset → decision=unknown → the loud diagnosis path. Keep
+// that: probe failure is 'unknown', not a transport abort.
+function verdictParserCommand(opts, ctx) {
+    var q = shellQuote;
+    return 'MAX_ROUNDS=' + q(String(opts.maxRounds === undefined ? '' : opts.maxRounds)) +
+        ' PR_REVIEW_JSON=' + q('outputs/pr_review.json') +
+        ' PR_REVIEW_JSON_ALT=' + q('outputs/gh-' + ctx.number + '/pr_review.json') +
+        ' RUN_OUTPUT=' + q(opts.runOutput || DEFAULT_RUN_OUTPUT) +
+        ' PR_COMMENTS_JSON=' + q(ctx.prCommentsPath) +
+        ' ISSUE_COMMENTS_JSON=' + q(ctx.issueCommentsPath) +
+        ' MACHINE_AUTHOR=' + q(ctx.machineAuthor) +
+        ' ISSUE_LABELS=' + q(ctx.labels) +
+        ' bash ' + q(ctx.verdictSh) + ' decide';
+}
+
+function probeVerdictContract(opts, io, ctx) {
     var probeOut = '';
     try {
-        probeOut = unwrap(io.exec(
-            'MAX_ROUNDS=' + q(String(opts.maxRounds === undefined ? '' : opts.maxRounds)) +
-            ' PR_REVIEW_JSON=' + q('outputs/pr_review.json') +
-            ' PR_REVIEW_JSON_ALT=' + q('outputs/gh-' + number + '/pr_review.json') +
-            ' RUN_OUTPUT=' + q(opts.runOutput || DEFAULT_RUN_OUTPUT) +
-            ' PR_COMMENTS_JSON=' + q(prCommentsPath) +
-            ' ISSUE_COMMENTS_JSON=' + q(issueCommentsPath) +
-            ' MACHINE_AUTHOR=' + q(machineAuthor) +
-            ' ISSUE_LABELS=' + q(labels) +
-            ' bash ' + q(verdictSh) + ' decide'));
+        probeOut = unwrap(io.exec(verdictParserCommand(opts, ctx)));
     } catch (e) {
         probeOut = '';
     }
     var contract = parseVerdictContract(probeOut);
+    return {
+        contract: contract,
+        decision: contract.decision || 'unknown'
+    };
+}
 
-    var decision = contract.decision || 'unknown';
-    var escalate = contract.escalate;
-    var roundsDone = contract.rounds_done;
-    var nextRound = contract.next_round;
-    log('→ review decision: ' + decision + ' (source=' + (contract.source || 'none') +
-        ', override=' + (contract.override || 'false') + ', rounds_done=' + roundsDone + ')');
+function logDecisionLine(log, probed) {
+    var contract = probed.contract;
+    log('→ review decision: ' + probed.decision + ' (source=' + (contract.source || 'none') +
+        ', override=' + (contract.override || 'false') + ', rounds_done=' + contract.rounds_done + ')');
+}
 
-    function stripRoundLabels() {
-        var lbls = String(contract.round_labels || '').split(/\s+/);
-        for (var i = 0; i < lbls.length; i++) {
-            if (!lbls[i]) continue;
-            tryExec('gh issue edit ' + q(number) + ' --repo ' + q(repo) +
-                ' --remove-label ' + q(lbls[i]), '');
+// ── label/comment primitives (were applyReviewVerdict closures) ─────────────
+
+function stripRoundLabels(io, ctx) {
+    var lbls = String(ctx.contract.round_labels || '').split(/\s+/);
+    for (var i = 0; i < lbls.length; i++) {
+        if (!lbls[i]) continue;
+        tryExec(io, 'gh issue edit ' + shellQuote(ctx.number) + ' --repo ' + shellQuote(ctx.repo) +
+            ' --remove-label ' + shellQuote(lbls[i]), '');
+    }
+}
+
+function ensureLabel(io, ctx, name, color) {
+    try { io.exec('gh label create ' + shellQuote(name) + ' --repo ' + shellQuote(ctx.repo) +
+        ' --color ' + shellQuote(color) + ' --force'); } catch (e) { /* idempotent */ }
+}
+
+function addLabel(io, ctx, name) {
+    io.exec('gh issue edit ' + shellQuote(ctx.number) + ' --repo ' + shellQuote(ctx.repo) +
+        ' --add-label ' + shellQuote(name));
+}
+
+function removeNeedsHumanQuietly(io, ctx) {
+    tryExec(io, 'gh issue edit ' + shellQuote(ctx.number) + ' --repo ' + shellQuote(ctx.repo) +
+        " --remove-label 'needs-human'", '');
+}
+
+function postIssueComment(io, ctx, body) {
+    var p = io.tempFile('comment.md');
+    io.writeFile(p, body);
+    io.exec('gh issue comment ' + shellQuote(ctx.number) + ' --repo ' + shellQuote(ctx.repo) +
+        ' --body-file ' + shellQuote(p));
+}
+
+// ── pure comment bodies (byte-exact, pinned by the unit + parity suites) ────
+
+function buildEscalationCommentBody(roundsDone, maxRounds, pr, threadSummary) {
+    var lines = [
+        '🛑 **Auto-rework loop capped** — ' + roundsDone + ' automatic rework rounds without an APPROVE verdict (cap: ' + (maxRounds === undefined ? '' : maxRounds) + '). The machine stopped labeling `agent:rework`.',
+        ''
+    ];
+    if (pr) {
+        lines.push('### Unresolved review threads on PR #' + pr, '');
+        if (threadSummary) lines.push(threadSummary);
+        lines.push('');
+        lines.push('_If no threads are listed, the findings live in the PR general comments._');
+    } else {
+        lines.push('_No linked open PR found for this issue._');
+    }
+    lines.push('');
+    lines.push('**Next step (human):** fix the remaining findings directly and re-label `agent:review` for a fresh review — or re-label `agent:rework` to re-arm the agent loop with a fresh round cap.');
+    return lines.join('\n') + '\n';
+}
+
+function buildNoVerdictComment(diagnosis) {
+    return [
+        '🛑 **Review verdict missing** — the review leg finished, but no verdict (APPROVE / REQUEST_CHANGES / BLOCK) was found in any source, so the cycle cannot be labeled.',
+        '',
+        'Per-source diagnosis: `' + (diagnosis || 'n/a') + '`',
+        '',
+        "_Next step (human):_ read the review leg's run output, then label `pr_approved` (approve) or `agent:rework` (changes requested) — or re-run the review leg."
+    ].join('\n') + '\n';
+}
+
+// ── one handler per verdict outcome ─────────────────────────────────────────
+
+function applyEscalatedVerdict(opts, io, ctx) {
+    var contract = ctx.contract;
+    stripRoundLabels(io, ctx);
+    ensureLabel(io, ctx, 'needs-human', 'B60205');
+    addLabel(io, ctx, 'needs-human');
+    var threadSummary = '';
+    if (ctx.pr) {
+        var owner = ctx.repo.split('/')[0];
+        var name = ctx.repo.split('/')[1];
+        var threadsPath = io.tempFile('threads.json');
+        // the sh: `if gh api graphql …; then summary=$(render); else
+        // warn; fi` — the renderer runs ONLY on fetch success and its
+        // own failure aborts (unguarded under bash -e). Keep both.
+        var gqlOk = true;
+        try {
+            io.writeFile(threadsPath, unwrap(io.exec(
+                'gh api graphql -f query=' + shellQuote(THREADS_QUERY) +
+                ' -f owner=' + shellQuote(owner) + ' -f name=' + shellQuote(name) +
+                ' -F number=' + shellQuote(ctx.pr))));
+        } catch (e) {
+            gqlOk = false;
+            ctx.log('::warning::reviewThreads fetch failed — the findings live in the PR review comments');
+        }
+        if (gqlOk) {
+            // sh: summary="$(bash …)" — command substitution strips
+            // ALL trailing newlines; the raw exec keeps them.
+            threadSummary = unwrap(io.exec(
+                'bash ' + shellQuote(ctx.verdictSh) + ' threads ' + shellQuote(threadsPath)))
+                .replace(/\n+$/, '');
         }
     }
-    function ensureLabel(name, color) {
-        try { io.exec('gh label create ' + q(name) + ' --repo ' + q(repo) +
-            ' --color ' + q(color) + ' --force'); } catch (e) { /* idempotent */ }
-    }
-    function addLabel(name) {
-        io.exec('gh issue edit ' + q(number) + ' --repo ' + q(repo) +
-            ' --add-label ' + q(name));
-    }
-    function comment(body) {
-        var p = io.tempFile('comment.md');
-        io.writeFile(p, body);
-        io.exec('gh issue comment ' + q(number) + ' --repo ' + q(repo) +
-            ' --body-file ' + q(p));
-    }
+    postIssueComment(io, ctx, buildEscalationCommentBody(contract.rounds_done, opts.maxRounds, ctx.pr, threadSummary));
+    ctx.log('→ labeled needs-human — auto-rework capped after ' + contract.rounds_done + ' round(s)');
+    return { status: 'escalated', decision: ctx.decision, pr: ctx.pr, roundsDone: contract.rounds_done };
+}
 
-    if (decision === 'rework') {
-        if (escalate) {
-            stripRoundLabels();
-            ensureLabel('needs-human', 'B60205');
-            addLabel('needs-human');
-            var threadSummary = '';
-            if (pr) {
-                var owner = repo.split('/')[0];
-                var name = repo.split('/')[1];
-                var threadsPath = io.tempFile('threads.json');
-                // the sh: `if gh api graphql …; then summary=$(render); else
-                // warn; fi` — the renderer runs ONLY on fetch success and its
-                // own failure aborts (unguarded under bash -e). Keep both.
-                var gqlOk = true;
-                try {
-                    io.writeFile(threadsPath, unwrap(io.exec(
-                        'gh api graphql -f query=' + q(THREADS_QUERY) +
-                        ' -f owner=' + q(owner) + ' -f name=' + q(name) +
-                        ' -F number=' + q(pr))));
-                } catch (e) {
-                    gqlOk = false;
-                    log('::warning::reviewThreads fetch failed — the findings live in the PR review comments');
-                }
-                if (gqlOk) {
-                    // sh: summary="$(bash …)" — command substitution strips
-                    // ALL trailing newlines; the raw exec keeps them.
-                    threadSummary = unwrap(io.exec(
-                        'bash ' + q(verdictSh) + ' threads ' + q(threadsPath)))
-                        .replace(/\n+$/, '');
-                }
-            }
-            var lines = [
-                '🛑 **Auto-rework loop capped** — ' + roundsDone + ' automatic rework rounds without an APPROVE verdict (cap: ' + (opts.maxRounds === undefined ? '' : opts.maxRounds) + '). The machine stopped labeling `agent:rework`.',
-                ''
-            ];
-            if (pr) {
-                lines.push('### Unresolved review threads on PR #' + pr, '');
-                if (threadSummary) lines.push(threadSummary);
-                lines.push('');
-                lines.push('_If no threads are listed, the findings live in the PR general comments._');
-            } else {
-                lines.push('_No linked open PR found for this issue._');
-            }
-            lines.push('');
-            lines.push('**Next step (human):** fix the remaining findings directly and re-label `agent:review` for a fresh review — or re-label `agent:rework` to re-arm the agent loop with a fresh round cap.');
-            comment(lines.join('\n') + '\n');
-            log('→ labeled needs-human — auto-rework capped after ' + roundsDone + ' round(s)');
-            return { status: 'escalated', decision: decision, pr: pr, roundsDone: roundsDone };
+function applyPlainReworkVerdict(opts, io, ctx) {
+    var nextRound = ctx.contract.next_round;
+    // agent:rework FIRST (ordering is load-bearing: the round-label
+    // event must not outrank the rework queue label), then the counter.
+    removeNeedsHumanQuietly(io, ctx);
+    stripRoundLabels(io, ctx);
+    addLabel(io, ctx, 'agent:rework');
+    ensureLabel(io, ctx, 'rework-round-' + nextRound, 'BFD4F2');
+    addLabel(io, ctx, 'rework-round-' + nextRound);
+    ctx.log('→ labeled agent:rework (round ' + nextRound + '/' + (opts.maxRounds === undefined ? '' : opts.maxRounds) + ') — rework run queued (re-review follows automatically)');
+    return { status: 'rework', decision: ctx.decision, pr: ctx.pr, nextRound: nextRound };
+}
+
+function applyReworkVerdict(opts, io, ctx) {
+    if (!ctx.contract.escalate) return applyPlainReworkVerdict(opts, io, ctx);
+    return applyEscalatedVerdict(opts, io, ctx);
+}
+
+// gh-305: fail LOUDLY and leave a diagnosable marker (the sh exits 1).
+function applyMissingVerdict(io, ctx) {
+    ctx.log('::error::no verdict found in any source (pr_review.json / run output / PR comments / issue comments) — the review cycle cannot be labeled (gh-305)');
+    ctx.log('→ diagnosis: ' + (ctx.contract.diagnosis || 'none'));
+    ensureLabel(io, ctx, 'needs-human', 'B60205');
+    addLabel(io, ctx, 'needs-human');
+    postIssueComment(io, ctx, buildNoVerdictComment(ctx.contract.diagnosis));
+    throw new Error('review verdict missing — needs-human left behind, the cycle is stranded (gh-305; the sh exits 1)');
+}
+
+// One rollup snapshot → 'green' | 'red' | 'pending' (empty lines skipped;
+// any red conclusion refuses the whole verdict).
+function assessRollup(states, pr, log) {
+    if (!states) return 'pending';
+    var arr = states.split('\n');
+    var allGreen = true;
+    for (var i = 0; i < arr.length; i++) {
+        var s = arr[i];
+        if (!s) continue;
+        if (RED_CHECK_RE.test(s)) {
+            log('::warning::PR #' + pr + ' checks FAILED — verdict not trusted, no label (a fresh dev/rework round must fix CI first)');
+            return 'red';
         }
-        // agent:rework FIRST (ordering is load-bearing: the round-label
-        // event must not outrank the rework queue label), then the counter.
-        tryExec('gh issue edit ' + q(number) + ' --repo ' + q(repo) +
-            " --remove-label 'needs-human'", '');
-        stripRoundLabels();
-        addLabel('agent:rework');
-        ensureLabel('rework-round-' + nextRound, 'BFD4F2');
-        addLabel('rework-round-' + nextRound);
-        log('→ labeled agent:rework (round ' + nextRound + '/' + (opts.maxRounds === undefined ? '' : opts.maxRounds) + ') — rework run queued (re-review follows automatically)');
-        return { status: 'rework', decision: decision, pr: pr, nextRound: nextRound };
+        if (!GREEN_CHECK_RE.test(s)) allGreen = false;
     }
+    if (allGreen) {
+        log('→ PR #' + pr + ' checks green');
+        return 'green';
+    }
+    return 'pending';
+}
 
-    if (decision !== 'approve') {
-        // gh-305: fail LOUDLY and leave a diagnosable marker.
-        log('::error::no verdict found in any source (pr_review.json / run output / PR comments / issue comments) — the review cycle cannot be labeled (gh-305)');
-        log('→ diagnosis: ' + (contract.diagnosis || 'none'));
-        ensureLabel('needs-human', 'B60205');
-        addLabel('needs-human');
-        comment([
-            '🛑 **Review verdict missing** — the review leg finished, but no verdict (APPROVE / REQUEST_CHANGES / BLOCK) was found in any source, so the cycle cannot be labeled.',
-            '',
-            'Per-source diagnosis: `' + (contract.diagnosis || 'n/a') + '`',
-            '',
-            "_Next step (human):_ read the review leg's run output, then label `pr_approved` (approve) or `agent:rework` (changes requested) — or re-run the review leg."
-        ].join('\n') + '\n');
-        throw new Error('review verdict missing — needs-human left behind, the cycle is stranded (gh-305; the sh exits 1)');
-    }
+function nowMs(io) {
+    return (io.clock ? io.clock() : new Date()).getTime();
+}
 
-    log('→ review verdict: approve');
-    if (!pr) {
-        log('::warning::APPROVE verdict but no linked open PR for #' + number + ' — skipping pr_approved');
-        return { status: 'approve-no-pr', decision: decision };
-    }
-    log('→ linked PR #' + pr + ' — waiting for green checks (≤10 min)');
-    var deadline = (io.clock ? io.clock() : new Date()).getTime() + CI_DEADLINE_MS;
+// Polls the rollup until green / red / the 10-min deadline. Returns the
+// terminal result object, or null when the checks went green (the caller
+// then labels pr_approved).
+function waitForGreenChecks(io, ctx) {
+    var deadline = nowMs(io) + CI_DEADLINE_MS;
     for (;;) {
-        var states = tryExec('gh pr view ' + q(pr) + ' --repo ' + q(repo) +
+        var states = tryExec(io, 'gh pr view ' + shellQuote(ctx.pr) + ' --repo ' + shellQuote(ctx.repo) +
             " --json statusCheckRollup --jq '" + ROLLUP_JQ + "'", '');
-        if (states) {
-            var red = new RegExp('^(' + RED_CHECKS + ')$');
-            var arr = states.split('\n');
-            var allGreen = true;
-            var green = new RegExp('^(' + GREEN_CHECKS + ')$');
-            for (var i = 0; i < arr.length; i++) {
-                var s = arr[i];
-                if (!s) continue;
-                if (red.test(s)) {
-                    log('::warning::PR #' + pr + ' checks FAILED — verdict not trusted, no label (a fresh dev/rework round must fix CI first)');
-                    return { status: 'ci-red', decision: decision, pr: pr };
-                }
-                if (!green.test(s)) allGreen = false;
-            }
-            if (allGreen) {
-                log('→ PR #' + pr + ' checks green');
-                break;
-            }
-        }
-        if ((io.clock ? io.clock() : new Date()).getTime() >= deadline) {
-            log('::warning::PR #' + pr + ' checks still pending after 10 min — skipping pr_approved (re-label or re-run to retry)');
-            return { status: 'ci-timeout', decision: decision, pr: pr };
+        var assessment = assessRollup(states, ctx.pr, ctx.log);
+        if (assessment === 'red') return { status: 'ci-red', decision: ctx.decision, pr: ctx.pr };
+        if (assessment === 'green') break;
+        if (nowMs(io) >= deadline) {
+            ctx.log('::warning::PR #' + ctx.pr + ' checks still pending after 10 min — skipping pr_approved (re-label or re-run to retry)');
+            return { status: 'ci-timeout', decision: ctx.decision, pr: ctx.pr };
         }
         if (io.sleepMs) io.sleepMs(CI_POLL_MS);
     }
-    stripRoundLabels();
-    tryExec('gh issue edit ' + q(number) + ' --repo ' + q(repo) +
-        " --remove-label 'needs-human'", '');
-    addLabel('pr_approved');
-    log('→ labeled pr_approved — merge-trigger will squash-merge PR #' + pr + ' once CLEAN');
-    var kicked = kickSmOnGreenHead(opts, io, pr);
-    return { status: 'approved', decision: decision, pr: pr, smKicked: kicked };
+    return null;
+}
+
+function applyApproveVerdict(opts, io, ctx) {
+    ctx.log('→ review verdict: approve');
+    if (!ctx.pr) {
+        ctx.log('::warning::APPROVE verdict but no linked open PR for #' + ctx.number + ' — skipping pr_approved');
+        return { status: 'approve-no-pr', decision: ctx.decision };
+    }
+    ctx.log('→ linked PR #' + ctx.pr + ' — waiting for green checks (≤10 min)');
+    var wait = waitForGreenChecks(io, ctx);
+    if (wait) return wait;
+    stripRoundLabels(io, ctx);
+    removeNeedsHumanQuietly(io, ctx);
+    addLabel(io, ctx, 'pr_approved');
+    ctx.log('→ labeled pr_approved — merge-trigger will squash-merge PR #' + ctx.pr + ' once CLEAN');
+    var kicked = kickSmOnGreenHead(opts, io, ctx.pr);
+    return { status: 'approved', decision: ctx.decision, pr: ctx.pr, smKicked: kicked };
+}
+
+/**
+ * Apply the review verdict. See the header for opts/io and the statuses:
+ * no-token | rework | escalated | approved | approve-no-pr | ci-red |
+ * ci-timeout; throws on the loud no-verdict path (exit-1 parity).
+ */
+function applyReviewVerdict(opts, io) {
+    opts = opts || {};
+    io = io || {};
+    var blocked = entryGuard(opts, io);
+    if (blocked) return blocked;
+    var ctx = buildReviewContext(opts, io);
+    var probed = probeVerdictContract(opts, io, ctx);
+    ctx.contract = probed.contract;
+    ctx.decision = probed.decision;
+    logDecisionLine(ctx.log, probed);
+    if (ctx.decision === 'rework') return applyReworkVerdict(opts, io, ctx);
+    if (ctx.decision !== 'approve') return applyMissingVerdict(io, ctx);
+    return applyApproveVerdict(opts, io, ctx);
 }
 
 // ── gh-1101: kick one SM tick on approval when the head is already green ──
@@ -474,5 +584,26 @@ module.exports = {
     parseVerdictContract: parseVerdictContract,
     resolveMachineAuthor: resolveMachineAuthor,
     pickVerdictSh: pickVerdictSh,
-    unwrap: unwrap
+    unwrap: unwrap,
+    entryGuard: entryGuard,
+    tryExec: tryExec,
+    buildReviewContext: buildReviewContext,
+    verdictParserCommand: verdictParserCommand,
+    probeVerdictContract: probeVerdictContract,
+    logDecisionLine: logDecisionLine,
+    stripRoundLabels: stripRoundLabels,
+    ensureLabel: ensureLabel,
+    addLabel: addLabel,
+    removeNeedsHumanQuietly: removeNeedsHumanQuietly,
+    postIssueComment: postIssueComment,
+    buildEscalationCommentBody: buildEscalationCommentBody,
+    buildNoVerdictComment: buildNoVerdictComment,
+    applyReworkVerdict: applyReworkVerdict,
+    applyEscalatedVerdict: applyEscalatedVerdict,
+    applyPlainReworkVerdict: applyPlainReworkVerdict,
+    applyMissingVerdict: applyMissingVerdict,
+    applyApproveVerdict: applyApproveVerdict,
+    assessRollup: assessRollup,
+    waitForGreenChecks: waitForGreenChecks,
+    nowMs: nowMs
 };
