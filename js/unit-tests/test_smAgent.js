@@ -4736,6 +4736,16 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
     function dispatched(cmdList) {
         return cmdList.some(function (c) { return c.command.indexOf('gh workflow run') === 0; });
     }
+    // gh-1118 rework (crap ratchet): re-extract the head_sha matcher for the
+    // sweep CLI fake. The gh-1107-rework inlining (`m && m[1] === HEAD`)
+    // re-pushed the throwing-dispatch closure below to CRAP 9 (over the 8
+    // threshold) under its fresh baseline key — same failure the gh-1107
+    // CI follow-up extraction already fixed once; the closure must carry
+    // its own weight at ≤ 8.
+    function sweepRunsForHead(cmd, headSha) {
+        var m = /head_sha=([^&"]+)/.exec(cmd);
+        return m !== null && m[1] === headSha;
+    }
 
     test('validate-armed: latch-skip — unchanged validated head arms WITHOUT re-running CI', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
@@ -5093,11 +5103,10 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
                 }
                 if (cmd.command.indexOf('actions/workflows/') !== -1 &&
                     cmd.command.indexOf('/runs?') !== -1) {
-                    var m = /head_sha=([^&"]+)/.exec(cmd.command);
-                    if (m && m[1] === HEAD1) {
+                    if (sweepRunsForHead(cmd.command, HEAD1)) {
                         return JSON.stringify({ workflow_runs: [oldRun('cancelled', HEAD1)] });
                     }
-                    if (m && m[1] === HEAD2) {
+                    if (sweepRunsForHead(cmd.command, HEAD2)) {
                         return JSON.stringify({ workflow_runs: [oldRun('cancelled', HEAD2)] });
                     }
                     return JSON.stringify({ workflow_runs: [] });
