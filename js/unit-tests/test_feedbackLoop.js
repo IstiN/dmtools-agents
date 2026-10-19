@@ -1023,3 +1023,125 @@ suite('feedbackLoop > runConfiguredGates characterization (gh-1079)', function()
     });
 
 });
+
+// ── gh-1079: extracted gate-runner helper contracts ─────────────────────────
+// Direct pins for the pure pieces the characterization suite exercises
+// through runConfiguredGates — they document the seams the refactor opened.
+
+suite('feedbackLoop > gate-runner helper contracts (gh-1079)', function() {
+
+    test('errorTextOf: Error.message wins, plain values are stringified', function() {
+        var mod = loadFeedbackLoop().mod;
+        assert.equal(mod.errorTextOf(new Error('the message')), 'the message');
+        assert.equal(mod.errorTextOf('plain'), 'plain');
+        assert.equal(mod.errorTextOf({ code: 7 }), '[object Object]');
+    });
+
+    test('gateRunnable: only null gates and enabled:false are skipped', function() {
+        var mod = loadFeedbackLoop().mod;
+        assert.equal(mod.gateRunnable(null), false);
+        assert.equal(mod.gateRunnable(undefined), false);
+        assert.equal(mod.gateRunnable({ enabled: false }), false);
+        assert.equal(mod.gateRunnable({}), true);
+        assert.equal(mod.gateRunnable({ enabled: true }), true);
+        assert.equal(mod.gateRunnable({ enabled: 'yes' }), true, 'only the literal false disables');
+    });
+
+    test('gateCommand: {ticketKey} interpolation, missing command → null', function() {
+        var mod = loadFeedbackLoop().mod;
+        assert.equal(mod.gateCommand({ command: 'run {ticketKey}' }, 'AB-9'), 'run AB-9');
+        assert.equal(mod.gateCommand({ command: 'run {ticketKey}' }, undefined), 'run ');
+        assert.equal(mod.gateCommand({}, 'AB-9'), null);
+        assert.equal(mod.gateCommand({ command: 123 }, 'AB-9'), '123', 'non-string commands are coerced');
+    });
+
+    test('gateWorkingDir: gate > options > config, else null', function() {
+        var mod = loadFeedbackLoop().mod;
+        assert.equal(mod.gateWorkingDir({ workingDir: 'g' }, { workingDir: 'o' }, { workingDir: 'c' }), 'g');
+        assert.equal(mod.gateWorkingDir({}, { workingDir: 'o' }, { workingDir: 'c' }), 'o');
+        assert.equal(mod.gateWorkingDir({}, {}, { workingDir: 'c' }), 'c');
+        assert.equal(mod.gateWorkingDir({}, {}, {}), null);
+    });
+
+    test('gateMaxAttempts: null/undefined → 2, strings parsed, garbage → 0', function() {
+        var mod = loadFeedbackLoop().mod;
+        assert.equal(mod.gateMaxAttempts({}), 2);
+        assert.equal(mod.gateMaxAttempts({ maxAttempts: null }), 2);
+        assert.equal(mod.gateMaxAttempts({ maxAttempts: '3' }), 3);
+        assert.equal(mod.gateMaxAttempts({ maxAttempts: 5 }), 5);
+        assert.equal(mod.gateMaxAttempts({ maxAttempts: 'junk' }), 0);
+        assert.equal(mod.gateMaxAttempts({ maxAttempts: 0 }), 0);
+    });
+
+    test('gateFeedbackConfig: the section-scoped resume contract, exactly as resumeAgent reads it', function() {
+        var mod = loadFeedbackLoop().mod;
+        var cfg = mod.gateFeedbackConfig('qualityGates', { resumeArgs: '--resume x', nonRecoverablePatterns: ['p'] }, 4);
+        assert.deepEqual(cfg, {
+            feedbackLoop: {
+                qualityGates: { enabled: true, maxAttempts: 4, resumeArgs: '--resume x', nonRecoverablePatterns: ['p'] }
+            }
+        });
+        var bare = mod.gateFeedbackConfig('policyGates', {}, 2);
+        assert.deepEqual(bare.feedbackLoop.policyGates, {
+            enabled: true, maxAttempts: 2, resumeArgs: undefined, nonRecoverablePatterns: undefined
+        });
+    });
+
+    test('gateResumeOptions: the resumeAgent payload (stage, error banner, ticket key)', function() {
+        var loaded = loadFeedbackLoop();
+        var mod = loaded.mod;
+        var ctx = {
+            options: { ticketKey: 'TS-R' },
+            section: 'qualityGates',
+            stagePrefix: 'quality_gate'
+        };
+        var resume = mod.gateResumeOptions(ctx, { resumeArgs: '--resume sid' }, 'gate-x', 'cmd x', 'dir x', 3, 'boom');
+        assert.deepEqual(resume, {
+            ticketKey: 'TS-R',
+            customParams: { feedbackLoop: { qualityGates: {
+                enabled: true, maxAttempts: 3, resumeArgs: '--resume sid', nonRecoverablePatterns: undefined
+            } } },
+            section: 'qualityGates',
+            stage: 'quality_gate_gate-x',
+            error: 'Command failed: cmd x\nWorking directory: dir x\n\nboom'
+        });
+        var noDir = mod.gateResumeOptions(ctx, {}, 'gate-y', 'cmd y', null, 3, 'boom');
+        assert.equal(noDir.error, 'Command failed: cmd y\n\nboom', 'no workingDir → no directory line');
+    });
+
+    test('gateWantsReturnAfterResume: any of options/config/gate opts in', function() {
+        var mod = loadFeedbackLoop().mod;
+        assert.equal(mod.gateWantsReturnAfterResume({ options: { returnAfterResume: true } }, {}), true);
+        assert.equal(mod.gateWantsReturnAfterResume({ options: {}, config: { returnAfterResume: true } }, {}), true);
+        assert.equal(mod.gateWantsReturnAfterResume({ options: {}, config: {} }, { returnAfterResume: true }), true);
+        assert.equal(mod.gateWantsReturnAfterResume({ options: {}, config: {} }, {}), false);
+    });
+
+    test('gateFailureResult: the blocking failure shape, with and without resumeAttempted', function() {
+        var mod = loadFeedbackLoop().mod;
+        var ctx = { results: [1], nonBlockingFailures: [2] };
+        assert.deepEqual(
+            mod.gateFailureResult('g', 'err', ctx, false),
+            { success: false, failedGate: 'g', error: 'err', results: [1], nonBlockingFailures: [2] });
+        assert.deepEqual(
+            mod.gateFailureResult('g', 'err', ctx, true),
+            { success: false, failedGate: 'g', error: 'err', resumeAttempted: true, results: [1], nonBlockingFailures: [2] });
+    });
+
+    test('gateSection + runGateContext: options.section wins, gateType follows the section', function() {
+        var mod = loadFeedbackLoop().mod;
+        assert.equal(mod.gateSection({}, 'qualityGates'), 'qualityGates');
+        assert.equal(mod.gateSection({ section: 'policyGates' }, 'qualityGates'), 'policyGates');
+
+        var ctx = mod.runGateContext({ customParams: { feedbackLoop: { policyGates: { workingDir: 'wd' } } } },
+            'policyGates', 'policy_gate');
+        assert.equal(ctx.gateType, 'policy gate');
+        assert.equal(ctx.config.workingDir, 'wd');
+        assert.deepEqual(ctx.results, []);
+        assert.deepEqual(ctx.nonBlockingFailures, []);
+
+        var qctx = mod.runGateContext({}, 'qualityGates', 'quality_gate');
+        assert.equal(qctx.gateType, 'quality gate');
+    });
+
+});
