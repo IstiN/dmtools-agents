@@ -389,6 +389,7 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
         if (comments && comments.length > 0) {
             let section = '## General PR Comments\n\n';
             comments.forEach(function(comment) {
+                if (_isDmtoolsMarkerComment(comment)) return;
                 const author = (comment.user && comment.user.login) ? comment.user.login : 'unknown';
                 const date = comment.created_at ? comment.created_at.substring(0, 10) : '';
                 section += '**' + author + '** (' + date + '):\n\n';
@@ -411,6 +412,13 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
         : null;
 
     return { markdown: markdown, rawThreads: raw };
+}
+
+// gh-1097 follow-up: hidden `<!-- dmtools:` audit comments (naked-pr-rearm
+// etc.) are machine bookkeeping — never review feedback. Mirrors
+// machineNotice.isDmtoolsMarkerBody (inlined: keeps loader maps unchanged).
+function _isDmtoolsMarkerComment(comment) {
+    return String((comment && comment.body) || '').replace(/^\s+/, '').indexOf('<!-- dmtools:') === 0;
 }
 
 /**
@@ -691,14 +699,111 @@ function buildCheckLogSections(check, scm, owner, repo, jenkinsBasePath) {
         md += jenkinsSections.md;
         full += jenkinsSections.full;
     }
-    if (full) return { md: md, full: full };
-    var reason = checkLogFailureReason(ghResult, jenkinsResult);
+    if (full) return { md: md, full: full, ok: true };
+    return failedLogSections(check, checkLogFailureReason(ghResult, jenkinsResult));
+}
+
+/** gh-1045: the loud per-check failure entry (md + full-log marker). */
+function failedLogSections(check, reason) {
     return {
         md: '- ⚠️ **Log**: log fetch failed: ' + reason + '\n\n',
         full: '=== LOG FETCH FAILED for: ' + check.name + ' ===\n' +
               'URL: ' + (check.details_url || 'N/A') + '\n' +
-              'Reason: ' + reason + '\n\n'
+              'Reason: ' + reason + '\n\n',
+        ok: false,
+        reason: reason
     };
+}
+
+// Max CI runs on the head scanned for an orphan's same-named job (bounds calls).
+var ORPHAN_FALLBACK_MAX_RUNS = 5;
+
+/** Parse a list-workflow-runs payload (object / JSON string / array) into runs. */
+function runsOfPayload(raw) {
+    var p = _unwrapToolResult(raw);
+    if (typeof p === 'string') {
+        try { p = JSON.parse(p); } catch (e) { return []; }
+    }
+    if (Array.isArray(p)) return p;
+    return (p && (p.workflow_runs || p.workflowRuns)) || [];
+}
+
+/** Workflow runs on headSha, newest first (gh-orphan fallback). */
+function listRunsForHead(scm, owner, repo, headSha) {
+    var raw = (scm && typeof scm.listWorkflowRuns === 'function')
+        ? scm.listWorkflowRuns(null, null, 50)
+        : github_list_workflow_runs({ workspace: owner, repository: repo, perPage: 50 });
+    return runsOfPayload(raw).filter(function (r) {
+        return r && String(r.head_sha || r.headSha) === String(headSha);
+    }).sort(function (a, b) { return Number(b.id) - Number(a.id); });
+}
+
+/** Logs of the failed job named `name` in one run, or null. */
+function sameNamedJobLogs(scm, owner, repo, run, name) {
+    var job = ciModule._jobsOf(fetchWorkflowRunJobs(scm, owner, repo, String(run.id)))
+        .filter(function (j) { return isFailedRunJob(j) && j.name === name; })[0];
+    if (!job) return null;
+    var logs = _fetchJobLogs(scm, owner, repo, job.id);
+    return logs ? { logs: logs, runUrl: run.html_url || ('run ' + run.id) } : null;
+}
+
+/**
+ * Orphan/placeholder check-runs (SM-kicker mirrored verdicts, 0 steps) have
+ * no job logs by nature — the job-log endpoint 404s. Their REAL logs live in
+ * the same-named failed job of the latest CI run on the same head.
+ * Returns { logs, runUrl } or null.
+ */
+function findSameNamedJobLogsOnHead(check, scm, owner, repo, headSha) {
+    try {
+        var runs = listRunsForHead(scm, owner, repo, headSha).slice(0, ORPHAN_FALLBACK_MAX_RUNS);
+        for (var i = 0; i < runs.length; i++) {
+            var found = sameNamedJobLogs(scm, owner, repo, runs[i], check.name);
+            if (found) return found;
+        }
+    } catch (e) {
+        console.warn('Orphan fallback for', check.name, 'failed:', fetchFailureDetail(e));
+    }
+    return null;
+}
+
+/** Clear reason for an orphan check whose real logs could not be found. */
+function orphanReason(check, priorReason) {
+    return 'orphan check-run (no job logs; mirrored verdict) — see run ' + (check.details_url || 'N/A') +
+        (priorReason ? ' [' + priorReason + ']' : '');
+}
+
+/** Resolve an orphan check's sections via the same-head fallback or the orphan reason. */
+function resolveOrphanSections(check, scm, owner, repo, headSha, priorReason) {
+    var found = findSameNamedJobLogsOnHead(check, scm, owner, repo, headSha);
+    if (!found) return failedLogSections(check, orphanReason(check, priorReason));
+    var sections = buildLogSections(check, '(orphan check-run — logs from same-named job in ' + found.runUrl + ')\n' + found.logs, 'Error log');
+    sections.ok = true;
+    return sections;
+}
+
+/** True when a same-named failed check already resolved real logs. */
+function hasResolvedTwin(entry, entries) {
+    return entries.some(function (other) {
+        return other !== entry && other.sections.ok && other.check.name === entry.check.name;
+    });
+}
+
+/**
+ * Resolve every failed check's sections, then handle orphan check-runs
+ * (bare /runs/{id} whose log fetch failed): dedupe into a same-named check
+ * that has real logs, else fall back to the same-named job on the head.
+ * Returns the surviving [{ check, sections }].
+ */
+function resolveFailedCheckSections(failedChecks, scm, owner, repo, headSha, jenkinsBasePath) {
+    var entries = failedChecks.map(function (check) {
+        return { check: check, sections: buildCheckLogSections(check, scm, owner, repo, jenkinsBasePath) };
+    });
+    return entries.filter(function (entry) {
+        if (entry.sections.ok || !extractGithubCheckRunId(entry.check)) return true;
+        if (hasResolvedTwin(entry, entries)) return false;
+        entry.sections = resolveOrphanSections(entry.check, scm, owner, repo, headSha, entry.sections.reason);
+        return true;
+    });
 }
 
 /**
@@ -801,10 +906,14 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
 
         console.warn('⚠️ ' + failedChecks.length + ' CI check(s) failed:', failedChecks.map(function(c) { return c.name; }).join(', '));
 
+        var entries = resolveFailedCheckSections(failedChecks, scm, owner, repo, headSha, jenkinsBasePath);
+        failedChecks = entries.map(function(e) { return e.check; });
+
         var mdBody = '';
         var fullLogContent = '';
 
-        failedChecks.forEach(function(check) {
+        entries.forEach(function(entry) {
+            var check = entry.check;
             mdBody += '## ❌ ' + check.name + '\n\n';
             mdBody += '- **Conclusion**: ' + check.conclusion + '\n';
             if (check.details_url) {
@@ -814,9 +923,8 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
 
             // gh-1045: every failed check resolves to logs OR a loud reason —
             // a silently missing log is what sent the #423 rework legs in blind.
-            var sections = buildCheckLogSections(check, scm, owner, repo, jenkinsBasePath);
-            mdBody += sections.md;
-            fullLogContent += sections.full;
+            mdBody += entry.sections.md;
+            fullLogContent += entry.sections.full;
         });
 
         // gh-1045: the full log is written FIRST, whenever failed checks exist
@@ -858,6 +966,7 @@ module.exports = {
     getPRDetails: getPRDetails,
     fetchDiscussionsAndRawData: fetchDiscussionsAndRawData,
     detectFailedChecks: detectFailedChecks,
+    _runsOfPayload: runsOfPayload,
 
     // Pure helpers extracted from detectFailedChecks (gh-1007, extended by
     // gh-1045) — exported for unit testing. gh-1045 DELIBERATELY changed
@@ -870,6 +979,8 @@ module.exports = {
     fetchGithubCheckLogsDetailed: fetchGithubCheckLogsDetailed,
     fetchGithubJobLogsDetailed: fetchGithubJobLogsDetailed,
     fetchGithubCheckRunLogsDetailed: fetchGithubCheckRunLogsDetailed,
+    resolveFailedCheckSections: resolveFailedCheckSections,
+    findSameNamedJobLogsOnHead: findSameNamedJobLogsOnHead,
     fetchGithubRunLogs: fetchGithubRunLogs,
     fetchGithubRunLogsDetailed: fetchGithubRunLogsDetailed,
     runLogsFailureReason: runLogsFailureReason,
