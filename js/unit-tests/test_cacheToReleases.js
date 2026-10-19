@@ -10,36 +10,47 @@
  * Uses: loadModule(), makeRequire(), assert, test(), suite()
  */
 
-function loadCacheToReleases(opts) {
-    opts = opts || {};
-    var uploadArtefactCalls = [];
-    var releaseArtefactsMock = {
-        buildTag: function(ticketKey, template) {
-            var t = (template || 'ai-{ticketKey}').replace(/\{ticketKey\}/g, ticketKey);
-            return t.toLowerCase().replace(/[^a-z0-9._/-]/g, '-');
-        },
-        buildReleaseName: function(ticketKey, template) {
-            return (template || '[AI] [{ticketKey}] Artefacts').replace(/\{ticketKey\}/g, ticketKey);
-        },
-        resolveTemplate: function(template, ticketKey) {
-            if (!template) return template;
-            return template.replace(/\{ticketKey\}/g, ticketKey);
-        },
-        resolveArtefactRepository: function(customParams) {
-            if (!customParams) return null;
-            var repo = customParams.artefactRepository || customParams.aiRepository || customParams.targetRepository;
-            if (!repo || !repo.owner || !repo.repo) return null;
-            return { owner: repo.owner, repo: repo.repo };
-        },
+// ── mock builders (gh-1085: named top-level factories keep every helper's
+//    complexity — and CRAP — small; the anonymous property callbacks count
+//    toward their enclosing factory, so each stays tiny) ────────────────────
+
+function fakeBuildTag(ticketKey, template) {
+    var t = (template || 'ai-{ticketKey}').replace(/\{ticketKey\}/g, ticketKey);
+    return t.toLowerCase().replace(/[^a-z0-9._/-]/g, '-');
+}
+
+function fakeBuildReleaseName(ticketKey, template) {
+    return (template || '[AI] [{ticketKey}] Artefacts').replace(/\{ticketKey\}/g, ticketKey);
+}
+
+function fakeResolveTemplate(template, ticketKey) {
+    if (!template) return template;
+    return template.replace(/\{ticketKey\}/g, ticketKey);
+}
+
+function fakeResolveArtefactRepository(customParams) {
+    if (!customParams) return null;
+    var repo = customParams.artefactRepository || customParams.aiRepository || customParams.targetRepository;
+    if (!repo || !repo.owner || !repo.repo) return null;
+    return { owner: repo.owner, repo: repo.repo };
+}
+
+function makeReleaseArtefactsMock(opts, uploadArtefactCalls) {
+    return {
+        buildTag: fakeBuildTag,
+        buildReleaseName: fakeBuildReleaseName,
+        resolveTemplate: fakeResolveTemplate,
+        resolveArtefactRepository: fakeResolveArtefactRepository,
         uploadArtefact: function(owner, repo, ticketKey, releaseConfig, asset, providerName) {
             uploadArtefactCalls.push({ owner: owner, repo: repo, ticketKey: ticketKey, asset: asset, providerName: providerName });
             if (opts.uploadArtefactImpl) return opts.uploadArtefactImpl(asset);
             return { success: true, releaseUrl: 'https://example.com/releases/ai-' + ticketKey.toLowerCase(), assetUrl: 'https://example.com/asset', error: null };
         }
     };
+}
 
-    var scmCalls = { listPrs: [], addComment: [] };
-    var scmMock = {
+function makeScmMock(opts, scmCalls) {
+    return {
         listPrs: function(state) {
             scmCalls.listPrs.push(state);
             return opts.prs || [];
@@ -50,8 +61,10 @@ function loadCacheToReleases(opts) {
             return '{}';
         }
     };
+}
 
-    var configLoaderMock = {
+function makeConfigLoaderMock(opts, scmMock) {
+    return {
         loadProjectConfig: function(params) {
             return { scm: { provider: opts.scmProvider || 'github' } };
         },
@@ -59,10 +72,16 @@ function loadCacheToReleases(opts) {
             return scmMock;
         }
     };
+}
 
+function loadCacheToReleases(opts) {
+    opts = opts || {};
+    var uploadArtefactCalls = [];
+    var scmCalls = { listPrs: [], addComment: [] };
+    var scmMock = makeScmMock(opts, scmCalls);
     var requireFn = makeRequire({
-        './common/releaseArtefacts.js': releaseArtefactsMock,
-        './configLoader.js': configLoaderMock
+        './common/releaseArtefacts.js': makeReleaseArtefactsMock(opts, uploadArtefactCalls),
+        './configLoader.js': makeConfigLoaderMock(opts, scmMock)
     });
 
     var mod = loadModule('js/cacheToReleases.js', requireFn, {});
