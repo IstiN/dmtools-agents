@@ -924,3 +924,212 @@ suite('factoryReviewVerdict — applyReviewVerdict characterization (gh-1079)', 
   });
 
 });
+
+// ── gh-1079: extracted verdict-handler helper contracts ─────────────────────
+// Direct pins for the pure pieces the characterization suite exercises
+// through applyReviewVerdict — they document the seams the refactor opened.
+
+suite('factoryReviewVerdict — extracted helper contracts (gh-1079)', function () {
+
+  function parseC(text) { return rvModule.parseVerdictContract(text); }
+  function baseCtx(over) {
+    over = over || {};
+    var ctx = {
+      log: function () {},
+      repo: REPO,
+      number: NUMBER,
+      labels: 'needs-human',
+      pr: PR,
+      prCommentsPath: '/tmp/rv-pr_comments.json',
+      issueCommentsPath: '/tmp/rv-issue_comments.json',
+      machineAuthor: 'machine-reviewer[bot]',
+      verdictSh: VERDICT_SH,
+      contract: parseC(contractLines({ decision: 'rework' })),
+      decision: 'rework'
+    };
+    if (over.contract) ctx.contract = over.contract;
+    if (over.decision) ctx.decision = over.decision;
+    return ctx;
+  }
+
+  test('verdictParserCommand: the full env contract with quoted payloads', function () {
+    var cmd = rvModule.verdictParserCommand(
+      { maxRounds: '2', runOutput: '.dmtools/run-output.txt' }, baseCtx());
+    assert.contains(cmd, "MAX_ROUNDS='2'");
+    assert.contains(cmd, "PR_REVIEW_JSON='outputs/pr_review.json'");
+    assert.contains(cmd, "PR_REVIEW_JSON_ALT='outputs/gh-42/pr_review.json'");
+    assert.contains(cmd, "RUN_OUTPUT='.dmtools/run-output.txt'");
+    assert.contains(cmd, "PR_COMMENTS_JSON='/tmp/rv-pr_comments.json'");
+    assert.contains(cmd, "ISSUE_COMMENTS_JSON='/tmp/rv-issue_comments.json'");
+    assert.contains(cmd, "MACHINE_AUTHOR='machine-reviewer[bot]'");
+    assert.contains(cmd, "ISSUE_LABELS='needs-human'");
+    assert.contains(cmd, "bash '" + VERDICT_SH + "' decide");
+  });
+
+  test('assessRollup: green / red / pending / blank-line / fetch-failure decisions', function () {
+    var logs = [];
+    var log = function (l) { logs.push(l); };
+    assert.equal(rvModule.assessRollup('SUCCESS\n', PR, log), 'green');
+    assert.contains(logs.join('\n'), '→ PR #' + PR + ' checks green');
+    assert.equal(rvModule.assessRollup('SKIPPED\nNEUTRAL\n', PR, log), 'green');
+    assert.equal(rvModule.assessRollup('FAILURE\n', PR, log), 'red');
+    assert.contains(logs.join('\n'), '::warning::PR #' + PR + ' checks FAILED — verdict not trusted, no label (a fresh dev/rework round must fix CI first)');
+    assert.equal(rvModule.assessRollup('PENDING\n', PR, log), 'pending');
+    assert.equal(rvModule.assessRollup('SUCCESS\nPENDING\n', PR, log), 'pending', 'any non-green conclusion keeps polling');
+    assert.equal(rvModule.assessRollup('SUCCESS\n\n', PR, log), 'green', 'blank lines are skipped, not counted as non-green');
+    assert.equal(rvModule.assessRollup('', PR, log), 'pending', 'fetch failure (`|| true` → empty) keeps polling');
+  });
+
+  test('buildEscalationCommentBody: the three body variants, byte-exact', function () {
+    assert.equal(
+      rvModule.buildEscalationCommentBody(2, '2', PR, 'thread summary line'),
+      '🛑 **Auto-rework loop capped** — 2 automatic rework rounds without an APPROVE verdict (cap: 2). The machine stopped labeling `agent:rework`.\n' +
+      '\n' +
+      '### Unresolved review threads on PR #' + PR + '\n' +
+      '\n' +
+      'thread summary line\n' +
+      '\n' +
+      '_If no threads are listed, the findings live in the PR general comments._\n' +
+      '\n' +
+      '**Next step (human):** fix the remaining findings directly and re-label `agent:review` for a fresh review — or re-label `agent:rework` to re-arm the agent loop with a fresh round cap.\n',
+      'the caller (applyEscalatedVerdict) strips trailing newlines before handing the summary over');
+    assert.equal(
+      rvModule.buildEscalationCommentBody(1, '3', PR, ''),
+      '🛑 **Auto-rework loop capped** — 1 automatic rework rounds without an APPROVE verdict (cap: 3). The machine stopped labeling `agent:rework`.\n' +
+      '\n' +
+      '### Unresolved review threads on PR #' + PR + '\n' +
+      '\n' +
+      '\n' +
+      '_If no threads are listed, the findings live in the PR general comments._\n' +
+      '\n' +
+      '**Next step (human):** fix the remaining findings directly and re-label `agent:review` for a fresh review — or re-label `agent:rework` to re-arm the agent loop with a fresh round cap.\n',
+      'empty summary → no summary block (the blank line after the header stays, as before)');
+    assert.equal(
+      rvModule.buildEscalationCommentBody(2, undefined, '', ''),
+      '🛑 **Auto-rework loop capped** — 2 automatic rework rounds without an APPROVE verdict (cap: ). The machine stopped labeling `agent:rework`.\n' +
+      '\n' +
+      '_No linked open PR found for this issue._\n' +
+      '\n' +
+      '**Next step (human):** fix the remaining findings directly and re-label `agent:review` for a fresh review — or re-label `agent:rework` to re-arm the agent loop with a fresh round cap.\n',
+      'no PR → the no-PR variant, undefined cap renders empty');
+  });
+
+  test('buildNoVerdictComment: diagnosis present and absent', function () {
+    assert.contains(rvModule.buildNoVerdictComment('pr_review.json=present'), 'Per-source diagnosis: `pr_review.json=present`');
+    assert.contains(rvModule.buildNoVerdictComment(''), 'Per-source diagnosis: `n/a`');
+  });
+
+  test('entryGuard: token gate first, then the numeric-NUMBER guard', function () {
+    var logs = [];
+    assert.deepEqual(rvModule.entryGuard({ ghToken: '', number: 'abc' }, { log: function (l) { logs.push(l); } }),
+      { status: 'no-token' });
+    assert.equal(logs.length, 1, 'the skip warning is logged once');
+    var threw = null;
+    try { rvModule.entryGuard({ ghToken: 't', number: '4 2' }, { log: function () {} }); } catch (e) { threw = e; }
+    assert.ok(threw, 'non-numeric NUMBER throws');
+    assert.contains(String(threw && threw.message || threw), 'review verdict: NUMBER must be numeric, got: 4 2');
+    assert.equal(rvModule.entryGuard({ ghToken: 't', number: '42' }, { log: function () {} }), null);
+  });
+
+  test('tryExec: unwraps success, returns the fallback on throw', function () {
+    var io = { exec: function (cmd) { if (cmd === 'bad') throw new Error('x'); return { output: 'out' }; } };
+    assert.equal(rvModule.tryExec(io, 'good', 'fb'), 'out');
+    assert.equal(rvModule.tryExec(io, 'bad', 'fb'), 'fb');
+  });
+
+  test('probeVerdictContract: parser output rides into the contract, decision defaults to unknown', function () {
+    var io = { exec: function () { return 'decision=rework\nescalate=true\nrounds_done=1\nnext_round=2\n'; } };
+    var probed = rvModule.probeVerdictContract({}, io, baseCtx());
+    assert.equal(probed.decision, 'rework');
+    assert.equal(probed.contract.escalate, true);
+    assert.equal(probed.contract.rounds_done, 1);
+
+    var quiet = { exec: function () { return 'no verdict chatter'; } };
+    var empty = rvModule.probeVerdictContract({}, quiet, baseCtx());
+    assert.equal(empty.decision, 'unknown', 'no decision key → unknown (the loud-path trigger)');
+  });
+
+  test('label primitives emit the exact gh commands (create/edit/comment order)', function () {
+    var cmds = [];
+    var written = {};
+    var io = {
+      exec: function (c) { cmds.push(c); if (c.indexOf('label create boom') !== -1) throw new Error('exists'); },
+      writeFile: function (p, c) { written[p] = c; },
+      tempFile: function (h) { return '/tmp/rv-' + h; }
+    };
+    var ctx = baseCtx({ contract: parseC('round_labels=rework-round-2 rework-round-3\n') });
+
+    rvModule.ensureLabel(io, ctx, 'boom', 'FF0000');
+    rvModule.ensureLabel(io, ctx, 'ok', 'B60205');
+    assert.equal(cmds.filter(function (c) { return c === "gh label create 'boom' --repo '" + REPO + "' --color 'FF0000' --force"; }).length, 1,
+      'the failed create is swallowed (idempotent), the command still rode the transport');
+
+    rvModule.stripRoundLabels(io, ctx);
+    var removes = cmds.filter(function (c) { return c.indexOf('--remove-label') !== -1; });
+    assert.equal(removes.length, 2);
+    assert.contains(removes[0], "--remove-label 'rework-round-2'");
+    assert.contains(removes[1], "--remove-label 'rework-round-3'");
+
+    rvModule.addLabel(io, ctx, 'agent:rework');
+    assert.contains(cmds[cmds.length - 1], "gh issue edit '42' --repo '" + REPO + "' --add-label 'agent:rework'");
+
+    rvModule.removeNeedsHumanQuietly(io, ctx);
+    assert.contains(cmds[cmds.length - 1], "gh issue edit '42' --repo '" + REPO + "' --remove-label 'needs-human'");
+
+    rvModule.postIssueComment(io, ctx, 'the body');
+    assert.equal(written['/tmp/rv-comment.md'], 'the body');
+    assert.contains(cmds[cmds.length - 1], "gh issue comment '42' --repo '" + REPO + "' --body-file '/tmp/rv-comment.md'");
+  });
+
+  test('waitForGreenChecks: red exits first, green breaks, deadline warns with bounded sleeps', function () {
+    var ctx = baseCtx({ decision: 'approve' });
+
+    var redIo = { exec: function () { return 'FAILURE\n'; }, log: function () {} };
+    assert.deepEqual(rvModule.waitForGreenChecks(redIo, ctx),
+      { status: 'ci-red', decision: 'approve', pr: PR });
+
+    var greenIo = { exec: function () { return 'SUCCESS\n'; }, log: function () {}, clock: function () { return new Date(0); } };
+    assert.equal(rvModule.waitForGreenChecks(greenIo, ctx), null);
+
+    var t = 0;
+    var sleeps = [];
+    var timeoutIo = {
+      exec: function () { return 'PENDING\n'; },
+      log: function () {},
+      clock: function () { return new Date(t += 300000); },
+      sleepMs: function (ms) { sleeps.push(ms); }
+    };
+    assert.deepEqual(rvModule.waitForGreenChecks(timeoutIo, ctx),
+      { status: 'ci-timeout', decision: 'approve', pr: PR });
+    assert.deepEqual(sleeps, [30000], 'exactly one 30s poll sleep before the deadline hit');
+  });
+
+  test('applyReworkVerdict dispatches on the escalate flag', function () {
+    var cmds = [];
+    function mkIo() {
+      return {
+        exec: function (c) { cmds.push(c); return 'thread summary line\n'; },
+        writeFile: function () {},
+        tempFile: function (h) { return '/tmp/rv-' + h; },
+        log: function () {}
+      };
+    }
+    var escalateCtx = baseCtx({
+      contract: parseC(contractLines({ decision: 'rework', escalate: 'true' })),
+      decision: 'rework'
+    });
+    var r = rvModule.applyReworkVerdict(baseOpts(), mkIo(), escalateCtx);
+    assert.equal(r.status, 'escalated');
+    assert.equal(cmds.filter(function (c) { return c.indexOf('api graphql') !== -1; }).length, 1,
+      'escalate path fetched the review threads');
+
+    cmds.length = 0;
+    var plainCtx = baseCtx({ decision: 'rework' });
+    var r2 = rvModule.applyReworkVerdict(baseOpts(), mkIo(), plainCtx);
+    assert.equal(r2.status, 'rework');
+    assert.equal(r2.nextRound, 3);
+    assert.equal(cmds.filter(function (c) { return c.indexOf('api graphql') !== -1; }).length, 0,
+      'plain rework never touches the threads query');
+  });
+
+});
