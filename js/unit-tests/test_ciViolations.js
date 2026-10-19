@@ -215,9 +215,17 @@ suite('ciViolations.parseDiffPaths + tagOwnership', function() {
         assert.equal(items[0].ownership, 'owned', 'old rename path counts as owned');
     });
 
-    test('no diff text (null) → every pathed violation degrades to foreign, never owned', function() {
+    test('no diff text (null) → pathed violations degrade to unknown, never "foreign, do not chase"', function() {
         var items = cv.extractAndTagViolations([{ name: 'gate', logs: GATE_LOG }], null);
-        assert.equal(items[0].ownership, 'foreign');
+        assert.equal(items[0].ownership, 'unknown');
+    });
+
+    test('unknown-ownership items render as a note, never inside the "do not chase" table', function() {
+        var md = cv.buildViolationsMarkdown(
+            cv.extractAndTagViolations([{ name: 'gate', logs: GATE_LOG }], null));
+        assert.notContains(md, 'Violations you must fix');
+        assert.notContains(md, 'do not chase');
+        assert.contains(md, 'no attributable file path');
     });
 });
 
@@ -303,7 +311,10 @@ suite('ciViolations.buildViolationsMarkdown (UT-3, AC3)', function() {
             lines.push(' gen/big_' + (i < 10 ? '0' : '') + i + '.dart:' + i + ': method m' + i + ' has ' + (60 + i) + ' lines > max 60');
         }
         var log = '[FAIL] method_size: 60 violations over limits\n' + lines.join('\n') + '\n';
-        var items = cv.extractAndTagViolations([{ name: 'gate', logs: log }], null);
+        // A non-empty diff (none of the 60 files in it) classifies the items
+        // foreign so the capped table is exercised.
+        var items = cv.extractAndTagViolations([{ name: 'gate', logs: log }],
+            'diff --git a/other/unrelated.txt b/other/unrelated.txt\n');
         assert.equal(items.length, 60, 'all 60 extracted');
         var md = cv.buildViolationsMarkdown(items);
         var rowCount = 0;

@@ -22,6 +22,7 @@ const prHelper = require('./pullRequest.js');
 const gitOps = require('./gitOps.js');
 const reviewThreadInventory = require('./reviewThreadInventory.js');
 const ciModule = require('./ci.js');
+const ciViolations = require('./ciViolations.js');
 
 // Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
 // common/pullRequest.js once — this delegate keeps every local call site.
@@ -495,7 +496,9 @@ function extractJenkinsBuildTarget(detailsUrl, jenkinsBasePath) {
     return { jobPath: jobPathParts.join('/'), buildNumber: buildNumber };
 }
 
-/** Build the md snippet + full-log block for one failed check, or null when there are no logs. */
+/** Build the md snippet + full-log block for one failed check, or null when there are no logs.
+ * gh-1119: the RAW logs ride along (sections.logs) so the violation extractor can run
+ * on them without re-parsing the rendered markdown. */
 function buildLogSections(check, logs, label) {
     if (!logs) return null;
     var lines = logs.split('\n');
@@ -504,7 +507,8 @@ function buildLogSections(check, logs, label) {
         md: '**' + label + ' (last 500 lines)**:\n\n```\n' + snippet + '\n```\n\n',
         full: '=== ' + label + ' for: ' + check.name + ' ===\n' +
               'URL: ' + (check.details_url || 'N/A') + '\n' +
-              logs + '\n\n'
+              logs + '\n\n',
+        logs: logs
     };
 }
 
@@ -689,17 +693,20 @@ function buildCheckLogSections(check, scm, owner, repo, jenkinsBasePath) {
 
     var md = '';
     var full = '';
+    var logs = '';
     if (ghResult.logs) {
         var ghSections = buildLogSections(check, ghResult.logs, 'Error log');
         md += ghSections.md;
         full += ghSections.full;
+        logs += ghResult.logs + '\n';
     }
     if (jenkinsResult.logs) {
         var jenkinsSections = buildLogSections(check, jenkinsResult.logs, 'Jenkins error log');
         md += jenkinsSections.md;
         full += jenkinsSections.full;
+        logs += jenkinsResult.logs + '\n';
     }
-    if (full) return { md: md, full: full, ok: true };
+    if (full) return { md: md, full: full, logs: logs, ok: true };
     return failedLogSections(check, checkLogFailureReason(ghResult, jenkinsResult));
 }
 
@@ -847,21 +854,23 @@ function buildCiFailuresResolutionSection(hasFullLog) {
     return section;
 }
 
-function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt) {
+function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt) {
     var scm = null;
-    var owner, repo, headSha, inputFolder, jenkinsBasePath;
+    var owner, repo, headSha, inputFolder, jenkinsBasePath, diffText;
 
     if (_isScm(scmOrOwner)) {
         scm = scmOrOwner;
         headSha = repoOrHeadSha;
         inputFolder = headShaOrInputFolder;
         jenkinsBasePath = inputFolderOpt;
+        diffText = diffTextOpt;
     } else {
         owner = scmOrOwner;
         repo = repoOrHeadSha;
         headSha = headShaOrInputFolder;
         inputFolder = inputFolderOpt;
         jenkinsBasePath = jenkinsBasePathOpt;
+        diffText = diffTextOpt;
     }
 
     try {

@@ -237,8 +237,13 @@ function jscpdViolations(lines, checkName, taken, out) {
 /** First path-like token (contains a separator and an extension) in a text. */
 function findPathToken(text) {
     var stripped = String(text || '').replace(/https?:\/\/\S+/g, ' ').replace(/`/g, '');
-    var m = stripped.match(/[A-Za-z0-9_.\-\\]+[\/\\][A-Za-z0-9_.\-\\]+\.[A-Za-z0-9]+/);
-    return m ? m[0] : null;
+    // The separator must be INSIDE the class: tokens like
+    // js/unit-tests/foo.js have several levels, and a class without '/' only
+    // matches the last directory level (leftmost-match semantics).
+    var m = stripped.match(/[A-Za-z0-9_.\-\/\\]+\.[A-Za-z0-9]+/);
+    if (!m) return null;
+    var token = m[0];
+    return (token.indexOf('/') !== -1 || token.indexOf('\\') !== -1) ? token : null;
 }
 
 /** Generic fallback: "::error file=..,line=..::msg" annotations and "##[error]" lines. */
@@ -310,13 +315,15 @@ function ownedViolations(violations) {
 /**
  * Tag each violation owned / foreign / unknown against the PR diff text:
  * owned = the path (or a runner-rooted suffix of it) appears in the diff,
- * unknown = no path, foreign = everything else.
+ * unknown = no path OR no diff evidence (legacy callers pass no diff — a
+ * missing diff must never silently rebrand a possibly-owned red as "foreign,
+ * do not chase"), foreign = pathed and absent from the diff.
  */
 function tagOwnership(violations, diffText) {
-    var diffPaths = parseDiffPaths(diffText);
+    var diffPaths = diffText ? parseDiffPaths(diffText) : null;
     return (violations || []).map(function(v) {
         var ownership = 'unknown';
-        if (v.path) {
+        if (v.path && diffPaths) {
             ownership = 'foreign';
             for (var i = 0; i < diffPaths.length; i++) {
                 if (sameFile(v.path, diffPaths[i])) {
@@ -379,22 +386,29 @@ function violationsTable(items) {
 
 /**
  * The violations block that opens ci_failures.md: the owned table first,
- * the foreign list second (AC3). Empty string when nothing was extracted —
- * the caller then assembles today's file unchanged (AC5 / I3).
+ * the foreign list second (AC3). Unknown-ownership items (no path, or no
+ * diff evidence) get a note only — they are never rendered as "do not
+ * chase". Empty string when nothing was extracted — the caller then
+ * assembles today's file unchanged (AC5 / I3).
  */
 function buildViolationsMarkdown(violations) {
     var items = violations || [];
     if (items.length === 0) return '';
     var owned = items.filter(function(v) { return v.ownership === 'owned'; });
-    var rest = items.filter(function(v) { return v.ownership !== 'owned'; });
-    if (owned.length === 0 && rest.length === 0) return '';
+    var foreign = items.filter(function(v) { return v.ownership === 'foreign'; });
+    var unknown = items.filter(function(v) { return v.ownership !== 'owned' && v.ownership !== 'foreign'; });
+    if (owned.length === 0 && foreign.length === 0 && unknown.length === 0) return '';
     var md = '';
     if (owned.length > 0) {
         md += '## 🚨 Violations you must fix (' + owned.length + ' owned)\n\n' +
             violationsTable(owned) + '\n' + OWNED_RULE_NOTE + '\n';
     }
-    if (rest.length > 0) {
-        md += '## 🌐 Foreign / infra reds (do not chase)\n\n' + violationsTable(rest) + '\n' + FOREIGN_NOTE + '\n';
+    if (foreign.length > 0) {
+        md += '## 🌐 Foreign / infra reds (do not chase)\n\n' + violationsTable(foreign) + '\n' + FOREIGN_NOTE + '\n';
+    }
+    if (unknown.length > 0) {
+        md += '_ℹ️ ' + unknown.length + ' additional error line(s) had no attributable file path — ' +
+            'judge them from the raw log sections below._\n';
     }
     return md;
 }
