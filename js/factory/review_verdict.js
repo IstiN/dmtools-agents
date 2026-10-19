@@ -395,11 +395,72 @@ function applyReviewVerdict(opts, io) {
         " --remove-label 'needs-human'", '');
     addLabel('pr_approved');
     log('→ labeled pr_approved — merge-trigger will squash-merge PR #' + pr + ' once CLEAN');
-    return { status: 'approved', decision: decision, pr: pr };
+    var kicked = kickSmOnGreenHead(opts, io, pr);
+    return { status: 'approved', decision: decision, pr: pr, smKicked: kicked };
+}
+
+// ── gh-1101: kick one SM tick on approval when the head is already green ──
+// Live dart #435: approved at 14:04 on a head whose dispatched CI run had
+// concluded green at 13:57 — the merge waited on cron. When the current
+// head carries a completed-green dispatched CI run, order ONE SM tick now,
+// deduped against an SM run already queued/in_progress (factory-sm-kicker
+// sm-liveness parity). Best-effort: every probe failure means no kick.
+
+var SM_LIVE_JQ = '[.[] | select(.status == "queued" or .status == "in_progress")] | length';
+var GREEN_RUNS_JQ = '[.workflow_runs[] | select(.status == "completed" and .conclusion == "success")] | length';
+
+function smKickEnabled(opts) {
+    return String(opts.smKick === undefined ? 'true' : opts.smKick) !== 'false';
+}
+
+function execCount(io, cmd) {
+    try { return parseInt(String(unwrap(io.exec(cmd))).trim(), 10) || 0; } catch (e) { return -1; }
+}
+
+function headShaOf(io, repo, pr) {
+    try {
+        return String(unwrap(io.exec('gh pr view ' + shellQuote(pr) + ' --repo ' + shellQuote(repo) +
+            " --json headRefOid --jq '.headRefOid'"))).trim();
+    } catch (e) { return ''; }
+}
+
+function headHasGreenRun(io, repo, ciWorkflow, sha) {
+    return execCount(io, 'gh api ' + shellQuote('repos/' + repo + '/actions/workflows/' + ciWorkflow +
+        '/runs?head_sha=' + sha + '&event=workflow_dispatch&per_page=5') +
+        ' --jq ' + shellQuote(GREEN_RUNS_JQ)) > 0;
+}
+
+function smRunLive(io, repo, smWorkflow) {
+    // -1 (probe failure) counts as live: never risk a duplicate tick.
+    return execCount(io, 'gh run list --repo ' + shellQuote(repo) + ' --workflow ' +
+        shellQuote(smWorkflow) + ' --limit 20 --json status --jq ' + shellQuote(SM_LIVE_JQ)) !== 0;
+}
+
+function kickSmOnGreenHead(opts, io, pr) {
+    if (!smKickEnabled(opts)) return false;
+    var log = io.log || function () {};
+    var repo = opts.repo;
+    var sha = headShaOf(io, repo, pr);
+    if (!/^[0-9a-f]{7,40}$/.test(sha)) return false;
+    if (!headHasGreenRun(io, repo, opts.ciWorkflow || 'quality.yml', sha)) return false;
+    var smWorkflow = opts.smWorkflow || 'machine-sm.yml';
+    if (smRunLive(io, repo, smWorkflow)) {
+        log('→ head ' + sha.slice(0, 8) + ' already green; SM tick already queued/running — no kick');
+        return false;
+    }
+    try {
+        io.exec('gh workflow run ' + shellQuote(smWorkflow) + ' --repo ' + shellQuote(repo));
+    } catch (e) {
+        log('::warning::SM tick dispatch failed: ' + (e && e.message || e));
+        return false;
+    }
+    log('→ head ' + sha.slice(0, 8) + ' already green — dispatched one SM tick (' + smWorkflow + ') to merge now');
+    return true;
 }
 
 module.exports = {
     applyReviewVerdict: applyReviewVerdict,
+    kickSmOnGreenHead: kickSmOnGreenHead,
     DEFAULT_RUN_OUTPUT: DEFAULT_RUN_OUTPUT,
     parseVerdictContract: parseVerdictContract,
     resolveMachineAuthor: resolveMachineAuthor,

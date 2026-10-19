@@ -49,6 +49,18 @@
 // serialized via fn.toString() and cannot close over module scope).
 var ACTIVE_RUN_STATES = ['queued', 'in_progress', 'waiting', 'pending'];
 
+// gh-1101: post-conclusion check-visibility grace. Applies ONLY to the
+// re-DISPATCH decision (a just-concluded run's check-runs may not be
+// visible yet) — never to latching a green verdict.
+var CONCLUDED_REDISPATCH_GRACE_MS = 15 * 60 * 1000;
+
+/** True when `run` is completed and concluded less than `ms` before nowMs. */
+function concludedWithin(run, nowMs, ms) {
+    if (!run || run.status !== 'completed') return false;
+    var age = nowMs - Date.parse(run.updated_at || run.created_at || '');
+    return age >= 0 && age < ms;
+}
+
 // ── Liveness classification ────────────────────────────────────────────────
 
 /**
@@ -85,7 +97,13 @@ function classify(probe) {
     if (newest.status !== 'completed') return 'running'; // defensive: active should have caught it
     var c = newest.conclusion ? String(newest.conclusion) : null;
     if (!c) return 'running';                     // completed, no conclusion yet
-    if (c === 'cancelled') return 'zombie-cancelled';
+    // gh-1101: the check-visibility grace moved here from the active
+    // probe — a FRESH cancel is still owned by the rerun-cancelled-checks
+    // remedy (no re-dispatch), but a concluded run is never "active".
+    if (c === 'cancelled') {
+        return concludedWithin(newest, Date.now(), CONCLUDED_REDISPATCH_GRACE_MS)
+            ? 'running' : 'zombie-cancelled';
+    }
     if (c === 'success') return 'green';
     return 'red';
 }
@@ -449,6 +467,8 @@ module.exports = {
     ghostGuardMarks: ghostGuardMarks,
     ZOMBIE_MARKER_RE: ZOMBIE_MARKER_RE,
     ACTIVE_RUN_STATES: ACTIVE_RUN_STATES,
+    CONCLUDED_REDISPATCH_GRACE_MS: CONCLUDED_REDISPATCH_GRACE_MS,
+    concludedWithin: concludedWithin,
     STALE_CANCEL_MARKER_RE: STALE_CANCEL_MARKER_RE,
     staleCancelMarkerLine: staleCancelMarkerLine,
     SILENT_UPDATE_MAX_FAILURES: SILENT_UPDATE_MAX_FAILURES,

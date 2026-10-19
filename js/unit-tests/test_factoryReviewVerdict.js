@@ -684,3 +684,65 @@ suite('factoryReviewVerdict — applyReviewVerdict guards (round-3 rework)', fun
     assert.contains(prList, '\\\\b(closes|fixes|resolves)\\\\s+#' + NUMBER + '\\\\b');
   });
 });
+
+// ── gh-1101: approval on an already-green head kicks ONE SM tick ────────────
+suite('review verdict — gh-1101 SM tick on approval', function () {
+  var SHA = '1fbfd41a1fbfd41a1fbfd41a1fbfd41a1fbfd41a';
+  function kickRules(green, smLive) {
+    return [
+      ['headRefOid', 'out', SHA + '\n'],
+      ['actions/workflows/quality.yml/runs', 'out', green + '\n'],
+      ['run list', 'out', smLive + '\n'],
+      ['workflow run', 'out', 'ok']
+    ].concat(baseRules({ rollup: 'SUCCESS\n' }));
+  }
+  function smKicks(st) {
+    return st.commands.filter(function (c) { return c.indexOf('gh workflow run') === 0; });
+  }
+  function approve(rules, optsOver) {
+    var st = withParser(execStub(rules), contractLines({ decision: 'approve' }));
+    var r = rvModule.applyReviewVerdict(Object.assign(baseOpts(), optsOver || {}), ioStub(st));
+    return { st: st, r: r };
+  }
+
+  test('(d) approval with a green dispatched run on the head ⇒ exactly one SM tick', function () {
+    var x = approve(kickRules(1, 0));
+    assert.equal(x.r.status, 'approved');
+    assert.equal(x.r.smKicked, true);
+    assert.equal(smKicks(x.st).length, 1);
+    assert.contains(smKicks(x.st)[0], "'machine-sm.yml'");
+  });
+
+  test('SM tick already queued/running ⇒ no duplicate', function () {
+    var x = approve(kickRules(1, 1));
+    assert.equal(x.r.smKicked, false);
+    assert.equal(smKicks(x.st).length, 0);
+  });
+
+  test('no green run on the current head ⇒ no SM tick', function () {
+    var x = approve(kickRules(0, 0));
+    assert.equal(smKicks(x.st).length, 0);
+  });
+
+  test('configured smWorkflow / ciWorkflow are honored; smKick=false disables', function () {
+    var rules = [['actions/workflows/ci.yml/runs', 'out', '1\n']].concat(kickRules(0, 0));
+    var x = approve(rules, { smWorkflow: 'sm.yml', ciWorkflow: 'ci.yml' });
+    assert.equal(smKicks(x.st).length, 1);
+    assert.contains(smKicks(x.st)[0], "'sm.yml'");
+    var y = approve(kickRules(1, 0), { smKick: 'false' });
+    assert.equal(smKicks(y.st).length, 0);
+  });
+
+  test('SM liveness probe failure counts as live (never risk a duplicate)', function () {
+    var rules = [['run list', 'throw', 'boom']].concat(kickRules(1, 0));
+    var x = approve(rules);
+    assert.equal(smKicks(x.st).length, 0);
+  });
+
+  test('SM dispatch failure is tolerated', function () {
+    var rules = [['workflow run', 'throw', 'boom']].concat(kickRules(1, 0));
+    var x = approve(rules);
+    assert.equal(x.r.status, 'approved');
+    assert.equal(x.r.smKicked, false);
+  });
+});

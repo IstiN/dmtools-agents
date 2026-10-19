@@ -3012,6 +3012,25 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 ' validation already dispatching on this head — skip');
                     continue;
                 }
+                // gh-1101: approved + completed-green dispatched run on the
+                // CURRENT head (probe is head_sha-scoped) + not BEHIND + no
+                // zombie/placeholder check-runs ⇒ latch ai_validated and
+                // merge now — no CI dispatch, no ai_validating re-arm,
+                // independent of rule.skipIfGreenCi.
+                if (approvedGreenHeadFastPath(effectiveRepoInfo, ticket, key, vProbe, vHead0)) {
+                    processedKeys.push(key);
+                    continue;
+                }
+                // gh-1101 re-dispatch guard: the newest dispatched run on
+                // this head concluded (non-green) moments ago — its
+                // check-runs may still be invisible; the verdict paths own
+                // it. Never applies to the green latch above.
+                if (recentlyConcludedNonGreen(vProbe)) {
+                    console.log('  ⏭️  ' + key + ' a dispatched run on this head concluded <' +
+                                (validationLivenessModule.CONCLUDED_REDISPATCH_GRACE_MS / 60000) +
+                                ' min ago — no re-dispatch (check visibility grace)');
+                    continue;
+                }
                 // Green-cover guard (rule flag skipIfGreenCi — the
                 // revalidate-armed-green dead-zone rule): if the head
                 // already carries a COMPLETED green dispatched CI run,
@@ -5497,19 +5516,11 @@ var PROBE_WORKER_SOURCE = [
     '        });',
     '        var parsed = mcpParse((res || {}).output || (res || {}).stdout || res);',
     '        var list = (parsed && parsed.workflow_runs) || [];',
-    '        var now = Date.now();',
     '    // active — hasActiveDispatchedRun semantics: any queued/in-progress/',
-    '    // waiting/pending run, or a completed one whose CONCLUSION is younger',
-    '    // than the 15-min check-visibility grace.',
+    '    // waiting/pending run. A CONCLUDED run is a verdict, never active (gh-1101).',
     '        out.active = list.some(function (r) {',
-    "            if (r.status === 'queued' || r.status === 'in_progress' ||",
-    "                r.status === 'waiting' || r.status === 'pending') return true;",
-    "            if (r.status === 'completed') {",
-    '                var endTs = r.updated_at || r.created_at;',
-    '                var age = now - new Date(endTs).getTime();',
-    '                return age >= 0 && age < 15 * 60 * 1000;',
-    '            }',
-    '            return false;',
+    "            return r.status === 'queued' || r.status === 'in_progress' ||",
+    "                r.status === 'waiting' || r.status === 'pending';",
     '        });',
     '    // green — hasSuccessfulDispatchedRun semantics: any completed run with',
     '    // conclusion success on this head (a canceled run leaves no verdict).',
@@ -6483,6 +6494,57 @@ function probeDispatchedState(repoInfo, ciWorkflow, headSha) {
     };
 }
 
+// gh-1101 helpers ────────────────────────────────────────────────────────
+function hasLabel(ticket, name) {
+    return (ticket.labels || []).indexOf(name) !== -1;
+}
+
+// No zombie / placeholder check-runs on the head (gh-842/852). A degraded
+// probe (null) reads clean — the legacy green-cover semantics.
+function headGateClean(repoInfo, headSha) {
+    var z = headCheckRunZombies(repoInfo, headSha);
+    if (z && z.zombies.length) return false;
+    var ph = headPlaceholders(repoInfo, headSha);
+    return !(ph && ph.length);
+}
+
+function isFastPathCandidate(ticket, probe, headSha) {
+    if (!headSha || !probe || !probe.green) return false;
+    if (!hasLabel(ticket, 'pr_approved')) return false;
+    return ((ticket.pr && ticket.pr.mergeState) || '') !== 'BEHIND';
+}
+
+// Latch ai_validated (always dropping the ai_validating arm) and attempt the
+// merge on the existing green. Returns true when the candidate is handled.
+function approvedGreenHeadFastPath(repoInfo, ticket, key, probe, headSha) {
+    if (!isFastPathCandidate(ticket, probe, headSha)) return false;
+    if (!headGateClean(repoInfo, headSha)) return false;
+    console.log('  ✅ ' + key + ' approved + green dispatched run on the current head' +
+                ' — merging without CI (gh-1101)');
+    try {
+        attemptMergeProbe(repoInfo, ticket, key); // latches itself when unapproved
+    } catch (eFast) {
+        latchValidated(repoInfo, ticket);
+        console.warn('  ⚠️  ' + key + ' fast-path merge: ' + (eFast.message || eFast) +
+                     ' — ai_validated latched, merge retries next tick (no re-dispatch)');
+    }
+    return true;
+}
+
+// Latching ai_validated ALWAYS drops the ai_validating arm (gh-1101).
+function latchValidated(repoInfo, ticket) {
+    var tracker = githubTracker(repoInfo.owner, repoInfo.repo);
+    if (hasLabel(ticket, 'ai_validating')) tracker.removeLabel(ticket.prNumber, 'ai_validating');
+    if (!hasLabel(ticket, 'ai_validated')) tracker.addLabel(ticket.prNumber, 'ai_validated');
+}
+
+function recentlyConcludedNonGreen(probe) {
+    var n = probe && probe.newest;
+    if (!n || n.conclusion === 'success') return false;
+    return validationLivenessModule.concludedWithin(n, Date.now(),
+        validationLivenessModule.CONCLUDED_REDISPATCH_GRACE_MS);
+}
+
 function hasActiveDispatchedRun(repoInfo, ciWorkflow, headSha) {
     try {
         var res = cli_execute_command({
@@ -6495,23 +6557,13 @@ function hasActiveDispatchedRun(repoInfo, ciWorkflow, headSha) {
         var runs = mcpParse((res || {}).output ||
                             (res || {}).stdout || res);
         var list = (runs && runs.workflow_runs) || [];
-        var now = Date.now();
+        // gh-1101: a CONCLUDED run is a verdict, never "in flight" — the
+        // old 15-min post-conclusion grace made a green run on an approved
+        // head skip the latch+merge for 15 min (live dart #435). The
+        // visibility-lag guard now lives on the RE-DISPATCH side only
+        // (validationLiveness.concludedWithin).
         return list.some(function (r) {
-            if (validationLivenessModule.ACTIVE_RUN_STATES.indexOf(r.status) !== -1) return true;
-            if (r.status === 'completed') {
-                // Grace from the run's CONCLUSION (updated_at), not its
-                // creation: the check-run visibility race only lasts ~15
-                // min after the verdict lands. Counting from created_at let
-                // a long-queued-then-cancelled/red run shadow re-dispatch
-                // far beyond its conclusion, and pinned the grace window to
-                // a point that had nothing to do with the verdict (live: fa
-                // wave stall 2026-09-27 — red heads could not re-validate
-                // for the whole created_at+15min span after a slow run).
-                var endTs = r.updated_at || r.created_at;
-                var age = now - new Date(endTs).getTime();
-                return age >= 0 && age < 15 * 60 * 1000;
-            }
-            return false;
+            return validationLivenessModule.ACTIVE_RUN_STATES.indexOf(r.status) !== -1;
         });
     } catch (e) {
         // Fail OPEN: a probe error must not wedge the arm — worst case
@@ -8132,6 +8184,8 @@ if (typeof module !== 'undefined' && module.exports) {
         probeDispatchedState: probeDispatchedState,
         failedRunLinksLine: failedRunLinksLine,
         hasRecentHeadRun: hasRecentHeadRun,
+        approvedGreenHeadFastPath: approvedGreenHeadFastPath,
+        recentlyConcludedNonGreen: recentlyConcludedNonGreen,
         hasActiveLegRun: hasActiveLegRun,
         dispatchRaceGraceMs: dispatchRaceGraceMs,
         resolveValidationConcurrency: resolveValidationConcurrency,
