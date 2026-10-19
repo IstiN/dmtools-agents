@@ -306,6 +306,111 @@ function getPRDetails(scmOrWorkspace, repositoryOrPrId, pullRequestIdOpt) {
     }
 }
 
+// ── fetchDiscussionsAndRawData helpers (gh-1086 extraction) ──────────────────
+// Each helper keeps the exact call order, log text and fallback semantics of
+// the original inline implementation.
+
+function fetchPrConversations(workspace, repository, prIdStr) {
+    var conversations = [];
+    try {
+        conversations = github_get_pr_conversations({
+            workspace: workspace,
+            repository: repository,
+            pullRequestId: prIdStr
+        }) || [];
+    } catch (e) {
+        console.warn('github_get_pr_conversations failed:', e.message || e);
+    }
+    return conversations;
+}
+
+function fetchPrReviewThreadsRaw(workspace, repository, prIdStr) {
+    var graphqlRaw = null;
+    try {
+        graphqlRaw = github_get_pr_review_threads({
+            workspace: workspace,
+            repository: repository,
+            pullRequestId: prIdStr
+        });
+        console.log('Got', reviewThreadInventory.parseGraphQLNodes(graphqlRaw).length, 'review threads for GraphQL IDs');
+    } catch (e) {
+        console.warn('github_get_pr_review_threads failed (falling back to conversations-only inventory):', e.message || e);
+    }
+    return graphqlRaw;
+}
+
+/**
+ * Build the review-thread inventory from the conversations export and the
+ * GraphQL census, pushing thread rows into rawThreads and the markdown
+ * section into sections when EITHER source has data. Returns the inventory
+ * (its census flows into the raw payload), or null when the build failed.
+ */
+function appendReviewThreadInventory(conversations, graphqlRaw, sections, rawThreads) {
+    var inv = null;
+    try {
+        inv = reviewThreadInventory.collectThreadInventory(conversations, graphqlRaw);
+        if (conversations.length > 0 || inv.threads.length > 0) {
+            inv.threads.forEach(function(t) { rawThreads.push(t); });
+            sections.push(inv.markdownSection);
+            var invCounts = inv.counts;
+            console.log('Discussions: ' + invCounts.total + ' threads (' + invCounts.open + ' open, ' + invCounts.resolved + ' resolved, ' + invCounts.bot + ' bot, ' + invCounts.notices + ' machine notices),',
+                rawThreads.filter(function(t) { return t.rootCommentId; }).length + ' reply IDs,',
+                rawThreads.filter(function(t) { return t.threadId; }).length + ' resolve IDs' +
+                (inv.census.graphqlUnresolved !== null
+                    ? ' — GraphQL census: ' + inv.census.graphqlUnresolved + ' unresolved (arm-rule count)'
+                    : ''));
+        }
+    } catch (e) {
+        console.warn('review-thread inventory build failed:', e.message || e);
+    }
+    return inv;
+}
+
+/**
+ * Render the general PR comments section body (marker comments skipped,
+ * bodies trimmed, per-comment separator). Callers gate on comments being
+ * non-empty, exactly like the pre-extraction inline code.
+ */
+function buildGeneralCommentsSection(comments) {
+    var section = '## General PR Comments\n\n';
+    comments.forEach(function(comment) {
+        if (_isDmtoolsMarkerComment(comment)) return;
+        var author = (comment.user && comment.user.login) ? comment.user.login : 'unknown';
+        var date = comment.created_at ? comment.created_at.substring(0, 10) : '';
+        section += '**' + author + '** (' + date + '):\n\n';
+        section += (comment.body || '').trim() + '\n\n---\n\n';
+    });
+    return section;
+}
+
+/**
+ * Fetch general PR comments and render their section; null when the fetch
+ * fails or there are no comments (no section is pushed in either case).
+ */
+function fetchGeneralCommentsSection(workspace, repository, prIdStr) {
+    try {
+        var comments = github_get_pr_comments({
+            workspace: workspace,
+            repository: repository,
+            pullRequestId: prIdStr
+        });
+        if (comments && comments.length > 0) {
+            return buildGeneralCommentsSection(comments);
+        }
+    } catch (e) {
+        console.warn('github_get_pr_comments failed:', e.message || e);
+    }
+    return null;
+}
+
+function buildDiscussionsMarkdown(sections, pullRequestId) {
+    return sections.length > 0
+        ? '# PR Discussion History\n\n' +
+          '_Previous review discussions for PR #' + pullRequestId + '._\n\n' +
+          sections.join('\n')
+        : null;
+}
+
 /**
  * Fetch PR discussions and raw thread data for reply/resolve.
  *
@@ -340,73 +445,17 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
     // export is empty/incomplete but whose GraphQL census carries open
     // threads (the live dart #424 shape) must still produce the full
     // inventory.
-    var conversations = [];
-    try {
-        conversations = github_get_pr_conversations({
-            workspace: workspace,
-            repository: repository,
-            pullRequestId: prIdStr
-        }) || [];
-    } catch (e) {
-        console.warn('github_get_pr_conversations failed:', e.message || e);
-    }
-    var graphqlRaw = null;
-    try {
-        graphqlRaw = github_get_pr_review_threads({
-            workspace: workspace,
-            repository: repository,
-            pullRequestId: prIdStr
-        });
-        console.log('Got', reviewThreadInventory.parseGraphQLNodes(graphqlRaw).length, 'review threads for GraphQL IDs');
-    } catch (e) {
-        console.warn('github_get_pr_review_threads failed (falling back to conversations-only inventory):', e.message || e);
-    }
-    var inv = null;
-    try {
-        inv = reviewThreadInventory.collectThreadInventory(conversations, graphqlRaw);
-        if (conversations.length > 0 || inv.threads.length > 0) {
-            inv.threads.forEach(function(t) { rawThreads.push(t); });
-            sections.push(inv.markdownSection);
-            var invCounts = inv.counts;
-            console.log('Discussions: ' + invCounts.total + ' threads (' + invCounts.open + ' open, ' + invCounts.resolved + ' resolved, ' + invCounts.bot + ' bot, ' + invCounts.notices + ' machine notices),',
-                rawThreads.filter(function(t) { return t.rootCommentId; }).length + ' reply IDs,',
-                rawThreads.filter(function(t) { return t.threadId; }).length + ' resolve IDs' +
-                (inv.census.graphqlUnresolved !== null
-                    ? ' — GraphQL census: ' + inv.census.graphqlUnresolved + ' unresolved (arm-rule count)'
-                    : ''));
-        }
-    } catch (e) {
-        console.warn('review-thread inventory build failed:', e.message || e);
-    }
+    var conversations = fetchPrConversations(workspace, repository, prIdStr);
+    var graphqlRaw = fetchPrReviewThreadsRaw(workspace, repository, prIdStr);
+    var inv = appendReviewThreadInventory(conversations, graphqlRaw, sections, rawThreads);
 
     // General PR comments
-    try {
-        const comments = github_get_pr_comments({
-            workspace: workspace,
-            repository: repository,
-            pullRequestId: prIdStr
-        });
-
-        if (comments && comments.length > 0) {
-            let section = '## General PR Comments\n\n';
-            comments.forEach(function(comment) {
-                if (_isDmtoolsMarkerComment(comment)) return;
-                const author = (comment.user && comment.user.login) ? comment.user.login : 'unknown';
-                const date = comment.created_at ? comment.created_at.substring(0, 10) : '';
-                section += '**' + author + '** (' + date + '):\n\n';
-                section += (comment.body || '').trim() + '\n\n---\n\n';
-            });
-            sections.push(section);
-        }
-    } catch (e) {
-        console.warn('github_get_pr_comments failed:', e.message || e);
+    var commentsSection = fetchGeneralCommentsSection(workspace, repository, prIdStr);
+    if (commentsSection !== null) {
+        sections.push(commentsSection);
     }
 
-    const markdown = sections.length > 0
-        ? '# PR Discussion History\n\n' +
-          '_Previous review discussions for PR #' + pullRequestId + '._\n\n' +
-          sections.join('\n')
-        : null;
+    const markdown = buildDiscussionsMarkdown(sections, pullRequestId);
 
     const raw = rawThreads.length > 0
         ? { threads: rawThreads, census: inv ? inv.census : null }
@@ -1021,6 +1070,12 @@ module.exports = {
     findMergedPRForTicket: findMergedPRForTicket,
     getPRDetails: getPRDetails,
     fetchDiscussionsAndRawData: fetchDiscussionsAndRawData,
+    fetchPrConversations: fetchPrConversations,
+    fetchPrReviewThreadsRaw: fetchPrReviewThreadsRaw,
+    appendReviewThreadInventory: appendReviewThreadInventory,
+    buildGeneralCommentsSection: buildGeneralCommentsSection,
+    fetchGeneralCommentsSection: fetchGeneralCommentsSection,
+    buildDiscussionsMarkdown: buildDiscussionsMarkdown,
     detectFailedChecks: detectFailedChecks,
     _runsOfPayload: runsOfPayload,
 

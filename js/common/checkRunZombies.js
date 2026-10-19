@@ -115,6 +115,113 @@ function _startedAtMs(checkRun) {
     return isNaN(ts) ? null : ts;
 }
 
+// ── classify: per-check-run decision helpers (gh-1085) ──────────────────────
+//
+// The partition verdict for ONE check-run is computed by the small pure
+// helpers below; classify() itself only tunes the knobs, iterates and
+// tallies. Extraction keeps every branch covered by the characterization
+// suite (test_checkRunZombies.js) — CRAP = CC at full coverage.
+
+/** A zombie verdict: the caller re-dispatches (runId ghosts) or resets. */
+function zombieVerdict(cr, runId, reason) {
+    return { kind: 'zombie', zombie: { name: (cr && cr.name) || null, runId: runId, reason: reason } };
+}
+
+/** A live verdict; unresolvable marks the probe-error fail-safe (live + retry next tick). */
+function liveVerdict(unresolvable) {
+    return { kind: 'live', unresolvable: unresolvable === true };
+}
+
+// Linked-run decision tree: probe error → live (fail safe), backing run
+// absent → 'no-run' zombie, everything else by the run's state vocabulary.
+function classifyLinkedRun(cr, runId, resolveRun, nowMs, graceMs) {
+    var state = null;
+    var probeError = false;
+    try { state = resolveRun(runId); } catch (e) { probeError = true; }
+    if (probeError) {
+        // Fail SAFE toward live: a missed zombie retries next tick;
+        // a wrongful re-dispatch is the churn this guard exists to
+        // prevent on healthy heads.
+        return liveVerdict(true);
+    }
+    if (state === null || state === undefined) {
+        // The backing run no longer exists (deleted → absent from
+        // the head's run list). The #1457 shape: the run was
+        // cancelled while queued and later ceased to exist.
+        return zombieVerdict(cr, runId, 'no-run');
+    }
+    return verdictForRunState(cr, runId, state, nowMs, graceMs);
+}
+
+// Run-state vocabulary dispatch: ACTIVE → live (AC2), completed → the
+// conclusion ladder, unknown vocabulary → live (fail safe).
+function verdictForRunState(cr, runId, state, nowMs, graceMs) {
+    var st = state.status ? String(state.status).toLowerCase() : '';
+    if (ACTIVE_RUN_STATES.indexOf(st) !== -1) {
+        return liveVerdict(false);       // AC2 — a runner is (or will be) behind it
+    }
+    if (st === 'completed') {
+        return completedRunVerdict(cr, runId, state, nowMs, graceMs);
+    }
+    return liveVerdict(false);           // unknown status vocabulary — fail safe
+}
+
+// A completed backing run: cancelled → zombie, concluded non-cancelled →
+// propagation-lag check, conclusion-less → odd, fail safe toward live.
+function completedRunVerdict(cr, runId, state, nowMs, graceMs) {
+    var concl = state.conclusion ? String(state.conclusion).toLowerCase() : null;
+    if (concl === 'cancelled') {
+        return zombieVerdict(cr, runId, 'cancelled');
+    }
+    if (concl) {
+        return concludedRunVerdict(cr, runId, state, nowMs, graceMs);
+    }
+    return liveVerdict(false);           // completed without a conclusion — odd, fail safe
+}
+
+// Non-cancelled conclusion on the backing run: inside the propagation grace
+// the conclusion is still landing (live); past it the bridge died mid-stamp.
+function concludedRunVerdict(cr, runId, state, nowMs, graceMs) {
+    var endTs = Date.parse(state.updated_at || state.created_at || '');
+    var lag = isNaN(endTs) ? null : nowMs - endTs;
+    if (lag !== null && lag >= 0 && lag <= graceMs) {
+        return liveVerdict(false);       // propagation lag — the conclusion is landing
+    }
+    return zombieVerdict(cr, runId, 'run-concluded');
+}
+
+// No run link (dispatch-bridge stamp at arm time carries no details_url):
+// staleness is the only liveness evidence. A fresh stamp is a dispatch that
+// JUST fired; an old one is a ghost whose run died without concluding it.
+// Unparseable/young → fail safe.
+function classifyUnlinkedRun(cr, nowMs, staleMs) {
+    var started = _startedAtMs(cr || {});
+    if (started !== null && (nowMs - started) > staleMs) {
+        return zombieVerdict(cr, null, 'stale-no-runner');
+    }
+    return liveVerdict(false);
+}
+
+// One check-run's verdict: settled evidence, a linked-run decision, or the
+// link-less staleness decision.
+function classifyOne(cr, resolveRun, nowMs, staleMs, graceMs) {
+    if (!isPendingCheckRun(cr)) return { kind: 'settled' };
+
+    var runId = runIdOf(cr);
+    if (runId !== null && typeof resolveRun === 'function') {
+        return classifyLinkedRun(cr, runId, resolveRun, nowMs, graceMs);
+    }
+    return classifyUnlinkedRun(cr, nowMs, staleMs);
+}
+
+// Fold one verdict into the classification output.
+function tallyClassifyVerdict(out, verdict) {
+    if (verdict.kind === 'zombie') { out.zombies.push(verdict.zombie); return; }
+    if (verdict.kind === 'settled') { out.settled++; return; }
+    out.live++;
+    if (verdict.unresolvable) out.unresolvable++;
+}
+
 /**
  * Partition the head's check-runs into zombies vs live.
  *
@@ -135,69 +242,7 @@ function classify(checkRuns, resolveRun, nowMs, opts) {
     var now = typeof nowMs === 'number' ? nowMs : Date.now();
 
     (checkRuns || []).forEach(function (cr) {
-        if (!isPendingCheckRun(cr)) { out.settled++; return; }
-
-        var runId = runIdOf(cr);
-        if (runId !== null && typeof resolveRun === 'function') {
-            var state = null;
-            var probeError = false;
-            try { state = resolveRun(runId); } catch (e) { probeError = true; }
-            if (probeError) {
-                // Fail SAFE toward live: a missed zombie retries next tick;
-                // a wrongful re-dispatch is the churn this guard exists to
-                // prevent on healthy heads.
-                out.live++;
-                out.unresolvable++;
-                return;
-            }
-            if (state === null || state === undefined) {
-                // The backing run no longer exists (deleted → absent from
-                // the head's run list). The #1457 shape: the run was
-                // cancelled while queued and later ceased to exist.
-                out.zombies.push({ name: (cr && cr.name) || null, runId: runId, reason: 'no-run' });
-                return;
-            }
-            var st = state.status ? String(state.status).toLowerCase() : '';
-            if (ACTIVE_RUN_STATES.indexOf(st) !== -1) {
-                out.live++;          // AC2 — a runner is (or will be) behind it
-                return;
-            }
-            if (st === 'completed') {
-                var concl = state.conclusion ? String(state.conclusion).toLowerCase() : null;
-                if (concl === 'cancelled') {
-                    out.zombies.push({ name: (cr && cr.name) || null, runId: runId, reason: 'cancelled' });
-                    return;
-                }
-                if (concl) {
-                    var endTs = Date.parse(state.updated_at || state.updated_at ||
-                                           state.created_at || '');
-                    var lag = isNaN(endTs) ? null : now - endTs;
-                    if (lag !== null && lag >= 0 && lag <= graceMs) {
-                        out.live++;  // propagation lag — the conclusion is landing
-                        return;
-                    }
-                    // The run ended (non-cancelled) and nobody concluded the
-                    // check — a bridge that died mid-stamp left a ghost.
-                    out.zombies.push({ name: (cr && cr.name) || null, runId: runId, reason: 'run-concluded' });
-                    return;
-                }
-                out.live++;          // completed without a conclusion — odd, fail safe
-                return;
-            }
-            out.live++;              // unknown status vocabulary — fail safe
-            return;
-        }
-
-        // No run link (dispatch-bridge stamp at arm time carries no
-        // details_url): staleness is the only liveness evidence. A fresh
-        // stamp is a dispatch that JUST fired; an old one is a ghost whose
-        // run died without concluding it. Unparseable/young → fail safe.
-        var started = _startedAtMs(cr || {});
-        if (started !== null && (now - started) > staleMs) {
-            out.zombies.push({ name: (cr && cr.name) || null, runId: null, reason: 'stale-no-runner' });
-            return;
-        }
-        out.live++;
+        tallyClassifyVerdict(out, classifyOne(cr, resolveRun, now, staleMs, graceMs));
     });
 
     return out;

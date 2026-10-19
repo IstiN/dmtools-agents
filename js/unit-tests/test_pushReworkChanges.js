@@ -3335,6 +3335,73 @@ function makeOwnedGateFileRead(owned) {
     };
 }
 
+// ── gh-1082 characterization: commitAndPush branch decisions ─────────────────
+// Pins every decision branch of commitAndPush() BEFORE its CRAP decomposition:
+// pr_info parsing (head + base), the forced-checkout decision, the base-branch
+// refusal, the staged-diff commit gate, the squash opt-in, the sync gate, and
+// the push retry ladder. Every test must keep passing byte-identically.
+
+function loadCommitAndPush1082(mocks, moduleOverrides) {
+    return loadModule(
+        'js/pushReworkChanges.js',
+        makeRequire(Object.assign({
+            './common/gitStaging.js': gitStagingModule,
+            './forkCheckout.js': forkCheckoutModule,
+            './configLoader.js': configLoaderModule,
+            './config.js': configModule,
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js'),
+            './common/scm.js': {},
+            './common/submodules.js': { pushManagedSubmodules: function() {} },
+            './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
+                readStagedDiffStat: function() { return 'M file.txt\n'; },
+                syncBranchWithBase: function() { return { success: true, updated: false }; }
+            }),
+            './common/githubHelpers.js': githubHelpersModule,
+            './common/feedbackLoop.js': {
+                runQualityGates: function() { return { success: true }; },
+                runPolicyGates: function() { return { success: true }; },
+                runPostPublishGates: function() { return { success: true }; },
+                resumeAgent: function() { return { attempted: false }; }
+            },
+            './common/autoStart.js': { triggerSmIfIdle: function() {} },
+            './common/outputFiles.js': { readOutputFile: function() { return null; } },
+            './common/trackers.js': makeTrackersModule({}),
+            './cacheToReleases.js': {},
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/commentMarkup.js': commentMarkupModule,
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+        }, moduleOverrides || {})),
+        Object.assign({
+            cli_execute_command: function() { return ''; },
+            file_read: function() { return null; },
+            jira_post_comment: function() {},
+            jira_move_to_status: function() {},
+            jira_remove_label: function() {}
+        }, mocks || {})
+    );
+}
+
+function happyReworkCli(commands, branches) {
+    if (typeof branches === 'string') branches = [branches];
+    return function(args) {
+        commands.push(args.command);
+        if (args.command === 'git branch --show-current') return branches[0] + '\n';
+        for (var i = 0; i < branches.length; i++) {
+            if (args.command.indexOf('git ls-remote --heads origin ' + branches[i]) === 0) {
+                return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/' + branches[i] + '\n';
+            }
+        }
+        return '';
+    };
+}
+
+function prInfoReader(text) {
+    return function(args) {
+        if (args.path.indexOf('pr_info.md') !== -1) return text;
+        return null;
+    };
+}
+
 suite('pushReworkChanges.action — owned-violations rejection marks the leg failed (gh-1119 AC6b)', function() {
 
     var OWNED = [{ check: 'gate', rule: 'method_size', path: 'test/js/require_base_resolution_test.dart',
@@ -3389,5 +3456,268 @@ suite('pushReworkChanges.action — owned-violations rejection marks the leg fai
         assert.ok(
             loaded.jiraMoveToStatusCalls.some(function(c) { return c.statusName === 'In Review'; }),
             'still moves to In Review');
+    });
+});
+
+suite('pushReworkChanges.commitAndPush — branch decisions (gh-1082 characterization)', function() {
+
+    test('pr_info.md without a **Branch** header refuses before any git command', function() {
+        var commands = [];
+        var mod = loadCommitAndPush1082({
+            file_read: prInfoReader('no branch marker here\n'),
+            cli_execute_command: happyReworkCli(commands, 'bug/PROJ-123')
+        });
+
+        var err = null;
+        try {
+            mod.commitAndPush('PROJ-123', baseConfig(), {});
+        } catch (e) { err = e; }
+
+        assert.ok(err, 'throws when the branch header is missing');
+        assert.equal(
+            err.message,
+            'Could not determine expected PR branch from input/PROJ-123/pr_info.md; refusing to commit or push.'
+        );
+        assert.equal(commands.length, 0, 'no git command runs without a known expected branch');
+    });
+
+    test('a branch mismatch with a working forced checkout commits on the expected branch', function() {
+        var commands = [];
+        var mod = loadCommitAndPush1082({
+            file_read: prInfoReader('**Branch**: `bug/PROJ-123` → `develop`'),
+            cli_execute_command: happyReworkCli(commands, ['bug/wrong', 'bug/PROJ-123'])
+        });
+
+        var result = mod.commitAndPush('PROJ-123', baseConfig(), {});
+
+        assert.equal(result.branch, 'bug/PROJ-123', 'the expected branch wins after the forced checkout');
+        assert.equal(result.hasChanges, true);
+        assert.ok(commands.indexOf('git checkout bug/PROJ-123') !== -1, 'forced checkout ran');
+        assert.ok(commands.some(function(c) { return c.indexOf('git commit -m "PROJ-123 rework"') === 0; }));
+        assert.ok(commands.indexOf('git push -u origin bug/PROJ-123') !== -1);
+    });
+
+    test('a failed branch sync with base refuses to push with the sync error', function() {
+        var commands = [];
+        var mod = loadCommitAndPush1082(
+            {
+                file_read: prInfoReader('**Branch**: `bug/PROJ-123` → `develop`'),
+                cli_execute_command: happyReworkCli(commands, 'bug/PROJ-123')
+            },
+            {
+                './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
+                    readStagedDiffStat: function() { return 'M f\n'; },
+                    syncBranchWithBase: function() { return { success: false, error: 'diverged' }; }
+                })
+            }
+        );
+
+        var err = null;
+        try {
+            mod.commitAndPush('PROJ-123', baseConfig(), {});
+        } catch (e) { err = e; }
+
+        assert.ok(err, 'throws when the sync fails');
+        assert.equal(
+            err.message,
+            'Could not sync PR branch with origin/develop before rework push: diverged'
+        );
+        assert.ok(commands.every(function(c) { return c.indexOf('git push') !== 0; }), 'never pushes after a failed sync');
+    });
+
+    test('a failing runtime-artifact untrack cleanup still stages and pushes', function() {
+        var commands = [];
+        var mod = loadCommitAndPush1082(
+            {
+                file_read: prInfoReader('**Branch**: `bug/PROJ-123` → `develop`'),
+                cli_execute_command: happyReworkCli(commands, 'bug/PROJ-123')
+            },
+            {
+                './common/gitStaging.js': {
+                    untrackRuntimeArtifacts: function() { throw new Error('cleanup boom'); },
+                    buildStagingPathspecs: function() { return ':!factory-kit'; }
+                }
+            }
+        );
+
+        var result = mod.commitAndPush('PROJ-123', baseConfig(), {});
+
+        assert.equal(result.hasChanges, true);
+        assert.ok(commands.indexOf('git add . -- :!factory-kit') !== -1, 'staging proceeds after the cleanup failure');
+        assert.ok(commands.indexOf('git push -u origin bug/PROJ-123') !== -1);
+    });
+
+    test('an empty staged diff skips the commit but still pushes existing commits', function() {
+        var commands = [];
+        var mod = loadCommitAndPush1082(
+            {
+                file_read: prInfoReader('**Branch**: `bug/PROJ-123` → `develop`'),
+                cli_execute_command: happyReworkCli(commands, 'bug/PROJ-123')
+            },
+            {
+                './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
+                    readStagedDiffStat: function() { return ''; },
+                    syncBranchWithBase: function() { return { success: true, updated: false }; }
+                })
+            }
+        );
+
+        var result = mod.commitAndPush('PROJ-123', baseConfig(), {});
+
+        assert.equal(result.hasChanges, false, 'no commit made — pushing existing commits only');
+        assert.equal(commands.some(function(c) { return c.indexOf('git commit') === 0; }), false, 'no git commit command');
+        assert.ok(commands.indexOf('git push -u origin bug/PROJ-123') !== -1, 'still pushes');
+    });
+
+    test('config.workingDir is forwarded as workingDirectory on every git command', function() {
+        var argsSeen = [];
+        var mod = loadCommitAndPush1082({
+            file_read: prInfoReader('**Branch**: `bug/PROJ-123` → `develop`'),
+            cli_execute_command: function(args) {
+                argsSeen.push(args);
+                if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+                if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) {
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
+                }
+                return '';
+            }
+        });
+
+        var cfg = baseConfig({ workingDir: '/repo/work' });
+        var result = mod.commitAndPush('PROJ-123', cfg, {});
+
+        assert.equal(result.branch, 'bug/PROJ-123');
+        assert.ok(argsSeen.length >= 4);
+        argsSeen.forEach(function(a) {
+            assert.equal(a.workingDirectory, '/repo/work', 'workingDirectory on: ' + a.command);
+        });
+    });
+
+    test('base-branch refusal message format is pinned (checkout failed, still on base)', function() {
+        var commands = [];
+        var mod = loadCommitAndPush1082({
+            file_read: prInfoReader('**Branch**: `bug/PROJ-123` → `develop`'),
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git branch --show-current') return 'develop\n';
+                if (args.command === 'git checkout bug/PROJ-123') {
+                    throw new Error('error: pathspec did not match any file(s)');
+                }
+                return '';
+            }
+        });
+
+        var err = null;
+        try {
+            mod.commitAndPush('PROJ-123', baseConfig(), {});
+        } catch (e) { err = e; }
+
+        assert.ok(err);
+        assert.equal(
+            err.message,
+            'Refusing to commit/push: current branch "develop" is the base branch (develop), ' +
+            'not the expected PR branch "bug/PROJ-123".'
+        );
+    });
+
+    test('gh-1082 extraction surface: pure parse/build/decide helpers', function() {
+        var mod = loadCommitAndPush1082({}, {});
+
+        // cmd option bag
+        assert.deepEqual(mod.reworkCmdOpts(null), {});
+        assert.deepEqual(mod.reworkCmdOpts(undefined), {});
+        assert.deepEqual(mod.reworkCmdOpts('/w'), { workingDirectory: '/w' });
+
+        // pr_info read + head-branch parse (module-global file_read)
+        var readerMod = loadCommitAndPush1082(
+            { file_read: prInfoReader('**Branch**: `bug/x` → `dev`\nmore') },
+            {}
+        );
+        var ctx = readerMod.readReworkPrInfoHeadBranch('PROJ-9');
+        assert.equal(ctx.headBranch, 'bug/x');
+        assert.contains(ctx.prInfo, 'bug/x');
+
+        var threw = null;
+        try {
+            loadCommitAndPush1082({ file_read: function() { throw new Error('gone'); } }, {})
+                .readReworkPrInfoHeadBranch('PROJ-9');
+        } catch (e) { threw = e; }
+        assert.ok(threw);
+        assert.equal(
+            threw.message,
+            'Missing PR context file input/PROJ-9/pr_info.md. Rework setup did not find or checkout a PR; refusing to commit or push.'
+        );
+
+        // base-branch parse + resolution
+        assert.equal(mod.parseReworkBaseBranch('**Branch**: `bug/x` → `dev`'), 'dev');
+        assert.equal(mod.parseReworkBaseBranch('**Branch**: `bug/x`'), null);
+        assert.equal(mod.resolveReworkBaseBranch(baseConfig(), '**Branch**: `b` → `dev`'), 'dev');
+        assert.equal(mod.resolveReworkBaseBranch(baseConfig(), 'no base line'), 'develop');
+        assert.equal(mod.resolveReworkBaseBranch({}, 'no base line'), 'main');
+
+        // decisions
+        assert.equal(mod.reworkBranchMismatch('bug/x', 'bug/y'), true);
+        assert.equal(mod.reworkBranchMismatch('bug/x', 'bug/x'), false);
+        assert.equal(mod.reworkBranchMismatch(null, 'bug/x'), false);
+        assert.equal(mod.isBaseBranchViolation('develop', 'develop'), true);
+        assert.equal(mod.isBaseBranchViolation('bug/1', 'develop'), false);
+        assert.equal(mod.isBaseBranchViolation(null, 'develop'), false);
+        assert.equal(mod.hasStagedChanges(' M f'), true);
+        assert.equal(mod.hasStagedChanges('   '), false);
+        assert.equal(mod.squashEnabled({ squashReworkWip: true }), true);
+        assert.equal(mod.squashEnabled({ squashReworkWip: 'yes' }), false, 'strict boolean opt-in');
+        assert.equal(mod.squashEnabled({}), false);
+        assert.equal(mod.squashEnabled(null), false);
+
+        // messages
+        assert.equal(
+            mod.baseBranchRefusalMessage('develop', 'develop', 'bug/1'),
+            'Refusing to commit/push: current branch "develop" is the base branch (develop), not the expected PR branch "bug/1".'
+        );
+        var cfg = baseConfig({ formats: { commitMessage: { rework: '{ticketKey} Rework [skip ci]' } } });
+        assert.equal(mod.buildReworkCommitMessage(cfg, 'PROJ-9'), 'PROJ-9 Rework');
+
+        // sync gate + squash dispatch (gh-1082 extraction surface)
+        mod.assertReworkBranchSynced({ success: true }, 'develop');
+        var syncErr = null;
+        try {
+            mod.assertReworkBranchSynced({ success: false, error: 'diverged' }, 'develop');
+        } catch (e) { syncErr = e; }
+        assert.ok(syncErr);
+        assert.equal(syncErr.message, 'Could not sync PR branch with origin/develop before rework push: diverged');
+
+        assert.equal(mod.squashReworkWipIfEnabled(function() {}, 'P-1', baseConfig(), null, {}), false,
+            'opt-in off: history untouched');
+        assert.equal(mod.squashReworkWipIfEnabled(function() {}, 'P-1', baseConfig(), null, null), false);
+        assert.equal(
+            mod.squashReworkWipIfEnabled(function() { throw new Error('must not run'); }, 'P-1', baseConfig(), null, { squashReworkWip: 'x' }),
+            false,
+            'strict boolean opt-in'
+        );
+        var squashCalls = [];
+        var squashingCli = function(args) {
+            squashCalls.push(args.command);
+            if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+            if (args.command.indexOf('git rev-list --merges') === 0) return '';
+            if (args.command.indexOf('git log --format=%s') === 0) {
+                return 'PROJ-123 WIP auto-save a\nPROJ-123 WIP auto-save b\n';
+            }
+            return '';
+        };
+        var squashMod = loadCommitAndPush1082({
+            file_read: function(args) {
+                if (args.path.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
+                if (args.path.indexOf('rework_base_head.txt') !== -1) return 'abc1234';
+                return null;
+            }
+        }, {});
+        assert.equal(
+            squashMod.squashReworkWipIfEnabled(function(command) { return squashingCli({ command: command }); },
+                'PROJ-123', baseConfig(), null, { squashReworkWip: true }),
+            true,
+            'opt-in on: all-WIP range squashed'
+        );
+        assert.ok(squashCalls.indexOf('git reset --soft abc1234') !== -1, 'soft reset ran');
+        assert.ok(squashCalls.indexOf('git commit -m "PROJ-123 rework"') !== -1, 'one rework commit');
     });
 });
