@@ -108,6 +108,22 @@ function questionsFetchPlan(provider, questionsConfig, ticketKey) {
 }
 
 /**
+ * Enrich input with parent story + [BA]/[SA]/[VD] context (non-fatal).
+ *
+ * gh-1112: preCliContentOutputSetup runs this step itself (fault-isolated
+ * in its own chain) and suppresses this built-in call via skipParentContext
+ * so the parent-context JQL is not fired twice per run.
+ */
+function fetchParentContextSafely(params) {
+    if (params.skipParentContext) return;
+    try {
+        fetchParentContextToInput.action(params);
+    } catch (e) {
+        console.warn('fetchParentContextToInput failed (non-fatal):', e);
+    }
+}
+
+/**
  * Pre-CLI action: fetch question subtasks into input folder
  *
  * @param {Object} params - Parameters from DMTools
@@ -166,19 +182,9 @@ function action(params) {
         console.error('Error in fetchQuestionsToInput:', error);
     }
 
-    // Enrich input with parent story + [BA]/[SA]/[VD] context.
-    // gh-1112: preCliContentOutputSetup runs this step itself (fault-isolated
-    // in its own chain) and suppresses this built-in call via skipParentContext
-    // so the parent-context JQL is not fired twice per run.
-    if (!params.skipParentContext) {
-        try {
-            fetchParentContextToInput.action(params);
-        } catch (e) {
-            console.warn('fetchParentContextToInput failed (non-fatal):', e);
-        }
-    }
+    fetchParentContextSafely(params);
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, getAnswerValue, hasAnswerValue, questionsFetchPlan };
+    module.exports = { action, getAnswerValue, hasAnswerValue, questionsFetchPlan, fetchParentContextSafely };
 }

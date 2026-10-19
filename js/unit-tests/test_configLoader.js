@@ -1617,3 +1617,148 @@ suite('configLoader.loadAgentConfig — parent inheritance (gh-1112 AC7)', funct
         assert.equal(resolved.cliPromptsStrategy, 'merge');
     });
 });
+
+suite('configLoader.loadAgentConfig — inheritance edges (gh-1112 rework)', function () {
+
+    var PARENT_PATH = './wiki_publisher.json';
+    var CHILD_PATH = './wiki_child.json';
+
+    var parentJson = JSON.stringify({
+        name: 'Teammate',
+        outputType: 'none',
+        params: {
+            metadata: { contextId: 'wiki_publisher' },
+            cliPrompts: ['base.md', 'shared.md'],
+            customParams: { contentOutput: { target: 'wiki' } }
+        }
+    });
+
+    function loaderWithFiles(files) {
+        return loadModule('js/configLoader.js',
+            makeRequire({ './config.js': configModule }),
+            {
+                file_read: function (opts) {
+                    var p = opts && (opts.path || opts);
+                    if (files[p] !== undefined) return files[p];
+                    if (p && p.indexOf('.dmtools/config') !== -1) return null; // block real config
+                    return null;
+                }
+            });
+    }
+
+    function childJson(child) {
+        return JSON.stringify(child);
+    }
+
+    test('a parent ref inside params (params.parent) resolves and is stripped from the result', function () {
+        var child = childJson({
+            params: {
+                parent: { path: PARENT_PATH, merge: ['params.cliPrompts'] },
+                metadata: { contextId: 'story_checklist' },
+                cliPrompts: ['child.md']
+            }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.equal(merged.params.metadata.contextId, 'story_checklist', 'child params win');
+        assert.equal(merged.params.metadata.cliPrompts, undefined, 'no stray metadata key is invented');
+        assert.deepEqual(merged.params.cliPrompts, ['base.md', 'shared.md', 'child.md'], 'arrays still concatenate');
+        assert.equal(merged.params.parent, undefined, 'params.parent marker must not leak');
+        assert.equal(merged.parent, undefined);
+    });
+
+    test('child top-level keys override the parent\'s', function () {
+        var child = childJson({
+            outputType: 'file',
+            parent: { path: PARENT_PATH, merge: ['params.cliPrompts'] },
+            params: { metadata: { contextId: 'story_checklist' } }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.equal(merged.outputType, 'file', 'child top-level field wins');
+        assert.equal(merged.name, 'Teammate', 'parent-only top-level field is inherited');
+    });
+
+    test('a merge path where only the CHILD has an array keeps the child entries', function () {
+        var parentNoPrompts = JSON.stringify({
+            name: 'Teammate',
+            params: { metadata: { contextId: 'wiki_publisher' } }
+        });
+        var child = childJson({
+            parent: { path: PARENT_PATH, merge: ['params.cliPrompts'] },
+            params: { metadata: { contextId: 'story_checklist' }, cliPrompts: ['child.md'] }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentNoPrompts, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, ['child.md']);
+    });
+
+    test('a merge path where only the PARENT has an array keeps the parent entries', function () {
+        var child = childJson({
+            parent: { path: PARENT_PATH, merge: ['params.cliPrompts'] },
+            params: { metadata: { contextId: 'story_checklist' } }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, ['base.md', 'shared.md']);
+    });
+
+    test('duplicate entries across parent and child arrays are de-duplicated, order stable', function () {
+        var child = childJson({
+            parent: { path: PARENT_PATH, merge: ['params.cliPrompts'] },
+            params: { metadata: { contextId: 'story_checklist' }, cliPrompts: ['shared.md', 'child.md', 'base.md'] }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, ['base.md', 'shared.md', 'child.md'],
+            'parent entries first (in parent order), unseen child entries appended once');
+    });
+
+    test('a merge path that is an array on NEITHER side is left to the plain deep merge', function () {
+        var child = childJson({
+            parent: { path: PARENT_PATH, merge: ['params.customParams'] },
+            params: { metadata: { contextId: 'story_checklist' }, customParams: { space: 'DOC' } }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.equal(merged.params.customParams.space, 'DOC', 'child value wins via deep merge');
+        assert.equal(merged.params.customParams.contentOutput.target, 'wiki', 'parent nested value kept');
+    });
+
+    test('an empty merge list falls back to the default path (params.cliPrompts)', function () {
+        var child = childJson({
+            parent: { path: PARENT_PATH, merge: [] },
+            params: { metadata: { contextId: 'story_checklist' }, cliPrompts: ['child.md'] }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, ['base.md', 'shared.md', 'child.md']);
+    });
+
+    test('an unparseable child config warns and returns null', function () {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function (m) { warns.push(String(m)); };
+        try {
+            var loader = loaderWithFiles({ 'wiki_child.json': '{not json' });
+            var merged = loader.loadAgentConfig(CHILD_PATH);
+            assert.equal(merged, null, 'unparseable config resolves to null');
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(warns.some(function (w) { return w.indexOf('cannot parse agent config') !== -1; }), true,
+            'a parse warning names the config');
+    });
+
+    test('layout prefixes on the parent path resolve repo-root-relative (agents/ form)', function () {
+        var child = childJson({
+            parent: { path: 'agents/wiki_publisher.json', merge: ['params.cliPrompts'] },
+            params: { metadata: { contextId: 'story_checklist' }, cliPrompts: ['child.md'] }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, ['base.md', 'shared.md', 'child.md'],
+            'the "agents/<file>" consuming-repo form resolves to the repo-root file');
+    });
+
+});

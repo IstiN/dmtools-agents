@@ -330,6 +330,81 @@ function resolveAgentConfigPath(path) {
     return p;
 }
 
+/** Read and parse an agent JSON config; null (with a warning) when unreadable/unparseable. */
+function readAgentConfigJson(path) {
+    var raw = tryReadFile(path);
+    if (!raw) {
+        console.warn('configLoader: cannot read agent config "' + path + '"');
+        return null;
+    }
+    try {
+        return JSON.parse(raw);
+    } catch (e) {
+        console.warn('configLoader: cannot parse agent config "' + path + '": ' + (e.message || e));
+        return null;
+    }
+}
+
+/** The inheritance marker is accepted at the top level or inside params. */
+function extractParentRef(config) {
+    return config.parent || (config.params && config.params.parent) || null;
+}
+
+/** The per-path array list to concatenate; defaults to params.cliPrompts. */
+function resolveMergePaths(parentRef) {
+    return (Array.isArray(parentRef.merge) && parentRef.merge.length > 0)
+        ? parentRef.merge
+        : DEFAULT_PARENT_MERGE;
+}
+
+/** Copy source's top-level keys onto target (skipping the params/parent keys). */
+function copyTopLevelKeys(target, source) {
+    for (var key in source) {
+        if (Object.prototype.hasOwnProperty.call(source, key) && key !== 'params' && key !== 'parent') {
+            target[key] = source[key];
+        }
+    }
+    return target;
+}
+
+/** Parent-first array concat; child entries already present are not repeated. */
+function concatUnique(parentList, childList) {
+    var combined = parentList.slice();
+    for (var j = 0; j < childList.length; j++) {
+        if (combined.indexOf(childList[j]) === -1) combined.push(childList[j]);
+    }
+    return combined;
+}
+
+/** Apply one dotted merge path: parent array first, unseen child entries appended. */
+function applyParentMergePath(merged, parentConfig, config, mergePath) {
+    var parentVal = getPathValue(parentConfig, mergePath);
+    var childVal = getPathValue(config, mergePath);
+    if (!Array.isArray(parentVal) && !Array.isArray(childVal)) return;
+    setPathValue(merged, mergePath, concatUnique(
+        Array.isArray(parentVal) ? parentVal : [],
+        Array.isArray(childVal) ? childVal : []
+    ));
+}
+
+/** Apply every dotted merge path of the parent's arrays onto the merged config. */
+function applyParentMergePaths(merged, parentConfig, config, mergePaths) {
+    for (var i = 0; i < mergePaths.length; i++) {
+        applyParentMergePath(merged, parentConfig, config, mergePaths[i]);
+    }
+}
+
+/**
+ * Merge a resolved parent under its child: child top-level keys win, child
+ * params deep-merge over the parent's (child wins on scalars and nested
+ * objects, e.g. a child contentOutput block overrides the parent's).
+ */
+function mergeParentIntoChild(parentConfig, config) {
+    var merged = copyTopLevelKeys(copyTopLevelKeys({}, parentConfig), config);
+    merged.params = deepMerge(parentConfig.params || {}, config.params || {});
+    return merged;
+}
+
 /**
  * Load an agent JSON config, resolving its "parent" inheritance chain.
  * Returns the merged config (child fields win, merged array paths are
@@ -338,20 +413,10 @@ function resolveAgentConfigPath(path) {
  * as-is (minus the parent marker) with a warning.
  */
 function loadAgentConfig(path) {
-    var raw = tryReadFile(resolveAgentConfigPath(path));
-    if (!raw) {
-        console.warn('configLoader: cannot read agent config "' + path + '"');
-        return null;
-    }
-    var config;
-    try {
-        config = JSON.parse(raw);
-    } catch (e) {
-        console.warn('configLoader: cannot parse agent config "' + path + '": ' + (e.message || e));
-        return null;
-    }
+    var config = readAgentConfigJson(resolveAgentConfigPath(path));
+    if (!config) return null;
 
-    var parentRef = config.parent || (config.params && config.params.parent) || null;
+    var parentRef = extractParentRef(config);
     if (!parentRef || !parentRef.path) return config;
 
     var parentConfig = loadAgentConfig(resolveAgentConfigPath(parentRef.path));
@@ -363,40 +428,8 @@ function loadAgentConfig(path) {
         return config;
     }
 
-    var mergePaths = (Array.isArray(parentRef.merge) && parentRef.merge.length > 0)
-        ? parentRef.merge
-        : DEFAULT_PARENT_MERGE;
-
-    // Child params deep-merge over the parent's (child wins on scalars and
-    // nested objects, e.g. a child contentOutput block overrides the parent's).
-    var mergedParams = deepMerge(parentConfig.params || {}, config.params || {});
-
-    var merged = {};
-    for (var key in parentConfig) {
-        if (Object.prototype.hasOwnProperty.call(parentConfig, key) && key !== 'params' && key !== 'parent') {
-            merged[key] = parentConfig[key];
-        }
-    }
-    for (var key2 in config) {
-        if (Object.prototype.hasOwnProperty.call(config, key2) && key2 !== 'params' && key2 !== 'parent') {
-            merged[key2] = config[key2];
-        }
-    }
-    merged.params = mergedParams;
-
-    for (var i = 0; i < mergePaths.length; i++) {
-        var parentVal = getPathValue(parentConfig, mergePaths[i]);
-        var childVal = getPathValue(config, mergePaths[i]);
-        if (!Array.isArray(parentVal) && !Array.isArray(childVal)) continue;
-        var parentList = Array.isArray(parentVal) ? parentVal : [];
-        var childList = Array.isArray(childVal) ? childVal : [];
-        var combined = parentList.slice();
-        for (var j = 0; j < childList.length; j++) {
-            if (combined.indexOf(childList[j]) === -1) combined.push(childList[j]);
-        }
-        setPathValue(merged, mergePaths[i], combined);
-    }
-
+    var merged = mergeParentIntoChild(parentConfig, config);
+    applyParentMergePaths(merged, parentConfig, config, resolveMergePaths(parentRef));
     return merged;
 }
 
