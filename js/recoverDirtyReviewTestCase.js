@@ -99,11 +99,70 @@ function findOpenPRForTicket(scm, config, ticketKey) {
     }) || null;
 }
 
+// ── gh-1077 extracted pure helpers (parse/build/decide) ─────────────────────
+
+function resolveTicketKey(params) {
+    return params.ticket && params.ticket.key;
+}
+
+function resolveCustomParams(params) {
+    return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+}
+
+function loadConfig(params) {
+    return configLoader.loadProjectConfig(params.jobParams || params || {});
+}
+
+// True when the PR list row already carries mergeability info, so the extra
+// getPr call can be avoided.
+function prHasMergeInfo(pr) {
+    return pr.mergeable !== undefined || pr.mergeableState || pr.mergeable_state;
+}
+
+// Fetch PR details, falling back to the list row when the call fails.
+function fetchPrDetail(scm, pr) {
+    try {
+        return scm.getPr(pr.number);
+    } catch (e) {
+        console.error('Failed to get PR details:', e);
+        return pr;
+    }
+}
+
+function mergeStateOf(prDetail) {
+    return prDetail && (prDetail.mergeable_state || prDetail.mergeableState || '');
+}
+
+function mergeableFlagOf(prDetail) {
+    return prDetail && prDetail.mergeable;
+}
+
+// dirty = conflicting merge state or an explicit mergeable=false
+function isDirtyMergeState(mergeableState, mergeable) {
+    return mergeableState === 'dirty' || mergeableState === 'conflicting' || mergeable === false;
+}
+
+// Remove stale labels so the rework agent can pick it up (best effort, in order)
+function stripStaleRecoveryLabels(tracker, ticketKey) {
+    try { tracker.removeLabel(ticketKey, 'sm_test_rework_triggered'); } catch (e) {}
+    try { tracker.removeLabel(ticketKey, 'sm_test_automation_triggered'); } catch (e) {}
+    try { tracker.removeLabel(ticketKey, 'sm_test_review_triggered'); } catch (e) {}
+}
+
+function postRecoveryComment(tracker, ticketKey, prNumber) {
+    try {
+        tracker.postComment(ticketKey, '🔄 *Recovery*: Test Case PR #' + prNumber + ' became dirty while in code review. Moved to In Rework so the test-automation rework agent can resolve the merge conflicts.'
+        );
+    } catch (e) {
+        console.warn('Failed to post recovery comment:', e);
+    }
+}
+
 function action(params) {
-    var ticketKey = params.ticket && params.ticket.key;
-    var config = configLoader.loadProjectConfig(params.jobParams || params || {});
+    var ticketKey = resolveTicketKey(params);
+    var config = loadConfig(params);
     var jiraConfig = config.jira;
-    var tracker = trackersModule.createTracker(config, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+    var tracker = trackersModule.createTracker(config, resolveCustomParams(params));
 
     if (!ticketKey) {
         console.error('No ticket key found');
@@ -122,25 +181,13 @@ function action(params) {
 
     console.log('Found open PR #' + pr.number + ': ' + pr.title);
 
-    var prDetail;
     // Avoid an extra API call if the PR list already returned mergeability info
-    if (pr.mergeable !== undefined || pr.mergeableState || pr.mergeable_state) {
-        prDetail = pr;
-    } else {
-        try {
-            prDetail = scm.getPr(pr.number);
-        } catch (e) {
-            console.error('Failed to get PR details:', e);
-            prDetail = pr;
-        }
-    }
-
-    var mergeableState = prDetail && (prDetail.mergeable_state || prDetail.mergeableState || '');
-    var mergeable = prDetail && prDetail.mergeable;
+    var prDetail = prHasMergeInfo(pr) ? pr : fetchPrDetail(scm, pr);
+    var mergeableState = mergeStateOf(prDetail);
+    var mergeable = mergeableFlagOf(prDetail);
     console.log('PR #' + pr.number + ' mergeable=' + mergeable + ' state=' + mergeableState);
 
-    var isDirty = mergeableState === 'dirty' || mergeableState === 'conflicting' || mergeable === false;
-    if (!isDirty) {
+    if (!isDirtyMergeState(mergeableState, mergeable)) {
         console.log('PR #' + pr.number + ' is clean — no recovery needed');
         return { success: true, action: 'clean', ticketKey: ticketKey, prNumber: pr.number };
     }
@@ -154,21 +201,24 @@ function action(params) {
         return { success: false, error: e.toString(), ticketKey: ticketKey, prNumber: pr.number };
     }
 
-    // Remove stale labels so the rework agent can pick it up
-    try { tracker.removeLabel(ticketKey, 'sm_test_rework_triggered'); } catch (e) {}
-    try { tracker.removeLabel(ticketKey, 'sm_test_automation_triggered'); } catch (e) {}
-    try { tracker.removeLabel(ticketKey, 'sm_test_review_triggered'); } catch (e) {}
-
-    try {
-        tracker.postComment(ticketKey, '🔄 *Recovery*: Test Case PR #' + pr.number + ' became dirty while in code review. Moved to In Rework so the test-automation rework agent can resolve the merge conflicts.'
-        );
-    } catch (e) {
-        console.warn('Failed to post recovery comment:', e);
-    }
+    stripStaleRecoveryLabels(tracker, ticketKey);
+    postRecoveryComment(tracker, ticketKey, pr.number);
 
     return { success: true, action: 'moved_to_rework', ticketKey: ticketKey, prNumber: pr.number };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action: action,
+        resolveTicketKey: resolveTicketKey,
+        resolveCustomParams: resolveCustomParams,
+        prHasMergeInfo: prHasMergeInfo,
+        fetchPrDetail: fetchPrDetail,
+        mergeStateOf: mergeStateOf,
+        mergeableFlagOf: mergeableFlagOf,
+        isDirtyMergeState: isDirtyMergeState,
+        _parseJson: _parseJson,
+        _toArray: _toArray,
+        _readCache: _readCache
+    };
 }
