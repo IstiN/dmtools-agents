@@ -320,7 +320,8 @@ function makeSmAgent(opts) {
             }
         };
         var smProviderRealMod = loadModule('js/common/smProvider.js', makeRequire({
-            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
         }), {});
         var smProviderStub = { createSmProvider: function () { return realProvider; },
             // gh-1059: pin the REAL shared head-repo resolver (githubSource

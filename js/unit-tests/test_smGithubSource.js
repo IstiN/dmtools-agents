@@ -11,7 +11,8 @@
 var smProviderReal = function () {
     if (!smProviderReal.mod) {
         smProviderReal.mod = loadModule('js/common/smProvider.js', makeRequire({
-            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
         }), {});
     }
     return smProviderReal.mod;
