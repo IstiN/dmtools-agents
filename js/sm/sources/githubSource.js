@@ -531,7 +531,7 @@ function query(rule, ctx) {
         scm: { provider: 'github' },
         repository: repoInfo
     });
-    var branchPrefix = rule.branchPrefix || 'ai/gh-';
+    var branchPrefix = branchPrefixOf(rule);
     var limit = rule.limit || 50;
 
     var machineAuthor = machineAuthorModule.resolveMachineAuthor(ctx, ctx && ctx.config);
@@ -699,32 +699,39 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
 // not cross-repo: it is the composite ticket key the dev leg writes into the
 // PR (title and body heading), and dropping it left such a PR unlinked — no
 // latch, no validation, no review. It stays a local ref.
+// Repo-qualified '#N' mentions: a qualifier token (owner, repo, or owner/repo — word
+// chars/dots/dashes, optionally slash-separated) before '#'. The boundary class keeps closing
+// keywords ('Closes #123') intact.
+var QUALIFIED_REF = /(^|[^A-Za-z0-9_.\-/])([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?)([ \t]*)(#\d+)/g;
+var CLOSING_KEYWORD = /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)/i;
+
+// 'owner/repo' of the repository the rule reads, lowercased; null when unknown.
+function ownRepoName(repoInfo) {
+    if (!repoInfo || !repoInfo.owner || !repoInfo.repo) return null;
+    return (repoInfo.owner + '/' + repoInfo.repo).toLowerCase();
+}
+
+// Only REAL qualifiers count — the token must contain a '.' or '/' ('dm.ai #601', 'org/repo#N',
+// 'org/repo #603') or attach directly to the '#' ('word#N' is not autolinked by GitHub either);
+// a plain English word followed by a spaced '#N' ('Related to #45') stays a LOCAL bare-mention ref.
+function isRepoQualifier(qualifier, gap) {
+    return gap === '' || qualifier.indexOf('.') !== -1 || qualifier.indexOf('/') !== -1;
+}
+
+// What one 'qualifier #N' match becomes: unchanged (a closing keyword, or a spaced plain word),
+// a bare local '#N' (a qualifier naming THIS repository), or dropped (another repository).
+function rewriteQualifiedRef(ownRepo, m0, boundary, qualifier, gap, hash) {
+    if (CLOSING_KEYWORD.test(qualifier)) return m0;
+    if (ownRepo && gap === '' && qualifier.toLowerCase() === ownRepo) return boundary + hash;
+    if (isRepoQualifier(qualifier, gap)) return boundary + ' ';
+    return m0;
+}
+
 function linkedIssueNumber(body, repoInfo) {
-    var text = String(body || '');
-    var ownRepo = (repoInfo && repoInfo.owner && repoInfo.repo)
-        ? (repoInfo.owner + '/' + repoInfo.repo).toLowerCase() : null;
-    // Strip repo-qualified mentions: a qualifier token (owner, repo, or
-    // owner/repo — word chars/dots/dashes, optionally slash-separated)
-    // before '#'. Only REAL qualifiers count — the token must contain a
-    // '.' or '/' ('dm.ai #601', 'org/repo#N', 'org/repo #603') or attach
-    // directly to the '#' ('word#N' is not autolinked by GitHub either);
-    // a plain English word followed by a spaced '#N' ('Related to #45')
-    // stays a LOCAL bare-mention ref. The boundary class keeps closing
-    // keywords ('Closes #123') intact — and the keyword check below is
-    // belt-and-suspenders for 'closes repo#N'.
-    text = text.replace(/(^|[^A-Za-z0-9_.\-/])([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?)([ \t]*)(#\d+)/g,
-        function (m0, boundary, qualifier, gap, hash) {
-            if (/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)/i.test(qualifier)) {
-                return m0; // closing keyword, not a repo qualifier
-            }
-            if (ownRepo && gap === '' && qualifier.toLowerCase() === ownRepo) {
-                return boundary + hash; // this repository — a local ref
-            }
-            if (gap === '' || qualifier.indexOf('.') !== -1 || qualifier.indexOf('/') !== -1) {
-                return boundary + ' '; // cross-repo mention — drop it
-            }
-            return m0; // spaced plain word — the #N stays a local ref
-        });
+    var ownRepo = ownRepoName(repoInfo);
+    var text = String(body || '').replace(QUALIFIED_REF, function (m0, boundary, qualifier, gap, hash) {
+        return rewriteQualifiedRef(ownRepo, m0, boundary, qualifier, gap, hash);
+    });
     var m = /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i.exec(text);
     if (m) return parseInt(m[1], 10);
     m = /(^|[^0-9])#(\d+)([^0-9]|$)/.exec(text);
@@ -919,6 +926,11 @@ function _prListBranch(p) {
 // ('ai/gh-12'). The issue-carrier side already links a PR to its issue by
 // this branch (provider.findPr); the PR-carrier side used only the body
 // scrape, so a PR whose body names no issue stayed unlinked.
+// The machine branch prefix of a rule (default 'ai/gh-') — one default for both carriers.
+function branchPrefixOf(rule) {
+    return rule.branchPrefix || 'ai/gh-';
+}
+
 function issueNumberFromBranch(branch, branchPrefix) {
     var b = String(branch || '');
     var prefix = String(branchPrefix || '');
@@ -1168,8 +1180,7 @@ function _sortAndSlicePrCandidates(matched, limit, priorityLabels, repoInfo) {
 
 function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {
     var q = rule.query || {};
-    // Same branch-prefix default as query() uses for the issue carrier.
-    var items = _buildPrItems(_openPrList(provider, repoInfo), repoInfo, rule.branchPrefix || 'ai/gh-');
+    var items = _buildPrItems(_openPrList(provider, repoInfo), repoInfo, branchPrefixOf(rule));
 
     // 'blocked' = human hold (fa #939 — documented in matchesGuards): the
     // item is invisible to EVERY rule, so it must not even act as a mutex
