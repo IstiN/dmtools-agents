@@ -14653,7 +14653,7 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         var teeAt = cmd.lastIndexOf('; } 2>>/tmp/sm-silent-update-');
         assert.ok(teeAt !== -1, 'gh-1074: the chain tees its stderr to a side file');
         var chain = cmd.slice(0, teeAt);
-        assert.equal(chain.slice(-('git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/x').length),
+        assert.equal(chain.slice(-('git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git \'feat/x\'').length),
             'git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git \'feat/x\'',
             'the base repush chain is byte-identical to the pre-gh-1070 form (gh-1107: quoted refspec)');
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no fork park on a same-repo PR');
