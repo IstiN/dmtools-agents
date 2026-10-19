@@ -260,6 +260,16 @@ suite('fetchEpicsToInput.action', function () {
         assert.equal(loaded.calls.writes.length, 2, 'both files still written');
     });
 
+    test('unexpected error (no params object) is swallowed by the outer guard', function () {
+        var loaded = loadFetchEpicsToInput({});
+
+        loaded.mod.action(null);
+
+        assert.deepEqual(loaded.calls.created, [], 'tracker never created');
+        assert.deepEqual(loaded.calls.search, []);
+        assert.deepEqual(loaded.calls.writes, []);
+    });
+
     test('findField matches partial key names case-sensitively by substring', function () {
         var loaded = loadFetchEpicsToInput({});
         assert.equal(loaded.mod.findField({ 'Diagrams (customfield_10296)': 'd1' }, 'Diagrams'), 'd1');
