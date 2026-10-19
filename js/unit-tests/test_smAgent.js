@@ -2066,7 +2066,14 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.ok(cmd.indexOf('epam/dmtools-dart') !== -1, 'clones the TARGET repo');
         assert.ok(cmd.indexOf('--branch feat/x') !== -1, 'single-branch clone of the head ref');
         assert.ok(cmd.indexOf('merge --no-edit FETCH_HEAD') !== -1, 'merges fetched main');
-        assert.equal(cmd.slice(-'git push https://x-access-token:${GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x'.length),
+        // gh-1074: the command tees its stderr to a side file (clone `2>`,
+        // the rest in a `{ …; } 2>>` brace group) — the git chain stays
+        // byte-identical INSIDE the wrapper, so the pin targets the chain
+        // up to the tee, not the vessel.
+        var teeAt = cmd.lastIndexOf('; } 2>>/tmp/sm-silent-update-');
+        assert.ok(teeAt !== -1, 'gh-1074: the chain tees its stderr to a side file');
+        var chain = cmd.slice(0, teeAt);
+        assert.equal(chain.slice(-'git push https://x-access-token:${GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x'.length),
             'git push https://x-access-token:${GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x');
         // No env swap: the push rides the checkout's stored credentials.
         assert.equal(sm.capturedEnvSets.length, 0, 'no token swap');
@@ -13927,7 +13934,12 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         assert.ok(cmd.indexOf('git checkout -B feat/fork FETCH_HEAD') !== -1,
             'checks the PR head out as the branch to push');
         assert.ok(cmd.indexOf('merge --no-edit FETCH_HEAD') !== -1, 'merges main under the head');
-        assert.ok(cmd.slice(-('HEAD:feat/fork').length) === 'HEAD:feat/fork', 'pushes HEAD to the PR branch');
+        // gh-1074: the chain now tees its stderr ('; } 2>>…' tail) — the
+        // push-target pin reads the chain up to the tee.
+        var teeAt = cmd.lastIndexOf('; } 2>>/tmp/sm-silent-update-');
+        assert.ok(teeAt !== -1, 'gh-1074: the chain tees its stderr to a side file');
+        var chain = cmd.slice(0, teeAt);
+        assert.ok(chain.slice(-('HEAD:feat/fork').length) === 'HEAD:feat/fork', 'pushes HEAD to the PR branch');
         assert.ok(cmd.indexOf('git push https://x-access-token:' + TOK + '@github.com/' + FORK + '.git') !== -1,
             'the push targets the FORK built from head.repo.full_name');
         assert.ok(cmd.indexOf('@github.com/' + BASE + '.git') === -1,
@@ -14052,9 +14064,15 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         assert.equal(clones(sm).length, 1, 'one base-repush command');
         var cmd = clones(sm)[0].command;
         assert.ok(cmd.indexOf('--single-branch --branch feat/x') !== -1, 'the classic single-branch clone');
-        assert.equal(cmd.slice(-('git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/x').length),
+        // gh-1074: the base repush GIT CHAIN stays byte-identical to the
+        // pre-gh-1070 form — the pin now reads the chain up to the stderr
+        // tee wrapper the builder appends ('; } 2>>…').
+        var teeAt = cmd.lastIndexOf('; } 2>>/tmp/sm-silent-update-');
+        assert.ok(teeAt !== -1, 'gh-1074: the chain tees its stderr to a side file');
+        var chain = cmd.slice(0, teeAt);
+        assert.equal(chain.slice(-('git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/x').length),
             'git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/x',
-            'the base repush is byte-identical to the pre-gh-1070 form');
+            'the base repush chain is byte-identical to the pre-gh-1070 form');
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no fork park on a same-repo PR');
     });
 
@@ -14074,9 +14092,14 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
         assert.equal(clones(sm).length, 1, 'one base-repush command — the fork paths never engaged');
         var cmd = clones(sm)[0].command;
         assert.ok(cmd.indexOf('refs/pull/') === -1, 'no refs/pull fetch on a same-repo head');
-        assert.equal(cmd.slice(-('git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/y').length),
+        // gh-1074: pin the chain up to the stderr tee wrapper (see the
+        // AC4 test above).
+        var teeAt = cmd.lastIndexOf('; } 2>>/tmp/sm-silent-update-');
+        assert.ok(teeAt !== -1, 'gh-1074: the chain tees its stderr to a side file');
+        var chain = cmd.slice(0, teeAt);
+        assert.equal(chain.slice(-('git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/y').length),
             'git push https://x-access-token:' + TOK + '@github.com/' + BASE + '.git feat/y',
-            'the base repush is byte-identical to the pre-gh-1070 form');
+            'the base repush chain is byte-identical to the pre-gh-1070 form');
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'NO false guest park on a same-repo PR');
         assert.equal(sm.capturedPrComments.length, 0, 'no park comment on a same-repo PR');
     });
@@ -14190,13 +14213,10 @@ suite('smAgent: silent-update failure stderr tail (gh-1074)', function () {
         sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [RULE_1074] } });
 
         var logged = sm.capturedLogs.join('\n');
-        var failLine = logged.split('\n').filter(function (l) {
-            return l.indexOf('update_branch failed') !== -1;
-        })[0] || '';
-        assert.ok(failLine, 'the update_branch failure is logged');
-        assert.ok(failLine.indexOf('[remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)') !== -1,
+        assert.ok(logged.indexOf('update_branch failed') !== -1, 'the update_branch failure is logged');
+        assert.ok(logged.indexOf('[remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)') !== -1,
             'the log entry carries the stderr TAIL with the rejection reason');
-        assert.ok(failLine.indexOf('silent-update stderr tail') !== -1,
+        assert.ok(logged.indexOf('silent-update stderr tail') !== -1,
             'the tail is labelled as the stderr tail');
         // the chain tees its stderr: clone truncates, the tail appends
         var cmd = sm.capturedCliCommands.filter(function (c) {
@@ -14230,12 +14250,11 @@ suite('smAgent: silent-update failure stderr tail (gh-1074)', function () {
         sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [RULE_1074] } });
 
         var logged = sm.capturedLogs.join('\n');
-        var rawToken = 'ghp_' + 'Nhz2Q1rN8ZsZv9mR2tK7wX4yP5bH3cD6fG8hJ9k';
-        assert.ok(logged.indexOf(rawToken) === -1, 'the raw token never reaches the log');
+        assert.ok(logged.indexOf(RAW_TOKEN_1074) === -1, 'the raw token never reaches the log');
         assert.ok(logged.indexOf('x-access-token:[REDACTED]@') !== -1,
             'the echoed push URL is redacted in the log');
         var body = sm.capturedPrComments.length ? sm.capturedPrComments[0].body : '';
-        assert.ok(body.indexOf(rawToken) === -1, 'the raw token never reaches the PR comment');
+        assert.ok(body.indexOf(RAW_TOKEN_1074) === -1, 'the raw token never reaches the PR comment');
         assert.ok(body.indexOf('[remote rejected]') !== -1,
             'the reason is still present after the redaction');
     });
