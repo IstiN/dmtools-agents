@@ -105,7 +105,8 @@ suite('recoverDirtyReviewTestCase.action — guard + no-PR paths', function() {
         var result = setup.module.action({ ticket: {}, jobParams: {} });
 
         assert.deepEqual(result, { success: false, error: 'missing ticket key' });
-        assert.deepEqual(callNames(setup.calls), []);
+        // tracker creation happens before the ticket-key guard (pinned behavior)
+        assert.deepEqual(callNames(setup.calls), ['createTracker']);
     });
 
     test('no open PR → action:no_pr, open-PR list cached to disk', function() {
@@ -113,8 +114,8 @@ suite('recoverDirtyReviewTestCase.action — guard + no-PR paths', function() {
         var result = setup.module.action(paramsFor());
 
         assert.deepEqual(result, { success: true, action: 'no_pr', ticketKey: 'TS-1' });
-        assert.deepEqual(callNames(setup.calls), ['listPrs', 'file_write']);
-        assert.equal(setup.calls[0].args[0], 'open');
+        assert.deepEqual(callNames(setup.calls), ['createTracker', 'listPrs', 'file_write']);
+        assert.equal(setup.calls[1].args[0], 'open');
         var cached = JSON.parse(setup.files[CACHE_PATH]);
         assert.deepEqual(cached, { timestamp: cached.timestamp, prList: [] });
         assert.equal(typeof cached.timestamp, 'number');
@@ -126,7 +127,7 @@ suite('recoverDirtyReviewTestCase.action — guard + no-PR paths', function() {
 
         assert.equal(result.success, true);
         assert.equal(result.action, 'no_pr');
-        assert.deepEqual(callNames(setup.calls), ['listPrs']);
+        assert.deepEqual(callNames(setup.calls), ['createTracker', 'listPrs']);
     });
 
     test('cache write failure is non-fatal — result still computed from the fetched list', function() {
@@ -421,13 +422,13 @@ suite('recoverDirtyReviewTestCase — extracted pure helpers (gh-1077)', functio
         assert.deepEqual(setup.module.resolveCustomParams({}), {});
     });
 
-    test('prHasMergeInfo — mergeable defined, or either state spelling', function() {
+    test('prHasMergeInfo — mergeable defined, or either state spelling (raw truthiness, as in the original condition)', function() {
         var setup = setupRecoverDirty({});
-        assert.equal(setup.module.prHasMergeInfo({ mergeable: false }), true);
-        assert.equal(setup.module.prHasMergeInfo({ mergeable: true }), true);
-        assert.equal(setup.module.prHasMergeInfo({ mergeableState: 'clean' }), true);
-        assert.equal(setup.module.prHasMergeInfo({ mergeable_state: 'dirty' }), true);
-        assert.equal(setup.module.prHasMergeInfo({}), false);
+        assert.ok(setup.module.prHasMergeInfo({ mergeable: false }));
+        assert.ok(setup.module.prHasMergeInfo({ mergeable: true }));
+        assert.ok(setup.module.prHasMergeInfo({ mergeableState: 'clean' }));
+        assert.ok(setup.module.prHasMergeInfo({ mergeable_state: 'dirty' }));
+        assert.notOk(setup.module.prHasMergeInfo({}));
     });
 
     test('mergeStateOf — snake_case first, camelCase fallback, empty default, null-safe', function() {

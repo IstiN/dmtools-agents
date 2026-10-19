@@ -227,17 +227,49 @@ function getIssueType(params) {
     }
 }
 
+// ── gh-1077 extracted pure helpers (parse/build/decide) ─────────────────────
+
+function isWipPrTitle(title) {
+    return /^\s*(WIP|DRAFT)\b/i.test(title);
+}
+
+// The PR itself is WIP/draft: an explicit draft flag or a WIP/DRAFT title prefix.
+function isWipPr(pr) {
+    return !!pr && (!!pr.draft || (!!pr.title && isWipPrTitle(pr.title)));
+}
+
+// ADO labels arrive as {value: [...]}; jira/github as a plain array.
+// Returns null when the ticket carries no labels at all.
+function ticketLabels(ticket) {
+    if (!ticket || !ticket.labels) {
+        return null;
+    }
+    return Array.isArray(ticket.labels) ? ticket.labels : (ticket.labels.value || []);
+}
+
+function isWipLabel(label) {
+    return /_(wip|draft)$/i.test(label) || /^(wip|draft)$/i.test(label);
+}
+
+function hasWipTicketLabel(ticket) {
+    const labels = ticketLabels(ticket);
+    if (!labels) {
+        return false;
+    }
+    for (var i = 0; i < labels.length; i++) {
+        if (isWipLabel(labels[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function isWip(pr, ticket) {
-    if (pr && (pr.draft || (pr.title && /^\s*(WIP|DRAFT)\b/i.test(pr.title)))) {
+    if (isWipPr(pr)) {
         return true;
     }
-    if (ticket && ticket.labels) {
-        const labels = Array.isArray(ticket.labels) ? ticket.labels : (ticket.labels.value || []);
-        for (var i = 0; i < labels.length; i++) {
-            if (/_(wip|draft)$/i.test(labels[i]) || /^(wip|draft)$/i.test(labels[i])) {
-                return true;
-            }
-        }
+    if (hasWipTicketLabel(ticket)) {
+        return true;
     }
     return false;
 }
@@ -408,5 +440,13 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action: action,
+        isWip: isWip,
+        isWipPr: isWipPr,
+        isWipPrTitle: isWipPrTitle,
+        ticketLabels: ticketLabels,
+        isWipLabel: isWipLabel,
+        hasWipTicketLabel: hasWipTicketLabel
+    };
 }
