@@ -3186,7 +3186,8 @@ suite('pushReworkChanges.readInputViolations (gh-1119)', function() {
                 './cacheToReleases.js': {},
                 './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
                 './common/commentMarkup.js': commentMarkupModule,
-                './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+                './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+                './common/ciViolations.js': loadModule('js/common/ciViolations.js')
             }),
             {
                 file_read: function(args) {
@@ -3248,7 +3249,8 @@ suite('pushReworkChanges.runOwnedViolationsGate (gh-1119 AC6b / UT-8 wiring)', f
                 './cacheToReleases.js': {},
                 './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
                 './common/commentMarkup.js': commentMarkupModule,
-                './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+                './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+                './common/ciViolations.js': loadModule('js/common/ciViolations.js')
             }),
             {
                 file_read: function(args) {
@@ -3336,7 +3338,14 @@ suite('pushReworkChanges.action — owned-violations rejection marks the leg fai
             }
         }, {
             scm: {
-                head: { ref: 'bug/PROJ-123', sha: 'abc1234def5678' },
+                listPrs: function() {
+                    return [{
+                        number: 123,
+                        title: 'PROJ-123: rework fix',
+                        head: { ref: 'bug/PROJ-123', sha: 'abc1234def5678' },
+                        html_url: 'https://github.com/IstiN/dmtools-agents/pull/123'
+                    }];
+                },
                 addComment: function(prId, text) { prComments.push({ prId: prId, text: text }); }
             }
         });
