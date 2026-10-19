@@ -122,12 +122,21 @@ function nowMsOf(opts) {
         ? opts.nowMs : null;
 }
 
-/** One run owns the branch: active, non-stale, the leg workflow, on-branch. */
-function legRunOwnsBranch(run, branch, workflowFile, nowMs, staleMs) {
+/** The shared freshness vocabulary of both gates (gh-1028 branch and
+ * gh-1075 fork): an ACTIVE run that is not a stale non-running zombie.
+ * gh-1075 review (CRAP ratchet): folded into one helper so each
+ * legRunOwns* predicate carries the freshness check as a single call. */
+function isFreshActiveRun(run, nowMs, staleMs) {
     if (!run || !isActiveStatus(run.status)) return false;
     if (run.status !== 'in_progress' && nowMs !== null &&
         isStaleNonRunning(run, nowMs, staleMs)) return false;
-    return isLegRun(run, workflowFile) && matchesBranch(run, branch);
+    return true;
+}
+
+/** One run owns the branch: active, non-stale, the leg workflow, on-branch. */
+function legRunOwnsBranch(run, branch, workflowFile, nowMs, staleMs) {
+    return isFreshActiveRun(run, nowMs, staleMs) &&
+        isLegRun(run, workflowFile) && matchesBranch(run, branch);
 }
 
 function hasActiveLegRunOnBranch(runs, branch, opts) {
@@ -178,7 +187,7 @@ function isWordChar(ch) {
 
 function titleHasPrToken(title, prNumber) {
     var s = String(title || '');
-    var token = '[REDACTED:Sensitive Value]' + prNumber;
+    var token = 'pr-' + prNumber;
     var from = 0;
     while (from <= s.length - token.length) {
         var idx = s.indexOf(token, from);
@@ -198,9 +207,7 @@ function runTitleOf(run) {
 /** One run owns the PR's fork head: active, non-stale, the leg workflow,
  * and (head_branch IS the pull ref OR the title carries the pr anchor). */
 function legRunOwnsPull(run, prNumber, workflowFile, nowMs, staleMs) {
-    if (!run || !isActiveStatus(run.status)) return false;
-    if (run.status !== 'in_progress' && nowMs !== null &&
-        isStaleNonRunning(run, nowMs, staleMs)) return false;
+    if (!isFreshActiveRun(run, nowMs, staleMs)) return false;
     if (!isLegRun(run, workflowFile)) return false;
     if (matchesBranch(run, pullHeadRefOf(prNumber))) return true;
     return titleHasPrToken(runTitleOf(run), prNumber);

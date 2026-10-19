@@ -124,33 +124,49 @@ suite('forkDispatch (gh-1075)', function () {
 
 suite('workflow template declares the dispatch inputs (gh-1075 lint)', function () {
 
+    // Locate the workflow_dispatch `inputs:` block: returns the index of
+    // the first line after `inputs:` plus the block's base indent, or
+    // null when the template declares no dispatch inputs (the lint then
+    // fails loudly on every required key).
+    // gh-1075 review (CRAP ratchet): the state machine is split into this
+    // finder and the key collector below — each loop carries one branch.
+    function dispatchInputsBlock(lines) {
+        var inDispatch = false;
+        for (var i = 0; i < lines.length; i++) {
+            var trimmed = lines[i].replace(/\s+$/, '');
+            if (!inDispatch) {
+                if (/^on:\s*$/.test(trimmed)) inDispatch = true;
+                continue;
+            }
+            var mInput = /^\s+inputs:\s*$/.exec(lines[i]);
+            if (mInput) {
+                return { start: i + 1,
+                    baseIndent: mInput[0].length - 'inputs:'.length - 1 };
+            }
+        }
+        return null;
+    }
+
     // Parse the workflow_dispatch input names out of the template by
     // indentation — no YAML dependency in the GraalJS runtime.
     function declaredDispatchInputs(templateText) {
         var lines = String(templateText).split(/\r?\n/);
         var inputs = {};
-        var inDispatch = false, inInputs = false, baseIndent = -1;
-        for (var i = 0; i < lines.length; i++) {
+        var block = dispatchInputsBlock(lines);
+        if (!block) return inputs;
+        for (var i = block.start; i < lines.length; i++) {
             var line = lines[i];
             var trimmed = line.replace(/\s+$/, '');
-            if (!inDispatch) {
-                if (/^on:\s*$/.test(trimmed)) inDispatch = true;
-                continue;
-            }
-            var mInput = /^\s+inputs:\s*$/.exec(line);
-            if (!inInputs) {
-                if (mInput) { inInputs = true; baseIndent = mInput[0].length - 'inputs:'.length - 1; }
-                continue;
-            }
             // inside inputs: entry keys are indented deeper than 'inputs:'
             var mKey = /^\s+([A-Za-z0-9_]+):\s*$/.exec(line);
             if (!mKey) {
                 // any line at or above the inputs indent closes the block
-                if (trimmed !== '' && (line.length - line.replace(/^\s+/, '').length) <= baseIndent) break;
+                if (trimmed !== '' &&
+                    (line.length - line.replace(/^\s+/, '').length) <= block.baseIndent) break;
                 continue;
             }
             var indent = line.length - line.replace(/^\s+/, '').length;
-            if (indent > baseIndent) inputs[mKey[1]] = true;
+            if (indent > block.baseIndent) inputs[mKey[1]] = true;
         }
         return inputs;
     }
