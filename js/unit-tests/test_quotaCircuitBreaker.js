@@ -74,15 +74,92 @@ suite('quotaCircuitBreaker > classifyFailure (UT-1, AC1)', function () {
         assert.equal(cls.kind, 'quota_exhausted');
     });
 
-    test('bare "Provider chain exhausted" without 403/quota evidence → not quota (legacy reset path)', function () {
+    test('bare "Provider chain exhausted" without 403/quota evidence → NOT quota (gh-1087 park never fires on it)', function () {
         var cls = quotaBreaker.classifyFailure('Provider chain exhausted: 2 of 2');
         assert.notOk(cls && cls.kind === 'quota_exhausted',
-            'must not park on the exhausted-chain tail alone — keep the gh-742 reset (AC4)');
+            'must not park on the exhausted-chain tail alone — keep the gh-1087 park quota-only');
     });
 
     test('empty / unrelated text → null (legacy reset path)', function () {
         assert.equal(quotaBreaker.classifyFailure(''), null);
         assert.equal(quotaBreaker.classifyFailure('some generic crash'), null);
+    });
+});
+
+// ── gh-1121: whole-provider-chain transient outage ──────────────────────────
+// Live evidence, run IstiN/dmtools-agents#39315836954 (job 118277233621,
+// gh-1112, 2026-10-19): zai/glm-5.3-flash answered 500 ×3, kimi-for-coding
+// hit 429 ×12 → "Provider chain exhausted: 2 of 2 chain model(s) failed
+// after 6 attempt(s) over 330s". The dev leg must classify this as
+// provider_transient (resume the persisted session once) — NOT quota
+// (no 403/quota text) and NOT a bare transient blip.
+var GH1121_OUTAGE_LOG = [
+    'zai/glm-5.3-flash returned 500 {"code":"1234","message":"Internal network failure"} (attempt 1/6)',
+    'zai/glm-5.3-flash returned 500 {"code":"1234","message":"Internal network failure"} (attempt 2/6)',
+    'kimi-for-coding hit 429 Rate limit reached (attempt 3/6)',
+    'Provider chain exhausted: 2 of 2 chain model(s) failed after 6 attempt(s) over 330s'
+].join('\n');
+
+suite('quotaCircuitBreaker > provider_transient outage (gh-1121 UT-1/REG-1)', function () {
+
+    test('UT-1: run 39315836954 log fixture (500s + 429s + exhausted chain) → provider_transient', function () {
+        var cls = quotaBreaker.classifyFailure(GH1121_OUTAGE_LOG);
+        assert.ok(cls, 'expected a classification');
+        assert.equal(cls.kind, 'provider_transient');
+        assert.ok(cls.models.indexOf('zai/glm-5.3-flash') !== -1, 'fixture model #1 extracted');
+        assert.ok(cls.models.indexOf('kimi-for-coding') !== -1, 'fixture model #2 extracted');
+        assert.deepEqual(cls.codes, ['500', '429'], 'distinct transient codes in encounter order');
+        assert.equal(cls.window, null, 'an outage never carries a quota window');
+    });
+
+    test('REG-1: a 403/quota fixture still yields quota_exhausted (I1 — park priority over the outage resume)', function () {
+        var cls = quotaBreaker.classifyFailure(
+            'z.ai glm-5.3-flash answered 403 "weekly (7-day) usage limit"; attempt 429; ' +
+            'Provider chain exhausted: 2 of 2');
+        assert.ok(cls);
+        assert.equal(cls.kind, 'quota_exhausted',
+            'quota evidence keeps priority — no provider_transient downgrade');
+        var bare = quotaBreaker.classifyFailure(
+            'HTTP 403: quota exceeded\nProvider chain exhausted: 2 of 2');
+        assert.equal(bare.kind, 'quota_exhausted');
+    });
+
+    test('exhausted chain + 401 auth text → NOT provider_transient (a resume can never fix credentials)', function () {
+        var cls = quotaBreaker.classifyFailure(
+            'provider kimi-for-coding: 401 Unauthorized\nProvider chain exhausted: 2 of 2');
+        assert.notOk(cls && cls.kind === 'provider_transient',
+            'auth failures must not trigger the outage resume');
+    });
+
+    test('plain 429 / network blips WITHOUT the exhausted-chain tail → transient (unchanged)', function () {
+        assert.equal(quotaBreaker.classifyFailure('HTTP 429: rate limit exceeded, retry in 30s').kind, 'transient');
+        assert.equal(quotaBreaker.classifyFailure('socket hang up: ETIMEDOUT').kind, 'transient');
+    });
+
+    test('extractOutageModels / extractOutageCodes pure helpers', function () {
+        var models = quotaBreaker.extractOutageModels(GH1121_OUTAGE_LOG);
+        assert.deepEqual(models, ['zai/glm-5.3-flash', 'kimi-for-coding']);
+        assert.deepEqual(quotaBreaker.extractOutageCodes(GH1121_OUTAGE_LOG), ['500', '429']);
+        assert.deepEqual(quotaBreaker.extractOutageModels('Provider chain exhausted: 2 of 2'), [],
+            'no model shapes → empty list (the comment falls back to unknown models)');
+        assert.deepEqual(quotaBreaker.extractOutageCodes('no codes here'), []);
+    });
+
+    test('outageResetHeaderOf: the honest reset header names the model list and the codes', function () {
+        var cls = quotaBreaker.classifyFailure(GH1121_OUTAGE_LOG);
+        var header = quotaBreaker.outageResetHeaderOf(cls);
+        assert.contains(header, 'Provider outage');
+        assert.contains(header, 'zai/glm-5.3-flash, kimi-for-coding');
+        assert.contains(header, '500, 429');
+        assert.contains(header, 'reset for retry');
+        assert.notContains(header.toLowerCase(), 'rate limit',
+            'the header must not blame a rate limit when the cause was a 500');
+    });
+
+    test('outageResetHeaderOf tolerates an evidence-free classification', function () {
+        var header = quotaBreaker.outageResetHeaderOf({ kind: 'provider_transient', models: [], codes: [] });
+        assert.contains(header, 'Provider outage');
+        assert.contains(header, 'reset for retry');
     });
 });
 

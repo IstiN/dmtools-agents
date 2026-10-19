@@ -1449,6 +1449,196 @@ suite('developTicketAndCreatePR > resume-before-cold-reset (gh-775)', function (
 
 });
 
+// ── gh-1121: provider-chain outage → resume the persisted session once ──────
+// Live run 39315836954 (gh-1112, 2026-10-19): the whole provider chain failed
+// with transient errors (zai/glm-5.3-flash 500 ×3, kimi-for-coding 429 ×12),
+// the leg discarded 97k prompt tokens of real work and cold-reset with a
+// "likely hit a rate limit" comment. The classified outage (provider_transient)
+// must get ONE resume of the persisted fa session even when the generic
+// feedbackLoop flag is off, after a configurable backoff — and the reset
+// fallback must name the real cause instead of guessing a rate limit.
+var GH1121_OUTAGE_LOG = [
+    'zai/glm-5.3-flash returned 500 {"code":"1234","message":"Internal network failure"} (attempt 1/6)',
+    'zai/glm-5.3-flash returned 500 {"code":"1234","message":"Internal network failure"} (attempt 2/6)',
+    'kimi-for-coding hit 429 Rate limit reached (attempt 3/6)',
+    'Provider chain exhausted: 2 of 2 chain model(s) failed after 6 attempt(s) over 330s'
+].join('\n');
+
+suite('developTicketAndCreatePR > provider-chain outage resume (gh-1121)', function () {
+
+    test('UT-2 (AC3): outage + resume disabled globally → the outage resume is STILL attempted exactly once (after the backoff)', function () {
+        var prUrl = 'https://github.com/acme/widgets/pull/1121';
+        var state = { files: null };
+        var loaded = loadForMissingResponseResume({
+            gitMock: committedWorkGitMock('ai/TS-1121', prUrl),
+            wrapperImpl: function () {
+                state.files['outputs/response.md'] = '### What changed\n- Resumed after the provider outage.\n';
+                return '';
+            }
+        });
+        state.files = loaded.files;
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-1121', fields: { summary: 'provider chain outage', description: '', labels: [] } },
+            metadata: { contextId: 'sm_story_development' },
+            customParams: {}, // no feedbackLoop config — the outage resume must not depend on it
+            currentCliErrorMessage: GH1121_OUTAGE_LOG,
+            response: ''
+        });
+
+        assert.equal(wrapperCommandCount(loaded.commands), 1,
+            'exactly one wrapper invocation even with the feedback loop disabled');
+        assert.equal(loaded.files['outputs/feedback/TS-1121_missing_response.attempt'], '1',
+            'the one outage resume rides the missing_response attempt marker (I2)');
+        // AC6: the default 90s backoff precedes the wrapper invocation.
+        var sleepIdx = firstIndexOfEvent(loaded.events, /command:bash -c "sleep 90"/);
+        var wrapperIdx = firstIndexOfEvent(loaded.events, /command:.*run-agent\.sh/);
+        assert.ok(sleepIdx !== -1, 'the default 90s backoff sleep is issued: ' + JSON.stringify(loaded.commands));
+        assert.ok(sleepIdx < wrapperIdx, 'the backoff precedes the resume wrapper');
+        assert.contains(loaded.files['outputs/feedback/TS-1121_missing_response.md'], 'provider outage',
+            'the outage resume prompt names the transient outage');
+    });
+
+    test('UT-3 (AC4): the outage resume lands response.md → normal PR path, no cold reset', function () {
+        var prUrl = 'https://github.com/acme/widgets/pull/1122';
+        var state = { files: null };
+        var loaded = loadForMissingResponseResume({
+            gitMock: committedWorkGitMock('ai/TS-1122', prUrl),
+            wrapperImpl: function () {
+                state.files['outputs/response.md'] = '### What changed\n- Landed after the outage resume.\n';
+                return '';
+            }
+        });
+        state.files = loaded.files;
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-1122', fields: { summary: 'outage resume lands', description: '', labels: [] } },
+            metadata: { contextId: 'sm_story_development' },
+            customParams: {},
+            currentCliErrorMessage: GH1121_OUTAGE_LOG,
+            response: ''
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, prUrl, 'the landed deliverable continues into PR creation');
+        assert.deepEqual(loaded.movedTo, ['In Review'], 'never Ready For Development on a landed resume');
+        for (var c = 0; c < loaded.comments.length; c++) {
+            assert.notContains(loaded.comments[c].comment, 'Provider outage',
+                'no outage-reset comment when the resume landed');
+        }
+    });
+
+    test('UT-4 (AC5): the outage resume fails → reset, and the comment names the providers + codes (no rate-limit blame)', function () {
+        var loaded = loadForMissingResponseResume({
+            gitMock: committedWorkGitMock('ai/TS-1123', ''),
+            wrapperImpl: function () {
+                throw new Error('Command failed (exit code 124): timeout -k 60 2400 bash agents/scripts/run-agent.sh --continue ...');
+            }
+        });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-1123', fields: { summary: 'outage resume failed', description: '', labels: [] } },
+                metadata: { contextId: 'sm_story_development' },
+                customParams: {},
+                currentCliErrorMessage: GH1121_OUTAGE_LOG,
+                response: ''
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught && caught.interruptedReset === true,
+            'the gh-742 dead-letter contract holds when the resume also fails');
+        assert.equal(wrapperCommandCount(loaded.commands), 1, 'exactly one resume attempt (I2)');
+        assert.deepEqual(loaded.movedTo, ['Ready For Development']);
+        assert.equal(loaded.comments.length, 1);
+        var comment = loaded.comments[0].comment;
+        assert.contains(comment, 'Provider outage (zai/glm-5.3-flash, kimi-for-coding, 500, 429) — reset for retry',
+            'the comment names the model list and the codes');
+        assert.notContains(comment.toLowerCase(), 'rate limit',
+            'the comment must not blame a rate limit when the cause was a 500');
+    });
+
+    test('UT-4b: no-changes site → the honest outage comment too', function () {
+        var loaded = loadForMissingResponseResume({
+            gitMock: noChangesGitCommandMock('TS-1124', 'ai/TS-1124'),
+            wrapperImpl: function () {
+                throw new Error('Command failed (exit code 124): timed out');
+            }
+        });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-1124', fields: { summary: 'outage, no changes', description: '', labels: [] } },
+                metadata: { contextId: 'story_development' },
+                customParams: {},
+                currentCliErrorMessage: GH1121_OUTAGE_LOG,
+                response: ''
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught && caught.interruptedReset === true);
+        var comment = loaded.comments[0].comment;
+        assert.contains(comment, 'Provider outage (zai/glm-5.3-flash, kimi-for-coding, 500, 429) — reset for retry');
+        assert.notContains(comment.toLowerCase(), 'rate limit');
+    });
+
+    test('UT-5 (AC6): providerTransientBackoffSec is honored before the resume', function () {
+        var state = { files: null };
+        var loaded = loadForMissingResponseResume({
+            gitMock: committedWorkGitMock('ai/TS-1125', ''),
+            wrapperImpl: function () {
+                state.files['outputs/response.md'] = '### What changed\n- Landed.\n';
+                return '';
+            }
+        });
+        state.files = loaded.files;
+
+        loaded.mod.action({
+            ticket: { key: 'TS-1125', fields: { summary: 'configured backoff', description: '', labels: [] } },
+            metadata: { contextId: 'sm_story_development' },
+            customParams: { providerTransientBackoffSec: 7 },
+            currentCliErrorMessage: GH1121_OUTAGE_LOG,
+            response: ''
+        });
+
+        var sleepIdx = firstIndexOfEvent(loaded.events, /command:bash -c "sleep 7"/);
+        var wrapperIdx = firstIndexOfEvent(loaded.events, /command:.*run-agent\.sh/);
+        assert.ok(sleepIdx !== -1, 'the configured 7s backoff is issued: ' + JSON.stringify(loaded.commands));
+        assert.ok(sleepIdx < wrapperIdx, 'the configured backoff precedes the wrapper');
+    });
+
+    test('REG-1 (I1): a 403/quota chain fixture parks the lane — NO outage resume, NO reset', function () {
+        var loaded = loadForMissingResponseResume({
+            gitMock: committedWorkGitMock('ai/TS-1126', '')
+        });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-1126', fields: { summary: 'quota wall', description: '', labels: [] } },
+                metadata: { contextId: 'sm_story_development' },
+                customParams: {},
+                currentCliErrorMessage: 'z.ai glm-5.3-flash answered 403 "weekly (7-day) usage limit"; attempt 429 rate limited; Provider chain exhausted: 2 of 2',
+                response: ''
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught && caught.quotaPark === true,
+            'quota evidence keeps priority — the leg parks (gh-1087), it never resumes');
+        assert.equal(wrapperCommandCount(loaded.commands), 0, 'no resume against a quota wall');
+        assert.deepEqual(loaded.movedTo, [], 'the park never resets the ticket');
+    });
+
+});
+
 suite('prompts/bash_tools.md > B7 hung-job disposal rule (gh-775 AC1)', function () {
     var bashTools = file_read({ path: 'prompts/bash_tools.md' });
 
