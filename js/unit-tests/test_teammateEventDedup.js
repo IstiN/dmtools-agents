@@ -469,13 +469,11 @@ suite('ai-teammate.yml — the dedup gate is wired into the stub', function () {
         // guarantee is now that NO labeled branch exists to fire.
         var ifs = foldedJobIfs(yml);
         assert.ok(ifs.length >= 2, 'both the dedup and the teammate job carry a folded if gate');
-        var dedupIf = null;
-        for (var i = 0; i < ifs.length; i++) {
-            if (ifs[i].indexOf('needs.dedup') === -1) {
-                dedupIf = ifs[i]; // the dedup job gate — the only other folded gate
-            }
-        }
-        assert.ok(dedupIf, 'the dedup job has its own gate (not just the teammate call gate)');
+        var candidates = ifs.filter(function (b) { return b.indexOf('needs.dedup') === -1; });
+        assert.equal(candidates.length, 1,
+            'exactly one non-call folded gate (the dedup probe gate) — a third folded ' +
+            'gate would silently shift this test onto the wrong one');
+        var dedupIf = candidates[0];
         assert.ok(dedupIf.indexOf("github.event.action == 'labeled'") === -1 &&
             dedupIf.indexOf('github.event.label.name') === -1,
             'gh-1076: the dedup gate must not key the labeled action — the labeled ' +

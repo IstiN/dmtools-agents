@@ -165,6 +165,59 @@ suite('workflowLint.extractIssueTypes', function () {
         ].join('\n');
         assert.deepEqual(lint.extractIssueTypes(yml), ['assigned']);
     });
+
+    test('a flow-form on: line is skipped — a later block-form on: still yields types', function () {
+        var yml = [
+            'on: [push]',
+            'on:',
+            '  issues:',
+            '    types: [assigned]',
+            'jobs: {}'
+        ].join('\n');
+        assert.deepEqual(lint.extractIssueTypes(yml), ['assigned']);
+    });
+
+    test('block list items tolerate blanks and trailing comments', function () {
+        var yml = [
+            'on:',
+            '  issues:',
+            '    types:',
+            '      - assigned # instant fire',
+            '',
+            '      - labeled',
+            '  workflow_dispatch:'
+        ].join('\n');
+        assert.deepEqual(lint.extractIssueTypes(yml), ['assigned', 'labeled']);
+    });
+
+    test('a column-0 comment inside the on: block does not end the types scan', function () {
+        var yml = [
+            'on:',
+            '  issues:',
+            '    types: [assigned]',
+            '# a column-0 comment between triggers',
+            '  workflow_dispatch:'
+        ].join('\n');
+        assert.deepEqual(lint.extractIssueTypes(yml), ['assigned']);
+    });
+});
+
+suite('workflowLint shared block scanner (extractTriggers + extractIssueTypes)', function () {
+
+    test('column-0 comments inside the on: block never hide later triggers', function () {
+        // YAML: comments are transparent — a column-0 comment between
+        // children does not close the on: mapping, so the trigger scan
+        // must not stop at it (a commented-out trigger line is a comment,
+        // NOT a trigger — but a real trigger below it still counts).
+        var yml = [
+            'on:',
+            '  issues:',
+            '# column-0 comment between children',
+            '  workflow_dispatch:',
+            'jobs: {}'
+        ].join('\n');
+        assert.deepEqual(lint.extractTriggers(yml), ['issues', 'workflow_dispatch']);
+    });
 });
 
 // ── findDuplicateKeys: pure-logic fixtures ───────────────────────────────────
