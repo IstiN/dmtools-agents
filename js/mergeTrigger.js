@@ -369,19 +369,6 @@ function processOrphanPr(ctx, prn, opts, tally) {
     if (outcome === 'merged') tally.merged++; else tally.skipped++;
 }
 
-function action(params) {
-    var job = (params && params.jobParams) || {};
-    var repoInfo = resolveRepo(job);
-    var owner = repoInfo.owner;
-    var name = repoInfo.name;
-    var opts = parseFlags(job);
-
-    var log = [];
-    function say(line) { log.push(line); console.log(line); }
-    var ctx = { owner: owner, name: name, log: log, say: say };
-
-
-
 /**
  * Candidate collection — the two sweeps that decide WHAT gets processed.
  * Candidates come from BOTH sides: the issue label (human/bot) and the PR

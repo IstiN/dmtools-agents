@@ -628,6 +628,23 @@ suite('prepareBulkBugsCreationContext: action wiring characterization (gh-1081)'
         mod.action({ inputFolderPath: 'input/bulk', customParams: { batchSize: 5 }, jira: { project: 'TS' } });
         assert.contains(w.byPath('failed_tcs.json').content, 'literal win');
     });
+
+    test('unexpected errors are logged and RETHROWN (JSRunner job failure)', function() {
+        var w = makeBulkWrites();
+        var brokenLoader = {
+            loadProjectConfig: function() { throw new Error('config exploded'); },
+            interpolateJql: configLoaderModule.interpolateJql
+        };
+        var mod = loadBulk({ file_write: w.file_write }, { './configLoader.js': brokenLoader });
+        var rethrown = false;
+        try {
+            mod.action({ inputFolderPath: 'input/bulk', customParams: { batchSize: 5 }, jira: { project: 'TS' } });
+        } catch (e) {
+            rethrown = e.message === 'config exploded';
+        }
+        assert.equal(rethrown, true, 'the original error surfaces after logging');
+        assert.equal(w.writes.length, 0, 'nothing is written when setup fails');
+    });
 });
 
 // ── gh-1081: direct tests of the extracted pure parse/build helpers.
