@@ -19,6 +19,7 @@
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var gitStagingModule = loadModule('js/common/gitStaging.js');
+var forkCheckoutModule = loadModule('js/common/forkCheckout.js', makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}) }), {});
 
 // Real githubHelpers (only its own deps stubbed) — pushReworkChanges requires
 // it for the PR-anchored (pr-N) lookup path; jira keys never touch it.
@@ -115,6 +116,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
         'js/pushReworkChanges.js',
         makeRequire({
             './common/gitStaging.js': gitStagingModule,
+            './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': { loadProjectConfig: function() { return {}; } },
             './common/scm.js': { createScm: function() { return scm; } },
             './common/submodules.js': {},
@@ -512,6 +514,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
         'js/pushReworkChanges.js',
         makeRequire({
             './common/gitStaging.js': gitStagingModule,
+            './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/scm.js': {},
@@ -615,6 +618,39 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
             'should commit when there are staged changes');
         assert.ok(commands.filter(function(c) { return c.indexOf('git push -u origin bug/PROJ-123') !== -1; }).length >= 1,
             'should push to the expected PR branch');
+    });
+
+    test('gh-1096: a fork-head PR pushes to the fork token URL HEAD:<branch>, never origin', function() {
+        var commands = [];
+        var mod = loadPushReworkChangesForCommitAndPush({
+            file_read: function(args) {
+                if (args.path.indexOf('pr_info.md') !== -1) {
+                    return '**Branch**: `fix/x` → `develop`\n- **Fork Head**: `YuryBY/fa`\n';
+                }
+                return null;
+            },
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git branch --show-current') return 'fix/x\n';
+                if (args.command.indexOf('git push https://') === 0 &&
+                        commands.filter(function(c) { return c.indexOf('git push') === 0; }).length === 1) {
+                    throw new Error('rejected (non-fast-forward)');
+                }
+                return '';
+            }
+        });
+
+        var result = mod.commitAndPush('PROJ-123', baseConfig(), {});
+
+        var pushes = commands.filter(function(c) { return c.indexOf('git push') === 0; });
+        assert.equal(result.branch, 'fix/x');
+        assert.equal(pushes.length, 2, JSON.stringify(pushes));
+        pushes.forEach(function(c) {
+            assert.ok(c.indexOf('github.com/YuryBY/fa.git HEAD:fix/x') !== -1, 'fork URL push, got: ' + c);
+            assert.ok(c.indexOf(' origin') === -1, 'never origin: ' + c);
+        });
+        assert.ok(commands.indexOf('git merge --no-edit FETCH_HEAD') !== -1, 'retry syncs with the fork head');
+        assert.equal(commands.filter(function(c) { return c.indexOf('ls-remote') !== -1; }).length, 0);
     });
 
     test('rework commit never carries a CI-skip token, even when the template has one (gh-711)', function() {
@@ -822,6 +858,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
         'js/pushReworkChanges.js',
         makeRequire({
             './common/gitStaging.js': gitStagingModule,
+            './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': {
                 loadProjectConfig: function() { return baseConfig(opt(opts, 'config')); },
                 resolveInstructions: function() { return { jobParamPatch: {} }; },
@@ -1023,6 +1060,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
         'js/pushReworkChanges.js',
         makeRequire({
             './common/gitStaging.js': gitStagingModule,
+            './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/submodules.js': { pushManagedSubmodules: function() {} },

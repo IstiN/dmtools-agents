@@ -100,9 +100,7 @@ _Push Rework Changes Post-Action_
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
   - assign ticket (via tracker)
-  - git push
   - git checkout
-  - git merge
 - Parameters (customParams):
   - `adoTextFormat`
   - `aiRepository`

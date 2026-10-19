@@ -399,4 +399,15 @@ jobs:
       # issue body to input/ticket.md, then:
       #   dmtools run "$RUNNER" '{"params":{"ticketKey":"gh-<n>"}}'
       # Full working reference: epam/dmtools-dart .github/workflows/ai-teammate.yml
+      #
+      # gh-1096: a gh-1075 fork-PR dispatch rides the base machine ref and
+      # carries refs/pull/<N>/head in inputs.checkout_ref — check THAT out so
+      # the leg works the fork head tree. Empty checkout_ref (same-repo
+      # dispatches, issue events) resolves github.ref exactly as before.
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.checkout_ref != '' && github.event.inputs.checkout_ref || github.ref }}
+        env:
+          CHECKOUT_REF: ${{ github.event.inputs.checkout_ref || '' }}
       - run: echo "Adapt runner steps from the machine-kit reference (see header comment)"
