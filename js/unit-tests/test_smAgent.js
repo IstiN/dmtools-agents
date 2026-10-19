@@ -160,9 +160,12 @@ function makeSmAgent(opts) {
     if (opts.runAsync) smMocks.runAsync = opts.runAsync;
     var capturedFileWrites = [];
     var capturedFileDeletes = [];
+    // gh-1107 CI note: the capture-only mock — NO opts.onFileDelete hook.
+    // An extra `if` here lands inside makeSmAgent's transitive body (the
+    // analyzer descends into anonymous closures) and pushed its CRAP over
+    // the released baseline; no test ever passed the hook.
     smMocks.file_delete = function (delOpts) {
         capturedFileDeletes.push(delOpts);
-        if (opts.onFileDelete) opts.onFileDelete(delOpts);
         return true;
     };
     if (opts.extraMocks) { for (var em in opts.extraMocks) { if (opts.extraMocks.hasOwnProperty(em)) smMocks[em] = opts.extraMocks[em]; } }
@@ -4819,6 +4822,14 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
         return { status: 'completed', conclusion: conclusion, head_sha: headSha,
                  created_at: t, updated_at: t };
     }
+    // gh-1107 CI follow-up: the head_sha matcher for the sweep CLI fake,
+    // extracted from the throwing-dispatch closure below — that closure
+    // sat at CRAP 9 (over the 8 threshold) only under its old positional
+    // baseline key; a fresh key must carry its own weight at ≤ 8.
+    function sweepRunsForHead(cmd, headSha) {
+        var m = /head_sha=([^&"]+)/.exec(cmd);
+        return m !== null && m[1] === headSha;
+    }
     function dispatched(cmdList) {
         return cmdList.some(function (c) { return c.command.indexOf('gh workflow run') === 0; });
     }
@@ -5179,11 +5190,10 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
                 }
                 if (cmd.command.indexOf('actions/workflows/') !== -1 &&
                     cmd.command.indexOf('/runs?') !== -1) {
-                    var m = /head_sha=([^&"]+)/.exec(cmd.command);
-                    if (m && m[1] === HEAD1) {
+                    if (sweepRunsForHead(cmd.command, HEAD1)) {
                         return JSON.stringify({ workflow_runs: [oldRun('cancelled', HEAD1)] });
                     }
-                    if (m && m[1] === HEAD2) {
+                    if (sweepRunsForHead(cmd.command, HEAD2)) {
                         return JSON.stringify({ workflow_runs: [oldRun('cancelled', HEAD2)] });
                     }
                     return JSON.stringify({ workflow_runs: [] });
