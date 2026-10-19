@@ -2188,14 +2188,17 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             cli_execute_command({
                 command: silentUpdateCommand({
                     dir: dir,
-                    headFlags: '--no-tags --single-branch --branch ' + branchName +
+                    // gh-1107: branchName is the PR head ref — quote every
+                    // place it meets the shell (--branch, push refspec).
+                    headFlags: '--no-tags --single-branch --branch ' +
+                               checkRunStampModule.shellQuote(branchName) +
                                ' --depth 200',
                     headSetup: '',
                     stderrFile: stderrFile,
                     forceFresh: forceFresh === true,
                     pushTarget: 'https://x-access-' + 'token:${GH_TOKEN}@github.com/' + // assembled from split literals: the sandbox redacts the contiguous token-URL pattern in file writes (the unit tests' TOK convention)
                          effectiveRepoInfo.owner + '/' + effectiveRepoInfo.repo +
-                         '.git ' + branchName
+                         '.git ' + checkRunStampModule.shellQuote(branchName)
                 })
             });
         }
@@ -2423,12 +2426,16 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 command: silentUpdateCommand({
                     dir: dir,
                     headFlags: '--no-tags --depth 200',
+                    // gh-1107: branchName is PR-author-controlled — quote it
+                    // at both shell touchpoints (checkout -B, the fork push
+                    // refspec).
                     headSetup: ' && git fetch --no-tags --depth 200 origin refs/pull/' +
                                ticket.prNumber + '/head' +
-                               ' && git checkout -B ' + branchName + ' FETCH_HEAD',
+                               ' && git checkout -B ' +
+                               checkRunStampModule.shellQuote(branchName) + ' FETCH_HEAD',
                     stderrFile: stderrFile,
                     pushTarget: validationLivenessModule.forkPushTokenUrl(forkFull) +
-                                ' HEAD:' + branchName
+                                ' HEAD:' + checkRunStampModule.shellQuote(branchName)
                 })
             });
         }
@@ -2553,10 +2560,15 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             ciWorkflow + ' @ ' + branchName + ')');
                 return;
             }
+            // gh-1107: the head ref is PR-author-controlled and git refs
+            // permit shell metacharacters — single-quote it through the
+            // ONE shellQuote helper (same discipline as the gh-757 ghost
+            // dispatch).
             cli_execute_command({
                 command: 'gh workflow run ' + ciWorkflow +
                          ' --repo ' + effectiveRepoInfo.owner + '/' +
-                         effectiveRepoInfo.repo + ' --ref ' + branchName
+                         effectiveRepoInfo.repo +
+                         ' --ref ' + checkRunStampModule.shellQuote(branchName)
             });
         }
 
@@ -3884,7 +3896,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         // not this dispatch), and git ref names permit
                         // shell metacharacters: single-quote the value and
                         // escape any embedded quote (rework review thread).
-                        var ghostRef = String(ticket.branch || '').replace(/'/g, "'\\''");
+                        // gh-1107 audit: same escaping as the ONE shellQuote
+                        // helper — normalized to it so the discipline has a
+                        // single implementation (byte-identical output).
+                        var ghostRef = checkRunStampModule.shellQuote(String(ticket.branch || ''));
                         // gh-683 bug C invariant, ghost class (rework review
                         // thread): the once-per-head marker latches every
                         // future retry for this head, so it may post ONLY
@@ -3897,7 +3912,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 command: 'gh workflow run ' + ghostCi +
                                          ' --repo ' + effectiveRepoInfo.owner + '/' +
                                          effectiveRepoInfo.repo +
-                                         ' --ref \'' + ghostRef + '\''
+                                         ' --ref ' + ghostRef
                             });
                             ghostDispatched = true;
                         } catch (eGhostDispatch) {
@@ -6956,12 +6971,15 @@ function sweepZombieCheckRunsNeutral(repoInfo, zombies, headSha) {
             }
             try {
                 cli_execute_command({
+                    // gh-1107: the summary is a fixed literal today, but the
+                    // flag value goes through the ONE shellQuote helper so
+                    // the shape cannot regress if it ever carries run text.
                     command: 'gh api -X PATCH repos/' + repoInfo.owner +
                         '/' + repoInfo.repo + '/check-runs/' + z.id +
                         ' -f status=completed' +
                         ' -f conclusion=neutral' +
-                        ' -f "output[title]=SM swept a zombie check-run (gh-998)"' +
-                        ' -f "output[summary]=' + summary + '"'
+                        ' -f ' + checkRunStampModule.shellQuote('output[title]=SM swept a zombie check-run (gh-998)') +
+                        ' -f ' + checkRunStampModule.shellQuote('output[summary]=' + summary)
                 });
                 out.concluded++;
                 console.log('  ' + checkRunZombiesModule.zombieSweptLine(z.id, headSha));
@@ -7061,14 +7079,17 @@ function concludePlaceholderCheckRuns(repoInfo, placeholders, coverRun) {
                 return;
             }
             try {
+                // gh-1107: the cover URL is run-derived (a PR can shape it
+                // via workflow-run fields) — quote the flag values through
+                // the ONE shellQuote helper instead of double quotes.
                 cli_execute_command({
                     command: 'gh api -X PATCH repos/' + repoInfo.owner +
                         '/' + repoInfo.repo + '/check-runs/' + ph.id +
                         ' -f status=completed' +
                         ' -f conclusion=success' +
-                        (coverUrl ? (' -f details_url="' + coverUrl + '"') : '') +
-                        ' -f "output[title]=SM concluded a placeholder check-run (gh-857)"' +
-                        ' -f "output[summary]=' + coverLine + '"'
+                        (coverUrl ? (' -f details_url=' + checkRunStampModule.shellQuote(coverUrl)) : '') +
+                        ' -f ' + checkRunStampModule.shellQuote('output[title]=SM concluded a placeholder check-run (gh-857)') +
+                        ' -f ' + checkRunStampModule.shellQuote('output[summary]=' + coverLine)
                 });
                 out.concluded++;
             } catch (ePatch) {
@@ -7788,11 +7809,14 @@ function stampLinkBlock(repoInfo, runUrl, conclusion) {
             var verdict = j.conclusion ? (j.status === 'completed' ? j.conclusion : j.status)
                                        : j.status;
             var link = j.html_url || runUrl;
-            lines.push('| [' + String(j.name).replace(/"/g, "'") + '](' + link + ') | ' +
+            // gh-1107: NO byte mangling — the name rides the JSON body
+            // verbatim (the old `"` → `'` swap existed for the shell string
+            // that no longer exists; the byte-for-byte contract forbids it).
+            lines.push('| [' + String(j.name) + '](' + link + ') | ' +
                        verdict + ' |');
         });
         block.summary = ('Dispatched run: ' + runUrl + '\n' + lines.join('\n') +
-                         '\n_Stamped by the SM tick (bridge-free mode)._').replace(/"/g, "'");
+                         '\n_Stamped by the SM tick (bridge-free mode)._');
         // Red verdict: land the reviewer on the FAILING JOB directly, not
         // the umbrella run (success keeps the umbrella — one click lists
         // every job).
@@ -7808,6 +7832,10 @@ function stampLinkBlock(repoInfo, runUrl, conclusion) {
     }
     return block;
 }
+
+// gh-1107: temp-body uniqueness — one /tmp file per stamp, monotonic so
+// same-millisecond stamps in the forEach never collide.
+var stampTempSeq = 0;
 
 function stampValidationChecksForModule(repoInfo, headSha, status, conclusion, runUrl) {
             var names = validationCheckNames();

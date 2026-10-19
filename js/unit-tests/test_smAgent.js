@@ -7906,6 +7906,7 @@ suite('smAgent: check-run stamp transport is shell-clean (gh-1107)', function ()
         });
 
         var smFail = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
             github: { items: [], prList: armedPrList(),
                       workflowApiRuns: concludedRun('failure') },
             onCliExecute: function (cmd) {
@@ -7919,9 +7920,15 @@ suite('smAgent: check-run stamp transport is shell-clean (gh-1107)', function ()
         smFail.action({ jobParams: { owner: 'a', repo: 'b',
             validationChecks: '["Quality gate"]', rules: [syncOnlyRule()] } });
 
-        assert.equal(stampPosts(smFail).length, 0, 'the gh call failed — no stamp landed');
+        assert.equal(stampPosts(smFail).length, 1,
+            'the failed gh call is attempted (and captured)');
         assert.equal(smFail.capturedFileDeletes.length, 1,
             'AC3: the temp file is STILL removed on the failure path');
+        var warns = smFail.capturedLogs.filter(function (l) {
+            return l.indexOf('⚠️  stamp') !== -1; });
+        assert.equal(warns.length, 1, 'the failure warns (today\'s failure mode)');
+        assert.ok(warns[0].indexOf('Bad substitution') !== -1,
+            'the warn carries the failure reason');
     });
 
     test('E2: an unwritable temp dir warns and skips — the tick continues', function () {
@@ -14639,7 +14646,7 @@ suite('smAgent: fork-aware silent-update (gh-1070)', function () {
 
         assert.equal(clones(sm).length, 1, 'one base-repush command');
         var cmd = clones(sm)[0].command;
-        assert.ok(cmd.indexOf('--single-branch --branch feat/x') !== -1, 'the classic single-branch clone');
+        assert.ok(cmd.indexOf("--single-branch --branch 'feat/x'") !== -1, 'the classic single-branch clone (gh-1107: quoted)');
         // gh-1074: the base repush GIT CHAIN stays byte-identical to the
         // pre-gh-1070 form — the pin now reads the chain up to the stderr
         // tee wrapper the builder appends ('; } 2>>…').
