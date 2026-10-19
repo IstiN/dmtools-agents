@@ -238,13 +238,7 @@ function resumeOnceForMissingResponse(options) {
 
     // Force exactly one attempt for this stage regardless of the inherited
     // root maxAttempts — gh-775 is explicit: no multi-resume retries.
-    var forced = {};
-    for (var key in customParams) {
-        if (customParams.hasOwnProperty(key)) forced[key] = customParams[key];
-    }
-    forced.feedbackLoop = Object.assign({}, root, {
-        missingResponse: Object.assign({}, scoped, { enabled: true, maxAttempts: 1 })
-    });
+    var forced = forcedResumeParams(customParams, root, scoped);
 
     try {
         return resumeAgent({
@@ -262,6 +256,21 @@ function resumeOnceForMissingResponse(options) {
         console.warn('Bounded resume for missing outputs/response.md failed/timed out:', e);
         return { attempted: true, failed: true, error: e && e.message ? e.message : String(e) };
     }
+}
+
+// gh-775: exactly one attempt for the missingResponse stage regardless of the
+// inherited root maxAttempts — clone customParams with the scoped
+// missingResponse config forced on (enabled: true, maxAttempts: 1). Split out
+// of resumeOnceForMissingResponse to keep it under the CRAP ratchet baseline.
+function forcedResumeParams(customParams, root, scoped) {
+    var forced = {};
+    for (var key in customParams) {
+        if (customParams.hasOwnProperty(key)) forced[key] = customParams[key];
+    }
+    forced.feedbackLoop = Object.assign({}, root, {
+        missingResponse: Object.assign({}, scoped, { enabled: true, maxAttempts: 1 })
+    });
+    return forced;
 }
 
 // ── gh-1121: ONE bounded resume for a whole-provider-chain outage ───────────

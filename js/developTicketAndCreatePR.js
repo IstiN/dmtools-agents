@@ -714,26 +714,51 @@ function recoverMissingResponse(ticketKey, customParams, developmentSummary, cli
     // cause (providers + codes) instead of guessing a rate limit.
     var outage = providerOutageOf(cliErrorMessage, developmentSummary);
     if (outage) {
-        console.log('⏸️ Whole provider chain failed with transient errors (' +
-            ((outage.models && outage.models.join(', ')) || 'unknown models') + '; codes: ' +
-            ((outage.codes && outage.codes.join(', ')) || 'n/a') + ') — classified provider_transient (gh-1121).');
-        if (ctx) ctx.providerOutage = outage;
-        var outageResume = feedbackLoop.resumeOnceForProviderOutage({
-            ticketKey: ticketKey,
-            customParams: customParams
-        });
-        if (outageResume.attempted) {
-            var outageRecovered = readResponseMd(ticketKey);
-            if (outageRecovered && outageRecovered.trim()) {
-                console.log('✅ Bounded outage resume landed outputs/response.md — continuing the normal path (no cold reset).');
-                return outageRecovered;
-            }
-            console.log('Bounded outage resume did not land outputs/response.md — continuing to the existing reset path.');
-            return null;
-        }
+        return tryResumeForProviderOutage(ticketKey, customParams, outage, ctx);
+    }
+    return tryGenericResumeForMissingResponse(ticketKey, customParams);
+}
+
+// gh-1121 log labels for the outage hand-off — the honest models/codes lists
+// with the same fallbacks the reset header uses (outageResetHeaderOf).
+function outageModelsLabelOf(outage) {
+    return (outage && outage.models && outage.models.length) ? outage.models.join(', ') : 'unknown models';
+}
+
+function outageCodesLabelOf(outage) {
+    return (outage && outage.codes && outage.codes.length) ? outage.codes.join(', ') : 'n/a';
+}
+
+// gh-1121: the bounded outage resume — ONE re-invocation of the persisted fa
+// session after the configured backoff (see resumeOnceForProviderOutage).
+// Returns the recovered outputs/response.md content when the resume landed
+// it, null to continue to the existing reset path. The classified outage is
+// stashed on ctx so the reset comment can name the real cause (models+codes).
+function tryResumeForProviderOutage(ticketKey, customParams, outage, ctx) {
+    console.log('⏸️ Whole provider chain failed with transient errors (' +
+        outageModelsLabelOf(outage) + '; codes: ' + outageCodesLabelOf(outage) + ') — classified provider_transient (gh-1121).');
+    if (ctx) ctx.providerOutage = outage;
+    var outageResume = feedbackLoop.resumeOnceForProviderOutage({
+        ticketKey: ticketKey,
+        customParams: customParams
+    });
+    if (!outageResume.attempted) {
         console.log('Bounded outage resume not attempted (' + (outageResume.reason || 'unknown') + ') — continuing to the existing reset path.');
         return null;
     }
+    var outageRecovered = readResponseMd(ticketKey);
+    if (outageRecovered && outageRecovered.trim()) {
+        console.log('✅ Bounded outage resume landed outputs/response.md — continuing the normal path (no cold reset).');
+        return outageRecovered;
+    }
+    console.log('Bounded outage resume did not land outputs/response.md — continuing to the existing reset path.');
+    return null;
+}
+
+// gh-75: the generic bounded resume for a missing deliverable — returns the
+// recovered outputs/response.md content, or null to continue to the existing
+// reset path. Split out of recoverMissingResponse for the CRAP gate.
+function tryGenericResumeForMissingResponse(ticketKey, customParams) {
     var resume = feedbackLoop.resumeOnceForMissingResponse({
         ticketKey: ticketKey,
         customParams: customParams

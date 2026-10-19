@@ -136,21 +136,30 @@ function classifyFailure(text) {
     // (5xx / 429 / network — no 401 auth text; 403/quota already excluded by
     // the priority branch above, I1) is a whole-chain OUTAGE, not a blip: the
     // dev leg may resume the persisted fa session once instead of cold-reset.
-    if (CHAIN_EXHAUSTED_RE.test(t) && !AUTH_TEXT_RE.test(t)) {
-        var models = extractOutageModels(t);
-        return {
-            kind: 'provider_transient',
-            provider: models[0] || extractProvider(t),
-            models: models,
-            codes: extractOutageCodes(t),
-            window: null,
-            evidence: 'provider chain exhausted'
-        };
-    }
+    var outage = providerOutageClassificationOf(t);
+    if (outage) return outage;
     if (RATE_LIMIT_RE.test(t) || TIMEOUT_RE.test(t)) {
         return { kind: 'transient', provider: extractProvider(t), window: null, evidence: null };
     }
     return null;
+}
+
+// gh-1121: classifies the exhausted-chain tail whose attempts are ONLY
+// transient (5xx / 429 / network — no 401 auth text) as a whole-chain OUTAGE.
+// Returns the provider_transient classification object, or null when the text
+// is not an outage. Split out of classifyFailure to keep both under the CRAP
+// gate (gh-1121 quality run: classifyFailure CC 9 > threshold 8).
+function providerOutageClassificationOf(t) {
+    if (!CHAIN_EXHAUSTED_RE.test(t) || AUTH_TEXT_RE.test(t)) return null;
+    var models = extractOutageModels(t);
+    return {
+        kind: 'provider_transient',
+        provider: models[0] || extractProvider(t),
+        models: models,
+        codes: extractOutageCodes(t),
+        window: null,
+        evidence: 'provider chain exhausted'
+    };
 }
 
 // Quota evidence: a 403 carrying a quota/billing body, an explicit quota
