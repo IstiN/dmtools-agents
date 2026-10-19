@@ -10,6 +10,8 @@
  * Uses: loadModule(), makeRequire(), assert, test(), suite()
  */
 
+var forkCheckoutModule = loadModule('js/common/forkCheckout.js', makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}) }), {});
+
 var NOOP_MODULE = {};
 
 var reworkCommentMarkupModule = loadModule('js/common/commentMarkup.js',
@@ -36,6 +38,7 @@ function loadPreCliReworkSetup(configLoaderStub, mocks) {
         makeRequire({
             './configLoader.js': configLoaderStub,
             './common/githubHelpers.js': mocks.__ghStub,
+            './forkCheckout.js': forkCheckoutModule,
             './common/gitOps.js': NOOP_MODULE,
             './common/commentMarkup.js': reworkCommentMarkupModule,
             './fetchQuestionsToInput.js': NOOP_MODULE,
@@ -428,6 +431,7 @@ function makeActionHarness(overides) {
         makeRequire({
             './configLoader.js': configLoaderStub,
             './common/githubHelpers.js': ghStub,
+            './forkCheckout.js': forkCheckoutModule,
             './common/gitOps.js': gitOpsStub,
             './common/commentMarkup.js': reworkCommentMarkupModule,
             './fetchQuestionsToInput.js': NOOP_MODULE,
@@ -494,6 +498,7 @@ function makeContractHarness(opts) {
         makeRequire({
             './configLoader.js': { loadHookFn: function() { return null; } },
             './common/githubHelpers.js': makeGhStub(),
+            './forkCheckout.js': forkCheckoutModule,
             './common/gitOps.js': gitOpsStub,
             './common/commentMarkup.js': reworkCommentMarkupModule,
             './fetchQuestionsToInput.js': NOOP_MODULE,
@@ -663,6 +668,7 @@ suite('preCliReworkSetup.ensureInputContextContract — pinned input trio (gh-79
                     createScm: function() { return { getRemoteRepoInfo: function() { return { owner: 'acme', repo: 'widgets' }; } }; }
                 },
                 './common/githubHelpers.js': ghStub,
+                './forkCheckout.js': forkCheckoutModule,
                 './common/gitOps.js': {
                     checkoutPRBranch: function() {},
                     detectMergeConflicts: function() { return []; },
@@ -740,6 +746,7 @@ suite('preCliReworkSetup.action — rework status write reflects the actual tran
                     createScm: function() { return { getRemoteRepoInfo: function() { return { owner: 'acme', repo: 'widgets' }; } }; }
                 },
                 './common/githubHelpers.js': ghStub,
+                './forkCheckout.js': forkCheckoutModule,
                 './common/gitOps.js': {
                     checkoutPRBranch: function() {},
                     detectMergeConflicts: function() { return []; },
@@ -816,6 +823,7 @@ suite('preCliReworkSetup.action — rework status write reflects the actual tran
                         createScm: function() { return { getRemoteRepoInfo: function() { return { owner: 'acme', repo: 'widgets' }; } }; }
                     },
                     './common/githubHelpers.js': ghStub,
+                    './forkCheckout.js': forkCheckoutModule,
                     './common/gitOps.js': {
                         checkoutPRBranch: function() {},
                         detectMergeConflicts: function() { return []; },

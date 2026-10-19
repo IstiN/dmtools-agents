@@ -19,6 +19,7 @@ var trackersModule = require('./common/trackers.js');
 var commentMarkup = require('./common/commentMarkup.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
+var forkCheckout = require('./common/forkCheckout.js');
 const { resolveStatuses } = require('./config.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
@@ -513,9 +514,9 @@ function moveTicketToReworkStatus(config, tracker, ticketKey, statuses, prAnchor
  * writes the marker + posts the comment, then throws).
  * (gh-1002) Side-effecting step helper extracted from action() Step 4.
  */
-function checkoutReworkBranch(branchName, config, inputFolder, tracker, ticketKey, customParams) {
+function checkoutReworkBranch(branchName, config, inputFolder, tracker, ticketKey, customParams, pullRef) {
     try {
-        gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
+        gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch, pullRef);
     } catch (e) {
         failSetup(tracker, ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString(), customParams);
     }
@@ -698,7 +699,8 @@ function action(params) {
         if (!branchName) {
             failSetup(tracker, ticketKey, inputFolder, 'Could not determine branch from PR details', customParams);
         }
-        checkoutReworkBranch(branchName, config, inputFolder, tracker, ticketKey, customParams);
+        checkoutReworkBranch(branchName, config, inputFolder, tracker, ticketKey, customParams,
+            forkCheckout.resolvePullRef(forkCheckout.prPullRef(prDetails), forkCheckout.envCheckoutRef()));
 
         const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
 

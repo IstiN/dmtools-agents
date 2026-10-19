@@ -76,6 +76,11 @@ on:
         required: false
         type: string
         default: ''
+      checkout_ref:
+        description: 'gh-1075/gh-1096: refs/pull/<N>/head for fork-PR legs (empty = dispatch ref)'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   # The factory (factory-teammate.yml@e611e5f) requests this set and a
@@ -273,6 +278,8 @@ jobs:
     with:
       issue: ${{ github.event.issue.number || github.event.inputs.issue }}
       pr: ${{ github.event.inputs.pr || '' }}
+      # gh-1096: requires the factory-teammate.yml checkout_ref input (awf PR merged first).
+      checkout_ref: ${{ github.event.inputs.checkout_ref || '' }}
       machine-author: 'ai-teammate'
       leg: ${{ github.event.inputs.leg || '' }}
       reason: ${{ github.event.inputs.reason || github.event_name }}

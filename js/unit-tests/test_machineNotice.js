@@ -18,6 +18,8 @@
  * Uses: configModule, loadModule(), makeRequire(), assert, test(), suite()
  */
 
+var forkCheckoutModule = loadModule('js/common/forkCheckout.js', makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}) }), {});
+
 // ── Loader helpers ────────────────────────────────────────────────────────────
 
 function loadMachineNotice() {
@@ -84,6 +86,7 @@ function loadPreCliReworkSetup(mocks, gitOpsStub) {
                 fetchDiscussionsAndRawData: function() {},
                 detectFailedChecks: function() {}
             },
+            './forkCheckout.js': forkCheckoutModule,
             './common/gitOps.js': gitOpsStub,
             './common/commentMarkup.js': loadModule('js/common/commentMarkup.js',
                 makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') })),

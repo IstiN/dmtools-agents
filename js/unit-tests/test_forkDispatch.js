@@ -194,4 +194,20 @@ suite('workflow template declares the dispatch inputs (gh-1075 lint)', function 
                 ' — the template must declare it or every fork dispatch 422s');
         });
     });
+
+    // gh-1096 UT-1: the declaration alone is not enough — the checkout step
+    // must CONSUME checkout_ref (guarded, default = dispatch ref) and the
+    // self-host stub must declare + forward it to the factory call.
+    test('gh-1096: template checkout step consumes checkout_ref guarded by != \'\'', function () {
+        var tpl = file_read({ path: 'workflows/ai-teammate.yml.template' });
+        assert.ok(tpl.indexOf("ref: ${{ github.event.inputs.checkout_ref != '' && github.event.inputs.checkout_ref || github.ref }}") !== -1,
+            'the checkout step must resolve inputs.checkout_ref (fork leg) else github.ref (byte-identical default)');
+    });
+
+    test('gh-1096: self-host stub declares checkout_ref and forwards it to factory-teammate', function () {
+        var stub = file_read({ path: '.github/workflows/ai-teammate.yml' });
+        assert.ok(declaredDispatchInputs(stub).checkout_ref, 'stub must declare checkout_ref or fork dispatches 422');
+        assert.ok(stub.indexOf("checkout_ref: ${{ github.event.inputs.checkout_ref || '' }}") !== -1,
+            'stub must forward checkout_ref in the factory call with:');
+    });
 });
