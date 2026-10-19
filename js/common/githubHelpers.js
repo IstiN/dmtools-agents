@@ -854,6 +854,42 @@ function buildCiFailuresResolutionSection(hasFullLog) {
     return section;
 }
 
+/** gh-1119: extract+tag violations from every check whose logs resolved. */
+function extractViolationsFromEntries(entries, diffText) {
+    var checkLogs = [];
+    (entries || []).forEach(function(entry) {
+        if (entry.sections && entry.sections.ok && entry.sections.logs) {
+            checkLogs.push({ name: entry.check.name, logs: entry.sections.logs });
+        }
+    });
+    if (checkLogs.length === 0) return [];
+    var violations = ciViolations.extractAndTagViolations(checkLogs, diffText);
+    if (violations.length > 0) {
+        console.log('⚠️ Extracted ' + violations.length + ' gate violation(s) from the failed-check logs (' +
+            ciViolations.ownedViolations(violations).length + ' owned)');
+    }
+    return violations;
+}
+
+/** gh-1119: best-effort ci_violations.json write (full uncapped list, E2). */
+function writeViolationsJson(inputFolder, violations) {
+    if (!violations || violations.length === 0) return;
+    try {
+        file_write({
+            path: inputFolder + '/ci_violations.json',
+            content: JSON.stringify(ciViolations.violationsSummaryJson(violations), null, 2)
+        });
+        console.log('✅ Wrote ci_violations.json (' + violations.length + ' violation(s))');
+    } catch (e) {
+        console.warn('Could not write ci_violations.json (non-fatal):', e && e.message ? e.message : String(e));
+    }
+}
+
+/** gh-1119: '' when nothing was extracted — today's file, unchanged (AC5/I3). */
+function buildViolationsBlock(violations) {
+    return ciViolations.buildViolationsMarkdown(violations);
+}
+
 function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt) {
     var scm = null;
     var owner, repo, headSha, inputFolder, jenkinsBasePath, diffText;
@@ -918,6 +954,12 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
         var entries = resolveFailedCheckSections(failedChecks, scm, owner, repo, headSha, jenkinsBasePath);
         failedChecks = entries.map(function(e) { return e.check; });
 
+        // gh-1119: extract gate violations from the RAW resolved logs and tag
+        // each one owned/foreign against the PR diff file list. The block is
+        // prepended to ci_failures.md so the rework leg cannot miss it; with
+        // zero extracted violations (unknown log shape, I3) nothing changes.
+        var violations = extractViolationsFromEntries(entries, diffText);
+
         var mdBody = '';
         var fullLogContent = '';
 
@@ -950,7 +992,12 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
                 writeErr && writeErr.message ? writeErr.message : String(writeErr));
         }
 
+        // gh-1119: the full uncapped violation list lands in ci_violations.json
+        // (E2) — best-effort, a write failure never costs the leg its table.
+        writeViolationsJson(inputFolder, violations);
+
         var md = buildCiFailuresHeader(failedChecks, headSha, fullLogWritten) +
+                 buildViolationsBlock(violations) +
                  mdBody +
                  buildCiFailuresResolutionSection(fullLogWritten);
 
@@ -1007,6 +1054,9 @@ module.exports = {
     buildLogSections: buildLogSections,
     buildCiFailuresHeader: buildCiFailuresHeader,
     buildCiFailuresResolutionSection: buildCiFailuresResolutionSection,
+    extractViolationsFromEntries: extractViolationsFromEntries,
+    writeViolationsJson: writeViolationsJson,
+    buildViolationsBlock: buildViolationsBlock,
 
     // Re-exported from ./gitOps.js for backward compatibility — these are
     // plain git-CLI operations, not GitHub-specific. New code should prefer

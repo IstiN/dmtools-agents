@@ -735,12 +735,18 @@ function action(params) {
         // JDK/Maven, verify build credentials) before the CLI agent starts fixing code.
         runSetupCommandsStep(customParams, config, inputFolder, tracker, ticketKey);
 
-        // Step 4.7: Detect failed CI checks — writes ci_failures.md if any failed
+        // Step 4.7: Detect failed CI checks — writes ci_failures.md if any failed.
+        // gh-1119: the PR diff is fetched FIRST and handed to detectFailedChecks,
+        // which tags every extracted gate violation owned/foreign against the
+        // diff file list (the #433 rework leg missed an owned violation because
+        // it was buried in the raw tails — now it opens ci_failures.md).
         const headSha = prDetails.head ? prDetails.head.sha : null;
-        const failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath);
 
         // Step 5: Diff + discussions (human-readable + raw with IDs)
         const diff = gitOps.getPRDiff(baseBranch, branchName, config.workingDir);
+
+        const failedChecks = gh.detectFailedChecks(
+            scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath, diff);
 
         console.log('Fetching PR discussions...');
         const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);

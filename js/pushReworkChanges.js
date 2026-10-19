@@ -27,6 +27,10 @@ var tokenUsageComment = require('./common/tokenUsageComment.js');
 // per leg close ({head, pushed, resolved}) so the SM arm actions can bound
 // consecutive empty laps on one head.
 var reworkLoopGuard = require('./common/reworkLoopGuard.js');
+// gh-1119: owned CI-violation accounting — the setup-time snapshot
+// (ci_violations.json) is validated against the fix summary before the
+// rework cycle may close.
+var ciViolations = require('./common/ciViolations.js');
 
 // ── gh-957: lap audit (loop guard) + audit-resolve support ──────────────────
 //
