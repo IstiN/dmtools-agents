@@ -448,7 +448,9 @@ function makeSmAgent(opts) {
         capturedEnvSets: capturedEnvSets,
         capturedScmConfigs: capturedScmConfigs,
         capturedIoCacheDrops: capturedIoCacheDrops,
-        capturedLogs: capturedLogs
+        capturedLogs: capturedLogs,
+        capturedFileWrites: capturedFileWrites,
+        capturedFileDeletes: capturedFileDeletes
     };
 }
 
@@ -15049,5 +15051,191 @@ suite('smAgent: naked-PR reconciliation sweep (gh-1097 IT-1)', function () {
             body: '<!-- dmtools:naked-pr-rearm {"pr":10,"head":"sha10"} -->' }]);
         assert.equal(sm.capturedPrLabelAdds.length, 0);
         assert.equal(sm.capturedPrComments.length, 0);
+    });
+});
+
+// ── gh-1118 — SM stamp survives dash-hostile API payloads ────────────────────
+// stampValidationChecksForModule used to interpolate the API-derived values
+// (check names, the jobs-table summary) INLINE into the `gh api -X POST …`
+// command string. GitHub's jobs API returns matrix job names with the
+// template UNRESOLVED while a run is in flight — `Core tests (shard
+// ${{ matrix.shard }}/4)` — and that literal `${ … }}` inside the
+// double-quoted summary made dash (sh on the hosted ubuntu runner) abort the
+// dmtools temp script with `Bad substitution` (exit 2). Every stamp for the
+// PR failed, the check-runs never landed, the merge gate stalled. The fix
+// carries the payload through a temp file (`gh api --input`, the scm.js
+// updatePrBody pattern) so the command string has no shell expansion surface.
+suite('smAgent: gh-1118 — stamp survives dash-hostile API payloads', function () {
+    var HEAD = '1118cafe1118cafe1118cafe1118cafe1118cafe';
+    var GREEN_RUN = { id: 55000111, event: 'workflow_dispatch',
+        head_branch: 'ai/gh-1118', head_sha: HEAD,
+        status: 'completed', conclusion: 'success',
+        html_url: 'https://github.com/o/r/actions/runs/55000111',
+        created_at: '2026-10-19T17:00:00Z' };
+    // Exactly what the jobs API returns for a QUEUED matrix leg (the live
+    // flutter_agent_harness quality.yml shape).
+    var UNRESOLVED_MATRIX_JOB = 'Core tests (shard ${{ matrix.shard }}/4)';
+    var JOBS_PAYLOAD = { jobs: [
+        { id: 1, name: UNRESOLVED_MATRIX_JOB, status: 'queued', conclusion: null,
+          html_url: 'https://github.com/o/r/actions/runs/55000111/job/1' },
+        { id: 2, name: 'Quality gate', status: 'completed', conclusion: 'success',
+          html_url: 'https://github.com/o/r/actions/runs/55000111/job/2' }
+    ] };
+
+    function stampConfig(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function prCarrier(n, sha) {
+        return { number: n, state: 'open', draft: false,
+            head: { sha: sha, ref: 'ai/gh-' + n },
+            labels: [{ name: 'ai_validating' }] };
+    }
+
+    function noMatchRule() {
+        // A github-pr rule that matches nothing — the gh-1118 sync runs
+        // BEFORE the rule's own source query, so the stamp fires regardless.
+        return { description: 'gh-1118 stamp carrier', source: 'github',
+            query: { type: 'pr', labels: ['no-such-label'] }, limit: 1 };
+    }
+
+    function stampTick(opts) {
+        opts = opts || {};
+        var sm = makeSmAgent(Object.assign(stampConfig('o', 'r'), {
+            github: {
+                items: [],
+                prList: [prCarrier(1118, HEAD)],
+                prComments: [],
+                workflowApiRuns: [GREEN_RUN]
+            },
+            captureConsole: true,
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('/jobs?per_page=100') !== -1) {
+                    return JOBS_PAYLOAD;
+                }
+                if (opts.onCliExecute) return opts.onCliExecute(cmdOpts);
+                return undefined;
+            }
+        }));
+        var result = sm.action({ jobParams: { owner: 'o', repo: 'r',
+            ciWorkflow: 'ci.yml', validationChecks: ['Quality gate'],
+            silentToken: 'app-token', sourceToken: 'pat-token',
+            nakedPrSweep: false, rules: [noMatchRule()] } });
+        return { sm: sm, result: result };
+    }
+
+    function stampPosts(sm) {
+        return sm.capturedCliCommands.filter(function (c) {
+            var cmd = c.command;
+            return cmd.indexOf('-X POST') !== -1 &&
+                   cmd.indexOf('/check-runs') !== -1 &&
+                   cmd.indexOf('/check-runs/') === -1; // create, not PATCH
+        });
+    }
+
+    test('DBG probe', function () {
+        var run = stampTick({});
+        run.sm.capturedLogs.forEach(function (l) {
+            if (l.indexOf('validation-sync') !== -1 || l.indexOf('stamp') !== -1 ||
+                l.indexOf('gh-1118') !== -1) console.log('      LOG: ' + l);
+        });
+        run.sm.capturedCliCommands.forEach(function (c) {
+            console.log('      CMD: ' + c.command.substring(0, 130));
+        });
+        assert.ok(true);
+    });
+    test('the stamp command string has NO shell expansion surface — payload rides --input', function () {
+        var run = stampTick({});
+        var posts = stampPosts(run.sm);
+        assert.ok(posts.length >= 1, 'at least one stamp POST was executed');
+        posts.forEach(function (p) {
+            assert.equal(p.command.indexOf('${'), -1,
+                'no ${ anywhere in the command string: ' + p.command);
+            assert.equal(p.command.indexOf('`'), -1,
+                'no backtick anywhere in the command string: ' + p.command);
+            assert.ok(p.command.indexOf('--input') !== -1,
+                'the request body travels through a file: ' + p.command);
+            assert.ok(p.command.indexOf('-f summary=') === -1,
+                'no inline summary interpolation: ' + p.command);
+        });
+    });
+
+    test('the payload file preserves the unresolved matrix job name byte-exact', function () {
+        var run = stampTick({});
+        var writes = run.sm.capturedFileWrites.filter(function (w) {
+            return String(w.path).indexOf('check_run_stamp') !== -1;
+        });
+        assert.equal(writes.length, 1, 'one stamp body file per check');
+        var body = JSON.parse(writes[0].content);
+        assert.equal(body.name, 'Quality gate');
+        assert.equal(body.head_sha, HEAD);
+        assert.equal(body.status, 'completed');
+        assert.equal(body.conclusion, 'success');
+        assert.ok(body.summary.indexOf(UNRESOLVED_MATRIX_JOB) !== -1,
+            'the jobs table keeps the raw GitHub template: ' + body.summary);
+        assert.equal(run.sm.capturedFileDeletes.length, 1,
+            'the body file is cleaned up');
+        assert.equal(run.sm.capturedFileDeletes[0].path, writes[0].path);
+    });
+
+    test('a failed stamp is retried once; a persistent failure counts into stamps_failed', function () {
+        var run = stampTick({
+            onCliExecute: function () { throw new Error('exit 2: Bad substitution'); }
+        });
+        var posts = stampPosts(run.sm);
+        assert.equal(posts.length, 2, 'exactly one retry per stamp (2 attempts total)');
+        assert.equal(run.result.stampsFailed, 1, 'the final failure is counted');
+        var summary = run.sm.capturedLogs.filter(function (l) {
+            return l.indexOf('stamps_failed: 1') !== -1;
+        });
+        assert.ok(summary.length >= 1, 'the tick summary carries the counter');
+    });
+
+    test('a transient stamp failure recovers on the retry and counts nothing', function () {
+        var attempts = 0;
+        var run = stampTick({
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('/check-runs') !== -1 &&
+                    cmdOpts.command.indexOf('/check-runs/') === -1) {
+                    attempts++;
+                    if (attempts === 1) throw new Error('transient exit 1');
+                }
+                return undefined;
+            }
+        });
+        assert.equal(stampPosts(run.sm).length, 2, 'first attempt + one retry');
+        assert.equal(run.result.stampsFailed, 0, 'the retry succeeded — no failure counted');
+    });
+
+    test('the counter resets between ticks on the SAME module instance', function () {
+        var sm = makeSmAgent(Object.assign(stampConfig('o', 'r'), {
+            github: {
+                items: [],
+                prList: [prCarrier(1118, HEAD)],
+                prComments: [],
+                workflowApiRuns: [GREEN_RUN]
+            },
+            captureConsole: true,
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('/jobs?per_page=100') !== -1) return JOBS_PAYLOAD;
+                if (c.indexOf('/check-runs') !== -1 &&
+                    c.indexOf('/check-runs/') === -1) {
+                    throw new Error('exit 2: Bad substitution');
+                }
+                return undefined;
+            }
+        }));
+        var jp = function () { return { jobParams: { owner: 'o', repo: 'r',
+            ciWorkflow: 'ci.yml', validationChecks: ['Quality gate'],
+            silentToken: 'app-token', sourceToken: 'pat-token',
+            nakedPrSweep: false, rules: [noMatchRule()] } }; };
+        var first = sm.action(jp());
+        var second = sm.action(jp());
+        assert.equal(first.stampsFailed, 1);
+        assert.equal(second.stampsFailed, 1,
+            'a fresh tick starts from zero — the counter is per-tick, not cumulative');
     });
 });

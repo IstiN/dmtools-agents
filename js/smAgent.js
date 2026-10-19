@@ -218,6 +218,13 @@ var tickReworkLatch = null;
 // ridden into the published factory-state snapshot (I5: operators see the
 // leak rate, not just the fix). Reset at the top of action().
 var tickZombiesSwept = 0;
+// gh-1118: stamps that STILL failed after the single retry — the check-runs
+// for those gates never landed on the PR head, so validation cannot conclude
+// and the merge bot waits forever on a context that will never arrive.
+// Tick-level counter (reset at the top of action()) surfaced in the
+// `SM Agent complete` summary line and the action() result so a broken
+// stamping run is visible without log archaeology.
+var tickStampsFailed = 0;
 // gh-1000 (phantom ai_validating holder): per-tick snapshot carried from
 // the github-source mutex scan to the factory-state publish rule (second
 // tier — the publish merge keeps counters/alarm tail across ticks).
