@@ -459,3 +459,160 @@ suite('prepareTestPRForReview', function() {
         assert.deepEqual(statusMoves, [{ key: 'TS-99', statusName: 'In Testing' }]);
     });
 });
+
+// ── gh-1077: isWip characterization through action() ─────────────────────────
+suite('prepareTestPRForReview isWip — WIP/draft characterization (gh-1077)', function() {
+
+    function wipAction(prExtra, ticketExtra, extraMocks) {
+        var comments = [];
+        var mocks = Object.assign({
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            scmMock: {
+                listPrs: function(state) {
+                    if (state === 'open') {
+                        return [Object.assign({
+                            number: 70,
+                            title: 'Test changes',
+                            head: { ref: 'test/TS-70' },
+                            html_url: 'https://github.com/IstiN/trackstate/pull/70'
+                        }, prExtra || {})];
+                    }
+                    return [];
+                }
+            }
+        }, extraMocks || {});
+        var module = loadPrepareTestPRForReview(mocks);
+        var ticket = Object.assign({ key: 'TS-70', fields: { issuetype: { name: 'Story' } } }, ticketExtra || {});
+        var result = module.action({
+            inputFolderPath: 'input/TS-70',
+            ticket: ticket,
+            jobParams: { customParams: {} }
+        });
+        return { result: result, comments: comments };
+    }
+
+    test('WIP title without a draft flag → skip comment, returns false', function() {
+        var out = wipAction({ title: 'WIP: not ready' });
+        assert.equal(out.result, false);
+        assert.ok(out.comments.some(function(c) { return c.indexOf('WIP/draft') !== -1; }));
+    });
+
+    test('draft: title prefix is case-insensitive', function() {
+        var out = wipAction({ title: 'draft: tweaks' });
+        assert.equal(out.result, false);
+        assert.ok(out.comments.some(function(c) { return c.indexOf('WIP/draft') !== -1; }));
+    });
+
+    test('title merely containing the letters (Swip) is not WIP', function() {
+        var out = wipAction({ title: 'Swipeland fixes', draft: false }, {}, {
+            githubHelpers: {
+                getPRDetails: function() {
+                    return { number: 70, changed_files: 1, head: { ref: 'test/TS-70' }, base: { ref: 'main' }, html_url: 'u' };
+                }
+            }
+        });
+        assert.equal(out.result.success, true);
+    });
+
+    test('leading whitespace before the WIP prefix still matches', function() {
+        var out = wipAction({ title: '  WIP stuff' });
+        assert.equal(out.result, false);
+    });
+
+    test('ADO-shaped ticket labels {value:[...]} with a _wip label → skip', function() {
+        var out = wipAction({}, { labels: { value: ['team', 'pr_review_wip'] } });
+        assert.equal(out.result, false);
+        assert.ok(out.comments.some(function(c) { return c.indexOf('WIP/draft') !== -1; }));
+    });
+
+    test('array ticket labels with a _draft suffix → skip', function() {
+        var out = wipAction({}, { labels: ['x', 'test_draft'] });
+        assert.equal(out.result, false);
+    });
+
+    test('bare wip label → skip', function() {
+        var out = wipAction({}, { labels: ['wip'] });
+        assert.equal(out.result, false);
+    });
+
+    test('plain title and non-WIP labels → review proceeds past the WIP gate', function() {
+        var out = wipAction({ title: 'Ready for review' }, { labels: ['other', 'more'] }, {
+            githubHelpers: {
+                getPRDetails: function() {
+                    return { number: 70, changed_files: 2, head: { ref: 'test/TS-70' }, base: { ref: 'main' }, html_url: 'u' };
+                }
+            }
+        });
+        assert.equal(out.result.success, true);
+    });
+});
+
+// ── gh-1077: extracted pure helpers ──────────────────────────────────────────
+suite('prepareTestPRForReview isWip — extracted pure helpers (gh-1077)', function() {
+
+    test('isWipPrTitle — WIP/DRAFT word prefix, whitespace tolerant, case insensitive', function() {
+        var m = loadPrepareTestPRForReview({});
+        assert.equal(m.isWipPrTitle('WIP: fix'), true);
+        assert.equal(m.isWipPrTitle('wip fix'), true);
+        assert.equal(m.isWipPrTitle('Draft: x'), true);
+        assert.equal(m.isWipPrTitle('DRAFT add'), true);
+        assert.equal(m.isWipPrTitle('   WIP late'), true);
+        assert.equal(m.isWipPrTitle('Swipeland'), false);
+        assert.equal(m.isWipPrTitle('WIPER valve'), false);
+        assert.equal(m.isWipPrTitle('drafty room'), false);
+        assert.equal(m.isWipPrTitle('Ready for review'), false);
+        assert.equal(m.isWipPrTitle(''), false);
+    });
+
+    test('isWipPr — draft flag, WIP title, or neither', function() {
+        var m = loadPrepareTestPRForReview({});
+        assert.equal(m.isWipPr(null), false);
+        assert.equal(m.isWipPr({}), false);
+        assert.equal(m.isWipPr({ draft: true }), true);
+        assert.equal(m.isWipPr({ draft: false, title: 'WIP: x' }), true);
+        assert.equal(m.isWipPr({ draft: false, title: 'clean' }), false);
+        assert.equal(m.isWipPr({ title: '' }), false);
+        assert.equal(m.isWipPr({ draft: true, title: '' }), true);
+    });
+
+    test('ticketLabels — array, {value}, empty/missing shapes, null ticket', function() {
+        var m = loadPrepareTestPRForReview({});
+        assert.deepEqual(m.ticketLabels({ labels: ['a'] }), ['a']);
+        assert.deepEqual(m.ticketLabels({ labels: { value: ['a', 'b'] } }), ['a', 'b']);
+        assert.deepEqual(m.ticketLabels({ labels: { value: undefined } }), []);
+        assert.deepEqual(m.ticketLabels({ labels: {} }), []);
+        assert.equal(m.ticketLabels({}), null);
+        assert.equal(m.ticketLabels({ labels: null }), null);
+        assert.equal(m.ticketLabels(null), null);
+    });
+
+    test('isWipLabel — suffixed or bare wip/draft, case insensitive', function() {
+        var m = loadPrepareTestPRForReview({});
+        assert.equal(m.isWipLabel('pr_review_wip'), true);
+        assert.equal(m.isWipLabel('X_DRAFT'), true);
+        assert.equal(m.isWipLabel('wip'), true);
+        assert.equal(m.isWipLabel('draft'), true);
+        assert.equal(m.isWipLabel('wiper'), false);
+        assert.equal(m.isWipLabel('a_wipx'), false);
+        assert.equal(m.isWipLabel('other'), false);
+    });
+
+    test('hasWipTicketLabel — finds the WIP label among several, honors shapes', function() {
+        var m = loadPrepareTestPRForReview({});
+        assert.equal(m.hasWipTicketLabel({ labels: ['a', 'b_wip', 'c'] }), true);
+        assert.equal(m.hasWipTicketLabel({ labels: { value: ['x', 'y_draft'] } }), true);
+        assert.equal(m.hasWipTicketLabel({ labels: ['a', 'b', 'c'] }), false);
+        assert.equal(m.hasWipTicketLabel({ labels: [] }), false);
+        assert.equal(m.hasWipTicketLabel({}), false);
+        assert.equal(m.hasWipTicketLabel(null), false);
+    });
+
+    test('isWip — PR branch, ticket-label branch, both, or neither', function() {
+        var m = loadPrepareTestPRForReview({});
+        assert.equal(m.isWip({ draft: true }, null), true);
+        assert.equal(m.isWip(null, { labels: ['b_wip'] }), true);
+        assert.equal(m.isWip({ draft: false, title: 'x' }, { labels: ['ok'] }), false);
+        assert.equal(m.isWip(null, null), false);
+        assert.equal(m.isWip(undefined, undefined), false);
+    });
+});
