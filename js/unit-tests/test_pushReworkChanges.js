@@ -1009,6 +1009,47 @@ suite('pushReworkChanges.action — input folder from params.inputFolderPath', f
         assert.equal(result.success, true, result.error);
         assert.equal(result.branchName, 'bug/PROJ-123');
     });
+
+    test('falls back to the legacy input/<ticketKey> for a GitHub key (Dart runtime, older runtimes)', function() {
+        // The Dart runtime pins metadata.contextId to the raw key and creates input/<contextId>/,
+        // so the folder is input/acme/widgets#5, not the Java runtime's input/gh-5.
+        var loaded = loadPushReworkChangesForAction({ file_read: strictFileRead('input/acme/widgets#5') });
+
+        loaded.mod.action({
+            ticket: { key: 'acme/widgets#5', fields: { labels: [] } },
+            response: 'Conflicts resolved.'
+        });
+
+        assert.ok(
+            loaded.cliCommands.filter(function(c) { return c.indexOf('git push -u origin bug/PROJ-123') !== -1; }).length >= 1,
+            'the rework is pushed to the PR branch read from the legacy input/acme/widgets#5/pr_info.md'
+        );
+    });
+
+    test('an explicit inputFolderPath without the setup context falls through to the derived folder', function() {
+        var loaded = loadPushReworkChangesForAction({ file_read: strictFileRead('input/PROJ-123') });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            inputFolderPath: '/home/runner/work/repo/repo/input/stale',
+            response: 'Conflicts resolved.'
+        });
+
+        assert.equal(result.success, true, result.error);
+        assert.equal(result.branchName, 'bug/PROJ-123');
+    });
+
+    test('with no folder holding the setup context the error names the first candidate', function() {
+        var loaded = loadPushReworkChangesForAction({ file_read: strictFileRead('input/nowhere') });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'acme/widgets#5', fields: { labels: [] } },
+            response: 'Conflicts resolved.'
+        });
+
+        assert.equal(result.success, false);
+        assert.ok(String(result.error).indexOf('input/gh-5/pr_info.md') !== -1, result.error);
+    });
 });
 
 suite('pushReworkChanges.action — tracker provider dispatch (#414)', function() {

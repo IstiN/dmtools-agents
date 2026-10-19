@@ -2578,3 +2578,54 @@ suite('postPRReviewComments — gh-1053 spec-claim guard wiring', function () {
         assert.equal(reviewData.issueCounts.blocking, 1);
     });
 });
+
+suite('postPRReviewComments.readPRInfoMarkdown — input folder chain', function () {
+
+    // Serves pr_info.md from one folder only; every other path misses the way file_read does.
+    function prInfoOnlyIn(folder, reads) {
+        return function (args) {
+            var p = args && (args.path || args);
+            reads.push(p);
+            if (p === folder + '/pr_info.md') return '**Branch**: `ai/gh-5` → `main`';
+            throw new Error('File does not exist: ' + p);
+        };
+    }
+
+    test('an explicit inputFolderPath wins', function () {
+        var reads = [];
+        var mod = loadPostPRReviewComments({ file_read: prInfoOnlyIn('/work/input/gh-5', reads) });
+
+        assert.ok(mod.readPRInfoMarkdown('/work/input/gh-5', 'acme/widgets#5'));
+        assert.equal(reads.length, 1, 'no further candidate is read');
+    });
+
+    test('derives input/gh-N for a GitHub key when no inputFolderPath is passed (Java runtime)', function () {
+        var reads = [];
+        var mod = loadPostPRReviewComments({ file_read: prInfoOnlyIn('input/gh-5', reads) });
+
+        assert.ok(mod.readPRInfoMarkdown(undefined, 'acme/widgets#5'));
+        assert.equal(reads[0], 'input/gh-5/pr_info.md');
+    });
+
+    test('falls back to the legacy input/<ticketKey> (Dart runtime, older runtimes)', function () {
+        var reads = [];
+        var mod = loadPostPRReviewComments({ file_read: prInfoOnlyIn('input/acme/widgets#5', reads) });
+
+        assert.ok(mod.readPRInfoMarkdown(undefined, 'acme/widgets#5'));
+        assert.deepEqual(reads, ['input/gh-5/pr_info.md', 'input/acme/widgets#5/pr_info.md']);
+    });
+
+    test('an explicit folder without pr_info.md still falls through the chain', function () {
+        var reads = [];
+        var mod = loadPostPRReviewComments({ file_read: prInfoOnlyIn('input/PROJ-1', reads) });
+
+        assert.ok(mod.readPRInfoMarkdown('/work/input/elsewhere', 'PROJ-1'));
+        assert.deepEqual(reads, ['/work/input/elsewhere/pr_info.md', 'input/PROJ-1/pr_info.md']);
+    });
+
+    test('null when no candidate holds pr_info.md', function () {
+        var mod = loadPostPRReviewComments({ file_read: prInfoOnlyIn('input/nowhere', []) });
+
+        assert.equal(mod.readPRInfoMarkdown(undefined, 'acme/widgets#5'), null);
+    });
+});

@@ -72,7 +72,7 @@ function reworkRunUrl() {
  */
 function readReworkBaseHead(ticketKey) {
     try {
-        var base = String(file_read({ path: 'input/' + ticketKey + '/rework_base_head.txt' }) || '').trim();
+        var base = String(file_read({ path: inputFolderFor(ticketKey) + '/rework_base_head.txt' }) || '').trim();
         return /^[0-9a-f]{7,40}$/i.test(base) ? base : null;
     } catch (e) {
         return null;
@@ -96,13 +96,20 @@ function postLapMarker(scm, prNumber, headSha, pushed, resolved) {
 }
 
 // The input folder dmtools created for this run. It is not always input/<ticketKey>: on a
-// GitHub-tracker deployment the folder carries the router key (input/gh-5) while the ticket key is
-// owner/repo#5, so reading input/<ticketKey>/pr_info.md found nothing and the finished rework was
-// never pushed. When the runtime passes the real folder (params.inputFolderPath) use its name;
-// the Java runtime passes it to pre-CLI actions only, so otherwise derive the name from the ticket
-// key the way the runtime does (ticketKeyShapes.inputFolderNameFor). Paths stay relative to the job
-// root like every other read here. Set once per action() run.
+// GitHub-tracker deployment the Java runtime names the folder after the router key (input/gh-5)
+// while the ticket key is owner/repo#5, so reading input/<ticketKey>/pr_info.md found nothing and the
+// finished rework was never pushed. The Dart runtime and older runtimes still create
+// input/<ticketKey>. The folder is resolved through ticketKeyShapes.inputFolderCandidates — the
+// folder the runtime passed (params.inputFolderPath; the Java runtime passes it to pre-CLI actions
+// only), then the Java-derived name, then the legacy input/<ticketKey> — taking the first that holds
+// the setup's context, else the first candidate. Paths stay relative to the job root like every
+// other read here. Reset once per action() run.
 var currentInputFolderName = null;
+var resolvedInputFolder = null;
+
+// Files preCliReworkSetup leaves in the run's folder: pr_info.md on success, rework_setup_failed.md
+// when it found no PR.
+var RUN_CONTEXT_FILES = ['pr_info.md', 'rework_setup_failed.md'];
 
 function inputFolderNameOf(inputFolderPath) {
     var segments = String(inputFolderPath || '').replace(/[\\/]+$/, '').split(/[\\/]/);
@@ -115,8 +122,25 @@ function runInputFolderName(params, actualParams) {
     return inputFolderNameOf(params.inputFolderPath || actualParams.inputFolderPath || jobParams.inputFolderPath);
 }
 
+function readsNonEmpty(path) {
+    try {
+        return String(file_read({ path: path }) || '').trim() !== '';
+    } catch (e) {
+        return false;
+    }
+}
+
+function holdsRunContext(folder) {
+    return RUN_CONTEXT_FILES.some(function(name) { return readsNonEmpty(folder + '/' + name); });
+}
+
 function inputFolderFor(ticketKey) {
-    return 'input/' + (currentInputFolderName || ticketKeyShapes.inputFolderNameFor(ticketKey));
+    if (resolvedInputFolder && resolvedInputFolder.key === ticketKey) return resolvedInputFolder.folder;
+    var explicit = currentInputFolderName ? 'input/' + currentInputFolderName : null;
+    var candidates = ticketKeyShapes.inputFolderCandidates(explicit, ticketKey);
+    var folder = candidates.filter(holdsRunContext)[0] || candidates[0];
+    resolvedInputFolder = { key: ticketKey, folder: folder };
+    return folder;
 }
 
 /**
@@ -2303,6 +2327,7 @@ function action(params) {
         const actualParams = params.ticket ? params : (params.jobParams || params);
         const ticketKey = actualParams.ticket.key;
         currentInputFolderName = runInputFolderName(params, actualParams);
+        resolvedInputFolder = null;
         const fixSummary = actualParams.response || '_(No fix summary generated)_';
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = scmModule.createScm(config);
