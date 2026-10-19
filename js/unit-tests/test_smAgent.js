@@ -15077,10 +15077,7 @@ suite('smAgent: gh-1114 movedThisTick guard (UT-2..5 / AC7)', function () {
     // the post-update world (the PR re-queried fresh).
     function movedTick(l2Rule, extra) {
         extra = extra || {};
-        var items = {};
-        items[UPDATE_RULE.id] = [pr(70)];
-        items[l2Rule.id] = [pr(70)];
-        if (extra.items) { for (var k in extra.items) { items[k] = extra.items[k]; } }
+        var items = movedTickItems(l2Rule, extra.items);
         var opts = Object.assign(config('a', 'b'), {
             captureConsole: true,
             github: Object.assign({
@@ -15096,6 +15093,18 @@ suite('smAgent: gh-1114 movedThisTick guard (UT-2..5 / AC7)', function () {
         return sm;
     }
 
+    // Per-rule item sets for the moved-head tick: both the freshness rule and
+    // the L2 rule match pr-70; extraItems adds/overrides entries (keyed by
+    // rule id) for callers that need a wider world (UT-2b's two-candidate
+    // verdict rule).
+    function movedTickItems(l2Rule, extraItems) {
+        var items = {};
+        items[UPDATE_RULE.id] = [pr(70)];
+        items[l2Rule.id] = [pr(70)];
+        if (extraItems) { for (var k in extraItems) { items[k] = extraItems[k]; } }
+        return items;
+    }
+
     function deferLogged(sm) {
         return (sm.capturedLogs || []).some(function (l) {
             return l.indexOf('pr-70 head moved this tick — verdict deferred') !== -1;
@@ -15109,6 +15118,25 @@ suite('smAgent: gh-1114 movedThisTick guard (UT-2..5 / AC7)', function () {
         assert.equal(deferLogged(sm), true, 'the deferral log line is printed');
         assert.equal(sm.capturedPrMerges.length, 0, 'no merge — the verdict is deferred');
         assert.ok(clonedA(sm), 'the freshness layer did move the head first');
+    });
+
+    test('UT-2b (AC7): the deferral is per-head — an unmoved candidate under the same verdict rule still merges', function () {
+        var sm = movedTick({ source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
+            localAction: 'merge_pr', limit: 5, id: 'merge-validated' }, {
+            // A wider world: the verdict rule sees the moved pr-70 AND an
+            // unmoved green pr-71. Only the moved head is deferred.
+            items: { 'merge-validated': [pr(70), pr(71, { headSha: NEW })] },
+            github: {
+                // attemptMergeProbe re-reads the sticky pr_approved latch on
+                // the PR itself — give the probe a green approved payload.
+                pr: { number: 71, head: { sha: NEW }, labels: ['pr_approved'] },
+                prAfterRefresh: { number: 71, head: { sha: NEW }, labels: ['pr_approved'] }
+            }
+        });
+        assert.equal(deferLogged(sm), true, 'the moved head (pr-70) is deferred');
+        assert.equal(sm.capturedPrMerges.length, 1, 'the unmoved candidate (pr-71) merges in the same tick');
+        assert.equal(sm.capturedPrMerges[0].pullRequestId, 71, 'the merge is pr-71, not the deferred pr-70');
     });
 
     test('UT-3 (AC7): fail_validation never parks a head moved this tick', function () {
@@ -15432,18 +15460,30 @@ suite('smAgent: gh-1114 IT replays (AC1/AC5/AC8/AC14)', function () {
 
     // Per-rule candidate lists from ONE world model (the post-L1 live read),
     // shared by both orders — the ORDER + guards produce any divergence.
+    // rule-id → (candidate PR, the snapshot that rule sees): a rule yields
+    // its candidate only while the world still holds that PR. The two
+    // snapshot-only entries pin what each rule reads at its layer:
+    // silent-update-behind the cached OLD head (post-unarm), validate-armed
+    // the fresh NEW head (post-update).
+    var REPLAY_CANDIDATES = [
+        { id: 'unarm-stale-validation', pr: 70, snap: function (w) { return w[70]; } },
+        { id: 'silent-update-behind', pr: 70,
+          snap: function () { return { labels: ['pr_approved'], headSha: OLD, branch: 'ai/x-70' }; } },
+        { id: 'park-reset', pr: 74, snap: function (w) { return w[74]; } },
+        { id: 'merge-validated', pr: 71, snap: function (w) { return w[71]; } },
+        { id: 'validate-armed', pr: 70,
+          snap: function () { return { labels: ['pr_approved'], headSha: NEW, branch: 'ai/x-70' }; } },
+        { id: 'conflict-rework', pr: 72, snap: function (w) { return w[72]; } },
+        { id: 'review-stale-verdict', pr: 73, snap: function (w) { return w[73]; } }
+    ];
+
     function itemsFor(world) {
         return function (rule) {
             var out = [];
-            if (rule.id === 'unarm-stale-validation' && world[70]) out.push(item(70, world[70]));
-            if (rule.id === 'silent-update-behind' && world[70]) out.push(item(70, {
-                labels: ['pr_approved'], headSha: OLD, branch: 'ai/x-70' })); // post-unarm snapshot
-            if (rule.id === 'park-reset' && world[74]) out.push(item(74, world[74]));
-            if (rule.id === 'merge-validated' && world[71]) out.push(item(71, world[71]));
-            if (rule.id === 'validate-armed' && world[70]) out.push(item(70, {
-                labels: ['pr_approved'], headSha: NEW, branch: 'ai/x-70' })); // post-update snapshot
-            if (rule.id === 'conflict-rework' && world[72]) out.push(item(72, world[72]));
-            if (rule.id === 'review-stale-verdict' && world[73]) out.push(item(73, world[73]));
+            for (var i = 0; i < REPLAY_CANDIDATES.length; i++) {
+                var c = REPLAY_CANDIDATES[i];
+                if (c.id === rule.id && world[c.pr]) out.push(item(c.pr, c.snap(world)));
+            }
             return out;
         };
     }

@@ -132,20 +132,34 @@ function isMergePathRule(rule) {
     return false;
 }
 
+// The string spelling of jobParams.mergeReservedSlots (repo variables arrive
+// as strings): 'false' disables, any other value parses as an integer
+// (unparsable → NaN → junk). Callers treat a non-positive result as disabled.
+function parseReservedSlotsString(raw) {
+    var trimmed = raw.trim();
+    if (trimmed === 'false') return 0;
+    return parseInt(trimmed, 10);
+}
+
+// Coerces jobParams.mergeReservedSlots to its numeric slot count, or null
+// when the value is unset or junk (anything that is not a usable count:
+// booleans map to 1/0, strings parse, NaN and non-numbers are junk).
+function reservedSlotsValue(jobParams) {
+    var raw = (jobParams || {}).mergeReservedSlots;
+    if (typeof raw === 'string') raw = parseReservedSlotsString(raw);
+    if (typeof raw === 'number' && !isNaN(raw)) return Math.floor(raw);
+    if (typeof raw === 'boolean') return raw ? 1 : 0;
+    return null;
+}
+
 // jobParams.mergeReservedSlots — the merge-path reservation, default 1.
 // 0 / false (or the string 'false') disables the reservation (bit-identical
 // with the pre-gh-1114 capacity behavior).
 function mergeReservedSlots(jobParams) {
+    var slots = reservedSlotsValue(jobParams);
+    if (slots !== null) return slots > 0 ? slots : 0;
     var raw = (jobParams || {}).mergeReservedSlots;
-    if (typeof raw === 'string') {
-        var trimmed = raw.trim();
-        if (trimmed === 'false') return 0;
-        raw = parseInt(trimmed, 10);
-    }
-    if (typeof raw === 'boolean') return raw ? 1 : 0;
-    if (typeof raw === 'number' && !isNaN(raw) && raw > 0) return Math.floor(raw);
-    if (typeof raw === 'undefined' || raw === null) return 1;
-    return 0; // any other junk disables rather than guess
+    return raw == null ? 1 : 0; // unset (or null) → default; junk disables rather than guess
 }
 
 // The reservation width for the tick: the whole gh-837 parallel width when
