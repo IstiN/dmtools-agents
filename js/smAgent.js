@@ -167,6 +167,11 @@ var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
 // ⚠️ trigger-failed marker math and the dead-head park cap. The pure
 // half lives in the module; recordDispatchFailure below wires transport.
 var triggerFailuresModule = require('./common/triggerFailures.js');
+// gh-1075 (hoisted, never lazy — the gh-823 pack-require rule): the
+// fork-PR dispatch contract — a cross-repo PR reroutes onto the base
+// machine ref with a refs/pull/<N>/head checkout plan (AC1) and its
+// no-ref liveness oracle is the pull-ref probe (AC2/AC3).
+var forkDispatchModule = require('./common/forkDispatch.js');
 // gh-1000 (hoisted, never lazy — the gh-823 pack-require rule): the
 // phantom ai_validating mutex holder — registry probes/heals, live-PR
 // re-derivation and the alarm/streak counter persistence.
@@ -597,6 +602,20 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
         .replace(/\{branch\}/g, String(it0.branch || ''))
         .replace(/\{prNumber\}/g, String(it0.prNumber || ''));
     if (!workflowRef) workflowRef = 'main';
+    // gh-1075 AC1 (fork PR dispatch): a HEAD-TARGETED dispatch for a
+    // CROSS-REPO PR reroutes onto the base repo's standard machine ref —
+    // the fork branch never exists in the base repo, so ref:<branch>
+    // 422s on every tick (live fa pr-1591 2026-10-19) — and the run
+    // inputs carry a refs/pull/<N>/head checkout plan (always fetchable
+    // on the base repo, even when the fork branch is deleted). Same-repo
+    // PRs and rules that never targeted the head return the plan
+    // UNCHANGED (UT-1 regression guard). headRefDispatch captures the
+    // head-targeting decision BEFORE the reroute so the gh-1028
+    // branch-leg guard below keeps its exact pre-gh-1075 semantics.
+    var headRefDispatch = !!(it0.branch && workflowRef === String(it0.branch));
+    var forkPlan = forkDispatchModule.dispatchPlan(workflowRef, it0,
+        repoInfo.owner, repoInfo.repo);
+    workflowRef = forkPlan.ref;
     var resolvedCf   = buildEncodedConfigModule.resolveConfigFile(rule, effectiveConfig);
     var concurrencyKey = rule.concurrencyKey || ticketKey;
 
@@ -656,7 +675,7 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
         // the gh-715 cross-anchor path): a leg that dies silently leaves
         // the arm armed, and the next quiet tick re-fires it — the
         // dead-letter recovery the machine loop is built on.
-        if (it0.branch && workflowRef === String(it0.branch) &&
+        if (headRefDispatch &&
                 hasActiveLegRunOnBranch(scm, workflowFile, it0.branch)) {
             console.log('  ⏭️  ' + ticketKey + ' skipped (leg already in flight on branch ' +
                 it0.branch + ' — gh-1028: the branch is the leg\'s single writer, ' +
@@ -726,6 +745,16 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
                 encoded_config:  buildEncodedConfigModule.buildEncodedConfig(ticketKey, rule, effectiveConfig),
                 project_key:     projectKey
             };
+        }
+        if (forkPlan.checkoutRef) {
+            // gh-1075 AC1: the pull-ref checkout plan and the PR number
+            // ride the run inputs — the leg's checkout step resolves
+            // refs/pull/<N>/head (always fetchable on the base repo,
+            // even when the fork branch was deleted). inputs.pr is
+            // backfilled only when the rule carried no {prNumber}
+            // placeholder of its own.
+            inputs.checkout_ref = forkPlan.checkoutRef;
+            if (!inputs.pr) inputs.pr = String(it0.prNumber || '');
         }
         if (DRY) {
             console.log('  [dry] ▶️ ' + ticketKey + ' dispatch:' + workflowFile + ' inputs=' + JSON.stringify(inputs));

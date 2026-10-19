@@ -7108,7 +7108,7 @@ suite('smAgent: trigger fail-open dispatch (gh-922)', function () {
         sm2.action({ jobParams: { owner: 'o', repo: 'r', machineAuthor: 'ai-teammate',
                                   rules: twoRules() } });
 
-        assert.deepEqual(parkAdds(sm), [302],
+        assert.deepEqual(parkAdds(sm2), [302],
             'exactly one validation_failed label add for the tick');
         assert.equal(bodyOf(sm2, 'parked-head: ').length, 1,
             'exactly one park comment — the stale second lane did not re-park');
