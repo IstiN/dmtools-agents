@@ -1717,3 +1717,491 @@ suite('gh-1108 asset default — the derivation path', function() {
         }), 'the local keyed copy rides the derived asset name');
     });
 });
+
+suite('aiTeammateTokenUsageReporter extraction characterization (gh-1078)', function() {
+
+    test('extractTokenUsage returns null for null, empty and tokenless logs', function() {
+        var reporter = loadReporter();
+
+        assert.equal(reporter.extractTokenUsage(null), null);
+        assert.equal(reporter.extractTokenUsage(''), null);
+        assert.equal(reporter.extractTokenUsage('just a plain log line'), null);
+    });
+
+    test('extractTokenUsage tolerates empty lines interleaved with content', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            '',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100 • 50 (cached)',
+            '',
+            '[INFO] CommandLineUtils - Tokens    ↑ 2k • ↓ 200 • 60 (cached)',
+            ''
+        ].join('\n'));
+
+        assert.notEqual(usage, null);
+        assert.equal(usage.samples, 2);
+        assert.equal(usage.readTokens, 3000);
+        assert.equal(usage.writeTokens, 300);
+        assert.equal(usage.cachedTokens, 110);
+    });
+
+    test('bare --resume marker marks resume without a feedback loop stage', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            './scripts/run-agent.sh --resume --ticket TS-1',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100'
+        ].join('\n'));
+
+        assert.equal(usage.resumeDetected, true);
+        assert.equal(usage.feedbackLoopCount, 0);
+        assert.deepEqual(usage.resumeStages, []);
+        assert.equal(usage.rateLimitRetryCount, 0);
+    });
+
+    test('run-agent.sh --continue marker marks resume without a feedback loop stage', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            './scripts/run-agent.sh --continue',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100'
+        ].join('\n'));
+
+        assert.equal(usage.resumeDetected, true);
+        assert.equal(usage.feedbackLoopCount, 0);
+        assert.deepEqual(usage.resumeStages, []);
+    });
+
+    test('feedback loop line takes precedence over the --resume marker check', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            'Feedback loop: resuming agent for review_comments attempt 2/3 --resume',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100'
+        ].join('\n'));
+
+        assert.equal(usage.resumeDetected, true);
+        assert.equal(usage.feedbackLoopCount, 1);
+        assert.deepEqual(usage.resumeStages, ['review_comments 2/3']);
+    });
+
+    test('generic rate limit wording marks detection without a retry count', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            "You've hit your rate limit. Limit resets at 17:00 UTC",
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100'
+        ].join('\n'));
+
+        assert.equal(usage.rateLimitDetected, true);
+        assert.equal(usage.rateLimitRetryCount, 0);
+    });
+
+    test('limit reset wording marks detection without a retry count', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            'rate limit reset in 42 minutes',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100'
+        ].join('\n'));
+
+        assert.equal(usage.rateLimitDetected, true);
+        assert.equal(usage.rateLimitRetryCount, 0);
+    });
+
+    test('counts every timeout marker variant across the log', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            'Command failed (exit code 124): ./agents/scripts/run-agent.sh',
+            'The command timed out after 30 minutes',
+            'cli_execute_command hit the command timeout of 1800s',
+            'timeout guard killed the runaway process',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100'
+        ].join('\n'));
+
+        assert.equal(usage.timeoutCount, 4);
+        assert.equal(usage.samples, 1);
+    });
+
+    test('samples without any Requests line keep empty request metadata', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage('[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100');
+
+        assert.notEqual(usage, null);
+        assert.equal(usage.requests, 0);
+        assert.equal(usage.requestTier, '');
+        assert.equal(usage.requestDuration, '');
+    });
+
+    test('non-fa samples merge the most recent Requests line, fa samples never do', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            '[INFO] CommandLineUtils - Requests  3 Premium (11m 0s)',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100',
+            '[INFO] CommandLineUtils - Requests  4 Pro (12m 0s)',
+            'fa-tokens: {"sessionId":"s9","segment":1,"input":500,"output":50,"cacheRead":10,"requests":2,"source":"reported"}'
+        ].join('\n'));
+
+        assert.equal(usage.attempts.length, 2);
+        assert.equal(usage.attempts[0].requests, 3);
+        assert.equal(usage.attempts[0].requestTier, 'Premium');
+        assert.equal(usage.attempts[1].requests, 2);
+        assert.equal(usage.attempts[1].requestTier, '');
+        assert.equal(usage.attempts[1].attemptIndex, 2);
+    });
+
+    test('source is empty when only CommandLineUtils samples exist', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage('[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100');
+
+        assert.equal(usage.source, '');
+    });
+
+    test('single resume with one sample still flags resumeDetected from the marker', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            'Feedback loop: resuming agent for polish attempt 1/2',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100'
+        ].join('\n'));
+
+        assert.equal(usage.resumeDetected, true);
+        assert.equal(usage.samples, 1);
+        assert.equal(usage.resumeStages.length, 1);
+    });
+
+    test('resumeDetected falls back to true for multi-sample logs without markers', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100',
+            '[INFO] CommandLineUtils - Tokens    ↑ 2k • ↓ 200'
+        ].join('\n'));
+
+        assert.equal(usage.resumeDetected, true);
+        assert.equal(usage.feedbackLoopCount, 0);
+        assert.deepEqual(usage.resumeStages, []);
+    });
+
+    test('processRunLogs sleeps between downloads when logDownloadSleepMs is set', function() {
+        var reporter = loadReporter({
+            github_get_workflow_run_logs: function() {
+                return '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100';
+            }
+        });
+        var run = { id: 9, run_number: 1, created_at: '2026-06-01T00:00:00Z', html_url: 'https://example.test/run/9' };
+        var meta = { title: 'agents/x.json : TS-1 : TS-1', configFile: 'agents/x.json', agent: 'x', ticketKey: 'TS-1' };
+        var state = {
+            rows: [],
+            attemptRows: [],
+            cache: { version: 1, entries: {} },
+            downloadedLogs: 1,
+            cacheHits: 0,
+            stoppedByDownloadLimit: false,
+            verbose: false,
+            cachePath: 'cache.json'
+        };
+        var options = { useCache: false, cacheWriteEvery: 25, logDownloadSleepMs: '5', maxLogDownloads: null };
+
+        var startedAt = Date.now();
+        reporter.processRunLogs({}, run, '9', meta, 60, '1m 0s', state, options);
+        var elapsed = Date.now() - startedAt;
+
+        assert.equal(state.downloadedLogs, 2);
+        assert.equal(state.rows.length, 1);
+        assert.equal(state.stoppedByDownloadLimit, false);
+        assert.equal(elapsed >= 5, true, 'expected a >=5ms pause between downloads, got ' + elapsed + 'ms');
+    });
+
+    test('processRunLogs skips the sleep for the first download and for unparseable values', function() {
+        var reporter = loadReporter({
+            github_get_workflow_run_logs: function() {
+                return '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100';
+            }
+        });
+        var run = { id: 9, run_number: 1, created_at: '2026-06-01T00:00:00Z', html_url: 'https://example.test/run/9' };
+        var meta = { title: 'agents/x.json : TS-1 : TS-1', configFile: 'agents/x.json', agent: 'x', ticketKey: 'TS-1' };
+        var firstState = {
+            rows: [], attemptRows: [], cache: { version: 1, entries: {} },
+            downloadedLogs: 0, cacheHits: 0, stoppedByDownloadLimit: false, verbose: false, cachePath: 'cache.json'
+        };
+
+        var startedAt = Date.now();
+        reporter.processRunLogs({}, run, '9', meta, 60, '1m 0s', firstState, { useCache: false, cacheWriteEvery: 25, logDownloadSleepMs: '5000', maxLogDownloads: null });
+        assert.equal(Date.now() - startedAt < 1000, true, 'first download must not sleep');
+
+        var junkState = {
+            rows: [], attemptRows: [], cache: { version: 1, entries: {} },
+            downloadedLogs: 1, cacheHits: 0, stoppedByDownloadLimit: false, verbose: false, cachePath: 'cache.json'
+        };
+        startedAt = Date.now();
+        reporter.processRunLogs({}, run, '9', meta, 60, '1m 0s', junkState, { useCache: false, cacheWriteEvery: 25, logDownloadSleepMs: 'soon', maxLogDownloads: null });
+        assert.equal(Date.now() - startedAt < 1000, true, 'unparseable sleep value must not sleep');
+        assert.equal(junkState.downloadedLogs, 2);
+    });
+
+    test('processRunLogs checks maxLogDownloads before sleeping or downloading', function() {
+        var downloads = [];
+        var reporter = loadReporter({
+            github_get_workflow_run_logs: function(args) {
+                downloads.push(args.runId);
+                return '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100';
+            }
+        });
+        var run = { id: 9, run_number: 1, created_at: '2026-06-01T00:00:00Z', html_url: 'https://example.test/run/9' };
+        var meta = { title: 'agents/x.json : TS-1 : TS-1', configFile: 'agents/x.json', agent: 'x', ticketKey: 'TS-1' };
+        var state = {
+            rows: [], attemptRows: [], cache: { version: 1, entries: {} },
+            downloadedLogs: 2, cacheHits: 0, stoppedByDownloadLimit: false, verbose: false, cachePath: 'cache.json'
+        };
+        var options = { useCache: false, cacheWriteEvery: 25, logDownloadSleepMs: '5000', maxLogDownloads: 2 };
+
+        var startedAt = Date.now();
+        reporter.processRunLogs({}, run, '9', meta, 60, '1m 0s', state, options);
+
+        assert.equal(downloads.length, 0);
+        assert.equal(state.downloadedLogs, 2);
+        assert.equal(state.stoppedByDownloadLimit, true);
+        assert.equal(Date.now() - startedAt < 1000, true, 'limit check must precede the sleep');
+    });
+});
+
+suite('aiTeammateTokenUsageReporter extraction helpers (gh-1078)', function() {
+
+    test('newUsageTracking starts zeroed', function() {
+        var reporter = loadReporter();
+        assert.deepEqual(reporter.newUsageTracking(), {
+            lastRequests: null,
+            samples: [],
+            seenFaSegments: {},
+            resumeDetected: false,
+            resumeStages: [],
+            feedbackLoopCount: 0,
+            rateLimitRetryCount: 0,
+            rateLimitDetected: false,
+            timeoutCount: 0
+        });
+    });
+
+    test('parseResumeSignal classifies feedback loop, markers and clean lines', function() {
+        var reporter = loadReporter();
+
+        var feedback = reporter.parseResumeSignal('Feedback loop: resuming agent for rework attempt 2/4');
+        assert.equal(feedback.resumed, true);
+        assert.equal(feedback.feedbackStage, 'rework 2/4');
+
+        var bareResume = reporter.parseResumeSignal('./scripts/run-agent.sh --resume --ticket TS-1');
+        assert.equal(bareResume.resumed, true);
+        assert.equal(bareResume.feedbackStage, null);
+
+        var continueMarker = reporter.parseResumeSignal('./scripts/run-agent.sh --continue');
+        assert.equal(continueMarker.resumed, true);
+        assert.equal(continueMarker.feedbackStage, null);
+
+        var clean = reporter.parseResumeSignal('just a plain log line');
+        assert.equal(clean.resumed, false);
+        assert.equal(clean.feedbackStage, null);
+    });
+
+    test('parseRateLimitSignal separates retries from plain detection', function() {
+        var reporter = loadReporter();
+
+        assert.deepEqual(
+            reporter.parseRateLimitSignal('Copilot rate limit detected; retrying in 90s'),
+            { retry: true, detected: true }
+        );
+        assert.deepEqual(
+            reporter.parseRateLimitSignal("You've hit your rate limit. Limit resets at 17:00"),
+            { retry: false, detected: true }
+        );
+        assert.deepEqual(
+            reporter.parseRateLimitSignal('all good here'),
+            { retry: false, detected: false }
+        );
+    });
+
+    test('isTimeoutLine matches every marker variant', function() {
+        var reporter = loadReporter();
+
+        assert.equal(reporter.isTimeoutLine('failed with exit code 124'), true);
+        assert.equal(reporter.isTimeoutLine('the command timed out'), true);
+        assert.equal(reporter.isTimeoutLine('command timeout of 1800s'), true);
+        assert.equal(reporter.isTimeoutLine('timeout guard intervened'), true);
+        assert.equal(reporter.isTimeoutLine('completed successfully'), false);
+    });
+
+    test('applyLogSignals routes resume, rate limit and timeout onto the tracker', function() {
+        var reporter = loadReporter();
+        var tracking = reporter.newUsageTracking();
+
+        reporter.applyLogSignals(tracking, 'Feedback loop: resuming agent for polish attempt 1/2', ''.toLowerCase());
+        reporter.applyLogSignals(tracking, 'Copilot rate limit detected; retrying in 90s', 'copilot rate limit detected; retrying in 90s');
+        reporter.applyLogSignals(tracking, 'Command failed (exit code 124)', 'command failed (exit code 124)');
+        reporter.applyLogSignals(tracking, 'nothing notable', 'nothing notable');
+
+        assert.equal(tracking.resumeDetected, true);
+        assert.deepEqual(tracking.resumeStages, ['polish 1/2']);
+        assert.equal(tracking.feedbackLoopCount, 1);
+        assert.equal(tracking.rateLimitRetryCount, 1);
+        assert.equal(tracking.rateLimitDetected, true);
+        assert.equal(tracking.timeoutCount, 1);
+
+        var untouched = reporter.newUsageTracking();
+        reporter.applyLogSignals(untouched, 'nothing notable', 'nothing notable');
+        assert.equal(untouched.resumeDetected, false);
+        assert.equal(untouched.rateLimitDetected, false);
+        assert.equal(untouched.timeoutCount, 0);
+    });
+
+    test('isFaSegmentReplay dedupes by sessionId+segment and ignores segmentless lines', function() {
+        var reporter = loadReporter();
+        var tracking = reporter.newUsageTracking();
+
+        assert.equal(reporter.isFaSegmentReplay(tracking, { faSessionId: 's1', faSegment: 1 }), false);
+        assert.equal(reporter.isFaSegmentReplay(tracking, { faSessionId: 's1', faSegment: 1 }), true, 'same segment must replay');
+        assert.equal(reporter.isFaSegmentReplay(tracking, { faSessionId: 's1', faSegment: 2 }), false);
+        assert.equal(reporter.isFaSegmentReplay(tracking, { faSessionId: 's2', faSegment: 1 }), false);
+        assert.equal(reporter.isFaSegmentReplay(tracking, { faSessionId: '', faSegment: 1 }), false);
+        assert.equal(reporter.isFaSegmentReplay(tracking, { faSessionId: 's1', faSegment: null }), false);
+    });
+
+    test('appendUsageSample numbers attempts and merges only unsourced request metadata', function() {
+        var reporter = loadReporter();
+        var tracking = reporter.newUsageTracking();
+        tracking.lastRequests = { requests: 3, requestTier: 'Premium', requestDuration: '11m 0s' };
+
+        reporter.appendUsageSample(tracking, { readTokens: 100, writeTokens: 10 });
+        reporter.appendUsageSample(tracking, { readTokens: 200, writeTokens: 20, requests: 7, requestTier: 'Pro', requestDuration: '12m 0s' });
+
+        assert.equal(tracking.samples.length, 2);
+        assert.equal(tracking.samples[0].attemptIndex, 1);
+        assert.equal(tracking.samples[0].requests, 3);
+        assert.equal(tracking.samples[0].requestTier, 'Premium');
+        assert.equal(tracking.samples[1].attemptIndex, 2);
+        assert.equal(tracking.samples[1].requests, 7);
+        assert.equal(tracking.samples[1].requestTier, 'Pro');
+    });
+
+    test('collectUsageSamples walks lines end-to-end into samples', function() {
+        var reporter = loadReporter();
+        var tracking = reporter.newUsageTracking();
+        reporter.collectUsageSamples(tracking, [
+            'Feedback loop: resuming agent for rework attempt 1/2',
+            '[INFO] CommandLineUtils - Requests  2 Premium (5m 0s)',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100',
+            'fa-tokens: {"sessionId":"s1","segment":1,"input":500,"output":50,"cacheRead":10,"requests":2,"source":"reported"}',
+            'fa-tokens: {"sessionId":"s1","segment":1,"input":500,"output":50,"cacheRead":10,"requests":2,"source":"reported"}'
+        ]);
+
+        assert.equal(tracking.samples.length, 2);
+        assert.equal(tracking.lastRequests.requests, 2);
+        assert.equal(tracking.resumeStages[0], 'rework 1/2');
+        assert.deepEqual(tracking.seenFaSegments, { 's1:1': true });
+    });
+
+    test('buildUsageAggregate returns null for empty samples and sums otherwise', function() {
+        var reporter = loadReporter();
+
+        assert.equal(reporter.buildUsageAggregate(reporter.newUsageTracking()), null);
+
+        var tracking = reporter.newUsageTracking();
+        reporter.appendUsageSample(tracking, { readTokens: 100, writeTokens: 10, cachedTokens: 5, reasoningTokens: 1, requests: 2, requestTier: 'Pro', requestDuration: '3m 0s' });
+        reporter.appendUsageSample(tracking, { readTokens: 200, writeTokens: 20, cachedTokens: 6, reasoningTokens: 2, requests: 3, requestTier: 'Premium', requestDuration: '4m 0s', source: 'reported' });
+        var aggregate = reporter.buildUsageAggregate(tracking);
+
+        assert.equal(aggregate.readTokens, 300);
+        assert.equal(aggregate.writeTokens, 30);
+        assert.equal(aggregate.cachedTokens, 11);
+        assert.equal(aggregate.reasoningTokens, 3);
+        assert.equal(aggregate.requests, 5);
+        assert.equal(aggregate.samples, 2);
+        assert.equal(aggregate.source, 'reported');
+        assert.equal(aggregate.requestTier, 'Premium', 'final sample wins');
+        assert.equal(aggregate.requestDuration, '4m 0s');
+    });
+
+    test('buildUsageAggregate derives source as empty, single or mixed', function() {
+        var reporter = loadReporter();
+
+        var noSource = reporter.newUsageTracking();
+        reporter.appendUsageSample(noSource, { readTokens: 1 });
+        assert.equal(reporter.buildUsageAggregate(noSource).source, '');
+
+        var single = reporter.newUsageTracking();
+        reporter.appendUsageSample(single, { readTokens: 1, source: 'estimated' });
+        assert.equal(reporter.buildUsageAggregate(single).source, 'estimated');
+
+        var mixed = reporter.newUsageTracking();
+        reporter.appendUsageSample(mixed, { readTokens: 1, source: 'reported' });
+        reporter.appendUsageSample(mixed, { readTokens: 2, source: 'estimated' });
+        assert.equal(reporter.buildUsageAggregate(mixed).source, 'mixed');
+    });
+
+    test('buildUsageAggregate flags resume from markers or multiple samples', function() {
+        var reporter = loadReporter();
+
+        var markerResume = reporter.newUsageTracking();
+        reporter.applyLogSignals(markerResume, 'run-agent.sh --continue', 'run-agent.sh --continue');
+        reporter.appendUsageSample(markerResume, { readTokens: 1 });
+        assert.equal(reporter.buildUsageAggregate(markerResume).resumeDetected, true);
+
+        var multiSample = reporter.newUsageTracking();
+        reporter.appendUsageSample(multiSample, { readTokens: 1 });
+        reporter.appendUsageSample(multiSample, { readTokens: 2 });
+        assert.equal(reporter.buildUsageAggregate(multiSample).resumeDetected, true);
+    });
+});
+
+suite('aiTeammateTokenUsageReporter sleepMilliseconds helpers (gh-1078)', function() {
+
+    function loadReporterWithJava(javaGlobal) {
+        return loadReporter({ Java: javaGlobal });
+    }
+
+    test('parseSleepMilliseconds clamps unparseable and non-positive values to 0', function() {
+        var reporter = loadReporter();
+
+        assert.equal(reporter.parseSleepMilliseconds('5'), 5);
+        assert.equal(reporter.parseSleepMilliseconds(250), 250);
+        assert.equal(reporter.parseSleepMilliseconds('12px'), 12);
+        assert.equal(reporter.parseSleepMilliseconds('abc'), 0);
+        assert.equal(reporter.parseSleepMilliseconds(0), 0);
+        assert.equal(reporter.parseSleepMilliseconds(-3), 0);
+        assert.equal(reporter.parseSleepMilliseconds(null), 0);
+        assert.equal(reporter.parseSleepMilliseconds(undefined), 0);
+    });
+
+    test('hasJavaThread is true only when the Java interop exposes type', function() {
+        assert.equal(loadReporterWithJava({ type: function() { return {}; } }).hasJavaThread(), true);
+        assert.equal(loadReporterWithJava({}).hasJavaThread(), false);
+    });
+
+    test('sleepMilliseconds routes positive durations to Thread.sleep under the Java interop', function() {
+        var sleeps = [];
+        var reporter = loadReporterWithJava({
+            type: function(name) {
+                return { sleep: function(ms) { sleeps.push({ name: name, ms: ms }); } };
+            }
+        });
+
+        reporter.sleepMilliseconds('7');
+        reporter.sleepMilliseconds(0);
+        reporter.sleepMilliseconds(-5);
+        reporter.sleepMilliseconds('soon');
+
+        assert.equal(sleeps.length, 1);
+        assert.equal(sleeps[0].name, 'java.lang.Thread');
+        assert.equal(sleeps[0].ms, 7);
+    });
+
+    test('sleepMilliseconds busy-waits when the Java interop is unavailable', function() {
+        var reporter = loadReporter();
+
+        var startedAt = Date.now();
+        reporter.sleepMilliseconds(2);
+        var elapsed = Date.now() - startedAt;
+        assert.equal(elapsed >= 2, true, 'expected a >=2ms busy wait, got ' + elapsed + 'ms');
+    });
+
+    test('sleepMilliseconds busy-waits when Java.type is absent even with Java defined', function() {
+        var reporter = loadReporterWithJava({});
+
+        var startedAt = Date.now();
+        reporter.sleepMilliseconds(2);
+        var elapsed = Date.now() - startedAt;
+        assert.equal(elapsed >= 2, true, 'expected a >=2ms busy wait fallback, got ' + elapsed + 'ms');
+    });
+});
