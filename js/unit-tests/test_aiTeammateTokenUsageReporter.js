@@ -1569,3 +1569,70 @@ suite('gh-1108 deployment wiring (AC3)', function() {
         assert.equal(custom.publishTokens, true, 'publish path is wired on');
     });
 });
+
+suite('gh-1108 action wiring — publish rides the scan', function() {
+
+    test('action publishes the keyed map when publishTokens is set', function() {
+        var writes = [];
+        var execCalls = [];
+        var reporter = loadReporter({
+            file_write: function (o) { writes.push(o); },
+            github_list_workflow_runs: function () {
+                return JSON.stringify({ total_count: 1, workflow_runs: [{
+                    id: 77, status: 'completed', conclusion: 'success',
+                    created_at: '2026-10-13T09:00:00Z',
+                    run_started_at: '2026-10-13T09:00:00Z',
+                    updated_at: '2026-10-13T10:00:00Z',
+                    display_title: 'teammate: workflow_dispatch #1040 · pr-1123 review',
+                    html_url: 'https://example.test/run/77', run_number: 5
+                }] });
+            },
+            github_get_workflow_run_logs: function () {
+                return 'fa-tokens: {"sessionId":"s","segment":1,"input":200,"output":300,"cacheRead":150,"source":"reported"}';
+            },
+            cli_execute_command: function (args) {
+                var cmd = String((args && args.command) || '');
+                execCalls.push(cmd);
+                if (cmd.indexOf('-X PUT') !== -1) return { output: '' };
+                if (cmd.indexOf('--jq .sha') !== -1) throw new Error('gh: Not Found (404)');
+                return { output: '' };
+            }
+        });
+        var res = reporter.action({ jobParams: { customParams: {
+            workspace: 'o', repository: 'r',
+            publishTokens: true, tokensAsset: 'agents-tokens.json',
+            tokensNow: '2026-10-16T10:00:00Z'
+        } } });
+        assert.equal(res.success, true);
+        assert.ok(res.tokens, 'publish summary rides the action result');
+        assert.equal(res.tokens.status, 'published');
+        assert.equal(res.tokens.path, 'data/agents-tokens.json');
+        assert.equal(res.tokens.rowCount, 1);
+        var keyed = writes.filter(function (w) {
+            return w.path === 'outputs/token_usage/agents-tokens.json';
+        })[0];
+        assert.ok(keyed, 'local keyed copy written next to the reports');
+        var map = JSON.parse(keyed.content);
+        assert.ok(map['pr-1123'] && map['pr-1123'][0].prompt === 200 &&
+            map['pr-1123'][0].cacheRead === 150, 'keyed rows carry the run usage');
+        assert.ok(execCalls.some(function (c) {
+            return c.indexOf('data/agents-tokens.json') !== -1 && c.indexOf('-X PUT') !== -1;
+        }), 'the branch PUT hits the exact asset path');
+    });
+
+    test('action skips the publish entirely when publishTokens is unset', function() {
+        var execCalls = [];
+        var reporter = loadReporter({
+            cli_execute_command: function (args) {
+                execCalls.push(String((args && args.command) || ''));
+                return { output: '' };
+            }
+        });
+        var res = reporter.action({ jobParams: { customParams: {
+            cacheOnly: true, repository: 'o/r'
+        } } });
+        assert.equal(res.success, true);
+        assert.equal(res.tokens, undefined, 'no tokens key when the knob is off');
+        assert.equal(execCalls.length, 0, 'zero gh traffic without the knob');
+    });
+});

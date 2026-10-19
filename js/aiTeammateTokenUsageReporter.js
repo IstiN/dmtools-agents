@@ -1,10 +1,23 @@
 var configLoader = require('./configLoader.js');
+// gh-1108: ONE run-title vocabulary (issue/pr anchors + legs) with the
+// event-dedup module, and the fa gh-781 producer's gh transport for the
+// tokens publish — both pure, both required at the top (hoisted per the
+// pack-require rule: init-time requires resolve file-relative).
+var teammateEventDedup = require('./common/teammateEventDedup.js');
+var tokenUsage = require('./factory/token_usage.js');
 
 /**
  * AI Teammate Token Usage Reporter (JSRunner)
  *
  * Downloads completed GitHub Actions logs for ai-teammate runs, extracts Copilot
  * token summaries printed by CommandLineUtils, and writes CSV/JSON/HTML outputs.
+ *
+ * gh-1108: the same scan also projects the rows into the keyed per-leg tokens
+ * map the factory tick consumes ({'pr-N'/'issue-N': [{leg, at, prompt,
+ * completion, total, cacheRead, model}]}) and — opt-in, customParams
+ * publishTokens — publishes it to the factory-data branch as
+ * data/<tokensAsset>.json, completing the producer→publish→tick link
+ * (dm.ai board TOKENS · R/W for this factory).
  */
 
 function parseJson(raw, fallback) {
@@ -1070,6 +1083,259 @@ function collectUsageRows(custom, runs, paths, options) {
     return state;
 }
 
+// ── gh-1108 — keyed per-leg tokens: projection + factory-data publish ────────
+// The producer→publish→tick link: the SAME scan that writes the CSV/JSON/
+// HTML reports also projects the rows into the keyed map the SM tick
+// consumes (factoryState.tokensMapOf → normalizeTokens → card.tokens) and
+// publishes it to the factory-data branch — the transport the tick's
+// fetchTokensFromBranch probes with statePublish.tokensAsset. Rows are
+// decorative end to end: any projection/publish miss degrades to a status,
+// never fails the report.
+
+/**
+ * Run title → token-row anchor. ONE title vocabulary with
+ * teammateEventDedup: the issue anchor via issueOfRunName (stub '#<n>' and
+ * factory 'gh-<n>' families, trailing-digit guarded), the leg via
+ * legOfRunName (stub tail / '▶ leg (SM)' / emoji families), plus a
+ * whole-token 'pr-<n>' scan for the PR-anchored dispatch slot (the stub's
+ * '· pr-<N>', gh-1075). pr wins over issue — the finer anchor when a title
+ * carries both. Returns { key, pr, issue, leg }; key is null when NEITHER
+ * anchor resolves — an unresolvable run yields no row, never a wrong key.
+ */
+function parseRunAnchor(title) {
+    var text = String(title || '');
+    var pr = null;
+    var re = /(?:^|[^0-9a-zA-Z])pr-(\d+)/g;
+    var m = re.exec(text);
+    while (m) {
+        var after = text.charAt(m.index + m[0].length);
+        if (after === '' || after < '0' || after > '9') {
+            pr = parseInt(m[1], 10);
+            break;
+        }
+        m = re.exec(text);
+    }
+    var issue = teammateEventDedup.issueOfRunName(text);
+    return {
+        pr: pr,
+        issue: issue,
+        leg: teammateEventDedup.legOfRunName(text) || '',
+        key: pr != null ? 'pr-' + pr : (issue != null ? 'issue-' + issue : null)
+    };
+}
+
+/**
+ * Leg fallback when the title carries none (pre-gh-1065 event-path titles):
+ * the runner-config basename family — *rework* → rework, *review* → review,
+ * *develop* → dev, else '' (honest unknown; resolveLeg's rework-first
+ * discipline from js/factory/token_usage.js).
+ */
+function legFromAgent(agent) {
+    var stem = String(agent || '');
+    if (!stem) return '';
+    if (stem.indexOf('rework') !== -1) return 'rework';
+    if (stem.indexOf('review') !== -1) return 'review';
+    if (stem.indexOf('develop') !== -1) return 'dev';
+    return '';
+}
+
+/**
+ * The keyed tokens projection: reporter rows → the map form the tick
+ * consumes ('pr-N'/'issue-N' → rows). One row per RUN (the run's summed
+ * usage) in the printf row contract {leg, at, prompt, completion, total,
+ * cacheRead, model}: prompt = read, completion = write, total = prompt +
+ * completion, cacheRead = cached. The logs carry no model id yet — model
+ * stays '' (normTokenRow → null downstream; pricing skips it, tokens still
+ * render). Rows without a resolvable anchor drop. Retention mirrors the fa
+ * producer (js/factory/token_usage.js): rows older than windowDays (default
+ * 14) drop, the newest keepPerKey (default ROW_KEEP = 40) survive per key,
+ * sorted by at ascending. Numbers only — no log text, no URLs (the
+ * snapshot's privacy invariant).
+ */
+function buildTokensMap(rows, opts) {
+    opts = opts || {};
+    var windowDays = (opts.windowDays == null || opts.windowDays === '') ?
+        tokenUsage.DEFAULT_WINDOW_DAYS : parseInt(opts.windowDays, 10);
+    var keepPerKey = (opts.keepPerKey == null || opts.keepPerKey === '') ?
+        tokenUsage.ROW_KEEP : parseInt(opts.keepPerKey, 10);
+    var cutoff = tokenUsage.cutoffIso(
+        opts.now ? new Date(opts.now) : new Date(), windowDays);
+    var byKey = {};
+    (Array.isArray(rows) ? rows : []).forEach(function(row) {
+        if (!row) return;
+        var anchor = parseRunAnchor(row.title);
+        if (!anchor.key) return;
+        var prompt = +row.readTokens || 0;
+        var completion = +row.writeTokens || 0;
+        (byKey[anchor.key] = byKey[anchor.key] || []).push({
+            leg: anchor.leg || legFromAgent(row.agent),
+            at: String(row.createdAt || ''),
+            prompt: prompt,
+            completion: completion,
+            total: prompt + completion,
+            cacheRead: +row.cachedTokens || 0,
+            model: ''
+        });
+    });
+    var map = {};
+    Object.keys(byKey).forEach(function(key) {
+        var kept = byKey[key]
+            .filter(function(r) { return String(r.at || '') >= cutoff; })
+            .sort(function(a, b) { return String(a.at).localeCompare(String(b.at)); });
+        if (kept.length > keepPerKey) kept = kept.slice(kept.length - keepPerKey);
+        if (kept.length) map[key] = kept;
+    });
+    return map;
+}
+
+/**
+ * Publish the keyed tokens map to the factory-data branch (data/<asset>),
+ * the exact transport shape of the fa gh-781 producer
+ * (js/factory/token_usage.js): bootstrap the branch (422 already-exists is
+ * the normal case), then up to `attempts` GET-sha → PUT cycles; a PUT
+ * conflict refetches and retries. An empty map SKIPS with zero gh traffic
+ * — a rebuild that found no rows must never erase the previous file. Asset
+ * default mirrors fetchPreviousState's derivation —
+ * data/<repoName>-tokens.json — so a shared multi-factory branch stays
+ * isolated even when the deployment forgets the explicit tokensAsset knob
+ * (ai_teammate_token_usage_reporter.json sets agents-tokens.json; AC3).
+ *
+ * opts: repo ('O/R', required), branch (default factory-data), asset,
+ *      attempts (default 3). io: exec({command}) → {output|stdout};
+ *      log(line).
+ * Returns { status, reason, path, keyCount, rowCount, attempts } — status
+ * 'published' | 'skipped' | 'gave-up'; never throws.
+ */
+function publishTokensMap(map, opts, io) {
+    opts = opts || {};
+    io = io || {};
+    var exec = io.exec;
+    var log = io.log || function() {};
+    var keys = (map && typeof map === 'object' && !Array.isArray(map)) ?
+        Object.keys(map) : [];
+    var rowCount = 0;
+    keys.forEach(function(k) {
+        if (Array.isArray(map[k])) rowCount += map[k].length;
+    });
+    var result = { status: 'skipped', reason: null, path: null,
+        keyCount: keys.length, rowCount: rowCount, attempts: 0 };
+    if (!keys.length || !rowCount) {
+        result.reason = 'no-rows';
+        return result;
+    }
+    var repo = String(opts.repo || '');
+    if (!repo || repo.indexOf('/') === -1) {
+        result.reason = 'no-repo';
+        log('::warning::tokens publish skipped — no target repo');
+        return result;
+    }
+    if (typeof exec !== 'function') {
+        result.reason = 'no-exec';
+        log('::warning::tokens publish skipped — no exec transport');
+        return result;
+    }
+    var asset = opts.asset || (repo.split('/')[1] || 'factory') + '-tokens.json';
+    var branch = opts.branch || tokenUsage.DEFAULT_DATA_BRANCH;
+    var path = 'data/' + asset;
+    result.path = path;
+    var attempts = opts.attempts || tokenUsage.DEFAULT_ATTEMPTS;
+    function ghOut(command) {
+        var res = exec({ command: command });
+        return String((res && (res.output || res.stdout)) || res || '').trim();
+    }
+    try { exec({ command: tokenUsage.bootstrapBranchCommand(repo, branch) }); }
+    catch (eBoot) { /* 422 already-exists is the normal case */ }
+    for (var attempt = 1; attempt <= attempts; attempt++) {
+        var sha = '';
+        try { sha = ghOut(tokenUsage.contentsShaCommand(repo, path, branch)); }
+        catch (eSha) { sha = ''; } // first publish — the file is absent
+        if (sha.indexOf('Not Found') !== -1) sha = '';
+        var ok = false;
+        try {
+            exec({ command: tokenUsage.contentsPutCommand(repo, path, {
+                branch: branch,
+                message: 'factory leg tokens — ' + rowCount + ' rows [skip ci]',
+                json: JSON.stringify(map),
+                sha: sha
+            }) });
+            ok = true;
+        } catch (ePut) { ok = false; }
+        result.attempts = attempt;
+        if (ok) {
+            result.status = 'published';
+            return result;
+        }
+        log('token publish attempt ' + attempt + ' conflicted — refetching');
+    }
+    result.status = 'gave-up';
+    log('::warning::tokens publish gave up after ' + attempts +
+        ' attempts (concurrent writes) — rows are decorative, the next scan retries');
+    return result;
+}
+
+/**
+ * customParams → publish options. repo rides the resolved repository
+ * (customParams.repository — '{repo}' resolves before this runs); the
+ * branch defaults to factory-data; the asset must be SET by deployments on
+ * shared branches (agents-tokens.json here). tokensNow pins the retention
+ * clock (tests); tokensWindowDays/tokensKeepPerKey ride the fa defaults.
+ */
+function parsePublishOptions(custom) {
+    custom = custom || {};
+    return {
+        enabled: custom.publishTokens === true || custom.publishTokens === 'true',
+        // the reporter's params split owner/repo (workspace/repository) —
+        // compose the gh 'O/R' form; an explicit tokensRepo wins.
+        repo: custom.tokensRepo ||
+            (custom.workspace && custom.repository ?
+                custom.workspace + '/' + custom.repository :
+                (custom.repository || '')),
+        branch: custom.tokensBranch || tokenUsage.DEFAULT_DATA_BRANCH,
+        asset: custom.tokensAsset || '',
+        windowDays: custom.tokensWindowDays,
+        keepPerKey: custom.tokensKeepPerKey,
+        now: custom.tokensNow || ''
+    };
+}
+
+/**
+ * The action-side link (gh-1108): project rows → local keyed copy next to
+ * the other report outputs → branch publish. Disabled unless customParams
+ * publishTokens is set; every failure logs and returns null — the report
+ * itself is never failed by the decorative tokens stream.
+ */
+function publishKeyedTokens(custom, paths, rows) {
+    var opts = parsePublishOptions(custom);
+    if (!opts.enabled) return null;
+    var map = buildTokensMap(rows, opts);
+    opts.asset = opts.asset ||
+        ((String(opts.repo || '').split('/')[1] || 'factory') + '-tokens.json');
+    var localPath = (paths && paths.outputDir ? paths.outputDir :
+        'outputs/token_usage') + '/' + opts.asset;
+    try { writeOutput(localPath, JSON.stringify(map, null, 2)); }
+    catch (eLocal) { /* the local copy is a convenience — the branch is the transport */ }
+    var exec = typeof cli_execute_command === 'function' ? cli_execute_command : null;
+    var res = publishTokensMap(map, opts, {
+        exec: exec,
+        log: function(line) { console.log(line); }
+    });
+    console.log('🪙 tokens publish: ' + res.status +
+        (res.path ? ' → ' + res.path : '') +
+        (res.reason ? ' (' + res.reason + ')' : '') +
+        ' [' + res.rowCount + ' rows / ' + res.keyCount + ' keys]' +
+        (res.attempts ? ' after ' + res.attempts + ' attempt(s)' : ''));
+    return {
+        status: res.status,
+        reason: res.reason,
+        path: res.path,
+        asset: opts.asset,
+        localPath: localPath,
+        keyCount: res.keyCount,
+        rowCount: res.rowCount,
+        attempts: res.attempts
+    };
+}
+
 function action(params) {
     var custom = (params && params.jobParams && params.jobParams.customParams) || {};
     var projectConfig = configLoader.loadProjectConfig(params || {});
@@ -1087,7 +1353,12 @@ function action(params) {
     }
 
     if (custom.cacheOnly === true || custom.cacheOnly === 'true') {
-        return cacheOnlyReport(paths);
+        var cachedResult = cacheOnlyReport(paths);
+        // gh-1108: the cache already holds every row the scan ever parsed —
+        // the keyed publish works from it without a single log download.
+        publishKeyedTokens(custom, paths,
+            buildRowsFromCache(loadUsageCache(paths.cachePath)).rows);
+        return cachedResult;
     }
 
     console.log('AI Teammate Token Usage Reporter — ' + custom.workspace + '/' + custom.repository + ' [' + custom.workflowId + ']');
@@ -1100,7 +1371,14 @@ function action(params) {
     writeReportOutputs(paths, state.rows, state.attemptRows, summary);
 
     console.log('Cache hits=' + state.cacheHits + ', log downloads=' + state.downloadedLogs + (state.stoppedByDownloadLimit ? ', stopped by maxLogDownloads' : ''));
-    return { success: true, csvPath: paths.csvPath, attemptsCsvPath: paths.attemptsCsvPath, jsonPath: paths.jsonPath, htmlPath: paths.htmlPath, summary: summary };
+
+    // gh-1108: the keyed tokens projection + factory-data publish (opt-in,
+    // customParams.publishTokens) — the producer→publish→tick link. Runs
+    // AFTER the report outputs so a publish miss can never lose the report.
+    var result = { success: true, csvPath: paths.csvPath, attemptsCsvPath: paths.attemptsCsvPath, jsonPath: paths.jsonPath, htmlPath: paths.htmlPath, summary: summary };
+    var tokensPublish = publishKeyedTokens(custom, paths, state.rows);
+    if (tokensPublish) result.tokens = tokensPublish;
+    return result;
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -1134,6 +1412,12 @@ if (typeof module !== 'undefined' && module.exports) {
         getCachedRunState: getCachedRunState,
         applyCachedRunState: applyCachedRunState,
         processRunLogs: processRunLogs,
-        collectUsageRows: collectUsageRows
+        collectUsageRows: collectUsageRows,
+        parseRunAnchor: parseRunAnchor,
+        legFromAgent: legFromAgent,
+        buildTokensMap: buildTokensMap,
+        parsePublishOptions: parsePublishOptions,
+        publishTokensMap: publishTokensMap,
+        publishKeyedTokens: publishKeyedTokens
     };
 }
