@@ -359,6 +359,7 @@ function makeSmAgent(opts) {
             './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
+            './common/invisibleRequiredChecks.js': loadModule('js/common/invisibleRequiredChecks.js', makeRequire({}), {}),
             './common/triggerFailures.js': loadModule('js/common/triggerFailures.js', makeRequire({}), {}),
             './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js', makeRequire({}), {}),
             // gh-1075: the real fork-dispatch module (its validationLiveness
@@ -410,6 +411,7 @@ function makeSmAgent(opts) {
         runLocalAction: sm.runLocalAction,
         probeDispatchedState: sm.probeDispatchedState,
         hasRecentHeadRun: sm.hasRecentHeadRun,
+        recentlyConcludedNonGreen: sm.recentlyConcludedNonGreen,
         dispatchRaceGraceMs: sm.dispatchRaceGraceMs,
         resolveValidationConcurrency: sm.resolveValidationConcurrency,
         effectiveValidationConcurrency: sm.effectiveValidationConcurrency,
@@ -2724,7 +2726,8 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         var dispatch = sm.capturedCliCommands.filter(function (c) {
             return c.command.indexOf('workflow run ci.yml') !== -1; });
         assert.equal(dispatch.length, 0, 'no re-dispatch — green cover already on the head');
-        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm churn');
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) { return a.labels.indexOf('ai_validating') !== -1; }),
+            'no arm churn — gh-1101: approved green head latches ai_validated, never re-arms');
     });
 
     test('validate_pr: skipIfGreenCi — a CANCELLED run is not a green cover (re-dispatch proceeds)', function () {
@@ -2927,7 +2930,8 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         var dispatch = sm.capturedCliCommands.filter(function (c) {
             return c.command.indexOf('workflow run ci.yml') !== -1; });
         assert.equal(dispatch.length, 0, 'AC2: live run behind the pending check — green-cover skip stands, no double-dispatch');
-        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm churn');
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) { return a.labels.indexOf('ai_validating') !== -1; }),
+            'no arm churn (gh-1101: latch only)');
     });
 
     test('validate_pr: gh-852 AC1 — placeholder check-runs pin the gate → fresh-sha reset + fast-start dispatch', function () {
@@ -2992,6 +2996,106 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrComments.length, 1, 'one marker comment');
         assert.ok(sm.capturedPrComments[0].body.indexOf('placeholder reset 1/3') !== -1,
             'the reset is counted against the per-PR cap (1/3)');
+    });
+
+    // ── gh-1101 invisible required checks (live dart #435) ────────────────
+    var INV_HEAD = 'abcdef12abcdef12abcdef12abcdef12abcdef12';
+    var INV_DEFAULTS = { head: INV_HEAD, mergeState: 'BLOCKED', prComments: [], visible: [],
+                         runStatus: null, headRuns: [], jobParams: {} };
+    function invDispatchedRun(o) {
+        return { id: 1, event: 'workflow_dispatch', head_sha: o.head,
+                 status: o.runStatus || 'completed', conclusion: o.runStatus ? null : 'success',
+                 created_at: new Date(Date.now() - 60000).toISOString(),
+                 updated_at: new Date(Date.now() - 30000).toISOString() };
+    }
+    // Ordered [substring, response] table — first match wins.
+    function invCliTable(o) {
+        return [
+            ['/branches/main', JSON.stringify(['static', 'gate'])],
+            ['gh api graphql', JSON.stringify(o.visible)],
+            ['workflows/ci.yml/runs?head_sha=', { workflow_runs: [invDispatchedRun(o)] }],
+            ['actions/runs?head_sha=', { workflow_runs: o.headRuns }]
+        ];
+    }
+    function tableCli(table) {
+        return function (cmdOpts) {
+            var hit = table.filter(function (row) { return cmdOpts.command.indexOf(row[0]) !== -1; })[0];
+            return hit ? hit[1] : undefined;
+        };
+    }
+    function invisibleSm(over) {
+        var o = Object.assign({}, INV_DEFAULTS, over);
+        var rule = { source: 'github', query: { type: 'pr', labels: ['pr_approved'], draft: false },
+                     localAction: 'validate_pr', limit: 1, id: 'validate-approved' };
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            captureConsole: true,
+            github: {
+                items: [prItem(435, { branch: 'ai/gh-435', headSha: o.head, labels: ['pr_approved'],
+                                      pr: { mergeState: o.mergeState, mergeable: true } })],
+                pr: { number: 435, labels: [{ name: 'pr_approved' }], base: { ref: 'main' },
+                      head: { sha: o.head } },
+                commitCheckRuns: { check_runs: [
+                    { name: 'static', status: 'completed', conclusion: 'success', started_at: '2026-10-12T14:00:00Z' },
+                    { name: 'gate', status: 'completed', conclusion: 'success', started_at: '2026-10-12T14:00:00Z' }
+                ] },
+                prComments: o.prComments,
+                mergeResult: JSON.stringify({ merged: false, message: 'blocked' }),
+                workflowApiRuns: []
+            },
+            onCliExecute: tableCli(invCliTable(o))
+        }));
+        sm.action({ jobParams: Object.assign({ owner: 'epam', repo: 'dmtools-dart', ciWorkflow: 'ci.yml',
+            rules: [rule] }, o.jobParams) });
+        return sm;
+    }
+    function clones(sm) { return sm.capturedCliCommands.filter(function (c) { return c.command.indexOf('gh repo clone') !== -1; }); }
+    function ciRuns(sm) { return sm.capturedCliCommands.filter(function (c) { return c.command.indexOf('workflow run ci.yml') !== -1; }); }
+
+    test('gh-1101 invisible: required green on commit, PR sees none, run concluded ⇒ immediate fresh-sha reset, no same-tick CI', function () {
+        var sm = invisibleSm({});
+        assert.equal(clones(sm).length, 1, 'fresh-sha reset fired (no grace)');
+        assert.equal(ciRuns(sm).length, 0, 'CI dispatch waits for the push suite on the new head');
+        assert.equal(sm.capturedPrComments.length, 1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('<!-- dmtools:invisible-required-reset') === 0, 'machine notice');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('placeholder reset 1/3') !== -1, 'counted on the gh-852 cap');
+        assert.equal(sm.capturedPrMerges.length, 0);
+    });
+
+    test('gh-1101 invisible: required contexts visible to the PR ⇒ no reset', function () {
+        var sm = invisibleSm({ visible: ['static', 'gate'] });
+        assert.equal(clones(sm).length, 0);
+        assert.equal(sm.capturedPrComments.length, 0);
+    });
+
+    test('gh-1101 invisible: run still in_progress ⇒ wait (no reset)', function () {
+        var sm = invisibleSm({ runStatus: 'in_progress' });
+        assert.equal(clones(sm).length, 0);
+    });
+
+    test('gh-1101 invisible: cap reached ⇒ no reset', function () {
+        var now = new Date().toISOString();
+        var sm = invisibleSm({ prComments: [1, 2, 3].map(function (n) {
+            return { body: '\uD83D\uDD01 placeholder reset ' + n + '/3 at ' + now }; }) });
+        assert.equal(clones(sm).length, 0);
+        assert.equal(ciRuns(sm).length, 0);
+    });
+
+    test('gh-1101 invisible: BEHIND ⇒ normal path, no invisible reset', function () {
+        var sm = invisibleSm({ mergeState: 'BEHIND' });
+        assert.ok(!sm.capturedPrComments.some(function (c) {
+            return c.body.indexOf('invisible-required') !== -1; }));
+    });
+
+    test('gh-1101 ordering: after a reset, CI held until the push suite exists on the new head', function () {
+        var marker = '<!-- dmtools:invisible-required-reset sha=old at=' + new Date(Date.now() - 30000).toISOString() + ' -->';
+        var held = invisibleSm({ head: 'feedbeeffeedbeeffeedbeeffeedbeeffeedbeef', visible: ['static', 'gate'],
+            mergeState: 'BEHIND', prComments: [{ body: marker }], headRuns: [] });
+        assert.equal(ciRuns(held).length, 0, 'no push suite yet — dispatch held');
+        var go = invisibleSm({ head: 'feedbeeffeedbeeffeedbeeffeedbeeffeedbeef', visible: ['static', 'gate'],
+            mergeState: 'BEHIND', prComments: [{ body: marker }],
+            headRuns: [{ id: 9, event: 'push', status: 'completed', conclusion: 'success' }] });
+        assert.ok(/CI dispatch held/.test(held.capturedLogs.join('\n')), 'hold logged');
+        assert.ok(!/CI dispatch held/.test(go.capturedLogs.join('\n')), 'push suite present — no hold');
     });
 
     test('validate_pr: gh-852 AC2 — a BUSY pool defers the fresh-sha reset (no churn)', function () {
@@ -4572,9 +4676,9 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
 
         assert.ok(!dispatched(sm.capturedCliCommands), 'NO CI re-dispatch — the existing green covers the head');
         assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
-            ['ai_validating'], 'arm only — no dispatch behind the arm');
+            [], 'gh-1101: no re-arm — approved + green current head merges directly');
         assert.equal(sm.capturedPrMerges.length, 1,
-            'gh-862: the merge-validated probe consumes the arm on the existing green IN THE SAME TICK');
+            'gh-862/gh-1101: merge attempted on the existing green IN THE SAME TICK');
     });
 
     test('validate-armed: moved head (no green run on the new SHA) → real validation dispatched', function () {
@@ -4604,8 +4708,12 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.validateSkip] } });
 
-        assert.ok(dispatched(sm.capturedCliCommands),
-            'no latch on record — a stray green dispatched run alone never skips validation');
+        // gh-1101 owner rule: approved + completed-green dispatched run on the
+        // CURRENT head is the verdict — no re-validation, straight to merge.
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'gh-1101: green on the current head + approved ⇒ no CI re-dispatch');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validated'], 'gh-1101: ai_validated latched (no ai_validating arm)');
     });
 
     test('sweep_stale_validation: concluded-green older than staleMinutes → unarm + ai_validated re-latch', function () {
@@ -5196,7 +5304,7 @@ suite('smAgent: gh-862 latch-skip arm-only must run the merge-validated probe sa
             rules: [LATCH_RULE] } });
 
         assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
-            ['ai_validating'], 'the arm still lands (arm only — no CI re-dispatch)');
+            [], 'gh-1101: no arm at all — approved green head merges directly');
         assert.equal(sm.capturedPrMerges.length, 1,
             'the merge is ATTEMPTED in the SAME tick as the arm — no arm → sweep → re-arm ping-pong');
         assert.equal(sm.capturedCliCommands.filter(function (c) {
@@ -5631,8 +5739,9 @@ suite('smAgent: red-head park + dry-run dispatch + conclusion grace (fa wave sta
         sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
                                  rules: [RULES.armed] } });
         assert.ok(!dispatched(sm.capturedCliCommands),
-            'verdict landed 2 min ago — inside the 15-min post-conclusion grace, no duplicate dispatch');
-        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm either — the guard skipped before arming');
+            'green verdict landed 2 min ago — gh-1101: a verdict, not in-flight; no duplicate dispatch');
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) { return a.labels.indexOf('ai_validating') !== -1; }),
+            'gh-1101: no ai_validating re-arm — the green verdict is latched/merged directly');
 
         // Same run shape but concluded 20 min ago: grace expired → dispatch.
         var sm2 = makeSmAgent(Object.assign(config('a', 'b'), {
@@ -5646,6 +5755,99 @@ suite('smAgent: red-head park + dry-run dispatch + conclusion grace (fa wave sta
                                   rules: [RULES.armed] } });
         assert.ok(dispatched(sm2.capturedCliCommands),
             'cancelled is no verdict and the grace expired 5 min after conclusion — re-dispatch allowed');
+    });
+
+    // ── gh-1101 (live dart #435): a concluded run is a verdict, never active ──
+    function hasAdd(sm, label) {
+        return sm.capturedPrLabelAdds.some(function (a) { return a.labels.indexOf(label) !== -1; });
+    }
+
+    test('gh-1101 (a): completed green 1 min ago, same head, pr_approved ⇒ no skip, ai_validated latched, no CI', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [prItem(435, { labels: ['pr_approved'], headSha: 'sha435' })],
+                prStatus: { checkConclusion: 'green' },
+                pr: { number: 435, labels: ['pr_approved'], body: '' },
+                mergeResult: JSON.stringify({ merged: false, message: 'blocked' })
+            },
+            onCliExecute: runsCli({ run: run('success', 'sha435', 30 * 60000, 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES.armed] } });
+        assert.ok(!dispatched(sm.capturedCliCommands), 'no CI dispatch on a green current head');
+        assert.ok(hasAdd(sm, 'ai_validated'), 'ai_validated latched');
+        assert.ok(!hasAdd(sm, 'ai_validating'), 'never re-armed');
+        assert.equal(sm.capturedPrMerges.length, 1, 'merge attempted immediately');
+        assert.ok(!(sm.capturedLogs || []).join('\n').match(/already dispatching/),
+            'no "already dispatching" skip');
+    });
+
+    test('gh-1101 (b): in_progress run on the head ⇒ "already dispatching" skip as before', function () {
+        var r = { status: 'in_progress', conclusion: null, head_sha: 'shaIP',
+                  created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(436, { headSha: 'shaIP' })], prStatus: { checkConclusion: 'pending' } },
+            onCliExecute: runsCli({ run: r })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES.armed] } });
+        assert.ok(!dispatched(sm.capturedCliCommands), 'no duplicate dispatch while in flight');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm, no latch');
+        assert.equal(sm.capturedPrMerges.length, 0);
+    });
+
+    test('gh-1101 (c): green run only on an OLDER sha ⇒ CI dispatched on the moved head', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(437, { labels: ['pr_approved', 'ai_validated'], headSha: 'shaNEW' })],
+                      prStatus: { checkConclusion: 'none' } },
+            onCliExecute: runsCli({ run: run('success', 'shaOLD', 30 * 60000, 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES.armed] } });
+        assert.ok(dispatched(sm.capturedCliCommands), 'head moved — CI re-dispatched');
+        assert.equal(sm.capturedPrMerges.length, 0, 'no merge on an unvalidated head');
+    });
+
+    test('gh-1101: BEHIND approved head with a green run ⇒ no fast-path latch/merge', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(438, { headSha: 'shaB', pr: { mergeState: 'BEHIND' } })],
+                      prStatus: { checkConclusion: 'green' } },
+            onCliExecute: runsCli({ run: run('success', 'shaB', 30 * 60000, 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES.armed] } });
+        assert.equal(sm.capturedPrMerges.length, 0, 'BEHIND never fast-path merges');
+    });
+
+    test('gh-1101 extra: ai_validated latched on the current green head ⇒ never re-armed; latch strips ai_validating', function () {
+        // live dart #435: 14:22:24 ai_validated, 14:22:38 ai_validating re-armed + CI re-dispatched.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(439, { labels: ['pr_approved', 'ai_validated', 'ai_validating'], headSha: 'shaL' })],
+                prStatus: { checkConclusion: 'green' },
+                pr: { number: 439, labels: ['pr_approved', 'ai_validated'], body: '' },
+                mergeResult: JSON.stringify({ merged: false, message: 'blocked' })
+            },
+            onCliExecute: runsCli({ run: run('success', 'shaL', 30 * 60000, 14 * 60000) })
+        }));
+        var rule = Object.assign({}, RULES.armed, { query: Object.assign({}, RULES.armed.query, { notLabels: [] }) });
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [rule] } });
+        assert.ok(!dispatched(sm.capturedCliCommands), 'no CI re-dispatch on the latched green head');
+        assert.ok(!hasAdd(sm, 'ai_validating'), 'ai_validating never re-added');
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) { return r.label === 'ai_validating'; }),
+            'latching ai_validated drops the ai_validating arm');
+    });
+
+    test('gh-1101: recentlyConcludedNonGreen guards only RE-dispatch, never green', function () {
+        var sm = makeSmAgent(config('a', 'b'));
+        var fresh = new Date(Date.now() - 60000).toISOString();
+        var old = new Date(Date.now() - 20 * 60000).toISOString();
+        assert.equal(sm.recentlyConcludedNonGreen(null), false);
+        assert.equal(sm.recentlyConcludedNonGreen({ newest: null }), false);
+        assert.equal(sm.recentlyConcludedNonGreen({ newest: { status: 'completed', conclusion: 'success', updated_at: fresh } }), false);
+        assert.equal(sm.recentlyConcludedNonGreen({ newest: { status: 'completed', conclusion: 'failure', updated_at: fresh } }), true);
+        assert.equal(sm.recentlyConcludedNonGreen({ newest: { status: 'completed', conclusion: 'cancelled', updated_at: old } }), false);
     });
 });
 
@@ -11003,7 +11205,7 @@ suite('smAgent: red yields the slot (owner directive 2026-10-04)', function () {
         sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
             rules: [RULES.validate] } });
 
-        assert.equal(sm.capturedPrLabelAdds.length, 0,
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) { return a.labels.indexOf('ai_validating') !== -1; }),
             'NO second ai_validating holder — the one-validation invariant holds');
         assert.ok(!dispatched(sm.capturedCliCommands), 'no dispatch either');
     });
