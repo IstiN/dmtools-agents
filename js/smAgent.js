@@ -166,6 +166,11 @@ var reworkConsumptionModule = require('./common/reworkConsumption.js');
 // marker math. The threads-armed arm_rework path had NO bound (live dart
 // #424: 7 no-op legs / 2h starved the whole queue).
 var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
+// gh-1114 (hoisted, never lazy — the gh-823 pack-require rule): the SM tick
+// layering — the sm_github.json rule-id → layer map (L0 hygiene → L5 close),
+// the L2 verdict-action set the movedThisTick guard defers, and the
+// merge-first capacity math (jobParams.mergeReservedSlots).
+var smRuleLayersModule = require('./common/smRuleLayers.js');
 // gh-922 (hoisted, never lazy — the gh-823 pack-require rule): fail-open
 // dispatch vocabulary — the no-ref/transient error classification, the
 // ⚠️ trigger-failed marker math and the dead-head park cap. The pure
@@ -222,6 +227,40 @@ var tickZombiesSwept = 0;
 // the github-source mutex scan to the factory-state publish rule (second
 // tier — the publish merge keeps counters/alarm tail across ticks).
 var spMutex = null;
+
+// ── gh-1114: layered-tick state (reset per tick in action()) ─────────────
+// tickMovedPrs: prNumber → true — THIS tick's L1 freshness rules moved the
+// PR head (a verified silent-refresh push). The L2 verdict actions and the
+// merge-candidate validation defer these PRs: the checks a verdict would
+// judge belonged to the superseded head (live #435).
+var tickMovedPrs = {};
+// Merge-first capacity: slot width reserved for the approved merge path
+// (jobParams.mergeReservedSlots, or the gh-837 parallel width), whether a
+// merge-path rule spent it, whether the spend was accounted against the
+// workflow cap once, and whether the L3 boundary released it to agent legs.
+var tickMergeReservedSlots = 0;
+var tickMergeSlotUsed = false;
+var tickMergeSlotAccounted = false;
+var tickMergeReservationReleased = false;
+// Set once the L1→L2 boundary dropped the openPrs ioCache so verdict
+// queries re-read current heads (post-freshness).
+var tickL1CacheDropped = false;
+
+// gh-1114 merge-first capacity: the dispatch budget THIS rule may spend.
+// Merge-path rules (the approved merge window + rework-on-red-ci) always
+// see the full remaining budget; every other dispatch rule sees the
+// remaining budget minus the still-held merge reservation, until the L3
+// boundary releases it (an unused reservation never throttles agent legs —
+// I7). Callers guard on workflowBudget being non-null.
+function ruleBudgetRemaining(rule, workflowBudget) {
+    if (!workflowBudget) return 0;
+    if (smRuleLayersModule.isMergePathRule(rule)) return workflowBudget.remaining;
+    if (tickMergeReservationReleased || tickMergeReservedSlots <= 0) {
+        return workflowBudget.remaining;
+    }
+    return Math.min(workflowBudget.remaining,
+        Math.max(0, workflowBudget.initial - tickMergeReservedSlots));
+}
 // Priority-tier label names (owner directive 2026-10-08), resolved once in
 // action() from config.smPriorityLabels — passed down to the source query
 // path (githubSource queryPrs' tier-aware FIFO sort).
@@ -584,7 +623,9 @@ function isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget, repoIn
     var workflowFile = rule.workflowFile || 'ai-teammate.yml';
     var scm = createTargetScm(effectiveConfig, repoInfo);
     ensureWorkflowBudgetActiveCount(workflowBudget, scm, workflowFile);
-    return workflowBudget.remaining <= 0;
+    // gh-1114: rule-aware — the still-held merge reservation throttles
+    // every non-merge-path dispatch lane.
+    return ruleBudgetRemaining(rule, workflowBudget) <= 0;
 }
 
 // True when `issueNumber` resolves to an existing LOCAL issue in repoInfo
@@ -1547,11 +1588,23 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     // localTeammate runs synchronously in-process — the workflow cap only bounds
     // concurrent/outstanding GitHub Actions dispatches, so it applies neither
     // here nor to localActions (inline curl/API calls, no dispatch).
-    if (!rule.localTeammate && !rule.localAction && workflowBudget && workflowBudget.remaining <= 0) {
+    // gh-1114: the cap check is rule-aware — a non-merge-path dispatch rule
+    // stops at the still-held merge reservation, a merge-path rule at the
+    // raw cap.
+    var budgetCapped = !rule.localTeammate && !rule.localAction;
+    var effBudget = (budgetCapped && workflowBudget)
+        ? ruleBudgetRemaining(rule, workflowBudget) : null;
+    if (effBudget !== null && effBudget <= 0) {
         var skippedLabel = rule.description || ('Rule #' + (ruleIndex + 1));
         var workflowFile = rule.workflowFile || 'ai-teammate.yml';
         console.log('\n══ ' + skippedLabel + ' ══');
-        console.log('  ⏭️  Global workflow cap reached (' + workflowBudget.initial + ') — skipping rule');
+        var reservedHeld = workflowBudget.remaining > 0 && !smRuleLayersModule.isMergePathRule(rule);
+        console.log('  ⏭️  Global workflow cap reached (' + workflowBudget.initial + ')' +
+            (reservedHeld
+                ? ' — merge reservation held (' + tickMergeReservedSlots +
+                  ' slot(s) reserved for the approved merge path)'
+                : '') +
+            ' — skipping rule');
         logBlockingWorkflowRuns(workflowBudget, workflowFile);
         return { processedKeys: [], skippedKeys: [] };
     }
@@ -1644,11 +1697,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     // for dispatch slots, so the budget must not throttle them (live bug:
     // one active review run zeroed the budget and silent-update-behind
     // freshened exactly ONE of four behind PRs per tick).
-    var budgetCapped = !rule.localTeammate && !rule.localAction;
+    // gh-1114: the spend ceiling is rule-aware (merge reservation).
     if (workflowBudget && budgetCapped) {
+        var ruleRemaining = ruleBudgetRemaining(rule, workflowBudget);
         effectiveLimit = effectiveLimit === null
-            ? workflowBudget.remaining
-            : Math.min(effectiveLimit, workflowBudget.remaining);
+            ? ruleRemaining
+            : Math.min(effectiveLimit, ruleRemaining);
     }
 
     if (effectiveLimit !== null && tickets.length > effectiveLimit) {
@@ -1666,7 +1720,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     var skippedKeys   = [];
 
     for (var idx = 0; idx < tickets.length; idx++) {
-        if (!rule.localTeammate && !rule.localAction && workflowBudget && workflowBudget.remaining <= 0) {
+        if (!rule.localTeammate && !rule.localAction && workflowBudget &&
+            ruleBudgetRemaining(rule, workflowBudget) <= 0) {
             break;
         }
         if (effectiveLimit !== null && processedKeys.length >= effectiveLimit) {
@@ -1680,6 +1735,20 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // rule.quotaParkProbe so it can probe the window and lift the park).
         if (quotaBreakerModule.shouldSkipForQuotaPark(ticket, rule, RUN_JOB_PARAMS)) {
             console.log('  🅿️  ' + key + ' skipped (provider-quota park)');
+            skippedKeys.push(key);
+            continue;
+        }
+
+        // gh-1114 (AC7, I4/I5): a verdict action never fires on a head that
+        // THIS tick's L1 freshness rules moved — the checks it would judge
+        // belonged to the superseded head (live #435: fail-validation
+        // re-parked a PR on a stale head seconds before the same tick's
+        // silent-update moved it). DRY never fills tickMovedPrs, so dry
+        // logs never claim a deferral (E3).
+        if (smRuleLayersModule.isVerdictAction(rule) &&
+            ticket.prNumber && tickMovedPrs[ticket.prNumber]) {
+            console.log('  ⏭ pr-' + ticket.prNumber +
+                ' head moved this tick — verdict deferred');
             skippedKeys.push(key);
             continue;
         }
@@ -2549,6 +2618,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             ciWorkflow + ' @ ' + branchName + ')');
                 return;
             }
+            // gh-1114 merge-first capacity (priority 3): a merge-path rule's
+            // validation dispatch SPENDS the reserved slot — accounted
+            // against the workflow cap once per tick, after the rule
+            // completes. Fresh validations (validate-fresh) never spend it.
+            if (smRuleLayersModule.isMergePathRule(rule)) tickMergeSlotUsed = true;
             cli_execute_command({
                 command: 'gh workflow run ' + ciWorkflow +
                          ' --repo ' + effectiveRepoInfo.owner + '/' +
@@ -2955,6 +3029,20 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
 
         if (rule.localAction === 'validate_pr') {
+            // gh-1114 (AC12/UT-9): the merge candidate whose head THIS
+            // tick's L1 freshness rules just refreshed is not validated in
+            // the same tick — the fresh head has no checks yet, and the
+            // next tick re-arms on it (AC1/AC5: 'revalidated next tick').
+            // Fresh (non-approved) validations keep today's same-tick flow
+            // — only the merge path defers. The reservation this frees is
+            // released to agent legs at the L3 boundary (no idle cap, I7).
+            if (smRuleLayersModule.isMergePathRule(rule) &&
+                ticket.prNumber && tickMovedPrs[ticket.prNumber]) {
+                console.log('  ⏭ pr-' + ticket.prNumber +
+                    ' head moved this tick — merge-candidate validation deferred to the next tick');
+                skippedKeys.push(key);
+                continue;
+            }
             // Dispatch the CI workflow on the head branch and arm the
             // ai_validating marker. Pre- and post-approval validation share
             // this action: pre-review (validate-fresh) latches ai_validated
