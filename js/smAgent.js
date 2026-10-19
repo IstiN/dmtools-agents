@@ -101,6 +101,9 @@
  *                               (e.g. ".dmtools/configs/myproject.js" → "myproject").
  *   skipIfLabel    (optional) — skip ticket if it already has this label (idempotency)
  *   skipIfLabels   (optional) — skip ticket if it already has any of these labels
+ *   quotaParkProbe (optional) — if true, this rule keeps processing tickets parked
+ *                               with the provider-quota label (gh-1087); every other
+ *                               rule skips parked tickets — set ONLY on the probe rule
  *   addLabel       (optional) — add this label after triggering (idempotency marker)
  *   addLabels      (optional) — add these labels after triggering
  *   recoverStaleTriggerLabel (optional) — if true, remove skip labels when no matching
@@ -167,6 +170,11 @@ var reworkLoopGuardModule = require('./common/reworkLoopGuard.js');
 // ⚠️ trigger-failed marker math and the dead-head park cap. The pure
 // half lives in the module; recordDispatchFailure below wires transport.
 var triggerFailuresModule = require('./common/triggerFailures.js');
+// gh-1087 (hoisted, never lazy — the gh-823 pack-require rule): the quota
+// circuit-breaker — the quota/transient failure classification, the park
+// label/probe-cadence config readers and the dispatch-lane exclusion
+// predicate. Pure module; the legs and the probe agent wire transport.
+var quotaBreakerModule = require('./common/quotaCircuitBreaker.js');
 // gh-1000 (hoisted, never lazy — the gh-823 pack-require rule): the
 // phantom ai_validating mutex holder — registry probes/heals, live-PR
 // re-derivation and the alarm/streak counter persistence.
@@ -1298,6 +1306,16 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
     tickets.forEach(function(ticket) {
         var key = ticket.key;
 
+        // gh-1087 AC2: a ticket parked with the provider-quota label is
+        // excluded from every dispatch lane — except the quota-probe rule
+        // (rule.quotaParkProbe), which must keep reaching it to probe the
+        // quota window and lift the park (AC3).
+        if (quotaBreakerModule.shouldSkipForQuotaPark(ticket, rule, RUN_JOB_PARAMS)) {
+            console.log('  🅿️  ' + key + ' skipped (provider-quota park)');
+            skippedKeys.push(key);
+            return;
+        }
+
         var skipLabel = firstMatchingLabel(ticket, normalizeLabels(rule.skipIfLabel, rule.skipIfLabels));
         if (skipLabel) {
             // Local execution is synchronous — there is never an in-flight
@@ -1487,6 +1505,15 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
         var ticket = tickets[idx];
         var key = ticket.key;
+
+        // gh-1087 AC2: provider-quota parked tickets are excluded from every
+        // dispatch lane (the quota-probe rule exempts itself via
+        // rule.quotaParkProbe so it can probe the window and lift the park).
+        if (quotaBreakerModule.shouldSkipForQuotaPark(ticket, rule, RUN_JOB_PARAMS)) {
+            console.log('  🅿️  ' + key + ' skipped (provider-quota park)');
+            skippedKeys.push(key);
+            continue;
+        }
 
         var skipLabel = firstMatchingLabel(ticket, normalizeLabels(rule.skipIfLabel, rule.skipIfLabels));
         if (skipLabel) {
