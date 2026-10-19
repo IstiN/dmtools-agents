@@ -193,6 +193,16 @@ function isMissingResult(result) {
     return !result || !result.status;
 }
 
+/** Project config for the rework job (jobParams-wrapped or bare dispatch). */
+function loadReworkProjectConfig(params) {
+    return configLoader.loadProjectConfig(params.jobParams || params);
+}
+
+/** The SM idempotency label to remove after the run (null when not configured). */
+function smRemoveLabelOf(customParams) {
+    return (customParams && customParams.removeLabel) || null;
+}
+
 /**
  * Whether the test PR must merge the base branch before pushing (gh-1083).
  * Mirrors the original inline condition EXACTLY — strict `mergeable === false`
@@ -826,12 +836,12 @@ function action(params) {
     var ctx = resolveActionContext(params);
     const actualParams = ctx.actualParams;
     const ticketKey = ctx.ticketKey;
-    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var config = loadReworkProjectConfig(params);
     var jiraConfig = config.jira;
     var scm = configLoader.createScm(config);
     const customParams = resolveCustomParams(params, actualParams, config);
     initTracker(config, customParams);
-    const removeLabel = customParams && customParams.removeLabel;
+    const removeLabel = smRemoveLabelOf(customParams);
     const wipLabel = resolveWipLabel(actualParams);
 
     function releaseLock() {
@@ -947,6 +957,8 @@ if (typeof module !== 'undefined' && module.exports) {
         fixSummaryOf,
         isMissingResult,
         decidePrIsDirty,
-        decideReworkTargetStatus
+        decideReworkTargetStatus,
+        loadReworkProjectConfig,
+        smRemoveLabelOf
     };
 }

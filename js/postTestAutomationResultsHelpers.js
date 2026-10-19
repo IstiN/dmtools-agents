@@ -163,6 +163,30 @@ function decideGitStageRoute(gitResult) {
     return 'git-failure';
 }
 
+/**
+ * Dispatch params for action() (gh-1083): the jobParams body when wrapped,
+ * the params object itself otherwise.
+ */
+function resolveJobParams(params) {
+    return params.jobParams || params;
+}
+
+/**
+ * Where the run works (gh-1083): the configured workingDir (null = repo root)
+ * and the test-files path to stage (default testing/).
+ */
+function resolveRunPaths(config, customParams) {
+    return {
+        workingDir: config.workingDir || null,
+        testFilesPath: customParams.testFilesGlob || 'testing/'
+    };
+}
+
+/** The PASSED/FAILED completion-log word for the run outcome. */
+function decideOutcomeWord(passed) {
+    return passed ? 'PASSED' : 'FAILED';
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         parseOutcome: parseOutcome,
@@ -180,6 +204,9 @@ if (typeof module !== 'undefined' && module.exports) {
         decideTargetStatus: decideTargetStatus,
         decidePublishStrategy: decidePublishStrategy,
         resolveTicketIdentity: resolveTicketIdentity,
-        decideGitStageRoute: decideGitStageRoute
+        decideGitStageRoute: decideGitStageRoute,
+        resolveJobParams: resolveJobParams,
+        resolveRunPaths: resolveRunPaths,
+        decideOutcomeWord: decideOutcomeWord
     };
 }

@@ -656,7 +656,7 @@ function handleActionError(trackerRef, params, error) {
 }
 
 function action(params) {
-    var jobParams = params.jobParams || params;
+    var jobParams = postHelpers.resolveJobParams(params);
     var customParams = jobParams.customParams || {};
     // Early tracker so the catch-path can still comment if config loading fails
     tracker = trackersModule.createTracker(null, customParams);
@@ -667,8 +667,9 @@ function action(params) {
         tracker = trackersModule.createTracker(config, customParams);
         var jiraConfig = config.jira;
         var scm = configLoader.createScm(config);
-        var workingDir = config.workingDir || null;
-        var testFilesPath = customParams.testFilesGlob || 'testing/';
+        var paths = postHelpers.resolveRunPaths(config, customParams);
+        var workingDir = paths.workingDir;
+        var testFilesPath = paths.testFilesPath;
         const jiraComment = readJiraComment(params, workingDir, ticketKey);
 
         console.log('=== Processing test automation results for', ticketKey, '===');
@@ -710,7 +711,7 @@ function action(params) {
 
         finalizeTicketLabels(ticketKey, params);
 
-        console.log('✅ Test automation workflow complete:', passed ? 'PASSED' : 'FAILED');
+        console.log('✅ Test automation workflow complete:', postHelpers.decideOutcomeWord(passed));
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
