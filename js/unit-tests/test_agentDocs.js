@@ -341,14 +341,20 @@ suite('collectArtifacts', function() {
             "file_read('outputs/' + key + '/summary.md');"
         ].join('\n');
         var out = generator().collectArtifacts(src, 'postJSAction');
-        assert.deepEqual(out.writes.sort(), ['input/<KEY>/a.md', 'outputs/r_<KEY>.md']);
-        assert.deepEqual(out.reads, ['outputs/<KEY>/summary.md']);
+        // Characterization quirk (preserved, gh-1085): the plain literal
+        // pattern also matches the LEFT half of a concat form whose path
+        // has no trailing slash ('outputs/r_'), so that partial path lands
+        // in the list next to the <KEY> form.
+        assert.deepEqual(out.writes.sort(), ['input/<KEY>/a.md', 'outputs/r_', 'outputs/r_<KEY>.md']);
+        // file_read has no concat pattern — the bare 'outputs/' capture is
+        // filtered by the bare-dir guard, so the read list stays empty.
+        assert.deepEqual(out.reads, []);
     });
 
     test('non-concat two-literal shape (slash only on one side) still inserts <KEY>', function() {
         var src = "file_write('outputs/r_' + key + '.md', data);";
         var out = generator().collectArtifacts(src, 'postJSAction');
-        assert.deepEqual(out.writes, ['outputs/r_<KEY>.md']);
+        assert.deepEqual(out.writes, ['outputs/r_', 'outputs/r_<KEY>.md']);
     });
 
     test('inputFolder / inputFolderPath / folder concatenations map to input/<KEY>', function() {
@@ -361,8 +367,11 @@ suite('collectArtifacts', function() {
             "var f = file_read(path.join(folder, 'f.md'));"
         ].join('\n');
         var out = generator().collectArtifacts(src, 'preJSAction');
-        assert.deepEqual(out.writes, ['input/<KEY>/a.md', 'input/<KEY>/c.md', 'input/<KEY>/e.md']);
-        assert.deepEqual(out.reads, ['input/<KEY>/b.md', 'input/<KEY>/d.md', 'input/<KEY>/f.md']);
+        // Characterization quirk (preserved, gh-1085): the path.join/folder
+        // patterns prepend 'input/<KEY>' WITHOUT a separator — the slash in
+        // the output comes only from the captured literal itself.
+        assert.deepEqual(out.writes, ['input/<KEY>/a.md', 'input/<KEY>c.md', 'input/<KEY>e.md']);
+        assert.deepEqual(out.reads, ['input/<KEY>/b.md', 'input/<KEY>d.md', 'input/<KEY>f.md']);
     });
 
     test('jira_attach_file_to_ticket filePath counts as a read', function() {

@@ -122,6 +122,32 @@ function normalizeArtifactPath(p) {
     return p.replace(/^\.\//, '').replace(/\/+/g, '/');
 }
 
+function withPrefix(prefix, file) {
+    return prefix + file;
+}
+
+// The file path for one regex match, per the pattern's shape: concat forms
+// splice the <KEY> placeholder between the two string literals, prefix
+// forms prepend the 'input/<KEY>' stand-in (gh-1085: extracted verbatim —
+// both concat branches produce the same splice, kept as documented paths).
+function matchedArtifactFile(m, pattern) {
+    var file;
+    if (pattern.concat) {
+        // Insert a placeholder for the variable between the two string literals.
+        var left = m[1];
+        var right = m[2] || '';
+        if (left.slice(-1) === '/' && right.charAt(0) === '/') {
+            file = left + '<KEY>' + right;
+        } else {
+            file = left + '<KEY>' + right;
+        }
+    } else {
+        file = m[1];
+    }
+    if (pattern.prefix) file = withPrefix(pattern.prefix, file);
+    return file;
+}
+
 function collectArtifacts(src, phase) {
     var reads = [];
     var writes = [];
@@ -130,10 +156,6 @@ function collectArtifacts(src, phase) {
         p = normalizeArtifactPath(p);
         if (p === 'input/' || p === 'outputs/') return;
         list.push(p);
-    }
-
-    function withPrefix(prefix, file) {
-        return prefix + file;
     }
 
     // Targeted patterns for file path arguments. Each pattern is run globally.
