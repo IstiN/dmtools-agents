@@ -143,6 +143,10 @@ var validationLivenessModule = require('./common/validationLiveness.js');
 // run is gone/cancelled/stale (check-RUN zombies); the run-level gh-821
 // twin cannot see them while a green run still exists on the head.
 var checkRunZombiesModule = require('./common/checkRunZombies.js');
+// gh-1107: the check-run stamp transport — temp-file JSON body, zero
+// untrusted bytes in the shell string; also re-exports the ONE shellQuote
+// helper every converted call site shares.
+var checkRunStampModule = require('./common/checkRunStamp.js');
 var invisibleRequiredModule = require('./common/invisibleRequiredChecks.js');
 var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
@@ -7835,26 +7839,36 @@ function stampValidationChecksForModule(repoInfo, headSha, status, conclusion, r
                                     status + (conclusion ? '/' + conclusion : ''));
                         return;
                     }
-                    // POST /repos/{o}/{r}/check-runs — head_sha is a FIELD,
-                    // never a path segment (sha-in-path 404s). github_create
-                    // _check_run is MCP-registry-only (not a JS-bridge tool).
-                    // details_url + the jobs table (stampLinkBlock) turn the
-                    // PR Checks-tab entry into a clickable path to the real
-                    // workflow run / failing job (owner 2026-09-27).
+                    // POST /repos/{o}/{r}/check-runs via a temp-file JSON
+                    // body (gh-1107): the jobs table can carry ANY bytes a
+                    // PR-editable workflow job name pleases (`Lockfile
+                    // smoke (${{ matrix.os }} release)` made dash die with
+                    // `Bad substitution` on the old -f summary="…" form —
+                    // exit 2, no stamp, PR blocked). The body travels as a
+                    // temp file (--input, the scm.js gh-960 PR-body
+                    // precedent); the shell string carries ONLY the fixed
+                    // repo path and the temp-file path, and the file is
+                    // deleted in finally on success AND failure.
                     try {
-                        var cmd = 'gh api -X POST repos/' + repoInfo.owner +
-                                  '/' + repoInfo.repo + '/check-runs' +
-                                  ' -f name="' + checkName + '"' +
-                                  ' -f head_sha=' + headSha +
-                                  ' -f status="' + status + '"' +
-                                  (conclusion ? (' -f conclusion="' + conclusion + '"') : '') +
-                                  (linkBlock.detailsUrl ?
-                                      (' -f details_url="' + linkBlock.detailsUrl + '"') : '') +
-                                  ' -f title="SM validation' +
-                                  (conclusion ? (': ' + conclusion) : ' (tick-dispatched)') + '"' +
-                                  ' -f summary="' + linkBlock.summary + '"';
-                        cli_execute_command({ command: cmd });
+                        var body = checkRunStampModule.buildCheckRunBody({
+                            name: checkName,
+                            headSha: headSha,
+                            status: status,
+                            conclusion: conclusion,
+                            detailsUrl: linkBlock.detailsUrl,
+                            title: 'SM validation' +
+                                (conclusion ? (': ' + conclusion) : ' (tick-dispatched)'),
+                            summary: linkBlock.summary
+                        });
+                        var tempPath = checkRunStampModule.tempBodyPath(
+                            Date.now(), ++stampTempSeq);
+                        checkRunStampModule.postCheckRunStamp(repoInfo, body, tempPath, {
+                            write: file_write, exec: cli_execute_command, del: file_delete
+                        });
                     } catch (e) {
+                        // Same failure mode as before gh-1107 (E2 included —
+                        // an unwritable temp dir degrades identically):
+                        // warn and move on to the next check name.
                         console.warn('  ⚠️  stamp "' + checkName + '" on ' +
                                      String(headSha).slice(0, 7) + ': ' + (e.message || e));
                     }
