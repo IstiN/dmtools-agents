@@ -164,19 +164,28 @@ function pullHeadRefOf(prNumber) {
 // Boundary rules mirror smAgent.stubAnchorMatches: a trailing key char
 // (digit/'-') rejects ('pr-1591' never matches 'pr-15910'), and a
 // letter/'-' prefix rejects ('pr-1591' never matches 'gh-pr-1591-x').
+// gh-1075 review (CRAP ratchet): the boundary tests are named predicates,
+// not inline conditionals — the while loop below then carries one branch
+// per iteration (the pure tests in test_branchLegGuard.js cover them).
+function isDigitOrDash(ch) {
+    return (ch >= '0' && ch <= '9') || ch === '-';
+}
+
+function isWordChar(ch) {
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+        (ch >= '0' && ch <= '9') || ch === '-' || ch === '#';
+}
+
 function titleHasPrToken(title, prNumber) {
     var s = String(title || '');
-    var token = '· pr-' + prNumber;
+    var token = '[REDACTED:Sensitive Value]' + prNumber;
     var from = 0;
     while (from <= s.length - token.length) {
         var idx = s.indexOf(token, from);
         if (idx === -1) break;
         var next = s.charAt(idx + token.length);
         var prev = idx > 0 ? s.charAt(idx - 1) : '';
-        var nextOk = !((next >= '0' && next <= '9') || next === '-');
-        var prevOk = !((prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') ||
-            (prev >= '0' && prev <= '9') || prev === '-' || prev === '#');
-        if (nextOk && prevOk) return true;
+        if (!isDigitOrDash(next) && !isWordChar(prev)) return true;
         from = idx + 1;
     }
     return false;
