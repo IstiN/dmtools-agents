@@ -162,6 +162,14 @@ var BOOKKEEPING_CHECK_PREFIXES = ['kicker /', 'Wake-up probe', 'merge /'];
 // require in this module, and the pack runtime LOAD self-test loads it.
 var reviewVerdicts = require('./reviewVerdicts.js');
 
+// gh-1106: the workflows-permission rejection classifier — the same pure
+// module the smAgent fork lane consumes, so the two silent-update paths
+// (this provider lane and the git-chain fork lane) can never drift apart
+// on WHAT counts as a workflow-write refusal. Hoisted like every require
+// (gh-823): load-time, file-relative — validationLiveness.js ships in
+// every pack that carries smProvider.js.
+var validationLiveness = require('./validationLiveness.js');
+
 // ── GitHub provider helpers (gh-1009) ─────────────────────────────────────
 // The githubProvider closure below is an orchestration shell only: every
 // decision branch lives in one of these module-level helpers so the provider
@@ -836,11 +844,61 @@ function _ghRemovePrLabel(owner, repo, prNumber, label) {
     }
 }
 
-function _ghSilentUpdateBranch(full, prNumber, silentToken, restoreToken) {
+// ── gh-1106 CRAP-ratchet split (gh-107 convention: the decision branches
+// live in small module-level helpers so every function stays under the
+// CRAP_THRESHOLD=8 gate) — the behavior stays byte-identical to the
+// single-function version the UT-4/REG-1 suite pins: same calls, same
+// order, same error texts, same finally-restores.
+
+// The DISTINCT capability error both refusal shapes surface (E1/AC3):
+// the caller parks on "needs a workflow-write token", never on the
+// maintainer-edit-revoked trail.
+function _ghWorkflowWriteTokenError(detail) {
+    return new Error('silent update needs a workflow-write token (gh-1106): ' + detail);
+}
+
+// ONE escalated attempt with GH_TOKEN swapped to escalationToken — the
+// same token-in-env pattern as the silent swap. The swap is undone in
+// finally even on exception (AC7); a second workflows-class refusal
+// surfaces the DISTINCT capability error (AC3), anything else propagates
+// untouched.
+function _ghEscalatedUpdate(update, silentToken, escalationToken) {
+    set_env_variable('GH_TOKEN', escalationToken);
+    try {
+        return update();
+    } catch (eEsc) {
+        if (validationLiveness.isWorkflowsPermissionRejection(eEsc && eEsc.message)) {
+            // AC3: the escalation token ALSO lacks workflow write.
+            throw _ghWorkflowWriteTokenError('the escalation token was refused too — grant the App ' +
+                '"Workflows: write" or use a PAT with the `workflow` scope (E1: no token available to ' +
+                'this tick can finish the update)');
+        }
+        throw eEsc;
+    } finally {
+        // AC7: undo the escalation swap before the outer restore —
+        // even on exception (finally runs first).
+        set_env_variable('GH_TOKEN', silentToken);
+    }
+}
+
+function _ghSilentUpdateBranch(full, prNumber, silentToken, restoreToken, escalationToken) {
     // Silent refresh of an armed PR: pushes made with the workflow's
     // own github.token trigger NO workflows, so the branch updates
     // without re-running the CI matrix (issue #687 — test once per
     // state, update for free).
+    //
+    // gh-1106 (AC6): a workflows-permission rejection means the update
+    // touches `.github/workflows/*` — the silent token can NEVER create
+    // or update workflow files (no `permissions:` key grants `workflows`
+    // to a GITHUB_TOKEN), so the same-token retry is deterministic-
+    // forever-failed. With an escalation token wired (App installation
+    // token with "Workflows: write", or a PAT with the `workflow` scope)
+    // the update retries ONCE with GH_TOKEN swapped to it. A second
+    // workflows-class refusal surfaces a DISTINCT error naming the
+    // missing capability so the caller parks on "needs a workflow-write
+    // token", never on a maintainer-edit-revoked trail. Non-workflows
+    // failures keep the pre-gh-1106 surface byte-identical (REG-1 — the
+    // catch rethrows before any escalation machinery).
     var update = function () {
         return cli_execute_command({
             command: 'gh pr update-branch ' + prNumber + ' --repo ' + full
@@ -849,7 +907,19 @@ function _ghSilentUpdateBranch(full, prNumber, silentToken, restoreToken) {
     if (!silentToken) return update();
     try {
         set_env_variable('GH_TOKEN', silentToken);
-        return update();
+        try {
+            return update();
+        } catch (e) {
+            if (!validationLiveness.isWorkflowsPermissionRejection(e && e.message)) throw e;
+            if (!escalationToken) {
+                // E1: no workflow-capable token is available — the
+                // capability gap is the finding; name it and stop.
+                throw _ghWorkflowWriteTokenError('the update touches .github/workflows/* which the ' +
+                    'silent token can never create or update — wire an App installation token with ' +
+                    '"Workflows: write" or a PAT with the `workflow` scope');
+            }
+            return _ghEscalatedUpdate(update, silentToken, escalationToken);
+        }
     } finally {
         set_env_variable('GH_TOKEN', restoreToken || silentToken);
     }
@@ -990,8 +1060,8 @@ function githubProvider(cfg) {
             });
         },
 
-        silentUpdateBranch: function (prNumber, silentToken, restoreToken) {
-            return _ghSilentUpdateBranch(full, prNumber, silentToken, restoreToken);
+        silentUpdateBranch: function (prNumber, silentToken, restoreToken, escalationToken) {
+            return _ghSilentUpdateBranch(full, prNumber, silentToken, restoreToken, escalationToken);
         }
     };
 }
