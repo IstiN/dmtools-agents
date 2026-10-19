@@ -183,7 +183,7 @@ suite('unblockResolvedDependencies', function() {
         assert.equal(result.ticketKey, 'PROJ-2');
         assert.deepEqual(loaded.calls.statusMoves, [{ key: 'PROJ-2', statusName: 'Backlog' }]);
         assert.equal(loaded.calls.comments.length, 1);
-        var body = loaded.calls.comments[0].body;
+        var body = loaded.calls.comments[0].comment;
         assert.ok(body.indexOf('PROJ-1 (Done)') !== -1, 'comment lists blocker 1');
         assert.ok(body.indexOf('PROJ-3 (Passed)') !== -1, 'comment lists blocker 2');
         assert.ok(body.indexOf('PROJ-4 (Irrelevant)') !== -1, 'comment lists blocker 3');
@@ -296,7 +296,9 @@ suite('unblockResolvedDependencies', function() {
     });
 
     test('token usage comments run after the move with initiator and jobParams customParams', function() {
-        var loaded = loadUnblockResolvedDependencies();
+        var loaded = loadUnblockResolvedDependencies({
+            jira_get_ticket: function() { return ticketBlockedBy('Done'); }
+        });
 
         var result = loaded.mod.action({
             ticket: { key: 'PROJ-2' },
@@ -311,7 +313,10 @@ suite('unblockResolvedDependencies', function() {
     });
 
     test('token usage failure is swallowed', function() {
-        var loaded = loadUnblockResolvedDependencies({ tokenUsageThrows: true });
+        var loaded = loadUnblockResolvedDependencies({
+            tokenUsageThrows: true,
+            jira_get_ticket: function() { return ticketBlockedBy('Done'); }
+        });
 
         var result = loaded.mod.action({ ticket: { key: 'PROJ-2' } });
 

@@ -241,7 +241,10 @@ suite('fetchEpicsToInput.action', function () {
 
         loaded.mod.action({ inputFolderPath: 'input/PROJ-3' });
 
-        var doc = JSON.parse(loaded.calls.writes[0].content);
+        var storiesWrite = loaded.calls.writes.filter(function (w) {
+            return w.path === 'input/PROJ-3/existing_stories.json';
+        })[0];
+        var doc = JSON.parse(storiesWrite.content);
         assert.deepEqual(doc.stories.map(function (s) { return s.key; }), ['PROJ-21']);
     });
 
