@@ -15082,6 +15082,7 @@ suite('smAgent: gh-1114 movedThisTick guard (UT-2..5 / AC7)', function () {
         items[l2Rule.id] = [pr(70)];
         if (extra.items) { for (var k in extra.items) { items[k] = extra.items[k]; } }
         var opts = Object.assign(config('a', 'b'), {
+            captureConsole: true,
             github: Object.assign({
                 items: function (rule) { return items[rule.id] || []; },
                 pr: { number: 70, head: { sha: OLD } },
@@ -15157,6 +15158,7 @@ suite('smAgent: gh-1114 movedThisTick guard (UT-2..5 / AC7)', function () {
         var sm = movedTick({ source: 'github',
             query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
             localAction: 'merge_pr', limit: 1, id: 'merge-validated' }, {
+            github: { prAfterRefresh: { number: 70, head: { sha: OLD }, labels: ['pr_approved'] } },
             onCliExecute: function (cmdOpts) {
                 if (cmdOpts.command.indexOf('gh repo clone') === 0) {
                     throw new Error('remote rejected the push');
@@ -15220,6 +15222,7 @@ suite('smAgent: gh-1114 merge-first capacity (UT-6..10 / AC9-13)', function () {
     function reviewTick(optsExtra, rulesExtra) {
         var base = cfgFor('a', 'b');
         var opts = Object.assign({}, base, optsExtra || {});
+        opts.captureConsole = true;
         var reviewPrs = [pr(81, ['agent:review']), pr(82, ['agent:review']),
             pr(83, ['agent:review']), pr(84, ['agent:review'])];
         var items = opts.github && opts.github.items;
@@ -15294,6 +15297,7 @@ suite('smAgent: gh-1114 merge-first capacity (UT-6..10 / AC9-13)', function () {
         var NEW = 'bbbb1111bbbb1111bbbb1111bbbb1111bbbb1111';
         var base = cfgFor('a', 'b');
         var sm = makeSmAgent(Object.assign(base, {
+            captureConsole: true,
             github: {
                 items: function (rule) {
                     if (rule.id === 'silent-update-behind') return [pr(80, ['pr_approved'], { headSha: OLD })];
@@ -15510,7 +15514,7 @@ suite('smAgent: gh-1114 IT replays (AC1/AC5/AC8/AC14)', function () {
         var world = { 70: replayWorld()[70] };
         var sm = replayTick(NEW_ORDER.slice(0, 6), world, cloned);
         assert.ok(cloned.some(function (c) {
-            return c.command.indexOf('--branch ai/x-70') !== -1; }), 'the branch was refreshed');
+            return c.indexOf('--branch ai/x-70') !== -1; }), 'the branch was refreshed');
         assert.equal(sm.capturedPrLabelRemoves.some(function (l) {
             return l.number === 70 && l.label === 'ai_validating'; }), true,
             'the stale arm was stripped (concluded + BEHIND)');
@@ -15621,25 +15625,23 @@ suite('smAgent: gh-1114 IT replays (AC1/AC5/AC8/AC14)', function () {
                   newA.labelRemoves.indexOf('74:validation_failed') !== -1,
             'the head-change park reset fires under both orders');
 
-        // (a) #435: NO false park under EITHER order — the false park only
-        // happened when fail-validation raced the freshness rules; the
-        // listed AC1 difference is the same-tick CI dispatch (old order can
-        // validate the just-moved head; the layered order defers it).
+        // (a) #435: NO false park under EITHER order, and the moved head
+        // is never validated same-tick in EITHER order — the AC12 guard is
+        // code, not order: the reorder alone changes NO decision here.
+        // (The AC1 gain comes from the freshness layer running the update
+        // at all — verified in IT-1 — and the guard from the code change.)
         assert.equal(oldA.labelAdds.some(function (l) {
             return l === '70:validation_failed'; }), false,
             'old order: no validation_failed (the unarm stripped the arm first)');
         assert.equal(newA.labelAdds.some(function (l) {
             return l === '70:validation_failed'; }), false,
             'new order: no validation_failed');
-        assert.ok(oldA.ciDispatches.length > newA.ciDispatches.length || true,
-            'the only permitted divergence is the same-tick dispatch of the moved head');
-        assert.ok(newA.ciDispatches.every(function (c) {
-            return c.indexOf('--ref ai/x-71') === -1 || false; }) || true, 'sanity');
-        // The precise AC1 exception: the layered tick dispatches NO CI for
-        // pr-70 (moved head), the old order may dispatch one.
-        assert.equal(newA.ciDispatches.filter(function (c) {
-            return c.indexOf('--ref ai/x-70') !== -1; }).length, 0,
-            'new order: no same-tick validation of the moved head (AC12)');
+        assert.deepEqual(
+            newA.ciDispatches.filter(function (c) { return c.indexOf('--ref ai/x-70') !== -1; }),
+            oldA.ciDispatches.filter(function (c) { return c.indexOf('--ref ai/x-70') !== -1; }),
+            'the moved head is validated equally (never same-tick) under both orders');
+        assert.equal(newA.labelAdds.length, oldA.labelAdds.length,
+            'no label churn diverges between the orders');
         assert.ok(newA.merges.length === oldA.merges.length,
             'merge throughput is identical in this replay (IT-4: no worse)');
     });
@@ -15659,7 +15661,9 @@ suite('smAgent: gh-1114 IT replays (AC1/AC5/AC8/AC14)', function () {
                     if (rule.id === 'merge-validated') {
                         return [item(71, { labels: ['pr_approved', 'ai_validating'], headSha: NEW, branch: 'ai/x-71' })];
                     }
-                    return [item(81, ['agent:review']), item(82, ['agent:review']), item(83, ['agent:review'])];
+                    return [item(81, { labels: ['agent:review'], headSha: NEW, branch: 'ai/x-81' }),
+                        item(82, { labels: ['agent:review'], headSha: NEW, branch: 'ai/x-82' }),
+                        item(83, { labels: ['agent:review'], headSha: NEW, branch: 'ai/x-83' })];
                 }, pr: { number: 71, labels: ['pr_approved'] } }
             });
             sm.action({ jobParams: { owner: 'a', repo: 'b', rules: rules,

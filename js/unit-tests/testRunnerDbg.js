@@ -1,0 +1,377 @@
+/**
+ * DMTools Agent Unit Test Runner
+ *
+ * Runs unit tests for agent JS scripts in GraalJS environment.
+ * Provides: test(), suite(), assert, loadModule(), makeRequire(), trackersMock()
+ *
+ * Usage:
+ *   dmtools run js/unit-tests/run_all.json
+ *   dmtools run js/unit-tests/run_configLoader.json
+ *   dmtools run js/unit-tests/run_smAgent.json
+ */
+
+// ── Global state ─────────────────────────────────────────────────────────────
+
+var _results_ = { passed: 0, failed: 0, errors: [] };
+var _currentSuite_ = 'default';
+
+// Provide a stub java global for tests that mock java.lang.System.getenv.
+// In a real GraalJS environment java is already present; we never overwrite it.
+if (typeof java === 'undefined') {
+    var _javaStub_ = { lang: { System: { getenv: function() { return null; } } } };
+    if (typeof globalThis !== 'undefined') {
+        globalThis.java = _javaStub_;
+    } else if (typeof this !== 'undefined') {
+        this.java = _javaStub_;
+    }
+}
+
+// ── Network guard ────────────────────────────────────────────────────────────
+// Unit tests must never reach a real service. Several tests fall through to the
+// REAL host tool (github_*, confluence_* ...) when they do not mock it, which issued
+// ~100 real api.github.com / atlassian.net requests per run (each a 401 after a
+// round-trip, ~40 s locally, flaky offline, and a rate-limit risk with a real token).
+// Replace every network-backed integration tool with one that throws — the same
+// failure mode the tests already tolerate from a 401 — while file_*, cli_*, kb_* and
+// mermaid_* stay real. Tests that mock a tool through loadModule() shadow it locally
+// and are unaffected.
+var NETWORK_TOOL_PREFIXES_ = [
+    'github', 'gitlab', 'bitbucket', 'jira', 'xray', 'confluence', 'ado', 'rally',
+    'figma', 'teams', 'sharepoint', 'bitrise', 'jenkins', 'testrail', 'tracker',
+    'source', 'gemini', 'openai', 'anthropic', 'bedrock', 'dial', 'ollama', 'vertex'
+];
+
+function installNetworkGuard_() {
+    var g = (typeof globalThis !== 'undefined') ? globalThis : this;
+    var guarded = 0;
+    Object.getOwnPropertyNames(g).forEach(function(name) {
+        var m = /^([a-z0-9]+)_/.exec(name);
+        if (!m || NETWORK_TOOL_PREFIXES_.indexOf(m[1]) === -1) return;
+        if (typeof g[name] !== 'function') return;
+        try {
+            g[name] = function() {
+                throw new Error('unit-test network guard: ' + name + '() is not mocked — ' +
+                    'unit tests must not call real services');
+            };
+            guarded++;
+        } catch (e) { /* non-writable binding — leave as is */ }
+    });
+    return guarded;
+}
+
+// Pre-loaded base modules available to all test files as globals
+var configModule = null;
+var configLoaderModule = null;
+
+// ── Test API (globals usable in test files) ──────────────────────────────────
+
+function test(name, fn) {
+    var fullName = _currentSuite_ + ' > ' + name;
+    try {
+        fn();
+        _results_.passed++;
+        console.log('  ✅ ' + fullName);
+    } catch (e) {
+        _results_.failed++;
+        var msg = e.message || String(e);
+        _results_.errors.push({ name: fullName, error: msg });
+        console.log('  ❌ ' + fullName);
+        console.log('     ' + msg);
+        if (e.stack) console.log('     STACK: ' + e.stack.split('\n').slice(0, 8).join('\n     '));
+    }
+}
+
+function suite(name, fn) {
+    var prev = _currentSuite_;
+    _currentSuite_ = name;
+    console.log('\n── ' + name + ' ──');
+    fn();
+    _currentSuite_ = prev;
+}
+
+// ── Assert library ────────────────────────────────────────────────────────────
+
+var assert = {
+    equal: function(actual, expected, msg) {
+        if (actual !== expected) {
+            throw new Error(
+                (msg ? msg + ': ' : '') +
+                'expected ' + JSON.stringify(expected) + ' but got ' + JSON.stringify(actual)
+            );
+        }
+    },
+
+    notEqual: function(actual, unexpected, msg) {
+        if (actual === unexpected) {
+            throw new Error(
+                (msg ? msg + ': ' : '') +
+                'expected value to not equal ' + JSON.stringify(unexpected)
+            );
+        }
+    },
+
+    deepEqual: function(actual, expected, msg) {
+        var a = JSON.stringify(actual);
+        var b = JSON.stringify(expected);
+        if (a !== b) {
+            throw new Error(
+                (msg ? msg + ': ' : '') +
+                '\n  expected: ' + b +
+                '\n  actual:   ' + a
+            );
+        }
+    },
+
+    ok: function(val, msg) {
+        if (!val) {
+            throw new Error(msg || ('expected truthy, got: ' + JSON.stringify(val)));
+        }
+    },
+
+    notOk: function(val, msg) {
+        if (val) {
+            throw new Error(msg || ('expected falsy, got: ' + JSON.stringify(val)));
+        }
+    },
+
+    contains: function(str, substr, msg) {
+        if (typeof str !== 'string' || str.indexOf(substr) === -1) {
+            throw new Error(
+                (msg ? msg + ': ' : '') +
+                JSON.stringify(str) + ' does not contain ' + JSON.stringify(substr)
+            );
+        }
+    },
+
+    notContains: function(str, substr, msg) {
+        if (typeof str === 'string' && str.indexOf(substr) !== -1) {
+            throw new Error(
+                (msg ? msg + ': ' : '') +
+                JSON.stringify(str) + ' should not contain ' + JSON.stringify(substr)
+            );
+        }
+    },
+
+    throws: function(fn, msg) {
+        var threw = false;
+        try { fn(); } catch (e) { threw = true; }
+        if (!threw) {
+            throw new Error(msg || 'expected function to throw but it did not');
+        }
+    },
+
+    doesNotThrow: function(fn, msg) {
+        try {
+            fn();
+        } catch (e) {
+            throw new Error(
+                (msg ? msg + ': ' : '') +
+                'expected function not to throw but it threw: ' + (e && e.message ? e.message : e)
+            );
+        }
+    }
+};
+
+// ── Module loader ─────────────────────────────────────────────────────────────
+
+/**
+ * Load a JS file as a CommonJS module with optional dependency injection.
+ *
+ * @param {string}   path       - file path passed to file_read
+ * @param {Function} requireFn  - custom require shim (use makeRequire)
+ * @param {Object}   mocks      - global names → replacement values
+ *                                (e.g. { file_read: fn, jira_search_by_jql: fn })
+ *                                These are injected as local vars that shadow globals.
+ * @returns {Object} module.exports
+ */
+function loadModule(path, requireFn, mocks) {
+    var code = file_read({ path: path });
+    if (!code || !code.trim()) {
+        throw new Error('loadModule: cannot read file: ' + path);
+    }
+
+    // Build preamble that shadows dmtools globals with our mocks
+    var _testMocks_ = mocks || {};
+    var preamble = '';
+    for (var k in _testMocks_) {
+        if (_testMocks_.hasOwnProperty(k)) {
+            preamble += 'var ' + k + ' = _testMocks_["' + k + '"];\n';
+        }
+    }
+
+    var _testModule_ = { exports: {} };
+    var _testRequire_ = requireFn || function(id) {
+        throw new Error('loadModule: require("' + id + '") not provided for ' + path);
+    };
+
+    // eval runs in current scope — can access _testMocks_, _testModule_, _testRequire_
+    eval(
+        '(function(module, exports, require) {\n' +
+        preamble +
+        code +
+        '\n})(_testModule_, _testModule_.exports, _testRequire_)'
+    );
+
+    return _testModule_.exports;
+}
+
+/**
+ * Build a require() shim from a module map.
+ * Matches on exact id, basename, or ./basename.js patterns.
+ */
+function makeRequire(moduleMap) {
+    return function(id) {
+        if (moduleMap[id]) return moduleMap[id];
+
+        // Match by basename (e.g. './config.js' → 'config.js' → 'config')
+        var base = id;
+        var slash = id.lastIndexOf('/');
+        if (slash !== -1) base = id.substring(slash + 1);
+        var noExt = base.replace(/\.js$/, '');
+
+        if (moduleMap[base]) return moduleMap[base];
+        if (moduleMap[noExt]) return moduleMap[noExt];
+        if (moduleMap['./' + base]) return moduleMap['./' + base];
+
+        throw new Error('makeRequire: module not found: ' + id);
+    };
+}
+
+/**
+ * The throwing './trackers.js' fallback mock shared by suites that load
+ * contentOutput-backed modules (gh-824 rework): contentOutput's tracker
+ * fallback must never fire in those tests, and this one place owns the
+ * contract — a change to the fallback shape turns
+ * test_unitTestMocks.js red instead of six suites drifting apart.
+ */
+function trackersMock() {
+    return { createTracker: function () { throw new Error('contentOutput tracker fallback not expected in this test'); } };
+}
+
+/**
+ * Default jira section for configLoader mocks — mirrors config.js STATUSES/ISSUE_TYPES.
+ * Returns shallow copies so per-test overrides never mutate the shared config module.
+ */
+function makeDefaultJiraConfig() {
+    return {
+        issueTypes: Object.assign({}, configModule.ISSUE_TYPES),
+        statuses: Object.assign({}, configModule.STATUSES)
+    };
+}
+
+/**
+ * configLoader mock that returns default jira statuses/issue types plus optional overrides.
+ */
+function makeDefaultConfigLoaderMock(extraConfig) {
+    return {
+        loadProjectConfig: function(params) {
+            var cfg = extraConfig || {};
+            var result = {
+                jira: makeDefaultJiraConfig()
+            };
+            if (cfg.repository) {
+                result.repository = cfg.repository;
+            }
+            if (cfg.jobParamPatches) {
+                result.jobParamPatches = cfg.jobParamPatches;
+            }
+            if (cfg.jira) {
+                if (cfg.jira.issueTypes) {
+                    for (var it in cfg.jira.issueTypes) {
+                        if (cfg.jira.issueTypes.hasOwnProperty(it)) {
+                            result.jira.issueTypes[it] = cfg.jira.issueTypes[it];
+                        }
+                    }
+                }
+                if (cfg.jira.statuses) {
+                    for (var st in cfg.jira.statuses) {
+                        if (cfg.jira.statuses.hasOwnProperty(st)) {
+                            result.jira.statuses[st] = cfg.jira.statuses[st];
+                        }
+                    }
+                }
+            }
+            return result;
+        },
+        // agents#855: scripts now resolve {jiraProject}/{status.*} through the loader; delegate to the real
+        // implementation so mocks of the loader keep behaving like it for query building.
+        interpolateJql: function(jql, config, trackerProvider) {
+            return configLoaderModule.interpolateJql(jql, config, trackerProvider);
+        }
+    };
+}
+
+// ── Main action ───────────────────────────────────────────────────────────────
+
+function action(params) {
+    var p = params.jobParams || params;
+    var testFiles = p.testFiles || [];
+
+    console.log('═══════════════════════════════════════════');
+    console.log('  DMTools Agent Unit Tests');
+    console.log('═══════════════════════════════════════════');
+
+    console.log('  Network guard: ' + installNetworkGuard_() + ' integration tools stubbed');
+
+    // Pre-load base modules once — test files use these as globals
+    try {
+        configModule = loadModule('js/config.js');
+        var machineNoticeModule = loadModule('js/common/machineNotice.js');
+        var reviewThreadInventoryModule = loadModule('js/common/reviewThreadInventory.js',
+            makeRequire({ './machineNotice.js': machineNoticeModule }));
+        var scmModule = loadModule('js/common/scm.js',
+            makeRequire({ './machineNotice.js': machineNoticeModule,
+                          './reviewThreadInventory.js': reviewThreadInventoryModule }));
+        configLoaderModule = loadModule(
+            'js/configLoader.js',
+            makeRequire({
+                './config.js': configModule, 'config': configModule,
+                './common/scm.js': scmModule, 'scm': scmModule
+            })
+        );
+        console.log('  Base modules loaded ✓');
+    } catch (e) {
+        console.log('  ❌ Failed to load base modules: ' + (e.message || e));
+        return { success: false };
+    }
+
+    // Run each test file
+    for (var i = 0; i < testFiles.length; i++) {
+        var filePath = testFiles[i];
+        console.log('\n📂 ' + filePath);
+        try {
+            var testCode = file_read({ path: filePath });
+            if (!testCode || !testCode.trim()) {
+                console.log('  ⚠️  File not found or empty');
+                continue;
+            }
+            eval(testCode);
+        } catch (e) {
+            _results_.failed++;
+            console.log('  ❌ Error in test file: ' + (e.message || e));
+        }
+    }
+
+    // Summary
+    console.log('\n═══════════════════════════════════════════');
+    var status = _results_.failed === 0 ? '✅ PASS' : '❌ FAIL';
+    console.log('  ' + status + '  —  ' + _results_.passed + ' passed, ' + _results_.failed + ' failed');
+    if (_results_.errors.length > 0) {
+        console.log('\n  Failed:');
+        for (var j = 0; j < _results_.errors.length; j++) {
+            console.log('    ❌ ' + _results_.errors[j].name);
+            console.log('       ' + _results_.errors[j].error);
+        }
+    }
+    console.log('═══════════════════════════════════════════');
+
+    return {
+        success: _results_.failed === 0,
+        passed: _results_.passed,
+        failed: _results_.failed
+    };
+}
+
+if (typeof module !== 'undefined') {
+    module.exports = { action: action };
+}
