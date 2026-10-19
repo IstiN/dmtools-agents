@@ -103,6 +103,7 @@ _Post Test Rework Results Action (postJSAction for pr_test_automation_rework)_
   - `localTeammate`
   - `prSearchFnPath`
   - `projectKey`
+  - `providerTransientBackoffSec`
   - `removeLabel`
   - `scmProvider`
   - `smFallback`
@@ -145,6 +146,7 @@ _Post Test Rework Results Action (postJSAction for pr_test_automation_rework)_
 - `feedbackLoop` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
 - `projectKey` _(used by JS action)_
+- `providerTransientBackoffSec` _(used by JS action)_
 - `smFallback` _(used by JS action)_
 
 ---

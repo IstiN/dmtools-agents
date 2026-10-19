@@ -1070,6 +1070,20 @@ suite('developBugAndCreatePR > pure helpers (gh-1003)', function () {
         assert.contains(withoutWork, 'No partial work was produced.');
     });
 
+    test('gh-1121: buildInterruptedComment names the provider outage instead of guessing a rate limit', function () {
+        var mod = loadDevelopBugAndCreatePR({}).mod;
+        var outage = {
+            kind: 'provider_transient',
+            models: ['zai/glm-5.3-flash', 'kimi-for-coding'],
+            codes: ['500', '429']
+        };
+        var comment = mod.buildInterruptedComment('TS-2', true, outage);
+        assert.contains(comment, 'Provider outage (zai/glm-5.3-flash, kimi-for-coding, 500, 429) — reset for retry');
+        assert.contains(comment, 'Partial analysis work was saved to the branch.');
+        assert.notContains(comment.toLowerCase(), 'rate limit',
+            'the comment must not blame a rate limit when the cause was a 500');
+    });
+
     test('isMeaningfulStatusLine keeps real work and drops factory-kit, runtime and script noise', function () {
         var mod = loadDevelopBugAndCreatePR({}).mod;
         assert.equal(typeof mod.isMeaningfulStatusLine, 'function',

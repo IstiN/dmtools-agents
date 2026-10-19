@@ -121,6 +121,7 @@ _Push Rework Changes Post-Action_
   - `managedSubmodules`
   - `prSearchFnPath`
   - `projectKey`
+  - `providerTransientBackoffSec`
   - `pushSubmodules`
   - `removeLabel`
   - `removeLabels`
@@ -204,6 +205,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `localTeammate` _(used by JS action)_
 - `managedSubmodules` _(used by JS action)_
 - `projectKey` _(used by JS action)_
+- `providerTransientBackoffSec` _(used by JS action)_
 - `pushSubmodules` _(used by JS action)_
 - `removeLabel` _(used by JS action)_
 - `smFallback` _(used by JS action)_

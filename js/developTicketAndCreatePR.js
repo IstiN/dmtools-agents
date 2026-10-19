@@ -705,6 +705,60 @@ function recoverMissingResponse(ticketKey, customParams, developmentSummary, cli
         console.error('CLI/environment failure detected (e.g. AI CLI binary missing from PATH, or a fatal provider/network error reported by dmtools) — failing the job explicitly instead of resetting for retry.');
         throwFatalCliEnvironmentError(ticketKey, cliErrorMessage || developmentSummary);
     }
+    // gh-1121: a whole-provider-chain transient outage (Provider chain
+    // exhausted with only 5xx/429/network attempts — no quota/auth text)
+    // gets ONE resume of the persisted fa session even when the generic
+    // feedbackLoop flag is off, after a configurable backoff. The cold
+    // reset below stays the fallback when the resume also fails (or is
+    // explicitly opted out), and the reset comment then names the real
+    // cause (providers + codes) instead of guessing a rate limit.
+    var outage = providerOutageOf(cliErrorMessage, developmentSummary);
+    if (outage) {
+        return tryResumeForProviderOutage(ticketKey, customParams, outage, ctx);
+    }
+    return tryGenericResumeForMissingResponse(ticketKey, customParams);
+}
+
+// gh-1121 log labels for the outage hand-off — the honest models/codes lists
+// with the same fallbacks the reset header uses (outageResetHeaderOf).
+function outageModelsLabelOf(outage) {
+    return (outage && outage.models && outage.models.length) ? outage.models.join(', ') : 'unknown models';
+}
+
+function outageCodesLabelOf(outage) {
+    return (outage && outage.codes && outage.codes.length) ? outage.codes.join(', ') : 'n/a';
+}
+
+// gh-1121: the bounded outage resume — ONE re-invocation of the persisted fa
+// session after the configured backoff (see resumeOnceForProviderOutage).
+// Returns the recovered outputs/response.md content when the resume landed
+// it, null to continue to the existing reset path. The classified outage is
+// stashed on ctx so the reset comment can name the real cause (models+codes).
+function tryResumeForProviderOutage(ticketKey, customParams, outage, ctx) {
+    console.log('⏸️ Whole provider chain failed with transient errors (' +
+        outageModelsLabelOf(outage) + '; codes: ' + outageCodesLabelOf(outage) + ') — classified provider_transient (gh-1121).');
+    if (ctx) ctx.providerOutage = outage;
+    var outageResume = feedbackLoop.resumeOnceForProviderOutage({
+        ticketKey: ticketKey,
+        customParams: customParams
+    });
+    if (!outageResume.attempted) {
+        console.log('Bounded outage resume not attempted (' + (outageResume.reason || 'unknown') + ') — continuing to the existing reset path.');
+        return null;
+    }
+    var outageRecovered = readResponseMd(ticketKey);
+    if (outageRecovered && outageRecovered.trim()) {
+        console.log('✅ Bounded outage resume landed outputs/response.md — continuing the normal path (no cold reset).');
+        return outageRecovered;
+    }
+    console.log('Bounded outage resume did not land outputs/response.md — continuing to the existing reset path.');
+    return null;
+}
+
+// gh-75: the generic bounded resume for a missing deliverable — returns the
+// recovered outputs/response.md content, or null to continue to the existing
+// reset path. Split out of recoverMissingResponse for the CRAP gate.
+function tryGenericResumeForMissingResponse(ticketKey, customParams) {
     var resume = feedbackLoop.resumeOnceForMissingResponse({
         ticketKey: ticketKey,
         customParams: customParams
@@ -1200,13 +1254,22 @@ function finalizeNoChangesOutcome(ctx, agentResponse) {
     return { success: true, path: 'no-changes-needed', ticketKey: ctx.ticketKey };
 }
 
-function interruptedNoChangesComment(ticketKey) {
+function interruptedNoChangesComment(ticketKey, outage) {
     var m = commentMarkup.forTicket(ticketKey);
+    // gh-1121 AC5: name the real cause — an honest "provider outage" with the
+    // failing models and codes, never a guessed "rate limit" when the chain
+    // answered 5xx.
+    if (outage && outage.kind === 'provider_transient') {
+        return m.h(3, quotaBreaker.outageResetHeaderOf(outage)) + '\nThe whole provider chain failed with transient errors, interrupting the AI agent before it could finish. The ticket has been reset to ' + m.bold('Ready For Development') + ' and will be automatically retried.';
+    }
     return m.h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to ' + m.bold('Ready For Development') + ' and will be automatically retried.';
 }
 
-function interruptedPartialWorkComment(ticketKey, branchName) {
+function interruptedPartialWorkComment(ticketKey, branchName, outage) {
     var m = commentMarkup.forTicket(ticketKey);
+    if (outage && outage.kind === 'provider_transient') {
+        return m.h(3, quotaBreaker.outageResetHeaderOf(outage)) + '\nThe whole provider chain failed with transient errors, interrupting the AI agent mid-run (partial work was pushed to branch ' + m.bold(branchName) + '). The ticket has been reset to ' + m.bold('Ready For Development') + ' and will be automatically retried.\n\nThe agent can resume from the existing branch.';
+    }
     return m.h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted before completing the implementation (partial work was pushed to branch ' + m.bold(branchName) + '). The ticket has been reset to ' + m.bold('Ready For Development') + ' and will be automatically retried.\n\nThe agent can resume from the existing branch.';
 }
 
@@ -1218,6 +1281,18 @@ function interruptedPartialWorkComment(ticketKey, branchName) {
  */
 function classifyInterruptedText(cliErrorMessage, developmentSummary) {
     return String(cliErrorMessage || '') + '\n' + String(developmentSummary || '');
+}
+
+/**
+ * gh-1121: classifies the leg's failure text as a whole-provider-chain
+ * transient outage (kind provider_transient) — null otherwise. Quota
+ * evidence keeps priority (I1): classifyFailure never returns
+ * provider_transient for a 403/quota chain, so this helper cannot divert
+ * a quota wall into the outage resume.
+ */
+function providerOutageOf(cliErrorMessage, developmentSummary) {
+    var cls = quotaBreaker.classifyFailure(classifyInterruptedText(cliErrorMessage, developmentSummary));
+    return (cls && cls.kind === 'provider_transient') ? cls : null;
 }
 
 /**
@@ -1329,7 +1404,7 @@ function recoverNoChangesOutcome(params, ctx) {
     // preempts it), so this block only runs for a genuinely interrupted agent
     // whose one bounded resume attempt (if any) did not land the deliverable.
     console.log('No git changes detected AND no response.md — CLI agent was interrupted. Resetting ticket for retry.');
-    resetInterruptedDevelopment(ctx, interruptedNoChangesComment(ctx.ticketKey));
+    resetInterruptedDevelopment(ctx, interruptedNoChangesComment(ctx.ticketKey, ctx.providerOutage));
 }
 
 function recoverGenericGitFailure(params, ctx, gitResult, stages) {
@@ -1374,7 +1449,7 @@ function ensureResponseForPrBody(ctx) {
             // Agent was interrupted after committing partial work (e.g. outputs/rca.md) but
             // before writing response.md. Reset ticket for retry rather than posting an error.
             console.log('outputs/response.md missing after commit — CLI agent was interrupted mid-way. Resetting for retry.');
-            resetInterruptedDevelopment(ctx, interruptedPartialWorkComment(ctx.ticketKey, ctx.branchName));
+            resetInterruptedDevelopment(ctx, interruptedPartialWorkComment(ctx.ticketKey, ctx.branchName, ctx.providerOutage));
         }
     }
     return responseContent;
