@@ -798,59 +798,112 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
 // outage must never park a fleet. PR-carrier items only (a dead head is a
 // PR concept), and only when the dispatch actually targeted the item's
 // head ref (a 'main'-ref failure is a deployment problem, not head-dead
-// evidence). NEVER throws: the slot yield already happened in the loop;
+// evidence). gh-1075: for a CROSS-REPO PR the branch-name oracle is
+// structurally wrong (the fork branch never exists in the base repo) —
+// the liveness oracle is the refs/pull/<N>/head probe: a fetchable pull
+// ref is never head-dead evidence (AC2, no markers, no park), an
+// unfetchable one parks through THIS path keyed on the pull ref (AC3).
+// NEVER throws: the slot yield already happened in the loop;
 // a recording failure must not break the dispatch loop.
 function recordDispatchFailure(repoInfo, ticketKey, item, err, expandedRef, failClass) {
     try {
         if (DRY || failClass !== 'no-ref') return;
         if (!item || !item.prNumber || !item.branch) return;
-        if (String(expandedRef || '') !== String(item.branch)) return;
-        if ((item.labels || []).indexOf('validation_failed') !== -1) return; // already parked (query-time snapshot)
-        if (tickParkedRecorded && tickParkedRecorded[item.prNumber]) return; // a sibling rule already recorded this PR earlier in the SAME tick — the stale label snapshot cannot see its park (gh-922 review: no duplicate marker, no duplicate park)
-        var cap = triggerFailuresModule.capOf(RUN_JOB_PARAMS);
-        if (cap <= 0) return;
-        if (!tickParkedRecorded) tickParkedRecorded = {}; // defensive: never throws outside a tick
-        tickParkedRecorded[item.prNumber] = true; // claim the recording slot before any I/O — first recorder in the tick wins
-        var bodies = [];
-        try {
-            var raw = github_get_pr_comments({
-                workspace: repoInfo.owner, repository: repoInfo.repo,
-                pullRequestId: item.prNumber
-            });
-            var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
-            var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
-            bodies = list.map(function (c) { return String((c && c.body) || ''); });
-        } catch (eRead) { bodies = []; } // degraded read → fresh count (a blind tick never parks)
-        var prior = triggerFailuresModule.triggerFailMarks(bodies)[item.branch] || 0;
-        var count = prior + 1;
-        var headSha = null;
-        try { headSha = resolveHeadSha(repoInfo, item); } catch (eSha) { headSha = null; }
-        var tr = githubTracker(repoInfo.owner, repoInfo.repo);
-        var msg = String((err && err.message) || err).replace(/\s+/g, ' ').trim(); // gh-922 review: flattened — a multi-line error must never carry a marker-shaped line into a scanned body
-        if (count >= cap) {
-            var parkBody = '🅿️ validation_failed — dispatch dead-head park (gh-922).' +
-                ' The head branch `' + item.branch + '` no longer exists — every dispatch fails (' + msg + ').' +
-                ' The PR is parked: it cannot preempt the queue and no legs are dispatched against it.' +
-                ' Restore or re-push the branch — a fresh push clears the park automatically' +
-                ' (the head-change reset fires on the new sha; a human re-push also clears a legacy park).' +
-                '\n' + triggerFailuresModule.triggerFailMarkerLine(count, item.branch, cap, new Date().toISOString());
-            if (headSha) parkBody += '\nparked-head: ' + headSha;
-            tr.addLabel(item.prNumber, 'validation_failed');
-            tr.postComment(item.prNumber, parkBody);
-            dropOpenPrsCache(repoInfo);
-            console.log('  🅿️  ' + ticketKey + ' dispatch dead-head (' + count + '/' + cap +
-                ' no-ref failures on ' + item.branch + ') — validation_failed park, slot stays open');
-        } else {
-            tr.postComment(item.prNumber,
-                triggerFailuresModule.triggerFailMarkerLine(count, item.branch, cap, new Date().toISOString()) +
-                '\nThe workflow dispatch failed with a non-retryable no-ref error (' + msg + ').' +
-                ' The dispatch slot was yielded to the next candidate in the queue (fail-open, gh-922).' +
-                ' ' + (cap - count) + ' more failure(s) on this head park the PR validation_failed.');
-            console.log('  ⏭️  ' + ticketKey + ' trigger failed (no-ref) — attempt ' + count + '/' + cap +
-                ' recorded on ' + item.branch + '; the slot yields to the next candidate (fail-open, gh-922)');
+        // gh-1075 AC2/AC3: the fork head's liveness oracle is
+        // refs/pull/<N>/head (#1057), never the branch name. A no-ref 422
+        // touching a fork PR is structurally expected on the base side and
+        // never head-dead evidence BY ITSELF: a FETCHABLE pull ref means
+        // the head is LIVE (record nothing); only an UNFETCHABLE pull ref
+        // (fork deleted entirely) parks — through the existing gh-922
+        // marker+park path, keyed on the pull ref so a restored fork's
+        // re-push still clears the park via the parked-head sha reset.
+        if (forkDispatchModule.forkFullOf(item, repoInfo.owner, repoInfo.repo)) {
+            if (forkDispatchModule.classifyForkNoRef(forkPullRefLive(repoInfo, item.prNumber)) === 'live') {
+                console.log('  ⏭️  ' + ticketKey + ' trigger failed (no-ref) on a fork head ignored — ' +
+                    forkDispatchModule.pullHeadRef(item.prNumber) +
+                    ' is fetchable (gh-1075 AC2: never head-dead evidence for a cross-repo PR)');
+                return;
+            }
+            recordNoRefBookkeeping(repoInfo, ticketKey, item, err,
+                forkDispatchModule.pullHeadRef(item.prNumber));
+            return;
         }
+        if (String(expandedRef || '') !== String(item.branch)) return;
+        recordNoRefBookkeeping(repoInfo, ticketKey, item, err, item.branch);
     } catch (eRec) {
         console.warn('  ⚠️  trigger-failure recording failed for ' + ticketKey + ': ' + (eRec.message || eRec));
+    }
+}
+
+// gh-1075 AC2/AC3: the fork head's liveness oracle — a targeted
+// ls-remote of refs/pull/<N>/head on the BASE repo. The pull ref is
+// served by GitHub regardless of where the fork branch lives or whether
+// it still exists; empty output (ls-remote exits 0 on a missing ref)
+// means the fork is gone entirely. Fail OPEN on a probe error — a blind
+// tick never parks (the gh-922 invariant).
+function forkPullRefLive(repoInfo, prNumber) {
+    var ref = forkDispatchModule.pullHeadRef(prNumber);
+    try {
+        var out = cli_execute_command({
+            command: 'git ls-remote https://github.com/' + repoInfo.owner + '/' +
+                repoInfo.repo + '.git ' + ref
+        });
+        return String(out || '').indexOf(ref) !== -1;
+    } catch (eProbe) {
+        console.warn('  ⚠️  fork pull-ref probe failed for pr-' + prNumber + ': ' +
+            (eProbe.message || eProbe) + ' — treating the head as LIVE (fail-open, gh-1075)');
+        return true;
+    }
+}
+
+// The gh-922 marker+park bookkeeping, keyed on `markKey` — the item's
+// head branch for same-repo PRs, the pull ref for dead fork heads
+// (gh-1075 AC3). The marker key is what the next tick's counter re-reads;
+// the parked-head sha (not the key) is what the #633 RESET probes key on.
+function recordNoRefBookkeeping(repoInfo, ticketKey, item, err, markKey) {
+    if ((item.labels || []).indexOf('validation_failed') !== -1) return; // already parked (query-time snapshot)
+    if (tickParkedRecorded && tickParkedRecorded[item.prNumber]) return; // a sibling rule already recorded this PR earlier in the SAME tick — the stale label snapshot cannot see its park (gh-922 review: no duplicate marker, no duplicate park)
+    var cap = triggerFailuresModule.capOf(RUN_JOB_PARAMS);
+    if (cap <= 0) return;
+    if (!tickParkedRecorded) tickParkedRecorded = {}; // defensive: never throws outside a tick
+    tickParkedRecorded[item.prNumber] = true; // claim the recording slot before any I/O — first recorder in the tick wins
+    var bodies = [];
+    try {
+        var raw = github_get_pr_comments({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestId: item.prNumber
+        });
+        var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
+        var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+        bodies = list.map(function (c) { return String((c && c.body) || ''); });
+    } catch (eRead) { bodies = []; } // degraded read → fresh count (a blind tick never parks)
+    var prior = triggerFailuresModule.triggerFailMarks(bodies)[markKey] || 0;
+    var count = prior + 1;
+    var headSha = null;
+    try { headSha = resolveHeadSha(repoInfo, item); } catch (eSha) { headSha = null; }
+    var tr = githubTracker(repoInfo.owner, repoInfo.repo);
+    var msg = String((err && err.message) || err).replace(/\s+/g, ' ').trim(); // gh-922 review: flattened — a multi-line error must never carry a marker-shaped line into a scanned body
+    if (count >= cap) {
+        var parkBody = '🅿️ validation_failed — dispatch dead-head park (gh-922).' +
+            ' The head branch `' + markKey + '` no longer exists — every dispatch fails (' + msg + ').' +
+            ' The PR is parked: it cannot preempt the queue and no legs are dispatched against it.' +
+            ' Restore or re-push the branch — a fresh push clears the park automatically' +
+            ' (the head-change reset fires on the new sha; a human re-push also clears a legacy park).' +
+            '\n' + triggerFailuresModule.triggerFailMarkerLine(count, markKey, cap, new Date().toISOString());
+        if (headSha) parkBody += '\nparked-head: ' + headSha;
+        tr.addLabel(item.prNumber, 'validation_failed');
+        tr.postComment(item.prNumber, parkBody);
+        dropOpenPrsCache(repoInfo);
+        console.log('  🅿️  ' + ticketKey + ' dispatch dead-head (' + count + '/' + cap +
+            ' no-ref failures on ' + markKey + ') — validation_failed park, slot stays open');
+    } else {
+        tr.postComment(item.prNumber,
+            triggerFailuresModule.triggerFailMarkerLine(count, markKey, cap, new Date().toISOString()) +
+            '\nThe workflow dispatch failed with a non-retryable no-ref error (' + msg + ').' +
+            ' The dispatch slot was yielded to the next candidate in the queue (fail-open, gh-922).' +
+            ' ' + (cap - count) + ' more failure(s) on this head park the PR validation_failed.');
+        console.log('  ⏭️  ' + ticketKey + ' trigger failed (no-ref) — attempt ' + count + '/' + cap +
+            ' recorded on ' + markKey + '; the slot yields to the next candidate (fail-open, gh-922)');
     }
 }
 

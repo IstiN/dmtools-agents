@@ -37,6 +37,7 @@
         "js/unit-tests/test_validationLiveness.js",
         "js/unit-tests/test_checkRunZombies.js",
         "js/unit-tests/test_triggerFailures.js",
+        "js/unit-tests/test_forkDispatch.js",
         "js/unit-tests/test_redConvergence.js",
         "js/unit-tests/test_buildEncodedConfig.js",
         "js/unit-tests/test_validateInputJql.js",
