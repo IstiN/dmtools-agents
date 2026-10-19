@@ -1917,7 +1917,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                      // token only — mid-string braces are fine, a leading
                      // brace is not).
                      ' 2>' + opts.stderrFile +
-                     ' && { cd ' + opts.dir +
+                     ' && { chmod 600 ' + opts.stderrFile + ' && cd ' + opts.dir +
                      opts.headSetup +
                      ' && git fetch --no-tags --depth 200 origin main' +
                      // Skip when main is already contained: two ticks racing
@@ -1955,7 +1955,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                      // gh-1074: close the stderr-tee brace group opened
                      // after the clone redirect (appends — the clone's
                      // 2> already truncated the file for this attempt).
-                     '; } 2>>' + opts.stderrFile;
+                     '; } 2>>' + opts.stderrFile +
+                     // Review gh-1074: a SUCCESSFUL chain removes its own
+                     // capture (it may hold the expanded push token); on
+                     // failure the caller reads the tail, then removes it.
+                     ' && rm -f ' + opts.stderrFile;
         }
 
         // The classic same-repo refresh (AC4): the base-repush GIT CHAIN
@@ -1986,9 +1990,16 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // + redact + window it; null when the capture is missing or empty
         // (mocks, or an executor that rejected the command before the
         // redirect ran) — callers then keep the pre-gh-1074 surface.
+        // Review gh-1074: the raw capture may hold the expanded push token
+        // (git echoes the credential URL) — never leave it on disk.
+        function removeSilentUpdateStderrFile(stderrFile) {
+            try { cli_execute_command({ command: 'bash -c "rm -f ' + stderrFile + '"' }); } catch (eRm) {}
+        }
+
         function readSilentUpdateStderrTail(stderrFile) {
             try {
                 var raw = file_read({ path: stderrFile });
+                removeSilentUpdateStderrFile(stderrFile);
                 var text = (raw == null) ? '' : String(raw);
                 if (!text) return null;
                 var tail = validationLivenessModule.silentUpdateStderrTail(text);
@@ -2006,9 +2017,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         function silentUpdateErrorWithTail(e, tail) {
             var base = (e && e.message) ? e.message : String(e);
             if (!tail) return e;
-            return new Error(base + '\n[silent-update stderr tail — last ' +
+            var wrapped = new Error(base + '\n[silent-update stderr tail — last ' +
                 validationLivenessModule.SILENT_UPDATE_STDERR_TAIL_LINES +
                 ' lines, secrets redacted]\n' + tail);
+            if (e && e.stack) wrapped.stack = e.stack + '\nCaused by: wrapped with stderr tail (gh-1074)';
+            return wrapped;
         }
 
         // One stderr side file per attempt, next to the throwaway clone's

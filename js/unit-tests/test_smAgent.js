@@ -14176,36 +14176,51 @@ suite('smAgent: silent-update failure stderr tail (gh-1074)', function () {
     }
 
 
-    // simpler: derive the stderr path from the captured command itself
+    var CONFIG_1074_PATH = '../.dmtools/config.js';
+    var CONFIG_1074 = 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };';
+    var STDERR_PATH_1074 = /2>(\/tmp\/sm-silent-update-\S+?\.stderr)/;
+    var CLONE_FAILURE_1074 = 'Tool execution failed: Command execution failed (exit code 1): ' +
+        "Cloning into '/tmp/sm-silent-update-x'...\nUpdating files: 1%\nUpdating files: 2%";
+
+    // file_read mock: captured stderr side files first, then the repo config.
+    function makeStderrFileRead(stderrByPath) {
+        return function (readOpts) {
+            var p = readOpts.path;
+            if (stderrByPath[p] !== undefined) return stderrByPath[p];
+            return p === CONFIG_1074_PATH ? CONFIG_1074 : null;
+        };
+    }
+
+    // Records the stderr side file named by the command's redirect.
+    function registerStderrPath(stderrByPath, command, stderrContent) {
+        var m = STDERR_PATH_1074.exec(command);
+        if (m) stderrByPath[m[1]] = stderrContent;
+    }
+
+    // derive the stderr path from the captured command itself
     function smWithStderr(item, stderrContent, githubExtra) {
         var stderrByPath = {};
         return makeSmAgent({
-            fileMap: { '../.dmtools/config.js':
-                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
-            github: Object.assign({ items: [item], prComments: [] }, githubExtra || {}),
+            fileMap: { '../.dmtools/config.js': CONFIG_1074 },
+            github: Object.assign({ items: [item], prComments: [] }, githubExtra),
             captureConsole: true,
-            extraMocks: {
-                file_read: function (readOpts) {
-                    var p = readOpts.path;
-                    if (stderrByPath[p] !== undefined) return stderrByPath[p];
-                    if (p.indexOf('.dmtools/config') !== -1) {
-                        return '../.dmtools/config.js' === p
-                            ? 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' : null;
-                    }
-                    try { return file_read(readOpts); } catch (e) { return null; }
-                }
-            },
+            extraMocks: { file_read: makeStderrFileRead(stderrByPath) },
             onCliExecute: function (cmdOpts) {
-                var m = /2>(\/tmp\/sm-silent-update-\S+?\.stderr)/.exec(cmdOpts.command);
-                if (m) stderrByPath[m[1]] = stderrContent;
-                if (cmdOpts.command.indexOf('gh repo clone ') !== -1) {
-                    throw new Error('Tool execution failed: Command execution failed (exit code 1): ' +
-                        "Cloning into '/tmp/sm-silent-update-x'...\nUpdating files: 1%\nUpdating files: 2%");
-                }
+                registerStderrPath(stderrByPath, cmdOpts.command, stderrContent);
+                if (cmdOpts.command.indexOf('gh repo clone ') !== -1) throw new Error(CLONE_FAILURE_1074);
                 return '';
             }
         });
     }
+
+    test('review gh-1074: a failed refresh removes the token-bearing stderr capture after reading it', function () {
+        var sm = smWithStderr(forkItem1074(), refusalStderr(false));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [RULE_1074] } });
+        var rm = sm.capturedCliCommands.filter(function (c) {
+            return /^bash -c "rm -f \/tmp\/sm-silent-update-\S+\.stderr"$/.test(c.command);
+        });
+        assert.equal(rm.length, 1, 'stderr capture removed once');
+    });
 
     test('UT-1/AC1: the propagated failure log carries the LAST stderr lines, not the head', function () {
         var sm = smWithStderr(baseItem(), refusalStderr(false));
@@ -14223,8 +14238,10 @@ suite('smAgent: silent-update failure stderr tail (gh-1074)', function () {
         })[0].command;
         assert.ok(cmd.indexOf('gh repo clone ') === 0, 'still a gh-first whitelisted command');
         assert.ok(/2>\/tmp\/sm-silent-update-\S+\.stderr/.test(cmd), 'clone stderr redirect present');
-        assert.ok(/; \} 2>>\/tmp\/sm-silent-update-\S+\.stderr$/.test(cmd),
-            'the brace group appends the remaining stderr');
+        assert.ok(/; \} 2>>\/tmp\/sm-silent-update-\S+\.stderr && rm -f \/tmp\/sm-silent-update-\S+\.stderr$/.test(cmd),
+            'the brace group appends the remaining stderr, a clean run removes the capture');
+        assert.ok(/&& \{ chmod 600 \/tmp\/sm-silent-update-\S+\.stderr && cd /.test(cmd),
+            'the capture is restricted to the owner before git writes to it');
     });
 
     test('UT-2/AC2: the failure marker comment gains the one-line rejection reason', function () {
