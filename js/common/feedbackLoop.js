@@ -9,6 +9,12 @@ var DEFAULT_MISSING_RESPONSE_TIMEOUT_SECONDS = 2400;
 // (or consumes) the failure-recovery stages' attempt counters.
 var MISSING_RESPONSE_STAGE = 'missing_response';
 
+// gh-1121: backoff before the provider-outage resume. The chain just spent
+// minutes answering 5xx/429 — an immediate resume would re-enter the same
+// outage window. Default 90s; projects override via
+// customParams.providerTransientBackoffSec.
+var DEFAULT_PROVIDER_TRANSIENT_BACKOFF_SECONDS = 90;
+
 function sanitizeId(value) {
     return String(value || 'unknown').replace(/[^A-Za-z0-9_.-]+/g, '_');
 }
@@ -217,7 +223,11 @@ function resumeOnceForMissingResponse(options) {
     if (scoped.enabled === false) {
         return { attempted: false, reason: 'disabled' };
     }
-    if (!isFeedbackEnabled(customParams, 'missingResponse')) {
+    // gh-1121: the provider-outage resume bypasses the GENERIC enablement
+    // flag (options.force) — an outage that killed the leg mid-flight must
+    // not depend on feedbackLoop being configured. An explicit
+    // missingResponse.enabled=false still opts the project out.
+    if (!options.force && !isFeedbackEnabled(customParams, 'missingResponse')) {
         return { attempted: false, reason: 'disabled' };
     }
 
@@ -252,6 +262,77 @@ function resumeOnceForMissingResponse(options) {
         console.warn('Bounded resume for missing outputs/response.md failed/timed out:', e);
         return { attempted: true, failed: true, error: e && e.message ? e.message : String(e) };
     }
+}
+
+// ── gh-1121: ONE bounded resume for a whole-provider-chain outage ───────────
+// Live fa gh-1112 (run 39315836954, 2026-10-19): zai/glm-5.3-flash answered
+// 500 ×3, kimi-for-coding hit 429 ×12 → "Provider chain exhausted: 2 of 2".
+// The dev leg discarded 97k prompt tokens of real work and cold-reset into
+// the same outage. Before that cold reset, the classified outage gets ONE
+// resume of the persisted fa session (run-agent.sh re-invoked; the fa
+// provider resume-or-creates the deterministic --session):
+//
+// - a configurable backoff (customParams.providerTransientBackoffSec, default
+//   90s) runs first so the resume does not re-enter the same outage window;
+//   the sleep goes through `bash -c` — already whitelisted for the wrapper —
+//   so no new CLI_ALLOWED_COMMANDS entry is needed;
+// - the generic feedback-loop enablement flag is IGNORED (the outage resume
+//   is the recovery for a leg the provider chain killed — it cannot depend
+//   on the project having opted into feedbackLoop); an explicit
+//   missingResponse.enabled=false still opts out;
+// - the same missing_response attempt marker as resumeOnceForMissingResponse
+//   enforces at-most-once per leg (I2).
+function providerTransientBackoffSeconds(customParams) {
+    var n = parseInt(customParams && customParams.providerTransientBackoffSec, 10);
+    return (n > 0) ? n : DEFAULT_PROVIDER_TRANSIENT_BACKOFF_SECONDS;
+}
+
+// Follow-up prompt for the outage resume. Unlike the gh-775 hung-job prompt,
+// the session here died from transient provider errors mid-run — the agent
+// must pick up where it stopped, not diagnose a hung child.
+function buildProviderOutageResumePrompt(options) {
+    options = options || {};
+    return [
+        'Your previous run was interrupted by a transient provider outage — every provider in the chain answered transient errors (HTTP 5xx / 429 / network) and the CLI exited before the task was finished. The outage window has passed and the persisted session was restored for this resume.',
+        '',
+        'Ticket: ' + (options.ticketKey || 'unknown'),
+        '',
+        'Resume the task now:',
+        '- Continue exactly where the previous run left off — do NOT restart completed steps from scratch.',
+        '- If a background job from the previous run is stuck, stop it (bash_job stop <id>) instead of waiting on it.',
+        '- Finish the remaining work, then write outputs/response.md (the deliverable the post-action expects) and end the turn.',
+        '- Do not push; the post-action will commit and push after you finish.'
+    ].join('\n');
+}
+
+// gh-1121: the explicit section-level opt-out — checked BEFORE the backoff
+// sleep so a project that disabled the missingResponse resume never pays the
+// wait either. The generic feedbackLoop flag is deliberately NOT consulted.
+function providerOutageResumeOptedOut(customParams) {
+    var root = (customParams && customParams.feedbackLoop) || {};
+    var scoped = (root.missingResponse && typeof root.missingResponse === 'object') ? root.missingResponse : {};
+    return scoped.enabled === false;
+}
+
+function resumeOnceForProviderOutage(options) {
+    options = options || {};
+    var customParams = options.customParams || {};
+    if (providerOutageResumeOptedOut(customParams)) {
+        return { attempted: false, reason: 'disabled' };
+    }
+    var backoff = providerTransientBackoffSeconds(customParams);
+    console.log('⏸️ Provider chain outage (transient 5xx/429/network failures) — backing off ' + backoff + 's before the bounded resume of the persisted session…');
+    runCommand('bash -c "sleep ' + backoff + '"');
+    return resumeOnceForMissingResponse({
+        ticketKey: options.ticketKey,
+        customParams: customParams,
+        error: options.error || '',
+        promptOverride: options.promptOverride || buildProviderOutageResumePrompt({
+            ticketKey: options.ticketKey
+        }),
+        timeoutSeconds: options.timeoutSeconds,
+        force: true
+    });
 }
 
 function getConfiguredGates(customParams, section, legacyKey) {
@@ -457,11 +538,15 @@ function runPostPublishGates(options) {
 module.exports = {
     DEFAULT_MAX_ATTEMPTS: DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MISSING_RESPONSE_TIMEOUT_SECONDS: DEFAULT_MISSING_RESPONSE_TIMEOUT_SECONDS,
+    DEFAULT_PROVIDER_TRANSIENT_BACKOFF_SECONDS: DEFAULT_PROVIDER_TRANSIENT_BACKOFF_SECONDS,
     MISSING_RESPONSE_STAGE: MISSING_RESPONSE_STAGE,
     resumeAgent: resumeAgent,
     resumeOnceForMissingResponse: resumeOnceForMissingResponse,
+    resumeOnceForProviderOutage: resumeOnceForProviderOutage,
+    providerTransientBackoffSeconds: providerTransientBackoffSeconds,
     buildFeedbackPrompt: buildFeedbackPrompt,
     buildMissingResponsePrompt: buildMissingResponsePrompt,
+    buildProviderOutageResumePrompt: buildProviderOutageResumePrompt,
     runConfiguredGates: runConfiguredGates,
     runQualityGates: runQualityGates,
     runPolicyGates: runPolicyGates,
