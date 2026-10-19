@@ -120,7 +120,8 @@ suite('forkDispatch (gh-1075)', function () {
 // triggerFailures.classifyTriggerError, so an undeclared input would leave
 // fork PRs permanently undispatchable with zero markers/park. This lint
 // fails CI the moment the SM dispatches an input the template does not
-// declare (declaration only — consumption stays in the #1074 lane).
+// declare (declaration only — consumption is tracked in #1096; the review
+// confirmed #1074 is observability-only and does not own checkout behavior).
 
 suite('workflow template declares the dispatch inputs (gh-1075 lint)', function () {
 

@@ -957,21 +957,23 @@ function recordNoRefBookkeeping(repoInfo, ticketKey, item, err, markKey) {
         // FORK, never "the head branch <pull ref> / re-push the branch" —
         // there is no base branch to re-push; the recovery is to restore
         // the fork and re-push the head. Same-repo parks keep the legacy
-        // branch wording byte-for-byte (REG-1).
+        // branch wording byte-for-byte (REG-1). gh-1075 review: the shared
+        // head/tail is built ONCE — only the two middle sentences branch,
+        // so a future wording change lands in one place and the two
+        // flavors cannot silently drift apart.
         var forkPark = String(markKey).indexOf('refs/pull/') === 0;
-        var parkBody = forkPark
-            ? '🅿️ validation_failed — dispatch dead-head park (gh-922).' +
-                ' The PR head (fork) is gone — `' + markKey + '` no longer resolves — every dispatch fails (' + msg + ').' +
-                ' The PR is parked: it cannot preempt the queue and no legs are dispatched against it.' +
-                ' Restore the fork and re-push the head — a fresh push clears the park automatically' +
-                ' (the head-change reset fires on the new sha; a human re-push also clears a legacy park).' +
-                '\n' + triggerFailuresModule.triggerFailMarkerLine(count, markKey, cap, new Date().toISOString())
-            : '🅿️ validation_failed — dispatch dead-head park (gh-922).' +
-                ' The head branch `' + markKey + '` no longer exists — every dispatch fails (' + msg + ').' +
-                ' The PR is parked: it cannot preempt the queue and no legs are dispatched against it.' +
-                ' Restore or re-push the branch — a fresh push clears the park automatically' +
-                ' (the head-change reset fires on the new sha; a human re-push also clears a legacy park).' +
-                '\n' + triggerFailuresModule.triggerFailMarkerLine(count, markKey, cap, new Date().toISOString());
+        var goneLine = forkPark
+            ? ' The PR head (fork) is gone — `' + markKey + '` no longer resolves'
+            : ' The head branch `' + markKey + '` no longer exists';
+        var restoreLine = forkPark
+            ? ' Restore the fork and re-push the head'
+            : ' Restore or re-push the branch';
+        var parkBody = '🅿️ validation_failed — dispatch dead-head park (gh-922).' + goneLine +
+            ' — every dispatch fails (' + msg + ').' +
+            ' The PR is parked: it cannot preempt the queue and no legs are dispatched against it.' +
+            restoreLine + ' — a fresh push clears the park automatically' +
+            ' (the head-change reset fires on the new sha; a human re-push also clears a legacy park).' +
+            '\n' + triggerFailuresModule.triggerFailMarkerLine(count, markKey, cap, new Date().toISOString());
         if (headSha) parkBody += '\nparked-head: ' + headSha;
         tr.addLabel(item.prNumber, 'validation_failed');
         tr.postComment(item.prNumber, parkBody);

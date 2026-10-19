@@ -84,7 +84,7 @@ on:
         type: string
         default: ''
       checkout_ref:
-        description: 'gh-1075 fork-PR dispatch: the leg checks out this ref (refs/pull/<N>/head — always fetchable on the base repo, even when the fork branch is deleted) instead of the dispatch ref. DECLARED here because GitHub 422s undeclared dispatch inputs ("Unexpected inputs provided"); consumption lives in the #1074 leg-checkout lane.'
+        description: 'gh-1075 fork-PR dispatch: the leg checks out this ref (refs/pull/<N>/head — always fetchable on the base repo, even when the fork branch is deleted) instead of the dispatch ref. DECLARED here because GitHub 422s undeclared dispatch inputs ("Unexpected inputs provided"); consumption (checkout step + fork push-back) is tracked in #1096 — the gh-1075 review confirmed #1074 is observability-only and does not own checkout behavior.'
         required: false
         type: string
         default: ''

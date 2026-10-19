@@ -587,3 +587,71 @@ suite('workflow contract — ai-teammate assigned-only triggers (gh-1076)', func
     });
 });
 
+// ── repo contract: gh-1075 — the stub run-name carries the pr anchor ────────
+//
+// gh-1075 review round 2 (IMPORTANT): the SM's pull-keyed leg probe
+// (branchLegGuard.hasActiveLegRunForPull) suppresses a second rework arm
+// on the same fork PR via the whole-token 'pr-<N>' run-title anchor. The
+// TEMPLATE run-name always rendered it, but the self-host stub (this
+// file) echoed inputs.issue only — so on the live-incident repo (fa
+// pr-1591's home) the gate was blind exactly where it matters. The stub
+// now renders ' · pr-<N>' right after the issue slot, and this contract
+// keeps the two run-name dialects from drifting apart again (the way
+// this file guards the trigger/dedup invariants). The anchor sits
+// BEFORE the trailing leg token ON PURPOSE: stubTailLegOf (the
+// 'teammate:' family of legOfRunName, js/common/teammateEventDedup.js)
+// parses the leg at the END of the title — appending after the leg
+// would blind the gh-1065 completed-owner leg precision.
+
+// The stub's single-line double-quoted run-name value ('' when absent).
+function stubRunNameOf(yml) {
+    var m = /^\s*run-name:\s*"(.*)"\s*$/m.exec(yml);
+    return m ? m[1] : '';
+}
+
+suite('workflow contract — stub run-name carries the gh-1075 pr anchor', function () {
+
+    test('the stub run-name renders · pr-<N> whenever inputs.pr is set', function () {
+        var rn = stubRunNameOf(STUB);
+        assert.ok(rn.indexOf('github.event.inputs.pr') !== -1,
+            'stub run-name never reads inputs.pr — a PR-anchored fork leg (gh-1075 always ' +
+            'backfills inputs.pr) would run untitled and the SM pull-keyed leg probe would ' +
+            'never suppress the second rework arm (live fa pr-1591 incident class)');
+        assert.ok(rn.indexOf('pr-{0}') !== -1,
+            'stub run-name must render the whole-token pr anchor (format(...pr-{0}...)) — ' +
+            'titleHasPrToken (js/common/branchLegGuard.js) keys on it');
+        assert.ok(rn.indexOf("(github.event.inputs.pr || '') != ''") !== -1,
+            'the pr anchor must be guarded — github.event.inputs is null on issues events, ' +
+            'and an unguarded render would print a stray pr- token on ordinary issue runs ' +
+            '(the template run-name documents the same null != \'\' trap)');
+    });
+
+    test('the leg token stays TRAILING — stubTailLegOf must keep parsing it', function () {
+        var rn = stubRunNameOf(STUB);
+        var lastExpr = rn.lastIndexOf('${');
+        assert.ok(lastExpr !== -1 && rn.indexOf('github.event.inputs.leg', lastExpr) !== -1,
+            'the LAST ${{ }} expression of the stub run-name must derive the LEG — ' +
+            'stubTailLegOf (/\\s(dev|review|rework)$/) parses the title tail, and the ' +
+            'gh-1065 completed-owner leg rule depends on it');
+        assert.ok(rn.indexOf('github.event.inputs.pr') < lastExpr,
+            'the pr anchor sits BEFORE the leg token — appending it after the leg would ' +
+            'blind legOfRunName exactly when the gh-1075 fork gate needs both');
+    });
+
+    test('a rendered fork-leg title keeps legOfRunName AND the pr anchor working end-to-end', function () {
+        var dedup = loadModule('js/common/teammateEventDedup.js');
+        var guard = loadModule('js/common/branchLegGuard.js');
+        // The rendered shapes the new run-name produces:
+        var forkTitle = 'teammate: workflow_dispatch # · pr-1591 rework';
+        var issueTitle = 'teammate: assigned #1040 rework';
+        assert.equal(dedup.legOfRunName(forkTitle), 'rework',
+            'legOfRunName still resolves the leg on a pr-anchored fork title');
+        assert.equal(dedup.legOfRunName(issueTitle), 'rework',
+            'legOfRunName still resolves the leg on an ordinary issue title');
+        assert.ok(guard.titleHasPrToken(forkTitle, 1591),
+            'titleHasPrToken sees the anchor on the rendered fork title');
+        assert.ok(!guard.titleHasPrToken(forkTitle, 2000),
+            'a different PR number does not match');
+    });
+});
+
