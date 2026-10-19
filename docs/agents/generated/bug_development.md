@@ -119,6 +119,7 @@ _Develop Bug and Create PR Post-Action_
   - `managedSubmodules`
   - `prSearchFnPath`
   - `projectKey`
+  - `providerTransientBackoffSec`
   - `pushSubmodules`
   - `removeLabel`
   - `removeLabels`
@@ -195,6 +196,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `localTeammate` _(used by JS action)_
 - `managedSubmodules` _(used by JS action)_
 - `projectKey` _(used by JS action)_
+- `providerTransientBackoffSec` _(used by JS action)_
 - `pushSubmodules` _(used by JS action)_
 - `removeLabels` _(used by JS action)_
 - `removeLabels.forEach` _(used by JS action)_
