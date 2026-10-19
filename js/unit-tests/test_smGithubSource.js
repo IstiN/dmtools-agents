@@ -11,7 +11,8 @@
 var smProviderReal = function () {
     if (!smProviderReal.mod) {
         smProviderReal.mod = loadModule('js/common/smProvider.js', makeRequire({
-            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
         }), {});
     }
     return smProviderReal.mod;
@@ -3313,7 +3314,8 @@ suite('sm github source: gh-807 latestVerdict receiver binding (fa tick crash 20
             makeRequire({ './machineAuthor.js': machineAuthor }), tools);
         var provider = loadModule('js/common/smProvider.js', makeRequire({
             './machineAuthor.js': machineAuthor,
-            './reviewVerdicts.js': reviewVerdicts
+            './reviewVerdicts.js': reviewVerdicts,
+            './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), tools)
         }), tools);
         var srcMod = loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': machineAuthor,
