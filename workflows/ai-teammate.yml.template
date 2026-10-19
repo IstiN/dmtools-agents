@@ -18,6 +18,15 @@
 # agent config named by RUNNER_*: dev (story/bug) develops from the issue
 # body, review produces a machine PR review verdict, rework fixes the
 # linked PR by the review threads.
+#
+# gh-1065/gh-1073: issues events are deduped before the leg fires — one
+# human action (assign, or assign-while-labels-change) emits MULTIPLE
+# issues events, and without the `dedup` probe job each event spawned its
+# own teammate run (live 2026-10-18: #1040–#1043 two runs each, #1061
+# three). The probe is transport only; the decision is the unit-tested
+# pure module js/common/teammateEventDedup.js, shipped in the agents pack
+# the runner leg mounts (dmtools-agents checkout). The probe FAILS OPEN on
+# errors, so a broken check never swallows the only trigger.
 name: 'AI Teammate'
 
 # Run title carries the EFFECTIVE anchor (owner 2026-09-27, live: dmd run
@@ -26,14 +35,26 @@ name: 'AI Teammate'
 # malformed '▶ rework (SM) · gh- · gh-: '. (inputs.pr || '') guards the
 # label-event path, where inputs are null — null != '' would be TRUE and
 # render 'pr-' for ordinary issue events.
+#
+# gh-1065/gh-1073: the issues-event title ALSO carries the LEG — the
+# strongest arming label on the issue (rework > review > pr_approved →
+# review > dev), not the label written by THIS event: assign-while-labels-
+# change emits a bare `assigned` event whose github.event.label.name is
+# empty. legOfRunName (js/common/teammateEventDedup.js) parses this emoji
+# title family, so a COMPLETED owner stays title-precise: the strict
+# completed-owner leg rule (a leg-less completed run never swallows a
+# KNOWN new leg) can only work when real leg runs carry their leg here.
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch' &&
       format('▶ {0} (SM) · {1}', github.event.inputs.leg,
         (github.event.inputs.pr || '') != '' && format('pr-{0}', github.event.inputs.pr)
         || format('gh-{0}', github.event.inputs.issue)) ||
-      github.event.label.name == 'agent:rework' && '🔧 rework' ||
-      github.event.label.name == 'agent:review' && '🔍 review' ||
-      '⚒️ dev' }}
+      (contains(github.event.issue.labels.*.name, 'agent:rework') && '🔧 rework') ||
+      (contains(github.event.issue.labels.*.name, 'agent:review') && '🔍 review') ||
+      (contains(github.event.issue.labels.*.name, 'pr_approved') && '🔍 review') ||
+      (contains(github.event.issue.labels.*.name, 'agent:dev') && '⚒️ dev') ||
+      (contains(github.event.issue.labels.*.name, 'agent:develop') && '⚒️ dev') ||
+      github.event.label.name || '⚒️ dev' }}
   · ${{ (github.event.inputs.pr || '') != '' && format('pr-{0}', github.event.inputs.pr)
       || format('gh-{0}', github.event.issue.number || github.event.inputs.issue) }}${{
       github.event.issue.title && format(': {0}', github.event.issue.title) || '' }}
