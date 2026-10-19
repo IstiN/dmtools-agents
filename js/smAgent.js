@@ -143,6 +143,7 @@ var validationLivenessModule = require('./common/validationLiveness.js');
 // run is gone/cancelled/stale (check-RUN zombies); the run-level gh-821
 // twin cannot see them while a green run still exists on the head.
 var checkRunZombiesModule = require('./common/checkRunZombies.js');
+var invisibleRequiredModule = require('./common/invisibleRequiredChecks.js');
 var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
 var smProviderModule = require('./common/smProvider.js');
@@ -3010,6 +3011,20 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 if (vProbe && vProbe.active) {
                     console.log('  ⏭️  ' + key +
                                 ' validation already dispatching on this head — skip');
+                    continue;
+                }
+                // gh-1101 invisible required checks (live dart #435): the
+                // run concluded, required contexts are green on the commit
+                // but the PR cannot see them (workflow_dispatch suite) —
+                // deterministic, no grace: fresh-sha reset NOW; the CI
+                // dispatch follows on a later tick once the push suite
+                // exists on the new head (dispatch-ordering guard below).
+                if (vHead0 && invisibleRequiredReset(effectiveRepoInfo, ticket, key, vHead0,
+                                                     silentUpdateBranchTracked)) {
+                    processedKeys.push(key);
+                    continue;
+                }
+                if (vHead0 && holdDispatchForPushSuite(effectiveRepoInfo, ticket, key, vHead0)) {
                     continue;
                 }
                 // gh-1101: approved + completed-green dispatched run on the
@@ -6495,6 +6510,119 @@ function probeDispatchedState(repoInfo, ciWorkflow, headSha) {
 }
 
 // gh-1101 helpers ────────────────────────────────────────────────────────
+// Invisible-required-checks probes (live dart #435). All fail CLOSED to
+// "not invisible" (null → legacy behavior): a reset burns a validation.
+function cliJson(command) {
+    var res = cli_execute_command({ command: command });
+    var out = (res && (res.output || res.stdout)) || res;
+    return typeof out === 'string' ? JSON.parse(out || 'null') : out;
+}
+
+function requiredContextsSafe(repoInfo, prNumber) {
+    try {
+        var pr = mcpParse(github_get_pr({ workspace: repoInfo.owner,
+            repository: repoInfo.repo, pullRequestId: prNumber })) || {};
+        var base = pr.base && (pr.base.ref || pr.base);
+        if (!base || typeof base !== 'string') return null;
+        var ctx = cliJson('gh api "repos/' + repoInfo.owner + '/' + repoInfo.repo +
+            '/branches/' + base + '" --jq ".protection.required_status_checks.contexts"');
+        return Array.isArray(ctx) ? ctx : null;
+    } catch (e) {
+        console.warn('  ⚠️  required-contexts probe failed: ' + (e.message || e));
+        return null;
+    }
+}
+
+var PR_ROLLUP_JQ = '[.data.repository.pullRequest.statusCheckRollup.contexts.nodes[]' +
+    ' | select(.isRequired == true) | (.name // .context)]';
+
+function prRequiredRollupSafe(repoInfo, prNumber) {
+    try {
+        var q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){' +
+            'pullRequest(number:$n){statusCheckRollup{contexts(first:100){nodes{' +
+            '... on CheckRun{name isRequired(pullRequestNumber:$n)}' +
+            '... on StatusContext{context isRequired(pullRequestNumber:$n)}}}}}}}';
+        var names = cliJson('gh api graphql -f query=\'' + q + '\' -F o=' + repoInfo.owner +
+            ' -F r=' + repoInfo.repo + ' -F n=' + prNumber + ' --jq \'' + PR_ROLLUP_JQ + '\'');
+        return Array.isArray(names) ? names : null;
+    } catch (e) {
+        console.warn('  ⚠️  PR rollup probe failed: ' + (e.message || e));
+        return null;
+    }
+}
+
+function detectInvisibleRequired(repoInfo, ticket, headSha) {
+    if (!invisibleRequiredModule.blockedApprovedShape(ticket)) return false;
+    var required = requiredContextsSafe(repoInfo, ticket.prNumber);
+    if (!required || !required.length) return false;
+    var checkRuns = headCheckRunsSafe(repoInfo, headSha);
+    if (!checkRuns) return false;
+    var visible = prRequiredRollupSafe(repoInfo, ticket.prNumber);
+    return invisibleRequiredModule.isInvisible(required, checkRuns, visible);
+}
+
+// Fresh-sha reset for the invisible shape, bounded by the gh-852 cap and
+// marker (one per tick; a capped PR stays put).
+function invisibleRequiredReset(repoInfo, ticket, key, headSha, silentUpdate) {
+    if (!detectInvisibleRequired(repoInfo, ticket, headSha)) return false;
+    console.log('  👻 ' + key + ' required checks invisible to PR — green on ' +
+                headSha.slice(0, 8) + ' (workflow_dispatch suite) but absent from the PR rollup');
+    var cap = checkRunZombiesModule.placeholderCapOf(RUN_JOB_PARAMS);
+    var marks = failMarkerState(repoInfo, ticket.prNumber).placeholders || { count: 0 };
+    if (!checkRunZombiesModule.placeholderRetryAllowed(marks, cap)) {
+        console.log('  🅿️  ' + key + ' invisible-required reset capped (' + marks.count + '/' + cap + ')');
+        return true;
+    }
+    if (DRY) { console.log('  🧪 [dry] invisible-required fresh-sha reset skipped'); return true; }
+    try {
+        silentUpdate(ticket.branch);
+    } catch (eUp) {
+        console.warn('  ⚠️  ' + key + ' invisible-required fresh-sha refresh failed: ' + (eUp.message || eUp));
+        return true;
+    }
+    postInvisibleResetNotice(repoInfo, ticket, headSha, marks.count + 1, cap);
+    return true;
+}
+
+function postInvisibleResetNotice(repoInfo, ticket, headSha, n, cap) {
+    var now = new Date().toISOString();
+    try {
+        githubTracker(repoInfo.owner, repoInfo.repo).postComment(ticket.prNumber,
+            invisibleRequiredModule.markerLine(headSha, now) + '\n' +
+            checkRunZombiesModule.placeholderMarkerLine(n, cap, now) +
+            '\n\nRequired checks were green on `' + headSha.slice(0, 8) + '` but invisible to the PR' +
+            ' (they ran in a workflow_dispatch check suite GitHub does not associate with PRs —' +
+            ' mergeState stuck BLOCKED). Head refreshed to a fresh sha; CI is dispatched once the' +
+            ' push suite exists on it (gh-1101).');
+    } catch (eNote) {
+        console.warn('  ⚠️  invisible-required notice failed: ' + (eNote.message || eNote));
+    }
+}
+
+// Dispatch-ordering guard: after an invisible-required reset, dispatch CI
+// only once the new head carries its push-event suite.
+function holdDispatchForPushSuite(repoInfo, ticket, key, headSha) {
+    var bodies = prCommentBodiesSafe(repoInfo, ticket.prNumber);
+    var last = invisibleRequiredModule.lastResetAtMs(bodies);
+    if (last === null) return false;
+    var hold = invisibleRequiredModule.shouldHoldDispatch(last, headWorkflowRunsSafe(repoInfo, headSha),
+        Date.now(), (RUN_JOB_PARAMS || {}).pushSuiteWaitMs);
+    if (hold) console.log('  ⏳ ' + key + ' fresh head ' + headSha.slice(0, 8) +
+                          ' has no push suite yet — CI dispatch held (gh-1101 ordering)');
+    return hold;
+}
+
+function prCommentBodiesSafe(repoInfo, prNumber) {
+    try {
+        var obj = mcpParse(github_get_pr_comments({ workspace: repoInfo.owner,
+            repository: repoInfo.repo, pullRequestId: prNumber })) || [];
+        var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+        return list.map(function (c) { return String((c && c.body) || ''); });
+    } catch (e) {
+        return [];
+    }
+}
+
 function hasLabel(ticket, name) {
     return (ticket.labels || []).indexOf(name) !== -1;
 }
@@ -8185,6 +8313,7 @@ if (typeof module !== 'undefined' && module.exports) {
         failedRunLinksLine: failedRunLinksLine,
         hasRecentHeadRun: hasRecentHeadRun,
         approvedGreenHeadFastPath: approvedGreenHeadFastPath,
+        detectInvisibleRequired: detectInvisibleRequired,
         recentlyConcludedNonGreen: recentlyConcludedNonGreen,
         hasActiveLegRun: hasActiveLegRun,
         dispatchRaceGraceMs: dispatchRaceGraceMs,

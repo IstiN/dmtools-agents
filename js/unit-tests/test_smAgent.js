@@ -359,6 +359,7 @@ function makeSmAgent(opts) {
             './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
+            './common/invisibleRequiredChecks.js': loadModule('js/common/invisibleRequiredChecks.js', makeRequire({}), {}),
             './common/triggerFailures.js': loadModule('js/common/triggerFailures.js', makeRequire({}), {}),
             './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js', makeRequire({}), {}),
             // gh-1075: the real fork-dispatch module (its validationLiveness
@@ -2995,6 +2996,92 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrComments.length, 1, 'one marker comment');
         assert.ok(sm.capturedPrComments[0].body.indexOf('placeholder reset 1/3') !== -1,
             'the reset is counted against the per-PR cap (1/3)');
+    });
+
+    // ── gh-1101 invisible required checks (live dart #435) ────────────────
+    function invisibleSm(o) {
+        var CUR = o.head || 'abcdef12abcdef12abcdef12abcdef12abcdef12';
+        var rule = { source: 'github', query: { type: 'pr', labels: ['pr_approved'], draft: false },
+                     localAction: 'validate_pr', limit: 1, id: 'validate-approved' };
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: {
+                items: [prItem(435, { branch: 'ai/gh-435', headSha: CUR, labels: ['pr_approved'],
+                                      pr: { mergeState: o.mergeState || 'BLOCKED', mergeable: true } })],
+                pr: { number: 435, labels: [{ name: 'pr_approved' }], base: { ref: 'main' },
+                      head: { sha: CUR } },
+                commitCheckRuns: { check_runs: [
+                    { name: 'static', status: 'completed', conclusion: 'success', started_at: '2026-10-12T14:00:00Z' },
+                    { name: 'gate', status: 'completed', conclusion: 'success', started_at: '2026-10-12T14:00:00Z' }
+                ] },
+                prComments: o.prComments || [],
+                mergeResult: JSON.stringify({ merged: false, message: 'blocked' }),
+                workflowApiRuns: []
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('/branches/main') !== -1) return JSON.stringify(['static', 'gate']);
+                if (c.indexOf('gh api graphql') !== -1) return JSON.stringify(o.visible || []);
+                if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1) {
+                    return { workflow_runs: [{ id: 1, event: 'workflow_dispatch', head_sha: CUR,
+                        status: o.runStatus || 'completed', conclusion: o.runStatus ? null : 'success',
+                        created_at: new Date(Date.now() - 60000).toISOString(),
+                        updated_at: new Date(Date.now() - 30000).toISOString() }] };
+                }
+                if (c.indexOf('actions/runs?head_sha=') !== -1) return { workflow_runs: o.headRuns || [] };
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: Object.assign({ owner: 'epam', repo: 'dmtools-dart', ciWorkflow: 'ci.yml',
+            rules: [rule] }, o.jobParams || {}) });
+        return sm;
+    }
+    function clones(sm) { return sm.capturedCliCommands.filter(function (c) { return c.command.indexOf('gh repo clone') !== -1; }); }
+    function ciRuns(sm) { return sm.capturedCliCommands.filter(function (c) { return c.command.indexOf('workflow run ci.yml') !== -1; }); }
+
+    test('gh-1101 invisible: required green on commit, PR sees none, run concluded ⇒ immediate fresh-sha reset, no same-tick CI', function () {
+        var sm = invisibleSm({});
+        assert.equal(clones(sm).length, 1, 'fresh-sha reset fired (no grace)');
+        assert.equal(ciRuns(sm).length, 0, 'CI dispatch waits for the push suite on the new head');
+        assert.equal(sm.capturedPrComments.length, 1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('<!-- dmtools:invisible-required-reset') === 0, 'machine notice');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('placeholder reset 1/3') !== -1, 'counted on the gh-852 cap');
+        assert.equal(sm.capturedPrMerges.length, 0);
+    });
+
+    test('gh-1101 invisible: required contexts visible to the PR ⇒ no reset', function () {
+        var sm = invisibleSm({ visible: ['static', 'gate'] });
+        assert.equal(clones(sm).length, 0);
+        assert.equal(sm.capturedPrComments.length, 0);
+    });
+
+    test('gh-1101 invisible: run still in_progress ⇒ wait (no reset)', function () {
+        var sm = invisibleSm({ runStatus: 'in_progress' });
+        assert.equal(clones(sm).length, 0);
+    });
+
+    test('gh-1101 invisible: cap reached ⇒ no reset', function () {
+        var now = new Date().toISOString();
+        var sm = invisibleSm({ prComments: [1, 2, 3].map(function (n) {
+            return { body: '\uD83D\uDD01 placeholder reset ' + n + '/3 at ' + now }; }) });
+        assert.equal(clones(sm).length, 0);
+        assert.equal(ciRuns(sm).length, 0);
+    });
+
+    test('gh-1101 invisible: BEHIND ⇒ normal path, no invisible reset', function () {
+        var sm = invisibleSm({ mergeState: 'BEHIND' });
+        assert.ok(!sm.capturedPrComments.some(function (c) {
+            return c.body.indexOf('invisible-required') !== -1; }));
+    });
+
+    test('gh-1101 ordering: after a reset, CI held until the push suite exists on the new head', function () {
+        var marker = '<!-- dmtools:invisible-required-reset sha=old at=' + new Date(Date.now() - 30000).toISOString() + ' -->';
+        var held = invisibleSm({ head: 'feedbeeffeedbeeffeedbeeffeedbeeffeedbeef', visible: ['static', 'gate'],
+            mergeState: 'BEHIND', prComments: [{ body: marker }], headRuns: [] });
+        assert.equal(ciRuns(held).length, 0, 'no push suite yet — dispatch held');
+        var go = invisibleSm({ head: 'feedbeeffeedbeeffeedbeeffeedbeeffeedbeef', visible: ['static', 'gate'],
+            mergeState: 'BEHIND', prComments: [{ body: marker }],
+            headRuns: [{ id: 9, event: 'push', status: 'completed', conclusion: 'success' }] });
+        assert.ok(!go.capturedLogs || !go.capturedLogs.join('\n').match(/CI dispatch held/), 'push suite present — no hold');
     });
 
     test('validate_pr: gh-852 AC2 — a BUSY pool defers the fresh-sha reset (no churn)', function () {
