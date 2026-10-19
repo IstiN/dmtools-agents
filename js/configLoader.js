@@ -368,7 +368,7 @@ function loadAgentConfig(path) {
         : DEFAULT_PARENT_MERGE;
 
     // Child params deep-merge over the parent's (child wins on scalars and
-    // nested objects, e.g. customParams.contentOutput overrides).
+    // nested objects, e.g. a child contentOutput block overrides the parent's).
     var mergedParams = deepMerge(parentConfig.params || {}, config.params || {});
 
     var merged = {};
