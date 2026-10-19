@@ -14,6 +14,21 @@
 // Load-time require (gh-823): a deferred require would resolve against the
 // pack js/ root only — hoist every require to the top of the module.
 var trackersModule = require("./common/trackers.js");
+var configLoader = require("./configLoader.js");
+
+/**
+ * GitHub has no epics: the existing work of an issue is its sub-issues (a
+ * previous intake run may have created some). Written as existing_stories.json
+ * so the agent does not plan them again; existing_epics.json is empty.
+ */
+function writeGithubSubIssues(tracker, folder, issueKey) {
+    var stories = tracker.listChildTickets(issueKey).map(function (c) {
+        return { key: c.key, summary: c.title || '', description: c.description || '', status: c.status || '', parent: issueKey };
+    });
+    file_write(folder + '/existing_epics.json', '{"epics":[]}');
+    file_write(folder + '/existing_stories.json', '{"stories":' + JSON.stringify(stories, null, 2) + '}');
+    console.log('Wrote ' + stories.length + ' existing sub-issue(s) of ' + issueKey + ' to ' + folder);
+}
 
 /**
  * Find a field value by partial key name (handles "Display Name (customfieldXXX)" keys).
@@ -32,7 +47,18 @@ function action(params) {
         const folder = params.inputFolderPath;
         var ticketKey = folder ? folder.split('/').pop() : '';
         var project = ticketKey ? ticketKey.split('-')[0] : '';
-        var tracker = trackersModule.createTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+        var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+        // The project config carries the repository that GitHub issue keys resolve against.
+        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params) || {};
+        var tracker = trackersModule.createTracker(projectConfig, customParams);
+        if (tracker.provider() === 'github') {
+            try {
+                writeGithubSubIssues(tracker, folder, ticketKey);
+            } catch (subIssueError) {
+                console.error('Failed to fetch sub-issues, continuing without files:', subIssueError);
+            }
+            return;
+        }
         console.log('Fetching existing epics for project ' + project + '...');
 
         try {

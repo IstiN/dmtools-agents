@@ -367,6 +367,9 @@ function makeSmAgent(opts) {
             './common/branchLegGuard.js': loadModule('js/common/branchLegGuard.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
             './common/issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {}),
+            './common/planAdvance.js': loadModule('js/common/planAdvance.js', makeRequire({
+                './issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {})
+            }), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {
                     return {
@@ -2022,7 +2025,7 @@ suite('smAgent: localAction mark_developed (github machine-loop backfill)', func
     });
 });
 
-suite('smAgent: localAction advance_plan (sequential issue plans)', function () {
+suite('smAgent: localAction advance_plan (issue plans from intake)', function () {
 
     var PLAN_RULE = {
         source: 'github',
@@ -2045,7 +2048,10 @@ suite('smAgent: localAction advance_plan (sequential issue plans)', function () 
     function planned(subIssues, extra) {
         var opts = {
             fileMap: { '../.dmtools/config.js': (extra && extra.config) || CONFIG },
-            github: { items: [{ key: 'gh-12', labels: ['ai_planned'], issueNumber: 12, prNumber: null, pr: null }] },
+            github: {
+                items: [{ key: 'gh-12', labels: ['ai_planned'], issueNumber: 12, prNumber: null, pr: null }],
+                prComments: (extra && extra.comments) || []
+            },
             onCliExecute: subIssuesCli(subIssues)
         };
         return makeSmAgent(opts);
@@ -2056,7 +2062,7 @@ suite('smAgent: localAction advance_plan (sequential issue plans)', function () 
                  labels: (labels || []).map(function (l) { return { name: l }; }) };
     }
 
-    test('starts the first open step once every earlier step is closed', function () {
+    test('starts the first open sub-issue when nothing is in development', function () {
         var sm = planned([issue(13, 'closed', ['agent:dev']), issue(14, 'open'), issue(15, 'open')]);
         sm.action(baseParams('acme', 'widgets', [PLAN_RULE]));
 
@@ -2065,12 +2071,12 @@ suite('smAgent: localAction advance_plan (sequential issue plans)', function () 
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:dev']);
         assert.equal(sm.capturedPrComments.length, 1);
         assert.equal(sm.capturedPrComments[0].number, 12, 'the comment goes on the parent');
-        assert.contains(sm.capturedPrComments[0].body, 'Step 2 of 3: starting #14');
+        assert.contains(sm.capturedPrComments[0].body, 'Starting #14');
         assert.equal(sm.capturedCloses.length, 0);
         assert.equal(sm.capturedTriggers.length, 0, 'localAction never dispatches workflows');
     });
 
-    test('waits while the first open step is in progress — later steps never start early', function () {
+    test('waits while a sub-issue is in development — the next one never starts early', function () {
         var sm = planned([issue(13, 'open', ['agent:dev']), issue(14, 'open')]);
         sm.action(baseParams('acme', 'widgets', [PLAN_RULE]));
 
@@ -2079,13 +2085,13 @@ suite('smAgent: localAction advance_plan (sequential issue plans)', function () 
         assert.equal(sm.capturedCloses.length, 0);
     });
 
-    test('closes the parent when every step is closed', function () {
+    test('closes the parent when every sub-issue is closed', function () {
         var sm = planned([issue(13, 'closed'), issue(14, 'closed')]);
         sm.action(baseParams('acme', 'widgets', [PLAN_RULE]));
 
         assert.equal(sm.capturedCloses.length, 1);
         assert.equal(sm.capturedCloses[0].number, 12);
-        assert.contains(sm.capturedPrComments[0].body, 'All 2 steps');
+        assert.contains(sm.capturedPrComments[0].body, 'All 2 sub-issues');
         assert.equal(sm.capturedPrLabelAdds.length, 0);
     });
 
@@ -2096,6 +2102,19 @@ suite('smAgent: localAction advance_plan (sequential issue plans)', function () 
         sm.action(baseParams('acme', 'widgets', [PLAN_RULE]));
 
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['start-dev']);
+    });
+
+    test('the blockedBy order recorded by intake skips a sub-issue whose blocker is open', function () {
+        var marker = '<!-- dmtools:issue-plan ' + JSON.stringify({
+            blockedBy: [], deps: { 'acme/widgets#13': ['acme/widgets#15'], 'acme/widgets#15': [] }
+        }) + ' -->';
+        var sm = planned([issue(13, 'open'), issue(14, 'closed'), issue(15, 'open')], {
+            comments: [{ body: 'Plan ' + marker, user: { login: 'bot' } }]
+        });
+        sm.action(baseParams('acme', 'widgets', [PLAN_RULE]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1);
+        assert.equal(sm.capturedPrLabelAdds[0].number, 15);
     });
 
     test('dry run plans the step without touching the issues', function () {

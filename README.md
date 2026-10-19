@@ -542,7 +542,6 @@ All config files live in the `agents/js/` directory and are consumed by the `ai-
 | `bug_merged.json` | Teammate (skipAI) | Handle a Bug that has been merged — transition to Ready For Testing and populate RCA/Solution via Gemini | — | — | `notifyBugMerged.js` |
 | `bug_test_cases_generator.json` | TestCasesGenerator | Generate structured Jira test cases from a Bug description after it moves to Ready For Testing | — | `moveToReadyForTesting.js` | `moveToDone.js` |
 | `bug_to_fix_check.json` | Teammate (skipAI) | Check if all bugs linked to a "Bug To Fix" Test Case are Done; if so, move TC back to Backlog | — | — | `checkBugToFixReady.js` |
-| `issue_planning.json` | Teammate (skipAI) | Plan a large issue: keep it whole and start development, or split it into ordered child issues (GitHub sub-issues) that the GitHub SM rule `plan-advance` starts one at a time | `issue_planning_prompt.md` | `checkWipLabel.js` | `createPlannedSubIssues.js` |
 | `po_refinement.json` | Teammate (skipAI) | Answer open questions (label `q`) on subtasks by running a PO refinement AI pass | `po_refinement_prompt.md` | — | `closeQuestionTicket.js` |
 | `pr_review.json` | Teammate (skipAI) | Review an open PR, post inline comments, and either approve (add `pr_approved`) or move to In Rework | `pr_review_prompt.md` | `checkWipLabel.js` | `postPRReviewComments.js` |
 | `pr_rework.json` | Teammate (skipAI) | Apply the reviewer's feedback to the branch and push updated commits | `pr_rework_prompt.md` | `checkWipLabel.js` | `pushReworkChanges.js` |
@@ -649,7 +648,7 @@ All scripts are located in `agents/js/`.
 | Script | Description |
 |--------|-------------|
 | `fetchQuestionsToInput.js` | Fetches existing question subtasks (label `q`) for a Story and injects them as context into the CLI agent prompt, preventing duplicate questions. |
-| `fetchEpicsToInput.js` | Fetches active Epics and their Stories with custom fields and injects them into the intake agent prompt for proper hierarchy mapping. |
+| `fetchEpicsToInput.js` | Fetches active Epics and their Stories with custom fields and injects them into the intake agent prompt for proper hierarchy mapping. On GitHub it provides the issue's existing sub-issues instead. |
 
 ### Utility
 
@@ -661,8 +660,7 @@ All scripts are located in `agents/js/`.
 | `moveToDone.js` | Transitions a Jira ticket to `Done` (used as postJS after test case generation for bugs). |
 | `notifyBugMerged.js` | When a Bug is merged, calls the Gemini API to generate an RCA and Solution summary and writes it back to the Jira Bug's custom fields. |
 | `closeQuestionTicket.js` | Marks the `q`-labelled question subtask as `Done` and removes the `q` label after PO refinement. |
-| `createIntakeTickets.js` | Parses the AI-structured intake output and creates Epics and Stories in Jira with correct field mappings, links, and assignees. |
-| `createPlannedSubIssues.js` | Reads `outputs/plan.json` from the issue planning agent: adds the dev label to an issue kept whole, or creates the ordered child issues (sub-issues on GitHub), labels the parent `ai_planned` and lists the steps. |
+| `createIntakeTickets.js` | Parses the AI-structured intake output and creates Epics and Stories in Jira with correct field mappings, links, and assignees. On GitHub it creates them as sub-issues (idempotent on re-run), records the `blockedBy` order and labels the issue `ai_planned` for the SM rule `plan-advance`. |
 
 ---
 

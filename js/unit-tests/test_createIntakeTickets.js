@@ -13,10 +13,12 @@ function intakeTrackers(mocks) {
     }), mocks);
 }
 
-function loadIntake(mocks) {
+function loadIntake(mocks, projectConfig) {
     return loadModule('js/createIntakeTickets.js', makeRequire({
         './common/aiResponseParser.js': loadModule('js/common/aiResponseParser.js', makeRequire({ '../config.js': configModule }), {}),
         './config.js': configModule,
+        './configLoader.js': { loadProjectConfig: function() { return projectConfig || {}; } },
+        './common/issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {}),
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './common/trackers.js': intakeTrackers(mocks)
     }), mocks);
@@ -241,37 +243,6 @@ suite('createIntakeTickets: full intake flow', function() {
         assert.equal(rec.calls.filter(function(c) { return c[0] === 'move' && c[1].statusName === 'Blocked'; }).length, 0);
     });
 
-    test('github: field-based creation unsupported -> failed results, finalize still works via github_*', function() {
-        var rec = intakeRecorder();
-        var boom = function(name) {
-            return function() { throw new Error(name + ' must not be called'); };
-        };
-        var mocks = rec.jiraMocks();
-        mocks.jira_create_ticket_with_json = boom('jira_create_ticket_with_json');
-        mocks.jira_post_comment = boom('jira_post_comment');
-        mocks.github_create_comment = function(a) { rec.calls.push(['comment', a]); };
-        mocks.github_add_labels = function(a) { rec.calls.push(['label', a]); };
-        mocks.github_remove_label = function(a) { rec.calls.push(['rm', a]); };
-        mocks.github_assign_issue = function(a) { rec.calls.push(['assign', a]); };
-        mocks.github_move_issue_to_status = function(a) { rec.calls.push(['move', a]); };
-        var mod = loadIntake(intakeFiles([
-            { tempId: 'e1', type: 'Epic', summary: 'Epic one', description: 'x' }
-        ], mocks));
-        var r = mod.action({
-            ticket: { key: '963' }, initiator: 'octocat', metadata: { contextId: 'intake' },
-            jobParams: { customParams: { trackerProvider: 'github' } }
-        });
-        assert.equal(r.success, true);
-        // createTicketWithFields is not expressible on GitHub issues — entry reported as failed
-        assert.equal(r.results.length, 1);
-        assert.equal(r.results[0].success, false);
-        assert.equal(r.results[0].error, 'Creation failed (see logs)');
-        var seq = toolSequence(rec.calls);
-        assert.deepEqual(seq, ['comment', 'label', 'label', 'assign', 'move', 'rm']);
-        assert.equal(rec.calls.filter(function(c) { return c[0] === 'comment'; })[0][1].pullRequestId, 963);
-        assert.deepEqual(rec.calls.filter(function(c) { return c[0] === 'assign'; })[0][1].user, 'octocat');
-    });
-
     test('exception in body posts error comment and returns success:false', function() {
         var rec = intakeRecorder();
         var mocks = rec.jiraMocks();
@@ -280,5 +251,155 @@ suite('createIntakeTickets: full intake flow', function() {
         var r = mod.action({ initiator: 'acc1', metadata: {} });
         assert.equal(r.success, false);
         assert.contains(r.error, "'key'");
+    });
+});
+
+// ── GitHub: entries become sub-issues ─────────────────────────────────────
+
+var GH_CONFIG = { repository: { owner: 'acme', repo: 'widgets' } };
+var GH_PARAMS = {
+    ticket: { key: 'acme/widgets#12' }, initiator: 'octocat', metadata: { contextId: 'intake' },
+    jobParams: { customParams: { trackerProvider: 'github' } }
+};
+
+/**
+ * A GitHub with persistent sub-issues: github_create_issue creates an issue and
+ * `gh api` lists / attaches sub-issues. Survives across runs (retry tests).
+ */
+function githubWorld() {
+    var w = { issues: {}, subIssues: {}, calls: [], next: 13, failTitles: [] };
+    function rec(name) { return function(a) { w.calls.push([name, a]); return '{}'; }; }
+    w.mocks = function() {
+        return {
+            github_create_issue: function(a) {
+                w.calls.push(['create', a]);
+                if (w.failTitles.indexOf(a.title) !== -1) throw new Error('create failed');
+                var n = w.next++;
+                w.issues[1000 + n] = { id: 1000 + n, number: n, title: a.title, body: a.body, state: 'open', labels: [] };
+                return w.issues[1000 + n];
+            },
+            cli_execute_command: function(a) {
+                w.calls.push(['gh', a.command]);
+                var m = /issues\/(\d+)\/sub_issues/.exec(a.command);
+                var list = w.subIssues[m[1]] || (w.subIssues[m[1]] = []);
+                var attach = /sub_issue_id=(\d+)/.exec(a.command);
+                if (attach) { list.push(w.issues[attach[1]]); return '{}'; }
+                return JSON.stringify(/page=1(\s|$)/.test(a.command) ? list : []);
+            },
+            github_create_comment: rec('comment'),
+            github_add_labels: rec('label'),
+            github_remove_label: rec('rm'),
+            github_assign_issue: rec('assign'),
+            github_move_issue_to_status: rec('move'),
+            jira_create_ticket_with_json: function() { throw new Error('jira must not be called'); }
+        };
+    };
+    w.of = function(name) { return w.calls.filter(function(c) { return c[0] === name; }).map(function(c) { return c[1]; }); };
+    w.reset = function() { w.calls = []; };
+    return w;
+}
+
+function planMarkerOf(text) {
+    var m = /<!-- dmtools:issue-plan (.*) -->/.exec(text);
+    return m ? JSON.parse(m[1]) : null;
+}
+
+suite('createIntakeTickets: GitHub sub-issues', function() {
+
+    var STORIES = [
+        { tempId: 'b1', type: 'Bug', summary: 'Fix the crash', description: 'outputs/d.md' },
+        { tempId: 'e1', type: 'Epic', summary: 'Orders', description: 'outputs/d.md', storyPoints: 3, attachments: ['outputs/attachments/a.png'] },
+        { tempId: 's1', type: 'Story', summary: 'Order model', parent: 'e1', description: 'outputs/d.md' },
+        { tempId: 's2', type: 'Story', summary: 'Order import', parent: 'e1', blockedBy: ['s1', 'b1'] }
+    ];
+
+    test('entries become sub-issues, the blockedBy ordering is recorded, parents are labeled planned', function() {
+        var w = githubWorld();
+        var r = loadIntake(intakeFiles(STORIES, w.mocks()), GH_CONFIG).action(GH_PARAMS);
+
+        assert.equal(r.success, true);
+        assert.deepEqual(r.results.map(function(x) { return x.key; }),
+            ['acme/widgets#13', 'acme/widgets#14', 'acme/widgets#15', 'acme/widgets#16']);
+        // Bug and epic are sub-issues of the source issue, the stories of the epic
+        assert.deepEqual(w.subIssues['12'].map(function(i) { return i.number; }), [13, 14]);
+        assert.deepEqual(w.subIssues['14'].map(function(i) { return i.number; }), [15, 16]);
+        // Every body carries the entry marker, the description stays first
+        var bodies = w.of('create').map(function(a) { return a.body; });
+        assert.contains(bodies[2], 'desc');
+        assert.contains(bodies[2], '<!-- dmtools:intake-item s1 -->');
+
+        // Epic plan first, then the source plan; label after its comment
+        var comments = w.of('comment');
+        assert.equal(comments[0].pullRequestId, 14);
+        assert.deepEqual(planMarkerOf(comments[0].text),
+            { blockedBy: [], deps: { 'acme/widgets#15': [], 'acme/widgets#16': ['acme/widgets#15', 'acme/widgets#13'] } });
+        assert.equal(comments[1].pullRequestId, 12);
+        assert.deepEqual(planMarkerOf(comments[1].text),
+            { blockedBy: [], deps: { 'acme/widgets#13': [], 'acme/widgets#14': [] } });
+        var labels = w.of('label');
+        assert.deepEqual(labels.slice(0, 2).map(function(a) { return [a.number, a.labels[0]]; }),
+            [[14, 'ai_planned'], [12, 'ai_planned']]);
+
+        // Final comment in Markdown, then the usual finalization
+        assert.contains(comments[2].text, 'AI comment');
+        assert.contains(comments[2].text, '- #16 (Story) - Order import');
+        assert.contains(comments[2].text, '**Total:** 4 sub-issue(s)');
+        assert.equal(comments[2].text.indexOf('Not every entry exists'), -1);
+        // No Jira-only extras: no Ready For Development / Blocked moves, no links, no attachments
+        assert.deepEqual(w.of('move').map(function(a) { return a.statusName; }), ['In Progress']);
+    });
+
+    test('a failed entry leaves every parent unplanned; the re-run reuses what exists and creates only the rest', function() {
+        var w = githubWorld();
+        w.failTitles = ['Order import'];
+        var first = loadIntake(intakeFiles(STORIES, w.mocks()), GH_CONFIG).action(GH_PARAMS);
+        assert.equal(first.results[3].success, false);
+        assert.equal(w.of('label').filter(function(a) { return a.labels[0] === 'ai_planned'; }).length, 0);
+        assert.equal(w.of('comment').filter(function(a) { return planMarkerOf(a.text); }).length, 0);
+        assert.contains(w.of('comment')[0].text, 'Not every entry exists yet');
+
+        w.reset();
+        w.failTitles = [];
+        var second = loadIntake(intakeFiles(STORIES, w.mocks()), GH_CONFIG).action(GH_PARAMS);
+        assert.deepEqual(w.of('create').map(function(a) { return a.title; }), ['Order import'], 'only the missing entry');
+        assert.deepEqual(second.results.map(function(x) { return x.reused; }), [true, true, true, false]);
+        assert.deepEqual(w.subIssues['14'].map(function(i) { return i.number; }), [15, 16]);
+        assert.equal(w.of('label').filter(function(a) { return a.labels[0] === 'ai_planned'; }).length, 2);
+        assert.contains(w.of('comment')[2].text, '_(existing)_');
+    });
+
+    test('an entry is matched by title when its marker is gone', function() {
+        var w = githubWorld();
+        w.issues[1099] = { id: 1099, number: 99, title: 'fix the crash ', body: 'edited by hand', state: 'open', labels: [] };
+        w.subIssues['12'] = [w.issues[1099]];
+        var r = loadIntake(intakeFiles([STORIES[0]], w.mocks()), GH_CONFIG).action(GH_PARAMS);
+        assert.equal(r.results[0].key, 'acme/widgets#99');
+        assert.equal(w.of('create').length, 0);
+    });
+
+    test('unreadable sub-issues (no gh): nothing is created, nothing is planned', function() {
+        var w = githubWorld();
+        var mocks = w.mocks();
+        mocks.cli_execute_command = function() { return 'bash: gh: command not found'; };
+        var r = loadIntake(intakeFiles(STORIES, mocks), GH_CONFIG).action(GH_PARAMS);
+        assert.equal(r.success, true);
+        assert.equal(w.of('create').length, 0);
+        assert.equal(r.results.filter(function(x) { return x.success; }).length, 0);
+        assert.equal(w.of('label').filter(function(a) { return a.labels[0] === 'ai_planned'; }).length, 0);
+    });
+
+    test('empty stories.json: nothing planned, the comment says so', function() {
+        var w = githubWorld();
+        loadIntake(intakeFiles([], w.mocks()), GH_CONFIG).action(GH_PARAMS);
+        assert.equal(w.of('create').length, 0);
+        assert.contains(w.of('comment')[0].text, '_No sub-issues were created (stories.json was empty)._');
+        assert.equal(w.of('label').filter(function(a) { return a.labels[0] === 'ai_planned'; }).length, 0);
+    });
+
+    test('planned label comes from the issuePlanning config', function() {
+        var w = githubWorld();
+        var cfg = { repository: GH_CONFIG.repository, issuePlanning: { plannedLabel: 'sequenced' } };
+        loadIntake(intakeFiles([STORIES[0]], w.mocks()), cfg).action(GH_PARAMS);
+        assert.deepEqual(w.of('label')[0].labels, ['sequenced']);
     });
 });

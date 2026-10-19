@@ -41,7 +41,10 @@
  * Parent → child: createTicketWithParent works on every provider (on GitHub
  * the child becomes a SUB-ISSUE of the parent). listChildTickets(parentKey)
  * returns the children in the parent's order and is GitHub-only (sub-issues);
- * jira/ado throw. Both GitHub calls go to the REST API through `gh api`.
+ * jira/ado throw. Both GitHub calls go to the REST API through `gh api`:
+ * no runtime ships a sub-issue tool yet, so the runner needs the GitHub CLI
+ * installed and authenticated (GH_TOKEN). Without it the calls fail with an
+ * error that says so, instead of a parse error on the shell's output.
  */
 
 const { STATUSES, LABELS, stageLabel: stageLabelOf } = require('../config.js');
@@ -665,18 +668,30 @@ function createTracker(config, customParams) {
     // order is the parent's list order). No dmtools runtime ships a sub-issue
     // tool, so these two calls go to the REST API through `gh api`, the way
     // the SM's own probes already do (smProvider.js). The command lines carry
-    // no shell metacharacters — cli_execute_command rejects them.
+    // no shell metacharacters — cli_execute_command rejects them, so query
+    // parameters go as -F fields of an explicit GET, never as '&' in the path.
+    //
+    // Requirement: the GitHub CLI (`gh`), installed and authenticated
+    // (GH_TOKEN) on the runner. It does not follow the runtime's GitHub
+    // configuration (base URL, token from dmtools.env) — replace these calls
+    // with runtime tools once the runtimes ship them.
 
-    function _jsonPart(out) {
-        var s = String(out == null ? '' : out);
-        var i = s.search(/[\[{]/);
-        return i === -1 ? s : s.substring(i);
-    }
+    var SUB_ISSUE_PAGE_SIZE = 100;
+    // GitHub caps a parent at 100 sub-issues; the guard only bounds a misbehaving API.
+    var SUB_ISSUE_MAX_PAGES = 10;
 
     function githubRestViaGh(method, path, fields) {
-        var cmd = 'gh api' + (method && method !== 'GET' ? ' --method ' + method : '') + ' ' + path;
+        var cmd = 'gh api --method ' + method + ' ' + path;
         (fields || []).forEach(function (f) { cmd += ' -F ' + f; });
-        return _parseJson(_jsonPart(cli_execute_command({ command: cmd })));
+        var out = String(cli_execute_command({ command: cmd }) || '');
+        var start = out.search(/[\[{]/);
+        if (start === -1) {
+            // No JSON at all: gh is missing, not authenticated, or the shell refused the command.
+            throw new Error('trackers: GitHub sub-issues need the GitHub CLI (gh) installed and ' +
+                'authenticated (GH_TOKEN) on the runner; `' + cmd + '` returned: ' +
+                (out.trim().substring(0, 200) || '(no output)'));
+        }
+        return _parseJson(out.substring(start));
     }
 
     function githubParentArgs(parentKey) {
@@ -708,18 +723,29 @@ function createTracker(config, customParams) {
         return child.key;
     }
 
-    function githubListChildTickets(parentKey) {
-        var parent = githubParentArgs(parentKey);
+    // One page of sub-issues (1-based page), as the raw REST list.
+    function githubSubIssuePage(parent, parentKey, page) {
         var list = githubRestViaGh('GET',
-            'repos/' + parent.owner + '/' + parent.repo + '/issues/' + parent.number + '/sub_issues?per_page=100');
+            'repos/' + parent.owner + '/' + parent.repo + '/issues/' + parent.number + '/sub_issues',
+            ['per_page=' + SUB_ISSUE_PAGE_SIZE, 'page=' + page]);
         if (!Array.isArray(list)) {
             throw new Error('trackers: unexpected sub_issues response for ' + parentKey);
         }
+        return list;
+    }
+
+    // Every sub-issue of the parent, in the parent's order (all pages).
+    function githubListChildTickets(parentKey) {
+        var parent = githubParentArgs(parentKey);
         var out = [];
-        list.forEach(function (raw) {
-            var t = normalizeTicket(raw);
-            if (t) out.push(t);
-        });
+        for (var page = 1; page <= SUB_ISSUE_MAX_PAGES; page++) {
+            var list = githubSubIssuePage(parent, parentKey, page);
+            list.forEach(function (raw) {
+                var t = normalizeTicket(raw);
+                if (t) out.push(t);
+            });
+            if (list.length < SUB_ISSUE_PAGE_SIZE) break;
+        }
         return out;
     }
 

@@ -4,7 +4,7 @@
     "jsPath": "js/unit-tests/testRunner.js",
     "jobParams": {
       "testFiles": [
-        "js/unit-tests/test_createPlannedSubIssues.js"
+        "js/unit-tests/test_planAdvance.js"
       ]
     }
   }

@@ -1,44 +1,41 @@
 /**
- * Issue planning contract — the single owner of everything the issue_planning
- * agent and the SM plan sequencer must agree on:
+ * Issue plan contract — what the intake post-action (createIntakeTickets.js)
+ * writes on GitHub and the SM plan sequencer (planAdvance.js) reads back:
  *
- *   - the planning knobs (labels, child cap, plan file) and their defaults;
- *   - the outputs/plan.json shape the CLI agent writes and how it is validated;
- *   - how a child issue body names its parent and its place in the plan;
- *   - the sequential next-step decision the SM takes on a planned parent.
+ *   - the planning knobs (labels, parallelism) and their defaults;
+ *   - the hidden marker that ties a created sub-issue to its intake entry, so a
+ *     re-run reuses the sub-issue instead of creating a duplicate;
+ *   - the hidden plan marker on a planned parent that records the blockedBy
+ *     ordering of its sub-issues (GitHub has no issue links the runtimes expose);
+ *   - the next-step decision the SM takes on a planned parent.
  *
- * Flow: a big issue gets the issue_planning leg. The agent either keeps it whole
- * (split:false → the post-action adds the dev label, development starts as usual)
- * or splits it into ordered children (split:true → createPlannedSubIssues.js
- * creates them as sub-issues of the parent and labels the parent `plannedLabel`).
- * From then on the SM rule plan-advance (localAction advance_plan) starts ONE
- * child at a time: it adds the dev label to the first open child once every
- * earlier child is closed, and closes the parent when every child is closed.
+ * Flow on GitHub: intake decomposes a big issue into stories.json entries; the
+ * post-action creates them as sub-issues of the issue (stories of a new epic as
+ * sub-issues of that epic), records the blockedBy ordering in a plan comment and
+ * labels every parent `plannedLabel`. From then on the SM rule plan-advance
+ * (localAction advance_plan) starts the sub-issues whose blockers are closed,
+ * at most `maxParallel` at a time, by adding the dev label, and closes the
+ * parent when every sub-issue is closed.
  *
- * Pure functions only — no tracker or tool calls — so the post-action and the
- * SM share one tested decision core.
+ * Pure functions only — no tracker or tool calls.
  *
  * Project override (.dmtools/config.js), per-agent override (customParams):
  *   issuePlanning: {
- *     devLabel:     'agent:dev',          // label that starts the dev leg of an issue
- *     plannedLabel: 'ai_planned',         // marks a parent whose children are created
- *     maxChildren:  8,                    // a plan with more children is rejected
- *     planFile:     'outputs/plan.json'   // where the CLI agent writes the plan
+ *     devLabel:     'agent:dev',   // label that starts the dev leg of an issue
+ *     plannedLabel: 'ai_planned',  // marks a parent whose sub-issues are sequenced
+ *     maxParallel:  1              // sub-issues of one parent in development at once
  *   }
  */
 
 var DEFAULTS = {
     devLabel: 'agent:dev',
     plannedLabel: 'ai_planned',
-    maxChildren: 8,
-    planFile: 'outputs/plan.json'
+    maxParallel: 1
 };
 
-// Hidden marker on the plan summary comment, so a reader (or a later tool) can
-// find the comment that lists the children without parsing prose.
-var PLAN_MARKER = '<!-- dmtools:issue-plan -->';
-
-var MAX_TITLE_LENGTH = 256;
+var PLAN_MARKER_PREFIX = '<!-- dmtools:issue-plan ';
+var ITEM_MARKER_PREFIX = '<!-- dmtools:intake-item ';
+var MARKER_SUFFIX = ' -->';
 
 function positiveInt(value) {
     var n = typeof value === 'string' ? parseInt(value, 10) : value;
@@ -60,12 +57,10 @@ function issuePlanningOf(source) {
 function applyPlanningLayer(cfg, layer) {
     var devLabel = nonEmptyString(layer.devLabel);
     var plannedLabel = nonEmptyString(layer.plannedLabel);
-    var maxChildren = positiveInt(layer.maxChildren);
-    var planFile = nonEmptyString(layer.planFile);
+    var maxParallel = positiveInt(layer.maxParallel);
     if (devLabel) cfg.devLabel = devLabel;
     if (plannedLabel) cfg.plannedLabel = plannedLabel;
-    if (maxChildren) cfg.maxChildren = maxChildren;
-    if (planFile) cfg.planFile = planFile;
+    if (maxParallel) cfg.maxParallel = maxParallel;
     return cfg;
 }
 
@@ -75,116 +70,26 @@ function applyPlanningLayer(cfg, layer) {
  *
  * @param {Object} projectConfig loaded .dmtools/config.js (may be null)
  * @param {Object} customParams  agent / job customParams (may be null)
- * @returns {{devLabel: string, plannedLabel: string, maxChildren: number, planFile: string}}
+ * @returns {{devLabel: string, plannedLabel: string, maxParallel: number}}
  */
 function resolvePlanningConfig(projectConfig, customParams) {
     var cfg = {
         devLabel: DEFAULTS.devLabel,
         plannedLabel: DEFAULTS.plannedLabel,
-        maxChildren: DEFAULTS.maxChildren,
-        planFile: DEFAULTS.planFile
+        maxParallel: DEFAULTS.maxParallel
     };
     applyPlanningLayer(cfg, issuePlanningOf(projectConfig));
     return applyPlanningLayer(cfg, issuePlanningOf(customParams));
 }
 
-function planFailure(error) {
-    return { ok: false, error: error, split: false, reason: '', children: [] };
-}
-
-// The plan file as a JSON object: { plan } or { error }.
-function readPlanObject(raw, cfg) {
-    if (!nonEmptyString(raw)) return { error: cfg.planFile + ' is missing or empty' };
-    var plan;
-    try {
-        plan = JSON.parse(raw);
-    } catch (e) {
-        return { error: cfg.planFile + ' is not valid JSON: ' + e };
-    }
-    if (!plan || typeof plan !== 'object' || Array.isArray(plan)) {
-        return { error: cfg.planFile + ' must be a JSON object' };
-    }
-    return { plan: plan };
-}
-
-// Why a split plan's children list is unusable, or null when it is usable.
-function childrenListError(children, cfg) {
-    if (!Array.isArray(children)) {
-        return cfg.planFile + ': "children" must be an array when split is true';
-    }
-    if (children.length < 2) {
-        return cfg.planFile + ': a split needs at least 2 children, got ' + children.length +
-            ' (use split:false to keep the issue whole)';
-    }
-    if (children.length > cfg.maxChildren) {
-        return cfg.planFile + ': ' + children.length + ' children exceed the limit of ' +
-            cfg.maxChildren + ' (issuePlanning.maxChildren)';
-    }
-    return null;
-}
-
-// A child's description: from bodyFile when it names one (preferred), else inline body.
-function childBody(child, readFile, where, cfg) {
-    if (!nonEmptyString(child.bodyFile)) {
-        var inline = nonEmptyString(child.body);
-        return inline ? { body: inline } : { error: where + ' has neither bodyFile nor body' };
-    }
-    var fromFile = nonEmptyString(readFile(child.bodyFile));
-    return fromFile ? { body: fromFile } : { error: where + ' bodyFile ' + child.bodyFile + ' is missing or empty' };
-}
-
-// One child: { child: {title, body} } or { error }. index is 0-based.
-function parseChild(raw, index, readFile, cfg) {
-    var child = raw || {};
-    var where = cfg.planFile + ': child ' + (index + 1);
-    var title = nonEmptyString(child.title);
-    if (!title) return { error: where + ' has no title' };
-    if (title.length > MAX_TITLE_LENGTH) {
-        return { error: where + ' title is longer than ' + MAX_TITLE_LENGTH + ' characters' };
-    }
-    var body = childBody(child, readFile, where, cfg);
-    return body.error ? { error: body.error } : { child: { title: title, body: body.body } };
+/** Canonical form of a ticket key for comparisons. */
+function sameRef(key) {
+    return String(key == null ? '' : key).trim().toLowerCase();
 }
 
 /**
- * Parse and validate the plan the CLI agent wrote.
- *
- *   { "split": false, "reason": "..." }
- *   { "split": true,  "reason": "...",
- *     "children": [ { "title": "...", "bodyFile": "outputs/plan/1.md" }, ... ] }
- *
- * A child carries its description in `bodyFile` (preferred: large text stays
- * out of the JSON) or inline in `body`. Children are kept in the given order —
- * that order IS the delivery sequence.
- *
- * @param {string}   raw      content of the plan file ('' when missing)
- * @param {Function} readFile path → text ('' when missing), for bodyFile
- * @param {Object}   cfg      resolvePlanningConfig() result
- * @returns {{ok: boolean, error: (string|undefined), split: boolean, reason: string,
- *            children: Array<{title: string, body: string}>}}
- */
-function parsePlan(raw, readFile, cfg) {
-    var read = readPlanObject(raw, cfg);
-    if (read.error) return planFailure(read.error);
-    var plan = read.plan;
-    if (typeof plan.split !== 'boolean') return planFailure(cfg.planFile + ': "split" must be true or false');
-    var reason = nonEmptyString(plan.reason) || '';
-    if (!plan.split) return { ok: true, split: false, reason: reason, children: [] };
-
-    var listError = childrenListError(plan.children, cfg);
-    if (listError) return planFailure(listError);
-    var children = [];
-    for (var i = 0; i < plan.children.length; i++) {
-        var parsed = parseChild(plan.children[i], i, readFile, cfg);
-        if (parsed.error) return planFailure(parsed.error);
-        children.push(parsed.child);
-    }
-    return { ok: true, split: true, reason: reason, children: children };
-}
-
-/**
- * Short reference to a ticket for comments and child bodies: '#12' for a
- * GitHub issue ('owner/repo#12', 'gh-12', '#12', 12), the key itself otherwise.
+ * Short reference to a ticket for comments: '#12' for a GitHub issue
+ * ('owner/repo#12', 'gh-12', '#12', 12), the key itself otherwise.
  */
 function displayRef(key) {
     var k = String(key == null ? '' : key);
@@ -192,23 +97,101 @@ function displayRef(key) {
     return m ? '#' + m[1] : k;
 }
 
-/** The description of child `index` (1-based) of `total`: parent link, place in the plan, then the agent's body. */
-function renderChildBody(parentKey, index, total, body) {
-    return 'Part of ' + displayRef(parentKey) + ' — step ' + index + ' of ' + total +
-        ' of a sequential plan. The steps are delivered one at a time, in order.\n\n' + body;
+// The text between a marker prefix and the marker end, or null.
+function markerPayload(text, prefix, fromEnd) {
+    var s = String(text == null ? '' : text);
+    var start = fromEnd ? s.lastIndexOf(prefix) : s.indexOf(prefix);
+    if (start === -1) return null;
+    var end = s.indexOf(MARKER_SUFFIX, start + prefix.length);
+    return end === -1 ? null : s.substring(start + prefix.length, end).trim();
 }
 
-/** The comment on the parent listing the created children in delivery order. */
-function renderPlanComment(childKeys, reason, cfg) {
-    var lines = [PLAN_MARKER, '**Plan: ' + childKeys.length + ' steps, delivered one at a time.**', ''];
-    if (reason) lines.push(reason, '');
-    childKeys.forEach(function (k, i) {
-        lines.push((i + 1) + '. ' + displayRef(k));
-    });
-    lines.push('', 'Each step starts when the previous one is closed (label `' + cfg.devLabel +
-        '` on the next step). This issue closes when every step is closed.');
-    return lines.join('\n');
+// ── intake item marker ────────────────────────────────────────────────────
+
+/** Hidden marker naming the intake entry a sub-issue was created from. */
+function itemMarker(itemId) {
+    return ITEM_MARKER_PREFIX + String(itemId) + MARKER_SUFFIX;
 }
+
+/** The intake entry id a sub-issue body carries, or null. */
+function itemIdOf(body) {
+    return markerPayload(body, ITEM_MARKER_PREFIX, false) || null;
+}
+
+function sameTitle(a, b) {
+    return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+}
+
+/**
+ * The existing sub-issue that already stands for an intake entry: the one whose
+ * marker names the entry, else the one with the same title. null when none.
+ *
+ * @param {Array<Object>} children flat sub-issue views ({key, title, description})
+ * @param {string} itemId the entry id (its tempId, or its position)
+ * @param {string} title  the entry summary
+ */
+function findExistingItem(children, itemId, title) {
+    var list = Array.isArray(children) ? children : [];
+    var byMarker = list.filter(function (c) { return itemIdOf(c.description) === String(itemId); });
+    if (byMarker.length) return byMarker[0];
+    var byTitle = list.filter(function (c) { return sameTitle(c.title, title); });
+    return byTitle.length ? byTitle[0] : null;
+}
+
+// ── plan marker ───────────────────────────────────────────────────────────
+
+/**
+ * Hidden marker recording the ordering of a planned parent:
+ *   blockedBy — keys that must be closed before any sub-issue of this parent starts;
+ *   deps      — sub-issue key → keys that must be closed before it starts.
+ */
+function renderPlanMarker(plan) {
+    var data = {
+        blockedBy: (plan && plan.blockedBy) || [],
+        deps: (plan && plan.deps) || {}
+    };
+    return PLAN_MARKER_PREFIX + JSON.stringify(data) + MARKER_SUFFIX;
+}
+
+/** The plan a comment body records, or null when it carries no (readable) plan marker. */
+function parsePlanMarker(body) {
+    var payload = markerPayload(body, PLAN_MARKER_PREFIX, true);
+    if (payload === null) return null;
+    try {
+        var data = JSON.parse(payload);
+        return {
+            blockedBy: Array.isArray(data.blockedBy) ? data.blockedBy : [],
+            deps: data.deps && typeof data.deps === 'object' ? data.deps : {}
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * The plan recorded on a parent: the marker of the LAST comment that carries
+ * one (a re-run posts a newer plan). An empty plan when there is none.
+ *
+ * @param {Array<Object>} comments normalized comments ({body}) in creation order
+ */
+function findPlan(comments) {
+    var list = Array.isArray(comments) ? comments : [];
+    for (var i = list.length - 1; i >= 0; i--) {
+        var plan = parsePlanMarker(list[i] && list[i].body);
+        if (plan) return plan;
+    }
+    return { blockedBy: [], deps: {} };
+}
+
+/** The keys recorded as blockers of `key` in the plan. */
+function blockersOf(plan, key) {
+    var deps = (plan && plan.deps) || {};
+    var wanted = sameRef(key);
+    var match = Object.keys(deps).filter(function (k) { return sameRef(k) === wanted; })[0];
+    return match && Array.isArray(deps[match]) ? deps[match] : [];
+}
+
+// ── next-step decision ────────────────────────────────────────────────────
 
 function labelsOf(ticket) {
     if (!ticket) return [];
@@ -216,57 +199,89 @@ function labelsOf(ticket) {
     return (ticket.fields && Array.isArray(ticket.fields.labels)) ? ticket.fields.labels : [];
 }
 
+function hasLabel(ticket, label) {
+    return labelsOf(ticket).indexOf(label) !== -1;
+}
+
 function isClosed(ticket) {
     var s = String((ticket && (ticket.status || ticket.state)) || '').toLowerCase();
     return s === 'closed' || s === 'done';
 }
 
-/**
- * The sequential next step for a planned parent.
- *
- * @param {Array<Object>} children the parent's children in plan order, flat tracker
- *        views ({key, status|state, labels})
- * @param {Object} cfg resolvePlanningConfig() result
- * @returns {{type: string, child: (Object|undefined), index: (number|undefined), total: number}}
- *   type 'empty'    — the parent has no children (a broken plan; nothing to do)
- *   type 'complete' — every child is closed: close the parent
- *   type 'wait'     — the first open child is already started (carries devLabel)
- *   type 'start'    — the first open child is not started yet: add devLabel to it
- *   index is 1-based.
- */
-function decideNextStep(children, cfg) {
-    var list = Array.isArray(children) ? children : [];
-    if (list.length === 0) return { type: 'empty', total: 0 };
-    for (var i = 0; i < list.length; i++) {
-        if (isClosed(list[i])) continue;
-        var started = labelsOf(list[i]).indexOf(cfg.devLabel) !== -1;
-        return { type: started ? 'wait' : 'start', child: list[i], index: i + 1, total: list.length };
-    }
-    return { type: 'complete', total: list.length };
+function allClosed(keys, isKeyClosed) {
+    return keys.every(function (k) { return isKeyClosed(k); });
 }
 
-/** The comment on the parent when the SM starts a step. */
-function renderStepComment(step, cfg) {
-    return 'Step ' + step.index + ' of ' + step.total + ': starting ' + displayRef(step.child.key) +
+// Open leaf sub-issues already in development (carry the dev label).
+function activeChildren(open, cfg) {
+    return open.filter(function (c) { return hasLabel(c, cfg.devLabel); });
+}
+
+// Open leaf sub-issues not started yet whose recorded blockers are all closed, in plan order.
+function readyChildren(open, plan, cfg, isKeyClosed) {
+    return open.filter(function (c) {
+        if (hasLabel(c, cfg.devLabel) || hasLabel(c, cfg.plannedLabel)) return false;
+        return allClosed(blockersOf(plan, c.key), isKeyClosed);
+    });
+}
+
+/**
+ * The next step for a planned parent.
+ *
+ * A sub-issue that is itself planned (it carries plannedLabel — an epic with
+ * its own sub-issues) is advanced by its own rule match: it never gets the dev
+ * label and does not count against maxParallel here.
+ *
+ * @param {Array<Object>} children    the parent's sub-issues in order, flat views ({key, status, labels})
+ * @param {Object}        plan        findPlan() result
+ * @param {Object}        cfg         resolvePlanningConfig() result
+ * @param {Function}      isKeyClosed key → true when that ticket is closed
+ * @returns {{type: string, start: Array<Object>, total: number}}
+ *   type 'empty'    — the parent has no sub-issues (nothing to do)
+ *   type 'blocked'  — a blocker of the parent itself is still open
+ *   type 'complete' — every sub-issue is closed: close the parent
+ *   type 'wait'     — nothing can start now (all slots busy, or blockers open)
+ *   type 'start'    — add the dev label to every sub-issue in `start`
+ */
+function decideNextSteps(children, plan, cfg, isKeyClosed) {
+    var list = Array.isArray(children) ? children : [];
+    var total = list.length;
+    if (total === 0) return { type: 'empty', start: [], total: 0 };
+    if (!allClosed((plan && plan.blockedBy) || [], isKeyClosed)) return { type: 'blocked', start: [], total: total };
+    var open = list.filter(function (c) { return !isClosed(c); });
+    if (open.length === 0) return { type: 'complete', start: [], total: total };
+    var slots = cfg.maxParallel - activeChildren(open, cfg).length;
+    var start = slots > 0 ? readyChildren(open, plan, cfg, isKeyClosed).slice(0, slots) : [];
+    return { type: start.length ? 'start' : 'wait', start: start, total: total };
+}
+
+/** The comment on the parent when the SM starts sub-issues. */
+function renderStartComment(decision, cfg) {
+    return 'Starting ' + decision.start.map(function (c) { return displayRef(c.key); }).join(', ') +
         ' (label `' + cfg.devLabel + '`).';
 }
 
-/** The comment on the parent when every step is closed. */
-function renderCompleteComment(step) {
-    return 'All ' + step.total + ' steps of the plan are closed — closing this issue.';
+/** The comment on the parent when every sub-issue is closed. */
+function renderCompleteComment(decision) {
+    return 'All ' + decision.total + ' sub-issues of the plan are closed — closing this issue.';
 }
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         DEFAULTS: DEFAULTS,
-        PLAN_MARKER: PLAN_MARKER,
         resolvePlanningConfig: resolvePlanningConfig,
-        parsePlan: parsePlan,
+        sameRef: sameRef,
         displayRef: displayRef,
-        renderChildBody: renderChildBody,
-        renderPlanComment: renderPlanComment,
-        decideNextStep: decideNextStep,
-        renderStepComment: renderStepComment,
+        itemMarker: itemMarker,
+        itemIdOf: itemIdOf,
+        findExistingItem: findExistingItem,
+        renderPlanMarker: renderPlanMarker,
+        parsePlanMarker: parsePlanMarker,
+        findPlan: findPlan,
+        blockersOf: blockersOf,
+        isClosed: isClosed,
+        decideNextSteps: decideNextSteps,
+        renderStartComment: renderStartComment,
         renderCompleteComment: renderCompleteComment
     };
 }

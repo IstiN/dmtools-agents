@@ -1161,7 +1161,9 @@ suite('trackers.js extended operations — github provider', function () {
             { id: 2, number: 14, title: 'Step 2', state: 'open', labels: [] }
         ]));
         var children = githubTracker({ cli_execute_command: cli }).listChildTickets('acme/widgets#12');
-        assert.equal(cli.calls[0].command, 'gh api repos/acme/widgets/issues/12/sub_issues?per_page=100');
+        assert.equal(cli.calls[0].command,
+            'gh api --method GET repos/acme/widgets/issues/12/sub_issues -F per_page=100 -F page=1');
+        assert.equal(cli.calls.length, 1, 'a short page is the last page');
         assert.equal(children.length, 2);
         assert.equal(children[0].key, 'acme/widgets#13');
         assert.equal(children[0].status, 'closed');
@@ -1174,6 +1176,30 @@ suite('trackers.js extended operations — github provider', function () {
         var children = githubTracker({ cli_execute_command: cli }).listChildTickets('12');
         assert.equal(children.length, 1);
         assert.equal(children[0].key, 'acme/widgets#13');
+    });
+
+    test('listChildTickets reads every page while pages are full', function () {
+        var full = [];
+        for (var i = 0; i < 100; i++) full.push({ id: i, number: 100 + i, state: 'open' });
+        var pages = [JSON.stringify(full), JSON.stringify([{ id: 500, number: 500, state: 'open' }])];
+        var commands = [];
+        var cli = function (a) { commands.push(a.command); return pages[commands.length - 1]; };
+        var children = githubTracker({ cli_execute_command: cli }).listChildTickets('12');
+        assert.equal(children.length, 101);
+        assert.equal(children[100].key, 'acme/widgets#500');
+        assert.equal(commands.length, 2);
+        assert.contains(commands[1], '-F page=2');
+        commands.forEach(function (c) { assert.equal(c.indexOf('&'), -1, 'no shell metacharacters: ' + c); });
+    });
+
+    test('a missing or unauthenticated gh fails with an error that names the requirement', function () {
+        var msg = '';
+        try {
+            githubTracker({ cli_execute_command: recorder('cli_execute_command', 'bash: gh: command not found') })
+                .listChildTickets('12');
+        } catch (e) { msg = String(e.message); }
+        assert.contains(msg, 'GitHub CLI (gh)');
+        assert.contains(msg, 'command not found');
     });
 
     test('listChildTickets throws on a response that is not a list', function () {
