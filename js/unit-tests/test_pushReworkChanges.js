@@ -3440,5 +3440,48 @@ suite('pushReworkChanges.commitAndPush — branch decisions (gh-1082 characteriz
         );
         var cfg = baseConfig({ formats: { commitMessage: { rework: '{ticketKey} Rework [skip ci]' } } });
         assert.equal(mod.buildReworkCommitMessage(cfg, 'PROJ-9'), 'PROJ-9 Rework');
+
+        // sync gate + squash dispatch (gh-1082 extraction surface)
+        mod.assertReworkBranchSynced({ success: true }, 'develop');
+        var syncErr = null;
+        try {
+            mod.assertReworkBranchSynced({ success: false, error: 'diverged' }, 'develop');
+        } catch (e) { syncErr = e; }
+        assert.ok(syncErr);
+        assert.equal(syncErr.message, 'Could not sync PR branch with origin/develop before rework push: diverged');
+
+        assert.equal(mod.squashReworkWipIfEnabled(function() {}, 'P-1', baseConfig(), null, {}), false,
+            'opt-in off: history untouched');
+        assert.equal(mod.squashReworkWipIfEnabled(function() {}, 'P-1', baseConfig(), null, null), false);
+        assert.equal(
+            mod.squashReworkWipIfEnabled(function() { throw new Error('must not run'); }, 'P-1', baseConfig(), null, { squashReworkWip: 'x' }),
+            false,
+            'strict boolean opt-in'
+        );
+        var squashCalls = [];
+        var squashingCli = function(args) {
+            squashCalls.push(args.command);
+            if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+            if (args.command.indexOf('git rev-list --merges') === 0) return '';
+            if (args.command.indexOf('git log --format=%s') === 0) {
+                return 'PROJ-123 WIP auto-save a\nPROJ-123 WIP auto-save b\n';
+            }
+            return '';
+        };
+        var squashMod = loadCommitAndPush1082({
+            file_read: function(args) {
+                if (args.path.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
+                if (args.path.indexOf('rework_base_head.txt') !== -1) return 'abc1234';
+                return null;
+            }
+        }, {});
+        assert.equal(
+            squashMod.squashReworkWipIfEnabled(function(command) { return squashingCli({ command: command }); },
+                'PROJ-123', baseConfig(), null, { squashReworkWip: true }),
+            true,
+            'opt-in on: all-WIP range squashed'
+        );
+        assert.ok(squashCalls.indexOf('git reset --soft abc1234') !== -1, 'soft reset ran');
+        assert.ok(squashCalls.indexOf('git commit -m "PROJ-123 rework"') !== -1, 'one rework commit');
     });
 });

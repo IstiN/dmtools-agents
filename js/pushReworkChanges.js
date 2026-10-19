@@ -470,6 +470,26 @@ function pushReworkBranch(cmd, branchName, pushPlan) {
     }
 }
 
+/**
+ * The sync gate: a rework push never proceeds on a branch that failed to
+ * synchronize with origin/<baseBranch>.
+ */
+function assertReworkBranchSynced(syncResult, baseBranch) {
+    if (!syncResult.success) {
+        throw new Error('Could not sync PR branch with origin/' + baseBranch + ' before rework push: ' + syncResult.error);
+    }
+}
+
+/**
+ * The agents#895 WIP-squash step, gated by the opt-in switch: folds the
+ * timer's WIP auto-save commits only when customParams.squashReworkWip is
+ * exactly true; otherwise history is untouched (false).
+ */
+function squashReworkWipIfEnabled(cmd, ticketKey, config, workingDir, customParams) {
+    if (!squashEnabled(customParams)) return false;
+    return squashReworkWipCommits(cmd, ticketKey, config, workingDir);
+}
+
 function commitAndPush(ticketKey, config, customParams) {
     var workingDir = config.workingDir || null;
     var cmdOpts = reworkCmdOpts(workingDir);
@@ -528,8 +548,7 @@ function commitAndPush(ticketKey, config, customParams) {
     // clean rework commit above is often never created. Opt-in (customParams.squashReworkWip): when EVERY
     // commit since the rework base is a WIP auto-save (or the commit just made) and none is a merge, fold
     // them into one commit with the rework message and push it with --force-with-lease.
-    var squashed = squashEnabled(customParams) ?
-        squashReworkWipCommits(cmd, ticketKey, config, workingDir) : false;
+    var squashed = squashReworkWipIfEnabled(cmd, ticketKey, config, workingDir, customParams);
 
     var syncResult = prHelper.syncBranchWithBase({
         branchName: branchName,
@@ -541,9 +560,7 @@ function commitAndPush(ticketKey, config, customParams) {
             return cli_execute_command(args);
         }
     });
-    if (!syncResult.success) {
-        throw new Error('Could not sync PR branch with origin/' + baseBranch + ' before rework push: ' + syncResult.error);
-    }
+    assertReworkBranchSynced(syncResult, baseBranch);
 
     // gh-1096: a fork PR head is pushed back to the FORK's token URL
     // (gh-1070 maintainer-edit contract); same-repo commands unchanged.
@@ -2554,5 +2571,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch };
+    module.exports = { action, hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch, assertReworkBranchSynced, squashReworkWipIfEnabled };;
 }
