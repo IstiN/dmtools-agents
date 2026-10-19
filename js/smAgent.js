@@ -7812,66 +7812,112 @@ function stampLinkBlock(repoInfo, runUrl, conclusion) {
     return block;
 }
 
-function stampValidationChecksForModule(repoInfo, headSha, status, conclusion, runUrl) {
-            var names = validationCheckNames();
-            if (!names || !headSha) return;
-            // Check runs are GitHub-App-only ("You must authenticate via a
-            // GitHub App") — the tick PAT cannot create them. The workflow
-            // token (jobParams.silentToken) IS an App token with
-            // checks:write on the repo the tick runs in. Swap GH_TOKEN for
-            // the gh child exactly like silentUpdateBranch does, restore
-            // after (sourceToken).
-            var appToken = (RUN_JOB_PARAMS || {}).silentToken;
-            var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
-            var swapped = false;
-            if (appToken) {
-                try {
-                    set_env_variable('GH_TOKEN', appToken);
-                    swapped = true;
-                } catch (e) {
-                    console.warn('  ⚠️  token swap failed, stamps use the PAT: ' + (e.message || e));
-                }
-            }
+function stampCheckRunBody(checkName, headSha, status, conclusion, linkBlock) {
+    // gh-1118: the request body is JSON carried by a temp FILE (--input),
+    // never inline `-f` interpolation. API-derived values (check names, the
+    // jobs-table summary) can carry shell-hostile text — GitHub's jobs API
+    // returns matrix job names with the template UNRESOLVED while a run is
+    // in flight (`Core tests (shard ${{ matrix.shard }}/4)`), and that
+    // literal `${ … }}` inside a double-quoted `-f summary="…"` made dash
+    // (sh on the hosted runner) abort the dmtools temp script with
+    // `Bad substitution` (exit 2). Same pattern as scm.js updatePrBody
+    // (gh-960): the payload travels by file, so no shell — dash or bash —
+    // ever sees it. Optional fields stay ABSENT (the API rejects nulls).
+    var body = { name: checkName, head_sha: headSha, status: status };
+    if (conclusion) body.conclusion = conclusion;
+    if (linkBlock.detailsUrl) body.details_url = linkBlock.detailsUrl;
+    body.title = 'SM validation' + (conclusion ? (': ' + conclusion) : ' (tick-dispatched)');
+    body.summary = linkBlock.summary;
+    return JSON.stringify(body);
+}
+
+// ONE stamp POST: temp-file body + `gh api --input`, retried once (gh-1118
+// never-again: a failed stamp re-fires before being counted). Returns true
+// on success; false after both attempts failed (caller counts it).
+function stampCheckRunViaFile(repoInfo, bodyJson, checkName, headSha) {
+    var tmpPath = 'check_run_stamp_tmp_' + Date.now() + '_' +
+                  Math.floor(Math.random() * 1e6) + '.json';
+    try {
+        file_write({ path: tmpPath, content: bodyJson });
+    } catch (eWrite) {
+        console.warn('  ⚠️  stamp "' + checkName + '": body file write failed: ' +
+                     (eWrite.message || eWrite));
+        return false;
+    }
+    try {
+        var cmd = 'gh api -X POST repos/' + repoInfo.owner +
+                  '/' + repoInfo.repo + '/check-runs' +
+                  ' --input ' + tmpPath;
+        for (var attempt = 0; attempt < 2; attempt++) {
             try {
-                // One jobs probe per stamp, shared by every stamped check
-                // name (they all echo the same dispatched run).
-                var linkBlock = stampLinkBlock(repoInfo, runUrl, conclusion);
-                names.forEach(function (checkName) {
-                    if (DRY) {
-                        console.log('  🧪 [dry] stamp "' + checkName + '" ' +
-                                    status + (conclusion ? '/' + conclusion : ''));
-                        return;
-                    }
-                    // POST /repos/{o}/{r}/check-runs — head_sha is a FIELD,
-                    // never a path segment (sha-in-path 404s). github_create
-                    // _check_run is MCP-registry-only (not a JS-bridge tool).
-                    // details_url + the jobs table (stampLinkBlock) turn the
-                    // PR Checks-tab entry into a clickable path to the real
-                    // workflow run / failing job (owner 2026-09-27).
-                    try {
-                        var cmd = 'gh api -X POST repos/' + repoInfo.owner +
-                                  '/' + repoInfo.repo + '/check-runs' +
-                                  ' -f name="' + checkName + '"' +
-                                  ' -f head_sha=' + headSha +
-                                  ' -f status="' + status + '"' +
-                                  (conclusion ? (' -f conclusion="' + conclusion + '"') : '') +
-                                  (linkBlock.detailsUrl ?
-                                      (' -f details_url="' + linkBlock.detailsUrl + '"') : '') +
-                                  ' -f title="SM validation' +
-                                  (conclusion ? (': ' + conclusion) : ' (tick-dispatched)') + '"' +
-                                  ' -f summary="' + linkBlock.summary + '"';
-                        cli_execute_command({ command: cmd });
-                    } catch (e) {
-                        console.warn('  ⚠️  stamp "' + checkName + '" on ' +
-                                     String(headSha).slice(0, 7) + ': ' + (e.message || e));
-                    }
-                });
-            } finally {
-                if (swapped && sourceTok) {
-                    try { set_env_variable('GH_TOKEN', sourceTok); } catch (e2) {}
+                cli_execute_command({ command: cmd });
+                return true;
+            } catch (eStamp) {
+                if (attempt === 0) {
+                    console.warn('  ⚠️  stamp "' + checkName + '" on ' +
+                                 String(headSha).slice(0, 7) + ' failed (' +
+                                 (eStamp.message || eStamp) + ') — retrying once');
+                } else {
+                    console.warn('  ⚠️  stamp "' + checkName + '" on ' +
+                                 String(headSha).slice(0, 7) + ' failed again: ' +
+                                 (eStamp.message || eStamp));
                 }
             }
         }
+        return false;
+    } finally {
+        try { file_delete({ path: tmpPath }); } catch (eDel) { /* best-effort */ }
+    }
+}
+
+function stampValidationChecksForModule(repoInfo, headSha, status, conclusion, runUrl) {
+    var names = validationCheckNames();
+    if (!names || !headSha) return;
+    // Check runs are GitHub-App-only ("You must authenticate via a
+    // GitHub App") — the tick PAT cannot create them. The workflow
+    // token (jobParams.silentToken) IS an App token with
+    // checks:write on the repo the tick runs in. Swap GH_TOKEN for
+    // the gh child exactly like silentUpdateBranch does, restore
+    // after (sourceToken).
+    var appToken = (RUN_JOB_PARAMS || {}).silentToken;
+    var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
+    var swapped = false;
+    if (appToken) {
+        try {
+            set_env_variable('GH_TOKEN', appToken);
+            swapped = true;
+        } catch (e) {
+            console.warn('  ⚠️  token swap failed, stamps use the PAT: ' + (e.message || e));
+        }
+    }
+    try {
+        // One jobs probe per stamp, shared by every stamped check
+        // name (they all echo the same dispatched run).
+        var linkBlock = stampLinkBlock(repoInfo, runUrl, conclusion);
+        names.forEach(function (checkName) {
+            if (DRY) {
+                console.log('  🧪 [dry] stamp "' + checkName + '" ' +
+                            status + (conclusion ? '/' + conclusion : ''));
+                return;
+            }
+            // POST /repos/{o}/{r}/check-runs — head_sha is a FIELD in the
+            // --input body, never a path segment (sha-in-path 404s).
+            // github_create_check_run is MCP-registry-only (not a
+            // JS-bridge tool). details_url + the jobs table
+            // (stampLinkBlock) turn the PR Checks-tab entry into a
+            // clickable path to the real workflow run / failing job
+            // (owner 2026-09-27).
+            var bodyJson = stampCheckRunBody(checkName, headSha, status, conclusion, linkBlock);
+            if (!stampCheckRunViaFile(repoInfo, bodyJson, checkName, headSha)) {
+                tickStampsFailed++;
+            }
+        });
+    } finally {
+        if (swapped && sourceTok) {
+            try { set_env_variable('GH_TOKEN', sourceTok); } catch (e2) {}
+        }
+    }
+}
 
 // One sync per repo per tick-process (the hook fires per PR rule; a
 // short window stops repeat API passes inside a single tick).
@@ -8130,6 +8176,7 @@ function action(params) {
     RUN_JOB_PARAMS = p;    DRY = p.dryRun === true;
     tickReworkLatch = null;
     tickZombiesSwept = 0; // gh-998 (I5): fresh per-tick sweep counter
+    tickStampsFailed = 0; // gh-1118: fresh per-tick stamp-failure counter
     tickFreshResets = {}; // gh-1101 follow-up: one fresh-sha reset per PR per tick
     tickParkedRecorded = {}; // gh-922: fresh same-tick dedup window (see recordDispatchFailure)
     if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
@@ -8358,10 +8405,19 @@ function action(params) {
     // rule so the arm counts reflect this tick's mutations.
     var validationCost = reportValidationCost(globalRepoInfo, validationConcurrencyCfg, validationMutexMax);
 
+    // gh-1118 check-run absence alarm: a non-zero stamps_failed means the
+    // validation check-runs for some gates never landed on the PR heads —
+    // branch protection stays pending and the merge bot waits forever.
+    // Say it loudly at tick level, not just in per-stamp warns.
+    if (tickStampsFailed > 0) {
+        console.warn('🚨 stamps_failed: ' + tickStampsFailed +
+            ' — validation check-runs did not land on their PR heads; validation cannot conclude (gh-1118)');
+    }
     console.log('\n══ SM Agent complete — processed: ' + allProcessedKeys.length + ' ' +
         (allProcessedKeys.length ? '[' + allProcessedKeys.join(', ') + ']' : '') +
         ', skipped: ' + allSkippedKeys.length +
-        (allSkippedKeys.length ? ' [' + allSkippedKeys.join(', ') + ']' : '') + ' ══');
+        (allSkippedKeys.length ? ' [' + allSkippedKeys.join(', ') + ']' : '') +
+        ', stamps_failed: ' + tickStampsFailed + ' ══');
 
     return {
         success: true,
@@ -8369,7 +8425,8 @@ function action(params) {
         skipped: allSkippedKeys.length,
         processedKeys: allProcessedKeys,
         skippedKeys: allSkippedKeys,
-        validationCost: validationCost
+        validationCost: validationCost,
+        stampsFailed: tickStampsFailed
     };
 }
 

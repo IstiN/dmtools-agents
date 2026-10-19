@@ -7568,6 +7568,14 @@ suite('smAgent: stamp check-run deep links (owner 2026-09-27)', function () {
         }).map(function (c) { return c.command; });
     }
 
+    // gh-1118: the volatile payload (details_url, jobs-table summary) rides
+    // the --input body FILE, not the command string.
+    function stampBodies(sm) {
+        return sm.capturedFileWrites.filter(function (w) {
+            return String(w.path).indexOf('check_run_stamp') !== -1;
+        }).map(function (w) { return JSON.parse(w.content); });
+    }
+
     function jobsCli(jobs) {
         return function (cmd) {
             if (cmd.command.indexOf('/actions/runs/777/jobs') !== -1) {
@@ -7595,15 +7603,23 @@ suite('smAgent: stamp check-run deep links (owner 2026-09-27)', function () {
             validationChecks: '["Quality gate","sm-liveness"]', rules: [syncOnlyRule()] } });
 
         var posts = stampPosts(sm);
+        var bodies = stampBodies(sm);
         assert.equal(posts.length, 2, 'one stamped check per configured validation check name');
+        assert.equal(bodies.length, 2, 'each stamp posts its --input body file');
         posts.forEach(function (p) {
-            assert.ok(p.indexOf('-f details_url="https://github.com/a/b/actions/runs/777"') !== -1,
-                'green verdict links the umbrella dispatched run');
-            assert.ok(p.indexOf('| [Quality gate](https://github.com/a/b/actions/runs/777/jobs/11) | success |') !== -1,
-                'summary carries the real jobs table (name → result → link)');
-            assert.ok(p.indexOf('| [sm-liveness](https://github.com/a/b/actions/runs/777/jobs/12) | success |') !== -1,
-                'every job is listed');
+            assert.ok(p.indexOf('--input') !== -1, 'the body travels through a file: ' + p);
+            assert.equal(p.indexOf('${'), -1, 'no shell expansion surface: ' + p);
         });
+        bodies.forEach(function (b) {
+            assert.equal(b.details_url, 'https://github.com/a/b/actions/runs/777',
+                'green verdict links the umbrella dispatched run');
+            assert.ok(b.summary.indexOf('| [Quality gate](https://github.com/a/b/actions/runs/777/jobs/11) | success |') !== -1,
+                'summary carries the real jobs table (name → result → link)');
+            assert.ok(b.summary.indexOf('| [sm-liveness](https://github.com/a/b/actions/runs/777/jobs/12) | success |') !== -1,
+                'every job is listed');
+            assert.equal(b.conclusion, 'success');
+        });
+    });
     });
 
     test('verdict stamp (red): details_url = the FAILING JOB directly', function () {
@@ -7624,12 +7640,14 @@ suite('smAgent: stamp check-run deep links (owner 2026-09-27)', function () {
             validationChecks: '["Quality gate","sm-liveness"]', rules: [syncOnlyRule()] } });
 
         var posts = stampPosts(sm);
+        var bodies = stampBodies(sm);
         assert.equal(posts.length, 2);
-        posts.forEach(function (p) {
-            assert.ok(p.indexOf('-f details_url="https://github.com/a/b/actions/runs/777/jobs/21"') !== -1,
+        assert.equal(bodies.length, 2);
+        bodies.forEach(function (b) {
+            assert.equal(b.details_url, 'https://github.com/a/b/actions/runs/777/jobs/21',
                 'red verdict lands the reviewer on the failing job, not the umbrella');
-            assert.ok(p.indexOf('-f conclusion="failure"') !== -1);
-            assert.ok(p.indexOf('| [Quality gate](https://github.com/a/b/actions/runs/777/jobs/21) | failure |') !== -1,
+            assert.equal(b.conclusion, 'failure');
+            assert.ok(b.summary.indexOf('| [Quality gate](https://github.com/a/b/actions/runs/777/jobs/21) | failure |') !== -1,
                 'the jobs table shows which job went red');
         });
     });
@@ -7647,10 +7665,12 @@ suite('smAgent: stamp check-run deep links (owner 2026-09-27)', function () {
             validationChecks: '["Quality gate"]', rules: [syncOnlyRule()] } });
 
         var posts = stampPosts(sm);
+        var bodies = stampBodies(sm);
         assert.equal(posts.length, 1, 'the stamp still posts');
-        assert.ok(posts[0].indexOf('-f details_url="https://github.com/a/b/actions/runs/777"') !== -1,
+        assert.equal(bodies.length, 1);
+        assert.equal(bodies[0].details_url, 'https://github.com/a/b/actions/runs/777',
             'details_url falls back to the dispatched run');
-        assert.ok(posts[0].indexOf('Dispatched run: https://github.com/a/b/actions/runs/777') !== -1,
+        assert.ok(bodies[0].summary.indexOf('Dispatched run: https://github.com/a/b/actions/runs/777') !== -1,
             'summary keeps at least the run link');
     });
 
@@ -7662,13 +7682,16 @@ suite('smAgent: stamp check-run deep links (owner 2026-09-27)', function () {
         sm.action({ jobParams: { owner: 'a', repo: 'b',
             validationChecks: '["Quality gate"]',
             rules: [{ source: 'github', query: { type: 'pr', labels: ['pr_approved'], draft: false },
-                      localAction: 'validate_pr', limit: 1, id: 'validate-armed' }] } });
-
         var posts = stampPosts(sm);
+        var bodies = stampBodies(sm);
         assert.equal(posts.length, 1, 'dispatch stamps in_progress once');
-        assert.ok(posts[0].indexOf('in_progress') !== -1);
-        assert.ok(posts[0].indexOf('details_url') === -1,
+        assert.equal(bodies.length, 1);
+        assert.ok(posts[0].indexOf('--input') !== -1);
+        assert.equal(bodies[0].status, 'in_progress');
+        assert.equal(bodies[0].details_url, undefined,
             'no run URL exists at dispatch time — nothing to link yet (the verdict stamp adds it)');
+        assert.equal(bodies[0].summary, 'Stamped by the SM tick (bridge-free mode).');
+    });
         assert.ok(posts[0].indexOf('Stamped by the SM tick (bridge-free mode).') !== -1);
     });
 });
@@ -15135,17 +15158,6 @@ suite('smAgent: gh-1118 — stamp survives dash-hostile API payloads', function 
         });
     }
 
-    test('DBG probe', function () {
-        var run = stampTick({});
-        run.sm.capturedLogs.forEach(function (l) {
-            if (l.indexOf('validation-sync') !== -1 || l.indexOf('stamp') !== -1 ||
-                l.indexOf('gh-1118') !== -1) console.log('      LOG: ' + l);
-        });
-        run.sm.capturedCliCommands.forEach(function (c) {
-            console.log('      CMD: ' + c.command.substring(0, 130));
-        });
-        assert.ok(true);
-    });
     test('the stamp command string has NO shell expansion surface — payload rides --input', function () {
         var run = stampTick({});
         var posts = stampPosts(run.sm);
@@ -15210,7 +15222,11 @@ suite('smAgent: gh-1118 — stamp survives dash-hostile API payloads', function 
     });
 
     test('the counter resets between ticks on the SAME module instance', function () {
-        var sm = makeSmAgent(Object.assign(stampConfig('o', 'r'), {
+        // No repository in the project config — the effective repo falls
+        // back to jobParams.owner/repo, so the second tick can target a
+        // DIFFERENT repo and defeat the 5s validationCheckSync throttle
+        // (same-repo ticks inside 5s skip the stamp sync entirely).
+        var sm = makeSmAgent(Object.assign({ fileMap: {} }, {
             github: {
                 items: [],
                 prList: [prCarrier(1118, HEAD)],
@@ -15228,12 +15244,12 @@ suite('smAgent: gh-1118 — stamp survives dash-hostile API payloads', function 
                 return undefined;
             }
         }));
-        var jp = function () { return { jobParams: { owner: 'o', repo: 'r',
+        var jp = function (owner, repo) { return { jobParams: { owner: owner, repo: repo,
             ciWorkflow: 'ci.yml', validationChecks: ['Quality gate'],
             silentToken: 'app-token', sourceToken: 'pat-token',
             nakedPrSweep: false, rules: [noMatchRule()] } }; };
-        var first = sm.action(jp());
-        var second = sm.action(jp());
+        var first = sm.action(jp('o', 'r'));
+        var second = sm.action(jp('o2', 'r2'));
         assert.equal(first.stampsFailed, 1);
         assert.equal(second.stampsFailed, 1,
             'a fresh tick starts from zero — the counter is per-tick, not cumulative');
