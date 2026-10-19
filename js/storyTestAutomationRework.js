@@ -1,6 +1,11 @@
 /**
  * Story Test Automation Rework Action
  * Applies review feedback to the Story test PR and re-triggers review.
+ *
+ * gh-1080 CRAP split: parameter parsing and every action() step (push-failure
+ * result, SCM announcement, In Testing move, Jira comment, review trigger,
+ * token usage, error result) are named helpers — the tracker/SCM/git/file
+ * calls and their order are unchanged.
  */
 
 var configLoader = require('./configLoader.js');
@@ -268,30 +273,63 @@ function findStoryPR(scm, storyKey) {
     }
 }
 
-function action(params) {
+// ── gh-1080: pure parse helper extracted from action ─────────────────────────
+
+function parseReworkParams(params) {
     const actualParams = params.ticket ? params : (params.jobParams || params);
-    const storyKey = actualParams.ticket.key;
+    const jobCustomParams = params.jobParams && params.jobParams.customParams;
+    return {
+        actualParams: actualParams,
+        storyKey: actualParams.ticket.key,
+        customParams: jobCustomParams || params.customParams || {},
+        contextId: actualParams.metadata && actualParams.metadata.contextId,
+        initiator: params.initiator
+    };
+}
+
+function buildReworkContext(params) {
+    const parsed = parseReworkParams(params);
     const config = configLoader.loadProjectConfig(params.jobParams || params);
-    const jiraConfig = config.jira;
-    const scm = configLoader.createScm(config);
-    const customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
-    var tracker = trackersModule.createTracker(config, customParams);
-    const contextId = actualParams.metadata && actualParams.metadata.contextId;
-    const removeLabel = customParams.removeLabel || smLabelForContext(contextId);
-    const wipLabel = contextId ? contextId + '_wip' : null;
+    return {
+        actualParams: parsed.actualParams,
+        storyKey: parsed.storyKey,
+        customParams: parsed.customParams,
+        initiator: parsed.initiator,
+        config: config,
+        jiraConfig: config.jira,
+        scm: configLoader.createScm(config),
+        tracker: trackersModule.createTracker(config, parsed.customParams),
+        // gh-916/gh-1006: SM label fallback by context, WIP label derived from it.
+        removeLabel: parsed.customParams.removeLabel || smLabelForContext(parsed.contextId),
+        wipLabel: parsed.contextId ? parsed.contextId + '_wip' : null
+    };
+}
+
+function action(params) {
+    const ctx = buildReworkContext(params);
+    const actualParams = ctx.actualParams;
+    const storyKey = ctx.storyKey;
+    const config = ctx.config;
+    const jiraConfig = ctx.jiraConfig;
+    const scm = ctx.scm;
+    const customParams = ctx.customParams;
+    const tracker = ctx.tracker;
+    // Hoisted like the pre-split `var pr`: assigned only after commitAndPush
+    // succeeds, and releaseLock() below must observe "undefined" until then.
+    var pr;
 
     function releaseWipLock() {
-        if (wipLabel) {
-            try { tracker.removeLabel(storyKey, wipLabel); } catch (e) {}
+        if (ctx.wipLabel) {
+            try { tracker.removeLabel(storyKey, ctx.wipLabel); } catch (e) {}
         } else {
             // If contextId is missing, clean up both known WIP labels defensively.
             try { tracker.removeLabel(storyKey, 'story_test_automation_rework_wip'); } catch (e) {}
             try { tracker.removeLabel(storyKey, 'bug_test_automation_rework_wip'); } catch (e) {}
         }
-        if (removeLabel) {
+        if (ctx.removeLabel) {
             try {
-                tracker.removeLabel(storyKey, removeLabel);
-                console.log('✅ Removed SM label:', removeLabel);
+                tracker.removeLabel(storyKey, ctx.removeLabel);
+                console.log('✅ Removed SM label:', ctx.removeLabel);
             } catch (e) {}
         }
     }
@@ -313,34 +351,27 @@ function action(params) {
         }
     }
 
-    try {
-        const fixSummary = actualParams.response || '_(No fix summary)_';
-        console.log('=== Processing story test automation rework for', storyKey, '===');
+    function pushFailedResult(e) {
+        console.error('Git operations failed:', e);
+        tracker.postComment(storyKey, 'h3. ❌ Story Test Rework Push Failed\n\n{code}' + e.toString() + '{code}'
+        );
+        releaseWipLock();
+        return { success: false, error: e.toString() };
+    }
 
-        // Step 1: Commit/push testing/
-        var branchName;
+    // Step 2: Reply to review threads + announce the rework on the PR
+    function announceReworkOnScm(prFound, fixSummary) {
+        if (!prFound) return;
+        postThreadReplies(scm, prFound.number);
         try {
-            branchName = commitAndPush(storyKey, config);
+            scm.addComment(prFound.number, '## 🔧 Story Test Rework Complete — ' + storyKey + '\n\n' + fixSummary);
         } catch (e) {
-            console.error('Git operations failed:', e);
-            tracker.postComment(storyKey, 'h3. ❌ Story Test Rework Push Failed\n\n{code}' + e.toString() + '{code}'
-            );
-            releaseWipLock();
-            return { success: false, error: e.toString() };
+            console.warn('Failed to post PR rework comment:', e);
         }
+    }
 
-        // Step 2: Reply to review threads
-        var pr = findStoryPR(scm, storyKey);
-        if (pr) {
-            postThreadReplies(scm, pr.number);
-            try {
-                scm.addComment(pr.number, '## 🔧 Story Test Rework Complete — ' + storyKey + '\n\n' + fixSummary);
-            } catch (e) {
-                console.warn('Failed to post PR rework comment:', e);
-            }
-        }
-
-        // Step 3: Move Story back to In Testing
+    // Step 3: Move Story back to In Testing
+    function moveStoryBackToInTesting() {
         try {
             // gh-916: IN_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback.
             var moveResult = tracker.moveToStatusOrMark(storyKey, jiraConfig.statuses.IN_TESTING, 'IN_TESTING');
@@ -350,19 +381,23 @@ function action(params) {
         } catch (e) {
             console.warn('Failed to move Story to In Testing:', e);
         }
+    }
 
-        // Step 4: Post Jira comment
+    // Step 4: Post Jira comment
+    function postReworkJiraComment(branchName, prFound, fixSummary) {
         try {
             var comment = 'h3. 🔧 Story Test Rework Completed\n\n';
             comment += '*Branch*: {code}' + branchName + '{code}\n';
-            if (pr) comment += '*Pull Request*: ' + pr.html_url + '\n';
+            if (prFound) comment += '*Pull Request*: ' + prFound.html_url + '\n';
             comment += '\n' + fixSummary;
             tracker.postComment(storyKey, comment);
         } catch (e) {
             console.warn('Failed to post Jira comment:', e);
         }
+    }
 
-        // Step 5: Trigger review
+    // Step 5: Trigger review
+    function triggerReworkReview() {
         releaseLock();
         var autoStarted = false;
         if (customParams.autoStartReview && customParams.autoStartReviewConfigFile) {
@@ -382,12 +417,48 @@ function action(params) {
         if (!autoStarted) {
             autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
         }
+    }
 
+    function postTokenUsageSafely() {
         try {
-            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator, tracker: tracker });
+            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: ctx.initiator, tracker: tracker });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }
+    }
+
+    function reworkErrorResult(error) {
+        console.error('❌ Error in storyTestAutomationRework:', error);
+        try {
+            tracker.postComment(storyKey, 'h3. ❌ Story Test Rework Error\n\n{code}' + error.toString() + '{code}'
+            );
+        } catch (e) {}
+        releaseLock();
+        return { success: false, error: error.toString() };
+    }
+
+    try {
+        const fixSummary = actualParams.response || '_(No fix summary)_';
+        console.log('=== Processing story test automation rework for', storyKey, '===');
+
+        // Step 1: Commit/push testing/
+        var branchName;
+        try {
+            branchName = commitAndPush(storyKey, config);
+        } catch (e) {
+            return pushFailedResult(e);
+        }
+
+        pr = findStoryPR(scm, storyKey);
+        announceReworkOnScm(pr, fixSummary);
+
+        moveStoryBackToInTesting();
+
+        postReworkJiraComment(branchName, pr, fixSummary);
+
+        triggerReworkReview();
+
+        postTokenUsageSafely();
 
         return {
             success: true,
@@ -396,13 +467,7 @@ function action(params) {
         };
 
     } catch (error) {
-        console.error('❌ Error in storyTestAutomationRework:', error);
-        try {
-            tracker.postComment(storyKey, 'h3. ❌ Story Test Rework Error\n\n{code}' + error.toString() + '{code}'
-            );
-        } catch (e) {}
-        releaseLock();
-        return { success: false, error: error.toString() };
+        return reworkErrorResult(error);
     }
 }
 
