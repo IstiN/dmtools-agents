@@ -264,6 +264,87 @@ suite('developTicketAndCreatePR > failure recovery', function () {
         assert.contains(comments[0].comment, 'Development Interrupted');
     });
 
+    test('gh-1087 UT-2/AC2: 403 weekly-limit quota failure parks the lane — label + comment, NO Ready For Development reset, run fails with the quotaPark marker', function () {
+        // Live fa gh-1697 (run 39210285663): z.ai glm-5.3-flash answered
+        // 403 "weekly (7-day) usage limit", the provider chain exhausted,
+        // and the gh-742 reset re-dispatched the same leg into the same
+        // wall on the next tick. The quota class must PARK instead:
+        // park label + reason comment, no status reset, dead-letter run.
+        var movedTo = [];
+        var removedLabels = [];
+        var addedLabels = [];
+        var comments = [];
+        var mod = loadDevelopTicketAndCreatePRWithRealGitHelpers({
+            cli_execute_command: noChangesGitCommandMock('TS-6', 'ai/TS-6'),
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+            jira_remove_label: function (args) { removedLabels.push(args.label); },
+            jira_add_label: function (args) { addedLabels.push(args.label); }
+        });
+
+        var caught = null;
+        try {
+            mod.action({
+                ticket: { key: 'TS-6', fields: { summary: 'Quota wall', description: '', labels: [] } },
+                metadata: { contextId: 'story_development' },
+                customParams: {},
+                response: '',
+                currentCliErrorMessage: 'z.ai glm-5.3-flash answered 403 "weekly (7-day) usage limit" (9 retries); Provider chain exhausted: 2 of 2'
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught, 'a parked leg must fail the run (throw), not return plain success');
+        assert.ok(caught && caught.quotaPark === true,
+            'thrown error carries the quotaPark marker (outer catch rethrows it)');
+        assert.deepEqual(movedTo, [],
+            'quota park must NOT reset the ticket to Ready For Development (AC2)');
+        assert.deepEqual(addedLabels, ['provider_quota'],
+            'park label added to the ticket (AC2)');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'Provider Quota Exhausted');
+        assert.contains(comments[0].comment, 'z.ai');
+        assert.contains(comments[0].comment, 'weekly (7-day)');
+        assert.contains(comments[0].comment, 'provider_quota');
+        assert.ok(removedLabels.indexOf('story_development_wip') !== -1,
+            'WIP label still cleaned up so a later un-park can re-dispatch');
+    });
+
+    test('gh-1087 AC4/REG-1: transient 429 interruption still takes the classic gh-742 reset (classifier must not park)', function () {
+        var movedTo = [];
+        var addedLabels = [];
+        var comments = [];
+        var mod = loadDevelopTicketAndCreatePRWithRealGitHelpers({
+            cli_execute_command: noChangesGitCommandMock('TS-7', 'ai/TS-7'),
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+            jira_add_label: function (args) { addedLabels.push(args.label); }
+        });
+
+        var caught = null;
+        try {
+            mod.action({
+                ticket: { key: 'TS-7', fields: { summary: 'Rate blip', description: '', labels: [] } },
+                metadata: { contextId: 'story_development' },
+                customParams: {},
+                response: '',
+                currentCliErrorMessage: 'HTTP 429: rate limit exceeded, retry in 30s'
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught && caught.interruptedReset === true,
+            'transient interruption keeps the gh-742 interruptedReset contract');
+        assert.deepEqual(movedTo, ['Ready For Development'],
+            'transient interruption is still reset for retry');
+        assert.deepEqual(addedLabels, [],
+            'no park label on a transient failure');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'Development Interrupted');
+    });
+
     test('fails the job explicitly (throws) when currentCliHasFatalError is set, even though the response text matches no known fatal-error signature (e.g. a provider HTTP 5xx)', function () {
         var movedTo = [];
         var removedLabels = [];

@@ -104,7 +104,7 @@ function probeEveryOf(jobParams) {
 function probeCommandOf(jobParams) {
     var cmd = jobParams && jobParams.quotaProbeCommand;
     if (typeof cmd === 'string' && cmd.trim()) return cmd;
-    return 'bash -c \'curl -fsS -m 30 -o /dev/null -X POST "$FA_PROVIDER_BASE_URL/chat/completions" ' +
+    return 'bash -c \'curl --fail -sS -m 30 -o /dev/null -X POST "$FA_PROVIDER_BASE_URL/chat/completions" ' +
         '-H "Authorization: Bearer $FA_PROVIDER_API_KEY" -H "Content-Type: application/json" ' +
         '-d "{\\"model\\":\\"$FA_PROVIDER_MODEL\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"ping\\"}],\\"max_tokens\\":1}"\'';
 }

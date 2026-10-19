@@ -101,8 +101,10 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
             './developTicketAndCreatePR.js': {
                 action: function() { return { success: true, path: 'delegated' }; },
                 throwInterruptedReset: developTicketRealModule.throwInterruptedReset,
-                // gh-1087: real shared classification contract (pure concat).
+                // gh-1087: real shared helpers (single source of truth for
+                // the classification concat + the quotaPark marker contract).
                 classifyInterruptedText: developTicketRealModule.classifyInterruptedText,
+                throwQuotaPark: developTicketRealModule.throwQuotaPark,
                 recoverMissingResponse: function () { return null; }
             }
         ,
@@ -213,6 +215,46 @@ suite('developBugAndCreatePR', function() {
             }),
             'CodeGraph setup/cleanup belongs to setup scripts, not JS post-actions'
         );
+    });
+
+    test('gh-1087 UT-2/AC2: bug leg parks on a 403 quota failure — park label + comment, NO status reset, quotaPark marker', function() {
+        var addedLabels = [];
+        var loaded = loadDevelopBugAndCreatePR({
+            jira_add_label: function (args) { addedLabels.push(args.label); }
+        });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: {
+                    key: 'TS-1301',
+                    fields: { summary: 'Quota wall', description: '', labels: [] }
+                },
+                metadata: { contextId: 'bug_development' },
+                response: '',
+                currentCliErrorMessage: 'z.ai glm-5.3-flash answered 403 "weekly (7-day) usage limit" (9 retries); Provider chain exhausted: 2 of 2',
+                jobParams: {
+                    customParams: { removeLabel: 'sm_bug_development_triggered' }
+                }
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught, 'a parked bug leg must fail the run (throw), not return plain success');
+        assert.ok(caught && caught.quotaPark === true,
+            'thrown error carries the quotaPark marker via the shared developTicket.throwQuotaPark helper');
+        assert.deepEqual(loaded.moves, [],
+            'quota park must NOT reset the ticket to Ready For Development (AC2)');
+        assert.deepEqual(addedLabels, ['provider_quota'],
+            'park label added to the ticket (AC2)');
+        assert.equal(loaded.comments.length, 1);
+        assert.contains(loaded.comments[0].comment, 'Provider Quota Exhausted');
+        assert.contains(loaded.comments[0].comment, 'weekly (7-day)');
+        assert.deepEqual(loaded.removed, [
+            { key: 'TS-1301', label: 'bug_development_wip' },
+            { key: 'TS-1301', label: 'sm_bug_development_triggered' }
+        ], 'WIP + SM labels still cleaned up so a later un-park can re-dispatch');
     });
 
     test('accepts already_fixed output without CodeGraph and moves bug to Done', function() {
@@ -696,6 +738,7 @@ function loadBugForMissingResponseResume(opts) {
             './developTicketAndCreatePR.js': {
                 action: function () { delegated++; return { success: true, path: 'delegated' }; },
                 classifyInterruptedText: sharedGateModule.classifyInterruptedText,
+                throwQuotaPark: sharedGateModule.throwQuotaPark,
                 throwInterruptedReset: sharedGateModule.throwInterruptedReset,
                 recoverMissingResponse: function (ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage) {
                     recoverCalls.push({
