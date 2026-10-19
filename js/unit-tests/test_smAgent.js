@@ -15156,7 +15156,13 @@ suite('smAgent: fork silent-update workflow-write escalation (gh-1106)', functio
         assert.equal(sm.cloneCommands.length, 2, 'one silent attempt + exactly ONE escalated attempt');
         var cmd1 = sm.cloneCommands[0];
         var cmd2 = sm.cloneCommands[1];
-        var pushOf = function (c) { return c.slice(c.indexOf('git push ')); };
+        // the push target proper — up to the stderr-tee suffix, which
+        // carries a Date.now() dir stamp that differs per attempt
+        var pushOf = function (c) {
+            var start = c.indexOf('git push ');
+            var end = c.indexOf('; } 2>>', start);
+            return c.slice(start, end === -1 ? undefined : end);
+        };
         assert.equal(pushOf(cmd2), pushOf(cmd1),
             'the escalated chain reuses the identical push target (fork token URL, HEAD:<branch>) — only the env changes');
         assert.deepEqual(sm.capturedEnvSets, [
