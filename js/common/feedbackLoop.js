@@ -384,6 +384,7 @@ module.exports = {
     resumeOnceForMissingResponse: resumeOnceForMissingResponse,
     buildFeedbackPrompt: buildFeedbackPrompt,
     buildMissingResponsePrompt: buildMissingResponsePrompt,
+    runConfiguredGates: runConfiguredGates,
     runQualityGates: runQualityGates,
     runPolicyGates: runPolicyGates,
     runPostPublishGates: runPostPublishGates,

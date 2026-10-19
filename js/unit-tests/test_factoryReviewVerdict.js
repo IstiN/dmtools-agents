@@ -746,3 +746,171 @@ suite('review verdict — gh-1101 SM tick on approval', function () {
     assert.equal(x.r.smKicked, false);
   });
 });
+
+// ── gh-1079: applyReviewVerdict characterization ─────────────────────────────
+// Pins the currently-uncovered branches (entry defaults, unwrap/parse edge
+// contracts, legacy parser fallback, parser-env defaults, probe failure,
+// missing round_labels/diagnosis/maxRounds rendering, clock-less io, SM-kick
+// warn paths) BEFORE the handler extraction — green now, must stay green.
+
+suite('factoryReviewVerdict — applyReviewVerdict characterization (gh-1079)', function () {
+
+  // gh-1101 kick-world rules (suite-local copy — the original lives inside
+  // the gh-1101 suite): green dispatched run on the head, SM idle.
+  var KICK_SHA = '1fbfd41a1fbfd41a1fbfd41a1fbfd41a1fbfd41a';
+  function kickRules(green, smLive) {
+    return [
+      ['headRefOid', 'out', KICK_SHA + '\n'],
+      ['actions/workflows/quality.yml/runs', 'out', green + '\n'],
+      ['run list', 'out', smLive + '\n'],
+      ['workflow run', 'out', 'ok']
+    ].concat(baseRules({ rollup: 'SUCCESS\n' }));
+  }
+
+  test('applyReviewVerdict() with no arguments short-circuits to no-token, zero calls', function () {
+    var r = rvModule.applyReviewVerdict();
+    assert.deepEqual(r, { status: 'no-token' });
+
+    var st = execStub([]);
+    var r2 = rvModule.applyReviewVerdict(baseOpts({ ghToken: '' }), ioStub(st));
+    assert.deepEqual(r2, { status: 'no-token' });
+    assert.equal(st.commands.length, 0);
+  });
+
+  test('unwrap contract: absent/empty object output is empty, plain strings ride verbatim', function () {
+    assert.equal(rvModule.unwrap({}), '');
+    assert.equal(rvModule.unwrap(null), '');
+    assert.equal(rvModule.unwrap(undefined), '');
+    assert.equal(rvModule.unwrap({ output: '' }), '');
+    assert.equal(rvModule.unwrap({ stdout: 's' }), 's');
+    assert.equal(rvModule.unwrap('raw-string'), 'raw-string');
+    assert.equal(rvModule.unwrap(0), '');
+  });
+
+  test('parseVerdictContract(null/undefined) yields the all-default contract', function () {
+    var c = rvModule.parseVerdictContract(null);
+    assert.equal(c.decision, '');
+    assert.equal(c.source, '');
+    assert.equal(c.override, '');
+    assert.equal(c.blocking_markers, '');
+    assert.equal(c.rounds_done, 0);
+    assert.equal(c.next_round, 0);
+    assert.equal(c.escalate, false);
+    assert.equal(c.round_labels, '');
+    assert.equal(c.diagnosis, '');
+    assert.equal(rvModule.parseVerdictContract(undefined).decision, '');
+  });
+
+  test('pickVerdictSh: probe exec failure still falls back to the legacy tree', function () {
+    var st = execStub([["bash -c 'ls -1", 'throw', 'exploded']]);
+    var io = ioStub(st);
+    var r = rvModule.pickVerdictSh(baseOpts(), io);
+    assert.equal(r, STUB_DIR + '/setup/review-verdict.sh');
+    assert.contains(io.logs.join('\n'),
+      '→ verdict logic: legacy tree ' + r + ' (no pr_review pack loop/verdict.sh unpacked)');
+  });
+
+  test('pickVerdictSh: absent config/factoryRoot still resolve a (rootless) legacy path', function () {
+    var st = execStub([['bash -c', 'out', '\n']]);
+    var io = ioStub(st);
+    var r = rvModule.pickVerdictSh({}, io);
+    assert.equal(r, '/setup/review-verdict.sh');
+  });
+
+  test('parser env: MAX_ROUNDS empty when undefined; RUN_OUTPUT falls back to the sh default', function () {
+    var st = withParser(execStub(baseRules()), contractLines({ decision: 'rework' }));
+    var io = ioStub(st);
+    rvModule.applyReviewVerdict(baseOpts({ maxRounds: undefined, runOutput: undefined }), io);
+    var c = st.lastParserCmd;
+    assert.contains(c, "MAX_ROUNDS=''");
+    assert.contains(c, "RUN_OUTPUT='.dmtools/run-output.txt'");
+  });
+
+  test('probe failure (parser exec throws) → empty contract → unknown decision → LOUD path with no diagnosis', function () {
+    var rules = [['decide', 'throw', 'parser exploded']];
+    Array.prototype.push.apply(rules, baseRules());
+    var st = execStub(rules);
+    var io = ioStub(st);
+    var threw = null;
+    try { rvModule.applyReviewVerdict(baseOpts(), io); } catch (e) { threw = e; }
+    assert.ok(threw, 'probe failure degrades to unknown → the loud exit-1 path');
+    assert.contains(String(threw && threw.message || threw), 'review verdict missing');
+    assert.contains(io.logs.join('\n'), '→ diagnosis: none');
+    var commentCmds = st.commands.filter(function (c) { return c.indexOf('issue comment') !== -1; });
+    var bodyPath = commentCmds[0].replace(/^.*--body-file '/, '').replace(/'$/, '');
+    assert.contains(io.written[bodyPath], 'Per-source diagnosis: `n/a`');
+  });
+
+  test('parser chatter with NO decision line → unknown decision → the loud path too', function () {
+    var st = withParser(execStub(baseRules()), 'just chatter\nno keys here\n');
+    var io = ioStub(st);
+    var threw = null;
+    try { rvModule.applyReviewVerdict(baseOpts(), io); } catch (e) { threw = e; }
+    assert.ok(threw);
+    assert.contains(io.logs.join('\n'), '→ review decision: unknown (source=none, override=false, rounds_done=0)');
+  });
+
+  test('rework with an empty round_labels contract: only needs-human is removed', function () {
+    var st = withParser(execStub(baseRules()), contractLines({ decision: 'rework', roundLabels: '' }));
+    var io = ioStub(st);
+    var r = rvModule.applyReviewVerdict(baseOpts(), io);
+    assert.equal(r.status, 'rework');
+    var removes = st.commands.filter(function (c) { return c.indexOf('--remove-label') !== -1; });
+    assert.equal(removes.length, 1, 'no round labels in the contract → nothing else to strip');
+    assert.contains(removes[0], "--remove-label 'needs-human'");
+    assert.notContains(removes.join('\n'), 'rework-round');
+  });
+
+  test('rework with maxRounds undefined: the queue log renders an empty cap', function () {
+    var st = withParser(execStub(baseRules()), contractLines({ decision: 'rework' }));
+    var io = ioStub(st);
+    rvModule.applyReviewVerdict(baseOpts({ maxRounds: undefined }), io);
+    assert.contains(io.logs.join('\n'),
+      '→ labeled agent:rework (round 3/) — rework run queued (re-review follows automatically)');
+  });
+
+  test('escalate with maxRounds undefined: the comment renders an empty cap', function () {
+    var st = withParser(execStub(baseRules()), contractLines({ decision: 'rework', escalate: 'true' }),
+      'thread summary line\n');
+    var io = ioStub(st);
+    var r = rvModule.applyReviewVerdict(baseOpts({ maxRounds: undefined }), io);
+    assert.equal(r.status, 'escalated');
+    var commentCmds = st.commands.filter(function (c) { return c.indexOf('issue comment') !== -1; });
+    var bodyPath = commentCmds[0].replace(/^.*--body-file '/, '').replace(/'$/, '');
+    assert.contains(io.written[bodyPath],
+      '🛑 **Auto-rework loop capped** — 2 automatic rework rounds without an APPROVE verdict (cap: ). The machine stopped labeling `agent:rework`.');
+  });
+
+  test('approve path tolerates a log-less, clock-less io (new Date() clock, no crash)', function () {
+    var st = withParser(execStub(baseRules({ rollup: 'SUCCESS\n' })),
+      contractLines({ decision: 'approve' }));
+    var io = ioStub(st);
+    delete io.log;
+    delete io.clock;
+    var r = rvModule.applyReviewVerdict(baseOpts(), io);
+    assert.equal(r.status, 'approved');
+    var adds = st.commands.filter(function (c) { return c.indexOf('--add-label') !== -1; });
+    assert.contains(adds.join('\n'), "--add-label 'pr_approved'");
+  });
+
+  test('SM dispatch failure with a non-Error throw warns via String(e)', function () {
+    var rules = [['workflow run', 'throw', 'gh: plain string']];
+    Array.prototype.push.apply(rules, kickRules(1, 0));
+    var st = withParser(execStub(rules), contractLines({ decision: 'approve' }));
+    var io = ioStub(st);
+    var r = rvModule.applyReviewVerdict(baseOpts(), io);
+    assert.equal(r.status, 'approved');
+    assert.equal(r.smKicked, false);
+    assert.contains(io.logs.join('\n'), '::warning::SM tick dispatch failed: gh: plain string');
+  });
+
+  test('kickSmOnGreenHead works with a log-less io (default no-op logger)', function () {
+    var st = execStub(kickRules(1, 0));
+    var io = ioStub(st);
+    delete io.log;
+    var kicked = rvModule.kickSmOnGreenHead(baseOpts(), io, PR);
+    assert.equal(kicked, true);
+    assert.equal(st.commands.filter(function (c) { return c.indexOf('gh workflow run') === 0; }).length, 1);
+  });
+
+});
