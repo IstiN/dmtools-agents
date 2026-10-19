@@ -122,94 +122,128 @@ function parseTokensLine(line) {
     };
 }
 
-function extractTokenUsage(logs) {
-    var lines = String(logs || '').split(/\r?\n/);
-    var lastRequests = null;
-    var samples = [];
-    var seenFaSegments = {};
-    var resumeDetected = false;
-    var resumeStages = [];
-    var feedbackLoopCount = 0;
-    var rateLimitRetryCount = 0;
-    var rateLimitDetected = false;
-    var timeoutCount = 0;
+function newUsageTracking() {
+    return {
+        lastRequests: null,
+        samples: [],
+        seenFaSegments: {},
+        resumeDetected: false,
+        resumeStages: [],
+        feedbackLoopCount: 0,
+        rateLimitRetryCount: 0,
+        rateLimitDetected: false,
+        timeoutCount: 0
+    };
+}
 
+// Classifies one log line's resume markers: a feedback-loop line carries its
+// stage, while a bare '--resume' / 'run-agent.sh --continue' marker only flags
+// the resume. The feedback-loop shape wins when a line matches both.
+function parseResumeSignal(line) {
+    var resumeMatch = line.match(/Feedback loop: resuming agent for\s+(.+?)\s+attempt\s+([0-9]+)\/([0-9]+)/);
+    if (resumeMatch) {
+        return { resumed: true, feedbackStage: (resumeMatch[1] || 'resume') + ' ' + resumeMatch[2] + '/' + resumeMatch[3] };
+    }
+    // 'run-agent.sh --continue' (without '--resume') is the recovery command shape
+    // used since --continue and --resume were found to be mutually exclusive in the
+    // Copilot CLI; kept alongside the older '--continue --resume' shape (still
+    // matched via the '--resume' check above) so historical logs still parse.
+    if (line.indexOf('--resume') !== -1 || line.indexOf('run-agent.sh --continue') !== -1) {
+        return { resumed: true, feedbackStage: null };
+    }
+    return { resumed: false, feedbackStage: null };
+}
+
+// Classifies one log line's rate-limit signals: only the explicit Copilot
+// retry wording counts a retry; the looser wording only flags detection.
+function parseRateLimitSignal(line) {
+    if (/Copilot rate limit detected; retrying/i.test(line)) {
+        return { retry: true, detected: true };
+    }
+    return { retry: false, detected: /rate limit|limit reset|You've hit your rate limit/i.test(line) };
+}
+
+function isTimeoutLine(lower) {
+    return lower.indexOf('exit code 124') !== -1 ||
+        lower.indexOf('timed out') !== -1 ||
+        lower.indexOf('command timeout') !== -1 ||
+        lower.indexOf('timeout guard') !== -1;
+}
+
+function applyResumeSignal(tracking, signal) {
+    if (!signal.resumed) return;
+    tracking.resumeDetected = true;
+    if (signal.feedbackStage) {
+        tracking.feedbackLoopCount += 1;
+        tracking.resumeStages.push(signal.feedbackStage);
+    }
+}
+
+function applyRateLimitSignal(tracking, signal) {
+    if (signal.retry) tracking.rateLimitRetryCount += 1;
+    if (signal.detected) tracking.rateLimitDetected = true;
+}
+
+// Applies one log line's resume / rate-limit / timeout signals to the tracking
+// state, preserving the original scan order.
+function applyLogSignals(tracking, line, lower) {
+    applyResumeSignal(tracking, parseResumeSignal(line));
+    applyRateLimitSignal(tracking, parseRateLimitSignal(line));
+    if (isTimeoutLine(lower)) tracking.timeoutCount += 1;
+}
+
+// The fa ledger is resume-aware: the same sessionId emits one line per
+// segment, so dedupe by (sessionId, segment) to avoid double-counting
+// resumed segments if a line is replayed in the logs. Lines without a
+// segment field keep faSegment null and are never deduped. Returns true when
+// the tokens sample is a replay that must be skipped.
+function isFaSegmentReplay(tracking, tokens) {
+    if (!tokens.faSessionId || tokens.faSegment == null) return false;
+    var segmentKey = tokens.faSessionId + ':' + tokens.faSegment;
+    if (tracking.seenFaSegments[segmentKey]) return true;
+    tracking.seenFaSegments[segmentKey] = true;
+    return false;
+}
+
+function appendUsageSample(tracking, tokens) {
+    var base = { attemptIndex: tracking.samples.length + 1 };
+    if (tokens.requests == null && tracking.lastRequests) base = Object.assign(base, tracking.lastRequests);
+    tracking.samples.push(Object.assign(base, tokens));
+}
+
+function collectUsageSamples(tracking, lines) {
     for (var i = 0; i < lines.length; i++) {
         var line = String(lines[i] || '');
-        var lower = line.toLowerCase();
-        var resumeMatch = line.match(/Feedback loop: resuming agent for\s+(.+?)\s+attempt\s+([0-9]+)\/([0-9]+)/);
-        if (resumeMatch) {
-            resumeDetected = true;
-            feedbackLoopCount += 1;
-            resumeStages.push((resumeMatch[1] || 'resume') + ' ' + resumeMatch[2] + '/' + resumeMatch[3]);
-        } else if (line.indexOf('--resume') !== -1 || line.indexOf('run-agent.sh --continue') !== -1) {
-            // 'run-agent.sh --continue' (without '--resume') is the recovery command shape
-            // used since --continue and --resume were found to be mutually exclusive in the
-            // Copilot CLI; kept alongside the older '--continue --resume' shape (still
-            // matched via the '--resume' check above) so historical logs still parse.
-            resumeDetected = true;
-        }
-        if (/Copilot rate limit detected; retrying/i.test(line)) {
-            rateLimitRetryCount += 1;
-            rateLimitDetected = true;
-        } else if (/rate limit|limit reset|You've hit your rate limit/i.test(line)) {
-            rateLimitDetected = true;
-        }
-        if (lower.indexOf('exit code 124') !== -1 ||
-            lower.indexOf('timed out') !== -1 ||
-            lower.indexOf('command timeout') !== -1 ||
-            lower.indexOf('timeout guard') !== -1) {
-            timeoutCount += 1;
-        }
-
+        applyLogSignals(tracking, line, line.toLowerCase());
         var request = parseRequestsLine(lines[i]);
         if (request) {
-            lastRequests = request;
+            tracking.lastRequests = request;
             continue;
         }
-
         var tokens = parseTokensLine(lines[i]);
-        if (tokens) {
-            // The fa ledger is resume-aware: the same sessionId emits one line per
-            // segment, so dedupe by (sessionId, segment) to avoid double-counting
-            // resumed segments if a line is replayed in the logs. Lines without a
-            // segment field keep faSegment null and are never deduped.
-            if (tokens.faSessionId && tokens.faSegment != null) {
-                var segmentKey = tokens.faSessionId + ':' + tokens.faSegment;
-                if (seenFaSegments[segmentKey]) continue;
-                seenFaSegments[segmentKey] = true;
-            }
-            var base = { attemptIndex: samples.length + 1 };
-            if (tokens.requests == null && lastRequests) base = Object.assign(base, lastRequests);
-            samples.push(Object.assign(base, tokens));
+        if (tokens && !isFaSegmentReplay(tracking, tokens)) {
+            appendUsageSample(tracking, tokens);
         }
     }
+}
 
-    if (!samples.length) return null;
-    var finalSample = samples[samples.length - 1];
+function collectFaSourceKeys(samples) {
     var faSources = {};
     samples.forEach(function(sample) {
         if (sample.source) faSources[sample.source] = true;
     });
-    var faSourceKeys = Object.keys(faSources).sort();
-    var aggregate = {
-        source: faSourceKeys.length === 0 ? '' : (faSourceKeys.length === 1 ? faSourceKeys[0] : 'mixed'),
-        requests: 0,
-        requestTier: finalSample.requestTier || '',
-        requestDuration: finalSample.requestDuration || '',
-        readTokens: 0,
-        writeTokens: 0,
-        cachedTokens: 0,
-        reasoningTokens: 0,
-        samples: samples.length,
-        resumeDetected: resumeDetected || samples.length > 1,
-        resumeStages: resumeStages,
-        feedbackLoopCount: feedbackLoopCount,
-        rateLimitRetryCount: rateLimitRetryCount,
-        rateLimitDetected: rateLimitDetected,
-        timeoutCount: timeoutCount,
-        attempts: samples
-    };
+    return Object.keys(faSources).sort();
+}
+
+// '', the single source when all samples agree, or 'mixed' when they disagree.
+function usageSourceLabel(faSourceKeys) {
+    if (faSourceKeys.length === 0) return '';
+    if (faSourceKeys.length === 1) return faSourceKeys[0];
+    return 'mixed';
+}
+
+// Sums the per-sample token/request counters into the aggregate.
+function sumUsageSamples(aggregate, samples) {
     samples.forEach(function(sample) {
         aggregate.requests += sample.requests || 0;
         aggregate.readTokens += sample.readTokens || 0;
@@ -218,6 +252,36 @@ function extractTokenUsage(logs) {
         aggregate.reasoningTokens += sample.reasoningTokens || 0;
     });
     return aggregate;
+}
+
+function buildUsageAggregate(tracking) {
+    if (!tracking.samples.length) return null;
+    var finalSample = tracking.samples[tracking.samples.length - 1];
+    var aggregate = {
+        source: usageSourceLabel(collectFaSourceKeys(tracking.samples)),
+        requests: 0,
+        requestTier: finalSample.requestTier || '',
+        requestDuration: finalSample.requestDuration || '',
+        readTokens: 0,
+        writeTokens: 0,
+        cachedTokens: 0,
+        reasoningTokens: 0,
+        samples: tracking.samples.length,
+        resumeDetected: tracking.resumeDetected || tracking.samples.length > 1,
+        resumeStages: tracking.resumeStages,
+        feedbackLoopCount: tracking.feedbackLoopCount,
+        rateLimitRetryCount: tracking.rateLimitRetryCount,
+        rateLimitDetected: tracking.rateLimitDetected,
+        timeoutCount: tracking.timeoutCount,
+        attempts: tracking.samples
+    };
+    return sumUsageSamples(aggregate, tracking.samples);
+}
+
+function extractTokenUsage(logs) {
+    var tracking = newUsageTracking();
+    collectUsageSamples(tracking, String(logs || '').split(/\r?\n/));
+    return buildUsageAggregate(tracking);
 }
 
 function normalizeLogPayload(raw) {
@@ -718,15 +782,39 @@ function readJsonFile(path, fallback) {
     }
 }
 
-function sleepMilliseconds(ms) {
-    ms = parseInt(ms, 10) || 0;
-    if (ms <= 0) return;
-    if (typeof Java !== 'undefined' && Java.type) {
-        Java.type('java.lang.Thread').sleep(ms);
-        return;
-    }
+// Parses the requested sleep duration, clamping unparseable and non-positive
+// values to a no-op 0.
+function parseSleepMilliseconds(ms) {
+    return Math.max(0, parseInt(ms, 10) || 0);
+}
+
+function hasJavaThread() {
+    return !!(typeof Java !== 'undefined' && Java.type);
+}
+
+// Real pause under GraalJS / the JVM-hosted runners.
+function sleepViaJavaThread(ms) {
+    Java.type('java.lang.Thread').sleep(ms);
+}
+
+// Busy-wait fallback for engines without the Java interop (unit-test harnesses).
+function sleepViaBusyWait(ms) {
     var end = Date.now() + ms;
     while (Date.now() < end) {}
+}
+
+// Pauses the current thread for the given duration. Trivial on purpose: the
+// duration parsing and the engine-specific strategies live in the small
+// helpers above, so this reads as a decision table and stays easy to inject
+// around in tests.
+function sleepMilliseconds(ms) {
+    var duration = parseSleepMilliseconds(ms);
+    if (duration <= 0) return;
+    if (hasJavaThread()) {
+        sleepViaJavaThread(duration);
+        return;
+    }
+    sleepViaBusyWait(duration);
 }
 
 function loadUsageCache(path) {
@@ -1109,6 +1197,18 @@ if (typeof module !== 'undefined' && module.exports) {
         parseNumberWithSuffix: parseNumberWithSuffix,
         parseTokensLine: parseTokensLine,
         extractTokenUsage: extractTokenUsage,
+        newUsageTracking: newUsageTracking,
+        parseResumeSignal: parseResumeSignal,
+        parseRateLimitSignal: parseRateLimitSignal,
+        isTimeoutLine: isTimeoutLine,
+        applyLogSignals: applyLogSignals,
+        isFaSegmentReplay: isFaSegmentReplay,
+        appendUsageSample: appendUsageSample,
+        collectUsageSamples: collectUsageSamples,
+        collectFaSourceKeys: collectFaSourceKeys,
+        usageSourceLabel: usageSourceLabel,
+        sumUsageSamples: sumUsageSamples,
+        buildUsageAggregate: buildUsageAggregate,
         extractAgentAndKey: extractAgentAndKey,
         calculateDurationSeconds: calculateDurationSeconds,
         formatDuration: formatDuration,
@@ -1124,6 +1224,9 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveOutputPaths: resolveOutputPaths,
         parseCacheOptions: parseCacheOptions,
         parseMaxLogDownloads: parseMaxLogDownloads,
+        parseSleepMilliseconds: parseSleepMilliseconds,
+        hasJavaThread: hasJavaThread,
+        sleepMilliseconds: sleepMilliseconds,
         shouldLogRunProgress: shouldLogRunProgress,
         renderOnlyReport: renderOnlyReport,
         cacheOnlyReport: cacheOnlyReport,
