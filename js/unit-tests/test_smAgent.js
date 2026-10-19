@@ -396,6 +396,8 @@ function makeSmAgent(opts) {
                 './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
             }), {}),
             './common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            // gh-1114: the tick-layer map — a pure leaf module, loaded real.
+            './common/smRuleLayers.js': loadModule('js/common/smRuleLayers.js', makeRequire({}), {}),
             './sm/sources/githubSource.js': {
                 takeMutexTickSnapshot: function () { return null; }
             },
@@ -2095,7 +2097,10 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
 
         sm.action(params);
 
-        assert.equal(sm.capturedCliCommands.length, 1, 'one update command');
+        // gh-1114 E4: the chain + ONE extra LOCAL command — the rev-parse
+        // sha probe in the attempt's checkout (no API call, no second
+        // update, no update-branch API).
+        assert.equal(sm.capturedCliCommands.length, 2, 'one update command + the E4 sha probe');
         // A git merge push, not the GitHub update-branch APIs: GraphQL
         // updatePullRequestBranch and the PUT REST endpoint both block
         // github-actions[bot] (live-verified); a plain push on the runner
@@ -2129,7 +2134,9 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         sm.action({ jobParams: { owner: 'a', repo: 'b',
             silentToken: 'SILENT-TOKEN', sourceToken: 'PAT-TOKEN', rules: [RULES.update] } });
 
-        assert.equal(sm.capturedCliCommands.length, 1, 'one update command');
+        // gh-1114 E4: the chain + ONE extra LOCAL command — the rev-parse
+        // sha probe (no API call, no second update chain).
+        assert.equal(sm.capturedCliCommands.length, 2, 'one update command + the E4 sha probe');
         var cmd = sm.capturedCliCommands[0].command;
         assert.ok(cmd.indexOf("--branch 'f'\\''$(reboot)`id` x'") !== -1,
             'the clone --branch is single-quote-escaped');
@@ -15376,6 +15383,835 @@ suite('smAgent: naked-PR reconciliation sweep (gh-1097 IT-1)', function () {
             body: '<!-- dmtools:naked-pr-rearm {"pr":10,"head":"sha10"} -->' }]);
         assert.equal(sm.capturedPrLabelAdds.length, 0);
         assert.equal(sm.capturedPrComments.length, 0);
+    });
+});
+
+// ─── gh-1114: layered tick — freshness before verdicts + merge-first capacity ──
+// The SM tick runs in layers (smRuleLayers.js): L0 hygiene → L1 freshness
+// (silent-update-behind, park-reset — the only layer that moves heads) →
+// L2 verdict (merge/fail/arm/sweep) → L3 dispatch → L4 agents → L5 close.
+// UT-1 (the layer map over sm_github.json) lives in test_smTickLayers.js.
+
+suite('smAgent: gh-1114 movedThisTick guard (UT-2..5 / AC7)', function () {
+
+    var OLD = 'aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000';
+    var NEW = 'bbbb1111bbbb1111bbbb1111bbbb1111bbbb1111';
+
+    var UPDATE_RULE = { source: 'github', query: { type: 'pr', labels: ['pr_approved'], mergeState: 'BEHIND' },
+        localAction: 'update_branch', limit: 5, id: 'silent-update-behind' };
+
+    function pr(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null, prNumber: n,
+            branch: 'ai/x-' + n, headSha: OLD, draft: false };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    // A tick where the L1 freshness rule REALLY moves pr-70's head (the
+    // post-clone prAfterRefresh payload carries the NEW sha), then the L2
+    // rule matches the same PR. items keyed per rule id — the L2 rule sees
+    // the post-update world (the PR re-queried fresh).
+    function movedTick(l2Rule, extra) {
+        extra = extra || {};
+        var items = movedTickItems(l2Rule, extra.items);
+        var opts = Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: Object.assign({
+                items: function (rule) { return items[rule.id] || []; },
+                pr: { number: 70, head: { sha: OLD } },
+                prAfterRefresh: { number: 70, head: { sha: NEW } }
+            }, extra.github || {})
+        }, extra.opts || {});
+        if (extra.onCliExecute) opts.onCliExecute = extra.onCliExecute;
+        var sm = makeSmAgent(opts);
+        sm.action({ jobParams: Object.assign({ owner: 'a', repo: 'b',
+            rules: [UPDATE_RULE, l2Rule] }, extra.jobParams || {}) });
+        return sm;
+    }
+
+    // Per-rule item sets for the moved-head tick: both the freshness rule and
+    // the L2 rule match pr-70; extraItems adds/overrides entries (keyed by
+    // rule id) for callers that need a wider world (UT-2b's two-candidate
+    // verdict rule).
+    function movedTickItems(l2Rule, extraItems) {
+        var items = {};
+        items[UPDATE_RULE.id] = [pr(70)];
+        items[l2Rule.id] = [pr(70)];
+        if (extraItems) { for (var k in extraItems) { items[k] = extraItems[k]; } }
+        return items;
+    }
+
+    function deferLogged(sm) {
+        return (sm.capturedLogs || []).some(function (l) {
+            return l.indexOf('pr-70 head moved this tick — verdict deferred') !== -1;
+        });
+    }
+
+    test('UT-2 (AC7): merge_pr never merges a head moved this tick', function () {
+        var sm = movedTick({ source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
+            localAction: 'merge_pr', limit: 1, id: 'merge-validated' });
+        assert.equal(deferLogged(sm), true, 'the deferral log line is printed');
+        assert.equal(sm.capturedPrMerges.length, 0, 'no merge — the verdict is deferred');
+        assert.ok(clonedA(sm), 'the freshness layer did move the head first');
+    });
+
+    test('UT-2b (AC7): the deferral is per-head — an unmoved candidate under the same verdict rule still merges', function () {
+        var sm = movedTick({ source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
+            localAction: 'merge_pr', limit: 5, id: 'merge-validated' }, {
+            // A wider world: the verdict rule sees the moved pr-70 AND an
+            // unmoved green pr-71. Only the moved head is deferred.
+            items: { 'merge-validated': [pr(70), pr(71, { headSha: NEW })] },
+            github: {
+                // attemptMergeProbe re-reads the sticky pr_approved latch on
+                // the PR itself — give the probe a green approved payload.
+                pr: { number: 71, head: { sha: NEW }, labels: ['pr_approved'] },
+                prAfterRefresh: { number: 71, head: { sha: NEW }, labels: ['pr_approved'] }
+            }
+        });
+        assert.equal(deferLogged(sm), true, 'the moved head (pr-70) is deferred');
+        assert.equal(sm.capturedPrMerges.length, 1, 'the unmoved candidate (pr-71) merges in the same tick');
+        assert.equal(sm.capturedPrMerges[0].pullRequestId, 71, 'the merge is pr-71, not the deferred pr-70');
+    });
+
+    test('UT-3 (AC7): fail_validation never parks a head moved this tick', function () {
+        var sm = movedTick({ source: 'github',
+            query: { type: 'pr', labels: ['ai_validating'], checks: 'red' },
+            localAction: 'fail_validation', limit: 1, id: 'fail-validation' }, {
+            github: { commitCheckRuns: { check_runs: [
+                { name: 'static', status: 'completed', conclusion: 'failure' }
+            ] } }
+        });
+        assert.equal(deferLogged(sm), true, 'the deferral log line is printed');
+        var failed = sm.capturedPrLabelAdds.filter(function (l) {
+            return String(l.labels).indexOf('validation_failed') !== -1;
+        });
+        assert.equal(failed.length, 0, 'no validation_failed park on a moved head');
+        assert.equal(sm.capturedPrComments.length, 0, 'no park comment on a moved head (I5)');
+        assert.equal(sm.capturedPrLabelRemoves.filter(function (l) {
+            return l.label === 'ai_validating'; }).length, 0, 'the fail path never ran');
+    });
+
+    test('UT-4 (AC7): arm_rework never arms a head moved this tick', function () {
+        var sm = movedTick({ source: 'github',
+            query: { type: 'pr', checks: ['red'], notLabels: ['ai_validating', 'validation_failed', 'agent:rework', 'chore:pin'],
+                     prMachineAuthor: true, draft: false },
+            localAction: 'arm_rework', redHeadGated: true, limit: 1, id: 'rework-on-red-gate-unlatched' }, {
+            github: { commitCheckRuns: { check_runs: [
+                { name: 'static', status: 'completed', conclusion: 'failure' }
+            ] } }
+        });
+        assert.equal(deferLogged(sm), true, 'the deferral log line is printed');
+        assert.equal(sm.capturedPrLabelAdds.filter(function (l) {
+            return String(l.labels).indexOf('agent:rework') !== -1; }).length, 0,
+            'no agent:rework arm on a moved head');
+    });
+
+    test('UT-5 (AC7): sweep_stale_validation never sweeps a head moved this tick', function () {
+        var sm = movedTick({ source: 'github',
+            query: { type: 'pr', labels: ['ai_validating'], notMergeState: ['BEHIND'], draft: false },
+            localAction: 'sweep_stale_validation', staleMinutes: 15, limit: 10, id: 'sweep-stale-validating' });
+        assert.equal(deferLogged(sm), true, 'the deferral log line is printed');
+        assert.equal(sm.capturedPrLabelRemoves.filter(function (l) {
+            return l.label === 'ai_validating'; }).length, 0, 'the sweep never ran');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no re-latch, no park');
+    });
+
+    test('E1: an update push that fails records no move — L2 behaves as today', function () {
+        var sm = movedTick({ source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
+            localAction: 'merge_pr', limit: 1, id: 'merge-validated' }, {
+            github: { prAfterRefresh: { number: 70, head: { sha: OLD }, labels: ['pr_approved'] } },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('gh repo clone') === 0) {
+                    throw new Error('remote rejected the push');
+                }
+                return '';
+            }
+        });
+        assert.ok(clonedA(sm), 'the update was attempted');
+        assert.equal(deferLogged(sm), false, 'no deferral — the head did not move');
+        assert.equal(sm.capturedPrMerges.length, 1, 'the L2 verdict ran exactly as today');
+    });
+
+    test('E3: a dry tick records no move and its logs never claim a deferral', function () {
+        var sm = movedTick({ source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
+            localAction: 'merge_pr', limit: 1, id: 'merge-validated' }, {
+            jobParams: { dryRun: true }
+        });
+        assert.equal(deferLogged(sm), false, 'dry logs never claim a deferral');
+        assert.equal(sm.capturedPrMerges.length, 0, 'dry still performs no merge');
+    });
+
+    test('E4 (PR #1120 thread smAgent.js:3109): the record verifies against the PUSH\'s own sha — the re-read is only a fallback', function () {
+        // The live 2026-10-19 16:43 lag shape (ticket E4): the post-push
+        // github_get_pr re-read answers the PRE-push sha (read-after-write
+        // lag) while the attempt's own checkout knows the truth. Pre-fix
+        // the record came from the re-read → the lag swallowed the move →
+        // the L2 verdict ran on the superseded head (the #435 bug, E4
+        // flavor, silently). The pushed sha is locally computed — zero
+        // API reads, lag-immune.
+        var sm = movedTick({ source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
+            localAction: 'merge_pr', limit: 1, id: 'merge-validated' }, {
+            github: {
+                // The LAGY re-read: answers the OLD (pre-push) sha.
+                prAfterRefresh: { number: 70, head: { sha: OLD }, labels: ['pr_approved'] }
+            },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('rev-parse HEAD') !== -1) {
+                    return { output: NEW + '\n' }; // the push's own checkout
+                }
+                return '';
+            }
+        });
+        assert.equal(deferLogged(sm), true,
+            'the move IS recorded — from the push\'s own sha (lag-immune, E4)');
+        assert.equal(sm.capturedPrMerges.length, 0, 'the moved head is not merged on the laggy read');
+    });
+
+    test('E1 contract (PR #1120 thread smAgent.js:3110): an unresolved pre-push head records NO move', function () {
+        // resolveHeadSha failed (no ticket sha, no PR payload head) — the
+        // heal backstop still refreshes, but with NO baseline a post-push
+        // sha proves nothing: headMoved(null, sha) is true for ANY sha,
+        // including the up-to-date no-op refresh. E1's own contract —
+        // "an unverified move records nothing" — must hold: no record,
+        // no deferral, the verdict runs as today.
+        var noBaselineItem = pr(70, { headSha: null });
+        var sm = movedTick({ source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
+            localAction: 'merge_pr', limit: 1, id: 'merge-validated' }, {
+            items: { 'silent-update-behind': [noBaselineItem],
+                     'merge-validated': [noBaselineItem] },
+            github: {
+                pr: { number: 70, head: {} }, // resolveHeadSha → null
+                prAfterRefresh: { number: 70, head: { sha: NEW },
+                    labels: ['pr_approved', 'ai_validating'] }
+            }
+        });
+        assert.equal(deferLogged(sm), false, 'no baseline — no move recorded (E1: unverified records nothing)');
+        assert.equal(sm.capturedPrMerges.length, 1, 'the verdict runs as today — no spurious deferral');
+    });
+
+    test('PR #1120 thread smAgent.js:8684 — the L1→L2 drop covers every repo the L1 rules used (multi-repo)', function () {
+        // Rules can carry configPath / per-rule repositories (effectiveRepoInfo
+        // ≠ globalRepoInfo); the ioCache is keyed per (owner, repo). A custom
+        // multi-repo smRules tick must not keep a stale cached open-PR list
+        // for the L1 repo across the boundary — exactly the staleness this
+        // boundary exists to remove.
+        var OLD2 = 'cccc2222cccc2222cccc2222cccc2222cccc2222';
+        var NEW2 = 'dddd3333dddd3333dddd3333dddd3333dddd3333';
+        var MERGE_L2 = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
+            localAction: 'merge_pr', limit: 5, id: 'merge-validated' };
+        var L1_OTHER_REPO = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved'], mergeState: 'BEHIND' },
+            localAction: 'update_branch', limit: 5, id: 'silent-update-behind',
+            configPath: 'rules/other.config.js' };
+        var base = config('a', 'b');
+        var sm = makeSmAgent(Object.assign(base, {
+            fileMap: Object.assign({}, base.fileMap, {
+                'rules/other.config.js':
+                    'module.exports = { repository: { owner: "x", repo: "y" } };'
+            }),
+            captureConsole: true,
+            github: {
+                items: function (rule) {
+                    if (rule.id === 'silent-update-behind') {
+                        return [pr(70, ['pr_approved'], { headSha: OLD2 })];
+                    }
+                    return [pr(71, ['pr_approved', 'ai_validating'])];
+                },
+                pr: { number: 70, head: { sha: OLD2 } },
+                prAfterRefresh: { number: 70, head: { sha: NEW2 } }
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', maxTriggeredWorkflows: 3,
+            rules: [L1_OTHER_REPO, MERGE_L2] } });
+        assert.ok(sm.capturedCliCommands.some(function (c) {
+            return c.command.indexOf('gh repo clone') === 0; }), 'the L1 rule refreshed its candidate');
+        var openPrsDrops = sm.capturedIoCacheDrops.filter(function (d) {
+            return d.kind === 'openPrs'; });
+        assert.ok(openPrsDrops.some(function (d) {
+            return d.owner === 'x' && d.repo === 'y'; }),
+            'the L1 repo (x/y — per-rule configPath) cache is dropped at the boundary');
+        assert.ok(openPrsDrops.some(function (d) {
+            return d.owner === 'a' && d.repo === 'b'; }),
+            'the global repo cache is still dropped');
+    });
+
+    function clonedA(sm) {
+        return sm.capturedCliCommands.some(function (c) {
+            return c.command.indexOf('gh repo clone') === 0 &&
+                c.command.indexOf("--branch 'ai/x-70'") !== -1; // gh-1107: quoted head ref
+        });
+    }
+});
+
+suite('smAgent: gh-1114 merge-first capacity (UT-6..10 / AC9-13)', function () {
+
+    function cfgFor(owner, repo, jobParamsExtra) {
+        var fileMap = { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' };
+        return { fileMap: fileMap, jobParams: jobParamsExtra || {} };
+    }
+
+    function pr(n, labels, extra) {
+        var it = { key: 'pr-' + n, labels: labels || [], issueNumber: null, prNumber: n,
+            branch: 'ai/x-' + n, draft: false };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    var VALIDATE_ARMED = { source: 'github',
+        query: { type: 'pr', labels: ['pr_approved'],
+                 notLabels: ['ai_validating', 'validation_failed', 'rework-loop-escalated'],
+                 notMergeState: ['BEHIND', 'DIRTY'], draft: false,
+                 mutex: 'ai_validating', mutexAmong: ['pr_approved'] },
+        localAction: 'validate_pr', skipIfValidatedHead: true, redHeadSkip: true,
+        deferRedHead: true, limit: 1, id: 'validate-armed' };
+
+    var REVIEW_RULE = { source: 'github',
+        query: { type: 'pr', labels: ['agent:review'] },
+        configFile: 'agents/pr_review.json',
+        workflowFile: 'ai-teammate.yml',
+        inputs: { pr: '{prNumber}' }, workflowRef: '{branch}',
+        limit: 10, id: 'review-on-label' };
+
+    function reviewTick(optsExtra, rulesExtra) {
+        var base = cfgFor('a', 'b');
+        var opts = Object.assign({}, base, optsExtra || {});
+        opts.captureConsole = true;
+        var reviewPrs = [pr(81, ['agent:review']), pr(82, ['agent:review']),
+            pr(83, ['agent:review']), pr(84, ['agent:review'])];
+        var items = opts.github && opts.github.items;
+        var sm = makeSmAgent(Object.assign(opts, {
+            github: Object.assign({ items: items || reviewPrs }, (opts.github || {}))
+        }));
+        var rules = [VALIDATE_ARMED, REVIEW_RULE].concat(rulesExtra || []);
+        sm.action({ jobParams: Object.assign({ owner: 'a', repo: 'b',
+            maxTriggeredWorkflows: 3, rules: rules }, opts.jobParams || {}) });
+        return sm;
+    }
+
+    function ciDispatches(sm) {
+        return sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        });
+    }
+
+    test('UT-6 (AC9): cap 3 — the approved validation dispatches and at most 2 reviews run', function () {
+        var sm = reviewTick({
+            github: { items: function (rule) {
+                if (rule.id === 'validate-armed') return [pr(80, ['pr_approved'])];
+                return [pr(81, ['agent:review']), pr(82, ['agent:review']),
+                    pr(83, ['agent:review']), pr(84, ['agent:review'])];
+            } }
+        });
+        assert.equal(ciDispatches(sm).length, 1, 'the merge candidate is validated');
+        assert.equal(sm.capturedTriggers.length, 2, 'at most 2 reviews (the reserved slot went to validation)');
+        assert.ok((sm.capturedLogs || []).some(function (l) {
+            return l.indexOf('reserved slot spent, 2 dispatch slot(s) left') !== -1;
+        }), 'the reserved slot is accounted against the cap');
+        var reviewRefs = sm.capturedTriggers.map(function (t) { return t.ref; });
+        assert.deepEqual(reviewRefs, ['ai/x-81', 'ai/x-82'], 'the two oldest reviews win the FIFO');
+    });
+
+    test('UT-7 (AC10): cap 3, no approved candidate — 3 reviews (the reservation is released)', function () {
+        var sm = reviewTick({
+            github: { items: function (rule) {
+                if (rule.id === 'validate-armed') return []; // no candidate
+                return [pr(81, ['agent:review']), pr(82, ['agent:review']),
+                    pr(83, ['agent:review']), pr(84, ['agent:review'])];
+            } }
+        });
+        assert.equal(ciDispatches(sm).length, 0, 'nothing to validate');
+        assert.equal(sm.capturedTriggers.length, 3, 'all 3 slots go to reviews');
+        assert.ok((sm.capturedLogs || []).some(function (l) {
+            return l.indexOf('the reserved slot is released to agent legs') !== -1;
+        }), 'the unused reservation is released in the same tick (I7)');
+    });
+
+    test('UT-8 (AC11): the candidate is green+CLEAN — merged first, the slot is released to agent legs', function () {
+        var MERGE_RULE = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
+            localAction: 'merge_pr', limit: 1, id: 'merge-validated' };
+        var sm = reviewTick({
+            github: { items: function (rule) {
+                if (rule.id === 'merge-validated') return [pr(80, ['pr_approved', 'ai_validating'])];
+                if (rule.id === 'validate-armed') return []; // merged — left the queue
+                return [pr(81, ['agent:review']), pr(82, ['agent:review']),
+                    pr(83, ['agent:review']), pr(84, ['agent:review'])];
+            }, pr: { number: 80, labels: ['pr_approved'] } }
+        }, [MERGE_RULE]);
+        assert.equal(sm.capturedPrMerges.length, 1, 'the approved head merges first (priority 1, no budget)');
+        assert.equal(ciDispatches(sm).length, 0, 'no validation needed — the merge consumed the verdict');
+        assert.equal(sm.capturedTriggers.length, 3, 'the reservation is released — agent legs get the full cap');
+    });
+
+    test('UT-9 (AC12): the candidate is BEHIND — updated, not validated this tick, slot released', function () {
+        var UPDATE_RULE = { source: 'github', query: { type: 'pr', labels: ['pr_approved'], mergeState: 'BEHIND' },
+            localAction: 'update_branch', limit: 5, id: 'silent-update-behind' };
+        var OLD = 'aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000';
+        var NEW = 'bbbb1111bbbb1111bbbb1111bbbb1111bbbb1111';
+        var base = cfgFor('a', 'b');
+        var sm = makeSmAgent(Object.assign(base, {
+            captureConsole: true,
+            github: {
+                items: function (rule) {
+                    if (rule.id === 'silent-update-behind') return [pr(80, ['pr_approved'], { headSha: OLD })];
+                    if (rule.id === 'validate-armed') return [pr(80, ['pr_approved'])];
+                    return [pr(81, ['agent:review']), pr(82, ['agent:review']),
+                        pr(83, ['agent:review']), pr(84, ['agent:review'])];
+                },
+                pr: { number: 80, head: { sha: OLD } },
+                prAfterRefresh: { number: 80, head: { sha: NEW } }
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', maxTriggeredWorkflows: 3,
+            rules: [UPDATE_RULE, VALIDATE_ARMED, REVIEW_RULE] } });
+        assert.ok(sm.capturedCliCommands.some(function (c) {
+            return c.command.indexOf('gh repo clone') === 0; }), 'the candidate was refreshed');
+        assert.equal(ciDispatches(sm).length, 0, 'the moved candidate is NOT validated this tick');
+        assert.ok((sm.capturedLogs || []).some(function (l) {
+            return l.indexOf('pr-80 head moved this tick — merge-candidate validation deferred') !== -1;
+        }), 'the merge-candidate deferral is logged');
+        assert.equal(sm.capturedTriggers.length, 3, 'the slot is released — 3 reviews');
+    });
+
+    test('UT-10 (AC13): gh-837 parallel mode — the reservation equals validationMutexMax', function () {
+        var sm = reviewTick({
+            github: {
+                items: function (rule) {
+                    if (rule.id === 'validate-armed') return [pr(80, ['pr_approved'])];
+                    return [pr(81, ['agent:review'])];
+                },
+                prList: [pr(80, ['pr_approved']), pr(85, ['pr_approved']), pr(86, ['pr_approved'])]
+            },
+            jobParams: { validationConcurrency: 2, validationConcurrencyQueueWatermark: 3 }
+        });
+        assert.ok((sm.capturedLogs || []).some(function (l) {
+            return l.indexOf('gh-837 parallel validations: concurrency 2') !== -1;
+        }), 'parallel mode active (queue above the watermark)');
+        assert.ok((sm.capturedLogs || []).some(function (l) {
+            return l.indexOf('reservation = validationMutexMax') !== -1;
+        }), 'the reservation covers the whole parallel width');
+        assert.equal(ciDispatches(sm).length, 1, 'the approved candidate still validates first');
+        assert.equal(sm.capturedTriggers.length, 1,
+            'cap 3 − reserved width 2 = 1 review slot (the width covers the approved queue while a validation is in flight)');
+    });
+
+    test('mergeReservedSlots=0 disables the reservation (bit-identical capacity)', function () {
+        var sm = reviewTick({
+            github: { items: function (rule) {
+                if (rule.id === 'validate-armed') return [pr(80, ['pr_approved'])];
+                return [pr(81, ['agent:review']), pr(82, ['agent:review']), pr(83, ['agent:review'])];
+            } },
+            jobParams: { mergeReservedSlots: 0 }
+        });
+        assert.equal(ciDispatches(sm).length, 1, 'the candidate validates');
+        assert.equal(sm.capturedTriggers.length, 3,
+            'R=0 restores today\'s behavior bit-for-bit: the validation rides free, reviews get the raw cap');
+        assert.ok(!(sm.capturedLogs || []).some(function (l) {
+            return l.indexOf('merge-first capacity') !== -1; }), 'no reservation log');
+    });
+
+    test('PR #1120 thread smAgent.js:6718 — a same-tick merge never overwrites a merge-path dispatch (first spend wins)', function () {
+        // gh-837 parallel mode (queue 3 ≥ watermark 3): validate-armed's
+        // limit rises to the mutex width, so ONE rule pass sees two
+        // approved candidates — pr-80 dispatches CI (the held width IS
+        // pr-80's in-flight validation), then pr-81 — approved green
+        // CLEAN head — merges via the gh-1101 fast path. Pre-fix the
+        // merge overwrote spent 'dispatched' → 'merged', the L3→L4
+        // boundary refunded the whole hold, and the tick dispatched
+        // 1 CI + 3 reviews = 4 workflows on cap 3 (the reviewer's
+        // oversubscription scenario). First resolution wins: the width
+        // stays held — reviews get only the leftover 1.
+        var OLD = 'aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000';
+        var CUR = '862ac2862ac2862ac2862ac2862ac2862ac2862';
+        var greenForCur = function (cmdOpts) {
+            var c = cmdOpts.command;
+            if (c.indexOf('runs?head_sha=') !== -1) {
+                var m = /head_sha=([^&"]+)/.exec(c);
+                if (m && m[1] === CUR) {
+                    var t = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+                    return { workflow_runs: [{ id: 38137997380, event: 'workflow_dispatch',
+                        head_branch: 'ai/x-81', head_sha: CUR,
+                        status: 'completed', conclusion: 'success',
+                        html_url: 'https://example.com/run/38137997380',
+                        created_at: t, updated_at: t }] };
+                }
+                return { workflow_runs: [] };
+            }
+            return undefined;
+        };
+        var sm = makeSmAgent(Object.assign(cfgFor('a', 'b'), {
+            captureConsole: true,
+            github: {
+                prList: [pr(80, ['pr_approved']), pr(81, ['pr_approved']),
+                    pr(85, ['pr_approved'])],
+                items: function (rule) {
+                    if (rule.id === 'validate-armed') {
+                        return [pr(80, ['pr_approved'], { headSha: OLD }),
+                            pr(81, ['pr_approved', 'ai_validated'], { headSha: CUR })];
+                    }
+                    return [pr(82, ['agent:review']), pr(83, ['agent:review']),
+                        pr(84, ['agent:review']), pr(85, ['agent:review'])];
+                },
+                pr: { number: 81, labels: ['pr_approved', 'ai_validated'], body: '' },
+                commitCheckRuns: { check_runs: [] }
+            },
+            onCliExecute: greenForCur
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', maxTriggeredWorkflows: 3,
+            validationConcurrency: 2, validationConcurrencyQueueWatermark: 3,
+            rules: [VALIDATE_ARMED, REVIEW_RULE] } });
+        assert.ok((sm.capturedLogs || []).some(function (l) {
+            return l.indexOf('gh-837 parallel validations: concurrency 2') !== -1;
+        }), 'parallel mode active (the setup is the reviewer\'s scenario)');
+        assert.equal(ciDispatches(sm).length, 1, 'pr-80 dispatches — the held width is its in-flight validation');
+        assert.equal(sm.capturedPrMerges.length, 1, 'pr-81 merges via the approved-green fast path');
+        assert.ok(!(sm.capturedLogs || []).some(function (l) {
+            return l.indexOf('merge resolved — the reservation is released') !== -1;
+        }), 'the merge does NOT release the width another candidate\'s validation holds');
+        assert.equal(sm.capturedTriggers.length, 1,
+            'first spend wins: 1 CI + 1 review = cap 3 with the parallel width held (not 4 — no refund double-count)');
+    });
+
+    test('I7: a jira-mode (non-layered) tick never reserves — bit-identical to today', function () {
+        var jiraRule = { jql: 'key = PROJ-1', configFile: 'agents/story_development.json',
+            limit: 10 };
+        var base = cfgFor('a', 'b');
+        var sm = makeSmAgent(Object.assign(base, { tickets: [
+            { key: 'PROJ-1', fields: { labels: [] } },
+            { key: 'PROJ-2', fields: { labels: [] } }
+        ] }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', maxTriggeredWorkflows: 3,
+            rules: [jiraRule] } });
+        assert.ok(!(sm.capturedLogs || []).some(function (l) {
+            return l.indexOf('merge-first capacity') !== -1; }), 'no reservation outside layered ticks');
+        assert.equal(sm.capturedTriggers.length, 2, 'both tickets dispatch under the raw cap');
+    });
+});
+
+suite('smAgent: gh-1114 IT replays (AC1/AC5/AC8/AC14)', function () {
+
+    var OLD = 'aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000';
+    var NEW = 'bbbb1111bbbb1111bbbb1111bbbb1111bbbb1111';
+
+    var RULES = {
+        unarm: { source: 'github',
+            query: { type: 'pr', labels: ['ai_validating'], mergeState: ['BEHIND'], draft: false },
+            localAction: 'unarm_validation', limit: 1, id: 'unarm-stale-validation' },
+        update: { source: 'github', query: { type: 'pr', notLabels: ['ai_validating'], mergeState: ['BEHIND'], draft: false },
+            localAction: 'update_branch', limit: 10, id: 'silent-update-behind' },
+        parkReset: { source: 'github', query: { type: 'pr', labels: ['validation_failed'], notLabels: ['ai_validating', 'blocked'], draft: false },
+            localAction: 'update_branch', limit: 10, id: 'park-reset' },
+        merge: { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
+            localAction: 'merge_pr', limit: 1, id: 'merge-validated' },
+        fail: { source: 'github',
+            query: { type: 'pr', labels: ['ai_validating'], checks: 'red' },
+            localAction: 'fail_validation', limit: 10, id: 'fail-validation' },
+        validateArmed: { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating', 'validation_failed'],
+                     notMergeState: ['BEHIND', 'DIRTY'], draft: false,
+                     mutex: 'ai_validating', mutexAmong: ['pr_approved'] },
+            localAction: 'validate_pr', skipIfValidatedHead: true, redHeadSkip: true,
+            deferRedHead: true, limit: 1, id: 'validate-armed' },
+        conflict: { source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework', limit: 5, id: 'conflict-rework' },
+        reviewStale: { source: 'github',
+            query: { type: 'pr', labels: ['ai_pr_reviewed'], checks: 'green' },
+            localAction: 'arm_review', limit: 5, id: 'review-stale-verdict' }
+    };
+
+    // The deployed-relative-order subsets: old = the pre-gh-1114 file order,
+    // new = the layered order. Same rules, same world — only the ORDER differs.
+    var OLD_ORDER = ['unarm', 'merge', 'fail', 'update', 'parkReset', 'validateArmed', 'conflict', 'reviewStale'];
+    var NEW_ORDER = ['unarm', 'update', 'parkReset', 'merge', 'fail', 'validateArmed', 'conflict', 'reviewStale'];
+
+    function replayWorld() {
+        return {
+            // (a) #435: approved, armed, red on the OLD head, base moved.
+            70: { labels: ['pr_approved', 'ai_validating'], headSha: OLD, branch: 'ai/x-70' },
+            // (b) green-merge: approved, armed, green, CLEAN, not behind.
+            71: { labels: ['pr_approved', 'ai_validating'], headSha: NEW, branch: 'ai/x-71' },
+            // (c) conflict: DIRTY machine PR.
+            72: { labels: [], headSha: NEW, branch: 'ai/x-72' },
+            // (d) review-stale: reviewed, green, stale verdict.
+            73: { labels: ['ai_pr_reviewed'], headSha: NEW, branch: 'ai/x-73' },
+            // (e) #1591 guest-park: parked guest, head moved since the park.
+            74: { labels: ['validation_failed'], headSha: NEW, branch: 'ai/x-74' }
+        };
+    }
+
+    function item(n, st) {
+        return { key: 'pr-' + n, labels: st.labels.slice(), issueNumber: null, prNumber: n,
+            branch: st.branch, headSha: st.headSha, draft: false };
+    }
+
+    // Per-rule candidate lists from ONE world model (the post-L1 live read),
+    // shared by both orders — the ORDER + guards produce any divergence.
+    // rule-id → (candidate PR, the snapshot that rule sees): a rule yields
+    // its candidate only while the world still holds that PR. The two
+    // snapshot-only entries pin what each rule reads at its layer:
+    // silent-update-behind the cached OLD head (post-unarm), validate-armed
+    // the fresh NEW head (post-update).
+    var REPLAY_CANDIDATES = [
+        { id: 'unarm-stale-validation', pr: 70, snap: function (w) { return w[70]; } },
+        { id: 'silent-update-behind', pr: 70,
+          snap: function () { return { labels: ['pr_approved'], headSha: OLD, branch: 'ai/x-70' }; } },
+        { id: 'park-reset', pr: 74, snap: function (w) { return w[74]; } },
+        { id: 'merge-validated', pr: 71, snap: function (w) { return w[71]; } },
+        { id: 'validate-armed', pr: 70,
+          snap: function () { return { labels: ['pr_approved'], headSha: NEW, branch: 'ai/x-70' }; } },
+        { id: 'conflict-rework', pr: 72, snap: function (w) { return w[72]; } },
+        { id: 'review-stale-verdict', pr: 73, snap: function (w) { return w[73]; } }
+    ];
+
+    function itemsFor(world) {
+        return function (rule) {
+            var out = [];
+            for (var i = 0; i < REPLAY_CANDIDATES.length; i++) {
+                var c = REPLAY_CANDIDATES[i];
+                if (c.id === rule.id && world[c.pr]) out.push(item(c.pr, c.snap(world)));
+            }
+            return out;
+        };
+    }
+
+    function actionsOf(sm) {
+        return {
+            merges: sm.capturedPrMerges.map(function (m) { return m.pullRequestId || m.number; }),
+            labelAdds: sm.capturedPrLabelAdds.map(function (l) { return l.number + ':' + l.labels; }),
+            labelRemoves: sm.capturedPrLabelRemoves.map(function (l) { return l.number + ':' + l.label; }),
+            comments: sm.capturedPrComments.map(function (c) { return c.number; }),
+            ciDispatches: sm.capturedCliCommands.filter(function (c) {
+                return c.command.indexOf('gh workflow run') === 0;
+            }).map(function (c) { return c.command; }),
+            triggers: sm.capturedTriggers.map(function (t) { return t.ref; })
+        };
+    }
+
+    function replayTick(orderIds, world, clonedBranches) {
+        var rules = orderIds.map(function (k) { return RULES[k]; });
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "a", repo: "b" } };' },
+            github: {
+                items: itemsFor(world),
+                commitCheckRuns: { check_runs: [
+                    { name: 'static', status: 'completed', conclusion: 'failure' }
+                ] },
+                // PR-70's payload: the head the refresh reads. Before the
+                // clone the cached OLD head (labels kept — the sticky
+                // approval gate reads them); after it the FRESH NEW head
+                // (the default harness payload swaps on the clone command).
+                pr: { number: 70, head: { sha: OLD }, labels: ['pr_approved'] },
+                prAfterRefresh: { number: 70, head: { sha: NEW }, labels: ['pr_approved'] },
+                // PR-74's #633 park marker: the park verdict keys the OLD
+                // head — the gh-994 head-change reset must clear it (the
+                // shared mock serves it to every PR; harmless elsewhere).
+                prComments: [{ body: '⚠️ validation failed — parked\nparked-head: ' + OLD }]
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('gh repo clone') === 0) clonedBranches.push(c);
+                if (c.indexOf('runs?') !== -1) return { workflow_runs: [] };
+                return '';
+            },
+            captureConsole: true
+        });
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: rules,
+            maxTriggeredWorkflows: 5 } });
+        return sm;
+    }
+
+    test('IT-1 (AC1): the #435 replay — layered tick updates the head, no park, no false comment; CI next tick', function () {
+        var cloned = [];
+        var world = { 70: replayWorld()[70] };
+        var sm = replayTick(NEW_ORDER.slice(0, 6), world, cloned);
+        assert.ok(cloned.some(function (c) {
+            return c.indexOf("--branch 'ai/x-70'") !== -1; }), 'the branch was refreshed'); // gh-1107: quoted head ref
+        assert.equal(sm.capturedPrLabelRemoves.some(function (l) {
+            return l.number === 70 && l.label === 'ai_validating'; }), true,
+            'the stale arm was stripped (concluded + BEHIND)');
+        assert.equal(sm.capturedPrLabelAdds.some(function (l) {
+            return l.number === 70 && String(l.labels).indexOf('validation_failed') !== -1; }), false,
+            'no validation_failed park on the moved head');
+        assert.equal(sm.capturedPrComments.filter(function (c) { return c.number === 70; }).length, 0,
+            'no park comment this tick');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0; }).length, 0,
+            'no CI dispatch this tick — the moved candidate defers');
+
+        // Next tick: the PR is up-to-date (no arm, no red verdict carried),
+        // validate-armed dispatches CI on the fresh head.
+        var next = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "a", repo: "b" } };' },
+            github: { items: [item(70, { labels: ['pr_approved'], headSha: NEW, branch: 'ai/x-70' })] }
+        });
+        next.action({ jobParams: { owner: 'a', repo: 'b',
+            rules: [RULES.validateArmed], maxTriggeredWorkflows: 3 } });
+        assert.equal(next.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0; }).length, 1,
+            'the next tick dispatches CI (AC1)');
+        assert.equal(next.capturedPrLabelAdds.some(function (l) {
+            return l.number === 70 && String(l.labels).indexOf('ai_validating') !== -1; }), true,
+            'the validation arm follows the dispatch');
+    });
+
+    test('IT-2 (AC5): concluded green + BEHIND — latched, updated, revalidated next tick, never merged same tick', function () {
+        var GREEN_RUN = { id: 9001, event: 'workflow_dispatch', head_branch: 'ai/x-70',
+            head_sha: OLD, status: 'completed', conclusion: 'success',
+            created_at: new Date(Date.now() - 3600 * 1000).toISOString() };
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "a", repo: "b" } };' },
+            captureConsole: true,
+            github: {
+                items: [
+                    item(70, { labels: ['pr_approved', 'ai_validating'], headSha: OLD, branch: 'ai/x-70' }),
+                    item(70, { labels: ['pr_approved'], headSha: OLD, branch: 'ai/x-70' }),
+                    item(70, { labels: ['pr_approved'], headSha: NEW, branch: 'ai/x-70' })
+                ],
+                pr: { number: 70, head: { sha: OLD }, labels: ['pr_approved', 'ai_validating'] },
+                prAfterRefresh: { number: 70, head: { sha: NEW }, labels: ['pr_approved'] }
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=' + OLD) !== -1 &&
+                    c.indexOf('event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [GREEN_RUN] }; // the CONCLUDED GREEN verdict
+                }
+                if (c.indexOf('runs?') !== -1) return { workflow_runs: [] };
+                return '';
+            }
+        });
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            rules: [RULES.unarm, RULES.update, RULES.merge, RULES.validateArmed],
+            maxTriggeredWorkflows: 3 } });
+        assert.equal(sm.capturedPrLabelRemoves.some(function (l) {
+            return l.number === 70 && l.label === 'ai_validating'; }), true, 'the arm is stripped');
+        assert.equal(sm.capturedPrLabelAdds.some(function (l) {
+            return l.number === 70 && String(l.labels).indexOf('ai_validated') !== -1; }), true,
+            'the concluded GREEN is consumed into the ai_validated latch (gh-751), never discarded');
+        assert.ok(sm.capturedCliCommands.some(function (c) {
+            return c.command.indexOf('gh repo clone') === 0 &&
+                c.command.indexOf("--branch 'ai/x-70'") !== -1; }), 'the head is refreshed'); // gh-1107: quoted head ref
+        assert.equal(sm.capturedPrMerges.length, 0, 'no same-tick merge (merge-validated needs ai_validating)');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0; }).length, 0,
+            'no same-tick validation — the moved head defers');
+
+        // Next tick: the latch no longer covers the NEW head → re-validate.
+        var next = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "a", repo: "b" } };' },
+            github: { items: [item(70, { labels: ['pr_approved', 'ai_validated'], headSha: NEW, branch: 'ai/x-70' })],
+                workflowApiRuns: [] }
+        });
+        next.action({ jobParams: { owner: 'a', repo: 'b',
+            rules: [RULES.validateArmed], maxTriggeredWorkflows: 3 } });
+        assert.equal(next.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0; }).length, 1,
+            'the next tick revalidates the moved head');
+    });
+
+    test('IT-3 (AC8): decision-diff replay — old vs new rule order produce identical actions on the 5-state fixture', function () {
+        var worldOld = replayWorld();
+        var clonedOld = [];
+        var oldRun = replayTick(OLD_ORDER, worldOld, clonedOld);
+        var worldNew = replayWorld();
+        var clonedNew = [];
+        var newRun = replayTick(NEW_ORDER, worldNew, clonedNew);
+
+        var oldA = actionsOf(oldRun);
+        var newA = actionsOf(newRun);
+
+        // (b) green-merge merges in BOTH orders (priority 1, order-insensitive).
+        assert.ok(oldA.merges.indexOf(71) !== -1 && newA.merges.indexOf(71) !== -1,
+            'the green CLEAN candidate merges under both orders');
+
+        // (c) conflict + (d) review-stale are L4 in both orders — identical.
+        assert.deepEqual(
+            oldA.comments.filter(function (n) { return n === 72; }),
+            newA.comments.filter(function (n) { return n === 72; }),
+            'the conflict report is order-insensitive');
+        assert.deepEqual(
+            oldA.labelAdds.filter(function (l) { return l.indexOf('73:') === 0; }),
+            newA.labelAdds.filter(function (l) { return l.indexOf('73:') === 0; }),
+            'the stale-verdict re-review arm is order-insensitive');
+
+        // (e) guest-park: the gh-994 head-change reset fires in BOTH orders
+        // (L1 in the new order, late-but-before-nothing in the old one).
+        assert.ok(oldA.labelRemoves.indexOf('74:validation_failed') !== -1 &&
+                  newA.labelRemoves.indexOf('74:validation_failed') !== -1,
+            'the head-change park reset fires under both orders');
+
+        // (a) #435: NO false park under EITHER order, and the moved head
+        // is never validated same-tick in EITHER order — the AC12 guard is
+        // code, not order: the reorder alone changes NO decision here.
+        // (The AC1 gain comes from the freshness layer running the update
+        // at all — verified in IT-1 — and the guard from the code change.)
+        assert.equal(oldA.labelAdds.some(function (l) {
+            return l === '70:validation_failed'; }), false,
+            'old order: no validation_failed (the unarm stripped the arm first)');
+        assert.equal(newA.labelAdds.some(function (l) {
+            return l === '70:validation_failed'; }), false,
+            'new order: no validation_failed');
+        assert.deepEqual(
+            newA.ciDispatches.filter(function (c) { return c.indexOf('--ref ai/x-70') !== -1; }),
+            oldA.ciDispatches.filter(function (c) { return c.indexOf('--ref ai/x-70') !== -1; }),
+            'the moved head is validated equally (never same-tick) under both orders');
+        assert.equal(newA.labelAdds.length, oldA.labelAdds.length,
+            'no label churn diverges between the orders');
+        assert.ok(newA.merges.length === oldA.merges.length,
+            'merge throughput is identical in this replay (IT-4: no worse)');
+    });
+
+    test('IT-4 (AC14): busy tick — merge throughput no worse under the layered order', function () {
+        var merge = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
+            localAction: 'merge_pr', limit: 1, id: 'merge-validated' };
+        var review = { source: 'github', query: { type: 'pr', labels: ['agent:review'] },
+            configFile: 'agents/pr_review.json', workflowFile: 'ai-teammate.yml',
+            inputs: { pr: '{prNumber}' }, workflowRef: '{branch}', limit: 10, id: 'review-on-label' };
+        function busyTick(rules) {
+            var sm = makeSmAgent({
+                fileMap: { '../.dmtools/config.js':
+                    'module.exports = { repository: { owner: "a", repo: "b" } };' },
+                github: { items: function (rule) {
+                    if (rule.id === 'merge-validated') {
+                        return [item(71, { labels: ['pr_approved', 'ai_validating'], headSha: NEW, branch: 'ai/x-71' })];
+                    }
+                    return [item(81, { labels: ['agent:review'], headSha: NEW, branch: 'ai/x-81' }),
+                        item(82, { labels: ['agent:review'], headSha: NEW, branch: 'ai/x-82' }),
+                        item(83, { labels: ['agent:review'], headSha: NEW, branch: 'ai/x-83' })];
+                }, pr: { number: 71, labels: ['pr_approved'] } }
+            });
+            sm.action({ jobParams: { owner: 'a', repo: 'b', rules: rules,
+                maxTriggeredWorkflows: 1 } });
+            return sm;
+        }
+        // The OLD pre-gh-1114 order ran merge-validated before the agent
+        // lanes too (old file: position 7); the layered order keeps the
+        // merge in L2, ahead of L4 — the busy tick must merge in both.
+        var oldRun = busyTick([merge, review]);
+        var newRun = busyTick([merge, review]);
+        assert.equal(oldRun.capturedPrMerges.length, 1, 'old order: the approved head merges');
+        assert.equal(newRun.capturedPrMerges.length, 1, 'layered order: the approved head merges');
+        assert.equal(newRun.capturedTriggers.length, oldRun.capturedTriggers.length,
+            'review throughput identical — merge throughput no worse');
     });
 });
 
