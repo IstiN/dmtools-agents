@@ -458,6 +458,91 @@ function forkPushTokenUrl(forkFull) {
     return 'https://x-access-token:${GH_TOKEN}@github.com/' + forkFull + '.git';
 }
 
+// ── Workflow-write rejection escalation (gh-1106) ───────────────────────────
+//
+// Live fa PR #1591 (2026-10-19 17:16/17:17Z): the fork silent-update pushed
+// the main merge with the silent token (github.token, github-actions[bot])
+// and GitHub refused EVERY push touching `.github/workflows/*`:
+//
+//   ! [remote rejected] HEAD -> fix/android-dap-home-sandbox (refusing to
+//   allow a GitHub App to create or update workflow
+//   `.github/workflows/build-mobile.yml` without `workflows` permission)
+//
+// GITHUB_TOKEN can never gain that capability (there is no `permissions:`
+// key that grants `workflows` to it), so the failure is a deterministic
+// token-capability fact — retrying the same token can never succeed — and
+// gh-1070's "maintainer edits revoked" 3-strike trail mis-frames it as an
+// author decision, ending in a guest park the author cannot clear (the
+// head predates the park; only the machine can move it: no push → park
+// holds → no push). The pure half lives here: classify the rejection from
+// the captured stderr tail and shape the distinct AC3 park marker. The
+// wiring (smAgent fork lane, smProvider base lane) swaps env GH_TOKEN to a
+// workflow-capable token (App installation token with Workflows: write, or
+// a PAT with the `workflow` scope) for exactly one escalated attempt.
+
+var WORKFLOWS_APP_REJECTION_RE =
+    /refusing to allow a GitHub App to create or update workflow/i;
+var WORKFLOWS_OAUTH_REJECTION_RE =
+    /refusing to allow an OAuth App to create or update workflow [^\n]*without [`'\u0060]workflow[`'\u0060] scope/i;
+
+/**
+ * True when the stderr tail is GitHub's workflows-permission refusal — the
+ * App-installation form (the exact #1591 phrasing) or the OAuth-App /
+ * classic-PAT form (missing `workflow` scope). Everything else — protected
+ * branch hooks, a genuine maintainer-edit revocation (E2), network noise,
+ * an EMPTY or truncated tail that never reaches the phrase (E4) — is
+ * deliberately generic: the escalation is a targeted cure for a named
+ * platform refusal, never a catch-all retry.
+ */
+function isWorkflowsPermissionRejection(stderrTail) {
+    var s = String(stderrTail == null ? '' : stderrTail);
+    if (!s) return false;
+    return WORKFLOWS_APP_REJECTION_RE.test(s) ||
+        WORKFLOWS_OAUTH_REJECTION_RE.test(s);
+}
+
+// The distinct AC3 park marker (one per parked head):
+//
+//   🔐 workflow-write park (gh-1106) — update needs a workflow-write token at <iso> · parked-head: <sha>
+//
+// The embedded 'parked-head: <40-hex>' is what the existing gh-994
+// head-change reset probes scan comments for — a later successful
+// escalation (or any head-moving push) lifts this park with zero new
+// machinery (AC4).
+var WORKFLOW_WRITE_PARK_RE =
+    /\uD83D\uDD10 workflow-write park \(gh-1106\) [^\n]*parked-head: ([0-9a-f]{7,40})/g;
+
+function workflowWriteParkLine(headSha, atIso) {
+    return '\uD83D\uDD10 workflow-write park (gh-1106) — update needs a workflow-write token at ' +
+        (atIso || '') + ' \u00B7 parked-head: ' + (headSha || 'unknown');
+}
+
+/**
+ * True when a comment body already carries the marker for THIS head
+ * (one-marker-per-head dedupe, ghost-guard parity): a parked head re-runs
+ * the doomed escalation every tick (self-healing if the token capability
+ * is granted later) but posts the distinct reason exactly once; a head
+ * MOVE starts a new park event and may post again.
+ */
+function workflowWriteParkMarked(bodies, headSha) {
+    var want = String(headSha || '').toLowerCase();
+    if (!want) return false;
+    var marked = false;
+    (bodies || []).forEach(function (body) {
+        if (marked) return;
+        var s = String(body == null ? '' : body);
+        WORKFLOW_WRITE_PARK_RE.lastIndex = 0;
+        var m;
+        while ((m = WORKFLOW_WRITE_PARK_RE.exec(s)) !== null) {
+            if (m[1].toLowerCase() === want) {
+                marked = true;
+                break;
+            }
+        }
+    });
+    return marked;
+}
+
 module.exports = {
     classify: classify,
     zombieMarks: zombieMarks,
@@ -484,5 +569,8 @@ module.exports = {
     redactSilentUpdateSecrets: redactSilentUpdateSecrets,
     forkHeadFull: forkHeadFull,
     forkSilentUpdateRoute: forkSilentUpdateRoute,
-    forkPushTokenUrl: forkPushTokenUrl
+    forkPushTokenUrl: forkPushTokenUrl,
+    isWorkflowsPermissionRejection: isWorkflowsPermissionRejection,
+    workflowWriteParkLine: workflowWriteParkLine,
+    workflowWriteParkMarked: workflowWriteParkMarked
 };
