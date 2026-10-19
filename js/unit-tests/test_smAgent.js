@@ -7620,7 +7620,6 @@ suite('smAgent: stamp check-run deep links (owner 2026-09-27)', function () {
             assert.equal(b.conclusion, 'success');
         });
     });
-    });
 
     test('verdict stamp (red): details_url = the FAILING JOB directly', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
@@ -7682,6 +7681,8 @@ suite('smAgent: stamp check-run deep links (owner 2026-09-27)', function () {
         sm.action({ jobParams: { owner: 'a', repo: 'b',
             validationChecks: '["Quality gate"]',
             rules: [{ source: 'github', query: { type: 'pr', labels: ['pr_approved'], draft: false },
+                      localAction: 'validate_pr', limit: 1, id: 'validate-armed' }] } });
+
         var posts = stampPosts(sm);
         var bodies = stampBodies(sm);
         assert.equal(posts.length, 1, 'dispatch stamps in_progress once');
@@ -7691,8 +7692,6 @@ suite('smAgent: stamp check-run deep links (owner 2026-09-27)', function () {
         assert.equal(bodies[0].details_url, undefined,
             'no run URL exists at dispatch time — nothing to link yet (the verdict stamp adds it)');
         assert.equal(bodies[0].summary, 'Stamped by the SM tick (bridge-free mode).');
-    });
-        assert.ok(posts[0].indexOf('Stamped by the SM tick (bridge-free mode).') !== -1);
     });
 });
 
@@ -15105,6 +15104,19 @@ suite('smAgent: gh-1118 — stamp survives dash-hostile API payloads', function 
           html_url: 'https://github.com/o/r/actions/runs/55000111/job/2' }
     ] };
 
+    // The summary the OLD builder interpolated inline into -f summary="…"
+    // (stampLinkBlock output: run link + jobs table with the unresolved
+    // matrix template) — the shell-hostile payload at the heart of gh-1118.
+    var STAMP_SUMMARY_INLINE = 'Dispatched run: https://github.com/o/r/actions/runs/55000111\n' +
+        '| Job | Result |\n| --- | --- |\n' +
+        '| [' + UNRESOLVED_MATRIX_JOB + '](https://github.com/o/r/actions/runs/55000111/job/1) | queued |\n' +
+        '_Stamped by the SM tick (bridge-free mode)._';
+    // The JSON body the NEW stamp writes to the --input temp file.
+    var STAMP_BODY_JSON = JSON.stringify({
+        name: 'Quality gate', head_sha: HEAD, status: 'completed', conclusion: 'success',
+        title: 'SM validation: success', summary: STAMP_SUMMARY_INLINE
+    });
+
     function stampConfig(owner, repo) {
         return { fileMap: { '../.dmtools/config.js':
             'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
@@ -15253,5 +15265,70 @@ suite('smAgent: gh-1118 — stamp survives dash-hostile API payloads', function 
         assert.equal(first.stampsFailed, 1);
         assert.equal(second.stampsFailed, 1,
             'a fresh tick starts from zero — the counter is per-tick, not cumulative');
+    });
+
+    // ── AC1 dash fixture (gh-1118): the stamp command layout must execute
+    // clean under sh on a dash-default host. Both sandboxes run the same
+    // way dmtools executes cli_execute_command: an outer temp script under
+    // sh (dash on the hosted ubuntu runner), our command inside it. The
+    // `gh` binary is a stub on PATH — the payload never reaches the network.
+    var _ghCanBash = typeof cli_execute_command === 'function';
+    if (_ghCanBash) {
+        try {
+            cli_execute_command({ command: 'bash -c "echo __gh1118_probe__"' });
+        } catch (eProbe) {
+            _ghCanBash = false; // bash not whitelisted in this dmtools env
+        }
+    }
+
+    /** Single-quote a value for the bash -c payload (test_dartSetup pattern). */
+    function ghShq(v) {
+        return "'" + String(v).replace(/'/g, "'\\''") + "'";
+    }
+
+    function runInSandbox(scriptLines) {
+        // One bash -c payload builds the mktemp sandbox and runs the stamp
+        // script under sh (the dmtools temp-script execution model).
+        var lines = ['d="$(mktemp -d)"',
+            'mkdir -p "$d/bin"',
+            'printf \'%s\\n\' \'#!/bin/sh\' \'echo "gh-stub: $*"\' > "$d/bin/gh"',
+            'chmod +x "$d/bin/gh"',
+            'printf \'%s\' ' + ghShq(STAMP_BODY_JSON) + ' > "$d/check_run_stamp_tmp_1.json"',
+            'printf \'%s\\n\' \'#!/bin/sh\' ' + ghShq(scriptLines.join('\n')) + ' > "$d/stamp.sh"',
+            'cd "$d"',
+            'PATH="$d/bin:$PATH" sh "$d/stamp.sh" 2>&1',
+            'rc=$?',
+            'echo "---body---"',
+            'cat "$d/check_run_stamp_tmp_1.json"',
+            'echo ""',
+            'echo "rc=$rc"'];
+        var wrapped = cli_execute_command({ command: 'bash -c ' + ghShq(lines.join('\n')) });
+        return String(wrapped);
+    }
+
+    test('AC1 dash fixture: the --input stamp layout executes clean under sh with a ${…}} payload on disk', function () {
+        if (!_ghCanBash) return; // degraded harness self-skip (test_dartSetup precedent)
+        var out = runInSandbox([
+            'gh api -X POST repos/o/r/check-runs --input check_run_stamp_tmp_1.json'
+        ]);
+        assert.ok(out.indexOf('rc=0') !== -1,
+            'the stamp command layout runs clean under sh: ' + out);
+        assert.ok(out.indexOf('Bad substitution') === -1 &&
+                  out.indexOf('bad substitution') === -1,
+            'no substitution error under sh: ' + out);
+        assert.ok(out.indexOf('gh-stub: api -X POST repos/o/r/check-runs --input check_run_stamp_tmp_1.json') !== -1,
+            'the stub gh received the exact --input layout: ' + out);
+        assert.ok(out.indexOf(UNRESOLVED_MATRIX_JOB) !== -1,
+            'the payload survived byte-exact');
+    });
+
+    test('AC1 contrast: the pre-fix inline -f interpolation dies under sh on the same payload', function () {
+        if (!_ghCanBash) return;
+        var out = runInSandbox([
+            'gh api -X POST repos/o/r/check-runs -f summary="' + STAMP_SUMMARY_INLINE + '"'
+        ]);
+        assert.ok(out.indexOf('ubstitution') !== -1,
+            'the pre-fix shape is rejected by the shell (documents the gh-1118 failure mode): ' + out);
+        assert.ok(out.indexOf('rc=0') === -1, 'the pre-fix shape never completed');
     });
 });
