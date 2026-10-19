@@ -612,3 +612,68 @@ suite('checkRunZombies sweper — observability (gh-998 I5)', function () {
                      'zombie-swept: 117469671401 head f3d58647');
     });
 });
+
+// ── classify: fail-safe corners + multi-item batch (gh-1085 characterization) ─
+
+suite('checkRunZombies classify — fail-safe corners', function () {
+    test('completed + conclusion-less backing run → live', function () {
+        var map = {};
+        map[RUN_DEAD] = { status: 'completed', conclusion: null, updated_at: '2026-10-10T14:55:00Z' };
+        var out = cz.classify([cr()], resolver(map, {}), NOW, {});
+        assert.equal(out.live, 1);
+        assert.equal(out.zombies.length, 0);
+        assert.equal(out.unresolvable, 0);
+    });
+
+    test('completed + EMPTY-string conclusion → live (odd, fail safe)', function () {
+        var map = {};
+        map[RUN_DEAD] = { status: 'completed', conclusion: '', updated_at: '2026-10-10T14:55:00Z' };
+        var out = cz.classify([cr()], resolver(map, {}), NOW, {});
+        assert.equal(out.live, 1);
+        assert.equal(out.zombies.length, 0);
+    });
+
+    test('unknown backing-run status vocabulary → live (fail safe)', function () {
+        var map = {};
+        map[RUN_DEAD] = { status: 'weird_vocabulary', updated_at: '2026-10-10T14:55:00Z' };
+        var out = cz.classify([cr()], resolver(map, {}), NOW, {});
+        assert.equal(out.live, 1);
+        assert.equal(out.zombies.length, 0);
+        assert.equal(out.unresolvable, 0);
+    });
+});
+
+suite('checkRunZombies classify — multi-item batch (gh-1085)', function () {
+    test('one call partitions a mixed batch: every reason lands exactly once, zombies keep input order', function () {
+        var RUN_LAG = '38222222222';     // concluded inside the propagation grace → live
+        var RUN_ODD = '38333333333';     // completed, no conclusion → live (fail safe)
+        var checkRuns = [
+            cr({ name: 'ctx-no-run' }),                                            // backing run absent
+            cr({ name: 'ctx-cancelled' }),                                         // (same dead run id — cancelled below)
+            cr({ name: 'ctx-live', details_url: 'https://github.com/o/r/actions/runs/' + RUN_LIVE }),
+            cr({ name: 'ctx-lag', details_url: 'https://github.com/o/r/actions/runs/' + RUN_LAG }),
+            cr({ name: 'ctx-odd', details_url: 'https://github.com/o/r/actions/runs/' + RUN_ODD }),
+            { name: 'ctx-stale', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-10T13:00:00Z' },                                 // no link, 2h old → stale-no-runner
+            cr({ name: 'ctx-probe-error', details_url: 'https://github.com/o/r/actions/runs/999' }),
+            { name: 'ctx-settled', status: 'completed', conclusion: 'success' }      // terminal — never zombie material
+        ];
+        var map = {};
+        map[RUN_DEAD] = { status: 'completed', conclusion: 'cancelled', updated_at: '2026-10-10T14:00:00Z' };
+        map[RUN_LIVE] = { status: 'in_progress', updated_at: '2026-10-10T14:59:00Z' };
+        map[RUN_LAG] = { status: 'completed', conclusion: 'success', updated_at: '2026-10-10T14:56:30Z' };
+        map[RUN_ODD] = { status: 'completed', conclusion: null, updated_at: '2026-10-10T14:50:00Z' };
+        var out = cz.classify(checkRuns, resolver(map, { throwFor: ['999'] }), NOW, {});
+
+        assert.equal(out.zombies.length, 3);
+        assert.equal(out.zombies[0].name, 'ctx-no-run');
+        assert.equal(out.zombies[0].reason, 'no-run');
+        assert.equal(out.zombies[1].name, 'ctx-cancelled');
+        assert.equal(out.zombies[1].reason, 'cancelled');
+        assert.equal(out.zombies[2].name, 'ctx-stale');
+        assert.equal(out.zombies[2].reason, 'stale-no-runner');
+        assert.equal(out.live, 4, 'live + lag + odd + probe-error');
+        assert.equal(out.unresolvable, 1);
+        assert.equal(out.settled, 1);
+    });
+});
