@@ -613,7 +613,7 @@ function generate() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { generate };
+    module.exports = { generate, collectArtifacts };
 }
 
 if (require.main === module) {

@@ -647,8 +647,9 @@ suite('checkRunZombies classify — multi-item batch (gh-1085)', function () {
     test('one call partitions a mixed batch: every reason lands exactly once, zombies keep input order', function () {
         var RUN_LAG = '38222222222';     // concluded inside the propagation grace → live
         var RUN_ODD = '38333333333';     // completed, no conclusion → live (fail safe)
+        var RUN_GONE = '38099999998';    // absent from the head's run list → no-run
         var checkRuns = [
-            cr({ name: 'ctx-no-run' }),                                            // backing run absent
+            cr({ name: 'ctx-no-run', details_url: 'https://github.com/o/r/actions/runs/' + RUN_GONE }),
             cr({ name: 'ctx-cancelled' }),                                         // (same dead run id — cancelled below)
             cr({ name: 'ctx-live', details_url: 'https://github.com/o/r/actions/runs/' + RUN_LIVE }),
             cr({ name: 'ctx-lag', details_url: 'https://github.com/o/r/actions/runs/' + RUN_LAG }),

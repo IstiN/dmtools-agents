@@ -45,6 +45,7 @@ function loadCacheToReleases(opts) {
             return opts.prs || [];
         },
         addComment: function(prId, text) {
+            if (opts.addCommentThrows) throw new Error('comment API down');
             scmCalls.addComment.push({ prId: prId, text: text });
             return '{}';
         }
@@ -182,4 +183,154 @@ suite('cacheToReleases', function() {
         assert.equal(m._scmCalls.addComment.length, 0);
     });
 
+    // ── gh-1085 characterization: skip paths, per-asset guards, error edges ──
+
+    test('skips when assets are missing or empty (config without assets / empty list)', function() {
+        var m = loadCacheToReleases();
+        var noKey = m.action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: { customParams: { artefactRepository: { owner: 'O', repo: 'r' }, cacheToReleases: {} } }
+        });
+        var empty = loadCacheToReleases().action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: { customParams: { artefactRepository: { owner: 'O', repo: 'r' }, cacheToReleases: { assets: [] } } }
+        });
+        assert.ok(noKey.skipped);
+        assert.ok(empty.skipped);
+        assert.equal(m._uploadArtefactCalls.length, 0);
+    });
+
+    test('MULTI-ITEM: assets missing fromFolder or name are skipped with a warning; valid siblings still upload', function() {
+        var m = loadCacheToReleases({
+            uploadArtefactImpl: function(asset) {
+                return { success: true, releaseUrl: 'https://example.com/r/' + asset.name, error: null };
+            }
+        });
+        var result = m.action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: {
+                customParams: {
+                    artefactRepository: { owner: 'Org', repo: 'repo' },
+                    cacheToReleases: {
+                        assets: [
+                            { name: 'no-folder' },
+                            { fromFolder: 'outputs/{ticketKey}' },
+                            { fromFolder: 'outputs/{ticketKey}', name: 'good' }
+                        ]
+                    }
+                }
+            }
+        });
+        assert.equal(m._uploadArtefactCalls.length, 1, 'only the complete asset uploads');
+        assert.equal(m._uploadArtefactCalls[0].asset.name, 'good');
+        assert.equal(result.success, true);
+        assert.equal(result.results.length, 1);
+        assert.equal(result.releaseUrl, 'https://example.com/r/good');
+    });
+
+    test('postToPRComment skipped (with a warning) when targetRepository is not configured', function() {
+        var m = loadCacheToReleases({
+            prs: [{ number: 7, title: 'PROJ-1 fix', head: { ref: 'feature/proj-1' } }]
+        });
+        var result = m.action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: {
+                customParams: {
+                    artefactRepository: { owner: 'Org', repo: 'repo' },
+                    cacheToReleases: {
+                        assets: [{ fromFolder: 'a/{ticketKey}', name: 'a', postToPRComment: true }]
+                    }
+                }
+            }
+        });
+        assert.equal(m._scmCalls.listPrs.length, 0, 'no PR listing without a target repository');
+        assert.equal(m._scmCalls.addComment.length, 0);
+        assert.equal(result.success, true);
+    });
+
+    test('a failing PR comment is caught — the release itself still succeeds', function() {
+        var m = loadCacheToReleases({
+            addCommentThrows: true,
+            prs: [{ number: 42, title: 'PROJ-1 fix', head: { ref: 'feature/proj-1' } }]
+        });
+        var result = m.action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: {
+                customParams: {
+                    artefactRepository: { owner: 'Org', repo: 'repo' },
+                    targetRepository: { owner: 'Org', repo: 'repo' },
+                    cacheToReleases: {
+                        assets: [{ fromFolder: 'a/{ticketKey}', name: 'a', postToPRComment: true }]
+                    }
+                }
+            }
+        });
+        assert.equal(m._uploadArtefactCalls.length, 1);
+        assert.equal(result.success, true);
+        assert.equal(result.results.length, 1);
+        assert.equal(result.results[0].result.success, true);
+    });
+
+    test('a failed upload is reported per asset: releaseUrl stays null and successCount reflects failures', function() {
+        var m = loadCacheToReleases({
+            uploadArtefactImpl: function() {
+                return { success: false, releaseUrl: null, error: 'boom' };
+            }
+        });
+        var result = m.action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: {
+                customParams: {
+                    artefactRepository: { owner: 'Org', repo: 'repo' },
+                    cacheToReleases: {
+                        assets: [
+                            { fromFolder: 'a/{ticketKey}', name: 'a' },
+                            { fromFolder: 'b/{ticketKey}', name: 'b' }
+                        ]
+                    }
+                }
+            }
+        });
+        assert.equal(result.success, true, 'the action itself completes');
+        assert.equal(result.results.length, 2);
+        assert.equal(result.results[0].result.success, false);
+        assert.ok(!result.releaseUrl, 'no releaseUrl when every upload failed');
+    });
+
+    test('an uploadArtefact throw escapes the loop — action reports { success: false, error }', function() {
+        var m = loadCacheToReleases({
+            uploadArtefactImpl: function() { throw new Error('upload exploded'); }
+        });
+        var result = m.action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: {
+                customParams: {
+                    artefactRepository: { owner: 'Org', repo: 'repo' },
+                    cacheToReleases: { assets: [{ fromFolder: 'a/{ticketKey}', name: 'a' }] }
+                }
+            }
+        });
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'upload exploded');
+    });
+
+    test('PR matching prefers the title and falls back to the head ref (case-insensitive)', function() {
+        var m = loadCacheToReleases({
+            prs: [{ number: 5, title: 'unrelated', head: { ref: 'feature/PROJ-1-payload' } }]
+        });
+        m.action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: {
+                customParams: {
+                    artefactRepository: { owner: 'Org', repo: 'repo' },
+                    targetRepository: { owner: 'Org', repo: 'repo' },
+                    cacheToReleases: {
+                        assets: [{ fromFolder: 'a/{ticketKey}', name: 'a', postToPRComment: true }]
+                    }
+                }
+            }
+        });
+        assert.equal(m._scmCalls.addComment.length, 1);
+        assert.equal(m._scmCalls.addComment[0].prId, 5);
+    });
 });

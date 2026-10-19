@@ -303,3 +303,100 @@ suite('agentWorkflowGraph', function() {
     });
 
 });
+
+suite('collectArtifacts', function() {
+    function generator() {
+        var mock = makeMockFs({ 'agents/js/agentDocGenerator.js': '// probe' });
+        var mod = loadModule(
+            'js/agentDocGenerator.js',
+            makeRequire({ 'fs': mock.fs, 'path': makeMockPath() }),
+            {}
+        );
+        return mod;
+    }
+
+    test('captures literal file_write / file_read paths under input/ or outputs/', function() {
+        var src = [
+            "file_write('outputs/report.md', data);",
+            "var t = file_read('input/ticket.md');"
+        ].join('\n');
+        var out = generator().collectArtifacts(src, 'postJSAction');
+        assert.deepEqual(out, {
+            reads: ['input/ticket.md'],
+            writes: ['outputs/report.md']
+        });
+    });
+
+    test('captures the file_write({ path: ... }) object form', function() {
+        var src = "file_write({ path: 'outputs/result.json', content: data });";
+        var out = generator().collectArtifacts(src, 'postJSAction');
+        assert.deepEqual(out.writes, ['outputs/result.json']);
+        assert.deepEqual(out.reads, []);
+    });
+
+    test('concat forms insert the <KEY> placeholder between the two literals', function() {
+        var src = [
+            "file_write('input/' + ticketKey + '/a.md', data);",        // slash/slash branch
+            "file_write({ path: 'outputs/r_' + key + '.md' }, data);",  // non-slash branch (object path)
+            "file_read('outputs/' + key + '/summary.md');"
+        ].join('\n');
+        var out = generator().collectArtifacts(src, 'postJSAction');
+        assert.deepEqual(out.writes.sort(), ['input/<KEY>/a.md', 'outputs/r_<KEY>.md']);
+        assert.deepEqual(out.reads, ['outputs/<KEY>/summary.md']);
+    });
+
+    test('non-concat two-literal shape (slash only on one side) still inserts <KEY>', function() {
+        var src = "file_write('outputs/r_' + key + '.md', data);";
+        var out = generator().collectArtifacts(src, 'postJSAction');
+        assert.deepEqual(out.writes, ['outputs/r_<KEY>.md']);
+    });
+
+    test('inputFolder / inputFolderPath / folder concatenations map to input/<KEY>', function() {
+        var src = [
+            "file_write(inputFolder + '/a.md', data);",
+            "var b = file_read(inputFolderPath + '/b.md');",
+            "fs.writeFileSync(path.join(folder, 'c.md'), data);",
+            "var d = fs.readFileSync(path.join(inputFolder, 'd.md'), 'utf8');",
+            "file_write(path.join(inputFolderPath, 'e.md'), data);",
+            "var f = file_read(path.join(folder, 'f.md'));"
+        ].join('\n');
+        var out = generator().collectArtifacts(src, 'preJSAction');
+        assert.deepEqual(out.writes, ['input/<KEY>/a.md', 'input/<KEY>/c.md', 'input/<KEY>/e.md']);
+        assert.deepEqual(out.reads, ['input/<KEY>/b.md', 'input/<KEY>/d.md', 'input/<KEY>/f.md']);
+    });
+
+    test('jira_attach_file_to_ticket filePath counts as a read', function() {
+        var src = "jira_attach_file_to_ticket({ ticketKey: key, filePath: 'outputs/g.pdf' });";
+        var out = generator().collectArtifacts(src, 'postJSAction');
+        assert.deepEqual(out.reads, ['outputs/g.pdf']);
+        assert.deepEqual(out.writes, []);
+    });
+
+    test('bare input/ and outputs/ paths are dropped', function() {
+        var src = [
+            "file_write('outputs/', data);",
+            "var t = file_read('input/');",
+            "file_write('outputs/real.md', data);"
+        ].join('\n');
+        var out = generator().collectArtifacts(src, 'postJSAction');
+        assert.deepEqual(out.writes, ['outputs/real.md']);
+        assert.deepEqual(out.reads, []);
+    });
+
+    test('MULTI-ITEM: results are deduplicated and sorted; ./ prefixes are normalized', function() {
+        var src = [
+            "file_write('outputs/b.md', data);",
+            "file_write('./outputs/a.md', data);",
+            "file_write('outputs/a.md', data);",
+            "var t = file_read('outputs/z.md');"
+        ].join('\n');
+        var out = generator().collectArtifacts(src, 'postJSAction');
+        assert.deepEqual(out.writes, ['outputs/a.md', 'outputs/b.md']);
+        assert.deepEqual(out.reads, ['outputs/z.md']);
+    });
+
+    test('sources with no artifact calls produce empty lists', function() {
+        var out = generator().collectArtifacts("console.log('nothing here');", 'postJSAction');
+        assert.deepEqual(out, { reads: [], writes: [] });
+    });
+});
