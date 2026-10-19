@@ -189,6 +189,14 @@ suite('smRuleLayers: gh-1114 verdict guard + merge-first capacity helpers', func
         assert.equal(smRuleLayers.mergeReservedSlots({ mergeReservedSlots: 'junk' }), 0, 'junk disables, never guesses');
         assert.equal(smRuleLayers.mergeReservedSlots({ mergeReservedSlots: 2.7 }), 2, 'floored');
         assert.equal(smRuleLayers.mergeReservedSlots(null), 1, 'no jobParams → default');
+        // Edge pins (gh-1114 rework): boolean-true, non-positive and junk
+        // numerics, and the explicit-undefined spellings.
+        assert.equal(smRuleLayers.mergeReservedSlots({ mergeReservedSlots: true }), 1, 'boolean true = 1 slot');
+        assert.equal(smRuleLayers.mergeReservedSlots({ mergeReservedSlots: -2 }), 0, 'negative number is junk → 0');
+        assert.equal(smRuleLayers.mergeReservedSlots({ mergeReservedSlots: NaN }), 0, 'NaN number is junk → 0');
+        assert.equal(smRuleLayers.mergeReservedSlots({ mergeReservedSlots: '-3' }), 0, 'negative string parses → non-positive → 0');
+        assert.equal(smRuleLayers.mergeReservedSlots({ mergeReservedSlots: '0' }), 0, "'0' parses → 0 (disabled)");
+        assert.equal(smRuleLayers.mergeReservedSlots({ mergeReservedSlots: undefined }), 1, 'explicit undefined → default 1');
     });
 
     test('reservationFor: gh-837 parallel mode reserves the whole mutex width (UT-10)', function () {
