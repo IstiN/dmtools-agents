@@ -15448,16 +15448,6 @@ suite('smAgent: gh-1114 IT replays (AC1/AC5/AC8/AC14)', function () {
         };
     }
 
-    function payloadFor(world) {
-        return function (args) {
-            var n = String((args && (args.pullRequestId || args.number)) || '');
-            var st = world[n];
-            if (!st) return JSON.stringify({ number: parseInt(n, 10) || 0 });
-            return JSON.stringify({ number: parseInt(n, 10), head: { sha: st.headSha },
-                labels: st.labels, body: '' });
-        };
-    }
-
     function actionsOf(sm) {
         return {
             merges: sm.capturedPrMerges.map(function (m) { return m.pullRequestId || m.number; }),
@@ -15482,10 +15472,15 @@ suite('smAgent: gh-1114 IT replays (AC1/AC5/AC8/AC14)', function () {
                     { name: 'static', status: 'completed', conclusion: 'failure' }
                 ] },
                 // PR-70's payload: the head the refresh reads. Before the
-                // clone the cached OLD head; after it the FRESH NEW head
+                // clone the cached OLD head (labels kept — the sticky
+                // approval gate reads them); after it the FRESH NEW head
                 // (the default harness payload swaps on the clone command).
-                pr: { number: 70, head: { sha: OLD } },
-                prAfterRefresh: { number: 70, head: { sha: NEW }, labels: ['pr_approved'] }
+                pr: { number: 70, head: { sha: OLD }, labels: ['pr_approved'] },
+                prAfterRefresh: { number: 70, head: { sha: NEW }, labels: ['pr_approved'] },
+                // PR-74's #633 park marker: the park verdict keys the OLD
+                // head — the gh-994 head-change reset must clear it (the
+                // shared mock serves it to every PR; harmless elsewhere).
+                prComments: [{ body: '⚠️ validation failed — parked\nparked-head: ' + OLD }]
             },
             onCliExecute: function (cmdOpts) {
                 var c = cmdOpts.command;
@@ -15516,10 +15511,7 @@ suite('smAgent: gh-1114 IT replays (AC1/AC5/AC8/AC14)', function () {
             'no park comment this tick');
         assert.equal(sm.capturedCliCommands.filter(function (c) {
             return c.command.indexOf('gh workflow run') === 0; }).length, 0,
-            'no CI dispatch this tick — the moved candidate defers; got: ' +
-            JSON.stringify(sm.capturedCliCommands.map(function (c) { return c.command; })) +
-            ' | logs: ' + JSON.stringify((sm.capturedLogs || []).filter(function (l) {
-                return l.indexOf('moved') !== -1 || l.indexOf('⏭') !== -1 || l.indexOf('🔖') !== -1; })));
+            'no CI dispatch this tick — the moved candidate defers');
 
         // Next tick: the PR is up-to-date (no arm, no red verdict carried),
         // validate-armed dispatches CI on the fresh head.
@@ -15539,23 +15531,30 @@ suite('smAgent: gh-1114 IT replays (AC1/AC5/AC8/AC14)', function () {
     });
 
     test('IT-2 (AC5): concluded green + BEHIND — latched, updated, revalidated next tick, never merged same tick', function () {
-        var cloned = [];
+        var GREEN_RUN = { id: 9001, event: 'workflow_dispatch', head_branch: 'ai/x-70',
+            head_sha: OLD, status: 'completed', conclusion: 'success',
+            created_at: new Date(Date.now() - 3600 * 1000).toISOString() };
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js':
                 'module.exports = { repository: { owner: "a", repo: "b" } };' },
+            captureConsole: true,
             github: {
                 items: [
                     item(70, { labels: ['pr_approved', 'ai_validating'], headSha: OLD, branch: 'ai/x-70' }),
                     item(70, { labels: ['pr_approved'], headSha: OLD, branch: 'ai/x-70' }),
                     item(70, { labels: ['pr_approved'], headSha: NEW, branch: 'ai/x-70' })
                 ],
-                workflowApiRuns: [
-                    { id: 9001, event: 'workflow_dispatch', head_branch: 'ai/x-70',
-                      head_sha: OLD, status: 'completed', conclusion: 'success',
-                      created_at: new Date(Date.now() - 3600 * 1000).toISOString() }
-                ],
                 pr: { number: 70, head: { sha: OLD }, labels: ['pr_approved', 'ai_validating'] },
                 prAfterRefresh: { number: 70, head: { sha: NEW }, labels: ['pr_approved'] }
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=' + OLD) !== -1 &&
+                    c.indexOf('event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [GREEN_RUN] }; // the CONCLUDED GREEN verdict
+                }
+                if (c.indexOf('runs?') !== -1) return { workflow_runs: [] };
+                return '';
             }
         });
         sm.action({ jobParams: { owner: 'a', repo: 'b',
@@ -15588,7 +15587,7 @@ suite('smAgent: gh-1114 IT replays (AC1/AC5/AC8/AC14)', function () {
             'the next tick revalidates the moved head');
     });
 
-    test('IT-3 (AC8): decision-diff replay — old vs new order produce identical actions except the AC1/AC5 BEHIND cases', function () {
+    test('IT-3 (AC8): decision-diff replay — old vs new rule order produce identical actions on the 5-state fixture', function () {
         var worldOld = replayWorld();
         var clonedOld = [];
         var oldRun = replayTick(OLD_ORDER, worldOld, clonedOld);
