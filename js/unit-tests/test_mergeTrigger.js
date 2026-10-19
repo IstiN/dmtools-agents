@@ -580,9 +580,10 @@ suite('mergeTrigger: extracted helpers (gh-1081)', function () {
         assert.equal(mod.branchOf({ headRefName: 'hr' }), 'hr');
         assert.equal(mod.branchOf({ head: { ref: 'gr' } }), 'gr');
         assert.equal(mod.branchOf({}), '');
-        assert.equal(mod.bodyOf('text'), 'text');
-        assert.equal(mod.bodyOf(null), '');
-        assert.equal(mod.bodyOf(5), '');
+        assert.equal(mod.bodyOf({ body: 'text' }), 'text');
+        assert.equal(mod.bodyOf({ body: null }), '');
+        assert.equal(mod.bodyOf({ body: 5 }), '');
+        assert.equal(mod.bodyOf({}), '');
     });
 
     test('mergeDecisionOf: every mergeStateStatus lands in exactly one bucket', function () {
