@@ -39,6 +39,63 @@ var CHAIN_EXHAUSTED_RE = /provider chain exhausted/i;
 // Transient signals — a retry CAN plausibly succeed on the next tick.
 var RATE_LIMIT_RE = /\b429\b/i;
 var TIMEOUT_RE = /rate\s*limit|timeout|timed?\s*out|econnreset|etimedout|socket hang up|network error|temporar/i;
+// gh-1121: an exhausted chain whose attempts carry 401-style auth text is a
+// credential problem, not an outage — a resume can never fix it. (403 and
+// quota vocabulary are excluded earlier by the quota branch's priority — I1.)
+var AUTH_TEXT_RE = /\b401\b|unauthorized|invalid[\s_-]?api[\s_-]?key|authentication failed/i;
+
+// gh-1121: transient-outage evidence extraction for the honest reset comment.
+// Live shapes (run 39315836954):
+//   zai/glm-5.3-flash returned 500 {"code":"1234",...}
+//   kimi-for-coding hit 429 Rate limit reached
+var OUTAGE_CODE_RE = /\b(5\d{2}|429)\b/g;
+var OUTAGE_MODEL_RES = [
+    /([A-Za-z0-9][\w.-]*(?:\/[\w.-]+)+)\s+(?:returned|responded with|answered|failed with|hit)\s+(?:HTTP\/?)?\s*(?:5\d{2}|429)/gi,
+    /(?:^|[\s"'(])([A-Za-z0-9][\w-]{2,})\s+(?:then\s+)?hit\s+(?:HTTP\/?)?\s*(?:5\d{2}|429)/gi,
+    /provider\s*[:\["']+\s*([A-Za-z0-9][\w.-]*)/gi
+];
+var OUTAGE_EXTRACT_CAP = 6;
+
+function collectMatches(text, re, cap) {
+    var found = [];
+    var seen = {};
+    re.lastIndex = 0;
+    var m;
+    while ((m = re.exec(text)) !== null) {
+        var value = m[1];
+        if (value && !seen[value]) {
+            seen[value] = true;
+            found.push(value);
+            if (found.length >= cap) break;
+        }
+    }
+    re.lastIndex = 0;
+    return found;
+}
+
+function extractOutageModels(text) {
+    var models = [];
+    OUTAGE_MODEL_RES.forEach(function (re) {
+        collectMatches(text, re, OUTAGE_EXTRACT_CAP).forEach(function (model) {
+            if (models.indexOf(model) === -1) models.push(model);
+        });
+    });
+    return models;
+}
+
+function extractOutageCodes(text) {
+    return collectMatches(text, OUTAGE_CODE_RE, OUTAGE_EXTRACT_CAP);
+}
+
+// gh-1121 AC5: the honest reset header — names the model list and the codes
+// so the comment says "provider outage" instead of guessing "rate limit"
+// when the chain answered 5xx. Shared by the story and bug interrupted-leg
+// comment builders so both legs word the reset identically.
+function outageResetHeaderOf(outage) {
+    var models = (outage && outage.models && outage.models.length) ? outage.models.join(', ') : 'unknown models';
+    var codes = (outage && outage.codes && outage.codes.length) ? outage.codes.join(', ') : 'transient errors';
+    return '⏸️ Provider outage (' + models + ', ' + codes + ') — reset for retry';
+}
 
 function extractQuotaWindow(text) {
     var m = /((?:weekly|daily|monthly|hourly|yearly)(?:\s*\([^)]*\))?)\s+(?:usage\s+)?limit/i.exec(text);
@@ -75,10 +132,34 @@ function classifyFailure(text) {
             evidence: quotaEvidenceOf(t)
         };
     }
+    // gh-1121: the exhausted-chain tail whose attempts are ONLY transient
+    // (5xx / 429 / network — no 401 auth text; 403/quota already excluded by
+    // the priority branch above, I1) is a whole-chain OUTAGE, not a blip: the
+    // dev leg may resume the persisted fa session once instead of cold-reset.
+    var outage = providerOutageClassificationOf(t);
+    if (outage) return outage;
     if (RATE_LIMIT_RE.test(t) || TIMEOUT_RE.test(t)) {
         return { kind: 'transient', provider: extractProvider(t), window: null, evidence: null };
     }
     return null;
+}
+
+// gh-1121: classifies the exhausted-chain tail whose attempts are ONLY
+// transient (5xx / 429 / network — no 401 auth text) as a whole-chain OUTAGE.
+// Returns the provider_transient classification object, or null when the text
+// is not an outage. Split out of classifyFailure to keep both under the CRAP
+// gate (gh-1121 quality run: classifyFailure CC 9 > threshold 8).
+function providerOutageClassificationOf(t) {
+    if (!CHAIN_EXHAUSTED_RE.test(t) || AUTH_TEXT_RE.test(t)) return null;
+    var models = extractOutageModels(t);
+    return {
+        kind: 'provider_transient',
+        provider: models[0] || extractProvider(t),
+        models: models,
+        codes: extractOutageCodes(t),
+        window: null,
+        evidence: 'provider chain exhausted'
+    };
 }
 
 // Quota evidence: a 403 carrying a quota/billing body, an explicit quota
@@ -236,6 +317,9 @@ module.exports = {
     classifyFailure: classifyFailure,
     extractQuotaWindow: extractQuotaWindow,
     extractProvider: extractProvider,
+    extractOutageModels: extractOutageModels,
+    extractOutageCodes: extractOutageCodes,
+    outageResetHeaderOf: outageResetHeaderOf,
     parkLabelOf: parkLabelOf,
     probeEveryOf: probeEveryOf,
     probeCommandOf: probeCommandOf,
