@@ -141,6 +141,77 @@ function hasActiveLegRunOnBranch(runs, branch, opts) {
     return false;
 }
 
+// ── gh-1075 fork reroute: the pull-keyed leg probe ──────────────────────────
+// A rerouted fork-PR dispatch lands on the base machine ref ('main'), so the
+// run's head_branch is 'main' — SHARED by every fork dispatch in the repo.
+// Keying the gh-1028 probe on 'main' would serialize unrelated fork legs,
+// and keying it on refs/pull/<N>/head matches nothing (GitHub records the
+// DISPATCH ref as head_branch, never the checkout plan). The per-PR
+// discriminator is the run-title pr anchor: the leg workflow's run-name
+// renders '▶ <leg> (SM) · pr-<N>' whenever inputs.pr is set — which the
+// gh-1075 fork path ALWAYS backfills. Forward-compat: a run whose
+// head_branch IS the pull ref (a leg dispatched directly on it) also
+// counts.
+
+// The always-fetchable head of PR <N> on the base repo (forkDispatch.
+// pullHeadRef parity — kept as a literal here to keep this module
+// dependency-free).
+function pullHeadRefOf(prNumber) {
+    return 'refs/pull/' + prNumber + '/head';
+}
+
+// Whole-token 'pr-<N>' search in a run title ('▶ rework (SM) · pr-1591').
+// Boundary rules mirror smAgent.stubAnchorMatches: a trailing key char
+// (digit/'-') rejects ('pr-1591' never matches 'pr-15910'), and a
+// letter/'-' prefix rejects ('pr-1591' never matches 'gh-pr-1591-x').
+function titleHasPrToken(title, prNumber) {
+    var s = String(title || '');
+    var token = '[REDACTED:Sensitive Value]' + prNumber;
+    var from = 0;
+    while (from <= s.length - token.length) {
+        var idx = s.indexOf(token, from);
+        if (idx === -1) break;
+        var next = s.charAt(idx + token.length);
+        var prev = idx > 0 ? s.charAt(idx - 1) : '';
+        var nextOk = !((next >= '0' && next <= '9') || next === '-');
+        var prevOk = !((prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') ||
+            (prev >= '0' && prev <= '9') || prev === '-' || prev === '#');
+        if (nextOk && prevOk) return true;
+        from = idx + 1;
+    }
+    return false;
+}
+
+function runTitleOf(run) {
+    return (run && (run.display_title || run.displayTitle || run.name)) || '';
+}
+
+/** One run owns the PR's fork head: active, non-stale, the leg workflow,
+ * and (head_branch IS the pull ref OR the title carries the pr anchor). */
+function legRunOwnsPull(run, prNumber, workflowFile, nowMs, staleMs) {
+    if (!run || !isActiveStatus(run.status)) return false;
+    if (run.status !== 'in_progress' && nowMs !== null &&
+        isStaleNonRunning(run, nowMs, staleMs)) return false;
+    if (!isLegRun(run, workflowFile)) return false;
+    if (matchesBranch(run, pullHeadRefOf(prNumber))) return true;
+    return titleHasPrToken(runTitleOf(run), prNumber);
+}
+
+/** THE FORK GATE (gh-1075): is a leg in flight for THIS PR's fork head?
+ * Same active/stale/workfile vocabulary as hasActiveLegRunOnBranch; the
+ * match keys on the pull ref or the run-title pr anchor instead of the
+ * branch name. opts identical to hasActiveLegRunOnBranch. */
+function hasActiveLegRunForPull(runs, prNumber, opts) {
+    if (!prNumber || !Array.isArray(runs)) return false;
+    var workflowFile = workflowFileOf(opts);
+    var staleMs = staleMsOf(opts);
+    var nowMs = nowMsOf(opts);
+    for (var i = 0; i < runs.length; i++) {
+        if (legRunOwnsPull(runs[i], prNumber, workflowFile, nowMs, staleMs)) return true;
+    }
+    return false;
+}
+
 module.exports = {
     DEFAULT_LEG_WORKFLOW: DEFAULT_LEG_WORKFLOW,
     ACTIVE_RUN_STATES: ACTIVE_RUN_STATES,

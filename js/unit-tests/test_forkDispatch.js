@@ -6,7 +6,7 @@
  * forever, live fa pr-1591), and the fork head's no-ref liveness oracle is
  * the pull ref (AC2/AC3), never the branch name.
  */
-/* global loadModule, assert, test, suite, makeRequire */
+/* global loadModule, assert, test, suite, makeRequire, file_read */
 
 suite('forkDispatch (gh-1075)', function () {
 
@@ -108,6 +108,73 @@ suite('forkDispatch (gh-1075)', function () {
         test('an UNFETCHABLE pull ref is a genuinely dead fork head (AC3)', function () {
             assert.equal(mod.classifyForkNoRef(false), 'dead',
                 'fork deleted entirely — parks via the existing no-ref path, keyed on the pull ref');
+        });
+    });
+});
+
+// ── gh-1075 review (thread 1, BLOCKING): the leg workflow template must
+// DECLARE every input the rerouted fork dispatch sends. GitHub's dispatches
+// REST endpoint validates the inputs object against the target workflow
+// file's declared inputs and 422s undeclared keys with "Unexpected inputs
+// provided" (github/gh-aw#50027) — classified 'transient' by
+// triggerFailures.classifyTriggerError, so an undeclared input would leave
+// fork PRs permanently undispatchable with zero markers/park. This lint
+// fails CI the moment the SM dispatches an input the template does not
+// declare (declaration only — consumption stays in the #1074 lane).
+
+suite('workflow template declares the dispatch inputs (gh-1075 lint)', function () {
+
+    // Parse the workflow_dispatch input names out of the template by
+    // indentation — no YAML dependency in the GraalJS runtime.
+    function declaredDispatchInputs(templateText) {
+        var lines = String(templateText).split(/\r?\n/);
+        var inputs = {};
+        var inDispatch = false, inInputs = false, baseIndent = -1;
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            var trimmed = line.replace(/\s+$/, '');
+            if (!inDispatch) {
+                if (/^on:\s*$/.test(trimmed)) inDispatch = true;
+                continue;
+            }
+            var mInput = /^\s+inputs:\s*$/.exec(line);
+            if (!inInputs) {
+                if (mInput) { inInputs = true; baseIndent = mInput[0].length - 'inputs:'.length - 1; }
+                continue;
+            }
+            // inside inputs: entry keys are indented deeper than 'inputs:'
+            var mKey = /^\s+([A-Za-z0-9_]+):\s*$/.exec(line);
+            if (!mKey) {
+                // any line at or above the inputs indent closes the block
+                if (trimmed !== '' && (line.length - line.replace(/^\s+/, '').length) <= baseIndent) break;
+                continue;
+            }
+            var indent = line.length - line.replace(/^\s+/, '').length;
+            if (indent > baseIndent) inputs[mKey[1]] = true;
+        }
+        return inputs;
+    }
+
+    test('ai-teammate.yml.template declares issue/leg/reason/pr AND checkout_ref', function () {
+        var tpl = file_read({ path: 'workflows/ai-teammate.yml.template' });
+        var declared = declaredDispatchInputs(tpl);
+        var required = ['issue', 'leg', 'reason', 'pr', 'checkout_ref'];
+        required.forEach(function (k) {
+            assert.ok(declared[k], 'workflow_dispatch must declare "' + k + '" — ' +
+                'an undeclared dispatch input 422s "Unexpected inputs provided" on the ' +
+                'dispatches endpoint (gh-aw#50027) and the fork fix can never fire');
+        });
+    });
+
+    test('the fork-path input keys smAgent sends are exactly template-declared', function () {
+        var tpl = file_read({ path: 'workflows/ai-teammate.yml.template' });
+        var declared = declaredDispatchInputs(tpl);
+        // The gh-1075 fork path adds these two to the rule-declared inputs
+        // (js/smAgent.js triggerWorkflow: inputs.checkout_ref always,
+        // inputs.pr backfilled when the rule carried no {prNumber}).
+        ['checkout_ref', 'pr'].forEach(function (k) {
+            assert.ok(declared[k], 'the gh-1075 fork dispatch sends inputs.' + k +
+                ' — the template must declare it or every fork dispatch 422s');
         });
     });
 });

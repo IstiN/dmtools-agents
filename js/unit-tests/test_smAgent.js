@@ -14238,7 +14238,8 @@ suite('smAgent: fork PR dispatch (gh-1075)', function () {
             github: { items: [fxItem(1591)], prComments: [],
                       pr: { number: 1591, head: { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } } },
             onTrigger: function () { throw new Error(NO_REF_ERR); },
-            onCliExecute: probeCli(true)
+            onCliExecute: probeCli(true),
+            captureConsole: true
         }, fxConfig()));
         sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
                                  machineAuthor: 'ai-teammate', rules: [LEG_RULE] } });
@@ -14250,6 +14251,9 @@ suite('smAgent: fork PR dispatch (gh-1075)', function () {
         assert.equal(sm.capturedCliCommands.filter(function (c) {
             return c.command.indexOf('ls-remote') !== -1; }).length, 1,
             'the liveness probe ran exactly once (refs/pull/<N>/head oracle)');
+        var logs = sm.capturedLogs.join('\n');
+        assert.ok(logs.indexOf('fork-blind') !== -1 && logs.indexOf('validate_pr') !== -1,
+            'a distinct degraded notice names the still-fork-blind validate_pr lane — the silent spin is greppable in SM logs (no PR marker comment)');
     });
 
     test('AC2 deployment shape: a no-ref failure on the BASE ref with a fetchable pull ref records nothing', function () {
@@ -14311,6 +14315,12 @@ suite('smAgent: fork PR dispatch (gh-1075)', function () {
         assert.ok(parks[0].body.indexOf(PULL_REF) !== -1, 'the park names the pull ref');
         assert.ok(parks[0].body.indexOf('parked-head: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') !== -1,
             'the parked-head sha records — a restored fork clears the park through the gh-994 head-change reset');
+        assert.ok(parks[0].body.indexOf('The PR head (fork) is gone') !== -1,
+            'the fork park wording names the FORK — never "the head branch <pull ref> / re-push the branch" (there is no base branch to re-push)');
+        assert.ok(parks[0].body.indexOf('re-push the head') !== -1,
+            'the recovery instruction matches a dead fork: restore the fork, re-push the head');
+        assert.ok(parks[0].body.indexOf('The head branch') === -1,
+            'the legacy same-repo wording stays off the fork park body');
     });
 
     test('AC3 probe fail-open: a broken ls-remote never parks — a blind tick records nothing', function () {
@@ -14361,5 +14371,127 @@ suite('smAgent: fork PR dispatch (gh-1075)', function () {
         assert.equal(sm.capturedCliCommands.filter(function (c) {
             return c.command.indexOf('ls-remote') !== -1; }).length, 0,
             'same-repo heads never pay the pull-ref probe');
+        var parks = sm.capturedPrComments.filter(function (c) {
+            return String(c.body || '').indexOf('parked-head: ') !== -1; });
+        assert.equal(parks.length, 1, 'exactly one park comment');
+        assert.ok(parks[0].body.indexOf('The head branch `') !== -1 &&
+            parks[0].body.indexOf('Restore or re-push the branch') !== -1,
+            'the SAME-REPO park keeps the legacy branch wording byte-for-byte');
+    });
+
+    test('the deleted-fork shape (headRepo: null) parks BRANCH-keyed via the legacy gh-922 path — the pull-ref probe never runs', function () {
+        // forkFullOf fails closed to same-repo on a null headRepo (the
+        // gh-1070 resolver contract, pinned by REG-1's legacy payload), so
+        // a deleted fork whose REST payload carries head.repo:null parks
+        // through the PRE-gh-1075 branch-keyed path — the AC3 park outcome
+        // still happens, just keyed on the branch name, and no ls-remote
+        // probe is ever paid. Contract text: js/common/forkDispatch.js.
+        var prior = [1, 2].map(function (n) {
+            return { body: '⚠️ trigger-failed ' + BRANCH + ' — attempt ' + n +
+                '/3 at 2026-10-19T06:2' + n + ':00Z — prior failure' };
+        });
+        var sm = makeSmAgent(Object.assign({
+            github: { items: [fxItem(1591, { headRepo: null })], prComments: prior,
+                      pr: { number: 1591, head: { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } } },
+            onTrigger: function () { throw new Error(NO_REF_ERR); }
+        }, fxConfig()));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                                 machineAuthor: 'ai-teammate', rules: [LEG_RULE] } });
+
+        assert.deepEqual(parkAdds(sm).map(function (a) { return a.number; }), [1591],
+            'the deleted fork still parks at the cap — through the legacy branch-keyed path');
+        var markers = markerBodies(sm);
+        assert.equal(markers.length, 1, 'one cap marker');
+        assert.ok(markers[0].indexOf('trigger-failed ' + BRANCH + ' — attempt 3/3') !== -1,
+            'the deleted-fork marker is keyed on the BRANCH name (null headRepo is indistinguishable from a legacy same-repo payload — REG-1 pins that fail-closed shape)');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('ls-remote') !== -1; }).length, 0,
+            'no pull-ref probe on the null-headRepo path — the probe covers only populated-headRepo fork PRs');
+    });
+
+    test('the liveness probe targets the runner\'s authenticated origin remote — never a hardcoded public URL', function () {
+        var sm = makeSmAgent(Object.assign({
+            github: { items: [fxItem(1591)], prComments: [],
+                      pr: { number: 1591, head: { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } } },
+            onTrigger: function () { throw new Error(NO_REF_ERR); },
+            onCliExecute: probeCli(true)
+        }, fxConfig()));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                                 machineAuthor: 'ai-teammate', rules: [LEG_RULE] } });
+
+        var probes = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('ls-remote') !== -1; });
+        assert.equal(probes.length, 1);
+        assert.ok(probes[0].command.indexOf(' ls-remote origin ') !== -1,
+            'the probe rides the runner\'s authenticated origin (private-repo parity with js/prepareTestPRForReview.js et al.)');
+        assert.ok(probes[0].command.indexOf('https://github.com/') === -1,
+            'no unauthenticated hardcoded URL — on a private base repo that errors "Repository not found" and AC3 silently never fires');
+    });
+
+    test('AC3 probe fail-open: a private-repo-shaped auth failure degrades with a distinct DEGRADED warning — never parks', function () {
+        var sm = makeSmAgent(Object.assign({
+            github: { items: [fxItem(1591)], prComments: [],
+                      pr: { number: 1591, head: { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } } },
+            onTrigger: function () { throw new Error(NO_REF_ERR); },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('ls-remote') !== -1) {
+                    throw new Error('remote: Repository not found.');
+                }
+                return '';
+            },
+            captureConsole: true
+        }, fxConfig()));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                                 machineAuthor: 'ai-teammate', rules: [LEG_RULE] } });
+
+        assert.deepEqual(sm.capturedPrComments, [],
+            'an auth-failed probe degrades to LIVE (fail-open) — the gh-922 blind-tick-never-parks invariant');
+        assert.deepEqual(parkAdds(sm), [], 'never parks on a probe error');
+        var logs = sm.capturedLogs.join('\n');
+        assert.ok(logs.indexOf('DEGRADED') !== -1 && logs.indexOf('pr-1591') !== -1,
+            'the degraded probe logs a distinct greppable warning naming the PR — a private-repo AC3 blind spot is visible in SM logs');
+    });
+
+    test('gh-1028 fork guard: an in-flight leg for the SAME fork PR (rerouted onto main) suppresses the second dispatch arm', function () {
+        // The first arm's leg rerouted onto 'main' — its run's head_branch
+        // is the SHARED machine ref, so the branch-keyed probe is blind;
+        // the per-PR discriminator is the run-title pr anchor ('· pr-1591',
+        // guaranteed by the template run-name once inputs.pr is set — the
+        // gh-1075 fork path ALWAYS backfills it). A distinct concurrencyKey
+        // keeps the gh-806 title guard out of this probe's way.
+        var rule = Object.assign({}, LEG_RULE, { concurrencyKey: 'fork-guard-probe' });
+        var inFlight = { id: 39220000001, status: 'in_progress',
+            display_title: '▶ rework (SM) · pr-1591',
+            path: '.github/workflows/ai-teammate.yml',
+            head_branch: 'main',
+            head_sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' };
+        var sm = makeSmAgent(Object.assign({
+            github: { items: [fxItem(1591)], prComments: [] },
+            workflowRuns: { in_progress: [inFlight] }
+        }, fxConfig()));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                                 machineAuthor: 'ai-teammate', rules: [rule] } });
+
+        assert.equal(sm.capturedTriggers.length, 0,
+            'the second arm sees the first fork leg in flight — one leg per fork head per rework cycle (gh-1028 survives the reroute)');
+    });
+
+    test('gh-1028 fork guard: an in-flight leg for a DIFFERENT PR on main does not suppress a fork dispatch', function () {
+        var rule = Object.assign({}, LEG_RULE, { concurrencyKey: 'fork-guard-probe' });
+        var inFlight = { id: 39220000002, status: 'in_progress',
+            display_title: '▶ rework (SM) · pr-2000',
+            path: '.github/workflows/ai-teammate.yml',
+            head_branch: 'main',
+            head_sha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' };
+        var sm = makeSmAgent(Object.assign({
+            github: { items: [fxItem(1591)], prComments: [] },
+            workflowRuns: { in_progress: [inFlight] }
+        }, fxConfig()));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+                                 machineAuthor: 'ai-teammate', rules: [rule] } });
+
+        assert.equal(sm.capturedTriggers.length, 1,
+            'another fork PR\'s leg owns nothing here — the probe keys on the PR anchor, not the shared main head_branch');
+        assert.equal(sm.capturedTriggers[0].ref, 'main');
     });
 });
