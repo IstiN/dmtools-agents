@@ -18,6 +18,15 @@
 # agent config named by RUNNER_*: dev (story/bug) develops from the issue
 # body, review produces a machine PR review verdict, rework fixes the
 # linked PR by the review threads.
+#
+# gh-1065/gh-1073: issues events are deduped before the leg fires — one
+# human action (assign, or assign-while-labels-change) emits MULTIPLE
+# issues events, and without the `dedup` probe job each event spawned its
+# own teammate run (live 2026-10-18: #1040–#1043 two runs each, #1061
+# three). The probe is transport only; the decision is the unit-tested
+# pure module js/common/teammateEventDedup.js, shipped in the agents pack
+# the runner leg mounts (dmtools-agents checkout). The probe FAILS OPEN on
+# errors, so a broken check never swallows the only trigger.
 name: 'AI Teammate'
 
 # Run title carries the EFFECTIVE anchor (owner 2026-09-27, live: dmd run
@@ -26,14 +35,26 @@ name: 'AI Teammate'
 # malformed '▶ rework (SM) · gh- · gh-: '. (inputs.pr || '') guards the
 # label-event path, where inputs are null — null != '' would be TRUE and
 # render 'pr-' for ordinary issue events.
+#
+# gh-1065/gh-1073: the issues-event title ALSO carries the LEG — the
+# strongest arming label on the issue (rework > review > pr_approved →
+# review > dev), not the label written by THIS event: assign-while-labels-
+# change emits a bare `assigned` event whose github.event.label.name is
+# empty. legOfRunName (js/common/teammateEventDedup.js) parses this emoji
+# title family, so a COMPLETED owner stays title-precise: the strict
+# completed-owner leg rule (a leg-less completed run never swallows a
+# KNOWN new leg) can only work when real leg runs carry their leg here.
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch' &&
       format('▶ {0} (SM) · {1}', github.event.inputs.leg,
         (github.event.inputs.pr || '') != '' && format('pr-{0}', github.event.inputs.pr)
         || format('gh-{0}', github.event.inputs.issue)) ||
-      github.event.label.name == 'agent:rework' && '🔧 rework' ||
-      github.event.label.name == 'agent:review' && '🔍 review' ||
-      '⚒️ dev' }}
+      (contains(github.event.issue.labels.*.name, 'agent:rework') && '🔧 rework') ||
+      (contains(github.event.issue.labels.*.name, 'agent:review') && '🔍 review') ||
+      (contains(github.event.issue.labels.*.name, 'pr_approved') && '🔍 review') ||
+      (contains(github.event.issue.labels.*.name, 'agent:dev') && '⚒️ dev') ||
+      (contains(github.event.issue.labels.*.name, 'agent:develop') && '⚒️ dev') ||
+      github.event.label.name || '⚒️ dev' }}
   · ${{ (github.event.inputs.pr || '') != '' && format('pr-{0}', github.event.inputs.pr)
       || format('gh-{0}', github.event.issue.number || github.event.inputs.issue) }}${{
       github.event.issue.title && format(': {0}', github.event.issue.title) || '' }}
@@ -170,9 +191,206 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # gh-1065/gh-1073: event-path dedup probe (the engine repo's stub carries
+  # the same job — see .github/workflows/ai-teammate.yml). One human action
+  # (assign, or assign-while-labels-change) emits MULTIPLE issues events and
+  # each event started its own teammate run — two per issue, three on #1061,
+  # the owner hand-cancelling duplicates. The gh-1028 dedup guards the SM
+  # dispatch path only; this job is the missing event-path gate. It probes
+  # the repo's ai-teammate.yml runs (per-status gh api fan-out, smAgent
+  # parity) and lets the `teammate` call fire only when no OLDER run for
+  # the same issue + leg is in flight or freshly completed. Probe errors
+  # FAIL OPEN (AC3): a broken check writes proceed=true so the only trigger
+  # of a burst is never silently swallowed. The decision itself is the
+  # unit-tested pure module js/common/teammateEventDedup.js (AC4) — this
+  # step is transport only. The probe short-circuits BEFORE any API call
+  # for workflow_dispatch (SM-side gh-1028 governs it), non-arming
+  # lifecycle labels and non-teammate assignees.
+  dedup:
+    name: Event-path dedup probe (gh-1065)
+    runs-on: ubuntu-latest
+    # gh-1029 zero-burn parity: this gate MIRRORS the guard gate above.
+    # `on:` fires on EVERY label write repo-wide, and an unguarded dedup
+    # job would allocate a runner (pack checkout + node boot) per
+    # lifecycle-label storm — the exact burn gh-1029 eliminated. Rejected
+    # events execute ZERO jobs: the run concludes failure (the gh-676
+    # phantom pattern) and — because only conclusion 'success' owns the
+    # freshness window — can never suppress a trigger for an issue whose
+    # leg never ran. NOTE: a job-level `if:` cannot read the env block —
+    # if you retarget AGENT_HANDLE below, mirror it into the two
+    # 'ai-teammate' literals in this gate and the teammate call gate.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' &&
+       github.event.action == 'assigned' &&
+       contains(github.event.issue.assignees.*.login, 'ai-teammate')) ||
+      (github.event_name == 'issues' &&
+       github.event.action == 'labeled' &&
+       (github.event.label.name == 'agent:dev' ||
+        github.event.label.name == 'agent:develop' ||
+        github.event.label.name == 'agent:review' ||
+        github.event.label.name == 'agent:rework' ||
+        github.event.label.name == 'pr_approved'))
+    outputs:
+      proceed: ${{ steps.probe.outputs.proceed }}
+      audit: ${{ steps.probe.outputs.audit }}
+    steps:
+      # The pure decision module ships in the agents pack (the runner leg
+      # below mounts the same checkout) — the consumer repo tree does NOT
+      # carry js/common/. Same DMTOOLS_AGENTS_REF pin as the runner leg.
+      - name: Checkout dmtools-agents (dedup decision module)
+        uses: actions/checkout@v4
+        with:
+          repository: IstiN/dmtools-agents
+          ref: ${{ env.DMTOOLS_AGENTS_REF }}
+          path: dmtools-agents
+      - id: probe
+        name: Decide whether this event duplicates an in-flight teammate run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABEL_NAME: ${{ github.event.label.name }}
+          ISSUE_LABELS: ${{ toJson(github.event.issue.labels.*.name) }}
+          ISSUE: ${{ github.event.issue.number || github.event.inputs.issue }}
+          ASSIGNEES: ${{ toJson(github.event.issue.assignees.*.login) }}
+          SELF_ID: ${{ github.run_id }}
+          SELF_RUN_NUMBER: ${{ github.run_number }}
+          WORKFLOW_FILE: ai-teammate.yml
+          # GITHUB_OUTPUT is provided by the runner — do NOT set it here.
+        run: |
+          node <<'DEDUP_PROBE_EOF'
+          const { execFileSync } = require('child_process');
+          const fs = require('fs');
+          const dedup = require('./dmtools-agents/js/common/teammateEventDedup.js');
+
+          const env = process.env;
+          // gh-1065 rework (review thread): label/login names may contain
+          // spaces — the lists ride as JSON. Fallback: the legacy
+          // space-joined shape still parses (defense in depth).
+          const parseEventList = (raw) => {
+            try {
+              const v = JSON.parse(raw || '[]');
+              if (Array.isArray(v)) return v.filter(Boolean);
+            } catch (e) { /* legacy space-joined list — fall through */ }
+            return (raw || '').split(' ').filter(Boolean);
+          };
+          const issueLabels = parseEventList(env.ISSUE_LABELS);
+          const assignees = parseEventList(env.ASSIGNEES);
+
+          const out = (proceed, audit) => {
+            const line = String(audit).replace(/\s+/g, ' ').trim();
+            fs.appendFileSync(env.GITHUB_OUTPUT || '/dev/null',
+              `proceed=${proceed}\naudit=${line}\n`);
+            console.log((proceed ? '::notice::' : '::warning::') + line);
+          };
+
+          try {
+            // Mirror of the guard/teammate gate: skip the probe entirely
+            // (no API burn, gh-1029 parity) for everything the gate below
+            // would reject, and for the dispatch path (SM-side dedup
+            // governs it).
+            let preflight = null;
+            if (env.EVENT_NAME === 'workflow_dispatch') {
+              preflight = 'dispatch path: governed by the SM-side gh-1028 dedup';
+            } else if (env.ACTION === 'labeled' &&
+                       !dedup.ARMING_LABEL_LEGS.hasOwnProperty(env.LABEL_NAME || '')) {
+              preflight = 'non-arming label: the teammate gate rejects it; no probe spent';
+            } else if (env.ACTION === 'assigned' && assignees.indexOf('ai-teammate') === -1) {
+              preflight = 'not assigned to ai-teammate: the teammate gate rejects it; no probe spent';
+            }
+            if (preflight) {
+              out(true, 'teammate dedup (gh-1065): ' + preflight + '; proceeding');
+              process.exit(0);
+            }
+
+            // Per-status fan-out (smAgent parity): the four active states plus
+            // 'completed' (the freshness window needs recently-settled runs —
+            // burst duplicates reach this probe only after the concurrency
+            // group releases the first run). Each status is best-effort: a
+            // failing status is logged and skipped — if EVERY status failed,
+            // the run list is empty and the decision fails open by design.
+            const statuses = ['queued', 'in_progress', 'waiting', 'pending', 'completed'];
+            let runs = [];
+            let probeErrors = 0;
+            for (const status of statuses) {
+              try {
+                const raw = execFileSync('gh', [
+                  'api', `repos/${env.REPO}/actions/workflows/${env.WORKFLOW_FILE}/runs`,
+                  '-X', 'GET', '-f', `status=${status}`, '-f', 'per_page=50',
+                  '--jq', '.workflow_runs[] | {id, run_number, name, status, conclusion, created_at, updated_at, path}'
+                ], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+                const batch = raw.trim() ? raw.trim().split('\n').filter(Boolean)
+                  .map((l) => { try { return JSON.parse(l); } catch (e) { return null; } })
+                  .filter(Boolean) : [];
+                runs = runs.concat(batch);
+              } catch (e) {
+                probeErrors++;
+                console.log(`::notice::teammate dedup (gh-1065): ${status} probe failed (${(e.message || e).toString().slice(0, 120)}) — status skipped, fail-open`);
+              }
+            }
+
+            const verdict = dedup.decideEventDedup({
+              eventName: env.EVENT_NAME,
+              action: env.ACTION,
+              labelName: env.LABEL_NAME || undefined,
+              issueLabelNames: issueLabels,
+              issue: parseInt(env.ISSUE, 10),
+              workflowFile: env.WORKFLOW_FILE,
+              runs: runs,
+              // The run_number tie-break needs no clock on the self side:
+              // REST always carries run_number for every run. The freshness
+              // window DOES need a clock — without nowMs the module degrades
+              // to in-flight-only and a completed burst owner would never
+              // suppress (transport regression caught by the mocked-gh
+              // smoke).
+              nowMs: Date.now(),
+              selfRun: {
+                id: parseInt(env.SELF_ID, 10),
+                runNumber: parseInt(env.SELF_RUN_NUMBER, 10)
+              }
+            });
+            const suffix = probeErrors > 0 && verdict.proceed
+              ? ` (${probeErrors}/${statuses.length} probe statuses failed — degraded, fail-open)` : '';
+            out(verdict.proceed, verdict.audit + suffix);
+          } catch (e) {
+            // AC3 fail-open, catch-all: an unexpected probe crash must never
+            // fail the job (that would wedge the dispatch path behind needs:)
+            // and must never swallow the only trigger — proceed with an audit.
+            out(true, 'teammate dedup (gh-1065): probe degraded — fail-open (' +
+              (e && e.message ? e.message : e) + '); proceeding so the only trigger is never swallowed');
+          }
+          DEDUP_PROBE_EOF
+
   teammate:
-    needs: guard
-    if: needs.guard.outputs.run == 'true'
+    needs: [guard, dedup]
+    # gh-1029: the `labeled` trigger fires on EVERY label write — including
+    # the leg's own lifecycle labels (status:*, ai_developed, ...) — and
+    # `on:` cannot filter by label name. The gate therefore keys the action:
+    # `assigned` requires the ai-teammate assignee; `labeled` proceeds ONLY
+    # for the arming labels — lifecycle labels never allocate a runner.
+    # (The guard job carries the same gate, so a rejected event already
+    # executes ZERO jobs — this clause is the mirror of the stub's call
+    # gate and the contract pinned by test_workflowLint.js.)
+    #
+    # gh-1065/gh-1073: the call additionally needs the event-path dedup
+    # probe (needs.dedup) — the probe outputs proceed=true unconditionally
+    # for the dispatch path, so workflow_dispatch behaviour is unchanged.
+    if: >-
+      needs.guard.outputs.run == 'true' &&
+      needs.dedup.outputs.proceed == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'issues' &&
+        github.event.action == 'assigned' &&
+        contains(github.event.issue.assignees.*.login, 'ai-teammate')) ||
+       (github.event_name == 'issues' &&
+        github.event.action == 'labeled' &&
+        (github.event.label.name == 'agent:dev' ||
+         github.event.label.name == 'agent:develop' ||
+         github.event.label.name == 'agent:review' ||
+         github.event.label.name == 'agent:rework' ||
+         github.event.label.name == 'pr_approved')))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
