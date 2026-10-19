@@ -379,6 +379,8 @@ function makeSmAgent(opts) {
                 './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
             }), {}),
             './common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            // gh-1114: the tick-layer map — a pure leaf module, loaded real.
+            './common/smRuleLayers.js': loadModule('js/common/smRuleLayers.js', makeRequire({}), {}),
             './sm/sources/githubSource.js': {
                 takeMutexTickSnapshot: function () { return null; }
             },

@@ -2926,13 +2926,34 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 }
                 // The routed refresh: the FORK path pushes to the fork's
                 // PR branch (maintainer-edit URL); same-repo rides the
-                // classic base repush untouched.
+                // classic base repush untouched. Returns the FRESH
+                // post-push head sha (one github_get_pr — the gh-846 seam),
+                // or null when the read failed / DRY (E3: a dry tick never
+                // records a move).
                 function refreshHeadSilent() {
                     if (forkGateU.forkFull) {
                         forkSilentUpdateBranchTracked(ticket.branch, forkGateU.forkFull);
                     } else {
                         silentUpdateBranchTracked(ticket.branch);
                     }
+                    // gh-1114: fill the tick's movedThisTick set. The move
+                    // is verified against the FRESH post-push head read —
+                    // never the ticket's cached sha or the per-tick ioCache
+                    // (E4); an unverified move (up-to-date no-op push, probe
+                    // failure, failed push — E1) records nothing and the L2
+                    // verdicts behave exactly as today.
+                    var newHeadMtt = null;
+                    if (!DRY) {
+                        newHeadMtt = freshHeadSha(effectiveRepoInfo, ticket.prNumber);
+                        if (headMoved(uHead, newHeadMtt)) {
+                            tickMovedPrs[ticket.prNumber] = true;
+                            console.log('  🔖 ' + key + ' head moved this tick (' +
+                                String(uHead || '?').slice(0, 8) + ' → ' +
+                                String(newHeadMtt).slice(0, 8) +
+                                ') — verdicts deferred (gh-1114)');
+                        }
+                    }
+                    return newHeadMtt;
                 }
                 // gh-798 (live fa PR #1420 rework leg, run 37828431528): a
                 // rework/review leg dispatched with workflowRef={branch} runs
@@ -2956,8 +2977,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // (gh-755 parity: CANCELLED is never a verdict — nothing on
                 // the old head trips fail-validation / zombie re-dispatch /
                 // red-head counting; those all key on the current head).
-                var cancelStaleAfterRefreshUb = function () {
-                    var newHeadUb = freshHeadSha(effectiveRepoInfo, ticket.prNumber);
+                var cancelStaleAfterRefreshUb = function (knownNewHead) {
+                    // gh-1114: the caller passes the head it just read after
+                    // the push (one read serves both the move record and the
+                    // stale-cancel); a null knownNewHead re-reads (legacy
+                    // shape, gh-846 fail closed).
+                    var newHeadUb = knownNewHead || freshHeadSha(effectiveRepoInfo, ticket.prNumber);
                     if (!newHeadUb) return; // fail closed — retried next refresh
                     var ubCancelResult = cancelStaleDispatchedRuns(
                         effectiveRepoInfo,
@@ -3002,9 +3027,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         console.warn('  ⚠️  ' + key +
                             ' head-run probe failed — branch refresh deferred (fail closed, gh-798)');
                     } else {
-                        refreshHeadSilent();
+                        var newHeadAfterRefresh = refreshHeadSilent();
                         console.log('  ✅ ' + key + ' branch silently updated (no CI)');
-                        cancelStaleAfterRefreshUb();
+                        cancelStaleAfterRefreshUb(newHeadAfterRefresh);
                     }
                 } else {
                     // No resolvable head sha: no probe possible — the
@@ -3017,9 +3042,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // unresolvable-but-existing head would close the hole
                     // for one tick of delay; the heal backstop was chosen
                     // instead so a flaky API never freezes freshness.
-                    refreshHeadSilent();
+                    var newHeadNoProbe = refreshHeadSilent();
                     console.log('  ✅ ' + key + ' branch silently updated (no CI)');
-                    cancelStaleAfterRefreshUb();
+                    cancelStaleAfterRefreshUb(newHeadNoProbe);
                 }
                 processedKeys.push(key);
             } catch (e) {
@@ -8213,6 +8238,12 @@ function action(params) {
     tickZombiesSwept = 0; // gh-998 (I5): fresh per-tick sweep counter
     tickFreshResets = {}; // gh-1101 follow-up: one fresh-sha reset per PR per tick
     tickParkedRecorded = {}; // gh-922: fresh same-tick dedup window (see recordDispatchFailure)
+    tickMovedPrs = {}; // gh-1114: heads moved by THIS tick's freshness layer
+    tickMergeReservedSlots = 0; // gh-1114: merge-first capacity (resolved below)
+    tickMergeSlotUsed = false;
+    tickMergeSlotAccounted = false;
+    tickMergeReservationReleased = false;
+    tickL1CacheDropped = false;
     if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
     var rules = p.rules;
 
@@ -8422,6 +8453,28 @@ function action(params) {
     // NOTE: JQL interpolation is now done per-rule inside processRule using each rule's
     // effective config. Rules with configPath get their own {jiraProject}/{parentTicket} resolved.
 
+    // gh-1114 merge-first capacity (owner directive 2026-10-19): reserve
+    // workflow slots for the approved merge path. Only a LAYERED tick (the
+    // sm_github.json rule set) reserves — a jira-mode or custom smRules tick
+    // has no layers, no merge candidate, and keeps today's bit-identical
+    // capacity behavior. In gh-837 parallel mode the reservation equals the
+    // whole parallel width (I6: approved PRs never starve; I7: released to
+    // agent legs at the L3 boundary when L3 did not spend it).
+    var layeredTick = rules && rules.some(function (r) {
+        return smRuleLayersModule.layerIndex(r) >= 0;
+    });
+    tickMergeReservedSlots = layeredTick
+        ? smRuleLayersModule.reservationFor(
+            smRuleLayersModule.mergeReservedSlots(p), validationMutexMax)
+        : 0;
+    if (tickMergeReservedSlots > 0) {
+        console.log('  🎯 merge-first capacity: ' + tickMergeReservedSlots +
+            ' workflow slot(s) reserved for the approved merge path' +
+            (validationMutexMax > 1
+                ? ' (gh-837 parallel mode — reservation = validationMutexMax)'
+                : ' (jobParams.mergeReservedSlots)'));
+    }
+
     var allProcessedKeys = [];
     var allSkippedKeys   = [];
 
@@ -8429,6 +8482,41 @@ function action(params) {
         var result = processRule(rule, globalRepoInfo, i, workflowBudget);
         allProcessedKeys = allProcessedKeys.concat(result.processedKeys);
         allSkippedKeys   = allSkippedKeys.concat(result.skippedKeys);
+        // gh-1114 merge-first capacity: a merge-path rule dispatched its
+        // validation — the reserved slot is now a spent slot; account it
+        // against the cap once, before the next rule computes its budget
+        // (AC9: the approved validation counts toward the cap).
+        if (tickMergeSlotUsed && !tickMergeSlotAccounted) {
+            tickMergeSlotAccounted = true;
+            if (workflowBudget) {
+                workflowBudget.remaining = Math.max(0, workflowBudget.remaining - 1);
+                console.log('  🎯 merge-path validation dispatched — reserved slot spent, ' +
+                    workflowBudget.remaining + ' dispatch slot(s) left');
+            }
+        }
+        // gh-1114 layer transitions. The next rule's layer decides the
+        // boundary; an unknown layer (-1) never triggers one.
+        var nextLayerIdx = (i + 1 < rules.length)
+            ? smRuleLayersModule.layerIndex(rules[i + 1])
+            : null;
+        if (!tickL1CacheDropped &&
+            nextLayerIdx !== null && nextLayerIdx > smRuleLayersModule.L1_IDX) {
+            // L1→L2: every freshness mutation has landed — drop the cached
+            // open-PR list so the verdict window re-queries CURRENT heads
+            // (the post-freshness head re-read; live #435).
+            tickL1CacheDropped = true;
+            dropOpenPrsCache(globalRepoInfo);
+            console.log('  🔄 gh-1114 L1→L2: openPrs ioCache dropped — verdict queries read current heads');
+        }
+        if (!tickMergeReservationReleased &&
+            (nextLayerIdx === null /* end of rules */
+                || nextLayerIdx > smRuleLayersModule.L3_IDX)) {
+            tickMergeReservationReleased = true;
+            if (tickMergeReservedSlots > 0 && !tickMergeSlotUsed) {
+                console.log('  🔓 gh-1114: no merge-candidate validation this tick — ' +
+                    'the reserved slot is released to agent legs');
+            }
+        }
     });
 
     // gh-1097 — naked-PR reconciliation: AFTER every dispatch lane, labels
@@ -8469,5 +8557,6 @@ if (typeof module !== 'undefined' && module.exports) {
         reportValidationCost: reportValidationCost,
         restoreReworkArm: restoreReworkArm,
         auditReworkConsumption: auditReworkConsumption,
-        runLocalAction: runLocalAction };
+        runLocalAction: runLocalAction,
+        ruleBudgetRemaining: ruleBudgetRemaining };
 }
