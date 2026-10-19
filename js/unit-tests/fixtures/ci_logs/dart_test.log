@@ -1,0 +1,10 @@
+00:00 +0: loading test/js/foo_test.dart
+00:01 +1: test/js/foo_test.dart: adds numbers
+test/js/foo_test.dart: subtracts numbers [E]
+  Expected: 1
+    Actual: 2
+
+00:01 +1 -1: test/js/bar_test.dart: wraps text [E]
+  Expected: 'a b'
+    Actual: 'a  b'
+00:02 +1 -2: Some tests failed.

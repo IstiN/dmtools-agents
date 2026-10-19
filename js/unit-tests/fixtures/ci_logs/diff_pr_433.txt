@@ -1,0 +1,17 @@
+diff --git a/js/common/githubHelpers.js b/js/common/githubHelpers.js
+index abc1234..def5678 100644
+--- a/js/common/githubHelpers.js
++++ b/js/common/githubHelpers.js
+@@ -10,7 +10,9 @@ Shared GitHub helpers
+ unchanged context line
++added line by the PR
+ unchanged context line
+diff --git a/test/js/require_base_resolution_test.dart b/test/js/require_base_resolution_test.dart
+new file mode 100644
+index 000..abc1234
+--- /dev/null
++++ b/test/js/require_base_resolution_test.dart
+@@ -0,0 +1,100 @@
++main() {
++  // 100-line main added by this PR
++}
