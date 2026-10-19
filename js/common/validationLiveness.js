@@ -315,6 +315,7 @@ function silentUpdateFailureCount(comments) {
 function silentUpdateAttemptsLeft(count) {
     var left = SILENT_UPDATE_MAX_FAILURES - (Math.floor(Number(count)) || 0);
     return left > 0 ? left : 0;
+}
 
 // ── Silent-update failure surface: the stderr tail (gh-1074) ────────────────
 //
@@ -378,7 +379,6 @@ function redactSilentUpdateSecrets(text) {
     s = s.replace(/\bgh[opsur]_[A-Za-z0-9]{6,}\b/g, '[REDACTED:token]');
     s = s.replace(/\bgithub_pat_[A-Za-z0-9_]{6,}\b/g, '[REDACTED:token]');
     return s;
-}
 }
 
 // ── Fork-aware silent-update routing (gh-1070) ──────────────────────────────

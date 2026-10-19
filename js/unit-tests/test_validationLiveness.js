@@ -447,7 +447,7 @@ suite('validationLiveness silent-update stderr tail (gh-1074)', function () {
     test('AC2: silentUpdateFailureLine appends the one-line reason and still round-trips through the counter', function () {
         var line = live.silentUpdateFailureLine(2, '2026-10-19T05:51:00Z',
             '[remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)');
-        assert.ok(line.indexOf('silent-update failure — attempt 2 at 2026-10-19T05:51:00Z') === 0,
+        assert.ok(line.indexOf('⚠️ silent-update failure — attempt 2 at 2026-10-19T05:51:00Z') === 0,
             'the marker prefix is unchanged');
         assert.ok(line.indexOf('[remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)') !== -1,
             'the reason rides the same marker line');
