@@ -72,89 +72,102 @@ function postTokenUsage(tracker, key, params) {
     }
 }
 
+// Everything one run needs: the ticket key, the planning config, the tracker, the project config.
+function runContext(params) {
+    var jobParams = params.jobParams || params;
+    var customParams = jobParams.customParams || params.customParams || {};
+    var projectConfig = configLoader.loadProjectConfig(jobParams) || {};
+    return {
+        key: params.ticket.key,
+        cfg: issuePlan.resolvePlanningConfig(projectConfig, customParams),
+        tracker: trackersModule.createTracker(projectConfig, customParams),
+        projectKey: (projectConfig.jira || {}).project || null
+    };
+}
+
 function action(params) {
+    if (!params.ticket || !params.ticket.key) {
+        return { success: false, error: 'No ticket in params' };
+    }
     try {
-        var ticket = params.ticket;
-        if (!ticket || !ticket.key) {
-            return { success: false, error: 'No ticket in params' };
-        }
-        var key = ticket.key;
-        var jobParams = params.jobParams || params;
-        var customParams = jobParams.customParams || params.customParams || {};
-        var projectConfig = configLoader.loadProjectConfig(jobParams) || {};
-        var cfg = issuePlan.resolvePlanningConfig(projectConfig, customParams);
-        var tracker = trackersModule.createTracker(projectConfig, customParams);
-
-        removeWipLabel(tracker, key, params);
-        var result = applyPlan(ticket, cfg, tracker, projectConfig);
-        postTokenUsage(tracker, key, params);
+        var ctx = runContext(params);
+        removeWipLabel(ctx.tracker, ctx.key, params);
+        var result = applyPlan(params.ticket, ctx);
+        postTokenUsage(ctx.tracker, ctx.key, params);
         return result;
-
     } catch (error) {
         console.error('Error in createPlannedSubIssues:', error);
         return { success: false, error: error.toString() };
     }
 }
 
-function applyPlan(ticket, cfg, tracker, projectConfig) {
-    var key = ticket.key;
-
-    if (ticketLabels(ticket).indexOf(cfg.plannedLabel) !== -1) {
-        console.log('createPlannedSubIssues: ' + key + ' already carries "' + cfg.plannedLabel +
+function applyPlan(ticket, ctx) {
+    if (ticketLabels(ticket).indexOf(ctx.cfg.plannedLabel) !== -1) {
+        console.log('createPlannedSubIssues: ' + ctx.key + ' already carries "' + ctx.cfg.plannedLabel +
             '" — its children exist, nothing to create');
-        return { success: true, skipped: true, message: key + ' is already planned' };
+        return { success: true, skipped: true, message: ctx.key + ' is already planned' };
     }
+    var plan = issuePlan.parsePlan(readText(ctx.cfg.planFile), readText, ctx.cfg);
+    if (!plan.ok) return rejectPlan(ctx, plan.error);
+    return plan.split ? splitIssue(ctx, plan) : keepWhole(ctx, plan);
+}
 
-    var plan = issuePlan.parsePlan(readText(cfg.planFile), readText, cfg);
-    if (!plan.ok) {
-        safeComment(tracker, key, 'Planning produced no usable plan: ' + plan.error +
-            '. Nothing was created. Fix the plan or start development directly with the label `' +
-            cfg.devLabel + '`.');
-        return { success: false, error: plan.error };
+function rejectPlan(ctx, error) {
+    safeComment(ctx.tracker, ctx.key, 'Planning produced no usable plan: ' + error +
+        '. Nothing was created. Fix the plan or start development directly with the label `' +
+        ctx.cfg.devLabel + '`.');
+    return { success: false, error: error };
+}
+
+function keepWhole(ctx, plan) {
+    ctx.tracker.addLabel(ctx.key, ctx.cfg.devLabel);
+    safeComment(ctx.tracker, ctx.key, 'No split needed' + (plan.reason ? ': ' + plan.reason : '.') +
+        '\n\nStarting development (label `' + ctx.cfg.devLabel + '`).');
+    console.log('createPlannedSubIssues: ' + ctx.key + ' kept whole, dev label added');
+    return { success: true, split: false, message: ctx.key + ' kept whole' };
+}
+
+// Create step `index` (0-based) as a child of the issue; returns the child's key or throws.
+function createStep(ctx, plan, index) {
+    var child = plan.children[index];
+    var childKey = ctx.tracker.createTicketWithParent(
+        ctx.projectKey,
+        ISSUE_TYPES.STORY,
+        child.title,
+        issuePlan.renderChildBody(ctx.key, index + 1, plan.children.length, child.body),
+        ctx.key
+    );
+    if (!childKey) throw new Error('the tracker returned no key');
+    console.log('createPlannedSubIssues: created ' + childKey + ' (step ' + (index + 1) + ') — ' + child.title);
+    return childKey;
+}
+
+function stoppedMessage(ctx, plan, index, error, created) {
+    var msg = 'Planning stopped: step ' + (index + 1) + ' of ' + plan.children.length +
+        ' ("' + plan.children[index].title + '") could not be created: ' + (error.message || error) + '.';
+    if (created.length) {
+        msg += ' Already created: ' + created.map(issuePlan.displayRef).join(', ') + '.';
     }
+    return msg + ' This issue was not marked as planned, so no step starts. Finish the plan by hand' +
+        ' (create the missing steps as sub-issues and add the label `' + ctx.cfg.plannedLabel + '`)' +
+        ' or remove the created steps and plan again.';
+}
 
-    if (!plan.split) {
-        tracker.addLabel(key, cfg.devLabel);
-        safeComment(tracker, key, 'No split needed' + (plan.reason ? ': ' + plan.reason : '.') +
-            '\n\nStarting development (label `' + cfg.devLabel + '`).');
-        console.log('createPlannedSubIssues: ' + key + ' kept whole, dev label added');
-        return { success: true, split: false, message: key + ' kept whole' };
-    }
-
-    var jira = projectConfig.jira || {};
-    var projectKey = jira.project || null;
+function splitIssue(ctx, plan) {
     var created = [];
     for (var i = 0; i < plan.children.length; i++) {
-        var child = plan.children[i];
         try {
-            var childKey = tracker.createTicketWithParent(
-                projectKey,
-                ISSUE_TYPES.STORY,
-                child.title,
-                issuePlan.renderChildBody(key, i + 1, plan.children.length, child.body),
-                key
-            );
-            if (!childKey) throw new Error('the tracker returned no key');
-            created.push(childKey);
-            console.log('createPlannedSubIssues: created ' + childKey + ' (step ' + (i + 1) + ') — ' + child.title);
+            created.push(createStep(ctx, plan, i));
         } catch (e) {
-            var msg = 'Planning stopped: step ' + (i + 1) + ' of ' + plan.children.length +
-                ' ("' + child.title + '") could not be created: ' + (e.message || e) + '.';
-            if (created.length) {
-                msg += ' Already created: ' + created.map(issuePlan.displayRef).join(', ') + '.';
-            }
-            msg += ' This issue was not marked as planned, so no step starts. Finish the plan by hand' +
-                ' (create the missing steps as sub-issues and add the label `' + cfg.plannedLabel + '`)' +
-                ' or remove the created steps and plan again.';
-            safeComment(tracker, key, msg);
+            var msg = stoppedMessage(ctx, plan, i, e, created);
+            safeComment(ctx.tracker, ctx.key, msg);
             return { success: false, error: msg, created: created };
         }
     }
-
-    tracker.addLabel(key, cfg.plannedLabel);
-    safeComment(tracker, key, issuePlan.renderPlanComment(created, plan.reason, cfg));
-    console.log('createPlannedSubIssues: ' + key + ' planned into ' + created.length + ' steps');
-    return { success: true, split: true, created: created, message: key + ' planned into ' + created.length + ' steps' };
+    ctx.tracker.addLabel(ctx.key, ctx.cfg.plannedLabel);
+    safeComment(ctx.tracker, ctx.key, issuePlan.renderPlanComment(created, plan.reason, ctx.cfg));
+    console.log('createPlannedSubIssues: ' + ctx.key + ' planned into ' + created.length + ' steps');
+    return { success: true, split: true, created: created, message: ctx.key + ' planned into ' + created.length + ' steps' };
 }
 
 if (typeof module !== 'undefined' && module.exports) {

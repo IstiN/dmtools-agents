@@ -51,6 +51,24 @@ function nonEmptyString(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+// The issuePlanning block of a project config or of customParams ({} when absent).
+function issuePlanningOf(source) {
+    return (source && source.issuePlanning) || {};
+}
+
+// One override layer over cfg: a valid value replaces the current one, an invalid one is ignored.
+function applyPlanningLayer(cfg, layer) {
+    var devLabel = nonEmptyString(layer.devLabel);
+    var plannedLabel = nonEmptyString(layer.plannedLabel);
+    var maxChildren = positiveInt(layer.maxChildren);
+    var planFile = nonEmptyString(layer.planFile);
+    if (devLabel) cfg.devLabel = devLabel;
+    if (plannedLabel) cfg.plannedLabel = plannedLabel;
+    if (maxChildren) cfg.maxChildren = maxChildren;
+    if (planFile) cfg.planFile = planFile;
+    return cfg;
+}
+
 /**
  * Merge the defaults with the project config and the per-agent customParams
  * (customParams win). Unknown or invalid values fall back to the default.
@@ -60,23 +78,72 @@ function nonEmptyString(value) {
  * @returns {{devLabel: string, plannedLabel: string, maxChildren: number, planFile: string}}
  */
 function resolvePlanningConfig(projectConfig, customParams) {
-    var layers = [
-        (projectConfig && projectConfig.issuePlanning) || {},
-        (customParams && customParams.issuePlanning) || {}
-    ];
     var cfg = {
         devLabel: DEFAULTS.devLabel,
         plannedLabel: DEFAULTS.plannedLabel,
         maxChildren: DEFAULTS.maxChildren,
         planFile: DEFAULTS.planFile
     };
-    layers.forEach(function (layer) {
-        if (nonEmptyString(layer.devLabel)) cfg.devLabel = nonEmptyString(layer.devLabel);
-        if (nonEmptyString(layer.plannedLabel)) cfg.plannedLabel = nonEmptyString(layer.plannedLabel);
-        if (positiveInt(layer.maxChildren)) cfg.maxChildren = positiveInt(layer.maxChildren);
-        if (nonEmptyString(layer.planFile)) cfg.planFile = nonEmptyString(layer.planFile);
-    });
-    return cfg;
+    applyPlanningLayer(cfg, issuePlanningOf(projectConfig));
+    return applyPlanningLayer(cfg, issuePlanningOf(customParams));
+}
+
+function planFailure(error) {
+    return { ok: false, error: error, split: false, reason: '', children: [] };
+}
+
+// The plan file as a JSON object: { plan } or { error }.
+function readPlanObject(raw, cfg) {
+    if (!nonEmptyString(raw)) return { error: cfg.planFile + ' is missing or empty' };
+    var plan;
+    try {
+        plan = JSON.parse(raw);
+    } catch (e) {
+        return { error: cfg.planFile + ' is not valid JSON: ' + e };
+    }
+    if (!plan || typeof plan !== 'object' || Array.isArray(plan)) {
+        return { error: cfg.planFile + ' must be a JSON object' };
+    }
+    return { plan: plan };
+}
+
+// Why a split plan's children list is unusable, or null when it is usable.
+function childrenListError(children, cfg) {
+    if (!Array.isArray(children)) {
+        return cfg.planFile + ': "children" must be an array when split is true';
+    }
+    if (children.length < 2) {
+        return cfg.planFile + ': a split needs at least 2 children, got ' + children.length +
+            ' (use split:false to keep the issue whole)';
+    }
+    if (children.length > cfg.maxChildren) {
+        return cfg.planFile + ': ' + children.length + ' children exceed the limit of ' +
+            cfg.maxChildren + ' (issuePlanning.maxChildren)';
+    }
+    return null;
+}
+
+// A child's description: from bodyFile when it names one (preferred), else inline body.
+function childBody(child, readFile, where, cfg) {
+    if (!nonEmptyString(child.bodyFile)) {
+        var inline = nonEmptyString(child.body);
+        return inline ? { body: inline } : { error: where + ' has neither bodyFile nor body' };
+    }
+    var fromFile = nonEmptyString(readFile(child.bodyFile));
+    return fromFile ? { body: fromFile } : { error: where + ' bodyFile ' + child.bodyFile + ' is missing or empty' };
+}
+
+// One child: { child: {title, body} } or { error }. index is 0-based.
+function parseChild(raw, index, readFile, cfg) {
+    var child = raw || {};
+    var where = cfg.planFile + ': child ' + (index + 1);
+    var title = nonEmptyString(child.title);
+    if (!title) return { error: where + ' has no title' };
+    if (title.length > MAX_TITLE_LENGTH) {
+        return { error: where + ' title is longer than ' + MAX_TITLE_LENGTH + ' characters' };
+    }
+    var body = childBody(child, readFile, where, cfg);
+    return body.error ? { error: body.error } : { child: { title: title, body: body.body } };
 }
 
 /**
@@ -97,57 +164,20 @@ function resolvePlanningConfig(projectConfig, customParams) {
  *            children: Array<{title: string, body: string}>}}
  */
 function parsePlan(raw, readFile, cfg) {
-    var fail = function (error) {
-        return { ok: false, error: error, split: false, reason: '', children: [] };
-    };
-    if (!nonEmptyString(raw)) return fail(cfg.planFile + ' is missing or empty');
-
-    var plan;
-    try {
-        plan = JSON.parse(raw);
-    } catch (e) {
-        return fail(cfg.planFile + ' is not valid JSON: ' + e);
-    }
-    if (!plan || typeof plan !== 'object' || Array.isArray(plan)) {
-        return fail(cfg.planFile + ' must be a JSON object');
-    }
-    if (typeof plan.split !== 'boolean') {
-        return fail(cfg.planFile + ': "split" must be true or false');
-    }
+    var read = readPlanObject(raw, cfg);
+    if (read.error) return planFailure(read.error);
+    var plan = read.plan;
+    if (typeof plan.split !== 'boolean') return planFailure(cfg.planFile + ': "split" must be true or false');
     var reason = nonEmptyString(plan.reason) || '';
-    if (!plan.split) {
-        return { ok: true, split: false, reason: reason, children: [] };
-    }
+    if (!plan.split) return { ok: true, split: false, reason: reason, children: [] };
 
-    if (!Array.isArray(plan.children)) {
-        return fail(cfg.planFile + ': "children" must be an array when split is true');
-    }
-    if (plan.children.length < 2) {
-        return fail(cfg.planFile + ': a split needs at least 2 children, got ' + plan.children.length +
-            ' (use split:false to keep the issue whole)');
-    }
-    if (plan.children.length > cfg.maxChildren) {
-        return fail(cfg.planFile + ': ' + plan.children.length + ' children exceed the limit of ' +
-            cfg.maxChildren + ' (issuePlanning.maxChildren)');
-    }
-
+    var listError = childrenListError(plan.children, cfg);
+    if (listError) return planFailure(listError);
     var children = [];
     for (var i = 0; i < plan.children.length; i++) {
-        var c = plan.children[i] || {};
-        var title = nonEmptyString(c.title);
-        if (!title) return fail(cfg.planFile + ': child ' + (i + 1) + ' has no title');
-        if (title.length > MAX_TITLE_LENGTH) {
-            return fail(cfg.planFile + ': child ' + (i + 1) + ' title is longer than ' + MAX_TITLE_LENGTH + ' characters');
-        }
-        var body = null;
-        if (nonEmptyString(c.bodyFile)) {
-            body = nonEmptyString(readFile(c.bodyFile));
-            if (!body) return fail(cfg.planFile + ': child ' + (i + 1) + ' bodyFile ' + c.bodyFile + ' is missing or empty');
-        } else {
-            body = nonEmptyString(c.body);
-        }
-        if (!body) return fail(cfg.planFile + ': child ' + (i + 1) + ' has neither bodyFile nor body');
-        children.push({ title: title, body: body });
+        var parsed = parseChild(plan.children[i], i, readFile, cfg);
+        if (parsed.error) return planFailure(parsed.error);
+        children.push(parsed.child);
     }
     return { ok: true, split: true, reason: reason, children: children };
 }

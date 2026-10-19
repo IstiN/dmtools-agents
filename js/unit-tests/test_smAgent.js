@@ -2033,16 +2033,20 @@ suite('smAgent: localAction advance_plan (sequential issue plans)', function () 
     };
     var CONFIG = 'module.exports = { repository: { owner: "acme", repo: "widgets" } };';
 
+    // A named CLI mock: anonymous onCliExecute closures are numbered by position in this file,
+    // so a new anonymous one would renumber (and mis-attribute) the existing ones.
+    function subIssuesCli(subIssues) {
+        var payload = typeof subIssues === 'string' ? subIssues : JSON.stringify(subIssues);
+        return function answerSubIssues(cmd) {
+            return String(cmd.command).indexOf('/issues/12/sub_issues') !== -1 ? payload : '';
+        };
+    }
+
     function planned(subIssues, extra) {
         var opts = {
             fileMap: { '../.dmtools/config.js': (extra && extra.config) || CONFIG },
             github: { items: [{ key: 'gh-12', labels: ['ai_planned'], issueNumber: 12, prNumber: null, pr: null }] },
-            onCliExecute: function (cmd) {
-                if (String(cmd.command).indexOf('/issues/12/sub_issues') !== -1) {
-                    return typeof subIssues === 'string' ? subIssues : JSON.stringify(subIssues);
-                }
-                return '';
-            }
+            onCliExecute: subIssuesCli(subIssues)
         };
         return makeSmAgent(opts);
     }
