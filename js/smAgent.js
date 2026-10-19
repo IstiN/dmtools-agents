@@ -8495,19 +8495,14 @@ function action(params) {
         allProcessedKeys = allProcessedKeys.concat(result.processedKeys);
         allSkippedKeys   = allSkippedKeys.concat(result.skippedKeys);
         // gh-1114 merge-first capacity: a merge-path rule dispatched its
-        // validation — the reservation is spent (held for the tick). In
-        // serial mode the held slot IS the validation slot: refund the
-        // dispatch's own charge so agent lanes see cap − validations (AC9).
-        // In parallel mode the dispatch pays from the held width — no
-        // refund (the whole mutex width stays claimed while a validation
-        // is in flight).
+        // validation — the reservation stays held for the tick (the
+        // dispatch consumed part of it; in parallel mode the rest of the
+        // width covers the approved queue). No re-accounting needed: the
+        // upfront hold already deducted it before any rule ran (AC9: the
+        // approved validation counts toward the cap).
         if (tickMergeSlotSpent === 'dispatched' && !tickMergeSlotAccounted) {
             tickMergeSlotAccounted = true;
             if (workflowBudget) {
-                if (tickMergeReservedSlots === 1) {
-                    workflowBudget.remaining = Math.min(workflowBudget.initial,
-                        workflowBudget.remaining + 1);
-                }
                 console.log('  🎯 merge-path validation dispatched — reserved slot spent, ' +
                     workflowBudget.remaining + ' dispatch slot(s) left');
             }

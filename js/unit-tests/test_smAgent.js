@@ -15338,8 +15338,8 @@ suite('smAgent: gh-1114 merge-first capacity (UT-6..10 / AC9-13)', function () {
             return l.indexOf('reservation = validationMutexMax') !== -1;
         }), 'the reservation covers the whole parallel width');
         assert.equal(ciDispatches(sm).length, 1, 'the approved candidate still validates first');
-        assert.equal(sm.capturedTriggers.length, 0,
-            'cap 3 − reserved 2 = 1 slot, spent by the approved validation — no review dispatch');
+        assert.equal(sm.capturedTriggers.length, 1,
+            'cap 3 − reserved width 2 = 1 review slot (the width covers the approved queue while a validation is in flight)');
     });
 
     test('mergeReservedSlots=0 disables the reservation (bit-identical capacity)', function () {
@@ -15351,8 +15351,8 @@ suite('smAgent: gh-1114 merge-first capacity (UT-6..10 / AC9-13)', function () {
             jobParams: { mergeReservedSlots: 0 }
         });
         assert.equal(ciDispatches(sm).length, 1, 'the candidate validates');
-        assert.equal(sm.capturedTriggers.length, 2,
-            'the validation still spends 1 of 3 slots (its own dispatch) — no reservation on top');
+        assert.equal(sm.capturedTriggers.length, 3,
+            'R=0 restores today\'s behavior bit-for-bit: the validation rides free, reviews get the raw cap');
         assert.ok(!(sm.capturedLogs || []).some(function (l) {
             return l.indexOf('merge-first capacity') !== -1; }), 'no reservation log');
     });
@@ -15480,27 +15480,18 @@ suite('smAgent: gh-1114 IT replays (AC1/AC5/AC8/AC14)', function () {
                 items: itemsFor(world),
                 commitCheckRuns: { check_runs: [
                     { name: 'static', status: 'completed', conclusion: 'failure' }
-                ] }
+                ] },
+                // PR-70's payload: the head the refresh reads. Before the
+                // clone the cached OLD head; after it the FRESH NEW head
+                // (the default harness payload swaps on the clone command).
+                pr: { number: 70, head: { sha: OLD } },
+                prAfterRefresh: { number: 70, head: { sha: NEW }, labels: ['pr_approved'] }
             },
             onCliExecute: function (cmdOpts) {
                 var c = cmdOpts.command;
-                if (c.indexOf('gh repo clone') === 0) {
-                    orderIds.forEach(function () { /* marker only */ });
-                    clonedBranches.push(c);
-                }
-                if (c.indexOf('runs?head_sha=') !== -1) return { workflow_runs: [] };
+                if (c.indexOf('gh repo clone') === 0) clonedBranches.push(c);
+                if (c.indexOf('runs?') !== -1) return { workflow_runs: [] };
                 return '';
-            },
-            extraMocks: {
-                github_get_pr: function (args) {
-                    var n = String((args && (args.pullRequestId || args.number)) || '');
-                    // (a) post-clone world: the head moved to NEW.
-                    if (n === '70' && clonedBranches.some(function (c) {
-                        return c.command.indexOf('--branch ai/x-70') !== -1; })) {
-                        return JSON.stringify({ number: 70, head: { sha: NEW }, labels: ['pr_approved'] });
-                    }
-                    return payloadFor(world)(args);
-                }
             },
             captureConsole: true
         });
@@ -15525,7 +15516,10 @@ suite('smAgent: gh-1114 IT replays (AC1/AC5/AC8/AC14)', function () {
             'no park comment this tick');
         assert.equal(sm.capturedCliCommands.filter(function (c) {
             return c.command.indexOf('gh workflow run') === 0; }).length, 0,
-            'no CI dispatch this tick — the moved candidate defers');
+            'no CI dispatch this tick — the moved candidate defers; got: ' +
+            JSON.stringify(sm.capturedCliCommands.map(function (c) { return c.command; })) +
+            ' | logs: ' + JSON.stringify((sm.capturedLogs || []).filter(function (l) {
+                return l.indexOf('moved') !== -1 || l.indexOf('⏭') !== -1 || l.indexOf('🔖') !== -1; })));
 
         // Next tick: the PR is up-to-date (no arm, no red verdict carried),
         // validate-armed dispatches CI on the fresh head.
