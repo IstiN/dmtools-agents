@@ -235,12 +235,30 @@ function collectFaSourceKeys(samples) {
     return Object.keys(faSources).sort();
 }
 
+// '', the single source when all samples agree, or 'mixed' when they disagree.
+function usageSourceLabel(faSourceKeys) {
+    if (faSourceKeys.length === 0) return '';
+    if (faSourceKeys.length === 1) return faSourceKeys[0];
+    return 'mixed';
+}
+
+// Sums the per-sample token/request counters into the aggregate.
+function sumUsageSamples(aggregate, samples) {
+    samples.forEach(function(sample) {
+        aggregate.requests += sample.requests || 0;
+        aggregate.readTokens += sample.readTokens || 0;
+        aggregate.writeTokens += sample.writeTokens || 0;
+        aggregate.cachedTokens += sample.cachedTokens || 0;
+        aggregate.reasoningTokens += sample.reasoningTokens || 0;
+    });
+    return aggregate;
+}
+
 function buildUsageAggregate(tracking) {
     if (!tracking.samples.length) return null;
     var finalSample = tracking.samples[tracking.samples.length - 1];
-    var faSourceKeys = collectFaSourceKeys(tracking.samples);
     var aggregate = {
-        source: faSourceKeys.length === 0 ? '' : (faSourceKeys.length === 1 ? faSourceKeys[0] : 'mixed'),
+        source: usageSourceLabel(collectFaSourceKeys(tracking.samples)),
         requests: 0,
         requestTier: finalSample.requestTier || '',
         requestDuration: finalSample.requestDuration || '',
@@ -257,14 +275,7 @@ function buildUsageAggregate(tracking) {
         timeoutCount: tracking.timeoutCount,
         attempts: tracking.samples
     };
-    tracking.samples.forEach(function(sample) {
-        aggregate.requests += sample.requests || 0;
-        aggregate.readTokens += sample.readTokens || 0;
-        aggregate.writeTokens += sample.writeTokens || 0;
-        aggregate.cachedTokens += sample.cachedTokens || 0;
-        aggregate.reasoningTokens += sample.reasoningTokens || 0;
-    });
-    return aggregate;
+    return sumUsageSamples(aggregate, tracking.samples);
 }
 
 function extractTokenUsage(logs) {
@@ -1194,6 +1205,9 @@ if (typeof module !== 'undefined' && module.exports) {
         isFaSegmentReplay: isFaSegmentReplay,
         appendUsageSample: appendUsageSample,
         collectUsageSamples: collectUsageSamples,
+        collectFaSourceKeys: collectFaSourceKeys,
+        usageSourceLabel: usageSourceLabel,
+        sumUsageSamples: sumUsageSamples,
         buildUsageAggregate: buildUsageAggregate,
         extractAgentAndKey: extractAgentAndKey,
         calculateDurationSeconds: calculateDurationSeconds,
