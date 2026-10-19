@@ -443,3 +443,38 @@ suite('postTestAutomationResultsHelpers: decideGitStageRoute (gh-1083)', functio
     });
 
 });
+
+suite('postTestAutomationResultsHelpers: action-input resolution (gh-1083)', function() {
+
+    test('resolveJobParams unwraps jobParams when present', function() {
+        var helpers = loadHelpers();
+        var inner = { customParams: {} };
+        assert.equal(helpers.resolveJobParams({ jobParams: inner }), inner);
+    });
+
+    test('resolveJobParams falls back to the params object itself', function() {
+        var helpers = loadHelpers();
+        var bare = { ticket: { key: 'PROJ-1' } };
+        assert.equal(helpers.resolveJobParams(bare), bare);
+        var nullJobParams = { jobParams: null, ticket: { key: 'PROJ-2' } };
+        assert.equal(helpers.resolveJobParams(nullJobParams), nullJobParams, 'falsy jobParams falls back to params');
+    });
+
+    test('resolveRunPaths defaults workingDir to null and the test path to testing/', function() {
+        var helpers = loadHelpers();
+        assert.deepEqual(helpers.resolveRunPaths({}, {}), { workingDir: null, testFilesPath: 'testing/' });
+    });
+
+    test('resolveRunPaths honours the configured workingDir and testFilesGlob', function() {
+        var helpers = loadHelpers();
+        var paths = helpers.resolveRunPaths({ workingDir: '/repo' }, { testFilesGlob: 'src/test/' });
+        assert.deepEqual(paths, { workingDir: '/repo', testFilesPath: 'src/test/' });
+    });
+
+    test('decideOutcomeWord flips between PASSED and FAILED', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.decideOutcomeWord(true), 'PASSED');
+        assert.equal(helpers.decideOutcomeWord(false), 'FAILED');
+    });
+
+});

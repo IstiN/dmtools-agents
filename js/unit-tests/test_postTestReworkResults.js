@@ -1527,3 +1527,28 @@ suite('postTestReworkResults — action-split helpers (gh-1083)', function() {
     });
 
 });
+
+suite('postTestReworkResults — action-input resolution (gh-1083)', function() {
+
+    test('loadReworkProjectConfig reads the jobParams body when wrapped', function() {
+        var h = loadReworkActionHarness({ files: {} });
+        var inner = { marker: 'jobParams-body' };
+        // The harness configLoader double ignores its argument; pin the
+        // delegation by observing the resolved config identity instead.
+        var config = h.module.loadReworkProjectConfig({ jobParams: inner });
+        assert.equal(config, REWORK_ACTION_CONFIG, 'delegates to configLoader.loadProjectConfig');
+    });
+
+    test('loadReworkProjectConfig delegates for bare dispatch params too', function() {
+        var h = loadReworkActionHarness({ files: {} });
+        assert.equal(h.module.loadReworkProjectConfig({ ticket: { key: 'PROJ-1' } }), REWORK_ACTION_CONFIG);
+    });
+
+    test('smRemoveLabelOf reads the configured label and degrades to null', function() {
+        var h = loadReworkActionHarness({ files: {} });
+        assert.equal(h.module.smRemoveLabelOf({ removeLabel: 'sm_rework_triggered' }), 'sm_rework_triggered');
+        assert.equal(h.module.smRemoveLabelOf({}), null);
+        assert.equal(h.module.smRemoveLabelOf(null), null);
+    });
+
+});

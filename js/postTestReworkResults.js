@@ -171,6 +171,174 @@ function buildPRReworkComment(ticketKey, testStatus, passed, prBodyContent) {
         '---\n\n' + prBodyContent;
 }
 
+// ── gh-1083: action() split — pure planners (called by the executors below) ──
+
+/**
+ * Which params shape carries the ticket (gh-1083): the ticket-shaped
+ * dispatch params resolve to themselves, the jobParams-wrapped shape
+ * unwraps to the jobParams body.
+ */
+function resolveActionContext(params) {
+    var actualParams = params.ticket ? params : (params.jobParams || params);
+    return { actualParams: actualParams, ticketKey: actualParams.ticket.key };
+}
+
+/** The operator-facing fix summary, degrading to the no-summary placeholder. */
+function fixSummaryOf(actualParams) {
+    return (actualParams && actualParams.response) || '_(No fix summary)_';
+}
+
+/** True when the rework result JSON is unreadable or carries no status. */
+function isMissingResult(result) {
+    return !result || !result.status;
+}
+
+/**
+ * Whether the test PR must merge the base branch before pushing (gh-1083).
+ * Mirrors the original inline condition EXACTLY — strict `mergeable === false`
+ * (an undefined mergeable is NOT dirty) — and a missing PR is never dirty.
+ */
+function decidePrIsDirty(pr) {
+    if (!pr) return false;
+    return pr.mergeable_state === 'dirty' || pr.mergeStateStatus === 'DIRTY' || pr.mergeable === false;
+}
+
+/** The In Review - Passed/Failed status pair for the rework outcome. */
+function decideReworkTargetStatus(passed, statuses) {
+    return passed
+        ? { stageKey: 'IN_REVIEW_PASSED', targetStatus: statuses.IN_REVIEW_PASSED }
+        : { stageKey: 'IN_REVIEW_FAILED', targetStatus: statuses.IN_REVIEW_FAILED };
+}
+
+// ── gh-1083: action() split — thin executors (side effects, unchanged order) ─
+
+/** Missing/unreadable rework result: ⚠️ Rework Error comment + unlock. */
+function reportMissingResult(ticketKey, result, config, customParams, releaseLock) {
+    var errMsg = buildResultErrorMessage(result);
+    console.error(errMsg);
+    var missingTracker = trackersModule.createTracker(config, customParams);
+    var mErr = commentMarkup.forTicket(ticketKey, customParams);
+    try {
+        missingTracker.postComment(
+            ticketKey,
+            mErr.h(3, '⚠️ Rework Error') + '\n\n' + errMsg + '\n\nCheck CI logs for the agent output.'
+        );
+    } catch (e) {}
+    releaseLock();
+    return { success: false, error: errMsg };
+}
+
+/** Configure the git author for the rework commit/push (failures ignored). */
+function configureReworkGitAuthor(config) {
+    try {
+        cli_execute_command({ command: 'git config user.name "' + config.git.authorName + '"' });
+        cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
+    } catch (e) {}
+}
+
+/** Step 2.5: the test PR for the ticket + its dirty state (with the dirty log line). */
+function resolveReworkPr(scm, ticketKey, config) {
+    var pr = findTestPRForTicket(scm, ticketKey);
+    var prIsDirty = decidePrIsDirty(pr);
+    if (pr && prIsDirty) {
+        console.log('PR #' + pr.number + ' is dirty — will merge origin/' + ((config.git && config.git.baseBranch) || 'main'));
+    }
+    return { pr: pr, prIsDirty: prIsDirty };
+}
+
+/**
+ * Step 2 git half: commitAndPush with the failure protocol — consult
+ * resumeAgent once (a retry re-runs action(params)), otherwise ❌ Rework
+ * Push Failed + unlock. Returns { branchName } on success or { terminal }
+ * for the caller to return unchanged.
+ */
+function pushReworkBranch(params, ticketKey, passed, config, customParams, prIsDirty, releaseLock) {
+    try {
+        return { branchName: commitAndPush(ticketKey, passed, config, prIsDirty) };
+    } catch (e) {
+        console.error('Git operations failed:', e);
+        if (resumeOrReport(ticketKey, customParams, config, 'test_rework_git_operations', '❌ Rework Push Failed', e)) {
+            return { terminal: action(params) };
+        }
+        releaseLock();
+        return { terminal: { success: false, error: e.toString() } };
+    }
+}
+
+/** Step 3: thread replies, body refresh and the rework summary comment — when a PR exists. */
+function publishReworkPrArtifacts(scm, pr, ticketKey, testStatus, passed, fixSummary) {
+    if (!pr) {
+        console.warn('No PR/MR found — skipping source-control comment');
+        return;
+    }
+    postThreadReplies(scm, pr.number);
+
+    // Post PR comment with fix summary + new test result (GitHub Markdown from pr_body.md)
+    var prBodyContent = readFile('outputs/pr_body.md') || fixSummary;
+    postReworkBodyAndComment(scm, pr, ticketKey, testStatus, passed, prBodyContent);
+}
+
+/** Step 4: move the ticket to In Review - Passed/Failed; returns the target status name. */
+function moveReworkTicket(ticketKey, passed, jiraConfig) {
+    var target = decideReworkTargetStatus(passed, jiraConfig.statuses);
+    try {
+        // gh-916: In Review - Passed/Failed can be tag-only (restricted ADO workflows) — stage-label fallback.
+        var moveResult = getTracker().moveToStatusOrMark(ticketKey, target.targetStatus, target.stageKey);
+        if (moveResult.moved || moveResult.marked) {
+            console.log('✅ Moved', ticketKey, 'to', target.targetStatus);
+        }
+    } catch (e) {
+        console.warn('Failed to move ticket status:', e);
+    }
+    return target.targetStatus;
+}
+
+/** Step 6: the flavored "Test Rework Completed" tracker comment (non-fatal on failure). */
+function postReworkTrackerComment(ticketKey, config, customParams, pr, testStatus, branchName, passed, fixSummary) {
+    try {
+        trackersModule.createTracker(config, customParams).postComment(
+            ticketKey,
+            buildTestReworkResultComment(
+                commentMarkup.forTicket(ticketKey, customParams),
+                {
+                    passed: passed,
+                    testStatus: testStatus,
+                    branchName: branchName,
+                    prUrl: pr ? pr.html_url : null,
+                    fixSummary: fixSummary
+                }
+            )
+        );
+    } catch (e) {
+        console.warn('Failed to post tracker comment:', e);
+    }
+}
+
+/** Token usage summary comments (outputs/*_usage.json); failures are non-fatal. */
+function postReworkUsageComments(ticketKey, params) {
+    try {
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
+/**
+ * Outer-catch resume consult (gh-1083): mirrors the original key resolution
+ * and its swallow-all wrapper — true means the caller must re-run action(params).
+ */
+function shouldResumeRework(params, customParams, config, error) {
+    try {
+        var key = (params.ticket || (params.jobParams && params.jobParams.ticket) || {}).key;
+        if (key) {
+            if (resumeOrReport(key, customParams, config, 'test_rework_post_action', '❌ Test Rework Error', error)) {
+                return true;
+            }
+        }
+    } catch (e) {}
+    return false;
+}
+
 // ── gh-928 thin executors (side effects, unchanged order) ────────────────────
 
 /** Quality + policy gates, in order; throws on the first failed gate. */
@@ -655,8 +823,9 @@ function triggerAutoStart(ticketKey, customParams, config) {
 }
 
 function action(params) {
-    const actualParams = params.ticket ? params : (params.jobParams || params);
-    const ticketKey = actualParams.ticket.key;
+    var ctx = resolveActionContext(params);
+    const actualParams = ctx.actualParams;
+    const ticketKey = ctx.ticketKey;
     var config = configLoader.loadProjectConfig(params.jobParams || params);
     var jiraConfig = config.jira;
     var scm = configLoader.createScm(config);
@@ -670,24 +839,13 @@ function action(params) {
     }
 
     try {
-        const fixSummary = actualParams.response || '_(No fix summary)_';
+        const fixSummary = fixSummaryOf(actualParams);
         console.log('=== Processing test rework results for', ticketKey, '===');
 
         // Step 1: Read new test result
         const result = readResultJson();
-        if (!result || !result.status) {
-            const errMsg = buildResultErrorMessage(result);
-            console.error(errMsg);
-            var tracker = trackersModule.createTracker(config, customParams);
-            var mErr = commentMarkup.forTicket(ticketKey, customParams);
-            try {
-                tracker.postComment(
-                    ticketKey,
-                    mErr.h(3, '⚠️ Rework Error') + '\n\n' + errMsg + '\n\nCheck CI logs for the agent output.'
-                );
-            } catch (e) {}
-            releaseLock();
-            return { success: false, error: errMsg };
+        if (isMissingResult(result)) {
+            return reportMissingResult(ticketKey, result, config, customParams, releaseLock);
         }
 
         const rawStatus = result.status.toLowerCase();
@@ -696,83 +854,34 @@ function action(params) {
         console.log('Re-run result:', result.status, '→ normalized:', testStatus);
 
         // Step 2: Configure git + commit/push testing/ only
-        try {
-            cli_execute_command({ command: 'git config user.name "' + config.git.authorName + '"' });
-            cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
-        } catch (e) {}
+        configureReworkGitAuthor(config);
 
         runPublishGates(ticketKey, customParams);
 
         // Step 2.5: Determine whether the test PR is dirty so the git step can merge main.
-        var pr = findTestPRForTicket(scm, ticketKey);
-        var prIsDirty = false;
-        if (pr) {
-            prIsDirty = (pr.mergeable_state === 'dirty' || pr.mergeStateStatus === 'DIRTY' || pr.mergeable === false);
-            if (prIsDirty) {
-                console.log('PR #' + pr.number + ' is dirty — will merge origin/' + ((config.git && config.git.baseBranch) || 'main'));
-            }
-        }
+        var prState = resolveReworkPr(scm, ticketKey, config);
+        var pr = prState.pr;
 
-        let branchName;
-        try {
-            branchName = commitAndPush(ticketKey, passed, config, prIsDirty);
-        } catch (e) {
-            console.error('Git operations failed:', e);
-            if (resumeOrReport(ticketKey, customParams, config, 'test_rework_git_operations', '❌ Rework Push Failed', e)) {
-                return action(params);
-            }
-            releaseLock();
-            return { success: false, error: e.toString() };
+        var pushed = pushReworkBranch(params, ticketKey, passed, config, customParams, prState.prIsDirty, releaseLock);
+        if (pushed.terminal) {
+            return pushed.terminal;
         }
+        var branchName = pushed.branchName;
 
         // Step 3: Ensure PR exists; create if missing (e.g. preCliJSAction failed to create it)
         if (!pr && branchName) {
             pr = createPRIfMissing(scm, branchName, ticketKey, config);
         }
 
-        if (pr) {
-            postThreadReplies(scm, pr.number);
-
-            // Post PR comment with fix summary + new test result (GitHub Markdown from pr_body.md)
-            const prBodyContent = readFile('outputs/pr_body.md') || fixSummary;
-            postReworkBodyAndComment(scm, pr, ticketKey, testStatus, passed, prBodyContent);
-        } else {
-            console.warn('No PR/MR found — skipping source-control comment');
-        }
+        publishReworkPrArtifacts(scm, pr, ticketKey, testStatus, passed, fixSummary);
 
         // Step 4: Move ticket to In Review - Passed or In Review - Failed
         // Bug creation/linking is handled by the bug_creation agent when TC reaches Failed status
-        const stageKey = passed ? 'IN_REVIEW_PASSED' : 'IN_REVIEW_FAILED';
-        const targetStatus = passed ? jiraConfig.statuses.IN_REVIEW_PASSED : jiraConfig.statuses.IN_REVIEW_FAILED;
-        try {
-            // gh-916: In Review - Passed/Failed can be tag-only (restricted ADO workflows) — stage-label fallback.
-            const moveResult = getTracker().moveToStatusOrMark(ticketKey, targetStatus, stageKey);
-            if (moveResult.moved || moveResult.marked) {
-                console.log('✅ Moved', ticketKey, 'to', targetStatus);
-            }
-        } catch (e) {
-            console.warn('Failed to move ticket status:', e);
-        }
+        const targetStatus = moveReworkTicket(ticketKey, passed, jiraConfig);
 
         // Step 6: Post tracker comment — flavor follows the ticket's
         // tracker (gh-770): Markdown on GitHub issues, wiki markup on Jira.
-        try {
-            trackersModule.createTracker(config, customParams).postComment(
-                ticketKey,
-                buildTestReworkResultComment(
-                    commentMarkup.forTicket(ticketKey, customParams),
-                    {
-                        passed: passed,
-                        testStatus: testStatus,
-                        branchName: branchName,
-                        prUrl: pr ? pr.html_url : null,
-                        fixSummary: fixSummary
-                    }
-                )
-            );
-        } catch (e) {
-            console.warn('Failed to post tracker comment:', e);
-        }
+        postReworkTrackerComment(ticketKey, config, customParams, pr, testStatus, branchName, passed, fixSummary);
 
         // Step 7 & 8: Remove WIP label + SM idempotency label
         releaseLock();
@@ -783,11 +892,7 @@ function action(params) {
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
+        postReworkUsageComments(ticketKey, params);
 
         return {
             success: true,
@@ -798,14 +903,9 @@ function action(params) {
 
     } catch (error) {
         console.error('❌ Error in postTestReworkResults:', error);
-        try {
-            const key = (params.ticket || (params.jobParams && params.jobParams.ticket) || {}).key;
-            if (key) {
-                if (resumeOrReport(key, customParams, config, 'test_rework_post_action', '❌ Test Rework Error', error)) {
-                    return action(params);
-                }
-            }
-        } catch (e) {}
+        if (shouldResumeRework(params, customParams, config, error)) {
+            return action(params);
+        }
         releaseLock();
         return { success: false, error: error.toString() };
     }
@@ -841,6 +941,12 @@ if (typeof module !== 'undefined' && module.exports) {
         parseConflictMarkerPaths,
         decideConflictSide,
         stageConflictMarkerFiles,
-        stageSubmoduleConflicts
+        stageSubmoduleConflicts,
+        // gh-1083: action() split — pure planners (test surface):
+        resolveActionContext,
+        fixSummaryOf,
+        isMissingResult,
+        decidePrIsDirty,
+        decideReworkTargetStatus
     };
 }
