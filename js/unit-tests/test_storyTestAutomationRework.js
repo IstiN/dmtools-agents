@@ -522,15 +522,10 @@ var REWORK_OPEN_PR = [{ number: 7, head: { ref: 'test/TS-900' }, html_url: 'http
 
 suite('storyTestAutomationRework: action characterization (gh-1080 CRAP split)', function() {
 
-    function runReworkAction(opts) {
-        opts = opts || {};
-        var commands = [];
-        var autoStart = opts.autoStart || recordingAutoStart();
-        var scm = opts.scm !== undefined ? opts.scm : makeScm([]);
-        var jiraCalls = { comments: [], labelsRemoved: [], labelsAdded: [], moves: [] };
-        var mocks = Object.assign({
-            cli_execute_command: reworkCliMock(commands, opts.cliOverrides),
-            file_read: opts.fileRead || function () { return null; },
+    // gh-1080 CRAP ratchet: the jira_* recorders live in their own helper so the
+    // action-invocation plumbing stays below the new-function threshold (>8).
+    function reworkJiraMocks(opts, jiraCalls) {
+        return {
             jira_post_comment: function (args) { jiraCalls.comments.push(args.comment); },
             jira_remove_label: function (args) { jiraCalls.labelsRemoved.push(args.label); },
             jira_add_label: function (args) { jiraCalls.labelsAdded.push(args.label); },
@@ -539,7 +534,19 @@ suite('storyTestAutomationRework: action characterization (gh-1080 CRAP split)',
                 if (opts.rejectInTesting && args.statusName === 'In Testing') throw new Error('state rejected');
                 return {};
             }
-        }, opts.mocks || {});
+        };
+    }
+
+    function runReworkAction(opts) {
+        opts = opts || {};
+        var commands = [];
+        var autoStart = opts.autoStart || recordingAutoStart();
+        var scm = opts.scm !== undefined ? opts.scm : makeScm([]);
+        var jiraCalls = { comments: [], labelsRemoved: [], labelsAdded: [], moves: [] };
+        var mocks = Object.assign({
+            cli_execute_command: reworkCliMock(commands, opts.cliOverrides),
+            file_read: opts.fileRead || function () { return null; }
+        }, reworkJiraMocks(opts, jiraCalls), opts.mocks || {});
         var module = loadReworkWith(autoStart, function () { return scm; }, mocks, opts.tokenUsage);
         var params = {
             ticket: { key: 'TS-900' },
