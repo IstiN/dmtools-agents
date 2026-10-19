@@ -14242,7 +14242,26 @@ suite('smAgent: silent-update failure stderr tail (gh-1074)', function () {
         // AC2 also requires the timeline alone to explain the streak: the
         // attempt counter must still parse the extended marker.
         var vl = loadModule('js/common/validationLiveness.js', makeRequire({}), {});
-        assert.deepEqual(vl.silentUpdateFailureCount([body]), { count: 1, newest: vl.silentUpdateFailureCount([body]).newest });
+        assert.deepEqual(vl.silentUpdateFailureCount([body]).count, 1);
+    });
+
+    test('UT-2 multi-item: a 2-tick streak — attempt counting stays correct with reason-bearing markers', function () {
+        // R5: marker counting must hold across MULTIPLE extended markers,
+        // not just one (the single-item case can pass while multi-item
+        // parsing of the extended line is still wrong).
+        var thread = []; // accumulated PR comment bodies across ticks
+        for (var tick = 1; tick <= 2; tick++) {
+            var sm = smWithStderr(forkItem1074(), refusalStderr(false),
+                { prComments: thread.map(function (b) { return { body: b }; }) });
+            sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [RULE_1074] } });
+            assert.equal(sm.capturedPrComments.length, 1, 'tick ' + tick + ': exactly one marker posted');
+            thread.push(sm.capturedPrComments[0].body);
+        }
+        assert.ok(thread[0].indexOf('attempt 1 at ') !== -1, 'first tick posts attempt 1');
+        assert.ok(thread[1].indexOf('attempt 2 at ') !== -1,
+            'second tick counts the reason-bearing attempt-1 marker correctly');
+        assert.ok(thread[1].indexOf('[remote rejected]') !== -1,
+            'the second marker carries the reason too');
     });
 
     test('UT-3/AC3: token-shaped strings in the tail are redacted in the log and the marker', function () {
