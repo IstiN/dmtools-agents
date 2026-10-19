@@ -210,51 +210,32 @@ function action(params) {
         return { success: true, action: 'moved_to_done', totalTCs: totalTCs, ticketKey: ticketKey };
     }
 
-    function applyCheckOutcome(buckets, totalTCs) {
-        if (allTestsConcluded(buckets)) {
-            return completeAllPassed(totalTCs);
+    // Step 3: Some TCs have open bugs → Story must wait in Bug To Fix
+    function moveStoryToBugToFix(pendingBugTCs) {
+        var bugList = pendingBugTCs.map(function(item) {
+            return '*' + item.bugKey + '* (from ' + item.key + ')';
+        }).join('\n');
+
+        console.log('Found', pendingBugTCs.length, 'TC(s) with pending bugs — moving Story to Bug To Fix');
+
+        // gh-916: BUG_TO_FIX can be tag-only (restricted ADO workflows) — stage-label fallback.
+        var bugToFixMove = tracker.moveToStatusOrMark(ticketKey, ctx.statuses.BUG_TO_FIX, 'BUG_TO_FIX');
+        if (bugToFixMove.moved || bugToFixMove.marked) {
+            tracker.postComment(ticketKey, 'h3. 🐛 Story Moved to Bug To Fix\n\n' +
+                    'The following linked Test Cases have open bugs:\n\n' + bugList + '\n\n' +
+                    'The Story has been moved to *Bug To Fix*. It will return to *Ready For Testing* once all linked bugs are *Done*.');
+
+            console.log('✅ Story', ticketKey, 'moved to Bug To Fix');
         }
+        releaseLock();
 
-        // Step 2: Some TCs are still being reviewed/developed — wait for those agents
-        if (buckets.inFlight.length > 0) {
-            console.log(buckets.inFlight.length, 'TC(s) still in review/automation — releasing lock, will re-check next cycle');
-            releaseLock();
-            return { success: true, action: 'waiting_in_flight', totalTCs: totalTCs, inFlightTCs: buckets.inFlight, ticketKey: ticketKey };
-        }
+        postTokenUsageSafely();
 
-        // Step 3: Some TCs have open bugs → Story must wait in Bug To Fix
-        if (buckets.pendingBug.length > 0) {
-            var pendingBugTCs = buckets.pendingBug;
-            var bugList = pendingBugTCs.map(function(item) {
-                return '*' + item.bugKey + '* (from ' + item.key + ')';
-            }).join('\n');
+        return { success: true, action: 'moved_to_bug_to_fix', pendingBugTCs: pendingBugTCs.length, ticketKey: ticketKey };
+    }
 
-            console.log('Found', pendingBugTCs.length, 'TC(s) with pending bugs — moving Story to Bug To Fix');
-
-            // gh-916: BUG_TO_FIX can be tag-only (restricted ADO workflows) — stage-label fallback.
-            var bugToFixMove = tracker.moveToStatusOrMark(ticketKey, ctx.statuses.BUG_TO_FIX, 'BUG_TO_FIX');
-            if (bugToFixMove.moved || bugToFixMove.marked) {
-                tracker.postComment(ticketKey, 'h3. 🐛 Story Moved to Bug To Fix\n\n' +
-                        'The following linked Test Cases have open bugs:\n\n' + bugList + '\n\n' +
-                        'The Story has been moved to *Bug To Fix*. It will return to *Ready For Testing* once all linked bugs are *Done*.');
-
-                console.log('✅ Story', ticketKey, 'moved to Bug To Fix');
-            }
-            releaseLock();
-
-            postTokenUsageSafely();
-
-            return { success: true, action: 'moved_to_bug_to_fix', pendingBugTCs: pendingBugTCs.length, ticketKey: ticketKey };
-        }
-
-        // Step 4: Some Failed TCs still have no linked bug — wait for bulk_bugs_creation
-        if (buckets.waitingForBugs.length > 0) {
-            console.log('Failed TCs without linked bugs — releasing lock, will re-check next cycle');
-            releaseLock();
-            return { success: true, action: 'waiting_for_bugs', totalTCs: totalTCs, waitingForBugsTCs: buckets.waitingForBugs, ticketKey: ticketKey };
-        }
-
-        // Step 5: All remaining non-passed TCs are ready for re-test → back to Ready For Testing
+    // Step 5: All remaining non-passed TCs are ready for re-test → back to Ready For Testing
+    function moveStoryToReadyForTesting(readyForRetestCount) {
         console.log('All non-passed TCs are ready for re-test — moving Story to Ready For Testing');
 
         // gh-916: READY_FOR_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback.
@@ -269,7 +250,33 @@ function action(params) {
 
         postTokenUsageSafely();
 
-        return { success: true, action: 'moved_to_ready_for_testing', readyForRetestTCs: buckets.readyForRetest.length, ticketKey: ticketKey };
+        return { success: true, action: 'moved_to_ready_for_testing', readyForRetestTCs: readyForRetestCount, ticketKey: ticketKey };
+    }
+
+    function applyCheckOutcome(buckets, totalTCs) {
+        if (allTestsConcluded(buckets)) {
+            return completeAllPassed(totalTCs);
+        }
+
+        // Step 2: Some TCs are still being reviewed/developed — wait for those agents
+        if (buckets.inFlight.length > 0) {
+            console.log(buckets.inFlight.length, 'TC(s) still in review/automation — releasing lock, will re-check next cycle');
+            releaseLock();
+            return { success: true, action: 'waiting_in_flight', totalTCs: totalTCs, inFlightTCs: buckets.inFlight, ticketKey: ticketKey };
+        }
+
+        if (buckets.pendingBug.length > 0) {
+            return moveStoryToBugToFix(buckets.pendingBug);
+        }
+
+        // Step 4: Some Failed TCs still have no linked bug — wait for bulk_bugs_creation
+        if (buckets.waitingForBugs.length > 0) {
+            console.log('Failed TCs without linked bugs — releasing lock, will re-check next cycle');
+            releaseLock();
+            return { success: true, action: 'waiting_for_bugs', totalTCs: totalTCs, waitingForBugsTCs: buckets.waitingForBugs, ticketKey: ticketKey };
+        }
+
+        return moveStoryToReadyForTesting(buckets.readyForRetest.length);
     }
 
     try {
