@@ -45,6 +45,7 @@ function loadPostBulkBugsCreation(mocks) {
             './common/tokenUsageComment.js': {
                 postTokenUsageComments: function() {}
             },
+            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': d2Trackers(Object.assign({}, defaults, mocks))
         }),
         Object.assign({}, defaults, mocks)

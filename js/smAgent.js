@@ -1393,6 +1393,7 @@ function runLocalAction(jsPath, ticket, agentParams) {
     var helperModules = [
         { id: 'ticketKeyShapes.js', varName: '_tks' },
         { id: 'trackers.js', varName: '_tr' },
+        { id: 'linkedIssuesReport.js', varName: '_lir' },
         { id: 'tokenUsageComment.js', varName: '_tu' },
         { id: 'aiChat.js', varName: '_ac' },
         { id: 'validateInputJql.js', varName: '_vq' },
@@ -1426,6 +1427,7 @@ function runLocalAction(jsPath, ticket, agentParams) {
         '      if (id.indexOf("scm.js") !== -1) return _scm.exports;\n' +
         '      if (id.indexOf("ticketKeyShapes.js") !== -1) return _tks.exports;\n' +
         '      if (id.indexOf("trackers.js") !== -1) return _tr.exports;\n' +
+        '      if (id.indexOf("linkedIssuesReport.js") !== -1) return _lir.exports;\n' +
         '      if (id.indexOf("tokenUsageComment.js") !== -1) return _tu.exports;\n' +
         '      if (id.indexOf("aiChat.js") !== -1) return _ac.exports;\n' +
         '      if (id.indexOf("validateInputJql.js") !== -1) return _vq.exports;\n' +

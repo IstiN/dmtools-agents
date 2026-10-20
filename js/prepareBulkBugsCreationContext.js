@@ -20,6 +20,7 @@
 var configLoader = require('./configLoader.js');
 const { JIRA_FIELDS } = require('./config.js');
 var trackersModule = require('./common/trackers.js');
+var linkedIssuesReport = require('./common/linkedIssuesReport.js');
 
 function summarizeDoneBug(bug) {
     var fields = bug.fields || {};
@@ -66,20 +67,36 @@ function buildStatusConfig(config, projectKey) {
         project: projectKey, parentTicket: '' } };
 }
 
+function defaultOpenBugsTemplate(provider) {
+    if (String(provider || '').toLowerCase() === 'ado') {
+        return "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{jiraProject}' AND [System.WorkItemType] = 'Bug' AND [System.State] NOT IN ('{status.DONE:Done}')";
+    }
+    return 'project = {jiraProject} AND issuetype in (Bug) AND status not in ({status.DONE:Done})';
+}
+
+function defaultFailedTCsTemplate(provider) {
+    if (String(provider || '').toLowerCase() === 'ado') {
+        return "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{jiraProject}' AND [System.WorkItemType] = 'Test Case' AND {stage.FAILED:Failed} AND NOT [System.Tags] CONTAINS 'sm_bug_creation_triggered' ORDER BY [System.CreatedDate] ASC";
+    }
+    return 'project = {jiraProject} AND issuetype = "Test Case" AND {stage.FAILED:Failed} AND (labels is EMPTY OR labels NOT IN (sm_bug_creation_triggered)) ORDER BY created ASC';
+}
+
 /**
  * The two sweep queries (customParams override > shipped defaults, both
  * interpolated against statusConfig).
  */
-function buildQueries(customParams, statusConfig) {
+function buildQueries(customParams, statusConfig, provider) {
     return {
         openBugsJql: configLoader.interpolateJql(
-            customParams.openBugsJql || 'project = {jiraProject} AND issuetype in (Bug) AND status not in ({status.DONE:Done})',
-            statusConfig),
+            customParams.openBugsJql || defaultOpenBugsTemplate(provider),
+            statusConfig,
+            provider),
         // gh-916: {stage.*} — in label mode a TC carrying the stage_failed marker is selectable too;
         // in 'none' mode this expands to the same `status in ('Failed')` clause as before.
-        failedTCsJql: configLoader.interpolateJql(customParams.failedTCsJql ||
-            'project = {jiraProject} AND issuetype = "Test Case" AND {stage.FAILED:Failed} AND (labels is EMPTY OR labels NOT IN (sm_bug_creation_triggered)) ORDER BY created ASC',
-            statusConfig)
+        failedTCsJql: configLoader.interpolateJql(
+            customParams.failedTCsJql || defaultFailedTCsTemplate(provider),
+            statusConfig,
+            provider)
     };
 }
 
@@ -131,8 +148,9 @@ function parentLabel(fields) {
 function fetchHistoricalDoneBugs(tcKey, tracker) {
     try {
         tracker = tracker || trackersModule.createTracker(null, {});
+        var provider = typeof tracker.provider === 'function' ? tracker.provider() : 'jira';
         // JQL text: provider-specific query (WIQL on ado)
-        var bugs = tracker.searchIssues('issue in linkedIssues("' + tcKey + '") AND issuetype = Bug AND status in (Done) ORDER BY updated DESC', {
+        var bugs = tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(provider, tcKey, 'issuetype = Bug AND status in (Done) ORDER BY updated DESC', { issueType: 'Bug', statusIn: ['Done'] }), {
             fields: ['key', 'summary', 'description', 'status', 'updated'],
             maxResults: 10
         }) || [];
@@ -247,13 +265,13 @@ function action(params) {
         var batchSize = settings.batchSize;
 
         var config = configLoader.loadProjectConfig(actualParams);
+        var tracker = trackersModule.createTracker(config, customParams);
         // agents#855: {jiraProject} is replaced with the project key derived above; {status.KEY:Literal}
         // follows jira.statuses only when the project opted in (jira.useConfiguredStatusesInQueries),
         // otherwise it stays the literal — the default queries are byte-identical to the previous ones.
         var statusConfig = buildStatusConfig(config, projectKey);
-        var queries = buildQueries(customParams, statusConfig);
+        var queries = buildQueries(customParams, statusConfig, tracker.provider());
 
-        var tracker = trackersModule.createTracker(config, customParams);
         var failedReasonFieldName = getFailedReasonFieldName(config, customParams);
         console.log('Failed Reason field name:', failedReasonFieldName);
 
@@ -306,6 +324,8 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveActionParams: resolveActionParams,
         resolveSettings: resolveSettings,
         buildStatusConfig: buildStatusConfig,
+        defaultOpenBugsTemplate: defaultOpenBugsTemplate,
+        defaultFailedTCsTemplate: defaultFailedTCsTemplate,
         buildQueries: buildQueries,
         getFailedReasonFieldName: getFailedReasonFieldName,
         extractFailedReason: extractFailedReason,

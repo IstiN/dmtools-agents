@@ -25,6 +25,7 @@
 
 var configModule = require('./config.js');
 var trackersModule = require('./common/trackers.js');
+var linkedIssuesReport = require('./common/linkedIssuesReport.js');
 var truncateSummary = configModule.truncateSummary;
 var JIRA_SUMMARY_MAX_LENGTH = configModule.JIRA_SUMMARY_MAX_LENGTH;
 
@@ -230,7 +231,8 @@ function loadExistingSummaries(tracker, parentKey) {
     var existingSummaries = [];
     try {
         // JQL text: provider-specific query (WIQL on ado)
-        var existing = tracker.searchIssues('parent = ' + parentKey + ' AND issuetype = Sub-task', {
+        var provider = tracker && typeof tracker.provider === 'function' ? tracker.provider() : 'jira';
+        var existing = tracker.searchIssues(linkedIssuesReport.buildChildrenQuery(provider, parentKey, 'parent = ' + parentKey + ' AND issuetype = Sub-task', 'Sub-task'), {
             fields: ['summary']
         });
         if (Array.isArray(existing)) {

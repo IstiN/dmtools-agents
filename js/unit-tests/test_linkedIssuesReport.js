@@ -40,6 +40,129 @@ suite('linkedIssuesReport.buildLinkedQuery', function () {
             'issue in linkedIssues("PROJ-7") AND issuetype = Bug AND status not in (Done)'
         );
     });
+
+    test('translates to WorkItemLinks WIQL when provider is ado', function () {
+        var mod = loadReport();
+        assert.equal(
+            mod.buildLinkedQuery('123', 'issuetype = "Test Case"', 'ado', { issueType: 'Test Case' }),
+            "SELECT [Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.Id] = 123 AND [Target].[System.Id] <> 123 AND [Target].[System.WorkItemType] = 'Test Case' MODE (MustContain)"
+        );
+        assert.equal(
+            mod.buildLinkedQuery('123', 'issuetype = Bug', 'ADO'),
+            'SELECT [Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.Id] = 123 AND [Target].[System.Id] <> 123 MODE (MustContain)'
+        );
+    });
+});
+
+suite('linkedIssuesReport — WIQL and provider-aware query helpers (gh-1122)', function () {
+
+    test('wiqlQuote quotes values and escapes single quotes', function () {
+        var mod = loadReport();
+        assert.equal(mod.wiqlQuote('Done'), "'Done'");
+        assert.equal(mod.wiqlQuote("PO's Review"), "'PO''s Review'");
+        assert.equal(mod.wiqlQuote(null), "''");
+        assert.equal(mod.wiqlQuote(undefined), "''");
+    });
+
+    test('wiqlIdExpr keeps numeric IDs bare and quotes non-numeric keys', function () {
+        var mod = loadReport();
+        assert.equal(mod.wiqlIdExpr(42), '42');
+        assert.equal(mod.wiqlIdExpr('  900 '), '900');
+        assert.equal(mod.wiqlIdExpr('PROJ-7'), "'PROJ-7'");
+        assert.equal(mod.wiqlIdExpr(null), "''");
+    });
+
+    test('wiqlList formats items as comma-separated quoted literals', function () {
+        var mod = loadReport();
+        assert.equal(mod.wiqlList(['Story', 'Bug']), "'Story', 'Bug'");
+        assert.equal(mod.wiqlList(null), '');
+    });
+
+    test('adoTargetTypeClause handles issueTypes array, single issueType, and empty opts', function () {
+        var mod = loadReport();
+        assert.equal(mod.adoTargetTypeClause(null), '');
+        assert.equal(mod.adoTargetTypeClause({}), '');
+        assert.equal(mod.adoTargetTypeClause({ issueTypes: [] }), '');
+        assert.equal(
+            mod.adoTargetTypeClause({ issueTypes: ['Story', 'Bug'] }),
+            " AND [Target].[System.WorkItemType] IN ('Story', 'Bug')"
+        );
+        assert.equal(
+            mod.adoTargetTypeClause({ issueType: 'Test Case' }),
+            " AND [Target].[System.WorkItemType] = 'Test Case'"
+        );
+    });
+
+    test('adoTargetStatusClause handles statusNotEquals, statusNotIn, statusIn, and empty opts', function () {
+        var mod = loadReport();
+        assert.equal(mod.adoTargetStatusClause(null), '');
+        assert.equal(mod.adoTargetStatusClause({}), '');
+        assert.equal(mod.adoTargetStatusClause({ statusNotIn: [], statusIn: [] }), '');
+        assert.equal(
+            mod.adoTargetStatusClause({ statusNotEquals: 'Done' }),
+            " AND [Target].[System.State] <> 'Done'"
+        );
+        assert.equal(
+            mod.adoTargetStatusClause({ statusNotIn: ['Done', 'Closed'] }),
+            " AND [Target].[System.State] NOT IN ('Done', 'Closed')"
+        );
+        assert.equal(
+            mod.adoTargetStatusClause({ statusIn: ['Done'] }),
+            " AND [Target].[System.State] IN ('Done')"
+        );
+    });
+
+    test('buildAdoLinkedWiql combines id, type, and status clauses with MODE (MustContain)', function () {
+        var mod = loadReport();
+        assert.equal(
+            mod.buildAdoLinkedWiql('55', { issueTypes: ['Story', 'Bug'], statusNotEquals: 'Done' }),
+            "SELECT [Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.Id] = 55 AND [Target].[System.Id] <> 55 AND [Target].[System.WorkItemType] IN ('Story', 'Bug') AND [Target].[System.State] <> 'Done' MODE (MustContain)"
+        );
+    });
+
+    test('buildLinkedIssuesQuery builds JQL on Jira and WIQL on ADO', function () {
+        var mod = loadReport();
+        assert.equal(
+            mod.buildLinkedIssuesQuery('jira', 'TS-1', 'issuetype = Bug', { issueType: 'Bug' }),
+            'issue in linkedIssues("TS-1") AND issuetype = Bug'
+        );
+        assert.equal(
+            mod.buildLinkedIssuesQuery(null, 'TS-1', 'issuetype = Bug', { issueType: 'Bug' }),
+            'issue in linkedIssues("TS-1") AND issuetype = Bug'
+        );
+        assert.equal(
+            mod.buildLinkedIssuesQuery('ado', '77', 'issuetype = Bug', { issueType: 'Bug', statusNotIn: ['Done'] }),
+            "SELECT [Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.Id] = 77 AND [Target].[System.Id] <> 77 AND [Target].[System.WorkItemType] = 'Bug' AND [Target].[System.State] NOT IN ('Done') MODE (MustContain)"
+        );
+        assert.equal(
+            mod.buildLinkedIssuesQuery('ado', '77', 'issuetype = Bug'),
+            'SELECT [Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.Id] = 77 AND [Target].[System.Id] <> 77 MODE (MustContain)'
+        );
+    });
+
+    test('buildChildrenQuery handles SELECT passthrough, ADO WorkItems WIQL, and Jira JQL', function () {
+        var mod = loadReport();
+        assert.equal(
+            mod.buildChildrenQuery('ado', '42', '  SELECT [Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.Id] = {ticketKey} MODE (MustContain)', 'Subtask'),
+            '  SELECT [Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.Id] = 42 MODE (MustContain)'
+        );
+        assert.equal(
+            mod.buildChildrenQuery('ado', '42', 'parent = {ticketKey} AND issuetype = Subtask', 'Subtask'),
+            "SELECT [System.Id] FROM WorkItems WHERE [System.Parent] = 42 AND [System.WorkItemType] = 'Subtask'"
+        );
+        assert.equal(
+            mod.buildChildrenQuery('ado', '42', 'parent = {ticketKey}', ''),
+            'SELECT [System.Id] FROM WorkItems WHERE [System.Parent] = 42'
+        );
+        assert.equal(
+            mod.buildChildrenQuery('jira', 'DMC-1', 'parent = {ticketKey} AND issuetype = Subtask', 'Subtask'),
+            'parent = DMC-1 AND issuetype = Subtask'
+        );
+        assert.equal(
+            mod.buildChildrenQuery(null, 'DMC-1', null, 'Subtask'),
+            ''
+        );
+    });
 });
 
 suite('linkedIssuesReport.buildRecentCommentLines', function () {

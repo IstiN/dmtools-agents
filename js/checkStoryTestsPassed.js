@@ -21,6 +21,7 @@
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const trackersModule = require('./common/trackers.js');
+const linkedIssuesReport = require('./common/linkedIssuesReport.js');
 
 // ── gh-1080: pure parse helpers ──────────────────────────────────────────────
 
@@ -133,7 +134,7 @@ function action(params) {
             // 'none' mode sends the exact same fields list as before.
             var fields = ['key', 'status'];
             if (tracker.stageFallback() === 'label') fields = fields.concat(['labels']);
-            return tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + ctx.testCaseType + '"', {
+            return tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(tracker.provider(), ticketKey, 'issuetype = "' + ctx.testCaseType + '"', { issueType: ctx.testCaseType }), {
                 fields: fields,
                 maxResults: 100
             }) || [];
@@ -146,7 +147,7 @@ function action(params) {
     function findLinkedBugs(tcKey) {
         try {
             // JQL text: provider-specific query (WIQL on ado)
-            return tracker.searchIssues('issue in linkedIssues("' + tcKey + '") AND issuetype = "' + ctx.bugType + '"', {
+            return tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(tracker.provider(), tcKey, 'issuetype = "' + ctx.bugType + '"', { issueType: ctx.bugType }), {
                 fields: ['key', 'status'],
                 maxResults: 50
             }) || [];

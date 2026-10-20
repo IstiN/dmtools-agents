@@ -21,6 +21,7 @@ function d3LoadCheckTask(mocks) {
     return loadModule('js/checkTaskStoriesDone.js', makeRequire({
         './configLoader.js': { loadProjectConfig: function() { return { jira: { statuses: { DONE: 'Done', READY_FOR_TESTING: 'Ready For Testing' } } }; } },
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+        './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
         './common/trackers.js': d3Trackers(mocks)
     }), mocks);
 }
@@ -69,6 +70,33 @@ suite('checkTaskStoriesDone: tracker layer', function() {
         assert.equal(r.action, 'moved_to_ready_for_testing');
         assert.deepEqual(calls[0], ['move', { id: '90', state: 'Ready For Testing' }]);
         assert.equal(calls[1][1].id, '90');
+    });
+
+    test('ado: waiting when not all Done + error handling & missing ticketKey', function() {
+        var calls = [];
+        var n = 0;
+        var mod = d3LoadCheckTask({
+            ado_search_by_wiql: function(a) {
+                n++;
+                calls.push(['search', a]);
+                return { value: [{ id: 1, fields: { 'System.Title': 'S', 'System.State': 'Active' } }] };
+            },
+            ado_remove_work_item_label: function(a) { calls.push(['rm', a]); }
+        });
+        var r = mod.action({ ticket: { key: '90' }, jobParams: { customParams: { trackerProvider: 'ado', removeLabel: 'sm_x' } } });
+        assert.equal(r.action, 'waiting');
+        assert.equal(r.notDone, 1);
+        assert.equal(
+            calls[0][1].wiql,
+            "SELECT [Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.Id] = 90 AND [Target].[System.Id] <> 90 AND [Target].[System.WorkItemType] IN ('Story', 'Bug') MODE (MustContain)"
+        );
+        assert.equal(
+            calls[1][1].wiql,
+            "SELECT [Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.Id] = 90 AND [Target].[System.Id] <> 90 AND [Target].[System.WorkItemType] IN ('Story', 'Bug') AND [Target].[System.State] <> 'Done' MODE (MustContain)"
+        );
+
+        var errRes = mod.action({});
+        assert.equal(errRes.success, false);
     });
 });
 
