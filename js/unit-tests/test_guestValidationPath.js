@@ -142,13 +142,22 @@ suite('guestValidationPath: policy bars (gh-113)', function () {
         assert.equal(mod.mergeableZeroFailing(null), false, 'degraded probe fails closed');
     });
 
-    test('recoverableZeroRed: real-pending allowed (the verdict owns it), red not', function () {
+    test('recoverableZeroRed: decided-head bar — real-pending allowed, red and undecided not (fa#923 parity)', function () {
         assert.equal(mod.recoverableZeroRed(mod.realCheckTally([
             { name: 'quality', status: 'IN_PROGRESS', conclusion: null }
         ], null)), true, 'in-flight is not red — a stale park may clear');
         assert.equal(mod.recoverableZeroRed(mod.realCheckTally([
             { name: 'gate', status: 'COMPLETED', conclusion: 'FAILURE' }
         ], null)), false);
+        // fa#923: the park is set ON the punished head — a head with NO
+        // check runs at all (or stub-only bookkeeping) is UNDECIDED, not
+        // "the red dissolved". Clearing on real === 0 would un-park every
+        // stale human head the sticky park protects.
+        assert.equal(mod.recoverableZeroRed(mod.realCheckTally([], null)), false,
+            'an empty rollup is undecided — the park holds (fa#923)');
+        assert.equal(mod.recoverableZeroRed(mod.realCheckTally([
+            { name: 'merge / 1', status: 'COMPLETED', conclusion: 'SKIPPED' }
+        ], null)), false, 'stub-only is undecided — the park holds (fa#923)');
         assert.equal(mod.recoverableZeroRed(null), false, 'degraded probe keeps the park');
     });
 });

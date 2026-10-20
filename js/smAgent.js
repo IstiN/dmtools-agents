@@ -3147,7 +3147,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 if (gRunsVf !== null) {
                                     var gTallyVf = guestValidationPathModule.realCheckTally(
                                         gRunsVf, smProviderModule.BOOKEEPING_CHECK_PREFIXES);
-                                    if (gTallyVf.red === 0 &&
+                                    if (guestValidationPathModule.recoverableZeroRed(gTallyVf) &&
                                         probeHeadVerdictVf() !== 'failure') {
                                         guestRungVf = true;
                                         guestRungWhyVf = 'the punished head now carries no red of its own (' +

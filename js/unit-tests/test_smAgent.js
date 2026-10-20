@@ -398,6 +398,11 @@ function makeSmAgent(opts) {
             './common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
             // gh-1114: the tick-layer map — a pure leaf module, loaded real.
             './common/smRuleLayers.js': loadModule('js/common/smRuleLayers.js', makeRequire({}), {}),
+            // gh-1133: the pure guest-validation evaluator — loaded real, with
+            // the real machineAuthor leaf it consults for authorship classes.
+            './common/guestValidationPath.js': loadModule('js/common/guestValidationPath.js', makeRequire({
+                './machineAuthor.js': machineAuthorModule
+            }), {}),
             './sm/sources/githubSource.js': {
                 takeMutexTickSnapshot: function () { return null; }
             },

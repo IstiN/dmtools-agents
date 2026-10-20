@@ -36,7 +36,8 @@
  *   mergeableZeroFailing(tally) — merge bar: red === 0 && pending === 0.
  *       A real in-flight check owns the verdict — never merge ahead of
  *       it. Degraded input (null) fails closed.
- *   recoverableZeroRed(tally) — park-recovery bar: red === 0 only. A
+ *   recoverableZeroRed(tally) — park-recovery bar: the head is decided
+ *       (real >= 1, the fa#923 undecided-head guard) and red === 0. A
  *       real in-flight run is not red; its verdict re-parks a genuinely
  *       red head one cycle later. Degraded input fails closed.
  *   newestArmEvent(events) — the newest `labeled` event for
@@ -123,9 +124,17 @@ function mergeableZeroFailing(tally) {
     return !!tally && tally.red === 0 && tally.pending === 0;
 }
 
-/** Park-recovery bar: no real red. Null fails closed. */
+/**
+ * Park-recovery bar: the head is DECIDED (at least one real concluded
+ * check) and carries no red. `real >= 1` is the fa#923 guard — the park
+ * is set ON the punished head, so a zero-check head is "undecided", not
+ * "the red dissolved"; clearing on it would un-park the stale human
+ * heads the sticky park protects. A real in-flight run is not red; its
+ * verdict re-parks a genuinely red head one cycle later. Null fails
+ * closed.
+ */
 function recoverableZeroRed(tally) {
-    return !!tally && tally.red === 0;
+    return !!tally && tally.red === 0 && tally.real >= 1;
 }
 
 /**
