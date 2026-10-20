@@ -92,8 +92,8 @@ function loadFetchQuestionsWithMocks(options) {
     var projectConfig = {
         jira: {
             questions: {
-                fetchJql: QUESTIONS_JQL,
-                answerField: 'Answer'
+                fetchJql: options.fetchJql !== undefined ? options.fetchJql : QUESTIONS_JQL,
+                answerField: options.answerField !== undefined ? options.answerField : 'Answer'
             }
         }
     };
@@ -332,6 +332,291 @@ suite('fetchQuestionsToInput.action — skipParentContext (gh-1112)', function (
         }
         assert.equal(warns.some(function (w) { return w.indexOf('fetchParentContextToInput') !== -1; }), true,
             'the failure is announced as a non-fatal warning');
+    });
+
+});
+
+// ── gh-1126: ADO comment-thread sentinel and custom WIT field resolution ────
+
+suite('fetchQuestionsToInput — gh-1126 ADO comment-thread sentinel & custom WIT field resolution', function () {
+
+    var ADO_QUESTIONS_WIQL = "SELECT [System.Id] FROM WorkItems WHERE [System.Parent] = {ticketKey}";
+
+    test('UT-1126-2: isCommentAnswerSentinel, buildQuestionSearchFields, extractLatestCommentAnswer, resolveQuestionAnswer helpers', function () {
+        var mod = loadFetchQuestionsWithMocks({}).mod;
+
+        assert.equal(mod.isCommentAnswerSentinel('comment'), true);
+        assert.equal(mod.isCommentAnswerSentinel('comments'), true);
+        assert.equal(mod.isCommentAnswerSentinel('COMMENT'), true);
+        assert.equal(mod.isCommentAnswerSentinel('  System.History  '), true);
+        assert.equal(mod.isCommentAnswerSentinel('Custom.Answer'), false);
+        assert.equal(mod.isCommentAnswerSentinel('Answer'), false);
+        assert.equal(mod.isCommentAnswerSentinel(''), false);
+        assert.equal(mod.isCommentAnswerSentinel(null), false);
+
+        assert.deepEqual(
+            mod.buildQuestionSearchFields('jira', 'Answer'),
+            ['key', 'summary', 'description', 'status', 'priority', 'Answer']
+        );
+        assert.deepEqual(
+            mod.buildQuestionSearchFields(undefined, 'comment'),
+            ['key', 'summary', 'description', 'status', 'priority', 'comment']
+        );
+        assert.deepEqual(
+            mod.buildQuestionSearchFields('ado', 'comment'),
+            ['key', 'summary', 'description', 'status', 'priority']
+        );
+        assert.deepEqual(
+            mod.buildQuestionSearchFields('ado', 'System.History'),
+            ['key', 'summary', 'description', 'status', 'priority']
+        );
+        assert.deepEqual(
+            mod.buildQuestionSearchFields('ado', ''),
+            ['key', 'summary', 'description', 'status', 'priority']
+        );
+        assert.deepEqual(
+            mod.buildQuestionSearchFields('ado', 'Custom.Answer'),
+            ['key', 'summary', 'description', 'status', 'priority', 'Custom.Answer']
+        );
+
+        assert.equal(mod.extractLatestCommentAnswer([
+            { author: 'A', body: 'first' },
+            { author: 'B', body: 'second' }
+        ]), 'second');
+        assert.equal(mod.extractLatestCommentAnswer([]), null);
+        assert.equal(mod.extractLatestCommentAnswer(null), null);
+    });
+
+    test('IT-1126-1: ADO + answerField="comment" searches without comment column and resolves latest comment answer', function () {
+        var wiqlCalls = [];
+        var commentCalls = [];
+        var writes = [];
+        var loaded = loadFetchQuestionsWithMocks({
+            trackerProvider: 'ado',
+            fetchJql: ADO_QUESTIONS_WIQL,
+            answerField: 'comment',
+            globals: {
+                ado_search_by_wiql: function (args) {
+                    wiqlCalls.push(args);
+                    return JSON.stringify({
+                        value: [
+                            {
+                                id: 501,
+                                fields: {
+                                    'System.Title': 'Q1: auth mode?',
+                                    'System.Description': 'Details 1',
+                                    'System.State': 'Active',
+                                    'System.WorkItemType': 'Issue'
+                                }
+                            }
+                        ]
+                    });
+                },
+                ado_get_work_item_comments: function (args) {
+                    commentCalls.push(args);
+                    return JSON.stringify({
+                        value: [
+                            { createdBy: { displayName: 'BA' }, text: 'Initial question context' },
+                            { createdBy: { displayName: 'PO' }, text: 'Use OAuth2 PKCE' }
+                        ]
+                    });
+                },
+                file_write: function (path, content) { writes.push({ path: path, content: content }); return null; }
+            }
+        });
+        loaded.mod.action({ inputFolderPath: 'input/500', jobParams: {} });
+        assert.equal(wiqlCalls.length, 1);
+        assert.equal(wiqlCalls[0].fields.indexOf('comment'), -1, 'comment sentinel is not sent as a WIT field');
+        assert.equal(commentCalls.length, 1);
+        assert.equal(commentCalls[0].id, '501');
+        assert.equal(writes.length, 1);
+        var payload = JSON.parse(writes[0].content);
+        assert.equal(payload.questions.length, 1);
+        assert.equal(payload.questions[0].key, '501');
+        assert.equal(payload.questions[0].answer, 'Use OAuth2 PKCE');
+    });
+
+    test('IT-1126-2: ADO + answerField="comments" (and System.History) resolves comment thread answer', function () {
+        ['comments', 'System.History'].forEach(function (sentinel) {
+            var wiqlCalls = [];
+            var writes = [];
+            var loaded = loadFetchQuestionsWithMocks({
+                trackerProvider: 'ado',
+                fetchJql: ADO_QUESTIONS_WIQL,
+                answerField: sentinel,
+                globals: {
+                    ado_search_by_wiql: function (args) {
+                        wiqlCalls.push(args);
+                        return JSON.stringify({
+                            value: [
+                                { id: 601, fields: { 'System.Title': 'Q?', 'System.State': 'Closed' } }
+                            ]
+                        });
+                    },
+                    ado_get_work_item_comments: function () {
+                        return JSON.stringify({
+                            value: [{ createdBy: { displayName: 'PO' }, text: 'Confirmed for ' + sentinel }]
+                        });
+                    },
+                    file_write: function (path, content) { writes.push({ path: path, content: content }); return null; }
+                }
+            });
+            loaded.mod.action({ inputFolderPath: 'input/600', jobParams: {} });
+            assert.equal(wiqlCalls[0].fields.indexOf(sentinel), -1);
+            var payload = JSON.parse(writes[0].content);
+            assert.equal(payload.questions[0].answer, 'Confirmed for ' + sentinel);
+        });
+    });
+
+    test('IT-1126-3: ADO + custom WIT field (Custom.Answer) requests the field in WIQL and reads it from issue.raw.fields', function () {
+        var wiqlCalls = [];
+        var commentCalls = [];
+        var writes = [];
+        var loaded = loadFetchQuestionsWithMocks({
+            trackerProvider: 'ado',
+            fetchJql: ADO_QUESTIONS_WIQL,
+            answerField: 'Custom.Answer',
+            globals: {
+                ado_search_by_wiql: function (args) {
+                    wiqlCalls.push(args);
+                    return JSON.stringify({
+                        value: [
+                            {
+                                id: 701,
+                                fields: {
+                                    'System.Title': 'Q: custom WIT field?',
+                                    'System.State': 'Resolved',
+                                    'Custom.Answer': 'Answered via Custom.Answer'
+                                }
+                            }
+                        ]
+                    });
+                },
+                ado_get_work_item_comments: function (args) {
+                    commentCalls.push(args);
+                    return JSON.stringify({ value: [] });
+                },
+                file_write: function (path, content) { writes.push({ path: path, content: content }); return null; }
+            }
+        });
+        loaded.mod.action({ inputFolderPath: 'input/700', jobParams: {} });
+        assert.equal(wiqlCalls.length, 1);
+        assert.ok(wiqlCalls[0].fields.indexOf('Custom.Answer') !== -1, 'Custom.Answer is requested in WIQL fields');
+        assert.equal(commentCalls.length, 0, 'getComments is not called when answerField is a WIT field');
+        var payload = JSON.parse(writes[0].content);
+        assert.equal(payload.questions[0].answer, 'Answered via Custom.Answer');
+    });
+
+    test('IT-1126-4 / E3: ADO + getComments throwing for one question logs warning, sets answer=null, and continues remaining questions', function () {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function () {
+            warns.push(Array.prototype.slice.call(arguments).join(' '));
+        };
+        var writes = [];
+        try {
+            var loaded = loadFetchQuestionsWithMocks({
+                trackerProvider: 'ado',
+                fetchJql: ADO_QUESTIONS_WIQL,
+                answerField: 'comment',
+                globals: {
+                    ado_search_by_wiql: function () {
+                        return JSON.stringify({
+                            value: [
+                                { id: 801, fields: { 'System.Title': 'Q1', 'System.State': 'Active' } },
+                                { id: 802, fields: { 'System.Title': 'Q2', 'System.State': 'Closed' } }
+                            ]
+                        });
+                    },
+                    ado_get_work_item_comments: function (args) {
+                        if (args.id === '801') throw new Error('ADO 500 on 801');
+                        return JSON.stringify({ value: [{ text: 'Answer for 802' }] });
+                    },
+                    file_write: function (path, content) { writes.push({ path: path, content: content }); return null; }
+                }
+            });
+            loaded.mod.action({ inputFolderPath: 'input/800', jobParams: {} });
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.ok(warns.some(function (w) { return w.indexOf('801') !== -1 && w.indexOf('ADO 500 on 801') !== -1; }));
+        assert.equal(writes.length, 1);
+        var payload = JSON.parse(writes[0].content);
+        assert.equal(payload.questions.length, 2);
+        assert.equal(payload.questions[0].key, '801');
+        assert.equal(payload.questions[0].answer, null);
+        assert.equal(payload.questions[1].key, '802');
+        assert.equal(payload.questions[1].answer, 'Answer for 802');
+    });
+
+    test('REG-1126-1: Jira provider forwards exact legacy fields array and never invokes getComments even when answerField="comment"', function () {
+        var searchCalls = [];
+        var commentCalls = [];
+        var writes = [];
+        var loaded = loadFetchQuestionsWithMocks({
+            trackerProvider: 'jira',
+            answerField: 'comment',
+            globals: {
+                jira_search_by_jql: function (args) {
+                    searchCalls.push(args);
+                    return [
+                        {
+                            key: 'PROJ-99',
+                            fields: {
+                                summary: 'Jira question',
+                                description: 'desc',
+                                status: { name: 'Done' },
+                                priority: { name: 'Medium' },
+                                comment: 'Jira field comment value'
+                            }
+                        }
+                    ];
+                },
+                jira_get_comments: function (args) { commentCalls.push(args); return []; },
+                file_write: function (path, content) { writes.push({ path: path, content: content }); return null; }
+            }
+        });
+        loaded.mod.action({ inputFolderPath: 'input/PROJ-90', jobParams: {} });
+        assert.equal(searchCalls.length, 1);
+        assert.deepEqual(searchCalls[0].fields, ['key', 'summary', 'description', 'status', 'priority', 'comment']);
+        assert.equal(commentCalls.length, 0);
+        var payload = JSON.parse(writes[0].content);
+        assert.equal(payload.questions[0].answer, 'Jira field comment value');
+    });
+
+    test('E1..E4 edge cases: empty comments (E1), whitespace-only trailing comments (E2), non-Error throw (E3), missing raw fields (E4)', function () {
+        var mod = loadFetchQuestionsWithMocks({}).mod;
+
+        // E1: Question work item has 0 comments -> null
+        assert.equal(mod.extractLatestCommentAnswer([]), null);
+
+        // E2: Latest comments have empty/whitespace body -> falls back to earlier non-empty comment
+        assert.equal(mod.extractLatestCommentAnswer([
+            { author: 'A', body: 'Real answer' },
+            { author: 'B', body: '   \n\t  ' },
+            { author: 'C', body: '' },
+            { author: 'D', body: null }
+        ]), 'Real answer');
+        assert.equal(mod.extractLatestCommentAnswer([
+            { author: 'A', body: '   ' },
+            { author: 'B', body: '' }
+        ]), null);
+
+        // E3: Non-Error string thrown by getComments -> warns and returns null
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function () { warns.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            var fakeTracker = { getComments: function () { throw 'raw string failure'; } };
+            assert.equal(mod.resolveQuestionAnswer(fakeTracker, 'ado', { key: '999' }, 'comment'), null);
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.ok(warns.some(function (w) { return w.indexOf('raw string failure') !== -1; }));
+
+        // E4: Missing issue / fields / raw.fields -> returns null cleanly
+        assert.equal(mod.resolveQuestionAnswer({}, 'ado', { key: '999', fields: {} }, 'Custom.Missing'), null);
+        assert.equal(mod.resolveQuestionAnswer({}, 'ado', null, 'Custom.Missing'), null);
     });
 
 });
