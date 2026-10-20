@@ -29,6 +29,14 @@ function readFixture(name) {
     return String(content);
 }
 
+/** Instruction-pack files (gh-1134 UT-5) — tests run with cwd = repo root. */
+function readPackFile(path) {
+    var content = file_read({ path: path });
+    assert.ok(content !== null && content !== undefined && String(content).length > 0,
+        'pack file ' + path + ' must exist and be non-empty');
+    return String(content);
+}
+
 // Shared fixture texts (read once at load — file_read is real in the runner).
 var GATE_LOG = readFixture('gate_crap4dart.log');
 var AGENTS_GATE_LOG = readFixture('agents_gate.log');
@@ -634,3 +642,88 @@ suite('ciViolations.extractViolations — dart-test long-run progress prefix', f
         assert.equal(items[0].rule, 'test');
     });
 });
+
+// gh-1134 (#433 rework-loop-escalated): the `static` job failed on
+// `dart format --set-exit-if-changed` — "Formatted <file>" lines with the
+// summary "Formatted 495 files (3 changed) in 1.08 seconds." The extractor
+// had no shape for them, the rework leg reported "0 owned" and finished
+// green over a one-command fix.
+suite('ciViolations.extractViolations — dart format shape (gh-1134, UT-1/UT-2)', function() {
+
+    var STATIC_LOG = readFixture('static_dart_format.log');
+    var STATIC_DIFF = readFixture('diff_pr_433_static.txt');
+
+    test('UT-1 (AC1): the #433 static log yields exactly three dart_format items, all OWNED', function() {
+        var items = cv.extractAndTagViolations([{ name: 'static', logs: STATIC_LOG }], STATIC_DIFF);
+        var fmt = items.filter(function(v) { return v.rule === 'dart_format'; });
+        assert.equal(fmt.length, 3, 'exactly three dart_format items: ' + JSON.stringify(items));
+        assert.deepEqual(fmt.map(function(v) { return v.path; }), [
+            'test/js/require_base_resolution_test.dart',
+            'lib/src/js/async_job_pool.dart',
+            'lib/src/cli/run_command_processor.dart'
+        ]);
+        fmt.forEach(function(v) {
+            assert.equal(v.check, 'static', 'check is the job name');
+            assert.equal(v.line, 1, 'whole-file violation: line 1');
+            assert.equal(v.detail, 'not dart-formatted');
+            assert.equal(v.ownership, 'owned', v.path + ' is in the PR diff');
+        });
+    });
+
+    test('UT-2 (AC2): the "Formatted N files (M changed)" summary line yields no item', function() {
+        assert.deepEqual(
+            cv.extractViolations('Formatted 495 files (3 changed) in 1.08 seconds.\n', 'static'), []);
+    });
+
+    test('UT-2 (AC2): a 0-changed run log yields no items at all (green run noise)', function() {
+        var items = cv.extractViolations(
+            'Formatted 495 files (0 changed) in 1.08 seconds.\n', 'static');
+        assert.deepEqual(items, []);
+    });
+
+    test('Windows/CRLF variant: backslash path and trailing \\r extract and match the diff', function() {
+        var items = cv.extractAndTagViolations([
+            { name: 'static', logs: 'Formatted lib\\src\\js\\async_job_pool.dart\r\n' }
+        ], STATIC_DIFF);
+        assert.equal(items.length, 1, 'CRLF-safe line still matches: ' + JSON.stringify(items));
+        assert.equal(items[0].rule, 'dart_format');
+        assert.equal(items[0].path, 'lib\\src\\js\\async_job_pool.dart');
+        assert.equal(items[0].ownership, 'owned', 'normalized backslash path matches the diff');
+    });
+
+    test('a non-.dart token after "Formatted" is not a violation line', function() {
+        var items = cv.extractViolations(
+            'Formatted 3 files in 1.08 seconds.\nFormatted output written.\n', 'static');
+        assert.deepEqual(items, []);
+    });
+
+    test('I2/UT-3: a Formatted file OUTSIDE the diff is FOREIGN, still listed', function() {
+        var items = cv.extractAndTagViolations([
+            { name: 'static', logs: 'Formatted lib/src/js/async_job_pool.dart\nFormatted lib/generated/auto.dart\nFormatted lib/src/cli/run_command_processor.dart\n' }
+        ], STATIC_DIFF);
+        assert.equal(items.length, 3, 'every Formatted file is listed');
+        var foreign = items.filter(function(v) { return v.ownership === 'foreign'; });
+        assert.equal(foreign.length, 1, 'exactly one foreign item: ' + JSON.stringify(items));
+        assert.equal(foreign[0].path, 'lib/generated/auto.dart');
+        assert.equal(items.filter(function(v) { return v.ownership === 'owned'; }).length, 2,
+            'the in-diff files stay owned');
+    });
+
+    test('UT-4 (AC4): the owned table renders the dart_format rows (snapshot)', function() {
+        var md = cv.buildViolationsMarkdown(
+            cv.extractAndTagViolations([{ name: 'static', logs: STATIC_LOG }], STATIC_DIFF));
+        assert.contains(md, 'Violations you must fix (3 owned)');
+        assert.contains(md, '| static | dart_format | `test/js/require_base_resolution_test.dart:1` | not dart-formatted |');
+        assert.contains(md, '| static | dart_format | `lib/src/js/async_job_pool.dart:1` | not dart-formatted |');
+        assert.contains(md, '| static | dart_format | `lib/src/cli/run_command_processor.dart:1` | not dart-formatted |');
+    });
+
+    test('UT-5 (AC5): the rework guidance carries the dart format remediation line', function() {
+        var md = readPackFile('instructions/pr_rework/general_guidelines.md');
+        assert.ok(md.indexOf('dart format .') !== -1,
+            'remediation: `dart format .` on the whole tree');
+        assert.ok(md.indexOf('dart format --set-exit-if-changed --output=none .') !== -1,
+            'verification: `dart format --set-exit-if-changed --output=none .` before pushing');
+    });
+});
+
