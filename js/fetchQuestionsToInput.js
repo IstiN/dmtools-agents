@@ -144,16 +144,25 @@ function fetchCommentAnswer(tracker, issueKey) {
     }
 }
 
-function resolveQuestionAnswer(tracker, provider, issue, answerField) {
-    if (String(provider || 'jira').toLowerCase() === 'ado' && isCommentAnswerSentinel(answerField)) {
-        return fetchCommentAnswer(tracker, issue && issue.key);
-    }
+function rawFieldsOf(issue) {
+    var raw = issue && issue.raw;
+    return raw ? raw.fields : null;
+}
+
+function resolveFieldAnswer(issue, answerField) {
     var direct = getAnswerValue(issue && issue.fields, answerField);
-    if (direct !== null) {
-        return direct;
+    return direct !== null ? direct : getAnswerValue(rawFieldsOf(issue), answerField);
+}
+
+function usesAdoCommentThread(provider, answerField) {
+    return String(provider || 'jira').toLowerCase() === 'ado' && isCommentAnswerSentinel(answerField);
+}
+
+function resolveQuestionAnswer(tracker, provider, issue, answerField) {
+    if (usesAdoCommentThread(provider, answerField)) {
+        return fetchCommentAnswer(tracker, issue ? issue.key : '');
     }
-    var rawFields = issue && issue.raw && issue.raw.fields;
-    return getAnswerValue(rawFields, answerField);
+    return resolveFieldAnswer(issue, answerField);
 }
 
 /**
@@ -172,14 +181,22 @@ function fetchParentContextSafely(params) {
     }
 }
 
+function namedField(obj) {
+    return obj ? obj.name : '';
+}
+
+function textOrEmpty(val) {
+    return val || '';
+}
+
 function toQuestionEntry(tracker, provider, issue, answerField) {
     var f = (issue && issue.fields) || {};
     return {
-        key: (issue && issue.key) || '',
-        summary: f.summary || '',
-        description: f.description || '',
-        status: f.status ? f.status.name : '',
-        priority: f.priority ? f.priority.name : '',
+        key: textOrEmpty(issue && issue.key),
+        summary: textOrEmpty(f.summary),
+        description: textOrEmpty(f.description),
+        status: namedField(f.status),
+        priority: namedField(f.priority),
         answer: resolveQuestionAnswer(tracker, provider, issue, answerField)
     };
 }
