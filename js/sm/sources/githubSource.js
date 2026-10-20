@@ -1164,7 +1164,17 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
     // holder — a frozen PR's stale ai_validating arm would otherwise
     // serialize the whole queue forever. Filtered before the mutex scan;
     // the matchesGuards check remains the engine-level guard.
-    items = items.filter(function (it) { return it.labels.indexOf('blocked') === -1; });
+    // gh-1140 exception (q.allowBlockedItems): the guest-transplant rule
+    // must SEE its own parked sources — AC4's automatic re-arm is the #633
+    // head-change reset, and a parked source (parkedLabel 'blocked') is
+    // otherwise invisible to every lane forever. Opt-in only: the freeze
+    // stays intact for every other rule, and the transplant decision core
+    // still refuses to act on a 'blocked' item that does not carry the
+    // lane's own park marker (human holds are never touched).
+    var allowBlocked = q.allowBlockedItems === true;
+    items = items.filter(function (it) {
+        return allowBlocked || it.labels.indexOf('blocked') === -1;
+    });
 
     // Mutex: gh-1009 split — _applyMutexFilter owns the defer decision;
     // gh-1000's phantom-holder reconciliation (phantomHealIfFull, inside
@@ -1271,7 +1281,10 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
     var matched = items.filter(function (item) {
         var labels = item.labels;
         var q2 = rule.query || {};
-        if (labels.indexOf('blocked') !== -1) return false; // #939: human hold — filtered pre-mutex too; see matchesGuards
+        // #939: human hold — filtered pre-mutex too; see matchesGuards.
+        // gh-1140: q.allowBlockedItems opts the guest-transplant lane back
+        // in (its own AC4 park-reset needs the parked sources).
+        if (!q2.allowBlockedItems && labels.indexOf('blocked') !== -1) return false; // #939: human hold — filtered pre-mutex too; see matchesGuards
         if (q2.labels && !q2.labels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
         if (q2.notLabels && q2.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
         if (q2.draft === false && item.draft) return false;
