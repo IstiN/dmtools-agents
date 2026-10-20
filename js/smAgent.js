@@ -252,6 +252,12 @@ var tickStampsFailed = 0;
 // tier — the publish merge keeps counters/alarm tail across ticks).
 var spMutex = null;
 
+// gh-113 AC3: the guest dead-zone scan result, lazily computed ONCE per
+// tick (the state-publish snapshot and the summary share it) — reset at
+// the top of action(). Shape: { blocked: [{prNumber, labels,
+// checkConclusion, mergeState}], scannedAt: iso }.
+var tickDeadZone = null;
+
 // ── gh-1114: layered-tick state (reset per tick in action()) ─────────────
 // tickMovedPrs: prNumber → true — THIS tick's L1 freshness rules moved the
 // PR head (a verified silent-refresh push). The L2 verdict actions and the
@@ -3113,8 +3119,64 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 (lastCommitter === 'sm-silent-update' ? 'sm-silent-update' : actorLoginVf) +
                                 '); silent-updates, bot merges of main and agent auto-saves are not new work');
                         } else if (!freshPushVf) {
-                            console.log('  🅿️  ' + key + ' ' + parkLabelVf +
-                                ' holds — the head predates the park event (no new push since)');
+                            // gh-113 AC2 GUEST ZERO-RED SELF-CLEAR: a stale
+                            // park whose punished head now carries NO red of
+                            // its own (zero real red check-run conclusions —
+                            // bookeeping stubs and CANCELLED runs are not
+                            // verdicts — and no red dispatched verdict on the
+                            // head, the gh-750 fail-open input) is void BY THE
+                            // SAME head-purity logic as the gh-994 reframe
+                            // ('the old verdict does not transfer'): the red
+                            // dissolved under the head (a human re-ran the
+                            // failed CI green, or the failing context went
+                            // away) and the label would otherwise dead-end the
+                            // guest forever — the machine twin (gh-750) exists
+                            // for machine PRs only, and nothing else clears a
+                            // same-head park. Machine PRs never reach this
+                            // rung (isMachinePrU keeps the gh-750 gate); a
+                            // machine movement (machinePushVf above) still
+                            // holds the park, and a probe degradation on
+                            // EITHER input keeps it (fail closed). A genuinely
+                            // re-broken head is re-parked by the SET path one
+                            // validation cycle later — no loop (each clear
+                            // needs the human's green re-run to recur).
+                            var guestRungVf = false;
+                            var guestRungWhyVf = '';
+                            if (!isMachinePrU && uHead) {
+                                var gRunsVf = headCheckRunsSafe(effectiveRepoInfo, uHead);
+                                if (gRunsVf !== null) {
+                                    var gTallyVf = guestValidationPathModule.realCheckTally(
+                                        gRunsVf, smProviderModule.BOOKEEPING_CHECK_PREFIXES);
+                                    if (gTallyVf.red === 0 &&
+                                        probeHeadVerdictVf() !== 'failure') {
+                                        guestRungVf = true;
+                                        guestRungWhyVf = 'the punished head now carries no red of its own (' +
+                                            gTallyVf.real + ' real check(s), none red, none cancelled;' +
+                                            ' bookkeeping stubs ignored — gh-113)';
+                                    }
+                                }
+                            }
+                            if (guestRungVf) {
+                                if (!DRY) {
+                                    try {
+                                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, parkLabelVf);
+                                    } catch (eUnparkGr) {
+                                        console.warn('  ⚠️  un-park label failed: ' + (eUnparkGr.message || eUnparkGr));
+                                    }
+                                    try {
+                                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🅿️→▶ validation_failed cleared — this GUEST PR\'s park went stale: ' + guestRungWhyVf + '. The red the park punished no longer exists on head `' + uHead + '`. Re-entering the normal lanes — validation re-arms on the current head; a genuinely re-broken head is re-parked one validation cycle later (gh-113: no human label edit needed).');
+                                    } catch (eUnparkGrC) {
+                                        console.warn('  ⚠️  un-park comment failed: ' + (eUnparkGrC.message || eUnparkGrC));
+                                    }
+                                }
+                                dropOpenPrsCache(effectiveRepoInfo);
+                                console.log('  ▶ ' + key + ' ' + parkLabelVf +
+                                    ' cleared: guest zero-red self-clear — ' + guestRungWhyVf);
+                                unparkedThisPass = true;
+                            } else {
+                                console.log('  🅿️  ' + key + ' ' + parkLabelVf +
+                                    ' holds — the head predates the park event (no new push since)');
+                            }
                         } else {
                             if (!DRY) {
                                 try {
@@ -5326,7 +5388,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // gh-1000 (phantom ai_validating holder): this tick's
                     // mutex bookkeeping from the github-source scan —
                     // counters + alarm tail, carried across ticks below.
-                    mutex: spMutex
+                    mutex: spMutex,
+                    // gh-113 AC3: the dead-zone scan rides the snapshot —
+                    // per-guest first-seen timestamps (age across ticks)
+                    // merge over the previous snapshot's block below.
+                    deadZone: guestValidationPathModule.mergeDeadZoneCary(
+                        spPrev && spPrev.deadZone, ensureDeadZoneScan(
+                            machineAuthorModule.resolveMachineAuthor(
+                                RUN_JOB_PARAMS, effectiveConfig)))
                 });
                 // gh-1000 second tier: merge over the PREVIOUS published
                 // snapshot's mutex block so counters/alarm tail persist
@@ -8617,6 +8686,59 @@ function runNakedPrSweep(repoInfo) {
     }
 }
 
+// ── gh-113 AC3: the guest dead-zone scan ────────────────────────────────────
+// Every tick summary must show the dead zone instead of requiring log
+// archaeology: guests sitting APROVED and/or armed + CLEAN + behind=0 with
+// NO concluded check verdict (rollup none|pending — the stub-only shape the
+// merge bot leaves on fork heads) can neither merge (merge-validated wants
+// green) nor validate (the fork-blind dispatch never lands). Machine PRs
+// and verdict-carrying heads have owners — never counted. One scan per
+// tick over every repo the tick's rules touched (the provider's per-tick
+// ioCache makes the prStatus reads free for PRs the rules already probed);
+// a probe failure on the LIST side degrades that repo to zero (fail-open
+// visibility — the counter is bookkeeping, never a gate).
+
+function scanGuestDeadZoneTick(machineAuthor) {
+    var blocked = [];
+    Object.keys(tickReposSeen).forEach(function (repoKey) {
+        var dzRepoInfo = tickReposSeen[repoKey];
+        if (!dzRepoInfo || !dzRepoInfo.owner || !dzRepoInfo.repo) return;
+        try {
+            var dzProvider = smProviderModule.createSmProvider({
+                scm: { provider: 'github' },
+                repository: dzRepoInfo
+            });
+            var dzPrs = dzProvider.listOpenPrs() || [];
+            var dzList = Array.isArray(dzPrs) ? dzPrs : [];
+            dzList.forEach(function (p) {
+                var item = {
+                    prNumber: p && (p.number || p.prNumber),
+                    labels: ((p && p.labels) || []).map(function (l) {
+                        return (l && l.name) || l;
+                    }),
+                    author: (p && ((p.user && p.user.login) || p.author)) || ''
+                };
+                var prStatus = null;
+                try { prStatus = dzProvider.prStatus(item.prNumber); } catch (eDzPr) { prStatus = null; }
+                var isGuest = !machineAuthorModule.isMachineAuthored(
+                    item, machineAuthor, dzRepoInfo.owner);
+                var entry = guestValidationPathModule.blockedGuestEntry(item, prStatus, isGuest);
+                if (entry) blocked.push(entry);
+            });
+        } catch (eDzRepo) {
+            console.warn('  ⚠️ dead-zone scan failed for ' + repoKey +
+                ' (fail-open visibility): ' + (eDzRepo.message || eDzRepo));
+        }
+    });
+    return { blocked: blocked, scannedAt: new Date().toISOString() };
+}
+
+// Lazily computed ONCE per tick — the snapshot and the summary share it.
+function ensureDeadZoneScan(machineAuthor) {
+    if (!tickDeadZone) tickDeadZone = scanGuestDeadZoneTick(machineAuthor);
+    return tickDeadZone;
+}
+
 function action(params) {
     var p     = params.jobParams || params;
     RUN_JOB_PARAMS = p;    DRY = p.dryRun === true;
@@ -8632,6 +8754,7 @@ function action(params) {
     tickMergeReservationReleased = false;
     tickL1CacheDropped = false;
     tickReposSeen = {}; // gh-1114: distinct effective repos seen this tick (L1→L2 drop set)
+    tickDeadZone = null; // gh-113: one dead-zone scan per tick, lazily computed
     tickWorkflowEscalations = {}; // gh-1106: one workflow-write escalation per PR per tick
     if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
     var rules = p.rules;
@@ -8961,11 +9084,26 @@ function action(params) {
             ' — validation check-runs did not land on their PR heads; validation cannot conclude (gh-1118)');
     }
 
+    // gh-113 AC3: the guest dead-zone counter — guests approved and/or
+    // armed + CLEAN + behind=0 with NO concluded check verdict, the
+    // population that can neither merge nor validate. Non-zero means the
+    // guest lanes could not drain them THIS tick (probe refusal, missing
+    // arm proof, limits) — visible in every summary, no log archaeology.
+    var dzScan = ensureDeadZoneScan(
+        machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, projectConfig));
+    var dzCount = dzScan.blocked.length;
+    if (dzCount > 0) {
+        console.warn('🚨 guest_prs_blocked_no_validation_path: ' + dzCount +
+            ' — ' + dzScan.blocked.map(function (b) { return 'pr-' + b.prNumber; }).join(', ') +
+            ' (guest PRs approved/armed + CLEAN with no concluded checks — the dead zone gh-113 closes)');
+    }
+
     console.log('\n══ SM Agent complete — processed: ' + allProcessedKeys.length + ' ' +
         (allProcessedKeys.length ? '[' + allProcessedKeys.join(', ') + ']' : '') +
         ', skipped: ' + allSkippedKeys.length +
         (allSkippedKeys.length ? ' [' + allSkippedKeys.join(', ') + ']' : '') +
-        ', stamps_failed: ' + tickStampsFailed + ' ══');
+        ', stamps_failed: ' + tickStampsFailed +
+        ', guest_prs_blocked_no_validation_path: ' + dzCount + ' ══');
 
     return {
         success: true,
@@ -8974,7 +9112,8 @@ function action(params) {
         processedKeys: allProcessedKeys,
         skippedKeys: allSkippedKeys,
         validationCost: validationCost,
-        stampsFailed: tickStampsFailed
+        stampsFailed: tickStampsFailed,
+        guestPrsBlocked: dzCount
     };
 }
 
