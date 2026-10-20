@@ -236,6 +236,13 @@ var tickReworkLatch = null;
 // ridden into the published factory-state snapshot (I5: operators see the
 // leak rate, not just the fix). Reset at the top of action().
 var tickZombiesSwept = 0;
+// gh-1118: stamps that STILL failed after the single retry — the check-runs
+// for those gates never landed on the PR head, so validation cannot conclude
+// and the merge bot waits forever on a context that will never arrive.
+// Tick-level counter (reset at the top of action()) surfaced in the
+// `SM Agent complete` summary line and the action() result so a broken
+// stamping run is visible without log archaeology.
+var tickStampsFailed = 0;
 // gh-1000 (phantom ai_validating holder): per-tick snapshot carried from
 // the github-source mutex scan to the factory-state publish rule (second
 // tier — the publish merge keeps counters/alarm tail across ticks).
@@ -8230,15 +8237,31 @@ function stampValidationChecksForModule(repoInfo, headSha, status, conclusion, r
                         });
                         var tempPath = checkRunStampModule.tempBodyPath(
                             Date.now(), ++stampTempSeq);
-                        checkRunStampModule.postCheckRunStamp(repoInfo, body, tempPath, {
-                            write: file_write, exec: cli_execute_command, del: file_delete
-                        });
+                        // gh-1118 never-again: ONE retry before the stamp is
+                        // counted — a transient gh/sh hiccup must not leave a
+                        // gate's check-run absent (the merge bot waits forever
+                        // on a context that never arrives). The helper lives
+                        // in the transport module so this loop stays flat.
+                        if (!checkRunStampModule.postCheckRunStampRetryOnce(
+                                repoInfo, body, tempPath, {
+                                    write: file_write,
+                                    exec: cli_execute_command,
+                                    del: file_delete
+                                },
+                                function (eStamp) {
+                                    console.warn('  ⚠️  stamp "' + checkName + '" on ' +
+                                                 String(headSha).slice(0, 7) + ' failed (' +
+                                                 (eStamp.message || eStamp) + ') — retrying once');
+                                })) {
+                            tickStampsFailed++; // still failed after the retry
+                        }
                     } catch (e) {
                         // Same failure mode as before gh-1107 (E2 included —
                         // an unwritable temp dir degrades identically):
                         // warn and move on to the next check name.
                         console.warn('  ⚠️  stamp "' + checkName + '" on ' +
                                      String(headSha).slice(0, 7) + ': ' + (e.message || e));
+                        tickStampsFailed++; // gh-1118: body-build/E2 failures count too
                     }
                 });
             } finally {
@@ -8505,6 +8528,7 @@ function action(params) {
     RUN_JOB_PARAMS = p;    DRY = p.dryRun === true;
     tickReworkLatch = null;
     tickZombiesSwept = 0; // gh-998 (I5): fresh per-tick sweep counter
+    tickStampsFailed = 0; // gh-1118: fresh per-tick stamp-failure counter
     tickFreshResets = {}; // gh-1101 follow-up: one fresh-sha reset per PR per tick
     tickParkedRecorded = {}; // gh-922: fresh same-tick dedup window (see recordDispatchFailure)
     tickMovedPrs = {}; // gh-1114: heads moved by THIS tick's freshness layer
@@ -8834,10 +8858,20 @@ function action(params) {
     // rule so the arm counts reflect this tick's mutations.
     var validationCost = reportValidationCost(globalRepoInfo, validationConcurrencyCfg, validationMutexMax);
 
+    // gh-1118 check-run absence alarm: a non-zero stamps_failed means the
+    // validation check-runs for some gates never landed on the PR heads —
+    // branch protection stays pending and the merge bot waits forever.
+    // Say it loudly at tick level, not just in per-stamp warns.
+    if (tickStampsFailed > 0) {
+        console.warn('🚨 stamps_failed: ' + tickStampsFailed +
+            ' — validation check-runs did not land on their PR heads; validation cannot conclude (gh-1118)');
+    }
+
     console.log('\n══ SM Agent complete — processed: ' + allProcessedKeys.length + ' ' +
         (allProcessedKeys.length ? '[' + allProcessedKeys.join(', ') + ']' : '') +
         ', skipped: ' + allSkippedKeys.length +
-        (allSkippedKeys.length ? ' [' + allSkippedKeys.join(', ') + ']' : '') + ' ══');
+        (allSkippedKeys.length ? ' [' + allSkippedKeys.join(', ') + ']' : '') +
+        ', stamps_failed: ' + tickStampsFailed + ' ══');
 
     return {
         success: true,
@@ -8845,7 +8879,8 @@ function action(params) {
         skipped: allSkippedKeys.length,
         processedKeys: allProcessedKeys,
         skippedKeys: allSkippedKeys,
-        validationCost: validationCost
+        validationCost: validationCost,
+        stampsFailed: tickStampsFailed
     };
 }
 

@@ -7938,15 +7938,17 @@ suite('smAgent: check-run stamp transport is shell-clean (gh-1107)', function ()
         smFail.action({ jobParams: { owner: 'a', repo: 'b',
             validationChecks: '["Quality gate"]', rules: [syncOnlyRule()] } });
 
-        assert.equal(stampPosts(smFail).length, 1,
-            'the failed gh call is attempted (and captured)');
-        assert.equal(smFail.capturedFileDeletes.length, 1,
-            'AC3: the temp file is STILL removed on the failure path');
+        assert.equal(stampPosts(smFail).length, 2,
+            'gh-1118: the failed gh call is retried ONCE (2 attempts total)');
+        assert.equal(smFail.capturedFileDeletes.length, 2,
+            'AC3: the temp file is STILL removed on every failure path (per attempt)');
         var warns = smFail.capturedLogs.filter(function (l) {
             return l.indexOf('⚠️  stamp') !== -1; });
-        assert.equal(warns.length, 1, 'the failure warns (today\'s failure mode)');
+        assert.equal(warns.length, 1, 'the first failure warns (retrying once)');
         assert.ok(warns[0].indexOf('Bad substitution') !== -1,
             'the warn carries the failure reason');
+        assert.ok(warns[0].indexOf('retrying once') !== -1,
+            'gh-1118: the warn says the stamp is being retried');
     });
 
     test('E2: an unwritable temp dir warns and skips — the tick continues', function () {
@@ -7963,10 +7965,11 @@ suite('smAgent: check-run stamp transport is shell-clean (gh-1107)', function ()
         assert.equal(stampPosts(sm).length, 0, 'no stamp can post without its body file');
         var warns = sm.capturedLogs.filter(function (l) {
             return l.indexOf('⚠️  stamp') !== -1; });
-        assert.equal(warns.length, 2, 'each skipped stamp warns (today\'s failure mode)');
+        assert.equal(warns.length, 2, 'each skipped stamp warns (gh-1118: retrying once)');
         assert.ok(warns[0].indexOf('Permission denied') !== -1, 'the warn carries the reason');
-        assert.equal(sm.capturedFileDeletes.length, 2,
-            'AC3: the delete is attempted even after the failed write');
+        assert.equal(sm.capturedFileDeletes.length, 4,
+            'AC3: the delete is attempted even after the failed write ' +
+            '(gh-1118: 2 stamps x 2 attempts)');
     });
 
     test('REG-1/AC4: the dry-run path is unchanged — no file, no command', function () {
@@ -15383,6 +15386,262 @@ suite('smAgent: naked-PR reconciliation sweep (gh-1097 IT-1)', function () {
             body: '<!-- dmtools:naked-pr-rearm {"pr":10,"head":"sha10"} -->' }]);
         assert.equal(sm.capturedPrLabelAdds.length, 0);
         assert.equal(sm.capturedPrComments.length, 0);
+    });
+});
+
+// ── gh-1118 — SM stamp survives dash-hostile API payloads (retry + counter) ──
+// The gh-1107 transport (checkRunStamp.js) already carries the payload by a
+// temp file, so no shell — dash or bash — ever sees the jobs-table bytes
+// (`Core tests (shard ${{ matrix.shard }}/4)` used to abort the whole dmtools
+// temp script with `Bad substitution`, exit 2, before `gh` ever ran). THIS
+// suite pins the gh-1118 end-to-end contract ON TOP of that transport: the
+// stamp POST is retried once, a still-failed stamp counts into the per-tick
+// `stamps_failed` (tick summary + 🚨 alarm + result.stampsFailed), the
+// counter resets between ticks, and the wire layout executes clean under sh.
+suite('smAgent: gh-1118 — stamp survives dash-hostile API payloads', function () {
+    var HEAD = '1118cafe1118cafe1118cafe1118cafe1118cafe';
+    var GREEN_RUN = { id: 55000111, event: 'workflow_dispatch',
+        head_branch: 'ai/gh-1118', head_sha: HEAD,
+        status: 'completed', conclusion: 'success',
+        html_url: 'https://github.com/o/r/actions/runs/55000111',
+        created_at: '2026-10-19T17:00:00Z' };
+    // Exactly what the jobs API returns for a QUEUED matrix leg (the live
+    // flutter_agent_harness quality.yml shape).
+    var UNRESOLVED_MATRIX_JOB = 'Core tests (shard ${{ matrix.shard }}/4)';
+    var JOBS_PAYLOAD = { jobs: [
+        { id: 1, name: UNRESOLVED_MATRIX_JOB, status: 'queued', conclusion: null,
+          html_url: 'https://github.com/o/r/actions/runs/55000111/job/1' },
+        { id: 2, name: 'Quality gate', status: 'completed', conclusion: 'success',
+          html_url: 'https://github.com/o/r/actions/runs/55000111/job/2' }
+    ] };
+
+    // The summary the OLD builder interpolated inline into -f summary="…"
+    // (stampLinkBlock output: run link + jobs table with the unresolved
+    // matrix template) — the shell-hostile payload at the heart of gh-1118.
+    var STAMP_SUMMARY_INLINE = 'Dispatched run: https://github.com/o/r/actions/runs/55000111\n' +
+        '| Job | Result |\n| --- | --- |\n' +
+        '| [' + UNRESOLVED_MATRIX_JOB + '](https://github.com/o/r/actions/runs/55000111/job/1) | queued |\n' +
+        '_Stamped by the SM tick (bridge-free mode)._';
+    // The JSON body the transport writes to the --input temp file (the
+    // checkRunStamp buildCheckRunBody shape: title/summary nest under output).
+    var STAMP_BODY_JSON = JSON.stringify({
+        name: 'Quality gate', head_sha: HEAD, status: 'completed', conclusion: 'success',
+        output: { title: 'SM validation: success', summary: STAMP_SUMMARY_INLINE }
+    });
+
+    function stampConfig(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function prCarrier(n, sha) {
+        return { number: n, state: 'open', draft: false,
+            head: { sha: sha, ref: 'ai/gh-' + n },
+            labels: [{ name: 'ai_validating' }] };
+    }
+
+    function noMatchRule() {
+        // A github-pr rule that matches nothing — the gh-1118 sync runs
+        // BEFORE the rule's own source query, so the stamp fires regardless.
+        return { description: 'gh-1118 stamp carrier', source: 'github',
+            query: { type: 'pr', labels: ['no-such-label'] }, limit: 1 };
+    }
+
+    function stampTick(opts) {
+        opts = opts || {};
+        var sm = makeSmAgent(Object.assign(stampConfig('o', 'r'), {
+            github: {
+                items: [],
+                prList: [prCarrier(1118, HEAD)],
+                prComments: [],
+                workflowApiRuns: [GREEN_RUN]
+            },
+            captureConsole: true,
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('/jobs?per_page=100') !== -1) {
+                    return JOBS_PAYLOAD;
+                }
+                if (opts.onCliExecute) return opts.onCliExecute(cmdOpts);
+                return undefined;
+            }
+        }));
+        var result = sm.action({ jobParams: { owner: 'o', repo: 'r',
+            ciWorkflow: 'ci.yml', validationChecks: ['Quality gate'],
+            silentToken: 'app-token', sourceToken: 'pat-token',
+            nakedPrSweep: false, rules: [noMatchRule()] } });
+        return { sm: sm, result: result };
+    }
+
+    function stampPosts(sm) {
+        return sm.capturedCliCommands.filter(function (c) {
+            var cmd = c.command;
+            return cmd.indexOf('-X POST') !== -1 &&
+                   cmd.indexOf('/check-runs') !== -1 &&
+                   cmd.indexOf('/check-runs/') === -1; // create, not PATCH
+        });
+    }
+
+    test('the stamp command string has NO shell expansion surface — payload rides --input', function () {
+        var run = stampTick({});
+        var posts = stampPosts(run.sm);
+        assert.ok(posts.length >= 1, 'at least one stamp POST was executed');
+        posts.forEach(function (p) {
+            assert.equal(p.command.indexOf('${'), -1,
+                'no ${ anywhere in the command string: ' + p.command);
+            assert.equal(p.command.indexOf('`'), -1,
+                'no backtick anywhere in the command string: ' + p.command);
+            assert.ok(p.command.indexOf('--input') !== -1,
+                'the request body travels through a file: ' + p.command);
+            assert.ok(p.command.indexOf('-f summary=') === -1,
+                'no inline summary interpolation: ' + p.command);
+        });
+    });
+
+    test('the payload file preserves the unresolved matrix job name byte-exact', function () {
+        var run = stampTick({});
+        var writes = run.sm.capturedFileWrites.filter(function (w) {
+            return String(w.path).indexOf('/tmp/sm-check-run-') === 0;
+        });
+        assert.equal(writes.length, 1, 'one stamp body file per check');
+        var body = JSON.parse(writes[0].content);
+        assert.equal(body.name, 'Quality gate');
+        assert.equal(body.head_sha, HEAD);
+        assert.equal(body.status, 'completed');
+        assert.equal(body.conclusion, 'success');
+        assert.ok(body.output.summary.indexOf(UNRESOLVED_MATRIX_JOB) !== -1,
+            'the jobs table keeps the raw GitHub template: ' + body.output.summary);
+        assert.equal(run.sm.capturedFileDeletes.length, 1,
+            'the body file is cleaned up');
+        assert.equal(run.sm.capturedFileDeletes[0].path, writes[0].path);
+    });
+
+    test('a failed stamp is retried once; a persistent failure counts into stamps_failed', function () {
+        var run = stampTick({
+            onCliExecute: function () { throw new Error('exit 2: Bad substitution'); }
+        });
+        var posts = stampPosts(run.sm);
+        assert.equal(posts.length, 2, 'exactly one retry per stamp (2 attempts total)');
+        assert.equal(run.result.stampsFailed, 1, 'the final failure is counted');
+        var summary = run.sm.capturedLogs.filter(function (l) {
+            return l.indexOf('stamps_failed: 1') !== -1;
+        });
+        assert.ok(summary.length >= 1, 'the tick summary carries the counter');
+    });
+
+    test('a transient stamp failure recovers on the retry and counts nothing', function () {
+        var attempts = 0;
+        var run = stampTick({
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('/check-runs') !== -1 &&
+                    cmdOpts.command.indexOf('/check-runs/') === -1) {
+                    attempts++;
+                    if (attempts === 1) throw new Error('transient exit 1');
+                }
+                return undefined;
+            }
+        });
+        assert.equal(stampPosts(run.sm).length, 2, 'first attempt + one retry');
+        assert.equal(run.result.stampsFailed, 0, 'the retry succeeded — no failure counted');
+    });
+
+    test('the counter resets between ticks on the SAME module instance', function () {
+        // No repository in the project config — the effective repo falls
+        // back to jobParams.owner/repo, so the second tick can target a
+        // DIFFERENT repo and defeat the 5s validationCheckSync throttle
+        // (same-repo ticks inside 5s skip the stamp sync entirely).
+        var sm = makeSmAgent(Object.assign({ fileMap: {} }, {
+            github: {
+                items: [],
+                prList: [prCarrier(1118, HEAD)],
+                prComments: [],
+                workflowApiRuns: [GREEN_RUN]
+            },
+            captureConsole: true,
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('/jobs?per_page=100') !== -1) return JOBS_PAYLOAD;
+                if (c.indexOf('/check-runs') !== -1 &&
+                    c.indexOf('/check-runs/') === -1) {
+                    throw new Error('exit 2: Bad substitution');
+                }
+                return undefined;
+            }
+        }));
+        var jp = function (owner, repo) { return { jobParams: { owner: owner, repo: repo,
+            ciWorkflow: 'ci.yml', validationChecks: ['Quality gate'],
+            silentToken: 'app-token', sourceToken: 'pat-token',
+            nakedPrSweep: false, rules: [noMatchRule()] } }; };
+        var first = sm.action(jp('o', 'r'));
+        var second = sm.action(jp('o2', 'r2'));
+        assert.equal(first.stampsFailed, 1);
+        assert.equal(second.stampsFailed, 1,
+            'a fresh tick starts from zero — the counter is per-tick, not cumulative');
+    });
+
+    // ── AC1 dash fixture (gh-1118): the stamp command layout must execute
+    // clean under sh on a dash-default host. Both sandboxes run the same
+    // way dmtools executes cli_execute_command: an outer temp script under
+    // sh (dash on the hosted ubuntu runner), our command inside it. The
+    // `gh` binary is a stub on PATH — the payload never reaches the network.
+    var _ghCanBash = typeof cli_execute_command === 'function';
+    if (_ghCanBash) {
+        try {
+            cli_execute_command({ command: 'bash -c "echo __gh1118_probe__"' });
+        } catch (eProbe) {
+            _ghCanBash = false; // bash not whitelisted in this dmtools env
+        }
+    }
+
+    /** Single-quote a value for the bash -c payload (test_dartSetup pattern). */
+    function ghShq(v) {
+        return "'" + String(v).replace(/'/g, "'\\''") + "'";
+    }
+
+    function runInSandbox(scriptLines) {
+        // One bash -c payload builds the mktemp sandbox and runs the stamp
+        // script under sh (the dmtools temp-script execution model).
+        var lines = ['d="$(mktemp -d)"',
+            'mkdir -p "$d/bin"',
+            'printf \'%s\\n\' \'#!/bin/sh\' \'echo "gh-stub: $*"\' > "$d/bin/gh"',
+            'chmod +x "$d/bin/gh"',
+            'printf \'%s\' ' + ghShq(STAMP_BODY_JSON) + ' > "$d/check_run_stamp_tmp_1.json"',
+            'printf \'%s\\n\' \'#!/bin/sh\' ' + ghShq(scriptLines.join('\n')) + ' > "$d/stamp.sh"',
+            'cd "$d"',
+            'PATH="$d/bin:$PATH" sh "$d/stamp.sh" 2>&1',
+            'rc=$?',
+            'echo "---body---"',
+            'cat "$d/check_run_stamp_tmp_1.json"',
+            'echo ""',
+            'echo "rc=$rc"'];
+        var wrapped = cli_execute_command({ command: 'bash -c ' + ghShq(lines.join('\n')) });
+        return String(wrapped);
+    }
+
+    test('AC1 dash fixture: the --input stamp layout executes clean under sh with a ${…}} payload on disk', function () {
+        if (!_ghCanBash) return; // degraded harness self-skip (test_dartSetup precedent)
+        var out = runInSandbox([
+            'gh api -X POST repos/o/r/check-runs --input check_run_stamp_tmp_1.json'
+        ]);
+        assert.ok(out.indexOf('rc=0') !== -1,
+            'the stamp command layout runs clean under sh: ' + out);
+        assert.ok(out.indexOf('Bad substitution') === -1 &&
+                  out.indexOf('bad substitution') === -1,
+            'no substitution error under sh: ' + out);
+        assert.ok(out.indexOf('gh-stub: api -X POST repos/o/r/check-runs --input check_run_stamp_tmp_1.json') !== -1,
+            'the stub gh received the exact --input layout: ' + out);
+        assert.ok(out.indexOf(UNRESOLVED_MATRIX_JOB) !== -1,
+            'the payload survived byte-exact');
+    });
+
+    test('AC1 contrast: the pre-fix inline -f interpolation dies under sh on the same payload', function () {
+        if (!_ghCanBash) return;
+        var out = runInSandbox([
+            'gh api -X POST repos/o/r/check-runs -f summary="' + STAMP_SUMMARY_INLINE + '"'
+        ]);
+        assert.ok(out.indexOf('ubstitution') !== -1,
+            'the pre-fix shape is rejected by the shell (documents the gh-1118 failure mode): ' + out);
+        assert.ok(out.indexOf('rc=0') === -1, 'the pre-fix shape never completed');
     });
 });
 
