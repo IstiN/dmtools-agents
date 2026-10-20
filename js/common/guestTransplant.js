@@ -211,7 +211,7 @@ function guestPrBody(opts) {
 
 // ── Arm marker (snapshot semantics; the machine-parseable state) ─────────
 
-var MARKER_KEYS = ['state', 'source', 'head', 'branch', 'transplant', 'merged', 'reason'];
+var MARKER_KEYS = ['state', 'source', 'head', 'branch', 'transplant', 'merged', 'reason', 'actor'];
 
 function markerHumanLine(f) {
     if (f.state === 'parked') {
@@ -256,17 +256,52 @@ function _markerObject(body) {
     return obj;
 }
 
-// Newest marker across a comment feed (chronological — last wins).
-// Accepts [{body}] items or raw strings. null when none (fail closed).
-function parseTransplantMarker(comments) {
+// Newest TRUSTED marker across a comment feed (chronological — last
+// wins). trustedLogins is the machineAuthor allowlist (the gh-828
+// doctrine, threads 13/17): the marker format is public and the marker
+// lives on the GUEST's own PR, so a payload field can never prove
+// authorship — the COMMENT AUTHOR does. No allowlist, an empty one, or
+// a comment with no readable author → that marker is not trusted;
+// a feed with no trusted marker reads as NO marker (fail closed — the
+// fresh path re-arms from the human label event instead).
+function parseTransplantMarker(comments, trustedLogins) {
     if (!comments || !comments.length) return null;
+    var allow = Array.isArray(trustedLogins) ? trustedLogins : null;
+    if (!allow || !allow.length) return null;
     var found = null;
     for (var i = 0; i < comments.length; i++) {
+        if (!_authorAllowed(comments[i], allow)) continue;
         var body = String((comments[i] && comments[i].body) || comments[i] || '');
         var hit = _markerObject(body);
         if (hit) found = hit;
     }
     return found;
+}
+
+// The author-login spelling of the verdict markers (reviewVerdicts'
+// commentAuthorLogin/trustedLogin, kept local — no new module dep):
+// `user.login || author.login || author.name`, lowercased, [bot] suffix
+// stripped on both sides of the comparison.
+function _commentAuthorLogin(item) {
+    if (!item) return null;
+    var u = item.user || item.author;
+    if (!u) return null;
+    var login = u.login || u.name;
+    return login ? String(login).toLowerCase() : null;
+}
+
+function _trustedLogin(login) {
+    return String(login || '').toLowerCase().replace(/\[bot\]$/i, '');
+}
+
+function _authorAllowed(item, allow) {
+    var who = _commentAuthorLogin(item);
+    if (!who) return false;
+    var norm = _trustedLogin(who);
+    for (var i = 0; i < allow.length; i++) {
+        if (norm === _trustedLogin(allow[i])) return true;
+    }
+    return false;
 }
 
 // E1 — the transplant sha: the sha RECORDED AT ARM TIME wins over the
@@ -589,7 +624,12 @@ function step(op, fields) {
 
 // AC4 fallback path: park the source with the machine park label and a
 // distinct-reason comment (the #633 `parked-head:` line when a sha
-// exists). No branch, no PR — nothing else.
+// exists) PLUS the state:"parked" machine marker (threads 11/15): the
+// re-arm gate (_parkResetDecision) keys on OUR park marker — without
+// the writer every machine park read as a human hold forever, and the
+// sweep re-completed the stranded branch every tick. The marker is the
+// newest snapshot, so the park both re-arm-proofs the lane and hands
+// the orphaned conflict branch to the GC (_orphanStep: parked ≠ armed).
 function parkSteps(reason, ctx) {
     var cfg = ctx.cfg;
     var conflict = reason === 'conflict';
@@ -603,7 +643,17 @@ function parkSteps(reason, ctx) {
         ctx.headSha);
     return [
         step('add_label', { prNumber: ctx.source.prNumber, label: cfg.parkedLabel }),
-        step('comment', { prNumber: ctx.source.prNumber, text: text, reason: reason })
+        step('comment', { prNumber: ctx.source.prNumber, text: text, reason: reason }),
+        step('comment', {
+            prNumber: ctx.source.prNumber,
+            text: transplantMarkerComment({
+                state: 'parked', source: ctx.source.prNumber,
+                head: ctx.headSha || null,
+                branch: transplantBranchName(cfg.branchPrefix, ctx.source.prNumber),
+                reason: reason, actor: ctx.actorLogin || null
+            }),
+            reason: reason
+        })
     ];
 }
 
@@ -632,7 +682,12 @@ function transplantBodySteps(ctx, sha) {
         }),
         step('carry_decision', { branch: branch }),
         step('transplant_comment', { prNumber: ctx.source.prNumber, branch: branch, sha: sha }),
-        step('close_pr', { prNumber: ctx.source.prNumber })
+        step('close_pr', { prNumber: ctx.source.prNumber }),
+        // The TERMINAL snapshot (threads 12/16): without it a reopened
+        // source re-transplants (a second machine PR). The wiring renders
+        // this op from the runtime ctx (the created PR number + merge sha
+        // are only known after the steps above ran).
+        step('transplanted_marker', { prNumber: ctx.source.prNumber, head: sha, branch: branch })
     ];
 }
 
@@ -679,14 +734,17 @@ function _transplantRefuseDecision(input, source, base, audit) {
 }
 
 // The tail every transplant shares: carry probe → transplant comment →
-// source close. The fresh path runs it after merge + open_pr; a RESUME
-// (a tick that died between open_pr and close_pr) runs it alone against
-// the EXISTING machine PR instead of noop-ing on it forever.
-function _resumeTailSteps(sourcePrNumber, branch) {
+// source close → the TERMINAL transplanted marker. The fresh path runs
+// it after merge + open_pr; a RESUME (a tick that died between open_pr
+// and close_pr) runs it alone against the EXISTING machine PR instead
+// of noop-ing on it forever — and leaves the same terminal marker
+// behind (threads 12/16: the residue must never read armed again).
+function _resumeTailSteps(sourcePrNumber, branch, head) {
     return [
         step('carry_decision', { branch: branch }),
         step('transplant_comment', { prNumber: sourcePrNumber, branch: branch }),
-        step('close_pr', { prNumber: sourcePrNumber })
+        step('close_pr', { prNumber: sourcePrNumber }),
+        step('transplanted_marker', { prNumber: sourcePrNumber, head: head || null, branch: branch })
     ];
 }
 
@@ -706,7 +764,7 @@ function _existingTransplantDecision(input, marker, branch, audit) {
             decision: 'transplant',
             reason: 'resume-after-open-pr',
             resumePrNumber: input.openTransplantPr.number,
-            steps: _resumeTailSteps(input.source.prNumber, branch),
+            steps: _resumeTailSteps(input.source.prNumber, branch, marker.head),
             audit: audit + 'resuming the interrupted transplant tail on open machine PR #' +
                 String(input.openTransplantPr.number) + ' (carry probe → comment → close)'
         };
@@ -749,7 +807,8 @@ function _parkResetDecision(input, cfg, source, marker, base, audit) {
         text: transplantMarkerComment({
             state: 'armed', source: source.prNumber,
             head: input.headSha,
-            branch: transplantBranchName(cfg.branchPrefix, source.prNumber)
+            branch: transplantBranchName(cfg.branchPrefix, source.prNumber),
+            actor: input.actorLogin || null
         })
     });
     return {
@@ -792,7 +851,8 @@ function _freshSequence(input, cfg, source, base, marker, shaInfo, branch, audit
         fresh.push(step('comment', {
             prNumber: source.prNumber,
             text: transplantMarkerComment({
-                state: 'armed', source: source.prNumber, head: shaInfo.sha, branch: branch
+                state: 'armed', source: source.prNumber, head: shaInfo.sha, branch: branch,
+                actor: input.actorLogin || null
             })
         }));
     }
@@ -830,7 +890,8 @@ function transplantSequence(input) {
     var shaInfo = resolveTransplantSha(marker, input.headSha);
     if (!shaInfo) {
         // AC4 fallback — no readable head: park with the no-ref reason.
-        var steps = parkSteps('no-ref', { cfg: cfg, source: source, headSha: null });
+        var steps = parkSteps('no-ref', { cfg: cfg, source: source, headSha: null,
+            actorLogin: input.actorLogin || null });
         return { decision: 'park', reason: 'no-ref', steps: steps,
                  audit: audit + 'parked — no-ref (source head unreadable)' };
     }
@@ -889,6 +950,38 @@ function isMergeConflictError(e) {
         msg.indexOf('409') !== -1;
 }
 
+// The sha the sequence's merge step will use (threads 11/15): the wiring
+// pins the close comment to THIS, not to the marker's recorded sha —
+// the park-reset path re-arms at the NEW head, so the stale recorded
+// sha must never leak into the comment (the wiring used to resolve
+// usedSha from the marker and name the wrong source sha).
+function sequenceHeadSha(seq) {
+    var steps = (seq && seq.steps) || [];
+    for (var i = 0; i < steps.length; i++) {
+        if (steps[i] && steps[i].op === 'merge') return steps[i].headSha || null;
+    }
+    return null;
+}
+
+// The fa#939 hold predicate for the E5 completion re-entry (thread 19):
+// the sweep must not complete a transplant on a source a human froze.
+// The lane's own park marker is NOT a hold (the AC4 reset owns it);
+// an UNREADABLE label probe holds too — completion needs a clean read
+// (fail closed toward the freeze; the branch survives to a later tick).
+function completionHold(labels, holdLabel, marker) {
+    if (!Array.isArray(labels)) return true;
+    if (labels.indexOf(holdLabel) === -1) return false;
+    return !(marker && marker.state === 'parked');
+}
+
+// The sweep's human-hold probe (thread 19): the source's current label
+// names, comma-joined by gh --jq. The caller fails closed to a hold on
+// any transport failure.
+function buildPrLabelsCommand(owner, repo, prNumber) {
+    return 'gh pr view ' + Number(prNumber) + ' --repo "' + owner + '/' + repo +
+        '" --json labels --jq "[.labels[].name] | join(\',\')"';
+}
+
 // The orphan half of a sweep entry: an armed marker completes (E5),
 // anything else (no marker / a parked marker) is a dead branch — GC.
 function _orphanStep(e) {
@@ -928,6 +1021,8 @@ function gcSteps(sweep) {
     return steps;
 }
 
+// ── Exports ──────────────────────────────────────────────────────────────
+
 module.exports = {
     DEFAULTS: DEFAULTS,
     resolveGuestTransplantConfig: resolveGuestTransplantConfig,
@@ -958,6 +1053,7 @@ module.exports = {
     buildListBranchesCommand: buildListBranchesCommand,
     buildFindPrByHeadCommand: buildFindPrByHeadCommand,
     buildListLabelEventsCommand: buildListLabelEventsCommand,
+    buildPrLabelsCommand: buildPrLabelsCommand,
     parseLabelEvents: parseLabelEvents,
     transitivelyNeeds: transitivelyNeeds,
     validateGateWiring: validateGateWiring,
@@ -968,5 +1064,7 @@ module.exports = {
     prStateFromFindList: prStateFromFindList,
     gcActionableCap: gcActionableCap,
     gcScanBudget: gcScanBudget,
-    isMergeConflictError: isMergeConflictError
+    isMergeConflictError: isMergeConflictError,
+    sequenceHeadSha: sequenceHeadSha,
+    completionHold: completionHold
 };

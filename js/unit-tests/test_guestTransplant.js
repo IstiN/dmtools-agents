@@ -33,6 +33,15 @@ var SHA_A = 'aaa00000000000000000000000000000000000aa';
 var SHA_B = 'bbb00000000000000000000000000000000000bb';
 var SHA_C = 'ccc00000000000000000000000000000000000cc';
 
+// The machineAuthor allowlist used across the marker-auth tests, and a
+// comment fixture with an author (the shape github_get_pr_comments
+// returns — the field the machineAuthor doctrine trusts, NOT a payload
+// field the guest could forge).
+var ML = ['ai-bot[bot]'];
+function mComment(login, body) {
+    return { body: body, user: { login: login } };
+}
+
 function baseCfg(overrides) {
     var cfg = mod.resolveGuestTransplantConfig({}, { smGuestTransplant: {} });
     if (overrides) {
@@ -209,7 +218,8 @@ suite('guestTransplant: marker build/parse (snapshot semantics, E1/E5)', functio
             state: 'armed', source: 42, head: SHA_A, branch: 'ai/guest-42'
         });
         assert.ok(c.indexOf('guest-transplant') !== -1);
-        var parsed = mod.parseTransplantMarker([{ body: 'noise' }, { body: c }]);
+        var parsed = mod.parseTransplantMarker(
+            [{ body: 'noise' }, mComment('ai-bot[bot]', c)], ML);
         assert.notEqual(parsed, null);
         assert.equal(parsed.state, 'armed');
         assert.equal(parsed.source, 42);
@@ -218,16 +228,16 @@ suite('guestTransplant: marker build/parse (snapshot semantics, E1/E5)', functio
     });
 
     test('parked marker carries the reason; transplanted marker carries both PRs', function () {
-        var parked = mod.parseTransplantMarker([{ body: mod.transplantMarkerComment({
+        var parked = mod.parseTransplantMarker([mComment('ai-bot[bot]', mod.transplantMarkerComment({
             state: 'parked', source: 42, head: SHA_A, branch: 'ai/guest-42', reason: 'conflict'
-        }) }]);
+        }))], ML);
         assert.equal(parked.state, 'parked');
         assert.equal(parked.reason, 'conflict');
 
-        var done = mod.parseTransplantMarker([{ body: mod.transplantMarkerComment({
+        var done = mod.parseTransplantMarker([mComment('ai-bot[bot]', mod.transplantMarkerComment({
             state: 'transplanted', source: 42, head: SHA_A, branch: 'ai/guest-42',
             transplant: 99, merged: SHA_B
-        }) }]);
+        }))], ML);
         assert.equal(done.state, 'transplanted');
         assert.equal(done.transplant, 99);
         assert.equal(done.merged, SHA_B);
@@ -244,12 +254,13 @@ suite('guestTransplant: marker build/parse (snapshot semantics, E1/E5)', functio
         var valid = mod.transplantMarkerComment({
             state: 'armed', source: 43, head: SHA_B, branch: 'ai/guest-43'
         });
-        var parsed = mod.parseTransplantMarker([{ body: stateless }, { body: valid }]);
+        var parsed = mod.parseTransplantMarker(
+            [{ body: stateless }, mComment('ai-bot[bot]', valid)], ML);
         assert.notEqual(parsed, null, 'the valid marker is found');
         assert.equal(parsed.state, 'armed');
         assert.equal(parsed.source, 43);
         assert.equal(parsed.head, SHA_B);
-        var onlyStateless = mod.parseTransplantMarker([{ body: stateless }]);
+        var onlyStateless = mod.parseTransplantMarker([{ body: stateless }], ML);
         assert.equal(onlyStateless, null, 'a stateless marker parses to null (fail closed)');
     });
 
@@ -347,7 +358,7 @@ suite('guestTransplant: transplantSequence — the happy path (AC1)', function (
         var ops = seq.steps.map(function (s) { return s.op; });
         assert.deepEqual(ops, [
             'comment', 'create_ref', 'merge', 'open_pr', 'carry_decision',
-            'transplant_comment', 'close_pr'
+            'transplant_comment', 'close_pr', 'transplanted_marker'
         ]);
 
         var marker = stepsOf('comment', seq)[0];
@@ -422,10 +433,12 @@ suite('guestTransplant: parks and resets (AC4)', function () {
             cfg: baseCfg(), source: baseSource(), headSha: SHA_A, mergedSha: null
         });
         var ops = steps.map(function (s) { return s.op; });
-        assert.deepEqual(ops, ['add_label', 'comment']);
+        assert.deepEqual(ops, ['add_label', 'comment', 'comment']);
         assert.equal(steps[0].label, 'blocked');
         assert.ok(steps[1].text.indexOf('conflict') !== -1, 'distinct-reason comment');
         assert.ok(steps[1].text.indexOf('parked-head: ' + SHA_A) !== -1, '#633 reset marker');
+        assert.ok(steps[2].text.indexOf('state="parked"') !== -1,
+            'the machine marker rides along (threads 11/15: the re-arm gate keys on it)');
     });
 
     test('no-ref park names its own reason (deleted branch before the tick)', function () {
@@ -805,8 +818,8 @@ suite('guestTransplant: rework round 2 — resume after open_pr (thread 2)', fun
         assert.equal(seq.reason, 'resume-after-open-pr');
         assert.equal(seq.resumePrNumber, 99, 'the wiring seeds the carry probe with the existing PR');
         assert.deepEqual(seq.steps.map(function (s) { return s.op; }),
-            ['carry_decision', 'transplant_comment', 'close_pr'],
-            'no second merge, no second PR, no duplicate marker');
+            ['carry_decision', 'transplant_comment', 'close_pr', 'transplanted_marker'],
+            'no second merge, no second PR, no duplicate marker; the tail leaves the TERMINAL marker');
         assert.equal(stepsOf('close_pr', seq)[0].prNumber, 42, 'the SOURCE still closes');
     });
 
@@ -893,5 +906,285 @@ suite('guestTransplant: rework round 2 — typed merge-conflict marker (thread 4
         assert.equal(mod.isMergeConflictError(undefined), false);
         assert.equal(mod.isMergeConflictError('conflict as a string'), true,
             'non-Error throws are read the same way');
+    });
+});
+
+// ── Rework round 3 (pr-1142 review round 3 threads 11–19) ────────────────
+// Threads 11/15 — parkSteps writes the state:"parked" machine marker
+//   (AC4 re-arm goes live; conflict-parked orphans GC instead of
+//   re-completing); the wiring pins usedSha from the RESET sha.
+// Threads 12/16 — a terminal state:"transplanted" marker ends both tails
+//   (a reopened source no longer re-transplants).
+// Threads 13/17 — markers are machineAuthor-authenticated at parse time
+//   (the gh-828 doctrine: the comment AUTHOR is the trust anchor).
+// Thread 19 — the E5 completion re-entry respects the fa#939 human hold.
+suite('guestTransplant: rework round 3 — marker authentication (threads 13/17)', function () {
+
+    test('no allowlist / empty allowlist trusts NOTHING (machineAuthor doctrine)', function () {
+        var c = mComment('ai-bot[bot]', mod.transplantMarkerComment({
+            state: 'armed', source: 42, head: SHA_A, branch: 'ai/guest-42'
+        }));
+        assert.equal(mod.parseTransplantMarker([c]), null, 'no allowlist → null');
+        assert.equal(mod.parseTransplantMarker([c], []), null, 'empty allowlist → null');
+        assert.equal(mod.parseTransplantMarker([c], null), null, 'null allowlist → null');
+        assert.equal(mod.parseTransplantMarker([c], ['ai-bot[bot]']).state, 'armed',
+            'the configured machine login is trusted');
+    });
+
+    test('a GUEST-forged marker never reads as the snapshot — the machine marker wins', function () {
+        // The exact attack from the thread: between the human po_accept and
+        // the SM tick the guest posts a newer armed marker with an
+        // arbitrary sha. The comment AUTHOR — not the payload — decides.
+        var real = mComment('ai-bot[bot]', mod.transplantMarkerComment({
+            state: 'armed', source: 42, head: SHA_A, branch: 'ai/guest-42'
+        }));
+        var forged = mComment('extcontributor', mod.transplantMarkerComment({
+            state: 'armed', source: 42, head: SHA_C, branch: 'ai/guest-42'
+        }));
+        var parsed = mod.parseTransplantMarker([real, forged], ML);
+        assert.equal(parsed.head, SHA_A,
+            'the forged newest marker is ignored; the recorded arm sha stands');
+        var forgedOnly = mod.parseTransplantMarker([forged], ML);
+        assert.equal(forgedOnly, null, 'a feed of only guest markers reads as no marker');
+    });
+
+    test('a marker comment with NO author info is rejected (fail closed)', function () {
+        var anonymous = { body: mod.transplantMarkerComment({
+            state: 'armed', source: 42, head: SHA_A, branch: 'ai/guest-42'
+        }) };
+        assert.equal(mod.parseTransplantMarker([anonymous], ML), null,
+            'a transport that drops the author field must not leak trust');
+    });
+
+    test('author matching normalizes case and the [bot] suffix (reviewVerdicts spelling)', function () {
+        var c = mComment('AI-BOT[BOT]', mod.transplantMarkerComment({
+            state: 'armed', source: 42, head: SHA_A, branch: 'ai/guest-42'
+        }));
+        assert.equal(mod.parseTransplantMarker([c], ['Ai-Bot[bot]']).state, 'armed');
+        var other = mComment('ai-bot-impersonator', c.body.replace('guest-transplant', 'guest-transplant'));
+        assert.equal(mod.parseTransplantMarker([other], ML), null,
+            'a similar but distinct login is not trusted');
+    });
+
+    test('E1 holds on the authenticated feed: the recorded sha wins, the forged one never leaks', function () {
+        var real = mComment('ai-bot[bot]', mod.transplantMarkerComment({
+            state: 'armed', source: 42, head: SHA_A, branch: 'ai/guest-42'
+        }));
+        var forged = mComment('extcontributor', mod.transplantMarkerComment({
+            state: 'armed', source: 42, head: SHA_C, branch: 'ai/guest-42'
+        }));
+        var marker = mod.parseTransplantMarker([real, forged], ML);
+        var sha = mod.resolveTransplantSha(marker, SHA_B);
+        assert.equal(sha.sha, SHA_A);
+        assert.equal(sha.drifted, true);
+    });
+});
+
+suite('guestTransplant: rework round 3 — parked marker writer (threads 11/15)', function () {
+
+    test('BLOCKING: parkSteps writes the state:"parked" machine marker beside the human comment', function () {
+        var steps = mod.parkSteps('conflict', {
+            cfg: baseCfg(), source: { prNumber: 42 }, headSha: SHA_A,
+            actorLogin: 'ai-bot[bot]'
+        });
+        assert.equal(steps.length, 3, 'label + human comment + machine marker');
+        assert.equal(steps[0].op, 'add_label');
+        assert.equal(steps[1].op, 'comment');
+        assert.equal(steps[2].op, 'comment');
+        var parsed = mod.parseTransplantMarker([mComment('ai-bot[bot]', steps[2].text)], ML);
+        assert.notEqual(parsed, null, 'the park step carries a machine-parseable marker');
+        assert.equal(parsed.state, 'parked');
+        assert.equal(parsed.head, SHA_A);
+        assert.equal(parsed.source, 42);
+        assert.equal(parsed.reason, 'conflict');
+        assert.equal(parsed.actor, 'ai-bot[bot]', 'the writer identity is stamped');
+    });
+
+    test('a no-ref park omits the head but still parks the marker', function () {
+        var steps = mod.parkSteps('no-ref', {
+            cfg: baseCfg(), source: { prNumber: 42 }, headSha: null,
+            actorLogin: 'ai-bot[bot]'
+        });
+        var parsed = mod.parseTransplantMarker([mComment('ai-bot[bot]', steps[2].text)], ML);
+        assert.equal(parsed.state, 'parked');
+        assert.equal(parsed.head, undefined, 'no sha to pin — the field is omitted');
+        assert.equal(parsed.reason, 'no-ref');
+    });
+
+    test('the replayed transport state now re-arms: parkSteps feed + moved head → park-reset', function () {
+        // The reviewer's replay: the armed marker from the fresh sequence,
+        // then the machine parks (its own marker lands newest), then the
+        // guest pushes a fix. Before the fix this read skip/human-blocked.
+        var armed = mComment('ai-bot[bot]', mod.transplantMarkerComment({
+            state: 'armed', source: 42, head: SHA_A, branch: 'ai/guest-42'
+        }));
+        var park = mod.parkSteps('conflict', {
+            cfg: baseCfg(), source: { prNumber: 42 }, headSha: SHA_A,
+            actorLogin: 'ai-bot[bot]'
+        });
+        var feed = [armed, mComment('ai-bot[bot]', park[2].text)];
+        var marker = mod.parseTransplantMarker(feed, ML);
+        assert.equal(marker.state, 'parked', 'the machine park is the newest snapshot');
+        var seq = mod.transplantSequence(baseInput({
+            source: baseSource({ labels: ['po_accept', 'blocked'] }),
+            marker: marker, headSha: SHA_B
+        }));
+        assert.equal(seq.decision, 'transplant');
+        assert.equal(seq.reason, 'park-reset', 'AC4 re-arm is live');
+    });
+
+    test('the same feed with an UNCHANGED head stays parked (no re-arm spam)', function () {
+        var park = mod.parkSteps('conflict', {
+            cfg: baseCfg(), source: { prNumber: 42 }, headSha: SHA_A,
+            actorLogin: 'ai-bot[bot]'
+        });
+        var marker = mod.parseTransplantMarker([mComment('ai-bot[bot]', park[2].text)], ML);
+        var seq = mod.transplantSequence(baseInput({
+            source: baseSource({ labels: ['po_accept', 'blocked'] }),
+            marker: marker, headSha: SHA_A
+        }));
+        assert.equal(seq.decision, 'noop');
+        assert.equal(seq.reason, 'parked-head-unchanged');
+    });
+
+    test('a conflict-parked orphan GCs instead of re-completing (the per-tick spam cure)', function () {
+        var park = mod.parkSteps('conflict', {
+            cfg: baseCfg(), source: { prNumber: 42 }, headSha: SHA_A,
+            actorLogin: 'ai-bot[bot]'
+        });
+        var marker = mod.parseTransplantMarker([mComment('ai-bot[bot]', park[2].text)], ML);
+        var steps = mod.gcSteps([{ branch: 'ai/guest-42', prState: null, marker: marker }]);
+        assert.equal(steps.length, 1);
+        assert.equal(steps[0].op, 'delete_ref',
+            'a parked-marker orphan is a dead branch, never a complete_orphan');
+    });
+
+    test('sequenceHeadSha: the wiring pins the sha the merge step will use', function () {
+        var reset = mod.transplantSequence(baseInput({
+            source: baseSource({ labels: ['po_accept', 'blocked'] }),
+            marker: { state: 'parked', source: 42, head: SHA_A, branch: 'ai/guest-42', reason: 'conflict' },
+            headSha: SHA_B
+        }));
+        assert.equal(mod.sequenceHeadSha(reset), SHA_B,
+            'the park-reset merge runs at the NEW head — the stale recorded sha must not leak into the close comment');
+        var fresh = mod.transplantSequence(baseInput({}));
+        assert.equal(mod.sequenceHeadSha(fresh), SHA_A);
+        assert.equal(mod.sequenceHeadSha({ decision: 'noop', steps: [] }), null);
+        assert.equal(mod.sequenceHeadSha(null), null);
+    });
+});
+
+suite('guestTransplant: rework round 3 — terminal transplanted marker (threads 12/16)', function () {
+
+    // Faithful wiring replay: guestApplyStep renders every marker comment
+    // via transplantMarkerComment with the runtime ctx (newPrNumber,
+    // mergedSha) — the same function the tests call.
+    function wiringReplay(seq, ctx0) {
+        var ctx = { usedSha: SHA_A, newPrNumber: null, mergedSha: null,
+                    actorLogin: 'ai-bot[bot]' };
+        if (ctx0) { for (var k in ctx0) ctx[k] = ctx0[k]; }
+        var posted = [];
+        seq.steps.forEach(function (s) {
+            if (s.op === 'comment' || s.op === 'transplanted_marker') {
+                posted.push(mComment('ai-bot[bot]',
+                    s.op === 'transplanted_marker'
+                        ? mod.transplantMarkerComment({
+                            state: 'transplanted', source: s.prNumber,
+                            head: ctx.usedSha || s.head, branch: s.branch,
+                            transplant: ctx.newPrNumber, merged: ctx.mergedSha || ctx.usedSha,
+                            actor: ctx.actorLogin
+                        })
+                        : s.text));
+            }
+            if (s.op === 'open_pr') ctx.newPrNumber = 99;
+            if (s.op === 'merge') ctx.mergedSha = SHA_B;
+        });
+        return posted;
+    }
+
+    test('the fresh sequence ends with a transplanted_marker step (after close_pr)', function () {
+        var seq = mod.transplantSequence(baseInput({}));
+        var ops = seq.steps.map(function (s) { return s.op; });
+        assert.equal(ops[ops.length - 1], 'transplanted_marker');
+        assert.equal(ops[ops.length - 2], 'close_pr');
+        var mstep = seq.steps[seq.steps.length - 1];
+        assert.equal(mstep.prNumber, 42);
+        assert.equal(mstep.head, SHA_A);
+        assert.equal(mstep.branch, 'ai/guest-42');
+    });
+
+    test('the resume tail ends with a transplanted_marker step too', function () {
+        var seq = mod.transplantSequence(baseInput({
+            marker: { state: 'armed', source: 42, head: SHA_A, branch: 'ai/guest-42' },
+            openTransplantPr: { number: 99 }
+        }));
+        assert.equal(seq.reason, 'resume-after-open-pr');
+        var ops = seq.steps.map(function (s) { return s.op; });
+        assert.equal(ops[ops.length - 1], 'transplanted_marker');
+        assert.equal(seq.steps[seq.steps.length - 1].head, SHA_A,
+            'the resume pins the recorded arm sha');
+    });
+
+    test('REPLAY: a completed transplant leaves a transplanted marker — a reopened source is a no-op', function () {
+        var first = mod.transplantSequence(baseInput({}));
+        var posted = wiringReplay(first);
+        var marker = mod.parseTransplantMarker(posted, ML);
+        assert.equal(marker.state, 'transplanted', 'the transport leaves the terminal marker');
+        assert.equal(marker.transplant, 99);
+        assert.equal(marker.merged, SHA_B);
+        var second = mod.transplantSequence(baseInput({
+            marker: marker   // the guest reopened the fork PR; the probe re-reads the feed
+        }));
+        assert.equal(second.decision, 'noop');
+        assert.equal(second.reason, 'already-transplanted');
+        assert.equal(second.steps.length, 0, 'AC5: the second arm is a no-op');
+    });
+
+    test('REPLAY: a resumed transplant also closes the loop with the terminal marker', function () {
+        var armedMarker = mod.parseTransplantMarker([mComment('ai-bot[bot]', mod.transplantMarkerComment({
+            state: 'armed', source: 42, head: SHA_A, branch: 'ai/guest-42'
+        }))], ML);
+        var resume = mod.transplantSequence(baseInput({
+            marker: armedMarker, openTransplantPr: { number: 99 }
+        }));
+        var posted = wiringReplay(resume, { usedSha: SHA_A });
+        var marker = mod.parseTransplantMarker(posted, ML);
+        assert.equal(marker.state, 'transplanted');
+        var second = mod.transplantSequence(baseInput({
+            marker: marker, openTransplantPr: { number: 99 }
+        }));
+        assert.equal(second.decision, 'noop');
+        assert.equal(second.reason, 'already-transplanted');
+    });
+});
+
+suite('guestTransplant: rework round 3 — hold-aware E5 completion (thread 19)', function () {
+
+    test('a blocked source holds the orphan completion (fa#939 freeze)', function () {
+        assert.equal(mod.completionHold(['blocked'], 'blocked',
+            { state: 'armed', source: 42, head: SHA_A }), true,
+            'blocked + armed = a HUMAN hold that landed after the arm');
+        assert.equal(mod.completionHold(['po_accept'], 'blocked',
+            { state: 'armed' }), false, 'no hold label → complete');
+        assert.equal(mod.completionHold(['blocked'], 'blocked',
+            { state: 'parked', source: 42, head: SHA_A }), false,
+            'OUR OWN park marker is not a human hold (the lane may reset it)');
+    });
+
+    test('an unreadable label probe holds too (fail closed toward the freeze)', function () {
+        assert.equal(mod.completionHold(null, 'blocked', { state: 'armed' }), true);
+        assert.equal(mod.completionHold('junk', 'blocked', { state: 'armed' }), true);
+        assert.equal(mod.completionHold(undefined, 'blocked', null), true);
+    });
+
+    test('the hold also fires without any marker (the probe raced the park)', function () {
+        assert.equal(mod.completionHold(['blocked'], 'blocked', null), true);
+    });
+
+    test('buildPrLabelsCommand pins the gh spelling of the hold probe', function () {
+        var cmd = mod.buildPrLabelsCommand('acme', 'widget', 42);
+        assert.ok(cmd.indexOf('gh pr view 42') !== -1, cmd);
+        assert.ok(cmd.indexOf('acme/widget') !== -1, cmd);
+        assert.ok(cmd.indexOf('labels') !== -1, cmd);
     });
 });
