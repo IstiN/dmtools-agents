@@ -126,9 +126,13 @@ function buildConfluenceCommentText(pageUrl, pageId) {
         (pageUrl ? 'Page: ' + pageUrl : 'Page id: ' + pageId);
 }
 
-/** Confluence-only: write the page link into the tracker field (non-fatal). */
+/** Wiki-only: write the page link into the tracker field (non-fatal). */
 function writeConfluenceLinkToField(cfg, ticketKey, pageUrl, pageId, tracker) {
-    if (cfg.updateTrackerField !== false && cfg.target === 'confluence') {
+    // gh-1112: 'wiki' is a first-class alias of 'confluence' — the link write
+    // applies to both. 'both' is excluded: the field already carries the full
+    // content from the jira-field step.
+    if (cfg.updateTrackerField !== false &&
+        contentOutput.isConfluenceTarget(cfg) && !contentOutput.isJiraFieldTarget(cfg)) {
         try {
             contentOutput.writeToTrackerField(ticketKey, cfg.field || 'Description', buildConfluenceLinkText(pageUrl, pageId), 'replace', tracker);
         } catch (e) {
