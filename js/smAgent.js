@@ -8433,9 +8433,11 @@ function guestApplyStep(repoInfo, cfg, s, ctx, dry) {
         }
         case 'open_pr': {
             if (dry) { console.log('  🧪 [dry] would open PR "' + s.title + '" (' + s.branch + ' → ' + s.baseBranch + ')'); return { newPrNumber: null }; }
-            // The whole payload travels via a temp file (scm.js precedent)
-            // — zero untrusted bytes in the shell string.
-            var payloadPath = '/tmp/gt-pr-' + Number(Date.now()) + '-' +
+            // The whole payload travels via a temp file — zero untrusted
+            // bytes in the shell string. Repo-RELATIVE name, same shape as
+            // the cited scm.js updatePrBody precedent (pr_body_update_tmp_*),
+            // not a POSIX-only absolute /tmp path.
+            var payloadPath = 'gt_pr_payload_tmp_' + Number(Date.now()) + '-' +
                 String(s.branch).replace(/[^0-9a-zA-Z-]/g, '') + '.json';
             try {
                 file_write({ path: payloadPath, content: guestTransplantModule.buildGuestPrPayload({
@@ -8540,16 +8542,24 @@ function transplantGuestPrAction(repoInfo, ticket, cfg, machineLogins) {
         machineLogins: machineLogins,
         marker: marker,
         branchExists: guestBranchExists(repoInfo, branch),
-        openTransplantPr: guestOpenPrOnBranch(repoInfo, branch)
+        openTransplantPr: guestOpenPrOnBranch(repoInfo, branch),
+        // The E5 completion re-entry (GC sweep): the arm actor was vetted
+        // when the `armed` marker was written — the actor/cross-repo
+        // refusals must not re-run against the synthetic headless ticket.
+        completionRentry: ticket.completionRentry === true
     });
     console.log('  🧬 ' + seq.audit);
-    if (dry && (seq.decision === 'transplant' || seq.decision === 'complete-orphan')) {
-        guestRunSteps(repoInfo, cfg, seq.steps, { sourcePrNumber: prNumber, usedSha: null }, true);
-        return;
-    }
     if (seq.decision !== 'transplant' && seq.decision !== 'complete-orphan') return;
 
-    var ctx = { sourcePrNumber: prNumber, usedSha: null };
+    // A resume (thread: a tick that died between open_pr and close_pr)
+    // carries the EXISTING machine PR number — the carry probe and the
+    // close comment address it instead of opening a second PR.
+    var ctx = { sourcePrNumber: prNumber, usedSha: null,
+                newPrNumber: seq.resumePrNumber || null };
+    if (dry) {
+        guestRunSteps(repoInfo, cfg, seq.steps, ctx, true);
+        return;
+    }
     try {
         // Pin the sha the transplant actually uses (the recorded arm-time
         // sha on a drifted head) for the close comment.
@@ -8557,9 +8567,7 @@ function transplantGuestPrAction(repoInfo, ticket, cfg, machineLogins) {
         ctx.usedSha = shaInfo ? shaInfo.sha : null;
         guestRunSteps(repoInfo, cfg, seq.steps, ctx, false);
     } catch (eRun) {
-        var msg = String((eRun && eRun.message) || eRun);
-        if (msg.indexOf('Merge conflict') !== -1 || msg.indexOf('conflict') !== -1 ||
-            msg.indexOf('409') !== -1) {
+        if (eRun && eRun.isMergeConflict === true) {
             console.log('  ⚠️  transplant merge conflict — parking the source (AC4)');
             guestRunSteps(repoInfo, cfg,
                 guestTransplantModule.parkSteps('conflict', {
@@ -8571,38 +8579,56 @@ function transplantGuestPrAction(repoInfo, ticket, cfg, machineLogins) {
     }
 }
 
+// ONE sweep-entry probe: the find-PRs-by-head list decides the branch's
+// PR state (an OPEN entry anywhere on the head keeps the branch alive —
+// never list[0]'s arbitrary pick), and a branch with no PR at all reads
+// its source marker for the E5 orphan completion. Fail-closed: a failed
+// probe reads as 'no PR'.
+function guestSweepEntry(repoInfo, cfg, branch) {
+    var prState = null;
+    var marker = null;
+    try {
+        var raw = cli_execute_command({
+            command: guestTransplantModule.buildFindPrByHeadCommand(
+                repoInfo.owner, repoInfo.repo, branch)
+        });
+        var list = JSON.parse(String((raw && (raw.output || raw.stdout)) || raw || '[]'));
+        prState = guestTransplantModule.prStateFromFindList(list);
+    } catch (ePr) { prState = null; }
+    if (!prState) {
+        var n = guestTransplantModule.parseGuestBranch(branch, cfg.branchPrefix);
+        marker = n ? guestMarker(repoInfo, n) : null;
+    }
+    return { branch: branch, prState: prState, marker: marker };
+}
+
 // Once-per-tick GC sweep (AC7 + E5): every ai/guest-* branch whose
 // transplant PR reached ANY closed state is deleted; an orphan branch
 // with no transplant PR completes from its arm marker or is GC'd.
-// Bounded at maxGcBranches per tick. Runs on the configured rule only —
-// inert deployments never sweep.
+// The actionable window is maxGcBranches EXECUTED steps per tick; the
+// probe scan walks the FULL (paginated) name list in order until the
+// window fills, bounded by the gh-1027 over-scan budget (cap + 15) —
+// the window applies AFTER actionability, never as a lexicographic
+// pre-slice that an OPEN-transplant prefix can starve. Runs on the
+// configured rule only — inert deployments never sweep.
 function sweepClosedGuestBranches(repoInfo, cfg) {
     var res = cli_execute_command({
         command: guestTransplantModule.buildListBranchesCommand(repoInfo.owner, repoInfo.repo)
     });
     var out = String((res && (res.output || res.stdout)) || res || '');
     var names = out.split('\n').map(function (n) { return n.trim(); })
-        .filter(function (n) { return n.indexOf(cfg.branchPrefix) === 0; })
-        .slice(0, cfg.maxGcBranches || 10);
+        .filter(function (n) { return n.indexOf(cfg.branchPrefix) === 0; });
     if (!names.length) return;
+    var cap = guestTransplantModule.gcActionableCap(cfg.maxGcBranches);
+    var budget = guestTransplantModule.gcScanBudget(cfg.maxGcBranches);
     var sweep = [];
-    names.forEach(function (branch) {
-        var prState = null;
-        var marker = null;
-        try {
-            var raw = cli_execute_command({
-                command: guestTransplantModule.buildFindPrByHeadCommand(
-                    repoInfo.owner, repoInfo.repo, branch)
-            });
-            var list = JSON.parse(String((raw && (raw.output || raw.stdout)) || raw || '[]'));
-            if (Array.isArray(list) && list.length) prState = String(list[0].state || '').toUpperCase();
-        } catch (ePr) { prState = null; }
-        if (!prState) {
-            var n = guestTransplantModule.parseGuestBranch(branch, cfg.branchPrefix);
-            marker = n ? guestMarker(repoInfo, n) : null;
-        }
-        sweep.push({ branch: branch, prState: prState, marker: marker });
-    });
+    var probed = 0;
+    for (var i = 0; i < names.length; i++) {
+        if (sweep.length >= cap || probed >= budget) break;
+        var entry = guestSweepEntry(repoInfo, cfg, names[i]);
+        probed++;
+        if (guestTransplantModule.gcSteps([entry]).length) sweep.push(entry);
+    }
     var steps = guestTransplantModule.gcSteps(sweep);
     steps.forEach(function (s) {
         if (s.op === 'delete_ref') {
@@ -8622,7 +8648,8 @@ function sweepClosedGuestBranches(repoInfo, cfg) {
                 prNumber: s.sourcePrNumber,
                 title: '', author: '',
                 labels: [cfg.label],
-                headRepo: null, draft: false, state: 'OPEN'
+                headRepo: null, draft: false, state: 'OPEN',
+                completionRentry: true   // the armed marker already vetted the arm actor
             }, cfg, []);
             return;
         }
