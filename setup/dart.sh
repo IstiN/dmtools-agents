@@ -6,8 +6,8 @@
 # they could not run `dart analyze/test/format` or `crap4dart check`, so they
 # could neither see nor verify quality-gate violations (CRAP / method_size /
 # format) and claimed success while violations stayed in place. Same pattern
-# as the golden-test Flutter toolchain for fa legs: the SDK is cached per
-# resolved version and exposed on PATH for the leg session, resolving the SAME
+# as the golden-test Flutter toolchain for dev/rework legs: the SDK is cached
+# per resolved version and exposed on PATH for the leg session, resolving the SAME
 # channel (and pinned version, when CI pins one) the checked-out repo's
 # quality workflow uses — the `dart-lang/setup-dart` step's `channel:`/`sdk:`
 # inputs in `.github/workflows/*.yml`. The SDK itself downloads from the same
@@ -433,26 +433,46 @@ cmd_summary() {
   # precedence), so the summary describes the toolchain the session runs.
   resolve_target ""
 
+  # The CI slot reports the repo's pin — taken from what resolve_target
+  # ALREADY consumed, never from a raw re-read of the pin source (review
+  # gh-1137: the raw token carried a muscle-memory `v` prefix the install
+  # path strips, so the summary claimed match: no while the leg provably ran
+  # the pinned SDK). On a repo-sourced target the resolved VERSION/CHANNEL IS
+  # the pin; on an operator override (argument/environment/default) the CI
+  # slot still reports the repo's own pin, v-stripped like resolve_target does.
   local pin pin_kind="version" running effective match
-  pin="$(repo_version_pin)"
-  case "${pin}" in stable|beta|dev) pin_kind="channel" ;; esac
-  if [ -z "${pin}" ]; then
-    local det det_sdk det_channel
-    det="$(quality_detection)"
-    det="${det#*|}"
-    det_sdk="${det%%|*}"; det_channel="${det#*|}"
-    if [ -n "${det_sdk}" ]; then
-      pin="${det_sdk}"; pin_kind="version"
-    elif [ -n "${det_channel}" ]; then
-      pin="${det_channel}"; pin_kind="channel"
-    fi
-  fi
+  case "${SOURCE}" in
+    "version file"|"quality workflow")
+      if [ "${MODE}" = "version" ]; then
+        pin="${VERSION}"
+      else
+        pin="${CHANNEL}"
+        pin_kind="channel"
+      fi
+      ;;
+    *)
+      pin="$(repo_version_pin)"
+      pin="${pin#v}"
+      case "${pin}" in stable|beta|dev) pin_kind="channel" ;; esac
+      if [ -z "${pin}" ]; then
+        local det det_sdk det_channel
+        det="$(quality_detection)"
+        det="${det#*|}"
+        det_sdk="${det%%|*}"; det_channel="${det#*|}"
+        if [ -n "${det_sdk}" ]; then
+          pin="${det_sdk#v}"; pin_kind="version"
+        elif [ -n "${det_channel}" ]; then
+          pin="${det_channel}"; pin_kind="channel"
+        fi
+      fi
+      ;;
+  esac
 
   running="$(installed_version)"
   effective="${running:-${VERSION:-${CHANNEL}}}"
   if [ -z "${pin}" ]; then
     echo "toolchain: dart ${effective} (CI: none, match: no)"
-    echo "⚠️ toolchain warning: no Dart SDK pin found (.dart-version or dart-lang/setup-dart sdk:/channel: in .github/workflows) — local dart format/analyzer results may differ from CI"
+    echo "⚠️ toolchain-warn: no Dart SDK pin found (.dart-version or dart-lang/setup-dart sdk:/channel: in .github/workflows) — local dart format/analyzer results may differ from CI"
     return 0
   fi
   if [ "${pin_kind}" = "channel" ]; then

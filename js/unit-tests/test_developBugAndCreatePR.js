@@ -2,6 +2,12 @@
  * Unit tests for js/developBugAndCreatePR.js.
  */
 
+// gh-1137: named pass-through stub for the toolchain-summary annotation. A
+// per-callsite inline function(t){return t;} would sit uncovered inside the
+// loader functions and lift their CRAP over the ratchet; the named helper is
+// a separate coverage unit of complexity 1 (CRAP 2, far below the bar).
+var stubToolchainLine = function (t) { return t; };
+
 function loadTrackersDev(mocks) {
     return loadModule('js/common/trackers.js', makeRequire({
         '../config.js': configModule,
@@ -69,7 +75,7 @@ var quotaBreakerModule = loadModule('js/common/quotaCircuitBreaker.js');
 // instead of a byte-copy. The bug tests never invoke the delegated
 // developTicketAndCreatePR action(), so its stubbed deps are never touched.
 var developTicketRealModule = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
-        './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
+        './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
         './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
         './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
         './common/submodules.js': {},
@@ -93,7 +99,7 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
     var mod = loadModule(
         'js/developBugAndCreatePR.js',
         makeRequire({
-            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -584,7 +590,7 @@ suite('developBugAndCreatePR', function() {
         var mod = loadModule(
             'js/developBugAndCreatePR.js',
             makeRequire({
-                './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
+                './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
                 './common/trackers.js': loadTrackersDev(inlineMocks),
                 './config.js': configModule,
                 './common/gitStaging.js': gitStagingMod,
@@ -693,7 +699,7 @@ function loadBugForMissingResponseResume(opts) {
     // wired to the same real feedbackLoop/outputFiles so the attempt marker,
     // prompt file and deliverable re-read are shared with the bug leg.
     var sharedGateModule = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
-            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
             './common/submodules.js': {},
@@ -724,7 +730,7 @@ function loadBugForMissingResponseResume(opts) {
     var mod = loadModule(
         'js/developBugAndCreatePR.js',
         makeRequire({
-            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/trackers.js': loadTrackersDev(spyMocks),
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModuleLocal,
@@ -1193,7 +1199,7 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
         var mod = loadModule(
             'js/developBugAndCreatePR.js',
             makeRequire({
-                './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
+                './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
                 './config.js': configModule,
                 './common/gitStaging.js': gitStagingModuleLocal,
                 './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),

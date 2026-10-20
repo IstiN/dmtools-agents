@@ -2533,6 +2533,18 @@ function handleActionError(params, error, tracker) {
     return { success: false, error: error.toString() };
 }
 
+// gh-1137: the fix summary (the leg summary) must state which Dart SDK the
+// leg verified with — `toolchain: dart <v> (CI: <pin>, match: yes|no)` — so
+// format/analyzer claims are checkable against CI (live #433: a mismatched
+// SDK made the leg dispute a mechanical red). No-op on failure, on non-Dart
+// repos, and when the line is already carried.
+function annotateFixSummary(response, config) {
+    return toolchainSummary.withToolchainLine(
+        response,
+        { workingDir: config && config.workingDir }
+    ) || '_(No fix summary generated)_';
+}
+
 function action(params) {
     var tracker = null;
     try {
@@ -2541,15 +2553,7 @@ function action(params) {
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = scmModule.createScm(config);
         const _customParams = resolveCustomParams(params, actualParams, config);
-        // gh-1137: the fix summary (the leg summary) must state which Dart SDK
-        // the leg verified with — `toolchain: dart <v> (CI: <pin>, match:
-        // yes|no)` — so format/analyzer claims are checkable against CI (live
-        // #433: a mismatched SDK made the leg dispute a mechanical red).
-        // No-op on failure, on non-Dart repos, and when the line is carried.
-        const fixSummary = toolchainSummary.withToolchainLine(
-            actualParams.response,
-            { workingDir: config && config.workingDir }
-        ) || '_(No fix summary generated)_';
+        const fixSummary = annotateFixSummary(actualParams.response, config);
         const statuses = resolveStatuses(_customParams, config.jira && config.jira.statuses);
         // Probe the tracker provider once — the same script then runs unchanged
         // on Jira / ADO / GitHub deployments.

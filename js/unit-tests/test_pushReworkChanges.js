@@ -13,6 +13,12 @@
  * postThreadReplies() must accept both field-name conventions.
  */
 
+// gh-1137: named pass-through stub for the toolchain-summary annotation. A
+// per-callsite inline function(t){return t;} would sit uncovered inside the
+// loader functions and lift their CRAP over the ratchet; the named helper is
+// a separate coverage unit of complexity 1 (CRAP 2, far below the bar).
+var stubToolchainLine = function (t) { return t; };
+
 // File-scope base module (was previously misplaced INSIDE the file_read mock
 // closure below — a latent defect masked in run_all.json by another test file
 // leaking the same sloppy-mode global, but breaking isolated per-file runs).
@@ -117,7 +123,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
     var mod = loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
-            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': { loadProjectConfig: function() { return {}; } },
@@ -517,7 +523,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
-            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
@@ -863,7 +869,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
     var mod = loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
-            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': {
@@ -1067,7 +1073,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
-            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
@@ -3175,7 +3181,7 @@ suite('pushReworkChanges.readInputViolations (gh-1119)', function() {
         return loadModule(
             'js/pushReworkChanges.js',
             makeRequire({
-                './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
+                './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
                 './common/gitStaging.js': gitStagingModule,
                 './forkCheckout.js': forkCheckoutModule,
                 './configLoader.js': configLoaderModule,
@@ -3239,7 +3245,7 @@ suite('pushReworkChanges.runOwnedViolationsGate (gh-1119 AC6b / UT-8 wiring)', f
         return loadModule(
             'js/pushReworkChanges.js',
             makeRequire({
-                './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
+                './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
                 './common/gitStaging.js': gitStagingModule,
                 './forkCheckout.js': forkCheckoutModule,
                 './configLoader.js': configLoaderModule,
@@ -3351,7 +3357,7 @@ function loadCommitAndPush1082(mocks, moduleOverrides) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire(Object.assign({
-            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,

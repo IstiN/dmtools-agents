@@ -17,9 +17,9 @@
  *   1. resolves dart.sh inside the leg workspace — the engine tree may be
  *      mounted at the repo root (self-hosted legs), `agents/` (submodule)
  *      or `factory-agents/` (legacy tree copy);
- *   2. runs it at POST time — the leg preamble (customParams.setupCommands
- *      → dart.sh) has already installed the SDK, so the banner describes
- *      the toolchain the leg actually verified with;
+ *   2. runs it at POST time — the leg preamble (the runner config's
+ *      setupCommands dart.sh entry) has already installed the SDK, so the
+ *      banner describes the toolchain the leg actually verified with;
  *   3. appends the `toolchain:` line (plus its warning line on a no-pin
  *      repo) to the response text.
  *
@@ -30,9 +30,16 @@
  * summary carries no toolchain noise.
  */
 
+// Stable markers shared with setup/dart.sh (grep-verified by a wiring
+// contract in test_toolchainSummary.js — the summary line prefix and the
+// no-pin warning token must never drift apart across the two files).
+var TOOLCHAIN_LINE_PREFIX = 'toolchain:';
+var TOOLCHAIN_WARN_TOKEN = 'toolchain-warn:';
+
 /**
  * Find setup/dart.sh relative to the leg's working directory.
- * Returns the path that exists, or null when the engine tree is not there.
+ * Returns the path that exists (workingDir-prefixed — file_read resolves
+ * against the engine process cwd), or null when the engine tree is absent.
  */
 function resolveDartScriptPath(workingDir) {
     var prefix = workingDir ? (workingDir + '/') : '';
@@ -56,39 +63,63 @@ function resolveDartScriptPath(workingDir) {
 }
 
 /**
- * Run `dart.sh summary` in the leg workspace and pick the summary lines:
- * the `toolchain:` line plus an immediately-following ⚠️ warning line when
- * the repo has no pin. Returns the array of lines, or null on any failure.
+ * Command text is workingDirectory-relative in this engine (every sibling
+ * caller pairs a plain repo-relative command with workingDirectory), so the
+ * probe path above must be run WITHOUT the workingDir prefix — a prefixed
+ * command executed inside workingDirectory would double it and exit 127 on
+ * any nested workingDir layout.
  */
-function fetchToolchainLines(workingDir) {
+function dartScriptRunPath(scriptPath, workingDir) {
+    var prefix = workingDir ? (workingDir + '/') : '';
+    if (prefix && scriptPath.indexOf(prefix) === 0) {
+        return scriptPath.substring(prefix.length);
+    }
+    return scriptPath;
+}
+
+/**
+ * Run `dart.sh summary` inside the leg workspace. Returns the command
+ * output, or null on any failure (script missing, command error).
+ */
+function runDartSummary(workingDir) {
     var scriptPath = resolveDartScriptPath(workingDir);
     if (!scriptPath) {
         return null;
     }
-    var out = null;
     try {
-        var args = { command: 'bash ' + scriptPath + ' summary' };
+        var args = { command: 'bash ' + dartScriptRunPath(scriptPath, workingDir) + ' summary' };
         if (workingDir) {
             args.workingDirectory = workingDir;
         }
-        out = cli_execute_command(args);
+        return cli_execute_command(args);
     } catch (e) {
         console.warn('toolchainSummary: dart.sh summary failed (non-fatal):',
             e && e.message ? e.message : String(e));
         return null;
     }
-    var lines = String(out || '').split('\n');
+}
+
+/** True when the line is dart.sh's no-pin warning (stable toolchain-warn: token). */
+function isToolchainWarnLine(line) {
+    return String(line).indexOf(TOOLCHAIN_WARN_TOKEN) !== -1;
+}
+
+/**
+ * Pick the summary lines from dart.sh's output: the `toolchain:` line plus
+ * an immediately-following toolchain-warn line when the repo has no pin.
+ * Returns the array of lines, or null when no toolchain line is present.
+ */
+function pickToolchainLines(lines) {
     var picked = [];
     var lastPick = -1;
     for (var i = 0; i < lines.length; i++) {
-        var line = lines[i].replace(/\r$/, '');
-        if (line.indexOf('toolchain:') === 0) {
+        var line = String(lines[i]).replace(/\r$/, '');
+        if (line.indexOf(TOOLCHAIN_LINE_PREFIX) === 0) {
             picked.push(line);
             lastPick = i;
-        } else if (picked.length > 0 && i === lastPick + 1 &&
-                   line.indexOf('⚠️') === 0 && line.indexOf('differ from CI') !== -1) {
-            // dart.sh emits the ⚠️ warning line immediately after the
-            // toolchain line when the repo has no pin — it rides along.
+        } else if (picked.length > 0 && i === lastPick + 1 && isToolchainWarnLine(line)) {
+            // dart.sh emits the warn line immediately after the toolchain
+            // line when the repo has no pin — it rides along.
             picked.push(line);
         }
         if (picked.length >= 2) {
@@ -98,11 +129,35 @@ function fetchToolchainLines(workingDir) {
     return picked.length > 0 ? picked : null;
 }
 
+/**
+ * Run `dart.sh summary` in the leg workspace and pick the summary lines.
+ * Returns the array of lines, or null on any failure.
+ */
+function fetchToolchainLines(workingDir) {
+    var out = runDartSummary(workingDir);
+    if (out === null) {
+        return null;
+    }
+    return pickToolchainLines(String(out || '').split('\n'));
+}
+
+/** True when the response text is blank — nothing to annotate. */
+function isBlankResponse(responseText) {
+    return !responseText || !String(responseText).trim();
+}
+
+/** True when the summary line (or dart none skip line) must not be appended. */
+function isSkippedToolchainLine(line) {
+    // Non-Dart repo: dart.sh prints the n/a skip line — no toolchain noise
+    // on JS/Kotlin legs.
+    return String(line).indexOf('toolchain: dart none') === 0;
+}
+
 /** True when the response text already carries a toolchain line (agent-written or a previous pass). */
 function hasToolchainLine(responseText) {
     var lines = String(responseText || '').split('\n');
     for (var i = 0; i < lines.length; i++) {
-        if (lines[i].indexOf('toolchain:') === 0) {
+        if (lines[i].indexOf(TOOLCHAIN_LINE_PREFIX) === 0) {
             return true;
         }
     }
@@ -120,11 +175,7 @@ function hasToolchainLine(responseText) {
  */
 function withToolchainLine(responseText, opts) {
     opts = opts || {};
-    var text = responseText;
-    if (!text || !String(text).trim()) {
-        return responseText;
-    }
-    if (hasToolchainLine(text)) {
+    if (isBlankResponse(responseText) || hasToolchainLine(responseText)) {
         return responseText;
     }
     var lines = null;
@@ -133,15 +184,10 @@ function withToolchainLine(responseText, opts) {
     } catch (e) {
         lines = null;
     }
-    if (!lines || lines.length === 0) {
+    if (!lines || lines.length === 0 || isSkippedToolchainLine(lines[0])) {
         return responseText;
     }
-    // Non-Dart repo: dart.sh prints the n/a skip line — no toolchain noise
-    // on JS/Kotlin legs.
-    if (String(lines[0]).indexOf('toolchain: dart none') === 0) {
-        return responseText;
-    }
-    return String(text).replace(/\s+$/, '') + '\n' + lines.join('\n') + '\n';
+    return String(responseText).replace(/\s+$/, '') + '\n' + lines.join('\n') + '\n';
 }
 
 module.exports = {
