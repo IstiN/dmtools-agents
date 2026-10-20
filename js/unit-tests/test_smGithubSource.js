@@ -1318,6 +1318,52 @@ suite('sm github source', function () {
         assert.equal(byPr[205], 78, 'cross-repo mention stripped, local closing keyword still wins');
     });
 
+    test('pr rules: linked issue — a ref qualified with THIS repository stays local', function () {
+        // The dev leg writes the composite ticket key into the PR ('# a/b#5 — title'). Dropping it as
+        // cross-repo left the PR unlinked: the ai_developed latch failed closed, nothing validated
+        // the PR and the review never started.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 211, labels: [], draft: false, body: '# a/b#5 — Plans and runs' },
+                    { number: 212, labels: [], draft: false, body: 'Closes A/B#6' },
+                    { number: 213, labels: [], draft: false, body: 'Ports a/c#7 from the sibling repo' }
+                ];
+            }
+        });
+        var items = srcMod.query({ query: { type: 'pr' } }, { repoInfo: { owner: 'a', repo: 'b' } });
+        var byPr = {};
+        items.forEach(function (i) { byPr[i.prNumber] = i.issueNumber; });
+        assert.equal(byPr[211], 5, "'a/b#5' in a/b is a local ref");
+        assert.equal(byPr[212], 6, 'the repository match ignores case, and the closing keyword still applies');
+        assert.equal(byPr[213], null, "'a/c#7' is another repository — still cross-repo");
+    });
+
+    test('pr rules: linked issue falls back to the machine branch name', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 221, labels: [], draft: false, body: '', head: { ref: 'ai/gh-30' } },
+                    { number: 222, labels: [], draft: false, body: 'Closes #9', head: { ref: 'ai/gh-30' } },
+                    { number: 223, labels: [], draft: false, body: '', head: { ref: 'ai/gh-30-extra' } },
+                    { number: 224, labels: [], draft: false, body: '', head: { ref: 'feature/x' } }
+                ];
+            }
+        });
+        var items = srcMod.query({ query: { type: 'pr' } }, { repoInfo: { owner: 'a', repo: 'b' } });
+        var byPr = {};
+        items.forEach(function (i) { byPr[i.prNumber] = i.issueNumber; });
+        assert.equal(byPr[221], 30, "branch 'ai/gh-30' links issue 30");
+        assert.equal(byPr[222], 9, 'an explicit body reference wins over the branch');
+        assert.equal(byPr[223], null, 'only <prefix><digits> exactly');
+        assert.equal(byPr[224], null, 'a non-machine branch links nothing');
+
+        var custom = srcMod.query({ branchPrefix: 'feature/', query: { type: 'pr' } },
+            { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(custom.filter(function (i) { return i.prNumber === 221; })[0].issueNumber, null,
+            'the rule branchPrefix decides the convention');
+    });
+
     test('issue rules: prMachineAuthor reads the linked PR author (prStatus)', function () {
         // Issue-anchored rework rules carry the state on the issue but the
         // author fact lives on the enriched PR — the gate reads it from
