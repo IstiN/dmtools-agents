@@ -134,6 +134,14 @@ suite('guestTransplant: config resolution (inert by default, REG-guest113)', fun
             { smGuestTransplant: { label: 'from_jobparams' } }, {});
         assert.equal(cfg.label, 'from_jobparams');
     });
+
+    test('the PROJECT config section wins when jobParams carries one too (thread 7: pinned precedence)', function () {
+        var cfg = mod.resolveGuestTransplantConfig(
+            { smGuestTransplant: { label: 'from_jobparams' } },
+            { smGuestTransplant: { label: 'from_project' } });
+        assert.equal(cfg.label, 'from_project',
+            'project config overrides jobParams — resolveMachineSmConfig precedence');
+    });
 });
 
 suite('guestTransplant: predicates and sanitizers', function () {
@@ -228,6 +236,8 @@ suite('guestTransplant: marker build/parse (snapshot semantics, E1/E5)', functio
     test('no marker anywhere — null (fail closed)', function () {
         assert.equal(mod.parseTransplantMarker([]), null);
         assert.equal(mod.parseTransplantMarker(null), null);
+        assert.equal(mod.parseTransplantMarker([{ body: 'plain talk' }]), null);
+    });
 
     test('a marker comment WITHOUT a state is skipped; a later valid marker still wins', function () {
         var stateless = '<!-- guest-transplant source="42" head="nope" --> half a marker';
@@ -241,8 +251,6 @@ suite('guestTransplant: marker build/parse (snapshot semantics, E1/E5)', functio
         assert.equal(parsed.head, SHA_B);
         var onlyStateless = mod.parseTransplantMarker([{ body: stateless }]);
         assert.equal(onlyStateless, null, 'a stateless marker parses to null (fail closed)');
-    });
-        assert.equal(mod.parseTransplantMarker([{ body: 'plain talk' }]), null);
     });
 
     test('resolveTransplantSha: the RECORDED arm sha wins over a moved head (E1, no TOCTOU)', function () {
@@ -702,11 +710,13 @@ suite('guestTransplant: transport command builders (byte-pinned; no fork ref is 
         assert.equal(ev.login, 'human3', 'plain string label spelling parses too');
     });
 
-    test('classifyArmActor: an EMPTY machine-login allowlist reads every arm as human', function () {
-        assert.equal(mod.classifyArmActor({ login: 'whoever' }, []), 'human',
-            'no allowlist to match against — cannot call the actor a machine');
-        assert.equal(mod.classifyArmActor({ login: 'whoever' }, ''), 'human',
+    test('classifyArmActor: an EMPTY machine-login allowlist is UNVERIFIED — the arm gate fails closed', function () {
+        assert.equal(mod.classifyArmActor({ login: 'whoever' }, []), 'unverified',
+            'no allowlist to check against — the one gate that arms foreign code never reads an actor as human');
+        assert.equal(mod.classifyArmActor({ login: 'whoever' }, ''), 'unverified',
             'a blank knob reads the same as an empty list');
+        assert.equal(mod.classifyArmActor({ login: 'whoever' }, null), 'unverified',
+            'an absent knob refuses too');
     });
 });
 
