@@ -20,6 +20,7 @@ const gitStaging = require('./common/gitStaging.js');
 // usage-limit body / exhausted provider chain) parks the lane instead of
 // burning a per-tick retry against the quota wall.
 var quotaBreaker = require('./common/quotaCircuitBreaker.js');
+var toolchainSummary = require('./common/toolchainSummary.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
@@ -1452,7 +1453,11 @@ function ensureResponseForPrBody(ctx) {
             resetInterruptedDevelopment(ctx, interruptedPartialWorkComment(ctx.ticketKey, ctx.branchName, ctx.providerOutage));
         }
     }
-    return responseContent;
+    // gh-1137: the PR body (the leg summary) must state which Dart SDK the leg
+    // verified with — `toolchain: dart <v> (CI: <pin>, match: yes|no)` — so
+    // format/analyzer claims are checkable against CI. No-op on failure, on
+    // non-Dart repos, and when the agent already carried the line.
+    return toolchainSummary.withToolchainLine(responseContent, { workingDir: _workingDir });
 }
 
 function recoverPrCreationFailure(params, ctx, prResult) {

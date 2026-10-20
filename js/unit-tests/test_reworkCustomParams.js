@@ -1,6 +1,12 @@
 /**
  * Unit tests for rework post-actions merging project jobParamPatches.
  */
+
+// gh-1137: named pass-through stub for the toolchain-summary annotation. A
+// per-callsite inline function(t){return t;} would sit uncovered inside the
+// loader functions and lift their CRAP over the ratchet; the named helper is
+// a separate coverage unit of complexity 1 (CRAP 2, far below the bar).
+var stubToolchainLine = function (t) { return t; };
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var gitStagingModule = loadModule('js/common/gitStaging.js');
@@ -62,6 +68,7 @@ function loadPushReworkChanges() {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -120,6 +127,7 @@ function loadPushReworkChangesForAction(mocks) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,

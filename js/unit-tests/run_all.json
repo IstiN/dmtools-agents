@@ -158,6 +158,7 @@
         "js/unit-tests/test_conflictReworkScan.js",
         "js/unit-tests/test_reviewVerdict.js",
         "js/unit-tests/test_dartSetup.js",
+        "js/unit-tests/test_toolchainSummary.js",
         "js/unit-tests/test_reviewVerdicts.js",
         "js/unit-tests/test_reviewSpecClaims.js",
         "js/unit-tests/test_mergeBot.js",
