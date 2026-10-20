@@ -222,6 +222,31 @@ function dartTestViolations(lines, checkName, taken, out) {
 }
 
 /**
+ * dart format --set-exit-if-changed (gh-1134): each unformatted file is
+ * announced by a bare "Formatted <path>.dart" line BEFORE the run summary
+ * ("Formatted 495 files (3 changed) in 1.08 seconds."). The strict end
+ * anchor keeps the summary line out (UT-2); the trailing \s* makes the
+ * match CRLF-safe (logs split on '\n' keep a trailing '\r' on Windows) and
+ * \S+ covers backslash path separators. Whole-file red: line 1.
+ */
+function dartFormatViolations(lines, checkName, taken, out) {
+    var re = /^Formatted\s+(\S+\.dart)\s*$/;
+    lines.forEach(function(line, idx) {
+        if (taken[idx]) return;
+        var m = line.match(re);
+        if (!m) return;
+        taken[idx] = true;
+        out.push({
+            check: checkName,
+            rule: 'dart_format',
+            path: m[1],
+            line: 1,
+            detail: 'not dart-formatted'
+        });
+    });
+}
+
+/**
  * jscpd: each "Clone found" block lists the duplicated file pair; the first
  * entry is the violation location, the counterpart goes into the detail.
  */
@@ -366,7 +391,11 @@ function extractViolations(logs, checkName) {
     // "path:line:"-shaped line) appearing later in the SAME concatenated job
     // log — an owned red mangled into a foreign-looking item. dart-analyze
     // bullets and dart-test "[E]" lines never match the other parsers, so
-    // claiming them first is safe for every pinned fixture.
+    // claiming them first is safe for every pinned fixture. The dart-format
+    // "Formatted <file>" line (gh-1134) is the strictest anchor of all
+    // (bare line, ends in .dart) and no other parser can match it — run it
+    // first so a concatenated log's format reds can never be swallowed.
+    dartFormatViolations(lines, checkName, taken, out);
     dartAnalyzeViolations(lines, checkName, taken, out);
     dartTestViolations(lines, checkName, taken, out);
     crap4jViolations(lines, checkName, taken, out);
