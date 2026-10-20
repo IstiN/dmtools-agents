@@ -27,7 +27,11 @@
  *   - One live transplant per source (snapshot semantics): the arm
  *     marker records the head SHA at arm time; a force-push between arm
  *     and tick transplants the RECORDED sha (E1, no TOCTOU); an orphan
- *     branch from a dead tick is completed from the marker or GC'd (E5).
+ *     branch from a dead tick is completed from the marker or GC'd (E5 —
+ *     the sweep's completion re-entry bypasses the actor/cross-repo
+ *     refusals via input.completionRentry: the marker already vetted the
+ *     arm); a tick that died between open_pr and close_pr RESUMES the
+ *     interrupted tail (carry, comment, close) on the existing machine PR.
  *
  * Orchestrated by the `transplant_guest_pr` localAction (smAgent.js);
  * the sequence here is the whole decision — the wiring only executes
@@ -96,10 +100,10 @@ function normalizeGate(gateCfg) {
 }
 
 // The sm-style knob: inert (null) unless the project configures the
-// section — jobParams first, then the project config (same
-// override-before-default priority every machineSm knob uses). An
-// explicit `enabled: false` keeps the rule inert even when the section
-// exists (the off switch).
+// section — the PROJECT config wins, then jobParams (the same project-
+// override-before-jobParams priority resolveMachineSmConfig uses for
+// every machineSm knob). An explicit `enabled: false` keeps the rule
+// inert even when the section exists (the off switch).
 function resolveGuestTransplantConfig(jobParams, projectConfig) {
     var section = (projectConfig && projectConfig.smGuestTransplant) ||
         (jobParams && jobParams.smGuestTransplant) || null;
@@ -311,15 +315,18 @@ function carryDecision(sourceDiff, transplantDiff, cfg) {
 
 // ── Arm-actor classification (AC5 instruction hierarchy) ─────────────────
 
-// 'human' | 'machine' | 'unverified'. No labeled event, no actor login →
-// 'unverified' — the caller refuses (fail closed: a machine actor, or a
-// proof-less arm, never authorizes executing foreign code).
+// 'human' | 'machine' | 'unverified'. No labeled event, no actor login,
+// NO CONFIGURED ALLOWLIST → 'unverified' — the caller refuses (fail
+// closed: a machine actor, a proof-less arm, or a deployment that
+// cannot verify actor classes never authorizes executing foreign code;
+// this is the one gate whose degraded direction must be "no action",
+// matching the module header's missing-proof-refuses invariant).
 function classifyArmActor(armEvent, machineLogins) {
     var login = armEvent && armEvent.login;
     if (!login) return 'unverified';
     var logins = machineAuthorModule.machineAuthorLogins(
         Array.isArray(machineLogins) ? machineLogins.join(',') : machineLogins);
-    if (!logins.length) return 'human';
+    if (!logins.length) return 'unverified';
     return machineAuthorModule.loginMatchesList(login, logins) ? 'machine' : 'human';
 }
 
@@ -649,10 +656,16 @@ function _transplantSkipDecision(source, cfg, audit) {
     return null;
 }
 
-// AC5 — only a HUMAN actor's label arms a transplant (missing proof
-// refuses, fail closed); E3 — cross-repo heads only; AC5 snapshot
-// semantics — one live transplant per source.
+// AC5 — only a HUMAN actor's label arms a transplant (missing proof, or
+// an unconfigurable actor class, refuses — fail closed); E3 —
+// cross-repo heads only. The E5 COMPLETION RE-ENTRY (input.completionRentry,
+// the GC sweep finishing an armed-marker orphan through a synthetic
+// headless ticket) bypasses both checks: the arm actor was already vetted
+// when the `armed` marker was written, and a null headRepo is exactly the
+// state the completion exists to recover from (before the bypass the
+// re-entry always died here as skip/same-repo — a permanent zombie).
 function _transplantRefuseDecision(input, source, base, audit) {
+    if (input.completionRentry) return null;
     var actor = classifyArmActor(input.armEvent, input.machineLogins);
     if (actor !== 'human') {
         return { decision: 'refuse', reason: actor === 'machine' ? 'machine-actor' : 'actor-unverified',
@@ -662,12 +675,55 @@ function _transplantRefuseDecision(input, source, base, audit) {
         return { decision: 'skip', reason: 'same-repo', steps: [],
                  audit: audit + 'skipped — same-repo head (transplant is cross-repo only)' };
     }
-    if (input.openTransplantPr ||
-        (input.marker && input.marker.state === 'transplanted')) {
+    return null;
+}
+
+// The tail every transplant shares: carry probe → transplant comment →
+// source close. The fresh path runs it after merge + open_pr; a RESUME
+// (a tick that died between open_pr and close_pr) runs it alone against
+// the EXISTING machine PR instead of noop-ing on it forever.
+function _resumeTailSteps(sourcePrNumber, branch) {
+    return [
+        step('carry_decision', { branch: branch }),
+        step('transplant_comment', { prNumber: sourcePrNumber, branch: branch }),
+        step('close_pr', { prNumber: sourcePrNumber })
+    ];
+}
+
+// AC5 snapshot semantics for an EXISTING transplant: a 'transplanted'
+// marker is terminal (noop); an OPEN machine PR beside an 'armed' marker
+// is a tick that died between open_pr and close_pr — RESUME the
+// interrupted tail with the existing PR number (the wiring seeds the
+// carry probe from resumePrNumber); any other openTransplantPr shape
+// (no readable marker, a parked marker) stays the conservative noop.
+function _existingTransplantDecision(input, marker, branch, audit) {
+    if (marker && marker.state === 'transplanted') {
+        return { decision: 'noop', reason: 'already-transplanted', steps: [],
+                 audit: audit + 'no-op — transplant already exists' };
+    }
+    if (input.openTransplantPr && marker && marker.state === 'armed') {
+        return {
+            decision: 'transplant',
+            reason: 'resume-after-open-pr',
+            resumePrNumber: input.openTransplantPr.number,
+            steps: _resumeTailSteps(input.source.prNumber, branch),
+            audit: audit + 'resuming the interrupted transplant tail on open machine PR #' +
+                String(input.openTransplantPr.number) + ' (carry probe → comment → close)'
+        };
+    }
+    if (input.openTransplantPr) {
         return { decision: 'noop', reason: 'already-transplanted', steps: [],
                  audit: audit + 'no-op — transplant already exists' };
     }
     return null;
+}
+
+// The refusal chain in decision order: actor/cross-repo refusals first,
+// then the existing-transplant snapshot states (noop/resume).
+function _refusalOrExisting(input, source, base, branch, audit) {
+    var refusal = _transplantRefuseDecision(input, source, base, audit);
+    if (refusal) return refusal;
+    return _existingTransplantDecision(input, input.marker, branch, audit);
 }
 
 // AC4 — the park is a pure function of the head (#633 semantics): a
@@ -758,10 +814,11 @@ function transplantSequence(input) {
     var source = input.source || {};
     var base = input.base || { owner: '', repo: '', baseBranch: cfg.baseBranch };
     var audit = 'guest-transplant: #' + String(source.prNumber) + ' ';
+    var branch = transplantBranchName(cfg.branchPrefix, source.prNumber);
 
     var skip = _transplantSkipDecision(source, cfg, audit);
     if (skip) return skip;
-    var refusal = _transplantRefuseDecision(input, source, base, audit);
+    var refusal = _refusalOrExisting(input, source, base, branch, audit);
     if (refusal) return refusal;
 
     var marker = input.marker;
@@ -778,14 +835,59 @@ function transplantSequence(input) {
                  audit: audit + 'parked — no-ref (source head unreadable)' };
     }
 
-    var branch = transplantBranchName(cfg.branchPrefix, source.prNumber);
     var orphan = _orphanDecision(input, cfg, source, base, marker, shaInfo, branch, audit);
     if (orphan) return orphan;
 
     return _freshSequence(input, cfg, source, base, marker, shaInfo, branch, audit);
 }
 
-// ── Branch GC sweep (AC7) ────────────────────────────────────────────────
+// ── Branch GC sweep (AC7) + the pure halves of the sweep wiring ──────────
+
+// The find-PRs-by-head list decides a branch's GC state: an OPEN PR on
+// the head (ANY of them — a stale closed machine PR may share the branch
+// with a live open one) keeps the branch alive; only when every PR on
+// the head is closed does the newest-first list's first entry hand the
+// branch to the GC. No usable entry (empty list, no states) reads null —
+// the caller probes the orphan marker (fail closed).
+function prStateFromFindList(list) {
+    if (!Array.isArray(list)) return null;
+    var first = null;
+    for (var i = 0; i < list.length; i++) {
+        var st = String((list[i] && list[i].state) || '').toUpperCase();
+        if (!st) continue;
+        if (!first) first = st;
+        if (st === 'OPEN') return 'OPEN';
+    }
+    return first;
+}
+
+// The sweep's actionable window (the maxGcBranches knob, shipped 10):
+// how many ACTIONABLE (GC-able / completable) branches one tick executes.
+function gcActionableCap(maxGcBranches) {
+    return intOr(maxGcBranches, 10);
+}
+
+// The sweep's over-scan bound (the gh-1027 shape: cap + 15): how many
+// branch entries one tick may PROBE while collecting the actionable
+// window — a long OPEN-transplant prefix cannot starve the closed-PR
+// branches behind it, and the probes stay bounded.
+var GC_OVERSCAN = 15;
+
+function gcScanBudget(maxGcBranches) {
+    return gcActionableCap(maxGcBranches) + GC_OVERSCAN;
+}
+
+// The gh transport spells a merges-API conflict into the error message
+// ('Merge conflict' + HTTP 409). ONLY the merge step's thrown error is
+// ever tested against this (the wiring marks eMerge.isMergeConflict in
+// the merge catch) — a substring hit anywhere else must not swap in the
+// AC4 park plan.
+function isMergeConflictError(e) {
+    var msg = String((e && e.message) || e || '');
+    return msg.indexOf('Merge conflict') !== -1 ||
+        msg.toLowerCase().indexOf('conflict') !== -1 ||
+        msg.indexOf('409') !== -1;
+}
 
 // The orphan half of a sweep entry: an armed marker completes (E5),
 // anything else (no marker / a parked marker) is a dead branch — GC.
@@ -862,5 +964,9 @@ module.exports = {
     guestValidationDispatchPlan: guestValidationDispatchPlan,
     gateOrderedIds: gateOrderedIds,
     transplantSequence: transplantSequence,
-    gcSteps: gcSteps
+    gcSteps: gcSteps,
+    prStateFromFindList: prStateFromFindList,
+    gcActionableCap: gcActionableCap,
+    gcScanBudget: gcScanBudget,
+    isMergeConflictError: isMergeConflictError
 };

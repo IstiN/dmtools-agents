@@ -8287,8 +8287,7 @@ function parkedHeadSha(repoInfo, prNumber) {
 function guestExec(repoInfo, command) {
     var res = cli_execute_command({ command: command });
     var out = String((res && (res.output || res.stdout)) || res || '');
-    var trimmed = out.trim();
-    return { ok: true, out: trimmed };
+    return { out: out.trim() };
 }
 
 // The live branch probe: 0 → exists, anything else → absent (the same
@@ -8413,8 +8412,14 @@ function guestApplyStep(repoInfo, cfg, s, ctx, dry) {
                     repoInfo.owner, repoInfo.repo, s.branch, s.headSha));
             } catch (eMerge) {
                 // 409 Conflict (and GitHub's "Merge conflict" 409 body) —
-                // rethrow untouched; the caller detects the conflict
-                // spelling and swaps in the pure AC4 park plan.
+                // mark the conflict HERE, on the only step that can
+                // legitimately 409, so the caller's park decision can
+                // never fire on an unrelated step's error message (a
+                // rate-limit page or proxy error merely CONTAINING the
+                // substring must surface as the failure it is).
+                if (guestTransplantModule.isMergeConflictError(eMerge)) {
+                    eMerge.isMergeConflict = true;
+                }
                 throw eMerge;
             }
             var mergedSha = '';

@@ -741,3 +741,157 @@ suite('guestTransplant: close comment (AC1 names both SHAs)', function () {
         assert.ok(text.indexOf('fresh') !== -1);
     });
 });
+
+// ── Rework round 2 (pr-1142 review threads) ──────────────────────────────
+// Thread 1 — the GC sweep's complete_orphan re-entry (completionRentry).
+// Thread 2 — resume of a transplant interrupted after open_pr.
+// Thread 3 — the empty-allowlist arm gate fails closed.
+// Thread 4/5/6 — the pure decisions behind the GC sweep + conflict flag.
+suite('guestTransplant: rework round 2 — E5 completion re-entry (thread 1)', function () {
+
+    test('BLOCKING: the sweep re-entry completes an armed-marker orphan despite the null synthetic head', function () {
+        // The EXACT sweep re-entry shape (sweepClosedGuestBranches): a
+        // synthetic ticket with headRepo null, machineLogins [] and the
+        // live armed marker — before the fix this read skip/same-repo.
+        var seq = mod.transplantSequence(baseInput({
+            source: baseSource({ headRepo: null }),
+            armEvent: null,
+            machineLogins: [],
+            marker: { state: 'armed', source: 42, head: SHA_A, branch: 'ai/guest-42' },
+            branchExists: true,
+            completionRentry: true
+        }));
+        assert.equal(seq.decision, 'complete-orphan',
+            'marker-driven completion bypasses the E3 same-repo refusal');
+        assert.deepEqual(seq.steps.map(function (s) { return s.op; }),
+            ['merge', 'open_pr', 'carry_decision', 'transplant_comment', 'close_pr']);
+        assert.equal(seq.steps[0].headSha, SHA_A, 'the RECORDED arm-time sha merges (E1)');
+    });
+
+    test('a re-entry whose marker reached transplanted is still a terminal no-op', function () {
+        var seq = mod.transplantSequence(baseInput({
+            source: baseSource({ headRepo: null }),
+            armEvent: null,
+            machineLogins: [],
+            marker: { state: 'transplanted', source: 42, head: SHA_A, branch: 'ai/guest-42' },
+            branchExists: true,
+            completionRentry: true
+        }));
+        assert.equal(seq.decision, 'noop');
+        assert.equal(seq.reason, 'already-transplanted');
+        assert.equal(seq.steps.length, 0);
+    });
+
+    test('WITHOUT completionRentry the main path still refuses a null head (E3 untouched)', function () {
+        var seq = mod.transplantSequence(baseInput({
+            source: baseSource({ headRepo: null }),
+            armEvent: { login: 'productowner' },
+            branchExists: true
+        }));
+        assert.equal(seq.decision, 'skip');
+        assert.equal(seq.reason, 'same-repo');
+    });
+});
+
+suite('guestTransplant: rework round 2 — resume after open_pr (thread 2)', function () {
+
+    test('an OPEN machine PR beside an ARMED marker resumes the interrupted tail on the existing PR', function () {
+        var seq = mod.transplantSequence(baseInput({
+            marker: { state: 'armed', source: 42, head: SHA_A, branch: 'ai/guest-42' },
+            branchExists: true,
+            openTransplantPr: { number: 99 }
+        }));
+        assert.equal(seq.decision, 'transplant');
+        assert.equal(seq.reason, 'resume-after-open-pr');
+        assert.equal(seq.resumePrNumber, 99, 'the wiring seeds the carry probe with the existing PR');
+        assert.deepEqual(seq.steps.map(function (s) { return s.op; }),
+            ['carry_decision', 'transplant_comment', 'close_pr'],
+            'no second merge, no second PR, no duplicate marker');
+        assert.equal(stepsOf('close_pr', seq)[0].prNumber, 42, 'the SOURCE still closes');
+    });
+
+    test('an OPEN machine PR with NO readable marker stays the conservative no-op (fail closed)', function () {
+        var seq = mod.transplantSequence(baseInput({
+            openTransplantPr: { number: 99 }
+        }));
+        assert.equal(seq.decision, 'noop');
+        assert.equal(seq.reason, 'already-transplanted');
+        assert.equal(seq.resumePrNumber, undefined);
+    });
+
+    test('an OPEN machine PR beside a PARKED marker also stays a no-op', function () {
+        var seq = mod.transplantSequence(baseInput({
+            marker: { state: 'parked', source: 42, head: SHA_A, branch: 'ai/guest-42', reason: 'conflict' },
+            openTransplantPr: { number: 99 }
+        }));
+        assert.equal(seq.decision, 'noop');
+        assert.equal(seq.reason, 'already-transplanted');
+    });
+});
+
+suite('guestTransplant: rework round 2 — fail-closed arm gate (thread 3)', function () {
+
+    test('an unconfigured machineAuthor allowlist REFUSES the arm end-to-end (no auto foreign code)', function () {
+        var seq = mod.transplantSequence(baseInput({ machineLogins: [] }));
+        assert.equal(seq.decision, 'refuse');
+        assert.equal(seq.reason, 'actor-unverified');
+        assert.equal(seq.steps.length, 0, 'audit only, no action');
+    });
+
+    test('a blank machineLogins knob refuses too', function () {
+        var seq = mod.transplantSequence(baseInput({ machineLogins: '' }));
+        assert.equal(seq.decision, 'refuse');
+        assert.equal(seq.reason, 'actor-unverified');
+    });
+});
+
+suite('guestTransplant: rework round 2 — GC sweep pure decisions (threads 5/6)', function () {
+
+    test('prStateFromFindList: ANY OPEN entry on the head keeps the branch alive', function () {
+        assert.equal(mod.prStateFromFindList(
+            [{ state: 'CLOSED' }, { state: 'OPEN' }]), 'OPEN',
+            'a closed list[0] beside a live OPEN machine PR must not GC the branch');
+        assert.equal(mod.prStateFromFindList([{ state: 'open' }]), 'OPEN', 'case normalized');
+    });
+
+    test('prStateFromFindList: all-closed heads fall back to the newest-first first entry', function () {
+        assert.equal(mod.prStateFromFindList([{ state: 'MERGED' }, { state: 'CLOSED' }]), 'MERGED');
+        assert.equal(mod.prStateFromFindList([{ state: 'CLOSED' }]), 'CLOSED');
+    });
+
+    test('prStateFromFindList: no usable entry reads null — the orphan probe runs (fail closed)', function () {
+        assert.equal(mod.prStateFromFindList([]), null);
+        assert.equal(mod.prStateFromFindList(null), null);
+        assert.equal(mod.prStateFromFindList('not a list'), null);
+        assert.equal(mod.prStateFromFindList([{}]), null, 'an entry without a state is skipped');
+        assert.equal(mod.prStateFromFindList([{ junk: 1 }, { state: 'CLOSED' }]), 'CLOSED',
+            'state-less entries do not shadow the first real state');
+    });
+
+    test('gcActionableCap / gcScanBudget: the actionable window and the gh-1027 over-scan bound', function () {
+        assert.equal(mod.gcActionableCap(undefined), 10, 'shipped default');
+        assert.equal(mod.gcActionableCap(0), 10, 'invalid degrades to the default');
+        assert.equal(mod.gcActionableCap(-3), 10);
+        assert.equal(mod.gcActionableCap(25), 25);
+        assert.equal(mod.gcScanBudget(undefined), 25, 'cap + 15 overscan');
+        assert.equal(mod.gcScanBudget(25), 40);
+    });
+});
+
+suite('guestTransplant: rework round 2 — typed merge-conflict marker (thread 4)', function () {
+
+    test('only merge-shaped error messages carry the conflict marker', function () {
+        assert.equal(mod.isMergeConflictError(new Error('gh: Merge conflict (HTTP 409)')), true);
+        assert.equal(mod.isMergeConflictError(new Error('merge conflict detected')), true,
+            'case-insensitive on the body spelling');
+        assert.equal(mod.isMergeConflictError(new Error('HTTP 409 Conflict')), true,
+            'a bare 409 from the merge transport counts');
+        assert.equal(mod.isMergeConflictError(new Error('HTTP 500 server error')), false,
+            'an unrelated transport failure never reads as a conflict');
+        assert.equal(mod.isMergeConflictError(new Error('boom')), false);
+        assert.equal(mod.isMergeConflictError(null), false);
+        assert.equal(mod.isMergeConflictError(undefined), false);
+        assert.equal(mod.isMergeConflictError('conflict as a string'), true,
+            'non-Error throws are read the same way');
+    });
+});
