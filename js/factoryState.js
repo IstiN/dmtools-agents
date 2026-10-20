@@ -727,6 +727,14 @@ function applyMutexSnapshot(state, input) {
     if (input.mutex) state.mutex = normalizeMutexSnapshot(input.mutex);
 }
 
+// gh-113 AC3 — the guest dead-zone block rides the snapshot verbatim (the
+// smAgent side already merged the per-PR first-seen carry over
+// input.prev.deadZone); absent on both sides ⇒ the key stays absent, the
+// schema never changes.
+function applyDeadZoneSnapshot(state, input) {
+    if (input.deadZone) state.deadZone = input.deadZone;
+}
+
 // gh-816 — per-head run verdicts (citation integrity). The runs list is
 // repo-wide and newest-first; classification is explicit (same idiom as
 // syncValidationChecks/failedRunLinksLine) because the list is shared with
@@ -927,6 +935,7 @@ function buildFactoryState(input) {
     // key when pricing is off/absent/malformed: the board renders tokens-only.
     if (costs) state.costs = costs;
     applyMutexSnapshot(state, input);
+    applyDeadZoneSnapshot(state, input);
     return state;
 }
 
