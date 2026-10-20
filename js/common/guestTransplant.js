@@ -236,8 +236,6 @@ function transplantMarkerComment(fields) {
     return '<!-- guest-transplant ' + pairs.join(' ') + ' -->\n' + markerHumanLine(f);
 }
 
-// Newest marker across a comment feed (chronological — last wins).
-// Accepts [{body}] items or raw strings. null when none (fail closed).
 // ONE comment body → the marker object, or null when the body carries no
 // complete marker (no HTML payload, or no state — a half-written marker
 // never reads as a transplant snapshot; fail closed).
@@ -418,6 +416,11 @@ function _parsedEventList(raw) {
     return list;
 }
 
+// The event's actor login, or null when the feed omits the actor.
+function _eventActorLogin(ev) {
+    return (ev.actor && ev.actor.login) || null;
+}
+
 // ONE feed event → {login, createdAt} when it labels the wanted label,
 // null otherwise (not a labeled event / different label). Both the
 // {name} object and the plain-string label spelling are accepted.
@@ -426,7 +429,7 @@ function _labeledEventFor(ev, labelName) {
     var name = (ev.label && typeof ev.label === 'object') ? ev.label.name : ev.label;
     if (String(name) !== String(labelName)) return null;
     return {
-        login: (ev.actor && ev.actor.login) || null,
+        login: _eventActorLogin(ev),
         createdAt: ev.created_at || null
     };
 }
@@ -633,7 +636,8 @@ function transplantBodySteps(ctx, sha) {
 
 // AC5 — a source closed by hand before the tick, or the configured label
 // missing entirely: both skip (the rule query should have filtered them).
-function _transplantSkipDecision(source, labels, cfg, audit) {
+function _transplantSkipDecision(source, cfg, audit) {
+    var labels = source.labels || [];
     if (source.state && source.state !== 'OPEN') {
         return { decision: 'skip', reason: 'source-closed', steps: [],
                  audit: audit + 'skipped — source is ' + source.state };
@@ -670,7 +674,8 @@ function _transplantRefuseDecision(input, source, base, audit) {
 // parked source whose head CHANGED re-arms (label off, transplant
 // proceeds); an unchanged head stays parked; a human 'blocked' with NO
 // park marker of ours is a human hold — never touched.
-function _parkResetDecision(input, cfg, source, labels, marker, base, audit) {
+function _parkResetDecision(input, cfg, source, marker, base, audit) {
+    var labels = source.labels || [];
     if (labels.indexOf(cfg.parkedLabel) === -1) return null;
     var isOurPark = marker && marker.state === 'parked';
     if (!isOurPark) {
@@ -725,7 +730,7 @@ function _orphanDecision(input, cfg, source, base, marker, shaInfo, branch, audi
 
 // Fresh transplant: record the arm marker (the snapshot for E1/E5), cut
 // the branch at main, merge the recorded sha, open the machine PR.
-function _freshSequence(input, cfg, source, marker, shaInfo, branch, audit) {
+function _freshSequence(input, cfg, source, base, marker, shaInfo, branch, audit) {
     var fresh = [];
     if (!marker) {
         fresh.push(step('comment', {
@@ -751,18 +756,17 @@ function _freshSequence(input, cfg, source, marker, shaInfo, branch, audit) {
 function transplantSequence(input) {
     var cfg = input.cfg;
     var source = input.source || {};
-    var labels = source.labels || [];
     var base = input.base || { owner: '', repo: '', baseBranch: cfg.baseBranch };
     var audit = 'guest-transplant: #' + String(source.prNumber) + ' ';
 
-    var skip = _transplantSkipDecision(source, labels, cfg, audit);
+    var skip = _transplantSkipDecision(source, cfg, audit);
     if (skip) return skip;
     var refusal = _transplantRefuseDecision(input, source, base, audit);
     if (refusal) return refusal;
 
-    var marker = input.marker || null;
+    var marker = input.marker;
 
-    var parked = _parkResetDecision(input, cfg, source, labels, marker, base, audit);
+    var parked = _parkResetDecision(input, cfg, source, marker, base, audit);
     if (parked) return parked;
 
     // The transplant sha: the marker's recorded arm-time sha wins (E1).
@@ -778,10 +782,35 @@ function transplantSequence(input) {
     var orphan = _orphanDecision(input, cfg, source, base, marker, shaInfo, branch, audit);
     if (orphan) return orphan;
 
-    return _freshSequence(input, cfg, source, marker, shaInfo, branch, audit);
+    return _freshSequence(input, cfg, source, base, marker, shaInfo, branch, audit);
 }
 
 // ── Branch GC sweep (AC7) ────────────────────────────────────────────────
+
+// The orphan half of a sweep entry: an armed marker completes (E5),
+// anything else (no marker / a parked marker) is a dead branch — GC.
+function _orphanStep(e) {
+    if (e.marker && e.marker.state === 'armed' && e.marker.head) {
+        return step('complete_orphan', {
+            branch: e.branch,
+            sourcePrNumber: e.marker.source,
+            headSha: e.marker.head
+        });
+    }
+    return step('delete_ref', { branch: e.branch });
+}
+
+// ONE sweep entry → its GC step, or null when the branch is left alone
+// (no branch name, or a live OPEN transplant PR still on it).
+function _gcEntryStep(e) {
+    if (!e || !e.branch) return null;
+    if (e.prState === 'CLOSED' || e.prState === 'MERGED') {
+        return step('delete_ref', { branch: e.branch });
+    }
+    if (e.prState === 'OPEN') return null;
+    // No PR on this branch (yet/anymore).
+    return _orphanStep(e);
+}
 
 // One sweep entry per guest branch: {branch, prState: 'OPEN'|'CLOSED'|
 // 'MERGED'|null, marker: parsed marker|null}. ANY closed state deletes
@@ -791,22 +820,8 @@ function gcSteps(sweep) {
     if (!Array.isArray(sweep)) return [];
     var steps = [];
     sweep.forEach(function (e) {
-        if (!e || !e.branch) return;
-        if (e.prState === 'CLOSED' || e.prState === 'MERGED') {
-            steps.push(step('delete_ref', { branch: e.branch }));
-            return;
-        }
-        if (e.prState === 'OPEN') return;
-        // No PR on this branch (yet/anymore).
-        if (e.marker && e.marker.state === 'armed' && e.marker.head) {
-            steps.push(step('complete_orphan', {
-                branch: e.branch,
-                sourcePrNumber: e.marker.source,
-                headSha: e.marker.head
-            }));
-            return;
-        }
-        steps.push(step('delete_ref', { branch: e.branch }));
+        var s = _gcEntryStep(e);
+        if (s) steps.push(s);
     });
     return steps;
 }
