@@ -1,10 +1,23 @@
 var configLoader = require('./configLoader.js');
+// gh-1108: ONE run-title vocabulary (issue/pr anchors + legs) with the
+// event-dedup module, and the fa gh-781 producer's gh transport for the
+// tokens publish — both pure, both required at the top (hoisted per the
+// pack-require rule: init-time requires resolve file-relative).
+var teammateEventDedup = require('./common/teammateEventDedup.js');
+var tokenUsage = require('./factory/token_usage.js');
 
 /**
  * AI Teammate Token Usage Reporter (JSRunner)
  *
  * Downloads completed GitHub Actions logs for ai-teammate runs, extracts Copilot
  * token summaries printed by CommandLineUtils, and writes CSV/JSON/HTML outputs.
+ *
+ * gh-1108: the same scan also projects the rows into the keyed per-leg tokens
+ * map the factory tick consumes ({'pr-N'/'issue-N': [{leg, at, prompt,
+ * completion, total, cacheRead, model}]}) and — opt-in, customParams
+ * publishTokens — publishes it to the factory-data branch as
+ * data/<tokensAsset>.json, completing the producer→publish→tick link
+ * (dm.ai board TOKENS · R/W for this factory).
  */
 
 function parseJson(raw, fallback) {
@@ -122,94 +135,128 @@ function parseTokensLine(line) {
     };
 }
 
-function extractTokenUsage(logs) {
-    var lines = String(logs || '').split(/\r?\n/);
-    var lastRequests = null;
-    var samples = [];
-    var seenFaSegments = {};
-    var resumeDetected = false;
-    var resumeStages = [];
-    var feedbackLoopCount = 0;
-    var rateLimitRetryCount = 0;
-    var rateLimitDetected = false;
-    var timeoutCount = 0;
+function newUsageTracking() {
+    return {
+        lastRequests: null,
+        samples: [],
+        seenFaSegments: {},
+        resumeDetected: false,
+        resumeStages: [],
+        feedbackLoopCount: 0,
+        rateLimitRetryCount: 0,
+        rateLimitDetected: false,
+        timeoutCount: 0
+    };
+}
 
+// Classifies one log line's resume markers: a feedback-loop line carries its
+// stage, while a bare '--resume' / 'run-agent.sh --continue' marker only flags
+// the resume. The feedback-loop shape wins when a line matches both.
+function parseResumeSignal(line) {
+    var resumeMatch = line.match(/Feedback loop: resuming agent for\s+(.+?)\s+attempt\s+([0-9]+)\/([0-9]+)/);
+    if (resumeMatch) {
+        return { resumed: true, feedbackStage: (resumeMatch[1] || 'resume') + ' ' + resumeMatch[2] + '/' + resumeMatch[3] };
+    }
+    // 'run-agent.sh --continue' (without '--resume') is the recovery command shape
+    // used since --continue and --resume were found to be mutually exclusive in the
+    // Copilot CLI; kept alongside the older '--continue --resume' shape (still
+    // matched via the '--resume' check above) so historical logs still parse.
+    if (line.indexOf('--resume') !== -1 || line.indexOf('run-agent.sh --continue') !== -1) {
+        return { resumed: true, feedbackStage: null };
+    }
+    return { resumed: false, feedbackStage: null };
+}
+
+// Classifies one log line's rate-limit signals: only the explicit Copilot
+// retry wording counts a retry; the looser wording only flags detection.
+function parseRateLimitSignal(line) {
+    if (/Copilot rate limit detected; retrying/i.test(line)) {
+        return { retry: true, detected: true };
+    }
+    return { retry: false, detected: /rate limit|limit reset|You've hit your rate limit/i.test(line) };
+}
+
+function isTimeoutLine(lower) {
+    return lower.indexOf('exit code 124') !== -1 ||
+        lower.indexOf('timed out') !== -1 ||
+        lower.indexOf('command timeout') !== -1 ||
+        lower.indexOf('timeout guard') !== -1;
+}
+
+function applyResumeSignal(tracking, signal) {
+    if (!signal.resumed) return;
+    tracking.resumeDetected = true;
+    if (signal.feedbackStage) {
+        tracking.feedbackLoopCount += 1;
+        tracking.resumeStages.push(signal.feedbackStage);
+    }
+}
+
+function applyRateLimitSignal(tracking, signal) {
+    if (signal.retry) tracking.rateLimitRetryCount += 1;
+    if (signal.detected) tracking.rateLimitDetected = true;
+}
+
+// Applies one log line's resume / rate-limit / timeout signals to the tracking
+// state, preserving the original scan order.
+function applyLogSignals(tracking, line, lower) {
+    applyResumeSignal(tracking, parseResumeSignal(line));
+    applyRateLimitSignal(tracking, parseRateLimitSignal(line));
+    if (isTimeoutLine(lower)) tracking.timeoutCount += 1;
+}
+
+// The fa ledger is resume-aware: the same sessionId emits one line per
+// segment, so dedupe by (sessionId, segment) to avoid double-counting
+// resumed segments if a line is replayed in the logs. Lines without a
+// segment field keep faSegment null and are never deduped. Returns true when
+// the tokens sample is a replay that must be skipped.
+function isFaSegmentReplay(tracking, tokens) {
+    if (!tokens.faSessionId || tokens.faSegment == null) return false;
+    var segmentKey = tokens.faSessionId + ':' + tokens.faSegment;
+    if (tracking.seenFaSegments[segmentKey]) return true;
+    tracking.seenFaSegments[segmentKey] = true;
+    return false;
+}
+
+function appendUsageSample(tracking, tokens) {
+    var base = { attemptIndex: tracking.samples.length + 1 };
+    if (tokens.requests == null && tracking.lastRequests) base = Object.assign(base, tracking.lastRequests);
+    tracking.samples.push(Object.assign(base, tokens));
+}
+
+function collectUsageSamples(tracking, lines) {
     for (var i = 0; i < lines.length; i++) {
         var line = String(lines[i] || '');
-        var lower = line.toLowerCase();
-        var resumeMatch = line.match(/Feedback loop: resuming agent for\s+(.+?)\s+attempt\s+([0-9]+)\/([0-9]+)/);
-        if (resumeMatch) {
-            resumeDetected = true;
-            feedbackLoopCount += 1;
-            resumeStages.push((resumeMatch[1] || 'resume') + ' ' + resumeMatch[2] + '/' + resumeMatch[3]);
-        } else if (line.indexOf('--resume') !== -1 || line.indexOf('run-agent.sh --continue') !== -1) {
-            // 'run-agent.sh --continue' (without '--resume') is the recovery command shape
-            // used since --continue and --resume were found to be mutually exclusive in the
-            // Copilot CLI; kept alongside the older '--continue --resume' shape (still
-            // matched via the '--resume' check above) so historical logs still parse.
-            resumeDetected = true;
-        }
-        if (/Copilot rate limit detected; retrying/i.test(line)) {
-            rateLimitRetryCount += 1;
-            rateLimitDetected = true;
-        } else if (/rate limit|limit reset|You've hit your rate limit/i.test(line)) {
-            rateLimitDetected = true;
-        }
-        if (lower.indexOf('exit code 124') !== -1 ||
-            lower.indexOf('timed out') !== -1 ||
-            lower.indexOf('command timeout') !== -1 ||
-            lower.indexOf('timeout guard') !== -1) {
-            timeoutCount += 1;
-        }
-
+        applyLogSignals(tracking, line, line.toLowerCase());
         var request = parseRequestsLine(lines[i]);
         if (request) {
-            lastRequests = request;
+            tracking.lastRequests = request;
             continue;
         }
-
         var tokens = parseTokensLine(lines[i]);
-        if (tokens) {
-            // The fa ledger is resume-aware: the same sessionId emits one line per
-            // segment, so dedupe by (sessionId, segment) to avoid double-counting
-            // resumed segments if a line is replayed in the logs. Lines without a
-            // segment field keep faSegment null and are never deduped.
-            if (tokens.faSessionId && tokens.faSegment != null) {
-                var segmentKey = tokens.faSessionId + ':' + tokens.faSegment;
-                if (seenFaSegments[segmentKey]) continue;
-                seenFaSegments[segmentKey] = true;
-            }
-            var base = { attemptIndex: samples.length + 1 };
-            if (tokens.requests == null && lastRequests) base = Object.assign(base, lastRequests);
-            samples.push(Object.assign(base, tokens));
+        if (tokens && !isFaSegmentReplay(tracking, tokens)) {
+            appendUsageSample(tracking, tokens);
         }
     }
+}
 
-    if (!samples.length) return null;
-    var finalSample = samples[samples.length - 1];
+function collectFaSourceKeys(samples) {
     var faSources = {};
     samples.forEach(function(sample) {
         if (sample.source) faSources[sample.source] = true;
     });
-    var faSourceKeys = Object.keys(faSources).sort();
-    var aggregate = {
-        source: faSourceKeys.length === 0 ? '' : (faSourceKeys.length === 1 ? faSourceKeys[0] : 'mixed'),
-        requests: 0,
-        requestTier: finalSample.requestTier || '',
-        requestDuration: finalSample.requestDuration || '',
-        readTokens: 0,
-        writeTokens: 0,
-        cachedTokens: 0,
-        reasoningTokens: 0,
-        samples: samples.length,
-        resumeDetected: resumeDetected || samples.length > 1,
-        resumeStages: resumeStages,
-        feedbackLoopCount: feedbackLoopCount,
-        rateLimitRetryCount: rateLimitRetryCount,
-        rateLimitDetected: rateLimitDetected,
-        timeoutCount: timeoutCount,
-        attempts: samples
-    };
+    return Object.keys(faSources).sort();
+}
+
+// '', the single source when all samples agree, or 'mixed' when they disagree.
+function usageSourceLabel(faSourceKeys) {
+    if (faSourceKeys.length === 0) return '';
+    if (faSourceKeys.length === 1) return faSourceKeys[0];
+    return 'mixed';
+}
+
+// Sums the per-sample token/request counters into the aggregate.
+function sumUsageSamples(aggregate, samples) {
     samples.forEach(function(sample) {
         aggregate.requests += sample.requests || 0;
         aggregate.readTokens += sample.readTokens || 0;
@@ -218,6 +265,36 @@ function extractTokenUsage(logs) {
         aggregate.reasoningTokens += sample.reasoningTokens || 0;
     });
     return aggregate;
+}
+
+function buildUsageAggregate(tracking) {
+    if (!tracking.samples.length) return null;
+    var finalSample = tracking.samples[tracking.samples.length - 1];
+    var aggregate = {
+        source: usageSourceLabel(collectFaSourceKeys(tracking.samples)),
+        requests: 0,
+        requestTier: finalSample.requestTier || '',
+        requestDuration: finalSample.requestDuration || '',
+        readTokens: 0,
+        writeTokens: 0,
+        cachedTokens: 0,
+        reasoningTokens: 0,
+        samples: tracking.samples.length,
+        resumeDetected: tracking.resumeDetected || tracking.samples.length > 1,
+        resumeStages: tracking.resumeStages,
+        feedbackLoopCount: tracking.feedbackLoopCount,
+        rateLimitRetryCount: tracking.rateLimitRetryCount,
+        rateLimitDetected: tracking.rateLimitDetected,
+        timeoutCount: tracking.timeoutCount,
+        attempts: tracking.samples
+    };
+    return sumUsageSamples(aggregate, tracking.samples);
+}
+
+function extractTokenUsage(logs) {
+    var tracking = newUsageTracking();
+    collectUsageSamples(tracking, String(logs || '').split(/\r?\n/));
+    return buildUsageAggregate(tracking);
 }
 
 function normalizeLogPayload(raw) {
@@ -718,15 +795,39 @@ function readJsonFile(path, fallback) {
     }
 }
 
-function sleepMilliseconds(ms) {
-    ms = parseInt(ms, 10) || 0;
-    if (ms <= 0) return;
-    if (typeof Java !== 'undefined' && Java.type) {
-        Java.type('java.lang.Thread').sleep(ms);
-        return;
-    }
+// Parses the requested sleep duration, clamping unparseable and non-positive
+// values to a no-op 0.
+function parseSleepMilliseconds(ms) {
+    return Math.max(0, parseInt(ms, 10) || 0);
+}
+
+function hasJavaThread() {
+    return !!(typeof Java !== 'undefined' && Java.type);
+}
+
+// Real pause under GraalJS / the JVM-hosted runners.
+function sleepViaJavaThread(ms) {
+    Java.type('java.lang.Thread').sleep(ms);
+}
+
+// Busy-wait fallback for engines without the Java interop (unit-test harnesses).
+function sleepViaBusyWait(ms) {
     var end = Date.now() + ms;
     while (Date.now() < end) {}
+}
+
+// Pauses the current thread for the given duration. Trivial on purpose: the
+// duration parsing and the engine-specific strategies live in the small
+// helpers above, so this reads as a decision table and stays easy to inject
+// around in tests.
+function sleepMilliseconds(ms) {
+    var duration = parseSleepMilliseconds(ms);
+    if (duration <= 0) return;
+    if (hasJavaThread()) {
+        sleepViaJavaThread(duration);
+        return;
+    }
+    sleepViaBusyWait(duration);
 }
 
 function loadUsageCache(path) {
@@ -1070,6 +1171,367 @@ function collectUsageRows(custom, runs, paths, options) {
     return state;
 }
 
+// ── gh-1108 — keyed per-leg tokens: projection + factory-data publish ────────
+// The producer→publish→tick link: the SAME scan that writes the CSV/JSON/
+// HTML reports also projects the rows into the keyed map the SM tick
+// consumes (factoryState.tokensMapOf → normalizeTokens → card.tokens) and
+// publishes it to the factory-data branch — the transport the tick's
+// fetchTokensFromBranch probes with statePublish.tokensAsset. Rows are
+// decorative end to end: any projection/publish miss degrades to a status,
+// never fails the report.
+
+/**
+ * Run title → token-row anchor. ONE title vocabulary with
+ * teammateEventDedup: the issue anchor via issueOfRunName (stub '#<n>' and
+ * factory 'gh-<n>' families, trailing-digit guarded), the leg via
+ * legOfRunName (stub tail / '▶ leg (SM)' / emoji families), plus a
+ * whole-token 'pr-<n>' scan for the PR-anchored dispatch slot (the stub's
+ * '· pr-<N>', gh-1075). pr wins over issue — the finer anchor when a title
+ * carries both. Returns { key, pr, issue, leg }; key is null when NEITHER
+ * anchor resolves — an unresolvable run yields no row, never a wrong key.
+ */
+function prAnchorOf(text) {
+    var re = /(?:^|[^0-9a-zA-Z])pr-(\d+)/g;
+    var m = re.exec(text);
+    while (m) {
+        var after = text.charAt(m.index + m[0].length);
+        if (after === '' || after < '0' || after > '9') return parseInt(m[1], 10);
+        m = re.exec(text);
+    }
+    return null;
+}
+
+function parseRunAnchor(title) {
+    var text = String(title || '');
+    var pr = prAnchorOf(text);
+    var issue = teammateEventDedup.issueOfRunName(text);
+    return {
+        pr: pr,
+        issue: issue,
+        leg: teammateEventDedup.legOfRunName(text) || '',
+        key: pr != null ? 'pr-' + pr : (issue != null ? 'issue-' + issue : null)
+    };
+}
+
+/**
+ * Leg fallback when the title carries none (pre-gh-1065 event-path titles):
+ * the runner-config basename family — *rework* → rework, *review* → review,
+ * *develop* → dev, else '' (honest unknown; resolveLeg's rework-first
+ * discipline from js/factory/token_usage.js).
+ */
+function legFromAgent(agent) {
+    var stem = String(agent || '');
+    if (!stem) return '';
+    if (stem.indexOf('rework') !== -1) return 'rework';
+    if (stem.indexOf('review') !== -1) return 'review';
+    if (stem.indexOf('develop') !== -1) return 'dev';
+    return '';
+}
+
+/** One reporter row → the printf row contract (see buildTokensMap). */
+function tokenRowOf(row, anchor) {
+    var prompt = +row.readTokens || 0;
+    var completion = +row.writeTokens || 0;
+    return {
+        leg: anchor.leg || legFromAgent(row.agent),
+        at: String(row.createdAt || ''),
+        prompt: prompt,
+        completion: completion,
+        total: prompt + completion,
+        cacheRead: +row.cachedTokens || 0,
+        model: ''
+    };
+}
+
+/** Bucket rows by their run-title anchor; unanchorable rows drop. */
+function collectTokenRows(rows, byKey) {
+    (Array.isArray(rows) ? rows : []).forEach(function(row) {
+        if (!row) return;
+        var anchor = parseRunAnchor(row.title);
+        if (!anchor.key) return;
+        (byKey[anchor.key] = byKey[anchor.key] || []).push(tokenRowOf(row, anchor));
+    });
+}
+
+/** Retention cut for one key's rows: window filter + at-sort + tail cap. */
+function retainTokenKey(rows, cutoff, keepPerKey) {
+    var kept = rows
+        .filter(function(r) { return String(r.at || '') >= cutoff; })
+        .sort(function(a, b) { return String(a.at).localeCompare(String(b.at)); });
+    return kept.length > keepPerKey ?
+        kept.slice(kept.length - keepPerKey) : kept;
+}
+
+/** int-or-default for the retention knobs (hand-edited configs). */
+function intOrDefault(value, dflt) {
+    return (value == null || value === '') ? dflt : parseInt(value, 10);
+}
+
+/** Retention knobs → { cutoff, keepPerKey } (fa producer defaults). */
+function retentionOpts(opts) {
+    opts = opts || {};
+    return {
+        cutoff: tokenUsage.cutoffIso(
+            opts.now ? new Date(opts.now) : new Date(),
+            intOrDefault(opts.windowDays, tokenUsage.DEFAULT_WINDOW_DAYS)),
+        keepPerKey: intOrDefault(opts.keepPerKey, tokenUsage.ROW_KEEP)
+    };
+}
+
+/**
+ * The keyed tokens projection: reporter rows → the map form the tick
+ * consumes ('pr-N'/'issue-N' → rows). One row per RUN (the run's summed
+ * usage) in the printf row contract {leg, at, prompt, completion, total,
+ * cacheRead, model}: prompt = read, completion = write, total = prompt +
+ * completion, cacheRead = cached. The logs carry no model id yet — model
+ * stays '' (normTokenRow → null downstream; pricing skips it, tokens still
+ * render). Rows without a resolvable anchor drop (never a wrong key).
+ * Retention mirrors the fa producer (js/factory/token_usage.js): rows
+ * older than windowDays (default 14) drop, the newest keepPerKey (default
+ * ROW_KEEP = 40) survive per key, sorted by at ascending. Numbers only —
+ * no log text, no URLs (the snapshot's privacy invariant).
+ */
+function buildTokensMap(rows, opts) {
+    var retention = retentionOpts(opts);
+    var byKey = {};
+    collectTokenRows(rows, byKey);
+    var map = {};
+    Object.keys(byKey).forEach(function(key) {
+        var kept = retainTokenKey(byKey[key], retention.cutoff, retention.keepPerKey);
+        if (kept.length) map[key] = kept;
+    });
+    return map;
+}
+
+/**
+ * Publish the keyed tokens map to the factory-data branch (data/<asset>),
+ * the exact transport shape of the fa gh-781 producer
+ * (js/factory/token_usage.js): bootstrap the branch (422 already-exists is
+ * the normal case), then up to `attempts` GET-sha → PUT cycles; a PUT
+ * conflict refetches and retries. An empty map SKIPS with zero gh traffic
+ * — a rebuild that found no rows must never erase the previous file. Asset
+ * default mirrors fetchPreviousState's derivation —
+ * data/<repoName>-tokens.json — so a shared multi-factory branch stays
+ * isolated even when the deployment forgets the explicit tokensAsset knob
+ * (ai_teammate_token_usage_reporter.json sets agents-tokens.json; AC3).
+ *
+ * opts: repo ('O/R', required), branch (default factory-data), asset,
+ *      attempts (default 3). io: exec({command}) → {output|stdout};
+ *      log(line).
+ * Returns { status, reason, path, keyCount, rowCount, attempts } — status
+ * 'published' | 'skipped' | 'gave-up'; never throws.
+ */
+/** Key count + total rows of a keyed tokens map (non-map → empty stats). */
+function tokensMapStats(map) {
+    var keys = (map && typeof map === 'object' && !Array.isArray(map)) ?
+        Object.keys(map) : [];
+    var rowCount = 0;
+    keys.forEach(function(k) {
+        if (Array.isArray(map[k])) rowCount += map[k].length;
+    });
+    return { keys: keys, rowCount: rowCount };
+}
+
+/** The skip contract: any reason here means zero gh traffic. */
+function tokensSkipReason(stats, opts, exec) {
+    if (!stats.keys.length || !stats.rowCount) return 'no-rows';
+    var repo = String(opts.repo || '');
+    if (!repo || repo.indexOf('/') === -1) return 'no-repo';
+    if (typeof exec !== 'function') return 'no-exec';
+    return null;
+}
+
+/** Publish target: asset / branch / path / attempts (fa defaults). */
+function tokensTargetOf(opts, repo) {
+    var asset = opts.asset || (repo.split('/')[1] || 'factory') + '-tokens.json';
+    return {
+        asset: asset,
+        branch: opts.branch || tokenUsage.DEFAULT_DATA_BRANCH,
+        path: 'data/' + asset,
+        attempts: opts.attempts || tokenUsage.DEFAULT_ATTEMPTS
+    };
+}
+
+/** The exec-output text extraction (factoryState's execOut discipline). */
+function ghText(exec, command) {
+    var res = exec({ command: command });
+    return String((res && (res.output || res.stdout)) || res || '').trim();
+}
+
+/** 422 already-exists is the normal case — absorb it. */
+function tryBootstrapBranch(exec, repo, branch) {
+    try { exec({ command: tokenUsage.bootstrapBranchCommand(repo, branch) }); }
+    catch (eBoot) { /* branch exists */ }
+}
+
+/**
+ * One GET-sha → PUT cycle: true when the PUT landed, false on conflict
+ * (the caller refetches and retries). A 404 sha probe = first publish.
+ */
+function tokensPutAttempt(exec, repo, target, json) {
+    var sha = '';
+    try {
+        sha = ghText(exec, tokenUsage.contentsShaCommand(
+            repo, target.path, target.branch));
+    } catch (eSha) { sha = ''; }
+    if (sha.indexOf('Not Found') !== -1) sha = '';
+    try {
+        exec({ command: tokenUsage.contentsPutCommand(repo, target.path, {
+            branch: target.branch,
+            message: 'factory leg tokens — ' + json.rows + ' rows [skip ci]',
+            json: json.text,
+            sha: sha
+        }) });
+        return true;
+    } catch (ePut) { return false; }
+}
+
+/**
+ * Publish the keyed tokens map to the factory-data branch (data/<asset>),
+ * the exact transport shape of the fa gh-781 producer
+ * (js/factory/token_usage.js): bootstrap the branch (422 already-exists is
+ * the normal case), then up to `attempts` GET-sha → PUT cycles; a PUT
+ * conflict refetches and retries. An empty map SKIPS with zero gh traffic
+ * — a rebuild that found no rows must never erase the previous file. Asset
+ * default mirrors fetchPreviousState's derivation —
+ * data/<repoName>-tokens.json — so a shared multi-factory branch stays
+ * isolated even when the deployment forgets the explicit tokensAsset knob
+ * (ai_teammate_token_usage_reporter.json sets agents-tokens.json; AC3).
+ *
+ * opts: repo ('O/R', required), branch (default factory-data), asset,
+ *      attempts (default 3). io: exec({command}) → {output|stdout};
+ *      log(line).
+ * Returns { status, reason, path, keyCount, rowCount, attempts } — status
+ * 'published' | 'skipped' | 'gave-up'; never throws.
+ */
+function publishTokensMap(map, opts, io) {
+    opts = opts || {};
+    io = io || {};
+    var log = io.log || function() {};
+    var stats = tokensMapStats(map);
+    var result = { status: 'skipped', reason: null, path: null,
+        keyCount: stats.keys.length, rowCount: stats.rowCount, attempts: 0 };
+    var skip = tokensSkipReason(stats, opts, io.exec);
+    if (skip) {
+        result.reason = skip;
+        log('::warning::tokens publish skipped — ' + skip);
+        return result;
+    }
+    var repo = String(opts.repo || '');
+    var target = tokensTargetOf(opts, repo);
+    result.path = target.path;
+    tryBootstrapBranch(io.exec, repo, target.branch);
+    var json = { text: JSON.stringify(map), rows: stats.rowCount };
+    for (var attempt = 1; attempt <= target.attempts; attempt++) {
+        if (tokensPutAttempt(io.exec, repo, target, json)) {
+            result.status = 'published';
+            result.attempts = attempt;
+            return result;
+        }
+        result.attempts = attempt;
+        log('token publish attempt ' + attempt + ' conflicted — refetching');
+    }
+    result.status = 'gave-up';
+    log('::warning::tokens publish gave up after ' + target.attempts +
+        ' attempts (concurrent writes) — rows are decorative, the next scan retries');
+    return result;
+}
+
+/** gh 'O/R' from the reporter's split workspace/repository params. */
+function tokensRepoOf(custom) {
+    if (custom.tokensRepo) return custom.tokensRepo;
+    if (custom.workspace && custom.repository) {
+        return custom.workspace + '/' + custom.repository;
+    }
+    return custom.repository || '';
+}
+
+/**
+ * customParams → publish options. repo rides the resolved repository
+ * ('{owner}'/'{repo}' resolve before this runs); the branch defaults to
+ * factory-data; the asset must be SET by deployments on shared branches
+ * (agents-tokens.json here). tokensNow pins the retention clock (tests);
+ * tokensWindowDays/tokensKeepPerKey ride the fa defaults.
+ */
+function parsePublishOptions(custom) {
+    custom = custom || {};
+    return {
+        enabled: custom.publishTokens === true || custom.publishTokens === 'true',
+        repo: tokensRepoOf(custom),
+        branch: custom.tokensBranch || tokenUsage.DEFAULT_DATA_BRANCH,
+        asset: custom.tokensAsset || '',
+        windowDays: custom.tokensWindowDays,
+        keepPerKey: custom.tokensKeepPerKey,
+        now: custom.tokensNow || ''
+    };
+}
+
+/** Asset default mirroring fetchPreviousState's <repoName> derivation. */
+function defaultTokensAsset(repo) {
+    return (String(repo || '').split('/')[1] || 'factory') + '-tokens.json';
+}
+
+/** The 🪙 publish provenance line (sibling of the tick's 🪙 line). */
+function tokensPublishLine(res) {
+    return '🪙 tokens publish: ' + res.status +
+        (res.path ? ' → ' + res.path : '') +
+        (res.reason ? ' (' + res.reason + ')' : '') +
+        ' [' + res.rowCount + ' rows / ' + res.keyCount + ' keys]' +
+        (res.attempts ? ' after ' + res.attempts + ' attempt(s)' : '');
+}
+
+/**
+ * The action-side link (gh-1108): project rows → local keyed copy next to
+ * the other report outputs → branch publish. Disabled unless customParams
+ * publishTokens is set; every failure logs and returns null — the report
+ * itself is never failed by the decorative tokens stream.
+ */
+function publishKeyedTokens(custom, paths, rows) {
+    var opts = parsePublishOptions(custom);
+    if (!opts.enabled) return null;
+    var map = buildTokensMap(rows, opts);
+    opts.asset = opts.asset || defaultTokensAsset(opts.repo);
+    var localPath = (paths && paths.outputDir ? paths.outputDir :
+        'outputs/token_usage') + '/' + opts.asset;
+    try { writeOutput(localPath, JSON.stringify(map, null, 2)); }
+    catch (eLocal) { /* the local copy is a convenience — the branch is the transport */ }
+    var exec = typeof cli_execute_command === 'function' ? cli_execute_command : null;
+    var res = publishTokensMap(map, opts, {
+        exec: exec,
+        log: function(line) { console.log(line); }
+    });
+    console.log(tokensPublishLine(res));
+    return {
+        status: res.status,
+        reason: res.reason,
+        path: res.path,
+        asset: opts.asset,
+        localPath: localPath,
+        keyCount: res.keyCount,
+        rowCount: res.rowCount,
+        attempts: res.attempts
+    };
+}
+
+/** The action result, with the optional tokens publish summary attached. */
+function actionResultOf(paths, summary, tokensPublish) {
+    var result = { success: true, csvPath: paths.csvPath, attemptsCsvPath: paths.attemptsCsvPath, jsonPath: paths.jsonPath, htmlPath: paths.htmlPath, summary: summary };
+    if (tokensPublish) result.tokens = tokensPublish;
+    return result;
+}
+
+/**
+ * The cache-only report path, plus the gh-1108 keyed publish: the cache
+ * already holds every row the scan ever parsed, so the keyed map rebuilds
+ * without a single log download.
+ */
+function cacheOnlyReportAndPublish(custom, paths) {
+    var cachedResult = cacheOnlyReport(paths);
+    publishKeyedTokens(custom, paths,
+        buildRowsFromCache(loadUsageCache(paths.cachePath)).rows);
+    return cachedResult;
+}
+
 function action(params) {
     var custom = (params && params.jobParams && params.jobParams.customParams) || {};
     var projectConfig = configLoader.loadProjectConfig(params || {});
@@ -1087,7 +1549,7 @@ function action(params) {
     }
 
     if (custom.cacheOnly === true || custom.cacheOnly === 'true') {
-        return cacheOnlyReport(paths);
+        return cacheOnlyReportAndPublish(custom, paths);
     }
 
     console.log('AI Teammate Token Usage Reporter — ' + custom.workspace + '/' + custom.repository + ' [' + custom.workflowId + ']');
@@ -1100,7 +1562,12 @@ function action(params) {
     writeReportOutputs(paths, state.rows, state.attemptRows, summary);
 
     console.log('Cache hits=' + state.cacheHits + ', log downloads=' + state.downloadedLogs + (state.stoppedByDownloadLimit ? ', stopped by maxLogDownloads' : ''));
-    return { success: true, csvPath: paths.csvPath, attemptsCsvPath: paths.attemptsCsvPath, jsonPath: paths.jsonPath, htmlPath: paths.htmlPath, summary: summary };
+
+    // gh-1108: the keyed tokens projection + factory-data publish (opt-in,
+    // customParams.publishTokens) — the producer→publish→tick link. Runs
+    // AFTER the report outputs so a publish miss can never lose the report.
+    return actionResultOf(paths, summary,
+        publishKeyedTokens(custom, paths, state.rows));
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -1109,6 +1576,18 @@ if (typeof module !== 'undefined' && module.exports) {
         parseNumberWithSuffix: parseNumberWithSuffix,
         parseTokensLine: parseTokensLine,
         extractTokenUsage: extractTokenUsage,
+        newUsageTracking: newUsageTracking,
+        parseResumeSignal: parseResumeSignal,
+        parseRateLimitSignal: parseRateLimitSignal,
+        isTimeoutLine: isTimeoutLine,
+        applyLogSignals: applyLogSignals,
+        isFaSegmentReplay: isFaSegmentReplay,
+        appendUsageSample: appendUsageSample,
+        collectUsageSamples: collectUsageSamples,
+        collectFaSourceKeys: collectFaSourceKeys,
+        usageSourceLabel: usageSourceLabel,
+        sumUsageSamples: sumUsageSamples,
+        buildUsageAggregate: buildUsageAggregate,
         extractAgentAndKey: extractAgentAndKey,
         calculateDurationSeconds: calculateDurationSeconds,
         formatDuration: formatDuration,
@@ -1124,6 +1603,9 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveOutputPaths: resolveOutputPaths,
         parseCacheOptions: parseCacheOptions,
         parseMaxLogDownloads: parseMaxLogDownloads,
+        parseSleepMilliseconds: parseSleepMilliseconds,
+        hasJavaThread: hasJavaThread,
+        sleepMilliseconds: sleepMilliseconds,
         shouldLogRunProgress: shouldLogRunProgress,
         renderOnlyReport: renderOnlyReport,
         cacheOnlyReport: cacheOnlyReport,
@@ -1134,6 +1616,12 @@ if (typeof module !== 'undefined' && module.exports) {
         getCachedRunState: getCachedRunState,
         applyCachedRunState: applyCachedRunState,
         processRunLogs: processRunLogs,
-        collectUsageRows: collectUsageRows
+        collectUsageRows: collectUsageRows,
+        parseRunAnchor: parseRunAnchor,
+        legFromAgent: legFromAgent,
+        buildTokensMap: buildTokensMap,
+        parsePublishOptions: parsePublishOptions,
+        publishTokensMap: publishTokensMap,
+        publishKeyedTokens: publishKeyedTokens
     };
 }

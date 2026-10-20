@@ -19,6 +19,7 @@ var feedbackLoop = require('./common/feedbackLoop.js');
 var autoStart = require('./common/autoStart.js');
 var outputFiles = require('./common/outputFiles.js');
 var gitStaging = require('./common/gitStaging.js');
+var forkCheckout = require('./common/forkCheckout.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 var cacheToReleases = require('./cacheToReleases.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
@@ -26,6 +27,11 @@ var tokenUsageComment = require('./common/tokenUsageComment.js');
 // per leg close ({head, pushed, resolved}) so the SM arm actions can bound
 // consecutive empty laps on one head.
 var reworkLoopGuard = require('./common/reworkLoopGuard.js');
+// gh-1119: owned CI-violation accounting — the setup-time snapshot
+// (ci_violations.json) is validated against the fix summary before the
+// rework cycle may close.
+var ciViolations = require('./common/ciViolations.js');
+var toolchainSummary = require('./common/toolchainSummary.js');
 
 // ── gh-957: lap audit (loop guard) + audit-resolve support ──────────────────
 //
@@ -302,62 +308,100 @@ function hasRealCodeChanges(ticketKey, config) {
     }
 }
 
-function commitAndPush(ticketKey, config, customParams) {
-    var workingDir = config.workingDir || null;
-    var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
-    var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
+// ── gh-1082: pure parse/build/decide helpers for commitAndPush() ─────────────
+// Extracted from commitAndPush() without changing the tracker/SCM/git/file
+// call order or any observable text. Each helper is directly unit-tested in
+// js/unit-tests/test_pushReworkChanges.js (commitAndPush — branch decisions).
 
-    // Read expected branch from pr_info.md (written by preCliReworkSetup).
-    // Do NOT trust git branch --show-current — the CLI agent may have switched branches.
-    var expectedBranch = null;
+/**
+ * The command-local cli_execute_command option bag for a workingDir.
+ */
+function reworkCmdOpts(workingDir) {
+    return workingDir ? { workingDirectory: workingDir } : {};
+}
+
+/**
+ * Reads input/<ticketKey>/pr_info.md (written by preCliReworkSetup) and
+ * parses the expected PR **Branch** head from it. Throws the refusing
+ * "Missing PR context file" error when the file cannot be read.
+ * Returns { prInfo, headBranch } — headBranch null when the header is absent.
+ */
+function readReworkPrInfoHeadBranch(ticketKey) {
     try {
-        var prInfoPath = 'input/' + ticketKey + '/pr_info.md';
-        var prInfo = file_read({ path: prInfoPath }) || '';
+        var prInfo = file_read({ path: 'input/' + ticketKey + '/pr_info.md' }) || '';
         var branchMatch = prInfo.match(/\*\*Branch\*\*:\s*`([^`]+)`/);
-        if (branchMatch) expectedBranch = branchMatch[1].trim();
+        return { prInfo: prInfo, headBranch: branchMatch ? branchMatch[1].trim() : null };
     } catch (e) {
         throw new Error('Missing PR context file input/' + ticketKey + '/pr_info.md. Rework setup did not find or checkout a PR; refusing to commit or push.');
     }
-    if (!expectedBranch) {
-        throw new Error('Could not determine expected PR branch from input/' + ticketKey + '/pr_info.md; refusing to commit or push.');
-    }
-    var baseBranch = (config.git && config.git.baseBranch) || 'main';
+}
+
+/**
+ * The PR's base branch parsed from the pr_info.md **Branch** head line
+ * ("**Branch**: `head` → `base`") — null when absent/unparsable.
+ */
+function parseReworkBaseBranch(prInfo) {
     try {
         var baseMatch = prInfo.match(/\*\*Branch\*\*:\s*`[^`]+`\s*→\s*`([^`]+)`/);
-        if (baseMatch && baseMatch[1]) baseBranch = baseMatch[1].trim();
-    } catch (e) {}
+        return (baseMatch && baseMatch[1]) ? baseMatch[1].trim() : null;
+    } catch (e) { return null; }
+}
 
-    var currentBranch = cleanCommandOutput(cmd('git branch --show-current') || '');
-    console.log('Current branch:', currentBranch, '| Expected:', expectedBranch);
+/**
+ * The base branch a rework push must never touch: the pr_info.md base line
+ * first, then config.git.baseBranch, then main.
+ */
+function resolveReworkBaseBranch(config, prInfo) {
+    return parseReworkBaseBranch(prInfo) || (config.git && config.git.baseBranch) || 'main';
+}
 
-    var branchName = currentBranch;
-    if (expectedBranch && currentBranch !== expectedBranch) {
-        console.warn('⚠️ Branch mismatch — forcing checkout to expected branch:', expectedBranch);
-        try {
-            cmd('git checkout ' + expectedBranch);
-            branchName = expectedBranch;
-            console.log('✅ Switched to expected branch:', branchName);
-        } catch (e) {
-            console.warn('Could not checkout expected branch, using current:', currentBranch, e);
-        }
+/**
+ * True when the checked-out branch differs from the expected PR branch and
+ * a forced checkout is required.
+ */
+function reworkBranchMismatch(expectedBranch, currentBranch) {
+    return !!expectedBranch && currentBranch !== expectedBranch;
+}
+
+/**
+ * Forces the expected PR branch when the CLI agent switched branches.
+ * Returns the branch name the subsequent commit/push must run on: the
+ * expected branch after a successful checkout, else the current branch.
+ */
+function checkoutExpectedBranch(cmd, expectedBranch, currentBranch) {
+    if (!reworkBranchMismatch(expectedBranch, currentBranch)) return currentBranch;
+    console.warn('⚠️ Branch mismatch — forcing checkout to expected branch:', expectedBranch);
+    try {
+        cmd('git checkout ' + expectedBranch);
+        console.log('✅ Switched to expected branch:', expectedBranch);
+        return expectedBranch;
+    } catch (e) {
+        console.warn('Could not checkout expected branch, using current:', currentBranch, e);
+        return currentBranch;
     }
+}
 
-    // Hard invariant: never commit/push while sitting on the base branch —
-    // if the forced checkout above didn't work and we're still parked on
-    // baseBranch, refuse rather than pushing WIP straight into the mainline.
-    if (branchName && branchName === baseBranch) {
-        throw new Error('Refusing to commit/push: current branch "' + branchName +
-            '" is the base branch (' + baseBranch + '), not the expected PR branch "' + expectedBranch + '".');
-    }
+/**
+ * The hard base-branch invariant: true when the branch about to be
+ * committed/pushed IS the base branch (the forced checkout above failed).
+ */
+function isBaseBranchViolation(branchName, baseBranch) {
+    return !!branchName && branchName === baseBranch;
+}
 
-    submoduleHelper.pushManagedSubmodules({
-        run: cmd,
-        cleanOutput: cleanCommandOutput,
-        config: config,
-        customParams: customParams,
-        ticketKey: ticketKey
-    });
+/**
+ * The refusal error for the base-branch invariant.
+ */
+function baseBranchRefusalMessage(branchName, baseBranch, expectedBranch) {
+    return 'Refusing to commit/push: current branch "' + branchName +
+        '" is the base branch (' + baseBranch + '), not the expected PR branch "' + expectedBranch + '".';
+}
 
+/**
+ * gh-628 runtime-artifact untrack cleanup — best-effort: a failure is
+ * warned about and never blocks staging.
+ */
+function untrackRuntimeArtifactsQuietly(cmd) {
     try {
         // gh-628: untrack machine-local runtime logs carried by
         // already-poisoned branches (a broad add swept the credential
@@ -368,6 +412,125 @@ function commitAndPush(ticketKey, config, customParams) {
     } catch (cleanupErr) {
         console.warn('Could not remove tracked Copilot session cache before staging:', cleanupErr);
     }
+}
+
+/**
+ * True when the staged diff stat is non-empty (something to commit).
+ */
+function hasStagedChanges(status) {
+    return !!status.trim();
+}
+
+/**
+ * The rework commit message: the configured format template with
+ * {ticketKey}, with any CI-skip directive stripped (gh-711).
+ */
+function buildReworkCommitMessage(config, ticketKey) {
+    return stripCiSkipTokens(configLoader.formatTemplate(config.formats.commitMessage.rework, {ticketKey: ticketKey}));
+}
+
+/**
+ * Commits the staged changes when the diff stat is non-empty; warns and
+ * leaves the history alone otherwise. Returns whether a commit was made.
+ */
+function commitStagedReworkChanges(cmd, status, config, ticketKey) {
+    if (!hasStagedChanges(status)) {
+        console.warn('No file changes detected — pushing existing commits only');
+        return false;
+    }
+    cmd('git commit -m "' + buildReworkCommitMessage(config, ticketKey) + '"');
+    console.log('✅ Committed rework changes');
+    return true;
+}
+
+/**
+ * agents#895 opt-in switch: fold WIP auto-save commits only when
+ * customParams.squashReworkWip is exactly true.
+ */
+function squashEnabled(customParams) {
+    return !!(customParams && customParams.squashReworkWip === true);
+}
+
+/**
+ * The push ladder for the rework head: a normal push first; when it fails,
+ * synchronize with origin/<branch> (fetch + merge) and retry once. A failed
+ * retry throws — never a force-push over remote updates.
+ */
+function pushReworkBranch(cmd, branchName, pushPlan) {
+    try {
+        cmd(pushPlan.push);
+    } catch (pushError) {
+        console.warn('Normal push failed; synchronizing with origin/' + branchName + ' before retry:', pushError.message || pushError);
+        try {
+            cmd(pushPlan.fetch);
+            cmd(pushPlan.merge);
+            cmd(pushPlan.retry);
+        } catch (syncPushError) {
+            throw new Error(
+                'Could not push rework branch after synchronizing with origin/' + branchName +
+                '. Refusing to force-push over remote updates. Error: ' +
+                (syncPushError.message || syncPushError)
+            );
+        }
+    }
+}
+
+/**
+ * The sync gate: a rework push never proceeds on a branch that failed to
+ * synchronize with origin/<baseBranch>.
+ */
+function assertReworkBranchSynced(syncResult, baseBranch) {
+    if (!syncResult.success) {
+        throw new Error('Could not sync PR branch with origin/' + baseBranch + ' before rework push: ' + syncResult.error);
+    }
+}
+
+/**
+ * The agents#895 WIP-squash step, gated by the opt-in switch: folds the
+ * timer's WIP auto-save commits only when customParams.squashReworkWip is
+ * exactly true; otherwise history is untouched (false).
+ */
+function squashReworkWipIfEnabled(cmd, ticketKey, config, workingDir, customParams) {
+    if (!squashEnabled(customParams)) return false;
+    return squashReworkWipCommits(cmd, ticketKey, config, workingDir);
+}
+
+function commitAndPush(ticketKey, config, customParams) {
+    var workingDir = config.workingDir || null;
+    var cmdOpts = reworkCmdOpts(workingDir);
+    var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
+
+    // Read expected branch from pr_info.md (written by preCliReworkSetup).
+    // Do NOT trust git branch --show-current — the CLI agent may have switched branches.
+    var prInfoCtx = readReworkPrInfoHeadBranch(ticketKey);
+    var prInfo = prInfoCtx.prInfo;
+    var expectedBranch = prInfoCtx.headBranch;
+    if (!expectedBranch) {
+        throw new Error('Could not determine expected PR branch from input/' + ticketKey + '/pr_info.md; refusing to commit or push.');
+    }
+    var baseBranch = resolveReworkBaseBranch(config, prInfo);
+
+    var currentBranch = cleanCommandOutput(cmd('git branch --show-current') || '');
+    console.log('Current branch:', currentBranch, '| Expected:', expectedBranch);
+
+    var branchName = checkoutExpectedBranch(cmd, expectedBranch, currentBranch);
+
+    // Hard invariant: never commit/push while sitting on the base branch —
+    // if the forced checkout above didn't work and we're still parked on
+    // baseBranch, refuse rather than pushing WIP straight into the mainline.
+    if (isBaseBranchViolation(branchName, baseBranch)) {
+        throw new Error(baseBranchRefusalMessage(branchName, baseBranch, expectedBranch));
+    }
+
+    submoduleHelper.pushManagedSubmodules({
+        run: cmd,
+        cleanOutput: cleanCommandOutput,
+        config: config,
+        customParams: customParams,
+        ticketKey: ticketKey
+    });
+
+    untrackRuntimeArtifactsQuietly(cmd);
 
     // `:!factory-kit` — nested machine-infra gitlink must not kill rework staging (#648 class)
     // `:!.dmtools/...` runtime logs (gh-628) — excluded by pathspec because
@@ -384,23 +547,13 @@ function commitAndPush(ticketKey, config, customParams) {
     }, ['factory-kit']));
 
     const status = prHelper.readStagedDiffStat(cmd, workingDir);
-
-    var hasChanges = false;
-    if (status.trim()) {
-        const commitMsg = stripCiSkipTokens(configLoader.formatTemplate(config.formats.commitMessage.rework, {ticketKey: ticketKey}));
-        cmd('git commit -m "' + commitMsg + '"');
-        console.log('✅ Committed rework changes');
-        hasChanges = true;
-    } else {
-        console.warn('No file changes detected — pushing existing commits only');
-    }
+    var hasChanges = commitStagedReworkChanges(cmd, status, config, ticketKey);
 
     // agents#895: the timer already committed (and pushed) the work as "WIP auto-save" commits, so the
     // clean rework commit above is often never created. Opt-in (customParams.squashReworkWip): when EVERY
     // commit since the rework base is a WIP auto-save (or the commit just made) and none is a merge, fold
     // them into one commit with the rework message and push it with --force-with-lease.
-    var squashed = (customParams && customParams.squashReworkWip === true) ?
-        squashReworkWipCommits(cmd, ticketKey, config, workingDir) : false;
+    var squashed = squashReworkWipIfEnabled(cmd, ticketKey, config, workingDir, customParams);
 
     var syncResult = prHelper.syncBranchWithBase({
         branchName: branchName,
@@ -412,31 +565,26 @@ function commitAndPush(ticketKey, config, customParams) {
             return cli_execute_command(args);
         }
     });
-    if (!syncResult.success) {
-        throw new Error('Could not sync PR branch with origin/' + baseBranch + ' before rework push: ' + syncResult.error);
-    }
+    assertReworkBranchSynced(syncResult, baseBranch);
 
-    try {
-        cmd(squashed ? 'git push -u --force-with-lease origin ' + branchName : 'git push -u origin ' + branchName);
-    } catch (pushError) {
-        console.warn('Normal push failed; synchronizing with origin/' + branchName + ' before retry:', pushError.message || pushError);
-        try {
-            cmd('git -c fetch.recurseSubmodules=no fetch origin ' + branchName + ':refs/remotes/origin/' + branchName);
-            cmd('git merge --no-edit origin/' + branchName);
-            cmd('git push -u origin ' + branchName);
-        } catch (syncPushError) {
-            throw new Error(
-                'Could not push rework branch after synchronizing with origin/' + branchName +
-                '. Refusing to force-push over remote updates. Error: ' +
-                (syncPushError.message || syncPushError)
-            );
-        }
-    }
+    // gh-1096: a fork PR head is pushed back to the FORK's token URL
+    // (gh-1070 maintainer-edit contract); same-repo commands unchanged.
+    var pushPlan = forkCheckout.reworkPushPlan(forkCheckout.readForkHead(prInfo), branchName, squashed);
+    pushReworkBranch(cmd, branchName, pushPlan);
 
+    verifyReworkPushed(cmd, branchName, pushPlan.fork);
+
+    console.log('✅ Pushed to remote branch:', branchName);
+    return { branch: branchName, hasChanges: hasChanges };
+}
+
+// gh-912: verify the push produced a real refs/heads/<branch> ref line on
+// origin — stderr noise never counts as the branch existing. gh-1096: a fork
+// head lives on the fork, not origin; the push itself is the proof there.
+function verifyReworkPushed(cmd, branchName, isFork) {
+    if (isFork) return;
     var remoteBranchExists = false;
     try {
-        // gh-912: verify the push produced a real refs/heads/<branch> ref
-        // line — stderr noise never counts as the branch existing.
         remoteBranchExists = prHelper.remoteBranchExists(cmd, null, branchName);
     } catch (lsRemoteErr) {
         console.warn('Error checking remote branches:', lsRemoteErr);
@@ -444,9 +592,6 @@ function commitAndPush(ticketKey, config, customParams) {
     if (!remoteBranchExists) {
         throw new Error('Branch was not successfully pushed to remote');
     }
-
-    console.log('✅ Pushed to remote branch:', branchName);
-    return { branch: branchName, hasChanges: hasChanges };
 }
 
 /**
@@ -1754,6 +1899,115 @@ function handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, 
     return { success: false, blocked: true, error: 'Rework blocked: no code changes while ' + openCount + ' review thread(s) are open' };
 }
 
+// ── gh-1119: owned CI violations may not be dismissed as unrelated ───────────
+//
+// Live pathology (#433, rework run 39308030238): the gate (crap4dart) failed
+// on a file the PR ITSELF added; the violation line was buried in the raw
+// tails, the leg concluded "violation is in code the PR does not touch" and
+// pushed without fixing. preCliReworkSetup now opens ci_failures.md with the
+// owned/foreign violation tables (gh-1119); this gate closes the loop on the
+// post-rework side: with owned violations open, a fix summary that dismisses
+// them wholesale ("not caused by this PR", "unrelated", "infra") or leaves
+// them unaccounted FAILS the leg — never a "Rework Complete" announcement
+// over an open owned red. The empty lap marker keeps the gh-957 no-op loop
+// guard counting.
+
+/** Parse one snapshot file's content into a violation array, or []. */
+function violationsFromSnapshot(raw) {
+    if (!raw || !String(raw).trim()) return [];
+    var parsed = JSON.parse(raw);
+    var violations = (parsed && parsed.violations) ? parsed.violations : (Array.isArray(parsed) ? parsed : []);
+    return (violations && violations.length > 0) ? violations : [];
+}
+
+/** Reads the setup-time violation snapshot (input/<ticketKey>/ci_violations.json). */
+function readInputViolations(ticketKey, workingDir) {
+    var candidates = ['input/' + ticketKey + '/ci_violations.json'];
+    if (workingDir) candidates.push(workingDir + '/input/' + ticketKey + '/ci_violations.json');
+    for (var i = 0; i < candidates.length; i++) {
+        try {
+            var violations = violationsFromSnapshot(file_read({ path: candidates[i] }));
+            if (violations.length > 0) return violations;
+        } catch (e) { /* try next candidate */ }
+    }
+    return [];
+}
+
+/** The rejection comment: per-item errors, the owned table, what the leg must do. */
+function buildOwnedViolationsRejectedComment(violations, verdict) {
+    var lines = ['### ❌ Rework rejected — owned CI violations not accounted', ''];
+    (verdict.errors || []).forEach(function(err) {
+        lines.push('- ' + err);
+    });
+    lines.push('');
+    lines.push(ciViolations.buildViolationsMarkdown(ciViolations.ownedViolations(violations)));
+    lines.push('Fix every owned violation (or dispute each one in the rework summary with ' +
+        '`fixed` / `disputed: <reason>`), then re-run the leg. This leg is marked failed and the ' +
+        'no-op loop guard counts it.');
+    return lines.join('\n');
+}
+
+/**
+ * The head a lap marker anchors to: the setup-time base head
+ * (rework_base_head.txt) when known, else the PR's current head.
+ */
+function lapMarkerHeadOf(ticketKey, pr) {
+    return readReworkBaseHead(ticketKey) ||
+        ((pr && pr.head && (pr.head.sha || pr.head)) || null);
+}
+
+/** Best-effort rejection comment on the PR — a post failure never rethrows. */
+function postRejectionComment(scm, prNumber, message) {
+    try {
+        scm.addComment(prNumber, message);
+    } catch (e) {
+        console.warn('Failed to post owned-violations rejection comment on PR #' + prNumber + ':', e.message || e);
+    }
+}
+
+/** Marks the leg failed: PR comment + an EMPTY lap marker (pushed 0) for the loop guard. */
+function handleOwnedViolationsRejected(scm, ticketKey, pr, violations, verdict) {
+    var message = buildOwnedViolationsRejectedComment(violations, verdict);
+    console.error('❌ Rework rejected — owned CI violations not accounted: ' +
+        (verdict.errors || []).join(' | '));
+    postRejectionComment(scm, pr.number, message);
+    // gh-957: the leg closed without an owned fix — it counts as an empty lap
+    // regardless of any WIP housekeeping commits that were pushed.
+    postLapMarker(scm, pr.number, lapMarkerHeadOf(ticketKey, pr), false, 0);
+    return {
+        success: false,
+        path: 'owned-violations-rejected',
+        ticketKey: ticketKey,
+        error: 'Owned CI violations not accounted in the rework summary: ' +
+            (verdict.errors || []).join(' | ')
+    };
+}
+
+/**
+ * gh-1119 AC6 gate: validates the fix summary against the owned violations
+ * the setup snapshot recorded. Rejection is the failure path — the leg is
+ * marked failed and the no-op loop guard counts it.
+ */
+function runOwnedViolationsGate(ticketKey, config, scm, tracker, pr, fixSummary) {
+    var violations;
+    try {
+        violations = readInputViolations(ticketKey, config && config.workingDir);
+    } catch (e) {
+        violations = [];
+    }
+    if (!violations || violations.length === 0) return { rejected: false };
+    var verdict = ciViolations.validateOwnedViolationsSummary(fixSummary, violations);
+    if (verdict.ok) {
+        console.log('✅ Owned CI violations accounted in the rework summary (' +
+            ciViolations.ownedViolations(violations).length + ' owned)');
+        return { rejected: false };
+    }
+    return {
+        rejected: true,
+        result: handleOwnedViolationsRejected(scm, ticketKey, pr, violations, verdict)
+    };
+}
+
 // gh-957 CRAP split (ratchet: action regressed 263.3 -> 288.5 against the
 // released baseline): the completion tail of action extracted into small
 // single-responsibility helpers. Behavior-preserving — the original block
@@ -2163,6 +2417,13 @@ function requirePrForTicket(scm, ticketKey, branchName) {
 // line even with zero pushed commits; incomplete coverage keeps the
 // historical blocked path.
 function runLapGate(ticketKey, config, codeChangesCommitted, actualParams, statuses, scm, tracker, pr, fixSummary) {
+    // gh-1119 AC6: with owned CI violations open, a fix summary that dismisses
+    // them ("not caused by this PR") or leaves them unaccounted fails the leg
+    // BEFORE any lap/audit logic — the completion path never runs.
+    var violationsGate = runOwnedViolationsGate(ticketKey, config, scm, tracker, pr, fixSummary);
+    if (violationsGate.rejected) {
+        return { blocked: true, result: violationsGate.result };
+    }
     var realCodeChanges = hasRealCodeChanges(ticketKey, config);
     var outputOptsForCoverage = { ticketKey: ticketKey, workingDir: config.workingDir || null };
     var inputSnapshotThreads = readInputRawThreads(ticketKey, outputOptsForCoverage);
@@ -2272,15 +2533,27 @@ function handleActionError(params, error, tracker) {
     return { success: false, error: error.toString() };
 }
 
+// gh-1137: the fix summary (the leg summary) must state which Dart SDK the
+// leg verified with — `toolchain: dart <v> (CI: <pin>, match: yes|no)` — so
+// format/analyzer claims are checkable against CI (live #433: a mismatched
+// SDK made the leg dispute a mechanical red). No-op on failure, on non-Dart
+// repos, and when the line is already carried.
+function annotateFixSummary(response, config) {
+    return toolchainSummary.withToolchainLine(
+        response,
+        { workingDir: config && config.workingDir }
+    ) || '_(No fix summary generated)_';
+}
+
 function action(params) {
     var tracker = null;
     try {
         const actualParams = params.ticket ? params : (params.jobParams || params);
         const ticketKey = actualParams.ticket.key;
-        const fixSummary = actualParams.response || '_(No fix summary generated)_';
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = scmModule.createScm(config);
         const _customParams = resolveCustomParams(params, actualParams, config);
+        const fixSummary = annotateFixSummary(actualParams.response, config);
         const statuses = resolveStatuses(_customParams, config.jira && config.jira.statuses);
         // Probe the tracker provider once — the same script then runs unchanged
         // on Jira / ADO / GitHub deployments.
@@ -2431,5 +2704,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked };
+    module.exports = { action, hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch, assertReworkBranchSynced, squashReworkWipIfEnabled, readInputViolations, runOwnedViolationsGate, handleOwnedViolationsRejected, buildOwnedViolationsRejectedComment };
 }

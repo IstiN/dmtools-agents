@@ -73,7 +73,11 @@ function resolveParams(params, envMap) {
         config: pick('config', 'CONFIG', ''),
         factoryRoot: pick('factoryRoot', 'FACTORY_ROOT', ''),
         home: pick('home', 'HOME', ''),
-        ghToken: pick('ghToken', 'GH_TOKEN', '')
+        ghToken: pick('ghToken', 'GH_TOKEN', ''),
+        // gh-1101: SM tick on approval when the head is already green.
+        ciWorkflow: pick('ciWorkflow', 'CI_WORKFLOW', 'quality.yml'),
+        smWorkflow: pick('smWorkflow', 'SM_WORKFLOW', 'machine-sm.yml'),
+        smKick: pick('smKick', 'SM_KICK', 'true')
     };
 }
 

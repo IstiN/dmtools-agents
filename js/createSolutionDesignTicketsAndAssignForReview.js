@@ -22,42 +22,6 @@ function getTracker() {
 
 
 /**
- * Parse AI response for module analysis
- * Expects JSON object with core, api, ui boolean flags and description
- * 
- * @param {Object|string} response - AI response (should be JSON object)
- * @returns {Object} Parsed module analysis or null if invalid
- */
-function parseModuleAnalysisResponse(response) {
-    // Handle string responses (parse JSON)
-    if (typeof response === 'string') {
-        try {
-            response = JSON.parse(response);
-        } catch (error) {
-            console.error('Invalid JSON from AI:', error);
-            return null;
-        }
-    }
-    
-    // Validate expected structure
-    if (!response || typeof response !== 'object') {
-        console.warn('AI response is not an object, got:', typeof response);
-        return null;
-    }
-    
-    // Validate required fields
-    if (typeof response.core !== 'boolean' || 
-        typeof response.api !== 'boolean' || 
-        typeof response.ui !== 'boolean' ||
-        typeof response.description !== 'string') {
-        console.error('AI response missing required fields or wrong types:', response);
-        return null;
-    }
-    
-    return response;
-}
-
-/**
  * Create solution design subtasks based on module analysis
  * 
  * @param {Object} moduleAnalysis - Parsed module analysis from AI
@@ -167,6 +131,138 @@ function postSummaryComment(parentKey, moduleAnalysis, createdTickets) {
     }
 }
 
+// ── parse/decide helpers (gh-1086 extraction) ────────────────────────────────
+
+/**
+ * Parse an AI JSON string response. Returns { value } on success or { error }
+ * when the payload is not valid JSON (the error is kept for the caller's
+ * log, preserving the pre-extraction message and control flow).
+ */
+function parseAiJson(text) {
+    try {
+        return { value: JSON.parse(text) };
+    } catch (error) {
+        return { error: error };
+    }
+}
+
+/**
+ * Validate expected module analysis structure: core/api/ui booleans and a
+ * string description.
+ */
+function hasValidModuleAnalysisFields(response) {
+    return typeof response.core === 'boolean' &&
+        typeof response.api === 'boolean' &&
+        typeof response.ui === 'boolean' &&
+        typeof response.description === 'string';
+}
+
+/**
+ * Parse AI response for module analysis
+ * Expects JSON object with core, api, ui boolean flags and description
+ *
+ * @param {Object|string} response - AI response (should be JSON object)
+ * @returns {Object} Parsed module analysis or null if invalid
+ */
+function parseModuleAnalysisResponse(response) {
+    // Handle string responses (parse JSON)
+    if (typeof response === 'string') {
+        var parsed = parseAiJson(response);
+        if (parsed.error) {
+            console.error('Invalid JSON from AI:', parsed.error);
+            return null;
+        }
+        response = parsed.value;
+    }
+
+    // Validate expected structure
+    if (!response || typeof response !== 'object') {
+        console.warn('AI response is not an object, got:', typeof response);
+        return null;
+    }
+
+    // Validate required fields
+    if (!hasValidModuleAnalysisFields(response)) {
+        console.error('AI response missing required fields or wrong types:', response);
+        return null;
+    }
+
+    return response;
+}
+
+/**
+ * WIP label derived from the workflow contextId, or null when the context
+ * carries no contextId.
+ */
+function resolveWipLabel(params) {
+    return params.metadata && params.metadata.contextId
+        ? params.metadata.contextId + '_wip'
+        : null;
+}
+
+/**
+ * Report an unparsable AI analysis: console error plus a best-effort error
+ * comment on the ticket. Returns the failure result for action().
+ */
+function invalidAnalysisResult(ticketKey) {
+    const errorMsg = 'Invalid AI response format for module analysis';
+    console.error(errorMsg);
+
+    // Post error comment to ticket
+    try {
+        getTracker().postComment(ticketKey, '*Error:* ' + errorMsg + '. Please check logs for details and retry the workflow.');
+    } catch (commentError) {
+        console.error('Failed to post error comment:', commentError);
+    }
+
+    return {
+        success: false,
+        error: errorMsg
+    };
+}
+
+/**
+ * Add the ai_solution_design_created label to the parent ticket (best
+ * effort — a labeling failure never fails the workflow).
+ */
+function addSolutionDesignCreatedLabel(ticketKey) {
+    try {
+        getTracker().addLabel(ticketKey, LABELS.AI_SOLUTION_DESIGN_CREATED);
+    } catch (labelError) {
+        console.warn('Failed to add ai_solution_design_created label:', labelError);
+    }
+}
+
+/**
+ * Success payload: created-subtask summary message plus the analysis and
+ * the full createdTickets list (successes and failures alike).
+ */
+function successResult(ticketKey, moduleAnalysis, createdTickets) {
+    const successfulTickets = createdTickets.filter(function(ticket) { return ticket.success; });
+
+    return {
+        success: true,
+        message: 'Ticket ' + ticketKey + ' assigned, moved to In Review, created ' + successfulTickets.length + ' solution design subtasks',
+        moduleAnalysis: moduleAnalysis,
+        createdTickets: createdTickets
+    };
+}
+
+/**
+ * Best-effort workflow error comment on the ticket (no-op without a ticket
+ * key; a comment failure is logged and swallowed).
+ */
+function postWorkflowErrorComment(params, error) {
+    // Try to post error comment to ticket
+    try {
+        if (params && params.ticket && params.ticket.key) {
+            getTracker().postComment(params.ticket.key, '*Workflow Error:* ' + error.toString() + '. Please check server logs for details.');
+        }
+    } catch (commentError) {
+        console.error('Failed to post error comment:', commentError);
+    }
+}
+
 function action(params) {
     try {
         const ticketKey = params.ticket.key;
@@ -174,72 +270,37 @@ function action(params) {
         const initiatorId = params.initiator;
         initTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         // Dynamically generate WIP label from contextId
-        const wipLabel = params.metadata && params.metadata.contextId 
-            ? params.metadata.contextId + '_wip' 
-            : null;
+        const wipLabel = resolveWipLabel(params);
 
         console.log("Processing solution design creation for ticket:", ticketKey);
-        
+
         // Parse AI module analysis response
         const moduleAnalysis = parseModuleAnalysisResponse(params.response);
         if (!moduleAnalysis) {
-            const errorMsg = 'Invalid AI response format for module analysis';
-            console.error(errorMsg);
-            
-            // Post error comment to ticket
-            try {
-                getTracker().postComment(ticketKey, '*Error:* ' + errorMsg + '. Please check logs for details and retry the workflow.');
-            } catch (commentError) {
-                console.error('Failed to post error comment:', commentError);
-            }
-            
-            return {
-                success: false,
-                error: errorMsg
-            };
+            return invalidAnalysisResult(ticketKey);
         }
 
         // Create solution design tickets based on analysis
         const createdTickets = createSolutionDesignTickets(moduleAnalysis, ticketKey, ticketSummary);
-        
+
         // Post summary comment with analysis results
         postSummaryComment(ticketKey, moduleAnalysis, createdTickets);
 
         // Add solution design label
-        try {
-            getTracker().addLabel(ticketKey, LABELS.AI_SOLUTION_DESIGN_CREATED);
-        } catch (labelError) {
-            console.warn('Failed to add ai_solution_design_created label:', labelError);
-        }
+        addSolutionDesignCreatedLabel(ticketKey);
 
         // Use common assignForReview function for post-processing
         const assignResult = assignForReview(ticketKey, initiatorId, wipLabel, undefined, getTracker());
-        
+
         if (!assignResult.success) {
             return assignResult;
         }
-        
-        const successfulTickets = createdTickets.filter(function(ticket) { return ticket.success; });
-        
-        return {
-            success: true,
-            message: `Ticket ${ticketKey} assigned, moved to In Review, created ${successfulTickets.length} solution design subtasks`,
-            moduleAnalysis: moduleAnalysis,
-            createdTickets: createdTickets
-        };
-        
+
+        return successResult(ticketKey, moduleAnalysis, createdTickets);
+
     } catch (error) {
         console.error("❌ Error:", error);
-        
-        // Try to post error comment to ticket
-        try {
-            if (params && params.ticket && params.ticket.key) {
-                getTracker().postComment(params.ticket.key, '*Workflow Error:* ' + error.toString() + '. Please check server logs for details.');
-            }
-        } catch (commentError) {
-            console.error('Failed to post error comment:', commentError);
-        }
-        
+        postWorkflowErrorComment(params, error);
         return {
             success: false,
             error: error.toString()
@@ -249,5 +310,15 @@ function action(params) {
 
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action: action,
+        parseModuleAnalysisResponse: parseModuleAnalysisResponse,
+        parseAiJson: parseAiJson,
+        hasValidModuleAnalysisFields: hasValidModuleAnalysisFields,
+        resolveWipLabel: resolveWipLabel,
+        invalidAnalysisResult: invalidAnalysisResult,
+        addSolutionDesignCreatedLabel: addSolutionDesignCreatedLabel,
+        successResult: successResult,
+        postWorkflowErrorComment: postWorkflowErrorComment
+    };
 }

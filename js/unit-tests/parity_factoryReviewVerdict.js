@@ -215,7 +215,8 @@ function runJs(fx) {
                 GH_TOKEN: 'stub-token', SOURCE_GITHUB_TOKEN: 'stub-token',
                 RUN_OUTPUT: sc.env.RUN_OUTPUT, MACHINE_AUTHOR: 'stub-bot',
                 MAX_ROUNDS: '2', HOME: sc.dir, CONFIG: 'pr_review.json',
-                FACTORY_ROOT: sc.dir
+                FACTORY_ROOT: sc.dir,
+                SM_KICK: 'false' // gh-1101 JS-only extension, not in the sh
             },
             file_write: function (p, c) { fs.writeFileSync(p, c); },
             file_read: function (r) {

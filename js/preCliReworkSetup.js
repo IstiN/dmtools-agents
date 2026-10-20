@@ -19,6 +19,7 @@ var trackersModule = require('./common/trackers.js');
 var commentMarkup = require('./common/commentMarkup.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
+var forkCheckout = require('./common/forkCheckout.js');
 const { resolveStatuses } = require('./config.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
@@ -513,9 +514,9 @@ function moveTicketToReworkStatus(config, tracker, ticketKey, statuses, prAnchor
  * writes the marker + posts the comment, then throws).
  * (gh-1002) Side-effecting step helper extracted from action() Step 4.
  */
-function checkoutReworkBranch(branchName, config, inputFolder, tracker, ticketKey, customParams) {
+function checkoutReworkBranch(branchName, config, inputFolder, tracker, ticketKey, customParams, pullRef) {
     try {
-        gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
+        gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch, pullRef);
     } catch (e) {
         failSetup(tracker, ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString(), customParams);
     }
@@ -698,7 +699,8 @@ function action(params) {
         if (!branchName) {
             failSetup(tracker, ticketKey, inputFolder, 'Could not determine branch from PR details', customParams);
         }
-        checkoutReworkBranch(branchName, config, inputFolder, tracker, ticketKey, customParams);
+        checkoutReworkBranch(branchName, config, inputFolder, tracker, ticketKey, customParams,
+            forkCheckout.resolvePullRef(forkCheckout.prPullRef(prDetails), forkCheckout.envCheckoutRef()));
 
         const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
 
@@ -733,12 +735,18 @@ function action(params) {
         // JDK/Maven, verify build credentials) before the CLI agent starts fixing code.
         runSetupCommandsStep(customParams, config, inputFolder, tracker, ticketKey);
 
-        // Step 4.7: Detect failed CI checks — writes ci_failures.md if any failed
+        // Step 4.7: Detect failed CI checks — writes ci_failures.md if any failed.
+        // gh-1119: the PR diff is fetched FIRST and handed to detectFailedChecks,
+        // which tags every extracted gate violation owned/foreign against the
+        // diff file list (the #433 rework leg missed an owned violation because
+        // it was buried in the raw tails — now it opens ci_failures.md).
         const headSha = prDetails.head ? prDetails.head.sha : null;
-        const failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath);
 
         // Step 5: Diff + discussions (human-readable + raw with IDs)
         const diff = gitOps.getPRDiff(baseBranch, branchName, config.workingDir);
+
+        const failedChecks = gh.detectFailedChecks(
+            scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath, diff);
 
         console.log('Fetching PR discussions...');
         const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);

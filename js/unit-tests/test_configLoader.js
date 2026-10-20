@@ -974,6 +974,115 @@ suite('configLoader.resolveInstructions', function() {
 
 });
 
+// ── resolveInstructions — global injection & tracker fallback (gh-1086 characterization) ──
+
+suite('configLoader.resolveInstructions — global injections and tracker fallback', function() {
+
+    var defaults = configLoaderModule.DEFAULTS;
+
+    test('globalAdditionalInstructions are appended after per-agent additionalInstructions', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            additionalInstructions: { my_agent: ['./per-agent.md'] },
+            globalAdditionalInstructions: ['./global-a.md', './global-b.md']
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.additionalInstructions, ['./per-agent.md', './global-a.md', './global-b.md']);
+    });
+
+    test('globalAdditionalInstructions alone produce the global list', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            globalAdditionalInstructions: ['./only-global.md']
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.additionalInstructions, ['./only-global.md']);
+    });
+
+    test('globalCliPrompts are appended after per-agent cliPrompts', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPrompts: { my_agent: ['./agent-prompt.md'] },
+            globalCliPrompts: ['./inject-to-all.md']
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.cliPrompts, ['./agent-prompt.md', './inject-to-all.md']);
+    });
+
+    test('globalCliPrompts alone produce the global list', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            globalCliPrompts: ['./all-agents.md']
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.cliPrompts, ['./all-agents.md']);
+    });
+
+    test('config.defaultTracker selects tracker prompts when DEFAULT_TRACKER env is unset', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            defaultTracker: 'ado',
+            cliPromptsByTracker: {
+                jira: { my_agent: ['./jira.md'] },
+                ado: { my_agent: ['./ado.md'] }
+            }
+        });
+        var originalGetenv = java.lang.System.getenv;
+        java.lang.System.getenv = function() { return null; };
+        try {
+            var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+            assert.deepEqual(result.cliPrompts, ['./ado.md']);
+        } finally {
+            java.lang.System.getenv = originalGetenv;
+        }
+    });
+
+    test('tracker falls back to jira when neither env nor config.defaultTracker is set', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPromptsByTracker: {
+                jira: { my_agent: ['./jira.md'] },
+                ado: { my_agent: ['./ado.md'] }
+            }
+        });
+        var originalGetenv = java.lang.System.getenv;
+        java.lang.System.getenv = function() { return null; };
+        try {
+            var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+            assert.deepEqual(result.cliPrompts, ['./jira.md']);
+        } finally {
+            java.lang.System.getenv = originalGetenv;
+        }
+    });
+
+    test('cliPrompts entry that is neither array nor {prompts} object is ignored', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPrompts: { my_agent: 'not-an-array' }
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.cliPrompts, []);
+        assert.equal(result.cliPromptsStrategy, 'merge');
+    });
+
+    test('cliPrompts object without a prompts array is ignored', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPrompts: { my_agent: { strategy: 'replace' } }
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.cliPrompts, []);
+        assert.equal(result.cliPromptsStrategy, 'merge');
+    });
+
+    test('cliPromptOverrides absent leaves cliPrompt null', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {});
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.equal(result.cliPrompt, null);
+        assert.equal(result.agentParamPatch, null);
+        assert.equal(result.jobParamPatch, null);
+    });
+
+    test('result carries cliPromptsStrategy merge by default with no cliPrompts at all', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {});
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.cliPrompts, []);
+        assert.equal(result.cliPromptsStrategy, 'merge');
+    });
+});
+
 
 
 suite('configLoader.loadProjectConfig top-level configPath', function() {
@@ -1262,6 +1371,43 @@ suite('configLoader customParams visibility for agentDocGenerator', function() {
     });
 });
 
+suite('agentDocGenerator static-analysis contract — intake write artifacts (docs-freshness)', function() {
+
+    // js/agentDocGenerator.js discovers written artifacts with literal-path
+    // regexes over the action source (the folder + 'literal' variant). A write
+    // path assembled from a spec variable (`folder + '/' + spec.fileName`)
+    // matches only the bare-slash capture and collapses the generated
+    // "Writes" list to `input/<KEY>/` — stale docs/agents/generated/intake.md
+    // → red docs-freshness CI. Keep every concrete artifact file name as a
+    // literal inside the file_write call, same contract as the customParams
+    // keys pinned above.
+    function generatorWriteArtifacts(src) {
+        var re = /file_write\s*\(\s*(?:inputFolder|inputFolderPath|folder)\s*\+\s*['"`]([^'"`\n]+)['"`]/g;
+        var found = [];
+        var m;
+        while ((m = re.exec(src)) !== null) {
+            found.push('input/<KEY>' + m[1]);
+        }
+        return found.sort();
+    }
+
+    test('fetchEpicsToInput.js keeps both intake artifacts statically visible', function() {
+        var writes = generatorWriteArtifacts(file_read({ path: 'js/fetchEpicsToInput.js' }));
+        assert.deepEqual(writes, [
+            'input/<KEY>/existing_epics.json',
+            'input/<KEY>/existing_stories.json'
+        ]);
+    });
+
+    test('intakePreAction.js keeps both intake artifacts statically visible', function() {
+        var writes = generatorWriteArtifacts(file_read({ path: 'js/intakePreAction.js' }));
+        assert.deepEqual(writes, [
+            'input/<KEY>/existing_epics.json',
+            'input/<KEY>/existing_stories.json'
+        ]);
+    });
+});
+
 // ── {status.KEY[:Literal]} placeholders (agents#855) ──────────────────────────
 
 suite('configLoader.interpolateJql — status placeholders (agents#855)', function() {
@@ -1451,3 +1597,420 @@ suite('smAgent builds every rule query through selectRuleQuery (agents#855)', fu
     });
 });
 
+
+// ── gh-1112 AC7: agent JSON "parent" inheritance (wiki_publisher base agent) ──
+
+suite('configLoader.loadAgentConfig — parent inheritance (gh-1112 AC7)', function() {
+
+    var PARENT_PATH = './wiki_publisher.json';
+    var CHILD_PATH = './wiki_checklist.json';
+    var GRANDCHILD_PATH = './wiki_release_notes.json';
+
+    var parentJson = JSON.stringify({
+        name: 'Teammate',
+        params: {
+            metadata: { contextId: 'wiki_publisher', descriptionPath: 'agents/docs/agents/wiki_publisher.md' },
+            cliCommands: ['./agents/scripts/run-agent.sh'],
+            ticketContextDepth: 0,
+            cliPrompts: [
+                'Technical Writer',
+                './agents/instructions/wiki_publisher/workflow.md',
+                './agents/prompts/wiki_publisher_prompt.md'
+            ],
+            customParams: {
+                contentOutput: { target: 'wiki', updateTrackerField: false }
+            }
+        }
+    });
+
+    var childJson = JSON.stringify({
+        parent: { path: PARENT_PATH, merge: ['params.cliPrompts'] },
+        params: {
+            metadata: { contextId: 'story_checklist' },
+            cliPrompts: ['./.dmtools/skills/checklist_rules.md'],
+            customParams: {
+                contentOutput: { space: 'DOC', parentPageId: '42', pageTitleSuffix: 'Checklist' }
+            }
+        }
+    });
+
+    var grandchildJson = JSON.stringify({
+        parent: { path: CHILD_PATH, merge: ['params.cliPrompts'] },
+        params: {
+            metadata: { contextId: 'release_notes' },
+            cliPrompts: ['./.dmtools/skills/release_notes_format.md']
+        }
+    });
+
+    function loaderWithFiles(files) {
+        return loadModule('js/configLoader.js',
+            makeRequire({ './config.js': configModule }),
+            {
+                file_read: function(opts) {
+                    var p = opts && (opts.path || opts);
+                    if (files[p] !== undefined) return files[p];
+                    if (p && p.indexOf('.dmtools/config') !== -1) return null; // block real config
+                    return null;
+                }
+            });
+    }
+
+    test('merges parent cliPrompts first, then the child entries (AC7)', function() {
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_checklist.json': childJson });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, [
+            'Technical Writer',
+            './agents/instructions/wiki_publisher/workflow.md',
+            './agents/prompts/wiki_publisher_prompt.md',
+            './.dmtools/skills/checklist_rules.md'
+        ]);
+    });
+
+    test('child params override parent params; parent-only params are inherited (deep merge)', function() {
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_checklist.json': childJson });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.equal(merged.params.metadata.contextId, 'story_checklist', 'child metadata wins');
+        assert.equal(merged.params.metadata.descriptionPath, 'agents/docs/agents/wiki_publisher.md',
+            'parent-only metadata inherited');
+        assert.deepEqual(merged.params.cliCommands, ['./agents/scripts/run-agent.sh'], 'inherited from parent');
+        assert.equal(merged.name, 'Teammate', 'top-level fields inherited');
+        assert.equal(merged.params.customParams.contentOutput.target, 'wiki', 'parent customParams kept');
+        assert.equal(merged.params.customParams.contentOutput.updateTrackerField, false, 'parent customParams kept');
+        assert.equal(merged.params.customParams.contentOutput.space, 'DOC', 'child customParams merged in');
+        assert.equal(merged.params.customParams.contentOutput.pageTitleSuffix, 'Checklist', 'child customParams merged in');
+    });
+
+    test('the parent marker is resolved away — the merged config carries no parent key', function() {
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_checklist.json': childJson });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.equal(merged.parent, undefined, 'parent marker must not leak into the resolved config');
+    });
+
+    test('a config without a parent is returned unchanged', function() {
+        var plain = JSON.stringify({ name: 'JSRunner', params: { jsPath: 'js/x.js' } });
+        var loader = loaderWithFiles({ 'plain.json': plain });
+        var merged = loader.loadAgentConfig('plain.json');
+        assert.equal(merged.name, 'JSRunner');
+        assert.equal(merged.params.jsPath, 'js/x.js');
+    });
+
+    test('a missing parent file warns and returns the child config as-is (non-fatal)', function() {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warns.push(m); };
+        try {
+            var loader = loaderWithFiles({ 'wiki_checklist.json': childJson });
+            var merged = loader.loadAgentConfig(CHILD_PATH);
+            assert.equal(merged.params.metadata.contextId, 'story_checklist');
+            assert.deepEqual(merged.params.cliPrompts, ['./.dmtools/skills/checklist_rules.md'],
+                'child prompts kept when the parent cannot be loaded');
+            assert.equal(warns.length > 0, true, 'a warning must be logged');
+        } finally {
+            console.warn = origWarn;
+        }
+    });
+
+    test('merge defaults to params.cliPrompts when the merge list is omitted', function() {
+        var childNoMerge = JSON.stringify({
+            parent: { path: PARENT_PATH },
+            params: { metadata: { contextId: 'story_checklist' }, cliPrompts: ['child_only.md'] }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_checklist.json': childNoMerge });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, [
+            'Technical Writer',
+            './agents/instructions/wiki_publisher/workflow.md',
+            './agents/prompts/wiki_publisher_prompt.md',
+            'child_only.md'
+        ]);
+    });
+
+    test('grandchild → child → parent chains resolve recursively with stable order', function() {
+        var loader = loaderWithFiles({
+            'wiki_publisher.json': parentJson,
+            'wiki_checklist.json': childJson,
+            'wiki_release_notes.json': grandchildJson
+        });
+        var merged = loader.loadAgentConfig(GRANDCHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, [
+            'Technical Writer',
+            './agents/instructions/wiki_publisher/workflow.md',
+            './agents/prompts/wiki_publisher_prompt.md',
+            './.dmtools/skills/checklist_rules.md',
+            './.dmtools/skills/release_notes_format.md'
+        ]);
+        assert.equal(merged.params.metadata.contextId, 'release_notes');
+    });
+
+    test('IT-inh-1: base → child → project cliPrompts → globalCliPrompts, in that order', function() {
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_checklist.json': childJson });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        var resolved = loader.resolveInstructions('wiki_publisher', merged.params.cliPrompts, {
+            cliPrompts: { wiki_publisher: ['./.dmtools/prompts/wiki_focus.md'] },
+            globalCliPrompts: ['./agents/instructions/common/codegraph_tools.md']
+        });
+        // The agent JSON carries base + child prompts; resolveInstructions appends
+        // the project-config and global prompts after them.
+        var fullList = merged.params.cliPrompts.concat(resolved.cliPrompts);
+        assert.deepEqual(fullList, [
+            'Technical Writer',
+            './agents/instructions/wiki_publisher/workflow.md',
+            './agents/prompts/wiki_publisher_prompt.md',
+            './.dmtools/skills/checklist_rules.md',
+            './.dmtools/prompts/wiki_focus.md',
+            './agents/instructions/common/codegraph_tools.md'
+        ]);
+        assert.equal(resolved.cliPromptsStrategy, 'merge');
+    });
+});
+
+suite('configLoader.loadAgentConfig — inheritance edges (gh-1112 rework)', function () {
+
+    var PARENT_PATH = './wiki_publisher.json';
+    var CHILD_PATH = './wiki_child.json';
+
+    var parentJson = JSON.stringify({
+        name: 'Teammate',
+        outputType: 'none',
+        params: {
+            metadata: { contextId: 'wiki_publisher' },
+            cliPrompts: ['base.md', 'shared.md'],
+            customParams: { contentOutput: { target: 'wiki' } }
+        }
+    });
+
+    function loaderWithFiles(files) {
+        return loadModule('js/configLoader.js',
+            makeRequire({ './config.js': configModule }),
+            {
+                file_read: function (opts) {
+                    var p = opts && (opts.path || opts);
+                    if (files[p] !== undefined) return files[p];
+                    if (p && p.indexOf('.dmtools/config') !== -1) return null; // block real config
+                    return null;
+                }
+            });
+    }
+
+    function childJson(child) {
+        return JSON.stringify(child);
+    }
+
+    test('a parent ref inside params (params.parent) resolves and is stripped from the result', function () {
+        var child = childJson({
+            params: {
+                parent: { path: PARENT_PATH, merge: ['params.cliPrompts'] },
+                metadata: { contextId: 'story_checklist' },
+                cliPrompts: ['child.md']
+            }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.equal(merged.params.metadata.contextId, 'story_checklist', 'child params win');
+        assert.equal(merged.params.metadata.cliPrompts, undefined, 'no stray metadata key is invented');
+        assert.deepEqual(merged.params.cliPrompts, ['base.md', 'shared.md', 'child.md'], 'arrays still concatenate');
+        assert.equal(merged.params.parent, undefined, 'params.parent marker must not leak');
+        assert.equal(merged.parent, undefined);
+    });
+
+    test('child top-level keys override the parent\'s', function () {
+        var child = childJson({
+            outputType: 'file',
+            parent: { path: PARENT_PATH, merge: ['params.cliPrompts'] },
+            params: { metadata: { contextId: 'story_checklist' } }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.equal(merged.outputType, 'file', 'child top-level field wins');
+        assert.equal(merged.name, 'Teammate', 'parent-only top-level field is inherited');
+    });
+
+    test('a merge path where only the CHILD has an array keeps the child entries', function () {
+        var parentNoPrompts = JSON.stringify({
+            name: 'Teammate',
+            params: { metadata: { contextId: 'wiki_publisher' } }
+        });
+        var child = childJson({
+            parent: { path: PARENT_PATH, merge: ['params.cliPrompts'] },
+            params: { metadata: { contextId: 'story_checklist' }, cliPrompts: ['child.md'] }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentNoPrompts, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, ['child.md']);
+    });
+
+    test('a merge path where only the PARENT has an array keeps the parent entries', function () {
+        var child = childJson({
+            parent: { path: PARENT_PATH, merge: ['params.cliPrompts'] },
+            params: { metadata: { contextId: 'story_checklist' } }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, ['base.md', 'shared.md']);
+    });
+
+    test('duplicate entries across parent and child arrays are de-duplicated, order stable', function () {
+        var child = childJson({
+            parent: { path: PARENT_PATH, merge: ['params.cliPrompts'] },
+            params: { metadata: { contextId: 'story_checklist' }, cliPrompts: ['shared.md', 'child.md', 'base.md'] }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, ['base.md', 'shared.md', 'child.md'],
+            'parent entries first (in parent order), unseen child entries appended once');
+    });
+
+    test('a merge path that is an array on NEITHER side is left to the plain deep merge', function () {
+        var child = childJson({
+            parent: { path: PARENT_PATH, merge: ['params.customParams'] },
+            params: { metadata: { contextId: 'story_checklist' }, customParams: { space: 'DOC' } }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.equal(merged.params.customParams.space, 'DOC', 'child value wins via deep merge');
+        assert.equal(merged.params.customParams.contentOutput.target, 'wiki', 'parent nested value kept');
+    });
+
+    test('an empty merge list falls back to the default path (params.cliPrompts)', function () {
+        var child = childJson({
+            parent: { path: PARENT_PATH, merge: [] },
+            params: { metadata: { contextId: 'story_checklist' }, cliPrompts: ['child.md'] }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, ['base.md', 'shared.md', 'child.md']);
+    });
+
+    test('an unparseable child config warns and returns null', function () {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function (m) { warns.push(String(m)); };
+        try {
+            var loader = loaderWithFiles({ 'wiki_child.json': '{not json' });
+            var merged = loader.loadAgentConfig(CHILD_PATH);
+            assert.equal(merged, null, 'unparseable config resolves to null');
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(warns.some(function (w) { return w.indexOf('cannot parse agent config') !== -1; }), true,
+            'a parse warning names the config');
+    });
+
+    test('layout prefixes on the parent path resolve repo-root-relative (agents/ form)', function () {
+        var child = childJson({
+            parent: { path: 'agents/wiki_publisher.json', merge: ['params.cliPrompts'] },
+            params: { metadata: { contextId: 'story_checklist' }, cliPrompts: ['child.md'] }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentJson, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, ['base.md', 'shared.md', 'child.md'],
+            'the "agents/<file>" consuming-repo form resolves to the repo-root file');
+    });
+
+});
+// ── resolveInstructions extracted helpers (gh-1086) ──────────────────────────
+
+suite('configLoader.resolveInstructions — extracted helpers', function() {
+
+    test('resolveBaseInstructions override vs confluence-url resolution', function() {
+        var config = { instructionOverrides: { a: ['./o.md'] } };
+        var base = configLoaderModule.resolveBaseInstructions('a', ['./d.md'], config);
+        assert.deepEqual(base.instructions, ['./o.md']);
+        assert.equal(base.instructionsOverridden, true);
+
+        var base2 = configLoaderModule.resolveBaseInstructions('b', ['./d.md'], config);
+        assert.deepEqual(base2.instructions, ['./d.md']);
+        assert.equal(base2.instructionsOverridden, false);
+
+        var base3 = configLoaderModule.resolveBaseInstructions('b', undefined, config);
+        assert.deepEqual(base3.instructions, []);
+    });
+
+    test('collectAdditionalInstructions keeps the configured array reference when no globals', function() {
+        var perAgent = ['./per.md'];
+        var config = { additionalInstructions: { a: perAgent } };
+        assert.equal(configLoaderModule.collectAdditionalInstructions('a', config), perAgent);
+        assert.deepEqual(configLoaderModule.collectAdditionalInstructions('missing', config), []);
+    });
+
+    test('resolveConfiguredCliPrompts — all entry shapes', function() {
+        assert.deepEqual(configLoaderModule.resolveConfiguredCliPrompts('a', {}).prompts, []);
+        var arr = ['./x.md'];
+        var shortForm = configLoaderModule.resolveConfiguredCliPrompts('a', { cliPrompts: { a: arr } });
+        assert.equal(shortForm.prompts, arr, 'short form keeps the array reference');
+        assert.equal(shortForm.strategy, 'merge');
+        var longForm = configLoaderModule.resolveConfiguredCliPrompts('a', {
+            cliPrompts: { a: { strategy: 'replace', prompts: ['./y.md'] } }
+        });
+        assert.deepEqual(longForm.prompts, ['./y.md']);
+        assert.equal(longForm.strategy, 'replace');
+        var junk = configLoaderModule.resolveConfiguredCliPrompts('a', { cliPrompts: { a: 42 } });
+        assert.deepEqual(junk.prompts, []);
+        assert.equal(junk.strategy, 'merge');
+    });
+
+    test('resolveCliPromptOverride and pickAgentPatch', function() {
+        assert.equal(configLoaderModule.resolveCliPromptOverride('a', {}), null);
+        assert.equal(
+            configLoaderModule.resolveCliPromptOverride('a', { cliPromptOverrides: { a: './main.md' } }),
+            './main.md'
+        );
+        var patch = { aiRole: 'x' };
+        assert.equal(configLoaderModule.pickAgentPatch({ a: patch }, 'a'), patch);
+        assert.equal(configLoaderModule.pickAgentPatch({ a: patch }, 'b'), null);
+        assert.equal(configLoaderModule.pickAgentPatch(null, 'a'), null);
+    });
+
+    test('resolveTrackerType precedence: override > env > config > jira', function() {
+        var originalGetenv = java.lang.System.getenv;
+        java.lang.System.getenv = function() { return null; };
+        try {
+            assert.equal(configLoaderModule.resolveTrackerType({}, {}), 'jira');
+            assert.equal(configLoaderModule.resolveTrackerType({ defaultTracker: 'ado' }, {}), 'ado');
+            java.lang.System.getenv = function(key) {
+                if (key === 'DEFAULT_TRACKER') return 'github';
+                return null;
+            };
+            assert.equal(configLoaderModule.resolveTrackerType({ defaultTracker: 'ado' }, {}), 'github');
+            assert.equal(
+                configLoaderModule.resolveTrackerType({ defaultTracker: 'ado' }, { trackerOverride: 'confluence' }),
+                'confluence'
+            );
+            assert.equal(configLoaderModule.resolveTrackerType({}, { trackerOverride: 'confluence' }), 'confluence');
+        } finally {
+            java.lang.System.getenv = originalGetenv;
+        }
+    });
+
+    test('extractTrackerPrompts — source shapes', function() {
+        var agentName = 'my_agent';
+        // null / missing tracker → null
+        assert.equal(configLoaderModule.extractTrackerPrompts(null, 'jira', agentName), null);
+        assert.equal(configLoaderModule.extractTrackerPrompts({ ado: ['./a.md'] }, 'jira', agentName), null);
+        // flat structure
+        var flat = ['./flat.md'];
+        assert.equal(configLoaderModule.extractTrackerPrompts({ jira: flat }, 'jira', agentName), flat);
+        // nested structure
+        var nested = ['./nested.md'];
+        assert.equal(
+            configLoaderModule.extractTrackerPrompts({ jira: { my_agent: nested } }, 'jira', agentName),
+            nested
+        );
+        // nested structure without the agent → undefined
+        assert.equal(
+            configLoaderModule.extractTrackerPrompts({ jira: { other: ['./x.md'] } }, 'jira', agentName),
+            undefined
+        );
+        // tracker entry that is neither array nor object → null
+        assert.equal(configLoaderModule.extractTrackerPrompts({ jira: 'garbage' }, 'jira', agentName), null);
+    });
+
+    test('appendTrackerPrompts concatenates only non-empty prompt lists', function() {
+        var base = ['./base.md'];
+        assert.equal(configLoaderModule.appendTrackerPrompts(base, null), base);
+        assert.equal(configLoaderModule.appendTrackerPrompts(base, []), base);
+        var merged = configLoaderModule.appendTrackerPrompts(base, ['./t.md']);
+        assert.deepEqual(merged, ['./base.md', './t.md']);
+        assert.notEqual(merged, base);
+    });
+});

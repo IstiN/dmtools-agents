@@ -30,6 +30,10 @@ The post-approval window is strictly serial by default: one `ai_validating` arm 
 
 Runner cost stays hard-capped at N × `validationMinutesEstimate` (default 35) validation-minutes per tick and is reported on the tick log (and the action result's `validationCost` field). A red validation still parks exactly one head — fail-validation is per-PR and the parallel arms share no state (#832 semantics preserved); the dev lane (`mutexAmong [pr_approved]` scope) is untouched.
 
+## Naked-PR reconciliation sweep (gh-1097)
+
+After every dispatch lane of the tick, the SM lists OPEN PRs with **zero lifecycle labels** whose linked issue (branch `ai/gh-N`, else a closing keyword in the body) is still in flow, and re-arms the PR-side label: issue `agent:review` / `status:In Review` → `agent:review`; `agent:rework` / `status:In Rework` → `agent:rework`. One audit comment per re-arm (hidden marker `<!-- dmtools:naked-pr-rearm {...} -->`). The marker records the PR head sha; a PR already re-armed on the same head is skipped (no re-arm loop when a lane consumes the label), a new head re-opens it. Only the first page of open PRs is swept. Labels only — the sweep never dispatches; the next tick's lanes pick the PR up. Excluded: `blocked` / `needs-human` / `validation_failed` on the PR or issue, and human-authored PRs (not machine author, not an `ai/` branch). Opt out with `jobParams.nakedPrSweep: false`; honours `dryRun`. Logic: `js/common/nakedPrReconcile.js`.
+
 _Human doc: [`agents/docs/agents/sm_github.md`](agents/docs/agents/sm_github.md)_
 
 ## Attributes

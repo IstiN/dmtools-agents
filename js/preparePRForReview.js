@@ -221,11 +221,14 @@ function writePrContext(ctx, prDetails, diff, discussionData) {
     console.log('PR context files written successfully');
 }
 
-// Step 6.5: detect failed CI checks on the head commit
-function detectCheckFailures(ctx, prDetails) {
+// Step 6.5: detect failed checks on the head commit.
+// gh-1119: the PR diff rides along so detectFailedChecks can tag extracted
+// gate violations owned/foreign in ci_failures.md (same tables the rework
+// leg sees); without it everything degrades to the unattributed note.
+function detectCheckFailures(ctx, prDetails, diff) {
     var headSha = prDetails.head ? prDetails.head.sha : null;
     console.log('Detecting failed checks for head SHA:', headSha || '(missing)');
-    var failedChecks = gh.detectFailedChecks(ctx.scm, headSha, ctx.inputFolder, ctx.config.scm && ctx.config.scm.jenkinsBasePath);
+    var failedChecks = gh.detectFailedChecks(ctx.scm, headSha, ctx.inputFolder, ctx.config.scm && ctx.config.scm.jenkinsBasePath, diff);
     console.log('Detected failed checks:', failedChecks.length);
     return failedChecks;
 }
@@ -348,7 +351,7 @@ function action(params) {
         var discussionData = fetchDiscussionData(ctx, prOutcome.pr.number);
         writePrContext(ctx, prDetails, diff, discussionData);
 
-        var failedChecks = detectCheckFailures(ctx, prDetails);
+        var failedChecks = detectCheckFailures(ctx, prDetails, diff);
 
         finishReviewStart(ctx, prDetails, branchName, failedChecks);
 

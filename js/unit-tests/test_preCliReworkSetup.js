@@ -10,6 +10,8 @@
  * Uses: loadModule(), makeRequire(), assert, test(), suite()
  */
 
+var forkCheckoutModule = loadModule('js/common/forkCheckout.js', makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}) }), {});
+
 var NOOP_MODULE = {};
 
 var reworkCommentMarkupModule = loadModule('js/common/commentMarkup.js',
@@ -36,6 +38,7 @@ function loadPreCliReworkSetup(configLoaderStub, mocks) {
         makeRequire({
             './configLoader.js': configLoaderStub,
             './common/githubHelpers.js': mocks.__ghStub,
+            './forkCheckout.js': forkCheckoutModule,
             './common/gitOps.js': NOOP_MODULE,
             './common/commentMarkup.js': reworkCommentMarkupModule,
             './fetchQuestionsToInput.js': NOOP_MODULE,
@@ -428,6 +431,7 @@ function makeActionHarness(overides) {
         makeRequire({
             './configLoader.js': configLoaderStub,
             './common/githubHelpers.js': ghStub,
+            './forkCheckout.js': forkCheckoutModule,
             './common/gitOps.js': gitOpsStub,
             './common/commentMarkup.js': reworkCommentMarkupModule,
             './fetchQuestionsToInput.js': NOOP_MODULE,
@@ -494,6 +498,7 @@ function makeContractHarness(opts) {
         makeRequire({
             './configLoader.js': { loadHookFn: function() { return null; } },
             './common/githubHelpers.js': makeGhStub(),
+            './forkCheckout.js': forkCheckoutModule,
             './common/gitOps.js': gitOpsStub,
             './common/commentMarkup.js': reworkCommentMarkupModule,
             './fetchQuestionsToInput.js': NOOP_MODULE,
@@ -663,6 +668,7 @@ suite('preCliReworkSetup.ensureInputContextContract — pinned input trio (gh-79
                     createScm: function() { return { getRemoteRepoInfo: function() { return { owner: 'acme', repo: 'widgets' }; } }; }
                 },
                 './common/githubHelpers.js': ghStub,
+                './forkCheckout.js': forkCheckoutModule,
                 './common/gitOps.js': {
                     checkoutPRBranch: function() {},
                     detectMergeConflicts: function() { return []; },
@@ -740,6 +746,7 @@ suite('preCliReworkSetup.action — rework status write reflects the actual tran
                     createScm: function() { return { getRemoteRepoInfo: function() { return { owner: 'acme', repo: 'widgets' }; } }; }
                 },
                 './common/githubHelpers.js': ghStub,
+                './forkCheckout.js': forkCheckoutModule,
                 './common/gitOps.js': {
                     checkoutPRBranch: function() {},
                     detectMergeConflicts: function() { return []; },
@@ -816,6 +823,7 @@ suite('preCliReworkSetup.action — rework status write reflects the actual tran
                         createScm: function() { return { getRemoteRepoInfo: function() { return { owner: 'acme', repo: 'widgets' }; } }; }
                     },
                     './common/githubHelpers.js': ghStub,
+                    './forkCheckout.js': forkCheckoutModule,
                     './common/gitOps.js': {
                         checkoutPRBranch: function() {},
                         detectMergeConflicts: function() { return []; },
@@ -1358,4 +1366,92 @@ suite('preCliReworkSetup — extracted helpers (gh-1002)', function() {
         });
     });
 
+});
+
+// ── gh-1119: the PR diff feeds detectFailedChecks for owned/foreign tagging ──
+
+suite('preCliReworkSetup.action — diff-before-CI-detection (gh-1119 AC7)', function() {
+
+    function makeDiffOrderHarness(overides) {
+        var calls = { order: [], detectArgs: null, diff: null };
+        var ghStub = makeGhStub();
+        ghStub.findPRForTicket = function() { return { number: 7 }; };
+        ghStub.getPRDetails = function() {
+            return { number: 7, title: 't', html_url: 'u', state: 'open',
+                head: { ref: 'ai/gh-123', sha: 'abc' }, base: { ref: 'master' }, user: { login: 'a' } };
+        };
+        ghStub.detectFailedChecks = function(scm, headSha, inputFolder, jenkinsBasePath, diffText) {
+            calls.order.push('detectFailedChecks');
+            calls.detectArgs = { scm: scm, headSha: headSha, inputFolder: inputFolder,
+                jenkinsBasePath: jenkinsBasePath, diffText: diffText };
+            return (overides && overides.failedChecks) || [];
+        };
+        ghStub.fetchDiscussionsAndRawData = function() { return { markdown: '## d', rawThreads: null }; };
+
+        var diffText = (overides && overides.diff) || 'diff --git a/src/a.dart b/src/a.dart\n';
+        var gitOpsStub = {
+            checkoutPRBranch: function() {},
+            detectMergeConflicts: function() { return []; },
+            getPRDiff: function(baseBranch, branchName, workingDir) {
+                calls.order.push('getPRDiff');
+                calls.diff = { baseBranch: baseBranch, branchName: branchName, workingDir: workingDir };
+                return diffText;
+            },
+            writePRContext: function() {},
+            writeInputFile: function() {}
+        };
+
+        var mod = loadModule(
+            'js/preCliReworkSetup.js',
+            makeRequire({
+                './configLoader.js': {
+                    loadProjectConfig: function() {
+                        return {
+                            git: { baseBranch: 'master' }, workingDir: null,
+                            repository: { owner: 'acme', repo: 'widgets' }
+                        };
+                    },
+                    paramsForConfigLoad: function(p) { return p; },
+                    loadHookFn: function() { return null; },
+                    createScm: function() { return { getRemoteRepoInfo: function() { return { owner: 'acme', repo: 'widgets' }; } }; }
+                },
+                './common/githubHelpers.js': ghStub,
+                './forkCheckout.js': forkCheckoutModule,
+                './common/gitOps.js': gitOpsStub,
+                './common/commentMarkup.js': reworkCommentMarkupModule,
+                './fetchQuestionsToInput.js': NOOP_MODULE,
+                './fetchParentContextToInput.js': NOOP_MODULE,
+                './restoreFromReleases.js': NOOP_MODULE,
+                './common/trackers.js': { createTracker: function() {
+                    return { postComment: function() {}, moveToStatus: function() {} };
+                } },
+                './common/setupCommands.js': loadModule('js/common/setupCommands.js'),
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+                './config.js': { resolveStatuses: function() {
+                    return { IN_DEVELOPMENT: 'In Development', IN_REWORK: 'In Rework', IN_REVIEW: 'In Review' };
+                } }
+            }),
+            {
+                file_write: function() {},
+                file_read: function() { throw new Error('File does not exist'); },
+                cli_execute_command: function() { return ''; }
+            }
+        );
+
+        return { mod: mod, calls: calls };
+    }
+
+    test('the PR diff is fetched BEFORE CI detection and passed to detectFailedChecks', function() {
+        var h = makeDiffOrderHarness({});
+        var result = h.mod.action({
+            inputFolderPath: 'input/PROJ-123',
+            jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} }
+        });
+        assert.ok(result.success, 'action succeeded: ' + JSON.stringify(result));
+        assert.deepEqual(h.calls.order, ['getPRDiff', 'detectFailedChecks'],
+            'getPRDiff must run before detectFailedChecks so ownership tagging has the diff');
+        assert.equal(h.calls.detectArgs.diffText, 'diff --git a/src/a.dart b/src/a.dart\n');
+        assert.equal(h.calls.detectArgs.headSha, 'abc');
+        assert.notOk(h.calls.detectArgs.jenkinsBasePath, 'no Jenkins base configured here');
+    });
 });

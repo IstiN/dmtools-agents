@@ -457,28 +457,31 @@ suite('ai-teammate.yml — the dedup gate is wired into the stub', function () {
             'a per-status API error is skipped fail-open');
     });
 
-    test('the dedup job is gated (gh-1029 zero-burn parity): non-arming events execute ZERO jobs', function () {
+    test('the dedup job is gated (gh-1029 zero-burn parity, gh-1076 assigned-only): non-teammate events execute ZERO jobs', function () {
         // Review-thread fix: an unguarded dedup job burned a runner on EVERY
         // label write repo-wide. With the gate mirroring the teammate gate,
         // a non-arming lifecycle label write executes zero jobs — the run
         // concludes failure (the gh-676 phantom pattern) and owns no dedup
         // key, closing the freshness-window hole for runs that never ran a
-        // leg.
+        // leg. gh-1076 then removed the `labeled` trigger itself (live
+        // #1074: the workflow re-fired on its own consequence labels), so
+        // the mirror's labeled branch went with it — the byte-level
+        // guarantee is now that NO labeled branch exists to fire.
         var ifs = foldedJobIfs(yml);
         assert.ok(ifs.length >= 2, 'both the dedup and the teammate job carry a folded if gate');
-        var dedupIf = null;
-        for (var i = 0; i < ifs.length; i++) {
-            if (ifs[i].indexOf('needs.dedup') === -1 && ifs[i].indexOf("github.event.action == 'labeled'") !== -1) {
-                dedupIf = ifs[i];
-            }
-        }
-        assert.ok(dedupIf, 'the dedup job has its own arming gate (not just the teammate call gate)');
-        ['agent:dev', 'agent:develop', 'agent:review', 'agent:rework', 'pr_approved'].forEach(function (l) {
-            assert.ok(dedupIf.indexOf("github.event.label.name == '" + l + "'") !== -1,
-                'the dedup gate admits the arming label ' + l);
-        });
+        var candidates = ifs.filter(function (b) { return b.indexOf('needs.dedup') === -1; });
+        assert.equal(candidates.length, 1,
+            'exactly one non-call folded gate (the dedup probe gate) — a third folded ' +
+            'gate would silently shift this test onto the wrong one');
+        var dedupIf = candidates[0];
+        assert.ok(dedupIf.indexOf("github.event.action == 'labeled'") === -1 &&
+            dedupIf.indexOf('github.event.label.name') === -1,
+            'gh-1076: the dedup gate must not key the labeled action — the labeled ' +
+            'trigger is gone, no labeled branch may survive. Gate: ' + dedupIf);
         assert.ok(dedupIf.indexOf("github.event.action == 'assigned'") !== -1,
             'the dedup gate keys the assignee check to the assigned action');
+        assert.ok(dedupIf.indexOf("contains(github.event.issue.assignees.*.login, 'ai-teammate')") !== -1,
+            'the dedup gate requires the ai-teammate assignee');
         assert.ok(dedupIf.indexOf("github.event_name == 'workflow_dispatch'") !== -1,
             'the dedup gate preserves the dispatch path (probe outputs proceed=true there)');
     });

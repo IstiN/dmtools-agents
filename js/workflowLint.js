@@ -41,6 +41,123 @@ function unquote(key) {
     return key;
 }
 
+// Parse the inline `[a, b, ...]` payload of a flow list, dropping comments
+// and blank entries, unquoting each item.
+function flowItems(inline) {
+    var flow = inline.replace(/^\[[ \t]*/, '').replace(/[ \t]*\].*$/, '');
+    var parts = flow === '' ? [] : flow.split(',');
+    var out = [];
+    for (var k = 0; k < parts.length; k++) {
+        var item = stripComment(parts[k]).trim();
+        if (item !== '') {
+            out.push(unquote(item));
+        }
+    }
+    return out;
+}
+
+// Strip a trailing ` # comment` from an inline YAML payload.
+function stripComment(s) {
+    return s.replace(/[ \t]+#.*$/, '');
+}
+
+// True when a line carries no YAML structure at all: blank or a full-line
+// comment.
+function isSkippable(line) {
+    var t = line.trim();
+    return t === '' || t.charAt(0) === '#';
+}
+
+// Structural mapping-key lines of the block that opens AFTER line
+// `parentIdx` (its parent key sits at parentIndent), as [{index, key,
+// indent}]. Blank/comment lines are skipped; the child indent is pinned by
+// the first key line (deeper or shallower keys are not this block's direct
+// children); a line dedented to parentIndent ends the block.
+function blockKeyLines(lines, parentIdx, parentIndent) {
+    var out = [];
+    var childIndent = -1;
+    for (var j = parentIdx + 1; j < lines.length; j++) {
+        var line = lines[j];
+        if (isSkippable(line)) {
+            continue;
+        }
+        var indent = indentOf(line);
+        if (indent <= parentIndent) {
+            break;
+        }
+        var km = KEY_LINE_RE.exec(line.trim());
+        if (!km) {
+            continue;
+        }
+        if (childIndent === -1) {
+            childIndent = indent;
+        }
+        if (indent !== childIndent) {
+            continue;
+        }
+        out.push({ index: j, key: unquote(km[2].trim()), indent: indent });
+    }
+    return out;
+}
+
+// Index of the child key named `wanted` inside the block at `parentIdx`;
+// -1 when the block closes without holding it.
+function findChildKey(lines, parentIdx, parentIndent, wanted) {
+    var keys = blockKeyLines(lines, parentIdx, parentIndent);
+    for (var k = 0; k < keys.length; k++) {
+        if (keys[k].key === wanted) {
+            return keys[k].index;
+        }
+    }
+    return -1;
+}
+
+// Index of the first top-level `on:` line in BLOCK form (nothing but an
+// optional trailing comment after the colon); -1 when the file has none.
+// Flow-form `on:` lines (on: [push], on: push) carry no per-trigger options
+// and are skipped — extractTriggers reports them instead.
+function findOnBlock(lines) {
+    for (var i = 0; i < lines.length; i++) {
+        var m = /^on:[ \t]*(.*)$/.exec(lines[i]);
+        if (m && stripComment(m[1]).trim() === '') {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// The `- item` entries of the block list that opens after line `idx` (the
+// list key sits at keyIndent); a line dedented to keyIndent ends the list.
+function blockListItems(lines, idx, keyIndent) {
+    var items = [];
+    for (var q = idx + 1; q < lines.length; q++) {
+        var ql = lines[q];
+        if (ql.trim() === '') {
+            continue;
+        }
+        var qi = indentOf(ql);
+        if (qi <= keyIndent) {
+            break;
+        }
+        var qm = /^-[ \t]+(.*?)[ \t]*$/.exec(ql.trim());
+        if (qm) {
+            items.push(unquote(stripComment(qm[1]).trim()));
+        }
+    }
+    return items;
+}
+
+// The payload list of the `types:` key at line `idx`: the inline flow list
+// (`types: [a, b]`) when present, else the `- item` block list below it.
+function readTypesPayload(lines, idx) {
+    var km = KEY_LINE_RE.exec(lines[idx].trim());
+    var inline = stripComment(km[3] || '').trim();
+    if (inline.charAt(0) === '[') {
+        return flowItems(inline);
+    }
+    return blockListItems(lines, idx, indentOf(lines[idx]));
+}
+
 /**
  * Top-level event triggers of a workflow file: ['issues', 'workflow_dispatch'].
  * Handles the block form (on:\n  issues:) and the flow list form
@@ -54,49 +171,49 @@ function extractTriggers(text) {
         if (!m) {
             continue;
         }
-        var inline = m[1].replace(/[ \t]+#.*$/, '').trim();
+        var inline = stripComment(m[1]).trim();
         if (inline === '') {
             // Block form: trigger names are the keys at the first indent
             // level under `on:`; dedent to column 0 ends the block.
+            var keys = blockKeyLines(lines, i, 0);
             var triggers = [];
-            var childIndent = -1;
-            for (var j = i + 1; j < lines.length; j++) {
-                var line = lines[j];
-                if (line.trim() === '') {
-                    continue;
-                }
-                var indent = indentOf(line);
-                if (indent === 0) {
-                    break;
-                }
-                var km = KEY_LINE_RE.exec(line.trim());
-                if (!km) {
-                    continue;
-                }
-                if (childIndent === -1) {
-                    childIndent = indent;
-                }
-                if (indent === childIndent) {
-                    triggers.push(unquote(km[2].trim()));
-                }
+            for (var t = 0; t < keys.length; t++) {
+                triggers.push(keys[t].key);
             }
             return triggers;
         }
         if (inline.charAt(0) === '[') {
-            var flow = inline.replace(/^\[[ \t]*/, '').replace(/[ \t]*\].*$/, '');
-            var items = flow === '' ? [] : flow.split(',');
-            var out = [];
-            for (var k = 0; k < items.length; k++) {
-                var item = items[k].replace(/[ \t]+#.*$/, '').trim();
-                if (item !== '') {
-                    out.push(unquote(item));
-                }
-            }
-            return out;
+            return flowItems(inline);
         }
         return [inline]; // flow mapping form — report as one opaque entry
     }
     return [];
+}
+
+/**
+ * The `types:` list of the `issues:` trigger, e.g. ['assigned'] (gh-1076:
+ * the ai-teammate stub must fire on assigned ONLY — the labeled trigger
+ * re-fired the workflow on the factory's own consequence labels). Parses
+ * the flow form (types: [assigned, labeled]) and the block list form
+ * (types:\n      - assigned). Returns null when the file has no issues
+ * trigger, the issues trigger declares no types key, or `on:` is in the
+ * flow-list form (no per-trigger options there).
+ */
+function extractIssueTypes(text) {
+    var lines = String(text).split(/\r?\n/);
+    var onIdx = findOnBlock(lines);
+    if (onIdx === -1) {
+        return null;
+    }
+    var issuesIdx = findChildKey(lines, onIdx, 0, 'issues');
+    if (issuesIdx === -1) {
+        return null;
+    }
+    var typesIdx = findChildKey(lines, issuesIdx, indentOf(lines[issuesIdx]), 'types');
+    if (typesIdx === -1) {
+        return null; // issues: trigger declares no types key
+    }
+    return readTypesPayload(lines, typesIdx);
 }
 
 /**
@@ -174,5 +291,6 @@ function findDuplicateKeys(text) {
 
 module.exports = {
     extractTriggers: extractTriggers,
+    extractIssueTypes: extractIssueTypes,
     findDuplicateKeys: findDuplicateKeys
 };

@@ -49,9 +49,9 @@ function prGhMocks(opts, record) {
             return opts.discussions !== undefined ? opts.discussions :
                 { markdown: '# PR Discussion History', rawThreads: [{ index: 1, body: 'x' }] };
         },
-        detectFailedChecks: function(scm, headSha, inputFolder, jenkinsBasePath) {
+        detectFailedChecks: function(scm, headSha, inputFolder, jenkinsBasePath, diffText) {
             record.ghCalls.push({ fn: 'detectFailedChecks', headSha: headSha,
-                inputFolder: inputFolder, jenkinsBasePath: jenkinsBasePath });
+                inputFolder: inputFolder, jenkinsBasePath: jenkinsBasePath, diffText: diffText });
             return opts.failedChecks || [];
         }
     };
@@ -167,7 +167,8 @@ test('ticket-anchored: assembles PR context, posts review-started comment, retur
     assert.deepEqual(rec.ghCalls.map(function(c) { return c.fn; }),
         ['findPRForTicket', 'getPRDetails', 'fetchDiscussionsAndRawData', 'detectFailedChecks']);
     assert.deepEqual(rec.ghCalls[3], { fn: 'detectFailedChecks', headSha: 'abc123def',
-        inputFolder: 'input/TS-42', jenkinsBasePath: undefined });
+        inputFolder: 'input/TS-42', jenkinsBasePath: undefined,
+        diffText: 'diff --git a/x b/x' });
     // One tracker comment: the "review started" notice.
     assert.equal(rec.comments.length, 1);
     assert.equal(rec.comments[0].tool, 'jira_post_comment');

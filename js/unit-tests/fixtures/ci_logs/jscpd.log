@@ -1,0 +1,12 @@
+jscpd: scanning 412 files (dart)
+Found 2 clones.
+
+Clone found (dart):
+ - lib/models/user.dart: 10-30
+ lib/models/profile.dart: 5-25
+
+Clone found (dart):
+ - lib/services/auth_service.dart: 100-140
+ lib/services/session_service.dart: 200-240
+
+Copy/paste detection completed - duplication threshold exceeded

@@ -15,6 +15,11 @@
  *   R2 duplicate keys — no .github/workflows/*.yml may contain duplicate
  *      mapping keys (YAML hard error → unparseable stretch → phantom
  *      registrations). This is the #671 root-cause class.
+ *   R3 assigned-only — gh-1076: the stub's issues trigger fires on
+ *      `assigned` ONLY. The `labeled` trigger re-fired the workflow on
+ *      the factory's own consequence labels (live #1074: 3 runs for one
+ *      assign); label-driven pickup is the SM tick's workflow_dispatch
+ *      lane, so no labeled branch may survive anywhere in the stub.
  */
 'use strict';
 
@@ -88,6 +93,129 @@ suite('workflowLint.extractTriggers', function () {
 
     test('quoted trigger keys are unquoted', function () {
         var yml = 'on:\n  "issues":\n  workflow_dispatch:\njobs: {}';
+        assert.deepEqual(lint.extractTriggers(yml), ['issues', 'workflow_dispatch']);
+    });
+});
+
+// ── extractIssueTypes: pure-logic fixtures ───────────────────────────────────
+
+suite('workflowLint.extractIssueTypes', function () {
+
+    test('flow list form under issues:', function () {
+        var yml = [
+            'name: AI Teammate',
+            'on:',
+            '  issues:',
+            '    types: [assigned, labeled]',
+            '  workflow_dispatch:',
+            'jobs: {}'
+        ].join('\n');
+        assert.deepEqual(lint.extractIssueTypes(yml), ['assigned', 'labeled']);
+    });
+
+    test('assigned-only flow list (the gh-1076 stub shape)', function () {
+        var yml = 'on:\n  issues:\n    types: [assigned]\n  workflow_dispatch:\npermissions: {}';
+        assert.deepEqual(lint.extractIssueTypes(yml), ['assigned']);
+    });
+
+    test('block list form is parsed', function () {
+        var yml = [
+            'on:',
+            '  issues:',
+            '    types:',
+            '      - assigned',
+            '      - labeled',
+            '  workflow_dispatch:'
+        ].join('\n');
+        assert.deepEqual(lint.extractIssueTypes(yml), ['assigned', 'labeled']);
+    });
+
+    test('no issues trigger yields null', function () {
+        var yml = 'on:\n  push:\n    branches: [main]\n  workflow_dispatch:\njobs: {}';
+        assert.equal(lint.extractIssueTypes(yml), null);
+    });
+
+    test('issues trigger without a types key yields null', function () {
+        var yml = 'on:\n  issues:\n  workflow_dispatch:\njobs: {}';
+        assert.equal(lint.extractIssueTypes(yml), null);
+    });
+
+    test('flow-list on: form yields null (no per-trigger options)', function () {
+        assert.equal(lint.extractIssueTypes('on: [issues, workflow_dispatch]\njobs: {}'), null);
+    });
+
+    test('types under a different trigger never leak into the result', function () {
+        var yml = [
+            'on:',
+            '  schedule:',
+            '    - cron: "*/5 * * * *"',
+            '  issues:',
+            '    types: [assigned]'
+        ].join('\n');
+        assert.deepEqual(lint.extractIssueTypes(yml), ['assigned']);
+    });
+
+    test('commented-out types lines are skipped', function () {
+        var yml = [
+            'on:',
+            '  issues:',
+            '    # types: [assigned, labeled]',
+            '    types: [assigned]',
+            '  workflow_dispatch:'
+        ].join('\n');
+        assert.deepEqual(lint.extractIssueTypes(yml), ['assigned']);
+    });
+
+    test('a flow-form on: line is skipped — a later block-form on: still yields types', function () {
+        var yml = [
+            'on: [push]',
+            'on:',
+            '  issues:',
+            '    types: [assigned]',
+            'jobs: {}'
+        ].join('\n');
+        assert.deepEqual(lint.extractIssueTypes(yml), ['assigned']);
+    });
+
+    test('block list items tolerate blanks and trailing comments', function () {
+        var yml = [
+            'on:',
+            '  issues:',
+            '    types:',
+            '      - assigned # instant fire',
+            '',
+            '      - labeled',
+            '  workflow_dispatch:'
+        ].join('\n');
+        assert.deepEqual(lint.extractIssueTypes(yml), ['assigned', 'labeled']);
+    });
+
+    test('a column-0 comment inside the on: block does not end the types scan', function () {
+        var yml = [
+            'on:',
+            '  issues:',
+            '    types: [assigned]',
+            '# a column-0 comment between triggers',
+            '  workflow_dispatch:'
+        ].join('\n');
+        assert.deepEqual(lint.extractIssueTypes(yml), ['assigned']);
+    });
+});
+
+suite('workflowLint shared block scanner (extractTriggers + extractIssueTypes)', function () {
+
+    test('column-0 comments inside the on: block never hide later triggers', function () {
+        // YAML: comments are transparent — a column-0 comment between
+        // children does not close the on: mapping, so the trigger scan
+        // must not stop at it (a commented-out trigger line is a comment,
+        // NOT a trigger — but a real trigger below it still counts).
+        var yml = [
+            'on:',
+            '  issues:',
+            '# column-0 comment between children',
+            '  workflow_dispatch:',
+            'jobs: {}'
+        ].join('\n');
         assert.deepEqual(lint.extractTriggers(yml), ['issues', 'workflow_dispatch']);
     });
 });
@@ -395,9 +523,135 @@ function assertLabelGate(yml, label) {
     });
 }
 
-suite('workflow contract — ai-teammate labeled-event gate (gh-1029)', function () {
+suite('workflow contract — template labeled-event gate (gh-1029)', function () {
 
-    assertLabelGate(STUB, '.github/workflows/ai-teammate.yml');
+    // gh-1076 removed the `labeled` trigger from the dmtools-agents stub
+    // (see the gh-1076 suite below) — the stub no longer carries a labeled
+    // gate branch to guard. The consumer-repo TEMPLATE keeps the labeled
+    // fast path (its event-path dedup is the deferred gh-1065 follow-up),
+    // so while it does, this gh-1029 contract guards it: lifecycle labels
+    // must never allocate a runner, the labeled path admits ONLY the
+    // arming labels.
     assertLabelGate(TEMPLATE, 'workflows/ai-teammate.yml.template');
+});
+
+// ── repo contract: gh-1076 — the stub fires on assigned ONLY ────────────────
+//
+// Live 2026-10-19 (#1074): ONE owner assign spawned THREE runs — the
+// `assigned` event plus two `labeled` events from the factory bot's OWN
+// consequence labels (status:* as the dev leg started). gh-1065 dedup
+// made the duplicates self-skip, but every labeled event still started a
+// run: it occupied the concurrency group, spammed the run list and cost
+// a probe. GitHub cannot filter label names in `on:`, and a job-level
+// `if:` still starts and LISTS the run (the owner's explicit complaint),
+// so the labeled trigger is gone entirely — the stub's `issues` trigger
+// fires on `assigned` ONLY. Arming-label (agent:*) pickup continues
+// through the SM tick's workflow_dispatch path (gh-1028 dedup), which is
+// already the governed lane. AC4 stays: `assigned` fires instantly and
+// manual workflow_dispatch is untouched.
+
+suite('workflow contract — ai-teammate assigned-only triggers (gh-1076)', function () {
+
+    test('stub issues trigger fires on assigned ONLY (AC1)', function () {
+        assert.deepEqual(lint.extractIssueTypes(STUB), ['assigned'],
+            'stub on.issues.types drifted — gh-1076: the labeled trigger re-fired the ' +
+            'workflow on the factory\'s own consequence labels (live #1074: 3 runs for ' +
+            'one assign). Arming-label pickup is the SM tick\'s dispatch lane. Found: ' +
+            JSON.stringify(lint.extractIssueTypes(STUB)));
+    });
+
+    test('stub gates carry NO labeled branch — a labeled event cannot reach a job (AC2/AC3)', function () {
+        var blocks = foldedIfBlocks(STUB);
+        assert.ok(blocks.length >= 2, 'expected the dedup + teammate folded gates');
+        for (var i = 0; i < blocks.length; i++) {
+            assert.ok(blocks[i].indexOf("github.event.action == 'labeled'") === -1 &&
+                blocks[i].indexOf('github.event.label.name') === -1,
+                'stub gate ' + (i + 1) + ' still keys the labeled action — gh-1076 made it ' +
+                'unreachable; the byte-level guarantee AC3 wants is that no labeled branch ' +
+                'exists anywhere in the stub gates. Gate: ' + blocks[i]);
+        }
+    });
+
+    test('stub assigned gate still requires the ai-teammate assignee', function () {
+        var ifExpr = extractJobIf(STUB);
+        assert.ok(ifExpr.indexOf("github.event.action == 'assigned'") !== -1,
+            'stub gate must key the assignee check to action == assigned');
+        assert.ok(ifExpr.indexOf("contains(github.event.issue.assignees.*.login, 'ai-teammate')") !== -1,
+            'stub assigned gate must require the ai-teammate assignee — a bare assigned ' +
+            'event on any issue would otherwise allocate a runner');
+    });
+
+    test('stub keeps the workflow_dispatch entry path (AC4)', function () {
+        assert.ok(extractJobIf(STUB).indexOf("github.event_name == 'workflow_dispatch'") !== -1,
+            'dropping the dispatch path silently kills the SM reconciler loop');
+    });
+});
+
+// ── repo contract: gh-1075 — the stub run-name carries the pr anchor ────────
+//
+// gh-1075 review round 2 (IMPORTANT): the SM's pull-keyed leg probe
+// (branchLegGuard.hasActiveLegRunForPull) suppresses a second rework arm
+// on the same fork PR via the whole-token 'pr-<N>' run-title anchor. The
+// TEMPLATE run-name always rendered it, but the self-host stub (this
+// file) echoed inputs.issue only — so on the live-incident repo (fa
+// pr-1591's home) the gate was blind exactly where it matters. The stub
+// now renders ' · pr-<N>' right after the issue slot, and this contract
+// keeps the two run-name dialects from drifting apart again (the way
+// this file guards the trigger/dedup invariants). The anchor sits
+// BEFORE the trailing leg token ON PURPOSE: stubTailLegOf (the
+// 'teammate:' family of legOfRunName, js/common/teammateEventDedup.js)
+// parses the leg at the END of the title — appending after the leg
+// would blind the gh-1065 completed-owner leg precision.
+
+// The stub's single-line double-quoted run-name value ('' when absent).
+function stubRunNameOf(yml) {
+    var m = /^\s*run-name:\s*"(.*)"\s*$/m.exec(yml);
+    return m ? m[1] : '';
+}
+
+suite('workflow contract — stub run-name carries the gh-1075 pr anchor', function () {
+
+    test('the stub run-name renders · pr-<N> whenever inputs.pr is set', function () {
+        var rn = stubRunNameOf(STUB);
+        assert.ok(rn.indexOf('github.event.inputs.pr') !== -1,
+            'stub run-name never reads inputs.pr — a PR-anchored fork leg (gh-1075 always ' +
+            'backfills inputs.pr) would run untitled and the SM pull-keyed leg probe would ' +
+            'never suppress the second rework arm (live fa pr-1591 incident class)');
+        assert.ok(rn.indexOf('pr-{0}') !== -1,
+            'stub run-name must render the whole-token pr anchor (format(...pr-{0}...)) — ' +
+            'titleHasPrToken (js/common/branchLegGuard.js) keys on it');
+        assert.ok(rn.indexOf("(github.event.inputs.pr || '') != ''") !== -1,
+            'the pr anchor must be guarded — github.event.inputs is null on issues events, ' +
+            'and an unguarded render would print a stray pr- token on ordinary issue runs ' +
+            '(the template run-name documents the same null != \'\' trap)');
+    });
+
+    test('the leg token stays TRAILING — stubTailLegOf must keep parsing it', function () {
+        var rn = stubRunNameOf(STUB);
+        var lastExpr = rn.lastIndexOf('${');
+        assert.ok(lastExpr !== -1 && rn.indexOf('github.event.inputs.leg', lastExpr) !== -1,
+            'the LAST ${{ }} expression of the stub run-name must derive the LEG — ' +
+            'stubTailLegOf (/\\s(dev|review|rework)$/) parses the title tail, and the ' +
+            'gh-1065 completed-owner leg rule depends on it');
+        assert.ok(rn.indexOf('github.event.inputs.pr') < lastExpr,
+            'the pr anchor sits BEFORE the leg token — appending it after the leg would ' +
+            'blind legOfRunName exactly when the gh-1075 fork gate needs both');
+    });
+
+    test('a rendered fork-leg title keeps legOfRunName AND the pr anchor working end-to-end', function () {
+        var dedup = loadModule('js/common/teammateEventDedup.js');
+        var guard = loadModule('js/common/branchLegGuard.js');
+        // The rendered shapes the new run-name produces:
+        var forkTitle = 'teammate: workflow_dispatch # · pr-1591 rework';
+        var issueTitle = 'teammate: assigned #1040 rework';
+        assert.equal(dedup.legOfRunName(forkTitle), 'rework',
+            'legOfRunName still resolves the leg on a pr-anchored fork title');
+        assert.equal(dedup.legOfRunName(issueTitle), 'rework',
+            'legOfRunName still resolves the leg on an ordinary issue title');
+        assert.ok(guard.titleHasPrToken(forkTitle, 1591),
+            'titleHasPrToken sees the anchor on the rendered fork title');
+        assert.ok(!guard.titleHasPrToken(forkTitle, 2000),
+            'a different PR number does not match');
+    });
 });
 

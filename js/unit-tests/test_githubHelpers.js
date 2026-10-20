@@ -25,7 +25,8 @@ function loadGithubHelpers(mocks) {
             './gitOps.js': gitOpsStub,
             './machineNotice.js': machineNoticeModule,
             './reviewThreadInventory.js': reviewThreadInventoryModule,
-            './ci.js': loadModule('js/common/ci.js')
+            './ci.js': loadModule('js/common/ci.js'),
+            './ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         mocks || {}
     );
@@ -2295,11 +2296,11 @@ suite('githubHelpers.detectFailedChecks — gh-1045 bare check-run URLs + loud f
         assert.contains(fullLogWrite.content, 'LOG-FOR-117677126855', 'actions-job check log present');
         assert.contains(fullLogWrite.content, 'LOG-FOR-117677625675', 'bare check-run check log present');
         assert.contains(fullLogWrite.content, 'LOG FETCH FAILED for: agents-gate', 'per-check fetch diagnostics for the rest');
-        assert.contains(fullLogWrite.content, 'Reason: check-run log fetch failed: check-run gone');
+        assert.contains(fullLogWrite.content, 'Reason: orphan check-run (no job logs; mirrored verdict)'); assert.contains(fullLogWrite.content, '[check-run log fetch failed: check-run gone]');
 
         var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
         assert.ok(mdWrite, 'ci_failures.md written');
-        assert.contains(mdWrite.content, 'log fetch failed: check-run log fetch failed: check-run gone',
+        assert.contains(mdWrite.content, '[check-run log fetch failed: check-run gone]',
             'per-check failure is loud in ci_failures.md');
         assert.contains(mdWrite.content, 'ci_failures_full.log', 'md references the full log that WAS written');
     });
@@ -2331,12 +2332,12 @@ suite('githubHelpers.detectFailedChecks — gh-1045 bare check-run URLs + loud f
         assert.ok(fullLogWrite, 'full log written');
         assert.contains(fullLogWrite.content, 'healthy log content', 'resolvable check log survives another check\'s failure');
         assert.contains(fullLogWrite.content, 'LOG FETCH FAILED for: broken-check');
-        assert.contains(fullLogWrite.content, 'Reason: check-run log fetch failed: boom');
+        assert.contains(fullLogWrite.content, '[check-run log fetch failed: boom]');
 
         var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
         assert.ok(mdWrite);
         assert.contains(mdWrite.content, 'healthy log content');
-        assert.contains(mdWrite.content, 'log fetch failed: check-run log fetch failed: boom');
+        assert.contains(mdWrite.content, 'log fetch failed: orphan check-run'); assert.contains(mdWrite.content, '[check-run log fetch failed: boom]');
     });
 
     test('ci_failures.md never references ci_failures_full.log when the full-log write failed (AC2)', function() {
@@ -2442,10 +2443,10 @@ suite('githubHelpers.detectFailedChecks — gh-1045 bare check-run URLs + loud f
 
         var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
         assert.ok(mdWrite);
-        assert.contains(mdWrite.content, 'log fetch failed: check-run 4242 log came back empty');
+        assert.contains(mdWrite.content, '[check-run 4242 log came back empty');
         var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
         assert.ok(fullLogWrite, 'full log written');
-        assert.contains(fullLogWrite.content, 'Reason: check-run 4242 log came back empty');
+        assert.contains(fullLogWrite.content, '[check-run 4242 log came back empty');
     });
 
     test('empty-log branches of the resolvers return loud reasons (direct)', function() {
@@ -2465,5 +2466,410 @@ suite('githubHelpers.detectFailedChecks — gh-1045 bare check-run URLs + loud f
         assert.deepEqual(checkRunResult,
             { reason: 'check-run 4242 log came back empty (check run is not backed by a GitHub Actions job?)' },
             'bare /runs/{id} empty log pins the loud contract');
+    });
+});
+
+suite('githubHelpers.detectFailedChecks — orphan/placeholder check-runs (dart #432)', function() {
+
+    function findWrite(writes, path) {
+        return writes.filter(function(w) { return w.path === path; })[0] || null;
+    }
+
+    function orphanMocks(writes, checkRuns, extra) {
+        var m = {
+            github_get_commit_check_runs: function() { return { check_runs: checkRuns }; },
+            github_get_job_logs: function(args) {
+                if (args.jobId === '118070885373') throw new Error('HTTP 404 {"message":"Not Found"}');
+                return 'REAL-LOG-' + args.jobId;
+            },
+            github_list_workflow_runs: function() {
+                return { workflow_runs: [
+                    { id: 39254074760, head_sha: 'other', html_url: 'https://x/actions/runs/39254074760' },
+                    { id: 39254356497, head_sha: '0d76ffe9abc', html_url: 'https://x/actions/runs/39254356497' }
+                ] };
+            },
+            github_get_workflow_run_jobs: function(args) {
+                assert.equal(args.runId, '39254356497', 'only runs on the head are scanned');
+                return { jobs: [
+                    { id: 118066596584, name: 'test (1)', conclusion: 'failure' },
+                    { id: 118070072955, name: 'gate', conclusion: 'failure' }
+                ] };
+            },
+            file_write: function(args) { writes.push(args); }
+        };
+        Object.keys(extra || {}).forEach(function(k) { m[k] = extra[k]; });
+        return m;
+    }
+
+    test('orphan 404 falls back to the same-named failed job logs of the CI run on the head', function() {
+        var writes = [];
+        var gh = loadGithubHelpers(orphanMocks(writes, [
+            { name: 'gate', conclusion: 'failure', details_url: 'https://github.com/o/r/runs/118070885373' }
+        ]));
+        var failed = gh.detectFailedChecks('o', 'r', '0d76ffe9abc', '/tmp/in');
+        assert.equal(failed.length, 1);
+        var full = findWrite(writes, '/tmp/in/ci_failures_full.log').content;
+        assert.contains(full, 'REAL-LOG-118070072955', 'real gate job logs used');
+        assert.contains(full, 'orphan check-run', 'fallback provenance noted');
+        assert.notContains(full, 'LOG FETCH FAILED', 'no 404 section');
+    });
+
+    test('orphan is deduped into a same-named failed check that has real logs', function() {
+        var writes = [];
+        var gh = loadGithubHelpers(orphanMocks(writes, [
+            { name: 'gate', conclusion: 'failure', details_url: 'https://github.com/o/r/runs/118070885373' },
+            { name: 'gate', conclusion: 'failure', details_url: 'https://github.com/o/r/actions/runs/39254356497/job/118070072955' }
+        ], { github_get_workflow_run_jobs: function() { throw new Error('no fallback needed'); } }));
+        var failed = gh.detectFailedChecks('o', 'r', '0d76ffe9abc', '/tmp/in');
+        assert.equal(failed.length, 1, 'one gate entry');
+        var md = findWrite(writes, '/tmp/in/ci_failures.md').content;
+        assert.contains(md, '1 check(s) failed');
+        assert.notContains(md, '118070885373', 'orphan section dropped');
+        assert.notContains(md, 'log fetch failed');
+    });
+
+    test('orphan with no same-named job on the head gets a clear orphan reason', function() {
+        var writes = [];
+        var gh = loadGithubHelpers(orphanMocks(writes, [
+            { name: 'agents-gate', conclusion: 'failure', details_url: 'https://github.com/o/r/runs/118070885373' }
+        ]));
+        gh.detectFailedChecks('o', 'r', '0d76ffe9abc', '/tmp/in');
+        var md = findWrite(writes, '/tmp/in/ci_failures.md').content;
+        assert.contains(md, 'orphan check-run (no job logs; mirrored verdict) — see run https://github.com/o/r/runs/118070885373');
+    });
+});
+
+suite('githubHelpers.fetchDiscussionsAndRawData — dmtools: machine markers (naked-pr-rearm)', function() {
+    test('naked-pr-rearm notice is not an open thread nor a general comment', function() {
+        var body = '<!-- dmtools:naked-pr-rearm {"pr":432,"issue":1,"label":"x","head":"abc"} -->\n🩹 **Naked-PR reconciliation (gh-1097)**: re-armed';
+        var gh = loadGithubHelpers({
+            github_get_pr_conversations: function() { return [{ rootComment: { id: 9, body: body, user: { login: 'ai-teammate' } }, replies: [] }]; },
+            github_get_pr_review_threads: function() { return null; },
+            github_get_pr_comments: function() { return [{ body: body, user: { login: 'ai-teammate' }, created_at: '2026-10-19' }]; }
+        });
+        var res = gh.fetchDiscussionsAndRawData('o', 'r', '432');
+        var open = ((res.rawThreads && res.rawThreads.threads) || []).filter(function(t) { return !t.resolved; });
+        assert.equal(open.length, 0, 'no open thread from the rearm notice');
+        assert.ok(!res.markdown || res.markdown.indexOf('Naked-PR reconciliation') === -1, 'not in pr_discussions.md');
+    });
+});
+
+suite('githubHelpers.runsOfPayload — payload shapes (orphan fallback)', function() {
+    var h = loadGithubHelpers();
+    test('array payload is returned as-is', function() {
+        assert.equal(h._runsOfPayload([{ id: 1 }]).length, 1);
+    });
+    test('workflow_runs and workflowRuns objects', function() {
+        assert.equal(h._runsOfPayload({ workflow_runs: [{ id: 1 }, { id: 2 }] }).length, 2);
+        assert.equal(h._runsOfPayload({ workflowRuns: [{ id: 3 }] })[0].id, 3);
+    });
+    test('JSON string payloads (plain and tool-result wrapped)', function() {
+        assert.equal(h._runsOfPayload(JSON.stringify({ workflow_runs: [{ id: 4 }] }))[0].id, 4);
+        assert.equal(h._runsOfPayload(JSON.stringify({ result: [{ id: 5 }] }))[0].id, 5);
+        assert.equal(h._runsOfPayload(JSON.stringify({ result: JSON.stringify([{ id: 6 }]) }))[0].id, 6);
+    });
+    test('garbage, null and runless objects yield []', function() {
+        assert.equal(h._runsOfPayload('not json').length, 0);
+        assert.equal(h._runsOfPayload(JSON.stringify({ result: 'nope{' })).length, 0);
+        assert.equal(h._runsOfPayload(null).length, 0);
+        assert.equal(h._runsOfPayload({ other: 1 }).length, 0);
+    });
+});
+
+// ── gh-1119: gate-violation extraction wired into detectFailedChecks ────────
+
+suite('githubHelpers.detectFailedChecks — owned/foreign violations block (gh-1119)', function() {
+
+    function findWrite(writes, path) {
+        for (var i = 0; i < writes.length; i++) {
+            if (writes[i].path === path) return writes[i];
+        }
+        return null;
+    }
+
+    function make433Gh(writes) {
+        var gateLog = file_read({ path: 'js/unit-tests/fixtures/ci_logs/gate_crap4dart.log' });
+        var agentsGateLog = file_read({ path: 'js/unit-tests/fixtures/ci_logs/agents_gate.log' });
+        return loadGithubHelpers({
+            github_get_commit_check_runs: function() {
+                return { check_runs: [
+                    { name: 'gate', conclusion: 'failure', details_url: 'https://github.com/acme/widgets/actions/runs/1/job/111' },
+                    { name: 'agents-gate', conclusion: 'failure', details_url: 'https://github.com/acme/widgets/actions/runs/1/job/222' }
+                ]};
+            },
+            github_get_job_logs: function(args) {
+                return String(args.jobId) === '111' ? gateLog : agentsGateLog;
+            },
+            file_write: function(args) { writes.push(args); }
+        });
+    }
+
+    test('IT-1/AC7 (replay #433): the owned violation row opens ci_failures.md above the raw tails', function() {
+        var writes = [];
+        var gh = make433Gh(writes);
+        var diff = file_read({ path: 'js/unit-tests/fixtures/ci_logs/diff_pr_433.txt' });
+
+        var failed = gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input', null, diff);
+
+        assert.equal(failed.length, 2, 'both failed checks reported as before');
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.ok(mdWrite, 'ci_failures.md written');
+        var md = mdWrite.content;
+        var ownedIdx = md.indexOf('Violations you must fix (1 owned)');
+        var foreignIdx = md.indexOf('Foreign / infra reds (do not chase)');
+        var tailsIdx = md.indexOf('## ❌ gate');
+        assert.ok(ownedIdx !== -1, 'owned table present');
+        assert.ok(foreignIdx > ownedIdx, 'owned table BEFORE the foreign list');
+        assert.ok(tailsIdx > ownedIdx, 'raw 500-line tails stay BELOW the violations block (I1)');
+        assert.contains(md, '`test/js/require_base_resolution_test.dart:13`');
+        assert.contains(md, 'main has 100 lines > max 60');
+        assert.contains(md, 'js/unit-tests/test_recoverDirtyReviewTestCase.js');
+
+        var jsonWrite = findWrite(writes, '/tmp/input/ci_violations.json');
+        assert.ok(jsonWrite, 'ci_violations.json written');
+        var summary = JSON.parse(jsonWrite.content);
+        assert.equal(summary.owned, 1);
+        assert.equal(summary.foreign, 1);
+        assert.equal(summary.violations.length, 2);
+
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(fullLogWrite, 'I1: the full log is still written');
+        assert.contains(fullLogWrite.content, 'main has 100 lines > max 60');
+    });
+
+    test('AC5/REG-1: an unrecognized log shape keeps today\u2019s file — no table, no ci_violations.json', function() {
+        var writes = [];
+        var unknownLog = file_read({ path: 'js/unit-tests/fixtures/ci_logs/unknown_shape.log' });
+        var gh = loadGithubHelpers({
+            github_get_commit_check_runs: function() {
+                return { check_runs: [
+                    { name: 'gate', conclusion: 'failure', details_url: 'https://github.com/acme/widgets/actions/runs/1/job/333' }
+                ]};
+            },
+            github_get_job_logs: function() { return unknownLog; },
+            file_write: function(args) { writes.push(args); }
+        });
+
+        gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input', null,
+            'diff --git a/src/a.dart b/src/a.dart\n');
+
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.ok(mdWrite, 'ci_failures.md still written');
+        assert.notContains(mdWrite.content, 'Violations you must fix');
+        assert.notContains(mdWrite.content, 'Foreign / infra reds');
+        assert.contains(mdWrite.content, '## ❌ gate', 'the raw per-check section is intact');
+        assert.notOk(findWrite(writes, '/tmp/input/ci_violations.json'), 'no ci_violations.json for zero violations');
+        assert.ok(findWrite(writes, '/tmp/input/ci_failures_full.log'), 'full log still written');
+    });
+
+    test('a violations json write failure is non-fatal (the md still carries the table)', function() {
+        var writes = [];
+        var gateLog = file_read({ path: 'js/unit-tests/fixtures/ci_logs/gate_crap4dart.log' });
+        var diff = file_read({ path: 'js/unit-tests/fixtures/ci_logs/diff_pr_433.txt' });
+        var ghFailing = loadGithubHelpers({
+            github_get_commit_check_runs: function() {
+                return { check_runs: [
+                    { name: 'gate', conclusion: 'failure', details_url: 'https://github.com/acme/widgets/actions/runs/1/job/111' }
+                ]};
+            },
+            github_get_job_logs: function() { return gateLog; },
+            file_write: function(args) {
+                if (args.path && args.path.indexOf('ci_violations.json') !== -1) {
+                    throw new Error('disk full');
+                }
+                writes.push(args);
+            }
+        });
+
+        var failed = ghFailing.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input', null, diff);
+        assert.equal(failed.length, 1);
+        assert.ok(findWrite(writes, '/tmp/input/ci_failures.md'), 'md written despite the json failure');
+        assert.notOk(findWrite(writes, '/tmp/input/ci_violations.json'));
+        assert.contains(findWrite(writes, '/tmp/input/ci_failures.md').content, 'Violations you must fix');
+    });
+
+    test('buildLogSections carries the raw logs for the extractor (additive)', function() {
+        var gh = loadGithubHelpers({});
+        var sections = gh.buildLogSections({ name: 'gate', details_url: 'u' }, 'a\nb\n', 'Error log');
+        assert.equal(sections.logs, 'a\nb\n');
+        assert.equal(gh.buildLogSections({ name: 'g' }, null, 'Error log'), null);
+    });
+});
+
+// ── fetchDiscussionsAndRawData — scm delegation + general comments (gh-1086) ──
+
+suite('githubHelpers.fetchDiscussionsAndRawData — SCM delegation', function() {
+    test('SCM-object first argument delegates to provider.fetchDiscussions', function() {
+        var fetched = [];
+        var scm = {
+            listPrs: function() { return []; },
+            fetchDiscussions: function(prId) {
+                fetched.push(prId);
+                return { markdown: 'MD', rawThreads: { threads: [] } };
+            }
+        };
+        var gh = loadGithubHelpers({});
+        var result = gh.fetchDiscussionsAndRawData(scm, 'PR-42');
+        assert.equal(fetched.length, 1);
+        assert.equal(fetched[0], 'PR-42');
+        assert.equal(result.markdown, 'MD');
+        assert.deepEqual(result.rawThreads, { threads: [] });
+    });
+});
+
+suite('githubHelpers.fetchDiscussionsAndRawData — general PR comments section', function() {
+
+    function ghWith(comments, overrides) {
+        var mocks = {
+            github_get_pr_conversations: function() { return []; },
+            github_get_pr_review_threads: function() { return null; },
+            github_get_pr_comments: function() { return comments; }
+        };
+        if (overrides) {
+            for (var k in overrides) mocks[k] = overrides[k];
+        }
+        return loadGithubHelpers(mocks);
+    }
+
+    test('no conversations, threads or comments → null markdown and null rawThreads', function() {
+        var gh = ghWith([]);
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '7');
+        assert.equal(result.markdown, null);
+        assert.equal(result.rawThreads, null);
+    });
+
+    test('general comments render with author, date and separator', function() {
+        var gh = ghWith([
+            { user: { login: 'alice' }, created_at: '2026-03-26T10:00:00Z', body: 'first note' },
+            { user: { login: 'bob' }, created_at: '2026-03-27T09:00:00Z', body: 'second note' }
+        ]);
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '7');
+        assert.ok(result.markdown, 'markdown built');
+        assert.contains(result.markdown, '# PR Discussion History');
+        assert.contains(result.markdown, '_Previous review discussions for PR #7._');
+        assert.contains(result.markdown, '## General PR Comments');
+        assert.contains(result.markdown, '**alice** (2026-03-26):');
+        assert.contains(result.markdown, '**bob** (2026-03-27):');
+        assert.contains(result.markdown, 'first note');
+        assert.contains(result.markdown, 'second note');
+        assert.contains(result.markdown, '---');
+        assert.equal(result.rawThreads, null);
+    });
+
+    test('dmtools: marker comments are excluded from the general section', function() {
+        var marker = '<!-- dmtools:naked-pr-rearm {"pr":7} --> rearm';
+        var gh = ghWith([
+            { user: { login: 'bot' }, created_at: '2026-03-26T10:00:00Z', body: marker },
+            { user: { login: 'human' }, created_at: '2026-03-26T11:00:00Z', body: 'real feedback' }
+        ]);
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '7');
+        assert.notContains(result.markdown, 'naked-pr-rearm');
+        assert.contains(result.markdown, 'real feedback');
+    });
+
+    test('missing author and created_at fall back to unknown/empty', function() {
+        var gh = ghWith([{ body: 'anon note' }]);
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '7');
+        assert.contains(result.markdown, '**unknown** ():');
+        assert.contains(result.markdown, 'anon note');
+    });
+
+    test('comment body whitespace is trimmed', function() {
+        var gh = ghWith([{ user: { login: 'a' }, created_at: '2026-01-01T00:00:00Z', body: '   padded   \n' }]);
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '7');
+        assert.ok(result.markdown.indexOf('padded') !== -1);
+        assert.ok(result.markdown.indexOf('   padded   ') === -1, 'raw padding must be trimmed');
+    });
+
+    test('comments fetch failure still yields no markdown when nothing else exists', function() {
+        var gh = ghWith(null, {
+            github_get_pr_comments: function() { throw new Error('comments down'); }
+        });
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '7');
+        assert.equal(result.markdown, null);
+        assert.equal(result.rawThreads, null);
+    });
+
+    test('comments alone produce the markdown header wrapper', function() {
+        var gh = ghWith([{ user: { login: 'a' }, created_at: '2026-01-01', body: 'x' }]);
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '99');
+        assert.ok(result.markdown.indexOf('# PR Discussion History') === 0, 'header first');
+        assert.ok(result.markdown.indexOf('_Previous review discussions for PR #99._') !== -1);
+    });
+
+    test('inventory with open threads but no general comments keeps raw census', function() {
+        var gh = loadGithubHelpers({
+            github_get_pr_conversations: function() {
+                return [makeConversation({ id: 11, body: 'open thread', isResolved: false })];
+            },
+            github_get_pr_review_threads: function() {
+                return makeGraphQLResponse([makeGraphQLThread({ dbId: 11, graphqlId: 'PRRT_11', isResolved: false })]);
+            },
+            github_get_pr_comments: function() { return []; }
+        });
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '11');
+        assert.ok(result.markdown, 'inventory section present');
+        assert.ok(result.rawThreads, 'rawThreads present');
+        assert.equal(result.rawThreads.threads.length, 1);
+        assert.ok(result.rawThreads.census, 'census propagated');
+        assert.equal(result.rawThreads.threads[0].rootCommentId, 11);
+    });
+
+    test('conversations and GraphQL both failing yields empty result', function() {
+        var gh = loadGithubHelpers({
+            github_get_pr_conversations: function() { throw new Error('conversations down'); },
+            github_get_pr_review_threads: function() { throw new Error('graphql down'); },
+            github_get_pr_comments: function() { return []; }
+        });
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '3');
+        assert.equal(result.markdown, null);
+        assert.equal(result.rawThreads, null);
+    });
+});
+
+suite('githubHelpers.fetchDiscussionsAndRawData — inventory build failure', function() {
+    test('inventory build failure falls back to no inventory section (census dropped)', function() {
+        var machineNoticeModule = loadModule('js/common/machineNotice.js');
+        var brokenInventory = {
+            collectThreadInventory: function() { throw new Error('inventory exploded'); },
+            parseGraphQLNodes: function() { return []; }
+        };
+        var gh = loadModule(
+            'js/common/githubHelpers.js',
+            makeRequire({
+                '../config.js': configModule,
+                'config': configModule,
+                './pullRequest.js': PR_HELPER_REAL_GH,
+                './gitOps.js': gitOpsStub,
+                './machineNotice.js': machineNoticeModule,
+                './reviewThreadInventory.js': brokenInventory,
+                './ci.js': loadModule('js/common/ci.js'),
+                './ciViolations.js': loadModule('js/common/ciViolations.js')
+            }),
+            {
+                github_get_pr_conversations: function() { return [makeConversation({ id: 1, body: 'b' })]; },
+                github_get_pr_review_threads: function() { return makeGraphQLResponse([]); },
+                github_get_pr_comments: function() { return [{ user: { login: 'a' }, created_at: '2026-01-01', body: 'note' }]; }
+            }
+        );
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '5');
+        // inventory section dropped, general comments still render
+        assert.ok(result.markdown, 'markdown from general comments only');
+        assert.notContains(result.markdown, 'PR Review Threads');
+        assert.contains(result.markdown, '## General PR Comments');
+        assert.equal(result.rawThreads, null, 'no inventory → no rawThreads payload');
+    });
+
+    test('fetchPrConversations passes non-array payloads through to the inventory', function() {
+        var seen = [];
+        var gh = loadGithubHelpers({
+            github_get_pr_conversations: function() { return 5; },
+            github_get_pr_review_threads: function() { return null; },
+            github_get_pr_comments: function() { return []; }
+        });
+        var result = gh.fetchDiscussionsAndRawData('org', 'repo', '5');
+        seen.push(result);
+        assert.equal(result.markdown, null);
+        assert.equal(result.rawThreads, null);
     });
 });

@@ -427,12 +427,14 @@ function createTracker(config, customParams) {
     var ADO_SEARCH_COLUMNS = { labels: 'System.Tags', tags: 'System.Tags', summary: 'System.Title', title: 'System.Title',
         status: 'System.State', state: 'System.State', description: 'System.Description' };
 
+    var ADO_SEARCH_SKIP = { key: true, id: true, comment: true, comments: true };
+
     function adoSearchFields(fields) {
         var out = ['System.Title', 'System.State', 'System.Tags', 'System.WorkItemType'];
         for (var i = 0; i < (fields || []).length; i++) {
             var raw = String(fields[i]);
             var low = raw.toLowerCase();
-            if (low === 'key' || low === 'id') continue;
+            if (ADO_SEARCH_SKIP[low]) continue;
             var mapped = ADO_SEARCH_COLUMNS[low] || raw;
             if (out.indexOf(mapped) === -1) out.push(mapped);
         }

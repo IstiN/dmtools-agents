@@ -402,10 +402,18 @@ function _githubCollectThreadInventory(conversations, graphqlRaw) {
     return null;
 }
 
+// gh-1097 follow-up: hidden `<!-- dmtools:` audit comments (naked-pr-rearm
+// etc.) are machine bookkeeping — never review feedback. Mirrors
+// machineNotice.isDmtoolsMarkerBody (inlined: keeps loader maps unchanged).
+function _isDmtoolsMarkerComment(comment) {
+    return String((comment && comment.body) || '').replace(/^\s+/, '').indexOf('<!-- dmtools:') === 0;
+}
+
 // Pure renderer for the '## General PR Comments' section (verbatim shape).
 function _githubRenderCommentsSection(comments) {
     var commentsSection = '## General PR Comments\n\n';
     comments.forEach(function(comment) {
+        if (_isDmtoolsMarkerComment(comment)) return;
         var author = (comment.user && comment.user.login) ? comment.user.login : 'unknown';
         var date = comment.created_at ? comment.created_at.substring(0, 10) : '';
         commentsSection += '**' + author + '** (' + date + '):\n\n';

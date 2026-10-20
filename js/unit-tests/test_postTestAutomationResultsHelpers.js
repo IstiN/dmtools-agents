@@ -370,3 +370,111 @@ suite('postTestAutomationResultsHelpers: decideTargetStatus', function() {
     });
 
 });
+
+// ── gh-1083: action() split — pure identity + git-stage routing ──────────────
+
+suite('postTestAutomationResultsHelpers: resolveTicketIdentity (gh-1083)', function() {
+
+    test('summary comes from ticket.fields when present', function() {
+        var helpers = loadHelpers();
+        var identity = helpers.resolveTicketIdentity({
+            ticket: { key: 'PROJ-12', fields: { summary: 'Fix the login flow' } }
+        });
+        assert.deepEqual(identity, {
+            ticketKey: 'PROJ-12',
+            ticketSummary: 'Fix the login flow',
+            projectKey: 'PROJ'
+        });
+    });
+
+    test('missing fields degrade the summary to the ticket key', function() {
+        var helpers = loadHelpers();
+        var identity = helpers.resolveTicketIdentity({ ticket: { key: 'PROJ-13' } });
+        assert.equal(identity.ticketSummary, 'PROJ-13');
+        assert.equal(identity.projectKey, 'PROJ');
+    });
+
+    test('null fields degrade the summary to the ticket key', function() {
+        var helpers = loadHelpers();
+        var identity = helpers.resolveTicketIdentity({ ticket: { key: 'AB-9', fields: null } });
+        assert.equal(identity.ticketSummary, 'AB-9');
+        assert.equal(identity.projectKey, 'AB');
+    });
+
+    test('projectKey is the part before the first dash', function() {
+        var helpers = loadHelpers();
+        var identity = helpers.resolveTicketIdentity({
+            ticket: { key: 'LONGPROJ-TC-44', fields: { summary: 's' } }
+        });
+        assert.equal(identity.projectKey, 'LONGPROJ');
+    });
+
+});
+
+suite('postTestAutomationResultsHelpers: decideGitStageRoute (gh-1083)', function() {
+
+    test('success with a new commit routes to create-pr', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.decideGitStageRoute({ success: true }), 'create-pr');
+        assert.equal(helpers.decideGitStageRoute({ success: true, noNewCommit: false }), 'create-pr');
+    });
+
+    test('success without a new commit routes to no-new-commit', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.decideGitStageRoute({ success: true, noNewCommit: true }), 'no-new-commit');
+    });
+
+    test('failed git result routes to git-failure', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.decideGitStageRoute({ success: false, error: 'boom' }), 'git-failure');
+        assert.equal(helpers.decideGitStageRoute({}), 'git-failure');
+    });
+
+    test('noNewCommit is honoured even without success (original else-if ignores success)', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.decideGitStageRoute({ noNewCommit: true }), 'no-new-commit');
+    });
+
+    test('null gitResult throws like the original field access did', function() {
+        var helpers = loadHelpers();
+        var threw = null;
+        try { helpers.decideGitStageRoute(null); } catch (e) { threw = e; }
+        assert.ok(threw, 'null gitResult must throw, not silently route');
+    });
+
+});
+
+suite('postTestAutomationResultsHelpers: action-input resolution (gh-1083)', function() {
+
+    test('resolveJobParams unwraps jobParams when present', function() {
+        var helpers = loadHelpers();
+        var inner = { customParams: {} };
+        assert.equal(helpers.resolveJobParams({ jobParams: inner }), inner);
+    });
+
+    test('resolveJobParams falls back to the params object itself', function() {
+        var helpers = loadHelpers();
+        var bare = { ticket: { key: 'PROJ-1' } };
+        assert.equal(helpers.resolveJobParams(bare), bare);
+        var nullJobParams = { jobParams: null, ticket: { key: 'PROJ-2' } };
+        assert.equal(helpers.resolveJobParams(nullJobParams), nullJobParams, 'falsy jobParams falls back to params');
+    });
+
+    test('resolveRunPaths defaults workingDir to null and the test path to testing/', function() {
+        var helpers = loadHelpers();
+        assert.deepEqual(helpers.resolveRunPaths({}, {}), { workingDir: null, testFilesPath: 'testing/' });
+    });
+
+    test('resolveRunPaths honours the configured workingDir and testFilesGlob', function() {
+        var helpers = loadHelpers();
+        var paths = helpers.resolveRunPaths({ workingDir: '/repo' }, { testFilesGlob: 'src/test/' });
+        assert.deepEqual(paths, { workingDir: '/repo', testFilesPath: 'src/test/' });
+    });
+
+    test('decideOutcomeWord flips between PASSED and FAILED', function() {
+        var helpers = loadHelpers();
+        assert.equal(helpers.decideOutcomeWord(true), 'PASSED');
+        assert.equal(helpers.decideOutcomeWord(false), 'FAILED');
+    });
+
+});

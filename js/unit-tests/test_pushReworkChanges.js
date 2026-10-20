@@ -13,12 +13,19 @@
  * postThreadReplies() must accept both field-name conventions.
  */
 
+// gh-1137: named pass-through stub for the toolchain-summary annotation. A
+// per-callsite inline function(t){return t;} would sit uncovered inside the
+// loader functions and lift their CRAP over the ratchet; the named helper is
+// a separate coverage unit of complexity 1 (CRAP 2, far below the bar).
+var stubToolchainLine = function (t) { return t; };
+
 // File-scope base module (was previously misplaced INSIDE the file_read mock
 // closure below — a latent defect masked in run_all.json by another test file
 // leaking the same sloppy-mode global, but breaking isolated per-file runs).
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var gitStagingModule = loadModule('js/common/gitStaging.js');
+var forkCheckoutModule = loadModule('js/common/forkCheckout.js', makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}) }), {});
 
 // Real githubHelpers (only its own deps stubbed) — pushReworkChanges requires
 // it for the PR-anchored (pr-N) lookup path; jira keys never touch it.
@@ -40,7 +47,8 @@ var githubHelpersModule = loadModule(
         },
         './machineNotice.js': loadModule('js/common/machineNotice.js'),
         './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })),
-        './ci.js': loadModule('js/common/ci.js')
+        './ci.js': loadModule('js/common/ci.js'),
+        './ciViolations.js': loadModule('js/common/ciViolations.js')
     }),
     {}
 );
@@ -48,7 +56,8 @@ var githubHelpersModule = loadModule(
 function makeOutputFiles(fileMap) {
     return loadModule('js/common/outputFiles.js', makeRequire({
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }), {
         file_read: function(opts) {
             var path = opts && (opts.path || opts);
@@ -114,7 +123,9 @@ function loadPushReworkChangesModule(fileMap, opts) {
     var mod = loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
+            './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': { loadProjectConfig: function() { return {}; } },
             './common/scm.js': { createScm: function() { return scm; } },
             './common/submodules.js': {},
@@ -129,7 +140,8 @@ function loadPushReworkChangesModule(fileMap, opts) {
             './common/tokenUsageComment.js': { postTokenUsageComments: noop }
         ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         {
             file_read: function(opts) {
@@ -511,7 +523,9 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
+            './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/scm.js': {},
@@ -536,7 +550,8 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         Object.assign({
             cli_execute_command: function() { return ''; },
@@ -615,6 +630,39 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
             'should commit when there are staged changes');
         assert.ok(commands.filter(function(c) { return c.indexOf('git push -u origin bug/PROJ-123') !== -1; }).length >= 1,
             'should push to the expected PR branch');
+    });
+
+    test('gh-1096: a fork-head PR pushes to the fork token URL HEAD:<branch>, never origin', function() {
+        var commands = [];
+        var mod = loadPushReworkChangesForCommitAndPush({
+            file_read: function(args) {
+                if (args.path.indexOf('pr_info.md') !== -1) {
+                    return '**Branch**: `fix/x` → `develop`\n- **Fork Head**: `YuryBY/fa`\n';
+                }
+                return null;
+            },
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git branch --show-current') return 'fix/x\n';
+                if (args.command.indexOf('git push https://') === 0 &&
+                        commands.filter(function(c) { return c.indexOf('git push') === 0; }).length === 1) {
+                    throw new Error('rejected (non-fast-forward)');
+                }
+                return '';
+            }
+        });
+
+        var result = mod.commitAndPush('PROJ-123', baseConfig(), {});
+
+        var pushes = commands.filter(function(c) { return c.indexOf('git push') === 0; });
+        assert.equal(result.branch, 'fix/x');
+        assert.equal(pushes.length, 2, JSON.stringify(pushes));
+        pushes.forEach(function(c) {
+            assert.ok(c.indexOf('github.com/YuryBY/fa.git HEAD:fix/x') !== -1, 'fork URL push, got: ' + c);
+            assert.ok(c.indexOf(' origin') === -1, 'never origin: ' + c);
+        });
+        assert.ok(commands.indexOf('git merge --no-edit FETCH_HEAD') !== -1, 'retry syncs with the fork head');
+        assert.equal(commands.filter(function(c) { return c.indexOf('ls-remote') !== -1; }).length, 0);
     });
 
     test('rework commit never carries a CI-skip token, even when the template has one (gh-711)', function() {
@@ -821,7 +869,9 @@ function loadPushReworkChangesForAction(mocks, opts) {
     var mod = loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
+            './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': {
                 loadProjectConfig: function() { return baseConfig(opt(opts, 'config')); },
                 resolveInstructions: function() { return { jobParamPatch: {} }; },
@@ -863,7 +913,8 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         mergedMocks
     );
@@ -1022,7 +1073,9 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
+            './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/submodules.js': { pushManagedSubmodules: function() {} },
@@ -1042,7 +1095,8 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         mergedMocks
     );
@@ -3116,5 +3170,567 @@ suite('pushReworkChanges.action — stage gates and commit recovery (gh-1011)', 
         assert.contains(result.error, 'config boom');
         assert.equal(loaded.resumeAgentCalls.length, 1, 'the outer catch still attempts one resume');
         assert.equal(loaded.jiraPostCommentCalls.length, 0, 'tracker rebuild fails the same way — no error comment, never a rethrow');
+    });
+});
+
+// ── gh-1119 AC6b: owned CI violations may not be dismissed as unrelated ──────
+
+suite('pushReworkChanges.readInputViolations (gh-1119)', function() {
+
+    function loadWithFiles(fileMap) {
+        return loadModule(
+            'js/pushReworkChanges.js',
+            makeRequire({
+                './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
+                './common/gitStaging.js': gitStagingModule,
+                './forkCheckout.js': forkCheckoutModule,
+                './configLoader.js': configLoaderModule,
+                './config.js': configModule,
+                './common/scm.js': {},
+                './common/submodules.js': {},
+                './common/pullRequest.js': PR_HELPER_REAL,
+                './common/githubHelpers.js': githubHelpersModule,
+                './common/feedbackLoop.js': {},
+                './common/autoStart.js': {},
+                './common/outputFiles.js': { readOutputFile: function() { return null; } },
+                './common/trackers.js': makeTrackersModule({}),
+                './cacheToReleases.js': {},
+                './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+                './common/commentMarkup.js': commentMarkupModule,
+                './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+                './common/ciViolations.js': loadModule('js/common/ciViolations.js')
+            }),
+            {
+                file_read: function(args) {
+                    var p = args && (args.path || args);
+                    return fileMap[p] !== undefined ? fileMap[p] : null;
+                }
+            }
+        );
+    }
+
+    var SNAPSHOT = JSON.stringify({ owned: 1, foreign: 0, unknown: 0, violations: [
+        { check: 'gate', rule: 'method_size', path: 'test/js/require_base_resolution_test.dart',
+            line: 13, detail: 'main has 100 lines > max 60', ownership: 'owned' }
+    ] });
+
+    test('reads and parses the setup-time ci_violations.json snapshot', function() {
+        var mod = loadWithFiles({ 'input/PROJ-123/ci_violations.json': SNAPSHOT });
+        var violations = mod.readInputViolations('PROJ-123', null);
+        assert.equal(violations.length, 1);
+        assert.equal(violations[0].ownership, 'owned');
+        assert.equal(violations[0].path, 'test/js/require_base_resolution_test.dart');
+    });
+
+    test('missing or garbage snapshot → [] (the gate stays off, never throws)', function() {
+        var mod = loadWithFiles({});
+        assert.deepEqual(mod.readInputViolations('PROJ-123', null), []);
+        var mod2 = loadWithFiles({ 'input/PROJ-123/ci_violations.json': 'not json {' });
+        assert.deepEqual(mod2.readInputViolations('PROJ-123', null), []);
+    });
+
+    test('falls back to the workingDir-relative input path', function() {
+        var mod = loadWithFiles({ 'dependencies/proj/input/PROJ-123/ci_violations.json': SNAPSHOT });
+        var violations = mod.readInputViolations('PROJ-123', 'dependencies/proj');
+        assert.equal(violations.length, 1);
+    });
+});
+
+suite('pushReworkChanges.runOwnedViolationsGate (gh-1119 AC6b / UT-8 wiring)', function() {
+
+    var OWNED = [{ check: 'gate', rule: 'method_size', path: 'test/js/require_base_resolution_test.dart',
+        line: 13, detail: 'main has 100 lines > max 60', ownership: 'owned' }];
+
+    function loadGate(fileMap, scmCalls) {
+        return loadModule(
+            'js/pushReworkChanges.js',
+            makeRequire({
+                './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
+                './common/gitStaging.js': gitStagingModule,
+                './forkCheckout.js': forkCheckoutModule,
+                './configLoader.js': configLoaderModule,
+                './config.js': configModule,
+                './common/scm.js': {},
+                './common/submodules.js': {},
+                './common/pullRequest.js': PR_HELPER_REAL,
+                './common/githubHelpers.js': githubHelpersModule,
+                './common/feedbackLoop.js': {},
+                './common/autoStart.js': {},
+                './common/outputFiles.js': { readOutputFile: function() { return null; } },
+                './common/trackers.js': makeTrackersModule({}),
+                './cacheToReleases.js': {},
+                './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+                './common/commentMarkup.js': commentMarkupModule,
+                './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+                './common/ciViolations.js': loadModule('js/common/ciViolations.js')
+            }),
+            {
+                file_read: function(args) {
+                    var p = args && (args.path || args);
+                    return fileMap[p] !== undefined ? fileMap[p] : null;
+                },
+                console: { log: function() {}, warn: function() {}, error: function() {} }
+            }
+        );
+    }
+
+    function makeScm(calls) {
+        return {
+            addComment: function(prId, text) { calls.push({ prId: prId, text: text }); }
+        };
+    }
+
+    var FILE_MAP = { 'input/PROJ-123/ci_violations.json': JSON.stringify({ owned: 1, violations: OWNED }) };
+    var PR = { number: 123, head: { ref: 'bug/PROJ-123', sha: 'abc1234def5678' } };
+
+    test('no violations snapshot → gate passes', function() {
+        var mod = loadGate({});
+        var gate = mod.runOwnedViolationsGate('PROJ-123', { workingDir: null }, makeScm([]), null, PR, 'any summary');
+        assert.notOk(gate.rejected);
+    });
+
+    test('dismissal summary with an owned violation open → rejected, PR comment + empty lap marker', function() {
+        var calls = [];
+        var mod = loadGate(FILE_MAP);
+        var gate = mod.runOwnedViolationsGate('PROJ-123', { workingDir: null }, makeScm(calls), null, PR,
+            'The method_size failure is not caused by this PR — none of my files exceed the limit.');
+        assert.ok(gate.rejected);
+        assert.equal(gate.result.success, false);
+        assert.equal(gate.result.path, 'owned-violations-rejected');
+        assert.equal(calls.length, 2, 'PR comment + lap marker');
+        assert.contains(calls[0].text, 'Rework rejected');
+        assert.contains(calls[0].text, 'test/js/require_base_resolution_test.dart:13');
+        assert.contains(calls[0].text, 'not caused by this PR');
+        assert.contains(calls[1].text, 'pushed 0', 'the no-op loop guard counts the lap');
+    });
+
+    test('fixed accounting summary → gate passes, nothing posted', function() {
+        var calls = [];
+        var mod = loadGate(FILE_MAP);
+        var gate = mod.runOwnedViolationsGate('PROJ-123', { workingDir: null }, makeScm(calls), null, PR,
+            '## Owned CI violations\n- fixed: test/js/require_base_resolution_test.dart main() split into helpers\n');
+        assert.notOk(gate.rejected);
+        assert.equal(calls.length, 0);
+    });
+
+    test('foreign-only snapshot never rejects (do-not-chase reds are free to mention)', function() {
+        var calls = [];
+        var FOREIGN_ONLY = JSON.stringify({ owned: 0, foreign: 1, violations: [
+            { check: 'agents-gate', rule: 'test', path: 'js/unit-tests/test_recoverDirtyReviewTestCase.js',
+                line: null, detail: 'partition mismatch', ownership: 'foreign' }
+        ] });
+        var mod = loadGate({ 'input/PROJ-123/ci_violations.json': FOREIGN_ONLY });
+        var gate = mod.runOwnedViolationsGate('PROJ-123', { workingDir: null }, makeScm(calls), null, PR,
+            'The red is unrelated to this PR.');
+        assert.notOk(gate.rejected);
+        assert.equal(calls.length, 0);
+    });
+});
+
+// Shared file_read mock for the AC6b rejection-path tests below. Table-driven
+// so complexity stays ≤ 8: the quality ratchet (crap4js, CRAP_THRESHOLD=8)
+// fails the PR on any NEW function with CRAP > 8, and the two former inline
+// copies were cyclomatic-complexity 9 (CRAP 9 at full coverage).
+function makeOwnedGateFileRead(owned) {
+    var snapshot = JSON.stringify({ owned: 1, foreign: 0, unknown: 0, violations: owned });
+    var routes = [
+        ['ci_violations.json', function() { return snapshot; }],
+        ['rework_setup_failed.md', function() { throw new Error('File does not exist'); }],
+        ['pr_info.md', function() { return '**Branch**: `bug/PROJ-123` → `develop`'; }]
+    ];
+    return function(args) {
+        var p = args && (args.path || args);
+        for (var i = 0; i < routes.length; i++) {
+            if (p && p.indexOf(routes[i][0]) !== -1) return routes[i][1]();
+        }
+        return null;
+    };
+}
+
+// ── gh-1082 characterization: commitAndPush branch decisions ─────────────────
+// Pins every decision branch of commitAndPush() BEFORE its CRAP decomposition:
+// pr_info parsing (head + base), the forced-checkout decision, the base-branch
+// refusal, the staged-diff commit gate, the squash opt-in, the sync gate, and
+// the push retry ladder. Every test must keep passing byte-identically.
+
+function loadCommitAndPush1082(mocks, moduleOverrides) {
+    return loadModule(
+        'js/pushReworkChanges.js',
+        makeRequire(Object.assign({
+            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
+            './common/gitStaging.js': gitStagingModule,
+            './forkCheckout.js': forkCheckoutModule,
+            './configLoader.js': configLoaderModule,
+            './config.js': configModule,
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js'),
+            './common/scm.js': {},
+            './common/submodules.js': { pushManagedSubmodules: function() {} },
+            './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
+                readStagedDiffStat: function() { return 'M file.txt\n'; },
+                syncBranchWithBase: function() { return { success: true, updated: false }; }
+            }),
+            './common/githubHelpers.js': githubHelpersModule,
+            './common/feedbackLoop.js': {
+                runQualityGates: function() { return { success: true }; },
+                runPolicyGates: function() { return { success: true }; },
+                runPostPublishGates: function() { return { success: true }; },
+                resumeAgent: function() { return { attempted: false }; }
+            },
+            './common/autoStart.js': { triggerSmIfIdle: function() {} },
+            './common/outputFiles.js': { readOutputFile: function() { return null; } },
+            './common/trackers.js': makeTrackersModule({}),
+            './cacheToReleases.js': {},
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/commentMarkup.js': commentMarkupModule,
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+        }, moduleOverrides || {})),
+        Object.assign({
+            cli_execute_command: function() { return ''; },
+            file_read: function() { return null; },
+            jira_post_comment: function() {},
+            jira_move_to_status: function() {},
+            jira_remove_label: function() {}
+        }, mocks || {})
+    );
+}
+
+function happyReworkCli(commands, branches) {
+    if (typeof branches === 'string') branches = [branches];
+    return function(args) {
+        commands.push(args.command);
+        if (args.command === 'git branch --show-current') return branches[0] + '\n';
+        for (var i = 0; i < branches.length; i++) {
+            if (args.command.indexOf('git ls-remote --heads origin ' + branches[i]) === 0) {
+                return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/' + branches[i] + '\n';
+            }
+        }
+        return '';
+    };
+}
+
+function prInfoReader(text) {
+    return function(args) {
+        if (args.path.indexOf('pr_info.md') !== -1) return text;
+        return null;
+    };
+}
+
+suite('pushReworkChanges.action — owned-violations rejection marks the leg failed (gh-1119 AC6b)', function() {
+
+    var OWNED = [{ check: 'gate', rule: 'method_size', path: 'test/js/require_base_resolution_test.dart',
+        line: 13, detail: 'main has 100 lines > max 60', ownership: 'owned' }];
+
+    test('a dismissal summary over owned violations fails the leg BEFORE the completion path', function() {
+        var prComments = [];
+        var loaded = loadPushReworkChangesForAction({
+            file_read: makeOwnedGateFileRead(OWNED)
+        }, {
+            scm: {
+                listPrs: function() {
+                    return [{
+                        number: 123,
+                        title: 'PROJ-123: rework fix',
+                        head: { ref: 'bug/PROJ-123', sha: 'abc1234def5678' },
+                        html_url: 'https://github.com/IstiN/dmtools-agents/pull/123'
+                    }];
+                },
+                addComment: function(prId, text) { prComments.push({ prId: prId, text: text }); }
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: '## Approach\nThe gate failure is not caused by this PR. None of my files exceed the limits.'
+        });
+
+        assert.equal(result.success, false, 'the leg is marked failed');
+        assert.equal(result.path, 'owned-violations-rejected');
+        assert.ok(prComments.length >= 1, 'a rejection comment was posted on the PR');
+        assert.contains(prComments[0].text, 'Rework rejected');
+        assert.contains(prComments[0].text, 'test/js/require_base_resolution_test.dart:13');
+        assert.ok(prComments.some(function(c) { return c.text.indexOf('pushed 0') !== -1; }),
+            'the empty lap marker counts toward the no-op loop guard');
+        assert.equal(
+            loaded.jiraMoveToStatusCalls.filter(function(c) { return c.statusName === 'In Review'; }).length, 0,
+            'the completion path never ran');
+    });
+
+    test('with the violations fixed and accounted, the normal completion path is unchanged', function() {
+        var loaded = loadPushReworkChangesForAction({
+            file_read: makeOwnedGateFileRead(OWNED)
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: '## Owned CI violations\n- fixed: test/js/require_base_resolution_test.dart main() split into helpers.\n## Test Coverage\nall green.'
+        });
+
+        assert.equal(result.success, true, 'normal completion: ' + JSON.stringify(result));
+        assert.ok(
+            loaded.jiraMoveToStatusCalls.some(function(c) { return c.statusName === 'In Review'; }),
+            'still moves to In Review');
+    });
+});
+
+suite('pushReworkChanges.commitAndPush — branch decisions (gh-1082 characterization)', function() {
+
+    test('pr_info.md without a **Branch** header refuses before any git command', function() {
+        var commands = [];
+        var mod = loadCommitAndPush1082({
+            file_read: prInfoReader('no branch marker here\n'),
+            cli_execute_command: happyReworkCli(commands, 'bug/PROJ-123')
+        });
+
+        var err = null;
+        try {
+            mod.commitAndPush('PROJ-123', baseConfig(), {});
+        } catch (e) { err = e; }
+
+        assert.ok(err, 'throws when the branch header is missing');
+        assert.equal(
+            err.message,
+            'Could not determine expected PR branch from input/PROJ-123/pr_info.md; refusing to commit or push.'
+        );
+        assert.equal(commands.length, 0, 'no git command runs without a known expected branch');
+    });
+
+    test('a branch mismatch with a working forced checkout commits on the expected branch', function() {
+        var commands = [];
+        var mod = loadCommitAndPush1082({
+            file_read: prInfoReader('**Branch**: `bug/PROJ-123` → `develop`'),
+            cli_execute_command: happyReworkCli(commands, ['bug/wrong', 'bug/PROJ-123'])
+        });
+
+        var result = mod.commitAndPush('PROJ-123', baseConfig(), {});
+
+        assert.equal(result.branch, 'bug/PROJ-123', 'the expected branch wins after the forced checkout');
+        assert.equal(result.hasChanges, true);
+        assert.ok(commands.indexOf('git checkout bug/PROJ-123') !== -1, 'forced checkout ran');
+        assert.ok(commands.some(function(c) { return c.indexOf('git commit -m "PROJ-123 rework"') === 0; }));
+        assert.ok(commands.indexOf('git push -u origin bug/PROJ-123') !== -1);
+    });
+
+    test('a failed branch sync with base refuses to push with the sync error', function() {
+        var commands = [];
+        var mod = loadCommitAndPush1082(
+            {
+                file_read: prInfoReader('**Branch**: `bug/PROJ-123` → `develop`'),
+                cli_execute_command: happyReworkCli(commands, 'bug/PROJ-123')
+            },
+            {
+                './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
+                    readStagedDiffStat: function() { return 'M f\n'; },
+                    syncBranchWithBase: function() { return { success: false, error: 'diverged' }; }
+                })
+            }
+        );
+
+        var err = null;
+        try {
+            mod.commitAndPush('PROJ-123', baseConfig(), {});
+        } catch (e) { err = e; }
+
+        assert.ok(err, 'throws when the sync fails');
+        assert.equal(
+            err.message,
+            'Could not sync PR branch with origin/develop before rework push: diverged'
+        );
+        assert.ok(commands.every(function(c) { return c.indexOf('git push') !== 0; }), 'never pushes after a failed sync');
+    });
+
+    test('a failing runtime-artifact untrack cleanup still stages and pushes', function() {
+        var commands = [];
+        var mod = loadCommitAndPush1082(
+            {
+                file_read: prInfoReader('**Branch**: `bug/PROJ-123` → `develop`'),
+                cli_execute_command: happyReworkCli(commands, 'bug/PROJ-123')
+            },
+            {
+                './common/gitStaging.js': {
+                    untrackRuntimeArtifacts: function() { throw new Error('cleanup boom'); },
+                    buildStagingPathspecs: function() { return ':!factory-kit'; }
+                }
+            }
+        );
+
+        var result = mod.commitAndPush('PROJ-123', baseConfig(), {});
+
+        assert.equal(result.hasChanges, true);
+        assert.ok(commands.indexOf('git add . -- :!factory-kit') !== -1, 'staging proceeds after the cleanup failure');
+        assert.ok(commands.indexOf('git push -u origin bug/PROJ-123') !== -1);
+    });
+
+    test('an empty staged diff skips the commit but still pushes existing commits', function() {
+        var commands = [];
+        var mod = loadCommitAndPush1082(
+            {
+                file_read: prInfoReader('**Branch**: `bug/PROJ-123` → `develop`'),
+                cli_execute_command: happyReworkCli(commands, 'bug/PROJ-123')
+            },
+            {
+                './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
+                    readStagedDiffStat: function() { return ''; },
+                    syncBranchWithBase: function() { return { success: true, updated: false }; }
+                })
+            }
+        );
+
+        var result = mod.commitAndPush('PROJ-123', baseConfig(), {});
+
+        assert.equal(result.hasChanges, false, 'no commit made — pushing existing commits only');
+        assert.equal(commands.some(function(c) { return c.indexOf('git commit') === 0; }), false, 'no git commit command');
+        assert.ok(commands.indexOf('git push -u origin bug/PROJ-123') !== -1, 'still pushes');
+    });
+
+    test('config.workingDir is forwarded as workingDirectory on every git command', function() {
+        var argsSeen = [];
+        var mod = loadCommitAndPush1082({
+            file_read: prInfoReader('**Branch**: `bug/PROJ-123` → `develop`'),
+            cli_execute_command: function(args) {
+                argsSeen.push(args);
+                if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+                if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) {
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
+                }
+                return '';
+            }
+        });
+
+        var cfg = baseConfig({ workingDir: '/repo/work' });
+        var result = mod.commitAndPush('PROJ-123', cfg, {});
+
+        assert.equal(result.branch, 'bug/PROJ-123');
+        assert.ok(argsSeen.length >= 4);
+        argsSeen.forEach(function(a) {
+            assert.equal(a.workingDirectory, '/repo/work', 'workingDirectory on: ' + a.command);
+        });
+    });
+
+    test('base-branch refusal message format is pinned (checkout failed, still on base)', function() {
+        var commands = [];
+        var mod = loadCommitAndPush1082({
+            file_read: prInfoReader('**Branch**: `bug/PROJ-123` → `develop`'),
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git branch --show-current') return 'develop\n';
+                if (args.command === 'git checkout bug/PROJ-123') {
+                    throw new Error('error: pathspec did not match any file(s)');
+                }
+                return '';
+            }
+        });
+
+        var err = null;
+        try {
+            mod.commitAndPush('PROJ-123', baseConfig(), {});
+        } catch (e) { err = e; }
+
+        assert.ok(err);
+        assert.equal(
+            err.message,
+            'Refusing to commit/push: current branch "develop" is the base branch (develop), ' +
+            'not the expected PR branch "bug/PROJ-123".'
+        );
+    });
+
+    test('gh-1082 extraction surface: pure parse/build/decide helpers', function() {
+        var mod = loadCommitAndPush1082({}, {});
+
+        // cmd option bag
+        assert.deepEqual(mod.reworkCmdOpts(null), {});
+        assert.deepEqual(mod.reworkCmdOpts(undefined), {});
+        assert.deepEqual(mod.reworkCmdOpts('/w'), { workingDirectory: '/w' });
+
+        // pr_info read + head-branch parse (module-global file_read)
+        var readerMod = loadCommitAndPush1082(
+            { file_read: prInfoReader('**Branch**: `bug/x` → `dev`\nmore') },
+            {}
+        );
+        var ctx = readerMod.readReworkPrInfoHeadBranch('PROJ-9');
+        assert.equal(ctx.headBranch, 'bug/x');
+        assert.contains(ctx.prInfo, 'bug/x');
+
+        var threw = null;
+        try {
+            loadCommitAndPush1082({ file_read: function() { throw new Error('gone'); } }, {})
+                .readReworkPrInfoHeadBranch('PROJ-9');
+        } catch (e) { threw = e; }
+        assert.ok(threw);
+        assert.equal(
+            threw.message,
+            'Missing PR context file input/PROJ-9/pr_info.md. Rework setup did not find or checkout a PR; refusing to commit or push.'
+        );
+
+        // base-branch parse + resolution
+        assert.equal(mod.parseReworkBaseBranch('**Branch**: `bug/x` → `dev`'), 'dev');
+        assert.equal(mod.parseReworkBaseBranch('**Branch**: `bug/x`'), null);
+        assert.equal(mod.resolveReworkBaseBranch(baseConfig(), '**Branch**: `b` → `dev`'), 'dev');
+        assert.equal(mod.resolveReworkBaseBranch(baseConfig(), 'no base line'), 'develop');
+        assert.equal(mod.resolveReworkBaseBranch({}, 'no base line'), 'main');
+
+        // decisions
+        assert.equal(mod.reworkBranchMismatch('bug/x', 'bug/y'), true);
+        assert.equal(mod.reworkBranchMismatch('bug/x', 'bug/x'), false);
+        assert.equal(mod.reworkBranchMismatch(null, 'bug/x'), false);
+        assert.equal(mod.isBaseBranchViolation('develop', 'develop'), true);
+        assert.equal(mod.isBaseBranchViolation('bug/1', 'develop'), false);
+        assert.equal(mod.isBaseBranchViolation(null, 'develop'), false);
+        assert.equal(mod.hasStagedChanges(' M f'), true);
+        assert.equal(mod.hasStagedChanges('   '), false);
+        assert.equal(mod.squashEnabled({ squashReworkWip: true }), true);
+        assert.equal(mod.squashEnabled({ squashReworkWip: 'yes' }), false, 'strict boolean opt-in');
+        assert.equal(mod.squashEnabled({}), false);
+        assert.equal(mod.squashEnabled(null), false);
+
+        // messages
+        assert.equal(
+            mod.baseBranchRefusalMessage('develop', 'develop', 'bug/1'),
+            'Refusing to commit/push: current branch "develop" is the base branch (develop), not the expected PR branch "bug/1".'
+        );
+        var cfg = baseConfig({ formats: { commitMessage: { rework: '{ticketKey} Rework [skip ci]' } } });
+        assert.equal(mod.buildReworkCommitMessage(cfg, 'PROJ-9'), 'PROJ-9 Rework');
+
+        // sync gate + squash dispatch (gh-1082 extraction surface)
+        mod.assertReworkBranchSynced({ success: true }, 'develop');
+        var syncErr = null;
+        try {
+            mod.assertReworkBranchSynced({ success: false, error: 'diverged' }, 'develop');
+        } catch (e) { syncErr = e; }
+        assert.ok(syncErr);
+        assert.equal(syncErr.message, 'Could not sync PR branch with origin/develop before rework push: diverged');
+
+        assert.equal(mod.squashReworkWipIfEnabled(function() {}, 'P-1', baseConfig(), null, {}), false,
+            'opt-in off: history untouched');
+        assert.equal(mod.squashReworkWipIfEnabled(function() {}, 'P-1', baseConfig(), null, null), false);
+        assert.equal(
+            mod.squashReworkWipIfEnabled(function() { throw new Error('must not run'); }, 'P-1', baseConfig(), null, { squashReworkWip: 'x' }),
+            false,
+            'strict boolean opt-in'
+        );
+        var squashCalls = [];
+        var squashingCli = function(args) {
+            squashCalls.push(args.command);
+            if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+            if (args.command.indexOf('git rev-list --merges') === 0) return '';
+            if (args.command.indexOf('git log --format=%s') === 0) {
+                return 'PROJ-123 WIP auto-save a\nPROJ-123 WIP auto-save b\n';
+            }
+            return '';
+        };
+        var squashMod = loadCommitAndPush1082({
+            file_read: function(args) {
+                if (args.path.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
+                if (args.path.indexOf('rework_base_head.txt') !== -1) return 'abc1234';
+                return null;
+            }
+        }, {});
+        assert.equal(
+            squashMod.squashReworkWipIfEnabled(function(command) { return squashingCli({ command: command }); },
+                'PROJ-123', baseConfig(), null, { squashReworkWip: true }),
+            true,
+            'opt-in on: all-WIP range squashed'
+        );
+        assert.ok(squashCalls.indexOf('git reset --soft abc1234') !== -1, 'soft reset ran');
+        assert.ok(squashCalls.indexOf('git commit -m "PROJ-123 rework"') !== -1, 'one rework commit');
     });
 });

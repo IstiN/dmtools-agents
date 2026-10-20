@@ -1328,3 +1328,12 @@ suite('mergeBot: action loop edge paths (gh-1040 characterization)', function ()
         assert.equal(calls.cli.length, 1, 'the deferral still arms the self-heal tick');
     });
 });
+
+suite('mergeBot: gh-1101 invisible-required log line', function () {
+    test('approved + BLOCKED names the invisible-required shape; others keep the generic line', function () {
+        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), {});
+        assert.ok(bot.blockedWaitLine(435, 'BLOCKED', true).indexOf('required checks invisible to PR') !== -1);
+        assert.equal(bot.blockedWaitLine(7, 'BLOCKED', false), '⏳ pr-7 mergeState=BLOCKED — waiting (checks settling)');
+        assert.equal(bot.blockedWaitLine(7, 'UNSTABLE', true), '⏳ pr-7 mergeState=UNSTABLE — waiting (checks settling)');
+    });
+});
