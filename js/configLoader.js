@@ -272,6 +272,167 @@ function loadConfigFile(path) {
     }
 }
 
+// ── Agent config "parent" inheritance (gh-1112) ──────────────────────────────
+//
+// A child agent JSON in a consuming repo specializes a base agent (e.g. the
+// generic wiki_publisher.json) instead of forking it:
+//
+//   {
+//     "parent": { "path": "../agents/wiki_publisher.json", "merge": ["params.cliPrompts"] },
+//     "params": { "metadata": { "contextId": "story_checklist" }, ... }
+//   }
+//
+// Resolution: the parent config is loaded (recursively), the child's params
+// deep-merge over it (child wins), and every path in `merge` has its ARRAY
+// value concatenated parent-first + child entries appended (de-duplicated).
+// Paths where the parent/child value is not an array are ignored by the merge
+// list — plain deep merge already lets the child override them.
+
+var DEFAULT_PARENT_MERGE = ['params.cliPrompts'];
+
+/** Read a dotted 'params.cliPrompts' style path; undefined when absent. */
+function getPathValue(obj, path) {
+    var cur = obj;
+    var parts = String(path || '').split('.');
+    for (var i = 0; i < parts.length; i++) {
+        if (!cur || typeof cur !== 'object') return undefined;
+        cur = cur[parts[i]];
+    }
+    return cur;
+}
+
+/** Write a dotted path in place, creating intermediate objects as needed. */
+function setPathValue(obj, path, value) {
+    var parts = String(path || '').split('.');
+    var cur = obj;
+    for (var i = 0; i < parts.length - 1; i++) {
+        if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+        cur = cur[parts[i]];
+    }
+    cur[parts[parts.length - 1]] = value;
+}
+
+/**
+ * Resolve a parent path to a readable file. Child configs live in consuming
+ * repos ('../agents/wiki_publisher.json', './wiki_publisher.json') or beside
+ * the base agent ('wiki_publisher.json'); strip the layout prefixes and try
+ * repo-root-relative when the literal path is not readable.
+ */
+function resolveAgentConfigPath(path) {
+    var p = String(path || '').trim();
+    var candidates = [p];
+    if (p.indexOf('../agents/') === 0) candidates.push(p.substring('../'.length));
+    if (p.indexOf('agents/') === 0) candidates.push(p.substring('agents/'.length));
+    if (p.indexOf('./') === 0) candidates.push(p.substring(2));
+    for (var i = 0; i < candidates.length; i++) {
+        if (tryReadFile(candidates[i]) !== null) return candidates[i];
+    }
+    return p;
+}
+
+/** Read and parse an agent JSON config; null (with a warning) when unreadable/unparseable. */
+function readAgentConfigJson(path) {
+    var raw = tryReadFile(path);
+    if (!raw) {
+        console.warn('configLoader: cannot read agent config "' + path + '"');
+        return null;
+    }
+    try {
+        return JSON.parse(raw);
+    } catch (e) {
+        console.warn('configLoader: cannot parse agent config "' + path + '": ' + (e.message || e));
+        return null;
+    }
+}
+
+/** The inheritance marker is accepted at the top level or inside params. */
+function extractParentRef(config) {
+    return config.parent || (config.params && config.params.parent) || null;
+}
+
+/** The per-path array list to concatenate; defaults to params.cliPrompts. */
+function resolveMergePaths(parentRef) {
+    return (Array.isArray(parentRef.merge) && parentRef.merge.length > 0)
+        ? parentRef.merge
+        : DEFAULT_PARENT_MERGE;
+}
+
+/** Copy source's top-level keys onto target (skipping the params/parent keys). */
+function copyTopLevelKeys(target, source) {
+    for (var key in source) {
+        if (Object.prototype.hasOwnProperty.call(source, key) && key !== 'params' && key !== 'parent') {
+            target[key] = source[key];
+        }
+    }
+    return target;
+}
+
+/** Parent-first array concat; child entries already present are not repeated. */
+function concatUnique(parentList, childList) {
+    var combined = parentList.slice();
+    for (var j = 0; j < childList.length; j++) {
+        if (combined.indexOf(childList[j]) === -1) combined.push(childList[j]);
+    }
+    return combined;
+}
+
+/** Apply one dotted merge path: parent array first, unseen child entries appended. */
+function applyParentMergePath(merged, parentConfig, config, mergePath) {
+    var parentVal = getPathValue(parentConfig, mergePath);
+    var childVal = getPathValue(config, mergePath);
+    if (!Array.isArray(parentVal) && !Array.isArray(childVal)) return;
+    setPathValue(merged, mergePath, concatUnique(
+        Array.isArray(parentVal) ? parentVal : [],
+        Array.isArray(childVal) ? childVal : []
+    ));
+}
+
+/** Apply every dotted merge path of the parent's arrays onto the merged config. */
+function applyParentMergePaths(merged, parentConfig, config, mergePaths) {
+    for (var i = 0; i < mergePaths.length; i++) {
+        applyParentMergePath(merged, parentConfig, config, mergePaths[i]);
+    }
+}
+
+/**
+ * Merge a resolved parent under its child: child top-level keys win, child
+ * params deep-merge over the parent's (child wins on scalars and nested
+ * objects, e.g. a child contentOutput block overrides the parent's).
+ */
+function mergeParentIntoChild(parentConfig, config) {
+    var merged = copyTopLevelKeys(copyTopLevelKeys({}, parentConfig), config);
+    merged.params = deepMerge(parentConfig.params || {}, config.params || {});
+    return merged;
+}
+
+/**
+ * Load an agent JSON config, resolving its "parent" inheritance chain.
+ * Returns the merged config (child fields win, merged array paths are
+ * concatenated parent-first), or null when the file is missing/unparseable.
+ * A missing or broken parent is non-fatal: the child config is returned
+ * as-is (minus the parent marker) with a warning.
+ */
+function loadAgentConfig(path) {
+    var config = readAgentConfigJson(resolveAgentConfigPath(path));
+    if (!config) return null;
+
+    var parentRef = extractParentRef(config);
+    if (!parentRef || !parentRef.path) return config;
+
+    var parentConfig = loadAgentConfig(resolveAgentConfigPath(parentRef.path));
+    // The marker is consumed either way — it never appears on resolved configs.
+    delete config.parent;
+    if (config.params) delete config.params.parent;
+    if (!parentConfig) {
+        console.warn('configLoader: parent "' + parentRef.path + '" of "' + path + '" could not be loaded — using the child config as-is');
+        return config;
+    }
+
+    var merged = mergeParentIntoChild(parentConfig, config);
+    applyParentMergePaths(merged, parentConfig, config, resolveMergePaths(parentRef));
+    return merged;
+}
+
 /**
  * Loads a project-supplied "hook" JS file (same GraalJS-safe loader as branchNamingFnPath)
  * whose module.exports must be a function. Used for extension points such as
@@ -958,6 +1119,7 @@ module.exports = {
     appendTrackerPrompts: appendTrackerPrompts,
     pickAgentPatch: pickAgentPatch,
     loadConfigFile: loadConfigFile,
+    loadAgentConfig: loadAgentConfig,
     loadHookFn: loadHookFn,
     buildConfigCandidates: buildConfigCandidates,
     discoverProjectConfig: discoverProjectConfig,

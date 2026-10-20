@@ -1,0 +1,55 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "wiki_publisher",
+      "descriptionPath": "agents/docs/agents/wiki_publisher.md"
+    },
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "ticketContextDepth": 0,
+    "attachResponseAsFile": false,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "preJSAction": "agents/js/requireTicket.js",
+    "preCliJSAction": "agents/js/preCliContentOutputSetup.js",
+    "postJSAction": "agents/js/writeContentOutput.js",
+    "customParams": {
+      "removeLabel": "sm_wiki_publisher_triggered",
+      "contentOutput": {
+        "target": "wiki",
+        "updateTrackerField": false
+      }
+    },
+    "inputJql": "key = WP-1",
+    "cliPrompts": [
+      "Technical Writer",
+      "./agents/instructions/common/agent_task_preamble.md",
+      "./agents/instructions/wiki_publisher/workflow.md",
+      "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/common/error_handling.md",
+      "./agents/instructions/common/no_development.md",
+      "./agents/prompts/wiki_publisher_prompt.md",
+      "./agents/instructions/common/confluence_comments.md",
+      "./agents/prompts/bash_tools.md"
+    ],
+    "cliPromptsByTracker": {
+      "jira": [
+        "./agents/instructions/common/jira_context.md",
+        "./agents/instructions/tracker/jira_markup_transform.md"
+      ],
+      "ado": [
+        "./agents/instructions/tracker/ado_context.md",
+        "./agents/instructions/tracker/ado_markup_transform.md"
+      ],
+      "github": [
+        "./agents/instructions/common/github_comment_format.md"
+      ],
+      "confluence": [
+        "./agents/instructions/tracker/confluence_markup_transform.md"
+      ]
+    }
+  }
+}
