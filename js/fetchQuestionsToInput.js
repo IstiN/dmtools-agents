@@ -107,6 +107,64 @@ function questionsFetchPlan(provider, questionsConfig, ticketKey) {
     };
 }
 
+var COMMENT_SENTINELS = { comment: true, comments: true, 'system.history': true };
+
+function isCommentAnswerSentinel(answerField) {
+    var norm = String(answerField || '').trim().toLowerCase();
+    return Boolean(COMMENT_SENTINELS[norm]);
+}
+
+function buildQuestionSearchFields(provider, answerField) {
+    if (String(provider || 'jira').toLowerCase() !== 'ado') {
+        return ['key', 'summary', 'description', 'status', 'priority', answerField];
+    }
+    if (!answerField || isCommentAnswerSentinel(answerField)) {
+        return ['key', 'summary', 'description', 'status', 'priority'];
+    }
+    return ['key', 'summary', 'description', 'status', 'priority', answerField];
+}
+
+function extractLatestCommentAnswer(comments) {
+    var list = Array.isArray(comments) ? comments : [];
+    for (var i = list.length - 1; i >= 0; i--) {
+        var c = list[i];
+        if (c && typeof c.body === 'string' && c.body.trim().length > 0) {
+            return c.body;
+        }
+    }
+    return null;
+}
+
+function fetchCommentAnswer(tracker, issueKey) {
+    try {
+        return extractLatestCommentAnswer(tracker.getComments(issueKey));
+    } catch (e) {
+        console.warn('Failed to fetch comments for question ' + issueKey + ':', e && e.message ? e.message : String(e));
+        return null;
+    }
+}
+
+function rawFieldsOf(issue) {
+    var raw = issue && issue.raw;
+    return raw ? raw.fields : null;
+}
+
+function resolveFieldAnswer(issue, answerField) {
+    var direct = getAnswerValue(issue && issue.fields, answerField);
+    return direct !== null ? direct : getAnswerValue(rawFieldsOf(issue), answerField);
+}
+
+function usesAdoCommentThread(provider, answerField) {
+    return String(provider || 'jira').toLowerCase() === 'ado' && isCommentAnswerSentinel(answerField);
+}
+
+function resolveQuestionAnswer(tracker, provider, issue, answerField) {
+    if (usesAdoCommentThread(provider, answerField)) {
+        return fetchCommentAnswer(tracker, issue ? issue.key : '');
+    }
+    return resolveFieldAnswer(issue, answerField);
+}
+
 /**
  * Enrich input with parent story + [BA]/[SA]/[VD] context (non-fatal).
  *
@@ -121,6 +179,40 @@ function fetchParentContextSafely(params) {
     } catch (e) {
         console.warn('fetchParentContextToInput failed (non-fatal):', e);
     }
+}
+
+function namedField(obj) {
+    return obj ? obj.name : '';
+}
+
+function textOrEmpty(val) {
+    return val || '';
+}
+
+function toQuestionEntry(tracker, provider, issue, answerField) {
+    var f = (issue && issue.fields) || {};
+    return {
+        key: textOrEmpty(issue && issue.key),
+        summary: textOrEmpty(f.summary),
+        description: textOrEmpty(f.description),
+        status: namedField(f.status),
+        priority: namedField(f.priority),
+        answer: resolveQuestionAnswer(tracker, provider, issue, answerField)
+    };
+}
+
+function fetchAndWriteQuestions(tracker, provider, plan, answerField, folder) {
+    var rawQuestions = tracker.searchIssues(plan.jql, {
+        fields: buildQuestionSearchFields(provider, answerField)
+    });
+    var questions = [];
+    for (var i = 0; i < rawQuestions.length; i++) {
+        questions.push(toQuestionEntry(tracker, provider, rawQuestions[i], answerField));
+    }
+    console.log('Found ' + questions.length + ' question subtasks');
+    // Wrap in object: file_write bridge auto-parses strings starting with '[' as ArrayList.
+    file_write(folder + '/existing_questions.json', '{"questions":' + JSON.stringify(questions, null, 2) + '}');
+    console.log('Wrote existing_questions.json to ' + folder);
 }
 
 /**
@@ -150,26 +242,7 @@ function action(params) {
         if (plan.skip) {
             console.warn('Skipping question subtask fetch — ' + plan.reason);
         } else try {
-            var rawQuestions = tracker.searchIssues(plan.jql, {
-                fields: ['key', 'summary', 'description', 'status', 'priority', answerField]
-            });
-            var questions = [];
-            for (var i = 0; i < rawQuestions.length; i++) {
-                var issue = rawQuestions[i];
-                var f = issue.fields || {};
-                questions.push({
-                    key: issue.key || '',
-                    summary: f.summary || '',
-                    description: f.description || '',
-                    status: f.status ? f.status.name : '',
-                    priority: f.priority ? f.priority.name : '',
-                    answer: getAnswerValue(f, answerField)
-                });
-            }
-            console.log('Found ' + questions.length + ' question subtasks');
-            // Wrap in object: file_write bridge auto-parses strings starting with '[' as ArrayList.
-            file_write(folder + '/existing_questions.json', '{"questions":' + JSON.stringify(questions, null, 2) + '}');
-            console.log('Wrote existing_questions.json to ' + folder);
+            fetchAndWriteQuestions(tracker, provider, plan, answerField, folder);
         } catch (fetchError) {
             // gh-802 AC3c: the host console renders a raw Error object as "{}"
             // (the cause was invisible in the logs) — log the CONTENT instead.
@@ -186,5 +259,15 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, getAnswerValue, hasAnswerValue, questionsFetchPlan, fetchParentContextSafely };
+    module.exports = {
+        action: action,
+        getAnswerValue: getAnswerValue,
+        hasAnswerValue: hasAnswerValue,
+        questionsFetchPlan: questionsFetchPlan,
+        fetchParentContextSafely: fetchParentContextSafely,
+        isCommentAnswerSentinel: isCommentAnswerSentinel,
+        buildQuestionSearchFields: buildQuestionSearchFields,
+        extractLatestCommentAnswer: extractLatestCommentAnswer,
+        resolveQuestionAnswer: resolveQuestionAnswer
+    };
 }
