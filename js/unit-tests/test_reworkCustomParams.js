@@ -62,6 +62,7 @@ function loadPushReworkChanges() {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -120,6 +121,7 @@ function loadPushReworkChangesForAction(mocks) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,

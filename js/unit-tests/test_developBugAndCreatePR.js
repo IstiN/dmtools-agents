@@ -69,6 +69,7 @@ var quotaBreakerModule = loadModule('js/common/quotaCircuitBreaker.js');
 // instead of a byte-copy. The bug tests never invoke the delegated
 // developTicketAndCreatePR action(), so its stubbed deps are never touched.
 var developTicketRealModule = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
+        './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
         './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
         './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
         './common/submodules.js': {},
@@ -92,6 +93,7 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
     var mod = loadModule(
         'js/developBugAndCreatePR.js',
         makeRequire({
+            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
             './common/quotaCircuitBreaker.js': quotaBreakerModule,
@@ -582,6 +584,7 @@ suite('developBugAndCreatePR', function() {
         var mod = loadModule(
             'js/developBugAndCreatePR.js',
             makeRequire({
+                './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
                 './common/trackers.js': loadTrackersDev(inlineMocks),
                 './config.js': configModule,
                 './common/gitStaging.js': gitStagingMod,
@@ -690,6 +693,7 @@ function loadBugForMissingResponseResume(opts) {
     // wired to the same real feedbackLoop/outputFiles so the attempt marker,
     // prompt file and deliverable re-read are shared with the bug leg.
     var sharedGateModule = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
+            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
             './common/submodules.js': {},
@@ -720,6 +724,7 @@ function loadBugForMissingResponseResume(opts) {
     var mod = loadModule(
         'js/developBugAndCreatePR.js',
         makeRequire({
+            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
             './common/trackers.js': loadTrackersDev(spyMocks),
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModuleLocal,
@@ -1188,6 +1193,7 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
         var mod = loadModule(
             'js/developBugAndCreatePR.js',
             makeRequire({
+                './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
                 './config.js': configModule,
                 './common/gitStaging.js': gitStagingModuleLocal,
                 './common/quotaCircuitBreaker.js': loadModule('js/common/quotaCircuitBreaker.js'),
