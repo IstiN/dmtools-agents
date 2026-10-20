@@ -3242,6 +3242,36 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.ok(!/CI dispatch held/.test(go.capturedLogs.join('\n')), 'push suite present — no hold');
     });
 
+    test('gh-1101 invisible: repository rulesets fallback when classic branch protection returns null', function () {
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'fah'), {
+            captureConsole: true,
+            github: {
+                items: [prItem(1691, { branch: 'ai/gh-1679', headSha: INV_HEAD, labels: ['pr_approved'],
+                                       pr: { mergeState: 'BLOCKED', mergeable: true } })],
+                pr: { number: 1691, labels: [{ name: 'pr_approved' }], base: { ref: 'main' },
+                      head: { sha: INV_HEAD } },
+                commitCheckRuns: { check_runs: [
+                    { name: 'Quality gate', status: 'completed', conclusion: 'success', started_at: '2026-10-12T14:00:00Z' }
+                ] },
+                prComments: [],
+                prAfterRefresh: { number: 1691, labels: [{ name: 'pr_approved' }], base: { ref: 'main' },
+                                  head: { sha: 'f00df00df00df00d' } },
+                workflowApiRuns: []
+            },
+            onCliExecute: tableCli([
+                ['/rules/branches/main', JSON.stringify(['Quality gate'])],
+                ['/branches/main', 'null'],
+                ['gh api graphql', JSON.stringify([])],
+                ['workflows/ci.yml/runs?head_sha=', { workflow_runs: [invDispatchedRun({ head: INV_HEAD })] }],
+                ['actions/runs?head_sha=', { workflow_runs: [] }]
+            ])
+        }));
+        var rule = { source: 'github', query: { type: 'pr', labels: ['pr_approved'], draft: false },
+                     localAction: 'validate_pr', limit: 1, id: 'validate-approved' };
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'fah', ciWorkflow: 'ci.yml', rules: [rule] } });
+        assert.equal(clones(sm).length, 1, 'rulesets fallback discovered required contexts and triggered reset');
+    });
+
     test('validate_pr: gh-852 AC2 — a BUSY pool defers the fresh-sha reset (no churn)', function () {
         var CUR = 'b85fbu55b85fbu55b85fbu55b85fbu55b85fbu55';
         var greenRule = { source: 'github',
@@ -6042,6 +6072,36 @@ suite('smAgent: red-head park + dry-run dispatch + conclusion grace (fa wave sta
         assert.equal(sm.recentlyConcludedNonGreen({ newest: { status: 'completed', conclusion: 'success', updated_at: fresh } }), false);
         assert.equal(sm.recentlyConcludedNonGreen({ newest: { status: 'completed', conclusion: 'failure', updated_at: fresh } }), true);
         assert.equal(sm.recentlyConcludedNonGreen({ newest: { status: 'completed', conclusion: 'cancelled', updated_at: old } }), false);
+    });
+
+    test('gh-1101 bridge-free: approvedGreenHeadFastPath stamps validationChecks with checksToken before merge probe', function () {
+        var r = Object.assign(run('success', 'shaBF', 30 * 60000, 60000), {
+            html_url: 'https://github.com/IstiN/fah/actions/runs/39432702706'
+        });
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'fah'), {
+            captureConsole: true,
+            github: {
+                items: [prItem(1691, { labels: ['pr_approved'], headSha: 'shaBF' })],
+                prStatus: { checkConclusion: 'green' },
+                pr: { number: 1691, labels: ['pr_approved'], body: '' }
+            },
+            onCliExecute: runsCli({ run: r })
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'fah', machineAuthor: 'ai-teammate',
+            validationChecks: '["Quality gate"]',
+            checksToken: 'ghs_app_checks_token',
+            silentToken: 'ghp_pat_silent_token',
+            sourceToken: 'ghp_pat_source_token',
+            rules: [RULES.armed] } });
+        var checkPosts = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('/check-runs --input') !== -1;
+        });
+        assert.equal(checkPosts.length, 1, 'validation check stamped on the green head before merge');
+        assert.deepEqual(sm.capturedEnvSets, [
+            { name: 'GH_TOKEN', value: 'ghs_app_checks_token' },
+            { name: 'GH_TOKEN', value: 'ghp_pat_source_token' }
+        ], 'checksToken (App token) preferred over silentToken (PAT) for check-run stamp');
+        assert.equal(sm.capturedPrMerges.length, 1, 'merge attempted after stamping');
     });
 });
 

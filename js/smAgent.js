@@ -3888,7 +3888,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // from checks:write, gh-848 belt); with no App token
                     // configured the in-place cure is skipped entirely —
                     // the reset below is the only working remedy.
-                    if ((RUN_JOB_PARAMS || {}).silentToken) {
+                    if (checksAppToken()) {
                         var phHeadRuns = headWorkflowRunsSafe(effectiveRepoInfo, vHead0);
                         if (phHeadRuns !== null && !hasActiveHeadRun(phHeadRuns)) {
                             var phCover = greenCoverRun(effectiveRepoInfo, vCiWf, vHead0);
@@ -5914,7 +5914,7 @@ function concludeOrphanedCheckRuns(repoInfo, cancelledRun) {
                 ' still pending on head ' +
                 String(cancelledRun.head_sha).slice(0, 7) +
                 ' — concluding them cancelled');
-    var appToken = (RUN_JOB_PARAMS || {}).silentToken;
+    var appToken = checksAppToken();
     var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
     var swapped = false;
     if (appToken) {
@@ -7116,15 +7116,33 @@ function cliJson(command) {
     return typeof out === 'string' ? JSON.parse(out || 'null') : out;
 }
 
+var RULESET_CONTEXTS_JQ = '[.[] | select(.type == "required_status_checks")' +
+    ' | .parameters.required_status_checks[].context]';
+
+function classicRequiredContexts(repoInfo, base) {
+    try {
+        var ctx = cliJson('gh api "repos/' + repoInfo.owner + '/' + repoInfo.repo +
+            '/branches/' + base + '" --jq ".protection.required_status_checks.contexts"');
+        return Array.isArray(ctx) && ctx.length ? ctx : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function rulesetRequiredContexts(repoInfo, base) {
+    var rCtx = cliJson('gh api "repos/' + repoInfo.owner + '/' + repoInfo.repo +
+        '/rules/branches/' + base + '" --jq \'' + RULESET_CONTEXTS_JQ + '\'');
+    return Array.isArray(rCtx) && rCtx.length ? rCtx : null;
+}
+
 function requiredContextsSafe(repoInfo, prNumber) {
     try {
         var pr = mcpParse(github_get_pr({ workspace: repoInfo.owner,
             repository: repoInfo.repo, pullRequestId: prNumber })) || {};
         var base = pr.base && (pr.base.ref || pr.base);
         if (!base || typeof base !== 'string') return null;
-        var ctx = cliJson('gh api "repos/' + repoInfo.owner + '/' + repoInfo.repo +
-            '/branches/' + base + '" --jq ".protection.required_status_checks.contexts"');
-        return Array.isArray(ctx) ? ctx : null;
+        return classicRequiredContexts(repoInfo, base) ||
+            rulesetRequiredContexts(repoInfo, base);
     } catch (e) {
         console.warn('  ⚠️  required-contexts probe failed: ' + (e.message || e));
         return null;
@@ -7279,11 +7297,18 @@ function isFastPathCandidate(ticket, probe, headSha) {
 
 // Latch ai_validated (always dropping the ai_validating arm) and attempt the
 // merge on the existing green. Returns true when the candidate is handled.
+function fastPathRunUrl(probe) {
+    var r = probe && probe.newest;
+    if (!r || r.status !== 'completed' || r.conclusion !== 'success') return null;
+    return r.html_url || null;
+}
+
 function approvedGreenHeadFastPath(repoInfo, ticket, key, probe, headSha) {
     if (!isFastPathCandidate(ticket, probe, headSha)) return false;
     if (!headGateClean(repoInfo, headSha)) return false;
     console.log('  ✅ ' + key + ' approved + green dispatched run on the current head' +
                 ' — merging without CI (gh-1101)');
+    stampValidationChecksForModule(repoInfo, headSha, 'completed', 'success', fastPathRunUrl(probe));
     try {
         attemptMergeProbe(repoInfo, ticket, key); // latches itself when unapproved
     } catch (eFast) {
@@ -7502,7 +7527,7 @@ function sweepZombieCheckRunsNeutral(repoInfo, zombies, headSha) {
         ' validation cycle — the owning workflow run terminated without' +
         ' concluding it. Closed as neutral: a dead cycle carries no verdict' +
         ' about its head. The PR re-validates through the normal dispatch path.';
-    var appToken = (RUN_JOB_PARAMS || {}).silentToken;
+    var appToken = checksAppToken();
     var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
     var swapped = false;
     if (appToken) {
@@ -7613,7 +7638,7 @@ function concludePlaceholderCheckRuns(repoInfo, placeholders, coverRun) {
         ' dispatched validation run concluded success' +
         (coverUrl ? (': ' + coverUrl) : '') +
         '. The gh-852 fresh-sha reset is the fallback cure.';
-    var appToken = (RUN_JOB_PARAMS || {}).silentToken;
+    var appToken = checksAppToken();
     var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
     var swapped = false;
     if (appToken) {
@@ -8837,6 +8862,11 @@ function stampLinkBlock(repoInfo, runUrl, conclusion) {
 // same-millisecond stamps in the forEach never collide.
 var stampTempSeq = 0;
 
+function checksAppToken() {
+    var jp = RUN_JOB_PARAMS || {};
+    return jp.checksToken || jp.silentToken;
+}
+
 function stampValidationChecksForModule(repoInfo, headSha, status, conclusion, runUrl) {
             var names = validationCheckNames();
             if (!names || !headSha) return;
@@ -8846,7 +8876,7 @@ function stampValidationChecksForModule(repoInfo, headSha, status, conclusion, r
             // checks:write on the repo the tick runs in. Swap GH_TOKEN for
             // the gh child exactly like silentUpdateBranch does, restore
             // after (sourceToken).
-            var appToken = (RUN_JOB_PARAMS || {}).silentToken;
+            var appToken = checksAppToken();
             var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
             var swapped = false;
             if (appToken) {
