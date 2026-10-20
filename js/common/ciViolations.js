@@ -57,6 +57,14 @@ var DISMISSAL_PATTERNS = [
     /\b(?:is|are)\s+(?:pure\s+)?infra\b/i
 ];
 
+// Summary section headings that scope the dismissal scan (review leg
+// 2026-10-20, thread PRT_kwDORYAuYs6uJ0zj): a claim inside a foreign-reds
+// section describes a red the rework leg was TOLD to mention — it is not a
+// dismissal of owned work. Only claims in owned/default scope (and never on
+// fixed/disputed accounting lines) reject.
+var FOREIGN_SECTION_HEADING = /^#{1,6}\s+.*(?:foreign|infra|do not chase|not chase)/i;
+var OWNED_SECTION_HEADING = /^#{1,6}\s+.*(?:violations you must fix|\bowned\b)/i;
+
 // ── path normalization (E3) ──────────────────────────────────────────────────
 
 /**
@@ -125,7 +133,18 @@ function parseDiffPaths(diffText) {
         seen[n] = true;
         out.push(n);
     };
+    // Only file-header lines (before the first hunk `@@` of the current
+    // file) may contribute paths — a CONTENT line whose text starts with
+    // "++ "/"-- " renders as "+++ "/"--- " and must not join the set
+    // (thread PRT_kwDORYAuYs6uJ04O: phantom owned files over-match).
+    var headerZone = true;
     String(diffText).split('\n').forEach(function(line) {
+        if (line.substring(0, 11) === 'diff --git ') headerZone = true;
+        if (line.substring(0, 2) === '@@') {
+            headerZone = false;
+            return;
+        }
+        if (!headerZone) return;
         addDiffHeaderPaths(add, line);
         if ((line.match(/^rename (from|to) (.+)$/))) {
             add(line.replace(/^rename (?:from|to) /, ''));
@@ -183,7 +202,10 @@ function dartAnalyzeViolations(lines, checkName, taken, out) {
 
 /** dart test: "[optional progress prefix]path: <test name> [E]" failure lines. */
 function dartTestViolations(lines, checkName, taken, out) {
-    var re = /^(?:\s*\d{1,2}:\d{2}\s+\+\d+(?:\s+-\d+)*:\s*)?\s*(\S+\.dart):\s+(.+?)\s+\[E\]\s*$/;
+    // The elapsed prefix is \d{1,}:\d{2} — capping the minutes at two digits
+    // dropped [E] lines of suites running >=100 minutes (thread
+    // PRT_kwDORYAuYs6uJ07q).
+    var re = /^(?:\s*\d{1,}:\d{2}\s+\+\d+(?:\s+-\d+)*:\s*)?\s*(\S+\.dart):\s+(.+?)\s+\[E\]\s*$/;
     lines.forEach(function(line, idx) {
         if (taken[idx]) return;
         var m = line.match(re);
@@ -285,27 +307,43 @@ function errorAnnotationViolation(line, checkName) {
     };
 }
 
-/** One "##[error]message" line → violation (path via token fallback), or null. */
-function ghErrorViolation(line, checkName) {
-    var ghErr = line.match(/^.*##\[error\]\s?(.*?)\s*$/);
-    if (!ghErr) return null;
-    return {
-        check: checkName,
-        rule: 'error',
-        path: findPathToken(ghErr[1]),
-        line: null,
-        detail: ghErr[1]
-    };
+/**
+ * Every "##[error]message" segment of one line → violations (path via token
+ * fallback). A line can carry several workflow annotations; a greedy
+ * ".*##\[error\]" anchor kept only the LAST one (thread
+ * PRT_kwDORYAuYs6uJ05y) — split on the marker instead and emit each segment.
+ */
+function ghErrorViolations(line, checkName) {
+    var segments = String(line).split(/##\[error\]\s?/);
+    var out = [];
+    for (var i = 1; i < segments.length; i++) {
+        var msg = segments[i].trim();
+        if (!msg) continue;
+        out.push({
+            check: checkName,
+            rule: 'error',
+            path: findPathToken(msg),
+            line: null,
+            detail: msg
+        });
+    }
+    return out;
 }
 
 /** Generic fallback: "::error file=..,line=..::msg" annotations and "##[error]" lines. */
 function genericErrorViolations(lines, checkName, taken, out) {
     lines.forEach(function(line, idx) {
         if (taken[idx]) return;
-        var violation = errorAnnotationViolation(line, checkName) || ghErrorViolation(line, checkName);
+        var violation = errorAnnotationViolation(line, checkName);
         if (violation) {
             taken[idx] = true;
             out.push(violation);
+            return;
+        }
+        var ghErrors = ghErrorViolations(line, checkName);
+        if (ghErrors.length > 0) {
+            taken[idx] = true;
+            ghErrors.forEach(function(v) { out.push(v); });
         }
     });
 }
@@ -322,9 +360,16 @@ function extractViolations(logs, checkName) {
     var lines = String(logs).split('\n');
     var taken = {};
     var out = [];
-    crap4jViolations(lines, checkName, taken, out);
+    // Most specific shapes first (thread PRT_kwDORYAuYs6uJ0xk, BLOCKING):
+    // the crap4j section scanner stays in-rule from a "[FAIL]" header until
+    // the next marker and would swallow dart-analyze bullets (or any
+    // "path:line:"-shaped line) appearing later in the SAME concatenated job
+    // log — an owned red mangled into a foreign-looking item. dart-analyze
+    // bullets and dart-test "[E]" lines never match the other parsers, so
+    // claiming them first is safe for every pinned fixture.
     dartAnalyzeViolations(lines, checkName, taken, out);
     dartTestViolations(lines, checkName, taken, out);
+    crap4jViolations(lines, checkName, taken, out);
     jscpdViolations(lines, checkName, taken, out);
     genericErrorViolations(lines, checkName, taken, out);
     var seen = {};
@@ -474,23 +519,64 @@ function violationsSummaryJson(violations) {
 
 // ── owned-violation summary validation (AC6, UT-8) ───────────────────────────
 
-/** The blanket-dismissal phrase a summary uses, or null. */
-function findDismissalClaim(summary) {
-    var text = String(summary || '');
+/** The first blanket-dismissal phrase on one line, or null. */
+function lineDismissalClaim(line) {
     for (var i = 0; i < DISMISSAL_PATTERNS.length; i++) {
-        var m = text.match(DISMISSAL_PATTERNS[i]);
+        var m = line.match(DISMISSAL_PATTERNS[i]);
         if (m) return m[0];
     }
     return null;
 }
 
-/** True when a summary line names the violation (path, basename or rule). */
-function mentionsViolation(normalizedLine, v) {
+/**
+ * The blanket-dismissal phrase a summary uses in owned/default scope, or
+ * null. Two scopes never reject (review leg 2026-10-20, thread
+ * PRT_kwDORYAuYs6uJ0zj):
+ *  - a `fixed` / `disputed:` accounting line — the structured per-item
+ *    alternative the gate asks for;
+ *  - a line inside a foreign-reds section — the foreign note tells the leg
+ *    to mention foreign reds, and "unrelated" is that vocabulary.
+ * A bare claim in owned/default scope still rejects while owned items are
+ * open (UT-8: blanket dismissal ≠ per-item dispute).
+ */
+function findDismissalClaim(summary) {
+    var lines = String(summary || '').split('\n');
+    var foreignScope = false;
+    for (var i = 0; i < lines.length; i++) {
+        if (FOREIGN_SECTION_HEADING.test(lines[i])) {
+            foreignScope = true;
+            continue;
+        }
+        if (OWNED_SECTION_HEADING.test(lines[i])) {
+            foreignScope = false;
+            continue;
+        }
+        if (foreignScope || carriesAccountingMarker(lines[i])) continue;
+        var claim = lineDismissalClaim(lines[i]);
+        if (claim) return claim;
+    }
+    return null;
+}
+
+/** True when the line names the violation's file (path or basename). */
+function lineNamesPath(normalizedLine, v) {
     var path = normalizePath(v.path).toLowerCase();
     var basename = path.split('/').pop();
     return (path.length > 0 && normalizedLine.indexOf(path) !== -1) ||
-        (basename.length > 3 && normalizedLine.indexOf(basename) !== -1) ||
-        (!!v.rule && normalizedLine.indexOf(String(v.rule).toLowerCase()) !== -1);
+        (basename.length > 3 && normalizedLine.indexOf(basename) !== -1);
+}
+
+/** True when a summary line names the violation (path, basename or rule). */
+function mentionsViolation(normalizedLine, v) {
+    if (lineNamesPath(normalizedLine, v)) return true;
+    if (!v.rule) return false;
+    // Word-boundary rule match: the dart-test shape hardcodes rule "test",
+    // and a bare substring match would let "…added a test" settle an
+    // unrelated file — a substring inside a longer token (test_recover…)
+    // is not the rule name (thread PRT_kwDORYAuYs6uJ01M).
+    var rule = String(v.rule).toLowerCase();
+    var ruleRe = new RegExp('\\b' + rule.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+    return ruleRe.test(normalizedLine);
 }
 
 /** True when the line carries the `fixed` / `disputed:` accounting marker. */
@@ -499,22 +585,42 @@ function carriesAccountingMarker(line) {
 }
 
 /** True when a line names the violation (path, basename or rule) AND carries fixed/disputed. */
-function lineAccountsFor(line, v) {
-    return carriesAccountingMarker(line) && mentionsViolation(String(line).toLowerCase(), v);
+function lineAccountsFor(line, v, requirePath) {
+    if (!carriesAccountingMarker(line)) return false;
+    var normalized = String(line).toLowerCase();
+    if (requirePath) return lineNamesPath(normalized, v);
+    return mentionsViolation(normalized, v);
+}
+
+/** True when the line names the file of a DIFFERENT violation (owned or not). */
+function namesOtherViolationPath(normalizedLine, v, violations) {
+    var list = violations || [];
+    for (var i = 0; i < list.length; i++) {
+        if (list[i] === v) continue;
+        if (lineNamesPath(normalizedLine, list[i])) return true;
+    }
+    return false;
 }
 
 /** True when the summary accounts for one owned violation (fixed / disputed per item). */
-function violationAccounted(summary, v, ownedCount) {
+function violationAccounted(summary, v, ownedCount, violations) {
     var lines = String(summary || '').split('\n');
     var i;
+    // Several owned items: citing the rule (or the dart-test word "test")
+    // is not naming the item — require the path/basename so one line cannot
+    // settle a differently-named file (thread PRT_kwDORYAuYs6uJ01M).
+    var requirePath = ownedCount > 1;
     for (i = 0; i < lines.length; i++) {
-        if (lineAccountsFor(lines[i], v)) return true;
+        if (lineAccountsFor(lines[i], v, requirePath)) return true;
     }
     if (ownedCount === 1) {
         // A single owned violation: one fixed/disputed line IS the per-item
-        // accounting — no ambiguity about which item it settles.
+        // accounting — unless the line names a DIFFERENT violation's file
+        // (it settles that one, not this item).
         for (i = 0; i < lines.length; i++) {
-            if (/\bfixed\b/i.test(lines[i]) || /disputed\s*:/i.test(lines[i])) return true;
+            if (!carriesAccountingMarker(lines[i])) continue;
+            if (namesOtherViolationPath(String(lines[i]).toLowerCase(), v, violations)) continue;
+            return true;
         }
     }
     return false;
@@ -537,7 +643,7 @@ function validateOwnedViolationsSummary(summary, violations) {
             ' owned CI violation(s) are open — fix them or dispute each with "disputed: <reason>"');
     }
     var unaccounted = owned.filter(function(v) {
-        return !violationAccounted(summary, v, owned.length);
+        return !violationAccounted(summary, v, owned.length, violations);
     });
     if (unaccounted.length > 0) {
         errors.push('unaccounted owned violation(s): ' +

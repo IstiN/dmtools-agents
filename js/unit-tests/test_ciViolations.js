@@ -441,3 +441,196 @@ suite('ciViolations.validateOwnedViolationsSummary (UT-8, AC6)', function() {
         assert.ok(verdict.ok, 'errors: ' + JSON.stringify(verdict.errors || []));
     });
 });
+
+// ── review-thread fixes (2026-10-20 rework leg) ──────────────────────────────
+
+// Thread PRT_kwDORYAuYs6uJ0xk (BLOCKING): parser order — the greedy crap4j
+// section scanner ran first and swallowed dart-analyze bullets appearing
+// after a [FAIL] header in the same (concatenated) job log, mangling their
+// path/rule and rendering a genuine owned red under "do not chase".
+suite('ciViolations.extractViolations — combined gate + dart-analyze log (parser order)', function() {
+
+    test('a dart-analyze bullet AFTER a [FAIL] section keeps its clean path/rule and tags OWNED', function() {
+        var log = readFixture('gate_plus_analyze.log');
+        var diff = 'diff --git a/test/js/require_base_resolution_test.dart b/test/js/require_base_resolution_test.dart\n' +
+            '--- /dev/null\n+++ b/test/js/require_base_resolution_test.dart\n@@ -0,0 +1,3 @@\n+void main() {}\n' +
+            'diff --git a/lib/widgets/foo_widget.dart b/lib/widgets/foo_widget.dart\n' +
+            '--- /dev/null\n+++ b/lib/widgets/foo_widget.dart\n@@ -0,0 +1 @@\n+class FooWidget {}\n';
+
+        var tagged = cv.extractAndTagViolations([{ name: 'gate', logs: log }], diff);
+
+        var crap = tagged.filter(function(v) { return v.rule === 'method_size'; });
+        assert.equal(crap.length, 1, 'the crap4j detail line still parses exactly once');
+        assert.equal(crap[0].path, 'test/js/require_base_resolution_test.dart');
+        assert.equal(crap[0].line, 13);
+        assert.equal(crap[0].ownership, 'owned');
+
+        var analyze = tagged.filter(function(v) { return v.path === 'lib/widgets/foo_widget.dart'; });
+        assert.equal(analyze.length, 1,
+            'the analyze bullet must survive with its CLEAN path (not swallowed into a mangled crap4j item): '
+            + JSON.stringify(tagged));
+        assert.equal(analyze[0].rule, 'undefined_method', 'the lint code is the rule');
+        assert.equal(analyze[0].line, 12);
+        assert.equal(analyze[0].ownership, 'owned',
+            'an in-diff analyze error is OWNED — never "foreign, do not chase"');
+    });
+
+    test('pure dart-analyze logs are unaffected by the parser order change (UT-4 stays pinned)', function() {
+        var items = cv.extractViolations(readFixture('dart_analyze.log'), 'analyze');
+        assert.ok(items.length > 0, 'dart analyze fixture still extracts');
+        assert.ok(items.every(function(v) { return v.rule && v.path; }));
+    });
+});
+
+// Thread PRT_kwDORYAuYs6uJ0zj (IMPORTANT): the blanket-dismissal scan must
+// not reject fully-accounted summaries that merely describe a FOREIGN red —
+// the foreign note tells the leg to mention them, and "unrelated" is that
+// vocabulary. Claims inside foreign-red sections (or on fixed/disputed
+// accounting lines) are not blanket dismissals of owned work.
+suite('ciViolations.validateOwnedViolationsSummary — dismissal scan scoping', function() {
+
+    var OWNED = [{ check: 'gate', rule: 'method_size', path: 'test/js/require_base_resolution_test.dart',
+        line: 13, detail: 'main has 100 lines > max 60', ownership: 'owned' }];
+
+    test('a fully-accounted summary that describes a FOREIGN red as "unrelated" passes', function() {
+        var summary = [
+            '## Owned CI violations',
+            '- fixed: test/js/require_base_resolution_test.dart main() split into helpers',
+            '## Foreign reds',
+            '- the agents-gate red is unrelated to this PR (partition race on the base branch)'
+        ].join('\n');
+        var verdict = cv.validateOwnedViolationsSummary(summary, OWNED);
+        assert.ok(verdict.ok, 'errors: ' + JSON.stringify(verdict.errors || []));
+    });
+
+    test('a dismissal claim OUTSIDE foreign sections still rejects even when a fixed line exists', function() {
+        var summary = '## Owned CI violations\n- fixed: test/js/require_base_resolution_test.dart split\n' +
+            'The method_size red is not caused by this PR anyway.\n';
+        var verdict = cv.validateOwnedViolationsSummary(summary, OWNED);
+        assert.notOk(verdict.ok, 'a blanket claim in owned scope is still a dismissal');
+    });
+
+    test('findDismissalClaim ignores accounting lines and foreign-red sections, still sees bare claims', function() {
+        assert.equal(cv.findDismissalClaim('- fixed: a.dart (the old code was unrelated to the pr)'), null,
+            'an accounting line is the structured alternative, not a dismissal');
+        assert.equal(cv.findDismissalClaim('## Foreign reds\n- z.dart red is unrelated to this PR'), null,
+            'foreign-section mention is the vocabulary the foreign note asks for');
+        assert.equal(cv.findDismissalClaim('not caused by this PR'), 'not caused by this PR');
+        assert.equal(cv.findDismissalClaim('## Owned CI violations\n- x is unrelated'), 'unrelated',
+            'a claim in owned scope still rejects');
+    });
+});
+
+// Thread PRT_kwDORYAuYs6uJ01M (SUGGESTION): accounting precision — the word
+// "test" (dart-test rule name) or a bare "fixed" must not settle a
+// differently-named owned violation.
+suite('ciViolations.validateOwnedViolationsSummary — accounting precision (multi-owned)', function() {
+
+    var OWNED_TWO = [
+        { check: 'gate', rule: 'test', path: 'lib/a.dart', line: 1, detail: 'd1', ownership: 'owned' },
+        { check: 'gate', rule: 'test', path: 'lib/c_test.dart', line: 2, detail: 'd2', ownership: 'owned' }
+    ];
+
+    test('a "fixed" line containing the word "test" does not settle a differently-named owned file', function() {
+        var verdict = cv.validateOwnedViolationsSummary(
+            '- fixed: lib/a.dart and added a test\n', OWNED_TWO);
+        assert.notOk(verdict.ok, 'with several owned items the path must be cited');
+        assert.ok(String(verdict.errors.join(' ')).indexOf('c_test.dart') !== -1,
+            'c_test.dart stays unaccounted: ' + JSON.stringify(verdict.errors || []));
+    });
+
+    test('multi-owned: per-item accounting with both paths passes', function() {
+        var verdict = cv.validateOwnedViolationsSummary(
+            '- fixed: lib/a.dart split\n- disputed: lib/c_test.dart is generated scaffolding\n', OWNED_TWO);
+        assert.ok(verdict.ok, JSON.stringify(verdict.errors || []));
+    });
+
+    test('single-owned fallback does not account when the line names a DIFFERENT violation file', function() {
+        var OWNED_ONE = [{ check: 'gate', rule: 'test', path: 'lib/a.dart', line: 1, detail: 'd', ownership: 'owned' }];
+        var FOREIGN = [{ check: 'agents-gate', rule: 'test', path: 'js/unit-tests/test_recoverDirtyReviewTestCase.js',
+            line: null, detail: 'partition mismatch', ownership: 'foreign' }];
+        var verdict = cv.validateOwnedViolationsSummary(
+            '- fixed: js/unit-tests/test_recoverDirtyReviewTestCase.js on the base branch\n',
+            OWNED_ONE.concat(FOREIGN));
+        assert.notOk(verdict.ok, 'the fixed line names the foreign file, not the owned one');
+    });
+
+    test('single-owned: a disputed line naming the rule still accounts (heuristic leniency kept)', function() {
+        var OWNED_ONE = [{ check: 'gate', rule: 'method_size', path: 'lib/a.dart', line: 1, detail: 'd', ownership: 'owned' }];
+        var verdict = cv.validateOwnedViolationsSummary(
+            '- disputed: the method_size limit is misconfigured for generated scaffolding\n', OWNED_ONE);
+        assert.ok(verdict.ok, JSON.stringify(verdict.errors || []));
+    });
+});
+
+// Thread PRT_kwDORYAuYs6uJ04O (SUGGESTION): parseDiffPaths must not ingest
+// phantom paths from diff CONTENT lines (added lines rendering as "+++ text"
+// or deleted lines as "--- text" after a hunk header).
+suite('ciViolations.parseDiffPaths — hunk content never joins the diff path set', function() {
+
+    test('added/deleted content lines starting with ++/-- after a hunk header are not diff paths', function() {
+        var diff = 'diff --git a/docs/guide.md b/docs/guide.md\n' +
+            '--- a/docs/guide.md\n+++ b/docs/guide.md\n' +
+            '@@ -1,3 +1,4 @@\n' +
+            ' context line\n' +
+            '+++ example of embedded diff text\n' +
+            '--- not a path\n' +
+            'diff --git a/real.dart b/real.dart\n' +
+            '--- /dev/null\n+++ b/real.dart\n@@ -0,0 +1 @@\n+void main() {}\n';
+        var paths = cv.parseDiffPaths(diff);
+        assert.ok(paths.indexOf('docs/guide.md') !== -1, 'real target path parsed');
+        assert.ok(paths.indexOf('real.dart') !== -1, 'second file target path parsed');
+        assert.equal(paths.indexOf('example of embedded diff text'), -1, '+++ content line is not a path');
+        assert.equal(paths.indexOf('not a path'), -1, '--- content line is not a path');
+        assert.equal(paths.length, 2, 'no phantom paths: ' + JSON.stringify(paths));
+    });
+
+    test('a ---/+++ pair with no diff --git header and no hunks still parses (bare-pair diff)', function() {
+        var paths = cv.parseDiffPaths('--- a/only.dart\n+++ b/only.dart\n');
+        assert.deepEqual(paths, ['only.dart']);
+    });
+
+    test('the #433 fixture diff still yields its real paths (no regression from hunk gating)', function() {
+        var paths = cv.parseDiffPaths(DIFF_433);
+        assert.ok(paths.indexOf('js/common/githubHelpers.js') !== -1, JSON.stringify(paths));
+        assert.ok(paths.indexOf('test/js/require_base_resolution_test.dart') !== -1, JSON.stringify(paths));
+    });
+});
+
+// Thread PRT_kwDORYAuYs6uJ05y (SUGGESTION): the greedy "^.*##\[error\]" anchor
+// kept only the LAST marker of a line — extract each marker's segment.
+suite('ciViolations.extractViolations — multiple ##[error] markers on one line', function() {
+
+    test('each ##[error] marker yields its own message segment', function() {
+        var log = '##[error]lint failed in src/a.dart:12 ##[error]and src/b.dart:9 has issues\n';
+        var items = cv.extractViolations(log, 'ci');
+        assert.equal(items.length, 2, 'one item per marker, not just the last: ' + JSON.stringify(items));
+        assert.equal(items[0].detail, 'lint failed in src/a.dart:12');
+        assert.equal(items[0].path, 'src/a.dart');
+        assert.equal(items[1].detail, 'and src/b.dart:9 has issues');
+        assert.equal(items[1].path, 'src/b.dart');
+    });
+
+    test('single-marker lines are unchanged (pinned fallback shape)', function() {
+        var items = cv.extractViolations('##[error]Process completed with exit code 1.\n', 'ci');
+        assert.equal(items.length, 1);
+        assert.equal(items[0].detail, 'Process completed with exit code 1.');
+        assert.equal(items[0].path, null);
+    });
+});
+
+// Thread PRT_kwDORYAuYs6uJ07q (SUGGESTION): the dart-test progress prefix
+// capped at \d{1,2}:\d{2} — suites running >=100 minutes lost their [E] lines.
+suite('ciViolations.extractViolations — dart-test long-run progress prefix', function() {
+
+    test('a failure line with a >=100 minute elapsed prefix still extracts', function() {
+        var log = '00:02 +51: loading test/dart_test_shape.dart\n' +
+            '102:33 +583 -12: test/long_suite.dart: the whole suite times out [E]\n' +
+            '102:33 +583 -13: Some tests failed.\n';
+        var items = cv.extractViolations(log, 'test-runner');
+        var paths = items.map(function(v) { return v.path; });
+        assert.ok(paths.indexOf('test/long_suite.dart') !== -1,
+            '>=100:00 prefix line extracted: ' + JSON.stringify(items));
+        assert.equal(items[0].rule, 'test');
+    });
+});
