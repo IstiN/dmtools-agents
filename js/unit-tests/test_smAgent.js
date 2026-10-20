@@ -16784,3 +16784,311 @@ suite('smAgent: fork silent-update workflow-write escalation (gh-1106)', functio
         assert.equal(sm.capturedPrLabelAdds.length, 0);
     });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// gh-113: guest validation path — the external validation arm, the guest
+// park self-clear and the dead-zone counter.
+// ─────────────────────────────────────────────────────────────────────────────
+suite('smAgent: guest validation path (gh-113)', function () {
+
+    var GUEST_MERGE = { source: 'github',
+        query: { type: 'pr', labels: ['ai_validating', 'pr_approved'],
+                 checks: ['none', 'pending'], mergeState: 'CLEAN',
+                 notMachine: true,
+                 notLatestVerdict: ['REQUEST_CHANGES', 'BLOCK'], draft: false },
+        localAction: 'merge_pr', guestZeroFailing: true, limit: 1,
+        id: 'merge-validated-guest' };
+    var PARK_RESET = { source: 'github',
+        query: { type: 'pr', labels: ['validation_failed'],
+                 notLabels: ['ai_validating', 'blocked'], draft: false },
+        localAction: 'update_branch', limit: 10, id: 'park-reset' };
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function guestItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved', 'ai_validating'],
+                   issueNumber: null, prNumber: n, draft: false,
+                   author: 'yury-by', branch: 'fix/guest', headSha: 'abc123def' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    // cli router: the arm-event probe (full JSON feed), the parkedSince
+    // probe (--jq max), the head-commit actor probe, and the head-run
+    // rollup probe answer from one table.
+    function cliRouter(map) {
+        return function (cmdOpts) {
+            var c = String(cmdOpts && cmdOpts.command || '');
+            if (map.events && c.indexOf('/events?per_page=100"') !== -1 &&
+                c.indexOf('--jq') === -1) return map.events;
+            if (map.parkedAt && c.indexOf('/events?per_page=100') !== -1 &&
+                c.indexOf('--jq') !== -1) return map.parkedAt;
+            if (map.commit && c.indexOf('/commits/') !== -1) return map.commit;
+            if (map.headRuns && c.indexOf('/actions/runs?head_sha=') !== -1) return map.headRuns;
+            return '';
+        };
+    }
+
+    function armEventJson(login) {
+        return JSON.stringify([
+            { event: 'labeled', label: { name: 'pr_approved' }, actor: { login: 'review-bot' },
+              created_at: '2026-10-19T20:00:00Z' },
+            { event: 'labeled', label: { name: 'ai_validating' }, actor: { login: login },
+              created_at: '2026-10-19T22:10:00Z' }
+        ]);
+    }
+
+    test('AC1: a manual-armed zero-failing guest (stub-only checks) merges within the tick', function () {
+        var sm = makeSmAgent(Object.assign(config('isti', 'harness'), {
+            github: {
+                items: [guestItem(1634)],
+                pr: { number: 1634, labels: ['pr_approved', 'ai_validating'] }
+            },
+            onCliExecute: cliRouter({ events: armEventJson('yury-by'),
+                                      headRuns: '{"workflow_runs":[]}' })
+        }));
+        sm.action({ jobParams: { owner: 'isti', repo: 'harness',
+            machineAuthor: 'ai-teammate', rules: [GUEST_MERGE] } });
+
+        assert.equal(sm.capturedPrMerges.length, 1, 'the external arm merges');
+        assert.equal(sm.capturedPrMerges[0].pullRequestId, 1634);
+        assert.equal(sm.capturedPrMerges[0].mergeMethod, 'squash');
+    });
+
+    test('a REAL in-flight check on the head refuses the lane (the verdict owns it)', function () {
+        var sm = makeSmAgent(Object.assign(config('isti', 'harness'), {
+            github: {
+                items: [guestItem(1634)],
+                pr: { number: 1634, labels: ['pr_approved', 'ai_validating'] },
+                commitCheckRuns: { check_runs: [
+                    { name: 'quality', status: 'IN_PROGRESS', conclusion: null } ] }
+            },
+            onCliExecute: cliRouter({ events: armEventJson('yury-by'),
+                                      headRuns: '{"workflow_runs":[]}' })
+        }));
+        sm.action({ jobParams: { owner: 'isti', repo: 'harness',
+            machineAuthor: 'ai-teammate', rules: [GUEST_MERGE] } });
+
+        assert.equal(sm.capturedPrMerges.length, 0, 'never merge ahead of a live validation');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'the arm stays for the verdict rules');
+    });
+
+    test('a REAL red check refuses the lane (fail-validation owns guests too)', function () {
+        var sm = makeSmAgent(Object.assign(config('isti', 'harness'), {
+            github: {
+                items: [guestItem(1634)],
+                pr: { number: 1634, labels: ['pr_approved', 'ai_validating'] },
+                commitCheckRuns: { check_runs: [
+                    { name: 'gate', status: 'COMPLETED', conclusion: 'failure' } ] }
+            },
+            onCliExecute: cliRouter({ events: armEventJson('yury-by'),
+                                      headRuns: '{"workflow_runs":[]}' })
+        }));
+        sm.action({ jobParams: { owner: 'isti', repo: 'harness',
+            machineAuthor: 'ai-teammate', rules: [GUEST_MERGE] } });
+
+        assert.equal(sm.capturedPrMerges.length, 0, 'a red head is never mergeable');
+    });
+
+    test('stub-only checks merge even when the ROLLUP label reads pending (the live #1634 shape)', function () {
+        var sm = makeSmAgent(Object.assign(config('isti', 'harness'), {
+            github: {
+                items: [guestItem(1634)],
+                pr: { number: 1634, labels: ['pr_approved', 'ai_validating'] },
+                commitCheckRuns: { check_runs: [
+                    { name: 'merge / 11', status: 'COMPLETED', conclusion: 'skipped' },
+                    { name: 'merge / 12', status: 'COMPLETED', conclusion: 'skipped' } ] }
+            },
+            onCliExecute: cliRouter({ events: armEventJson('yury-by'),
+                                      headRuns: '{"workflow_runs":[]}' })
+        }));
+        sm.action({ jobParams: { owner: 'isti', repo: 'harness',
+            machineAuthor: 'ai-teammate', rules: [GUEST_MERGE] } });
+
+        assert.equal(sm.capturedPrMerges.length, 1, 'bookkeeping stubs are not verdicts');
+    });
+
+    test('a MACHINE-added ai_validating refuses the lane (no external arm)', function () {
+        var sm = makeSmAgent(Object.assign(config('isti', 'harness'), {
+            github: {
+                items: [guestItem(1707, { author: 'vendor-human' })],
+                pr: { number: 1707, labels: ['pr_approved', 'ai_validating'] }
+            },
+            onCliExecute: cliRouter({ events: armEventJson('ai-teammate'),
+                                      headRuns: '{"workflow_runs":[]}' })
+        }));
+        sm.action({ jobParams: { owner: 'isti', repo: 'harness',
+            machineAuthor: 'ai-teammate', rules: [GUEST_MERGE] } });
+
+        assert.equal(sm.capturedPrMerges.length, 0,
+            'the machine arms ride the normal CI path, never the policy lane');
+    });
+
+    test('a missing arm event refuses the lane (fail closed — an irreversible merge needs the proof)', function () {
+        var sm = makeSmAgent(Object.assign(config('isti', 'harness'), {
+            github: {
+                items: [guestItem(1634)],
+                pr: { number: 1634, labels: ['pr_approved', 'ai_validating'] }
+            },
+            onCliExecute: cliRouter({ events: '[]', headRuns: '{"workflow_runs":[]}' })
+        }));
+        sm.action({ jobParams: { owner: 'isti', repo: 'harness',
+            machineAuthor: 'ai-teammate', rules: [GUEST_MERGE] } });
+
+        assert.equal(sm.capturedPrMerges.length, 0);
+    });
+
+    test('an events-feed probe failure refuses the lane and never crashes the tick', function () {
+        var sm = makeSmAgent(Object.assign(config('isti', 'harness'), {
+            github: {
+                items: [guestItem(1634)],
+                pr: { number: 1634, labels: ['pr_approved', 'ai_validating'] }
+            },
+            onCliExecute: cliRouter({ headRuns: '{"workflow_runs":[]}' })
+        }));
+        sm.action({ jobParams: { owner: 'isti', repo: 'harness',
+            machineAuthor: 'ai-teammate', rules: [GUEST_MERGE] } });
+
+        assert.equal(sm.capturedPrMerges.length, 0);
+    });
+
+    test('AC2: a guest parked validation_failed whose head carries no red of its own clears the park', function () {
+        var sm = makeSmAgent(Object.assign(config('isti', 'harness'), {
+            github: {
+                items: [{ key: 'pr-1615', labels: ['validation_failed'], issueNumber: null,
+                          prNumber: 1615, draft: false, author: 'yury-by',
+                          branch: 'fix/guest', headSha: 'abc123def' }],
+                pr: { number: 1615, labels: ['validation_failed'] },
+                commitCheckRuns: { check_runs: [
+                    { name: 'merge / 11', status: 'COMPLETED', conclusion: 'skipped' },
+                    { name: 'quality', status: 'COMPLETED', conclusion: 'success' } ] }
+            },
+            onCliExecute: cliRouter({
+                events: JSON.stringify([
+                    { event: 'labeled', label: { name: 'validation_failed' },
+                      actor: { login: 'ai-teammate' }, created_at: '2026-10-19T18:00:00Z' }]),
+                parkedAt: '"2026-10-19T18:00:00Z"',
+                commit: JSON.stringify({ login: 'yury-by', date: '2026-10-19T17:00:00Z',
+                                         committer: 'Yury', sha: 'abc123def', parents: [] }),
+                headRuns: '{"workflow_runs":[]}'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'isti', repo: 'harness',
+            machineAuthor: 'ai-teammate', rules: [PARK_RESET] } });
+
+        var removes = sm.capturedPrLabelRemoves.filter(function (r) {
+            return r.label === 'validation_failed';
+        });
+        assert.equal(removes.length, 1, 'the stale park clears without a human label edit');
+        var say = sm.capturedPrComments.some(function (c) {
+            return String(c.body || '').indexOf('validation_failed cleared') !== -1;
+        });
+        assert.ok(say, 'the recovery is documented on the PR (no log archaeology)');
+    });
+
+    test('AC2 negative: a guest parked on a genuinely red head keeps the park', function () {
+        var sm = makeSmAgent(Object.assign(config('isti', 'harness'), {
+            github: {
+                items: [{ key: 'pr-1615', labels: ['validation_failed'], issueNumber: null,
+                          prNumber: 1615, draft: false, author: 'yury-by',
+                          branch: 'fix/guest', headSha: 'abc123def' }],
+                pr: { number: 1615, labels: ['validation_failed'] },
+                commitCheckRuns: { check_runs: [
+                    { name: 'gate', status: 'COMPLETED', conclusion: 'failure' } ] }
+            },
+            onCliExecute: cliRouter({
+                events: JSON.stringify([
+                    { event: 'labeled', label: { name: 'validation_failed' },
+                      actor: { login: 'ai-teammate' }, created_at: '2026-10-19T18:00:00Z' }]),
+                parkedAt: '"2026-10-19T18:00:00Z"',
+                commit: JSON.stringify({ login: 'yury-by', date: '2026-10-19T17:00:00Z',
+                                         committer: 'Yury', sha: 'abc123def', parents: [] }),
+                headRuns: '{"workflow_runs":[]}'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'isti', repo: 'harness',
+            machineAuthor: 'ai-teammate', rules: [PARK_RESET] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'the red verdict stands — no clear');
+    });
+
+    test('AC2 negative: a zero-red MACHINE park keeps the gh-750 semantics (green rollup clears via its own rung)', function () {
+        // The machine rung (gh-750) already owns machine parks; the guest
+        // rung must not change machine outcomes. Here the machine park has
+        // a NON-green rollup (stub-only) — the gh-750 green-rollup rung
+        // would not fire either, and the guest rung must not fire for it.
+        var sm = makeSmAgent(Object.assign(config('isti', 'harness'), {
+            github: {
+                items: [{ key: 'pr-1707', labels: ['validation_failed'], issueNumber: null,
+                          prNumber: 1707, draft: false, author: 'ai-teammate',
+                          branch: 'ai/gh-1707', headSha: 'abc123def' }],
+                pr: { number: 1707, labels: ['validation_failed'] },
+                commitCheckRuns: { check_runs: [
+                    { name: 'merge / 11', status: 'COMPLETED', conclusion: 'skipped' } ] }
+            },
+            onCliExecute: cliRouter({
+                events: JSON.stringify([
+                    { event: 'labeled', label: { name: 'validation_failed' },
+                      actor: { login: 'ai-teammate' }, created_at: '2026-10-19T18:00:00Z' }]),
+                parkedAt: '"2026-10-19T18:00:00Z"',
+                commit: JSON.stringify({ login: 'ai-teammate', date: '2026-10-19T17:00:00Z',
+                                         committer: 'AI Teammate', sha: 'abc123def', parents: [] }),
+                headRuns: '{"workflow_runs":[]}'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'isti', repo: 'harness',
+            machineAuthor: 'ai-teammate', rules: [PARK_RESET] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'machine parks keep the gh-750 gate (green rollup or moved-clean head only)');
+    });
+
+    test('AC3: the tick summary exposes the dead-zone counter for blocked guests', function () {
+        var sm = makeSmAgent(Object.assign(config('isti', 'harness'), {
+            captureConsole: true,
+            github: {
+                items: [guestItem(1634)],
+                pr: { number: 1634, labels: ['pr_approved', 'ai_validating'] },
+                prList: [ { number: 1634, state: 'open',
+                            labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                            user: { login: 'yury-by' }, draft: false } ],
+                prStatus: { state: 'OPEN', checkConclusion: 'pending', mergeState: 'CLEAN',
+                            mergeable: true, headSha: 'abc123def' }
+            },
+            onCliExecute: cliRouter({ events: '[]', headRuns: '{"workflow_runs":[]}' })
+        }));
+        var res = sm.action({ jobParams: { owner: 'isti', repo: 'harness',
+            machineAuthor: 'ai-teammate', rules: [GUEST_MERGE] } });
+
+        assert.equal(res.guestPrsBlocked, 1, 'the result carries the counter');
+        var summary = sm.capturedLogs.join('\n');
+        assert.ok(summary.indexOf('guest_prs_blocked_no_validation_path: 1') !== -1,
+            'the summary names the dead-zone counter');
+        assert.ok(summary.indexOf('pr-1634') !== -1, 'the blocked guest is named');
+    });
+
+    test('AC3: machine-authored PRs and verdict-carrying heads are never counted', function () {
+        var sm = makeSmAgent(Object.assign(config('isti', 'harness'), {
+            captureConsole: true,
+            github: {
+                items: [],
+                prList: [ { number: 1707, state: 'open',
+                            labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                            user: { login: 'ai-teammate' }, draft: false },
+                          { number: 1591, state: 'open',
+                            labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                            user: { login: 'yury-by' }, draft: false } ],
+                prStatus: { state: 'OPEN', checkConclusion: 'green', mergeState: 'CLEAN',
+                            mergeable: true, headSha: 'abc123def' }
+            }
+        }));
+        var res = sm.action({ jobParams: { owner: 'isti', repo: 'harness',
+            machineAuthor: 'ai-teammate', rules: [PARK_RESET] } });
+
+        assert.equal(res.guestPrsBlocked, 0,
+            'machine PRs have the auto path; green heads have merge-validated');
+    });
+});

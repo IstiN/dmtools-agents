@@ -185,11 +185,15 @@ var triggerFailuresModule = require('./common/triggerFailures.js');
 // label/probe-cadence config readers and the dispatch-lane exclusion
 // predicate. Pure module; the legs and the probe agent wire transport.
 var quotaBreakerModule = require('./common/quotaCircuitBreaker.js');
-// gh-1075 (hoisted, never lazy — the gh-823 pack-require rule): the
-// fork-PR dispatch contract — a cross-repo PR reroutes onto the base
+// gh-1075 (hoisted, never lazy — the gh-823 pack-require rule): the fork-PR dispatch contract — a cross-repo PR reroutes onto the base
 // machine ref with a refs/pull/<N>/head checkout plan (AC1) and its
 // no-ref liveness oracle is the pull-ref probe (AC2/AC3).
 var forkDispatchModule = require('./common/forkDispatch.js');
+// gh-113 (hoisted, never lazy — the gh-823 pack-require rule): the guest
+// validation path — the pure half of the guest-PR dead-zone fixes (the
+// real check-run census, the external-validation-arm test, the dead-zone
+// scan shape and its cross-tick carry).
+var guestValidationPathModule = require('./common/guestValidationPath.js');
 // gh-1000 (hoisted, never lazy — the gh-823 pack-require rule): the
 // phantom ai_validating mutex holder — registry probes/heals, live-PR
 // re-derivation and the alarm/streak counter persistence.
@@ -4582,6 +4586,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // pr_approved gate lives in attemptMergeProbe — the shared
             // merge-validated probe (gh-862: the latch-skip arm-only path
             // and the gh-857 conclude-success path call the same helper).
+            // gh-113: the guest lane (merge-validated-guest, rule flag
+            // guestZeroFailing) gates every candidate through the external-
+            // validation-arm probe BEFORE the merge — a refusal is not a
+            // processed key, the tick dead-zone counter exposes the guest.
+            if (rule.guestZeroFailing &&
+                !guestZeroFailingMergeGate(effectiveRepoInfo, rule, ticket, key, effectiveConfig)) {
+                continue; // NOT processedKeys — the dead-zone counter owns the refusal
+            }
             try {
                 attemptMergeProbe(effectiveRepoInfo, ticket, key);
                 processedKeys.push(key);
@@ -6759,6 +6771,88 @@ function dropOpenPrsCache(repoInfo) {
 // raw body for error statuses, a 405 "not mergeable" arrives as
 // {"merged": false, ...} with NO thrown error; the markers MUST stay so
 // the loop self-heals: unarm-stale → refresh → re-validate → retry).
+// ── gh-113: the guest external-validation-arm gate ──────────────────────────
+
+// The ai_validating label's ADDING actor — the external-arm proof. ONE gh
+// api events read (per_page=100, the same page budget parkedSince reads);
+// the newest labeled(ai_validating) entry wins (chronological feed). Null
+// when the feed carries none or the probe fails — the caller fails closed
+// (an irreversible merge needs the proof).
+function armEventActor(repoInfo, prNumber) {
+    try {
+        var events = cliJson('gh api "repos/' + repoInfo.owner + '/' + repoInfo.repo +
+            '/issues/' + prNumber + '/events?per_page=100"');
+        return guestValidationPathModule.newestArmEvent(events);
+    } catch (eArmProbe) {
+        console.warn('  ⚠️  arm-event probe failed for pr-' + prNumber + ': ' +
+            (eArmProbe.message || eArmProbe) + ' — no external-arm proof (fail closed)');
+        return null;
+    }
+}
+
+// The merge-side gate for the gh-113 guest lane (rule.guestZeroFailing —
+// merge-validated-guest). A MANUAL ai_validating label by a non-machine
+// actor is an EXTERNAL VALIDATION ARM: the human vouches for the head, so
+// the lane may merge a CLEAN approved guest whose rollup carries no
+// concluded verdict. Every probe fails CLOSED — the lane never merges on
+// a degraded read:
+//   1. the head's REAL check-run census (bookkeeping stubs — the merge
+//      bot's 'merge / …' checks — and CANCELLED runs are not verdicts)
+//      carries no red (fail-validation owns guests too) and no in-flight
+//      real check (a live validation owns the verdict — never merge ahead
+//      of it);
+//   2. no run of ANY workflow is active on the head (the gh-748 stamp-lag
+//      belt — a fresh dispatch re-stamps the rollup itself);
+//   3. the ai_validating label event names a NON-machine actor (the
+//      machine's own arms ride the normal CI path).
+// Returns true only when the merge may proceed.
+function guestZeroFailingMergeGate(repoInfo, rule, ticket, key, effectiveConfig) {
+    var gHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
+    var gRuns = gHead ? headCheckRunsSafe(repoInfo, gHead) : null;
+    if (gRuns === null) {
+        console.log('  ⏭️  ' + key + ' guest zero-failing gate: head check-run probe failed' +
+                    ' — refusing the merge (fail closed)');
+        return false;
+    }
+    var gTally = guestValidationPathModule.realCheckTally(
+        gRuns, smProviderModule.BOOKEEPING_CHECK_PREFIXES);
+    if (gTally.red > 0) {
+        console.log('  ⏭️  ' + key + ' guest zero-failing gate: ' + gTally.red +
+                    ' real red check(s) on the head — fail-validation owns the verdict');
+        return false;
+    }
+    if (gTally.pending > 0) {
+        console.log('  ⏭️  ' + key + ' guest zero-failing gate: ' + gTally.pending +
+                    ' real check(s) in flight — the verdict rules own the head');
+        return false;
+    }
+    var gHeadRuns = gHead ? headWorkflowRunsSafe(repoInfo, gHead) : null;
+    if (gHeadRuns === null || hasActiveHeadRun(gHeadRuns)) {
+        console.log('  ⏭️  ' + key + ' guest zero-failing gate: ' +
+                    (gHeadRuns === null ? 'head-run probe failed (fail closed)' :
+                     'a run is active on the head (gh-748 stamp-lag belt)') +
+                    ' — refusing the merge');
+        return false;
+    }
+    var gArm = armEventActor(repoInfo, ticket.prNumber);
+    if (!gArm) {
+        console.log('  ⏭️  ' + key + ' guest zero-failing gate: no readable ai_validating' +
+                    ' label event — no external-arm proof (fail closed)');
+        return false;
+    }
+    var gMachineAuthor = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
+    if (!guestValidationPathModule.isManualArm(gArm, gMachineAuthor)) {
+        console.log('  ⏭️  ' + key + ' guest zero-failing gate: ai_validating was added by `' +
+                    gArm.login + '` (a machine identity) — the machine arms ride the normal CI path');
+        return false;
+    }
+    console.log('  🤝 ' + key + ' external validation arm — ai_validating added by `' +
+        gArm.login + '` at ' + (gArm.createdAt || 'unknown time') +
+        ', head carries ' + gTally.real + ' real check(s), none red, none in flight' +
+        ' (gh-113: the stub-only rollup never reads green — the manual arm is the verdict)');
+    return true;
+}
+
 function attemptMergeProbe(repoInfo, ticket, key) {
     // Verify the sticky pr_approved latch on the PR itself (defense in
     // depth for the rule guards — the query list may be a stale snapshot).

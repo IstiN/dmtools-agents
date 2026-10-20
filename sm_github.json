@@ -184,6 +184,32 @@
           "id": "merge-validated"
         },
         {
+          "description": "gh-113 GUEST MERGE LANE (live IstiN/flutter_agent_harness 2026-10-19, PRs #1634/#1615/#1591 — three guest PRs APROVED + CLEAN + behind=0 for 3h+ with a MANUAL ai_validating label, no merge, no validation): the author-disjoint twin of merge-validated for HUMAN-authored PRs (query.notMachine — the gh-755 twin pattern; with no machineAuthor configured notMachine is inert and the lane covers every PR, degrading to merge-validated semantics, never below). The dead shape it closes: a guest head never gets a real validation run (workflow_dispatch cannot target fork refs — gh-1075 fixed the AI legs, the validate_pr lane stays branch-targeted), and its only check-runs are the merge bot's SKIPPED stubs ('merge / …'), which the smProvider rollup deliberately reads 'pending' (bookkeeping = no verdict yet — that label arms validate-fresh) — so merge-validated (checks green) never matches and the manual arm silently never fires. EXPLICIT POLICY (gh-113 fix direction, option 3): a MANUAL ai_validating label by a non-machine actor is an EXTERNAL VALIDATION ARM — the human vouches for the head. This lane matches armed+approved CLEAN guests whose rollup carries NO concluded verdict (checks none|pending — deliberately DISJOINT from merge-validated's green: a real green verdict flows through the standard lane) and the merge_pr arm gates every candidate through the guest zero-failing probe (rule.guestZeroFailing → smAgent guestZeroFailingMergeGate, fail-closed on every probe): the head's REAL check-run census (js/common/guestValidationPath.js realCheckTally — bookkeeping stubs and CANCELLED conclusions are not verdicts) must carry no red (a red head belongs to fail-validation, which parks guests machine-author-agnostically) and no in-flight real check (a live validation owns the verdict — the lane never merges ahead of it; an active run of ANY workflow on the head refuses too, the gh-748 stamp-lag belt), and the ai_validating label event (gh api issues events feed, per_page=100) must name a NON-machine actor (isManualArm — the machine's own arms are on the normal CI path; a missing/unreadable event refuses the merge — an irreversible action needs the proof). CLEAN is required by the query, so branch protection is already satisfied; the sticky pr_approved gate lives in attemptMergeProbe like merge-validated (an un-approved head latches ai_validated instead). Order: DIRECTLY below merge-validated (the #637/#682 invariants untouched — still before sweep-stale-validating and the red lane; its own limit-1 pick shares the tier-aware FIFO sort). Guests still parked validation_failed never match (the label is absent from the query — the gh-113 guest park self-clear rung in update_branch re-opens them).",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating",
+              "pr_approved"
+            ],
+            "checks": [
+              "none",
+              "pending"
+            ],
+            "mergeState": "CLEAN",
+            "notMachine": true,
+            "notLatestVerdict": [
+              "REQUEST_CHANGES",
+              "BLOCK"
+            ],
+            "draft": false
+          },
+          "localAction": "merge_pr",
+          "guestZeroFailing": true,
+          "limit": 1,
+          "id": "merge-validated-guest"
+        },
+        {
           "description": "RULE ORDER (owner directive 2026-10-04 'red yields the slot', live fa 11:0x: #1194 held ai_validating through repeated reds while #1215..#1223 sat FIFO-queued 40+ min): this rule MUST run BEFORE validate-armed — the unarm below frees the limit-1 mutex and (with the openPrs ioCache drop in the action) the arm rule's later query in the SAME tick sees the freed slot and arms the NEXT oldest approved PR immediately. Previously fail-validation ran after validate-armed: the arm rule scanned the still-occupied mutex every tick and the slot stayed hostage until the failed PR's rework cycle re-armed it. #637 rule-order invariant preserved: rerun-cancelled-checks stays first (#682/gh-682), and merge-validated still runs before sweep-stale-validating. GitHub PR: validation CI red on the head -> unarm ai_validating, report (with the 🔴 red-head counter marker — the validate_pr arm side skips heads with >= redHeadCap recorded reds), requeue agent:rework on the linked issue. pr_approved is STICKY (owner rule 2026-09): the reworked head re-validates and merges without a re-review — no token burn on review legs. GUEST PRs (gh-757, live fa#1286: the 2026-10-04 guest validation-red arm spent an AI rework leg on a vendor PR): report + validation_failed PARK only — auto-rework is machine-author-ONLY (owner rule 2026-09-21 reaffirmed); the guest's own push clears the park (#633 RESET) and validation re-runs, and a HUMAN can still arm agent:rework manually on any PR (rework-on-label). Limit 10 (owner 2026-09-22): latch/unlatch verdicts in waves — pure label writes, nothing serial. gh-832 CONVERGENCE PARK (live fa #1453, 2026-10-10: 12 dispatch→red→unarm→rearm cycles on an unchanged approved head, 5 reds in a row, window idle 3.5h, no park, no comment): repeated red verdicts must never loop — the fail path counts CONSECUTIVE concluded-red dispatched runs on the unchanged head from the head's own run list (a green run breaks the streak, a head move resets it by construction, cancelled is never a verdict) and at jobParams.redHeadParkCap (default 2) PARKS validation_failed with a report naming the failing job(s) + the failed-run link. The parked PR leaves validate-armed's FIFO (notLabels excludes it) — NO third dispatch. Machine PRs keep the rework arm (routing unchanged) and exit the park via the gh-750 machine self-clear / #633 RESET probes on the next head; guests keep the red-1 park. jobParams.redHeadParkCap=false disables the park (the 🔴 marker audit trail and the 3-red arm-side skip are untouched).",
           "source": "github",
           "query": {
