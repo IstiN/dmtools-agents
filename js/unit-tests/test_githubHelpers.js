@@ -25,7 +25,8 @@ function loadGithubHelpers(mocks) {
             './gitOps.js': gitOpsStub,
             './machineNotice.js': machineNoticeModule,
             './reviewThreadInventory.js': reviewThreadInventoryModule,
-            './ci.js': loadModule('js/common/ci.js')
+            './ci.js': loadModule('js/common/ci.js'),
+            './ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         mocks || {}
     );
@@ -2575,6 +2576,126 @@ suite('githubHelpers.runsOfPayload — payload shapes (orphan fallback)', functi
     });
 });
 
+// ── gh-1119: gate-violation extraction wired into detectFailedChecks ────────
+
+suite('githubHelpers.detectFailedChecks — owned/foreign violations block (gh-1119)', function() {
+
+    function findWrite(writes, path) {
+        for (var i = 0; i < writes.length; i++) {
+            if (writes[i].path === path) return writes[i];
+        }
+        return null;
+    }
+
+    function make433Gh(writes) {
+        var gateLog = file_read({ path: 'js/unit-tests/fixtures/ci_logs/gate_crap4dart.log' });
+        var agentsGateLog = file_read({ path: 'js/unit-tests/fixtures/ci_logs/agents_gate.log' });
+        return loadGithubHelpers({
+            github_get_commit_check_runs: function() {
+                return { check_runs: [
+                    { name: 'gate', conclusion: 'failure', details_url: 'https://github.com/acme/widgets/actions/runs/1/job/111' },
+                    { name: 'agents-gate', conclusion: 'failure', details_url: 'https://github.com/acme/widgets/actions/runs/1/job/222' }
+                ]};
+            },
+            github_get_job_logs: function(args) {
+                return String(args.jobId) === '111' ? gateLog : agentsGateLog;
+            },
+            file_write: function(args) { writes.push(args); }
+        });
+    }
+
+    test('IT-1/AC7 (replay #433): the owned violation row opens ci_failures.md above the raw tails', function() {
+        var writes = [];
+        var gh = make433Gh(writes);
+        var diff = file_read({ path: 'js/unit-tests/fixtures/ci_logs/diff_pr_433.txt' });
+
+        var failed = gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input', null, diff);
+
+        assert.equal(failed.length, 2, 'both failed checks reported as before');
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.ok(mdWrite, 'ci_failures.md written');
+        var md = mdWrite.content;
+        var ownedIdx = md.indexOf('Violations you must fix (1 owned)');
+        var foreignIdx = md.indexOf('Foreign / infra reds (do not chase)');
+        var tailsIdx = md.indexOf('## ❌ gate');
+        assert.ok(ownedIdx !== -1, 'owned table present');
+        assert.ok(foreignIdx > ownedIdx, 'owned table BEFORE the foreign list');
+        assert.ok(tailsIdx > ownedIdx, 'raw 500-line tails stay BELOW the violations block (I1)');
+        assert.contains(md, '`test/js/require_base_resolution_test.dart:13`');
+        assert.contains(md, 'main has 100 lines > max 60');
+        assert.contains(md, 'js/unit-tests/test_recoverDirtyReviewTestCase.js');
+
+        var jsonWrite = findWrite(writes, '/tmp/input/ci_violations.json');
+        assert.ok(jsonWrite, 'ci_violations.json written');
+        var summary = JSON.parse(jsonWrite.content);
+        assert.equal(summary.owned, 1);
+        assert.equal(summary.foreign, 1);
+        assert.equal(summary.violations.length, 2);
+
+        var fullLogWrite = findWrite(writes, '/tmp/input/ci_failures_full.log');
+        assert.ok(fullLogWrite, 'I1: the full log is still written');
+        assert.contains(fullLogWrite.content, 'main has 100 lines > max 60');
+    });
+
+    test('AC5/REG-1: an unrecognized log shape keeps today\u2019s file — no table, no ci_violations.json', function() {
+        var writes = [];
+        var unknownLog = file_read({ path: 'js/unit-tests/fixtures/ci_logs/unknown_shape.log' });
+        var gh = loadGithubHelpers({
+            github_get_commit_check_runs: function() {
+                return { check_runs: [
+                    { name: 'gate', conclusion: 'failure', details_url: 'https://github.com/acme/widgets/actions/runs/1/job/333' }
+                ]};
+            },
+            github_get_job_logs: function() { return unknownLog; },
+            file_write: function(args) { writes.push(args); }
+        });
+
+        gh.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input', null,
+            'diff --git a/src/a.dart b/src/a.dart\n');
+
+        var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
+        assert.ok(mdWrite, 'ci_failures.md still written');
+        assert.notContains(mdWrite.content, 'Violations you must fix');
+        assert.notContains(mdWrite.content, 'Foreign / infra reds');
+        assert.contains(mdWrite.content, '## ❌ gate', 'the raw per-check section is intact');
+        assert.notOk(findWrite(writes, '/tmp/input/ci_violations.json'), 'no ci_violations.json for zero violations');
+        assert.ok(findWrite(writes, '/tmp/input/ci_failures_full.log'), 'full log still written');
+    });
+
+    test('a violations json write failure is non-fatal (the md still carries the table)', function() {
+        var writes = [];
+        var gateLog = file_read({ path: 'js/unit-tests/fixtures/ci_logs/gate_crap4dart.log' });
+        var diff = file_read({ path: 'js/unit-tests/fixtures/ci_logs/diff_pr_433.txt' });
+        var ghFailing = loadGithubHelpers({
+            github_get_commit_check_runs: function() {
+                return { check_runs: [
+                    { name: 'gate', conclusion: 'failure', details_url: 'https://github.com/acme/widgets/actions/runs/1/job/111' }
+                ]};
+            },
+            github_get_job_logs: function() { return gateLog; },
+            file_write: function(args) {
+                if (args.path && args.path.indexOf('ci_violations.json') !== -1) {
+                    throw new Error('disk full');
+                }
+                writes.push(args);
+            }
+        });
+
+        var failed = ghFailing.detectFailedChecks('acme', 'widgets', 'abc123def', '/tmp/input', null, diff);
+        assert.equal(failed.length, 1);
+        assert.ok(findWrite(writes, '/tmp/input/ci_failures.md'), 'md written despite the json failure');
+        assert.notOk(findWrite(writes, '/tmp/input/ci_violations.json'));
+        assert.contains(findWrite(writes, '/tmp/input/ci_failures.md').content, 'Violations you must fix');
+    });
+
+    test('buildLogSections carries the raw logs for the extractor (additive)', function() {
+        var gh = loadGithubHelpers({});
+        var sections = gh.buildLogSections({ name: 'gate', details_url: 'u' }, 'a\nb\n', 'Error log');
+        assert.equal(sections.logs, 'a\nb\n');
+        assert.equal(gh.buildLogSections({ name: 'g' }, null, 'Error log'), null);
+    });
+});
+
 // ── fetchDiscussionsAndRawData — scm delegation + general comments (gh-1086) ──
 
 suite('githubHelpers.fetchDiscussionsAndRawData — SCM delegation', function() {
@@ -2722,7 +2843,8 @@ suite('githubHelpers.fetchDiscussionsAndRawData — inventory build failure', fu
                 './gitOps.js': gitOpsStub,
                 './machineNotice.js': machineNoticeModule,
                 './reviewThreadInventory.js': brokenInventory,
-                './ci.js': loadModule('js/common/ci.js')
+                './ci.js': loadModule('js/common/ci.js'),
+                './ciViolations.js': loadModule('js/common/ciViolations.js')
             }),
             {
                 github_get_pr_conversations: function() { return [makeConversation({ id: 1, body: 'b' })]; },

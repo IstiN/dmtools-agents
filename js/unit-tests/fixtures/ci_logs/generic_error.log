@@ -1,0 +1,3 @@
+2026-10-19T18:59:02Z step build: compiling release
+::error file=scripts/deploy.sh,line=8::Permission denied while writing /usr/local/bin
+##[error]Process completed with exit code 1.

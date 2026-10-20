@@ -27,6 +27,10 @@ var tokenUsageComment = require('./common/tokenUsageComment.js');
 // per leg close ({head, pushed, resolved}) so the SM arm actions can bound
 // consecutive empty laps on one head.
 var reworkLoopGuard = require('./common/reworkLoopGuard.js');
+// gh-1119: owned CI-violation accounting — the setup-time snapshot
+// (ci_violations.json) is validated against the fix summary before the
+// rework cycle may close.
+var ciViolations = require('./common/ciViolations.js');
 
 // ── gh-957: lap audit (loop guard) + audit-resolve support ──────────────────
 //
@@ -1894,6 +1898,115 @@ function handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, 
     return { success: false, blocked: true, error: 'Rework blocked: no code changes while ' + openCount + ' review thread(s) are open' };
 }
 
+// ── gh-1119: owned CI violations may not be dismissed as unrelated ───────────
+//
+// Live pathology (#433, rework run 39308030238): the gate (crap4dart) failed
+// on a file the PR ITSELF added; the violation line was buried in the raw
+// tails, the leg concluded "violation is in code the PR does not touch" and
+// pushed without fixing. preCliReworkSetup now opens ci_failures.md with the
+// owned/foreign violation tables (gh-1119); this gate closes the loop on the
+// post-rework side: with owned violations open, a fix summary that dismisses
+// them wholesale ("not caused by this PR", "unrelated", "infra") or leaves
+// them unaccounted FAILS the leg — never a "Rework Complete" announcement
+// over an open owned red. The empty lap marker keeps the gh-957 no-op loop
+// guard counting.
+
+/** Parse one snapshot file's content into a violation array, or []. */
+function violationsFromSnapshot(raw) {
+    if (!raw || !String(raw).trim()) return [];
+    var parsed = JSON.parse(raw);
+    var violations = (parsed && parsed.violations) ? parsed.violations : (Array.isArray(parsed) ? parsed : []);
+    return (violations && violations.length > 0) ? violations : [];
+}
+
+/** Reads the setup-time violation snapshot (input/<ticketKey>/ci_violations.json). */
+function readInputViolations(ticketKey, workingDir) {
+    var candidates = ['input/' + ticketKey + '/ci_violations.json'];
+    if (workingDir) candidates.push(workingDir + '/input/' + ticketKey + '/ci_violations.json');
+    for (var i = 0; i < candidates.length; i++) {
+        try {
+            var violations = violationsFromSnapshot(file_read({ path: candidates[i] }));
+            if (violations.length > 0) return violations;
+        } catch (e) { /* try next candidate */ }
+    }
+    return [];
+}
+
+/** The rejection comment: per-item errors, the owned table, what the leg must do. */
+function buildOwnedViolationsRejectedComment(violations, verdict) {
+    var lines = ['### ❌ Rework rejected — owned CI violations not accounted', ''];
+    (verdict.errors || []).forEach(function(err) {
+        lines.push('- ' + err);
+    });
+    lines.push('');
+    lines.push(ciViolations.buildViolationsMarkdown(ciViolations.ownedViolations(violations)));
+    lines.push('Fix every owned violation (or dispute each one in the rework summary with ' +
+        '`fixed` / `disputed: <reason>`), then re-run the leg. This leg is marked failed and the ' +
+        'no-op loop guard counts it.');
+    return lines.join('\n');
+}
+
+/**
+ * The head a lap marker anchors to: the setup-time base head
+ * (rework_base_head.txt) when known, else the PR's current head.
+ */
+function lapMarkerHeadOf(ticketKey, pr) {
+    return readReworkBaseHead(ticketKey) ||
+        ((pr && pr.head && (pr.head.sha || pr.head)) || null);
+}
+
+/** Best-effort rejection comment on the PR — a post failure never rethrows. */
+function postRejectionComment(scm, prNumber, message) {
+    try {
+        scm.addComment(prNumber, message);
+    } catch (e) {
+        console.warn('Failed to post owned-violations rejection comment on PR #' + prNumber + ':', e.message || e);
+    }
+}
+
+/** Marks the leg failed: PR comment + an EMPTY lap marker (pushed 0) for the loop guard. */
+function handleOwnedViolationsRejected(scm, ticketKey, pr, violations, verdict) {
+    var message = buildOwnedViolationsRejectedComment(violations, verdict);
+    console.error('❌ Rework rejected — owned CI violations not accounted: ' +
+        (verdict.errors || []).join(' | '));
+    postRejectionComment(scm, pr.number, message);
+    // gh-957: the leg closed without an owned fix — it counts as an empty lap
+    // regardless of any WIP housekeeping commits that were pushed.
+    postLapMarker(scm, pr.number, lapMarkerHeadOf(ticketKey, pr), false, 0);
+    return {
+        success: false,
+        path: 'owned-violations-rejected',
+        ticketKey: ticketKey,
+        error: 'Owned CI violations not accounted in the rework summary: ' +
+            (verdict.errors || []).join(' | ')
+    };
+}
+
+/**
+ * gh-1119 AC6 gate: validates the fix summary against the owned violations
+ * the setup snapshot recorded. Rejection is the failure path — the leg is
+ * marked failed and the no-op loop guard counts it.
+ */
+function runOwnedViolationsGate(ticketKey, config, scm, tracker, pr, fixSummary) {
+    var violations;
+    try {
+        violations = readInputViolations(ticketKey, config && config.workingDir);
+    } catch (e) {
+        violations = [];
+    }
+    if (!violations || violations.length === 0) return { rejected: false };
+    var verdict = ciViolations.validateOwnedViolationsSummary(fixSummary, violations);
+    if (verdict.ok) {
+        console.log('✅ Owned CI violations accounted in the rework summary (' +
+            ciViolations.ownedViolations(violations).length + ' owned)');
+        return { rejected: false };
+    }
+    return {
+        rejected: true,
+        result: handleOwnedViolationsRejected(scm, ticketKey, pr, violations, verdict)
+    };
+}
+
 // gh-957 CRAP split (ratchet: action regressed 263.3 -> 288.5 against the
 // released baseline): the completion tail of action extracted into small
 // single-responsibility helpers. Behavior-preserving — the original block
@@ -2303,6 +2416,13 @@ function requirePrForTicket(scm, ticketKey, branchName) {
 // line even with zero pushed commits; incomplete coverage keeps the
 // historical blocked path.
 function runLapGate(ticketKey, config, codeChangesCommitted, actualParams, statuses, scm, tracker, pr, fixSummary) {
+    // gh-1119 AC6: with owned CI violations open, a fix summary that dismisses
+    // them ("not caused by this PR") or leaves them unaccounted fails the leg
+    // BEFORE any lap/audit logic — the completion path never runs.
+    var violationsGate = runOwnedViolationsGate(ticketKey, config, scm, tracker, pr, fixSummary);
+    if (violationsGate.rejected) {
+        return { blocked: true, result: violationsGate.result };
+    }
     var realCodeChanges = hasRealCodeChanges(ticketKey, config);
     var outputOptsForCoverage = { ticketKey: ticketKey, workingDir: config.workingDir || null };
     var inputSnapshotThreads = readInputRawThreads(ticketKey, outputOptsForCoverage);
@@ -2571,5 +2691,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch, assertReworkBranchSynced, squashReworkWipIfEnabled };;
+    module.exports = { action, hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch, assertReworkBranchSynced, squashReworkWipIfEnabled, readInputViolations, runOwnedViolationsGate, handleOwnedViolationsRejected, buildOwnedViolationsRejectedComment };
 }

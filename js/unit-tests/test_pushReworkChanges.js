@@ -41,7 +41,8 @@ var githubHelpersModule = loadModule(
         },
         './machineNotice.js': loadModule('js/common/machineNotice.js'),
         './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })),
-        './ci.js': loadModule('js/common/ci.js')
+        './ci.js': loadModule('js/common/ci.js'),
+        './ciViolations.js': loadModule('js/common/ciViolations.js')
     }),
     {}
 );
@@ -49,7 +50,8 @@ var githubHelpersModule = loadModule(
 function makeOutputFiles(fileMap) {
     return loadModule('js/common/outputFiles.js', makeRequire({
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }), {
         file_read: function(opts) {
             var path = opts && (opts.path || opts);
@@ -131,7 +133,8 @@ function loadPushReworkChangesModule(fileMap, opts) {
             './common/tokenUsageComment.js': { postTokenUsageComments: noop }
         ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         {
             file_read: function(opts) {
@@ -539,7 +542,8 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         Object.assign({
             cli_execute_command: function() { return ''; },
@@ -900,7 +904,8 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         mergedMocks
     );
@@ -1080,7 +1085,8 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         mergedMocks
     );
@@ -3157,6 +3163,178 @@ suite('pushReworkChanges.action — stage gates and commit recovery (gh-1011)', 
     });
 });
 
+// ── gh-1119 AC6b: owned CI violations may not be dismissed as unrelated ──────
+
+suite('pushReworkChanges.readInputViolations (gh-1119)', function() {
+
+    function loadWithFiles(fileMap) {
+        return loadModule(
+            'js/pushReworkChanges.js',
+            makeRequire({
+                './common/gitStaging.js': gitStagingModule,
+                './forkCheckout.js': forkCheckoutModule,
+                './configLoader.js': configLoaderModule,
+                './config.js': configModule,
+                './common/scm.js': {},
+                './common/submodules.js': {},
+                './common/pullRequest.js': PR_HELPER_REAL,
+                './common/githubHelpers.js': githubHelpersModule,
+                './common/feedbackLoop.js': {},
+                './common/autoStart.js': {},
+                './common/outputFiles.js': { readOutputFile: function() { return null; } },
+                './common/trackers.js': makeTrackersModule({}),
+                './cacheToReleases.js': {},
+                './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+                './common/commentMarkup.js': commentMarkupModule,
+                './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+                './common/ciViolations.js': loadModule('js/common/ciViolations.js')
+            }),
+            {
+                file_read: function(args) {
+                    var p = args && (args.path || args);
+                    return fileMap[p] !== undefined ? fileMap[p] : null;
+                }
+            }
+        );
+    }
+
+    var SNAPSHOT = JSON.stringify({ owned: 1, foreign: 0, unknown: 0, violations: [
+        { check: 'gate', rule: 'method_size', path: 'test/js/require_base_resolution_test.dart',
+            line: 13, detail: 'main has 100 lines > max 60', ownership: 'owned' }
+    ] });
+
+    test('reads and parses the setup-time ci_violations.json snapshot', function() {
+        var mod = loadWithFiles({ 'input/PROJ-123/ci_violations.json': SNAPSHOT });
+        var violations = mod.readInputViolations('PROJ-123', null);
+        assert.equal(violations.length, 1);
+        assert.equal(violations[0].ownership, 'owned');
+        assert.equal(violations[0].path, 'test/js/require_base_resolution_test.dart');
+    });
+
+    test('missing or garbage snapshot → [] (the gate stays off, never throws)', function() {
+        var mod = loadWithFiles({});
+        assert.deepEqual(mod.readInputViolations('PROJ-123', null), []);
+        var mod2 = loadWithFiles({ 'input/PROJ-123/ci_violations.json': 'not json {' });
+        assert.deepEqual(mod2.readInputViolations('PROJ-123', null), []);
+    });
+
+    test('falls back to the workingDir-relative input path', function() {
+        var mod = loadWithFiles({ 'dependencies/proj/input/PROJ-123/ci_violations.json': SNAPSHOT });
+        var violations = mod.readInputViolations('PROJ-123', 'dependencies/proj');
+        assert.equal(violations.length, 1);
+    });
+});
+
+suite('pushReworkChanges.runOwnedViolationsGate (gh-1119 AC6b / UT-8 wiring)', function() {
+
+    var OWNED = [{ check: 'gate', rule: 'method_size', path: 'test/js/require_base_resolution_test.dart',
+        line: 13, detail: 'main has 100 lines > max 60', ownership: 'owned' }];
+
+    function loadGate(fileMap, scmCalls) {
+        return loadModule(
+            'js/pushReworkChanges.js',
+            makeRequire({
+                './common/gitStaging.js': gitStagingModule,
+                './forkCheckout.js': forkCheckoutModule,
+                './configLoader.js': configLoaderModule,
+                './config.js': configModule,
+                './common/scm.js': {},
+                './common/submodules.js': {},
+                './common/pullRequest.js': PR_HELPER_REAL,
+                './common/githubHelpers.js': githubHelpersModule,
+                './common/feedbackLoop.js': {},
+                './common/autoStart.js': {},
+                './common/outputFiles.js': { readOutputFile: function() { return null; } },
+                './common/trackers.js': makeTrackersModule({}),
+                './cacheToReleases.js': {},
+                './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+                './common/commentMarkup.js': commentMarkupModule,
+                './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+                './common/ciViolations.js': loadModule('js/common/ciViolations.js')
+            }),
+            {
+                file_read: function(args) {
+                    var p = args && (args.path || args);
+                    return fileMap[p] !== undefined ? fileMap[p] : null;
+                },
+                console: { log: function() {}, warn: function() {}, error: function() {} }
+            }
+        );
+    }
+
+    function makeScm(calls) {
+        return {
+            addComment: function(prId, text) { calls.push({ prId: prId, text: text }); }
+        };
+    }
+
+    var FILE_MAP = { 'input/PROJ-123/ci_violations.json': JSON.stringify({ owned: 1, violations: OWNED }) };
+    var PR = { number: 123, head: { ref: 'bug/PROJ-123', sha: 'abc1234def5678' } };
+
+    test('no violations snapshot → gate passes', function() {
+        var mod = loadGate({});
+        var gate = mod.runOwnedViolationsGate('PROJ-123', { workingDir: null }, makeScm([]), null, PR, 'any summary');
+        assert.notOk(gate.rejected);
+    });
+
+    test('dismissal summary with an owned violation open → rejected, PR comment + empty lap marker', function() {
+        var calls = [];
+        var mod = loadGate(FILE_MAP);
+        var gate = mod.runOwnedViolationsGate('PROJ-123', { workingDir: null }, makeScm(calls), null, PR,
+            'The method_size failure is not caused by this PR — none of my files exceed the limit.');
+        assert.ok(gate.rejected);
+        assert.equal(gate.result.success, false);
+        assert.equal(gate.result.path, 'owned-violations-rejected');
+        assert.equal(calls.length, 2, 'PR comment + lap marker');
+        assert.contains(calls[0].text, 'Rework rejected');
+        assert.contains(calls[0].text, 'test/js/require_base_resolution_test.dart:13');
+        assert.contains(calls[0].text, 'not caused by this PR');
+        assert.contains(calls[1].text, 'pushed 0', 'the no-op loop guard counts the lap');
+    });
+
+    test('fixed accounting summary → gate passes, nothing posted', function() {
+        var calls = [];
+        var mod = loadGate(FILE_MAP);
+        var gate = mod.runOwnedViolationsGate('PROJ-123', { workingDir: null }, makeScm(calls), null, PR,
+            '## Owned CI violations\n- fixed: test/js/require_base_resolution_test.dart main() split into helpers\n');
+        assert.notOk(gate.rejected);
+        assert.equal(calls.length, 0);
+    });
+
+    test('foreign-only snapshot never rejects (do-not-chase reds are free to mention)', function() {
+        var calls = [];
+        var FOREIGN_ONLY = JSON.stringify({ owned: 0, foreign: 1, violations: [
+            { check: 'agents-gate', rule: 'test', path: 'js/unit-tests/test_recoverDirtyReviewTestCase.js',
+                line: null, detail: 'partition mismatch', ownership: 'foreign' }
+        ] });
+        var mod = loadGate({ 'input/PROJ-123/ci_violations.json': FOREIGN_ONLY });
+        var gate = mod.runOwnedViolationsGate('PROJ-123', { workingDir: null }, makeScm(calls), null, PR,
+            'The red is unrelated to this PR.');
+        assert.notOk(gate.rejected);
+        assert.equal(calls.length, 0);
+    });
+});
+
+// Shared file_read mock for the AC6b rejection-path tests below. Table-driven
+// so complexity stays ≤ 8: the quality ratchet (crap4js, CRAP_THRESHOLD=8)
+// fails the PR on any NEW function with CRAP > 8, and the two former inline
+// copies were cyclomatic-complexity 9 (CRAP 9 at full coverage).
+function makeOwnedGateFileRead(owned) {
+    var snapshot = JSON.stringify({ owned: 1, foreign: 0, unknown: 0, violations: owned });
+    var routes = [
+        ['ci_violations.json', function() { return snapshot; }],
+        ['rework_setup_failed.md', function() { throw new Error('File does not exist'); }],
+        ['pr_info.md', function() { return '**Branch**: `bug/PROJ-123` → `develop`'; }]
+    ];
+    return function(args) {
+        var p = args && (args.path || args);
+        for (var i = 0; i < routes.length; i++) {
+            if (p && p.indexOf(routes[i][0]) !== -1) return routes[i][1]();
+        }
+        return null;
+    };
+}
+
 // ── gh-1082 characterization: commitAndPush branch decisions ─────────────────
 // Pins every decision branch of commitAndPush() BEFORE its CRAP decomposition:
 // pr_info parsing (head + base), the forced-checkout decision, the base-branch
@@ -3171,6 +3349,7 @@ function loadCommitAndPush1082(mocks, moduleOverrides) {
             './forkCheckout.js': forkCheckoutModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js'),
             './common/scm.js': {},
             './common/submodules.js': { pushManagedSubmodules: function() {} },
             './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
@@ -3222,6 +3401,63 @@ function prInfoReader(text) {
         return null;
     };
 }
+
+suite('pushReworkChanges.action — owned-violations rejection marks the leg failed (gh-1119 AC6b)', function() {
+
+    var OWNED = [{ check: 'gate', rule: 'method_size', path: 'test/js/require_base_resolution_test.dart',
+        line: 13, detail: 'main has 100 lines > max 60', ownership: 'owned' }];
+
+    test('a dismissal summary over owned violations fails the leg BEFORE the completion path', function() {
+        var prComments = [];
+        var loaded = loadPushReworkChangesForAction({
+            file_read: makeOwnedGateFileRead(OWNED)
+        }, {
+            scm: {
+                listPrs: function() {
+                    return [{
+                        number: 123,
+                        title: 'PROJ-123: rework fix',
+                        head: { ref: 'bug/PROJ-123', sha: 'abc1234def5678' },
+                        html_url: 'https://github.com/IstiN/dmtools-agents/pull/123'
+                    }];
+                },
+                addComment: function(prId, text) { prComments.push({ prId: prId, text: text }); }
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: '## Approach\nThe gate failure is not caused by this PR. None of my files exceed the limits.'
+        });
+
+        assert.equal(result.success, false, 'the leg is marked failed');
+        assert.equal(result.path, 'owned-violations-rejected');
+        assert.ok(prComments.length >= 1, 'a rejection comment was posted on the PR');
+        assert.contains(prComments[0].text, 'Rework rejected');
+        assert.contains(prComments[0].text, 'test/js/require_base_resolution_test.dart:13');
+        assert.ok(prComments.some(function(c) { return c.text.indexOf('pushed 0') !== -1; }),
+            'the empty lap marker counts toward the no-op loop guard');
+        assert.equal(
+            loaded.jiraMoveToStatusCalls.filter(function(c) { return c.statusName === 'In Review'; }).length, 0,
+            'the completion path never ran');
+    });
+
+    test('with the violations fixed and accounted, the normal completion path is unchanged', function() {
+        var loaded = loadPushReworkChangesForAction({
+            file_read: makeOwnedGateFileRead(OWNED)
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: '## Owned CI violations\n- fixed: test/js/require_base_resolution_test.dart main() split into helpers.\n## Test Coverage\nall green.'
+        });
+
+        assert.equal(result.success, true, 'normal completion: ' + JSON.stringify(result));
+        assert.ok(
+            loaded.jiraMoveToStatusCalls.some(function(c) { return c.statusName === 'In Review'; }),
+            'still moves to In Review');
+    });
+});
 
 suite('pushReworkChanges.commitAndPush — branch decisions (gh-1082 characterization)', function() {
 

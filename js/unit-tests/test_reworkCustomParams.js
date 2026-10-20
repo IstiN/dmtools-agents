@@ -26,7 +26,8 @@ var githubHelpersModule = loadModule(
         './machineNotice.js': loadModule('js/common/machineNotice.js'),
         './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })),
         './common/reworkLoopGuard.js': reworkLoopGuardModule,
-        './ci.js': loadModule('js/common/ci.js')
+        './ci.js': loadModule('js/common/ci.js'),
+        './ciViolations.js': loadModule('js/common/ciViolations.js')
     }),
     {}
 );
@@ -84,7 +85,8 @@ function loadPushReworkChanges() {
             './cacheToReleases.js': {}
         ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': reworkLoopGuardModule
+            './common/reworkLoopGuard.js': reworkLoopGuardModule,
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         {}
     );
@@ -169,7 +171,8 @@ function loadPushReworkChangesForAction(mocks) {
             './cacheToReleases.js': { action: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': reworkLoopGuardModule
+            './common/reworkLoopGuard.js': reworkLoopGuardModule,
+            './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         toolMocks
     );
