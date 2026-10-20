@@ -108,6 +108,17 @@ function dsRun(subcommand, opts) {
         lines.push('printf %s ' + dsShq('#!/bin/sh\nexit 1') + ' > "$d/bin/curl"');
         lines.push('chmod +x "$d/bin/curl"');
     }
+    if (opts.versionFile !== undefined) {
+        // The repo's version-file pin convention (gh-1137): a one-token
+        // .dart-version at the repo root — the first pin source checked.
+        lines.push('printf %s ' + dsShq(opts.versionFile) + ' > "$d/.dart-version"');
+    }
+    if (opts.pubspec) {
+        // Marks the sandbox checkout as a Dart repo (gh-1137: the stable
+        // fallback and its loud warning apply to Dart repos; a non-Dart
+        // repo skips the SDK install entirely).
+        lines.push('printf %s ' + dsShq('name: sandbox\nenvironment:\n  sdk: ^3.0.0\n') + ' > "$d/pubspec.yaml"');
+    }
     var env = (opts.env || []).slice();
     // Hermetic against the HOST: the script's installed-version probe falls
     // back to <DART_INSTALL_DIR>/dart-sdk/bin/dart, so a real SDK cached on
@@ -181,6 +192,10 @@ var DS_QUALITY_COMMENTED_CHANNEL = DS_QUALITY_BETA
     .replace('          channel: beta',
         '          # channel: beta   (was beta, pinned to stable for now)\n          channel: stable');
 
+// ── gh-1137 fixtures ─────────────────────────────────────────────────────────
+// The dmtools-dart live scenario: CI pins sdk: 3.13.5 (no channel input → stable).
+var DS_QUALITY_PIN_3135 = DS_QUALITY_BETA.replace('          channel: beta', '          sdk: 3.13.5');
+
 /**
  * Run dart.sh with merged stdout+stderr and a captured exit code — for
  * error-path assertions (usage errors) where dsParseKv is not applicable.
@@ -193,8 +208,28 @@ function dsRunRaw(subcommand, opts) {
         lines.push('mkdir -p "$d/.github/workflows"');
         lines.push('printf %s ' + dsShq(opts.qualityYml) + ' > "$d/.github/workflows/quality.yml"');
     }
+    if (opts.versionFile !== undefined) {
+        lines.push('printf %s ' + dsShq(opts.versionFile) + ' > "$d/.dart-version"');
+    }
+    if (opts.pubspec) {
+        lines.push('printf %s ' + dsShq('name: sandbox\nenvironment:\n  sdk: ^3.0.0\n') + ' > "$d/pubspec.yaml"');
+    }
+    if (opts.managedBanner !== undefined) {
+        lines.push('mkdir -p "$d/nodart/dart-sdk/bin"');
+        lines.push('printf %s ' + dsShq('#!/bin/sh\necho ' + dsShq(opts.managedBanner)) +
+            ' > "$d/nodart/dart-sdk/bin/dart"');
+        lines.push('chmod +x "$d/nodart/dart-sdk/bin/dart"');
+    }
+    if (opts.stubCurlFails) {
+        lines.push('mkdir -p "$d/bin"');
+        lines.push('printf %s ' + dsShq('#!/bin/sh\nexit 1') + ' > "$d/bin/curl"');
+        lines.push('chmod +x "$d/bin/curl"');
+    }
     var env = (opts.env || []).slice();
     env.push('DART_INSTALL_DIR="$d/nodart"');
+    if (opts.stubCurlFails) {
+        env.push('PATH="$d/bin:$PATH"');
+    }
     lines.push('cd "$d"');
     lines.push('out="$( (' + (env.length ? env.join(' ') + ' ' : '') +
         'bash "$r/setup/dart.sh" ' + subcommand + ') 2>&1 )"; rc=$?');
@@ -543,5 +578,255 @@ suite('setup/dart.sh: degraded keep never lies about the managed install (foreig
         });
         assert.equal(r.trail_hit, '1',
             'a real (managed/cache-restored) SDK must keep being registered in degraded mode');
+    });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// gh-1137 — the leg toolchain must match the repo's CI SDK, and the leg
+// summary must carry `toolchain: dart <version> (CI: <version>, match: …)`.
+// ══════════════════════════════════════════════════════════════════════════════
+
+suite('setup/dart.sh: .dart-version version-file pin (gh-1137 step 1)', function () {
+
+    if (!_dsCanRun_) {
+        console.log('  ⏭️  skipped — bash not executable here');
+        return;
+    }
+
+    test('.dart-version pin resolves as the target with source=version file', function () {
+        var r = dsRun('plan', { versionFile: '3.13.5\n', pubspec: true });
+        assert.equal(r.mode, 'version');
+        assert.equal(r.version, '3.13.5');
+        assert.equal(r.source, 'version file',
+            'the repo version file is pin source #1, before the CI workflow line');
+    });
+
+    test('.dart-version pin wins over the quality.yml sdk: line (ticket precedence: file → CI)', function () {
+        var r = dsRun('plan', { versionFile: '3.13.5\n', qualityYml: DS_QUALITY_PIN_3135, pubspec: true });
+        assert.equal(r.version, '3.13.5');
+        assert.equal(r.source, 'version file');
+    });
+
+    test('explicit DART_VERSION env still beats the repo version file (operator input wins)', function () {
+        var r = dsRun('plan', { versionFile: '3.13.5\n', env: ['DART_VERSION=3.9.4'], pubspec: true });
+        assert.equal(r.version, '3.9.4');
+        assert.equal(r.source, 'environment');
+    });
+
+    test('.dart-version carrying a channel token (beta) resolves as channel mode', function () {
+        var r = dsRun('plan', { versionFile: 'beta\n', pubspec: true });
+        assert.equal(r.mode, 'channel');
+        assert.equal(r.channel, 'beta');
+        assert.equal(r.source, 'version file');
+    });
+
+    test('.dart-version ignores comment and blank lines (first live token wins)', function () {
+        var r = dsRun('plan', { versionFile: '# pinned below\n\n  3.13.5  \n', pubspec: true });
+        assert.equal(r.version, '3.13.5');
+        assert.equal(r.source, 'version file');
+    });
+
+    test('a v-prefixed .dart-version token is stripped (same muscle-memory rule as arguments)', function () {
+        var r = dsRun('plan', { versionFile: 'v3.13.5\n', pubspec: true });
+        assert.equal(r.version, '3.13.5');
+    });
+});
+
+suite('setup/dart.sh: toolchain summary line (gh-1137 AC2 + AC3)', function () {
+
+    if (!_dsCanRun_) {
+        console.log('  ⏭️  skipped — bash not executable here');
+        return;
+    }
+
+    test('pinned repo + installed==pin → the exact ticket summary line (AC3)', function () {
+        // Live dmtools-dart shape: CI pins sdk: 3.13.5, the leg installed
+        // exactly that → the summary shows a YES match. Asserted via dsRunRaw
+        // in the next test (dsRun's key=value parser does not apply here).
+        var r = dsRunRaw('summary', {
+            qualityYml: DS_QUALITY_PIN_3135,
+            managedBanner: 'Dart SDK version: 3.13.5 (stable) on "linux_x64"',
+            pubspec: true
+        });
+        assert.equal(r.rc, 0, 'summary is network-free and must succeed: ' + r.out);
+        assert.ok(r.out.indexOf('toolchain: dart 3.13.5 (CI: 3.13.5, match: yes)') !== -1,
+            'got: ' + r.out);
+    });
+
+    test('summary output contract: exactly one toolchain line when pinned and matching', function () {
+        var r = dsRunRaw('summary', {
+            qualityYml: DS_QUALITY_PIN_3135,
+            managedBanner: 'Dart SDK version: 3.13.5 (stable) on "linux_x64"',
+            pubspec: true
+        });
+        assert.equal(r.rc, 0, 'summary is network-free and must succeed: ' + r.out);
+        var toolchainLines = r.out.split('\n').filter(function (l) {
+            return l.indexOf('toolchain:') === 0;
+        });
+        assert.equal(toolchainLines.length, 1, 'exactly one toolchain line, got: ' + r.out);
+        assert.equal(toolchainLines[0], 'toolchain: dart 3.13.5 (CI: 3.13.5, match: yes)',
+            'the leg summary line must carry version, CI pin and the match flag (AC3)');
+    });
+
+    test('installed SDK differs from the CI pin → match: no (honest flag)', function () {
+        var r = dsRunRaw('summary', {
+            qualityYml: DS_QUALITY_PIN_3135,
+            managedBanner: 'Dart SDK version: 3.9.4 (stable) on "linux_x64"',
+            pubspec: true
+        });
+        assert.equal(r.rc, 0);
+        assert.ok(r.out.indexOf('toolchain: dart 3.9.4 (CI: 3.13.5, match: no)') !== -1,
+            'got: ' + r.out);
+        assert.ok(r.out.indexOf('match: yes') === -1, 'must not claim a match, got: ' + r.out);
+    });
+
+    test('Dart repo with NO pin and NO CI line → match: no + loud warning line (AC2)', function () {
+        var r = dsRunRaw('summary', {
+            managedBanner: 'Dart SDK version: 3.2.1 (stable) on "linux_x64"',
+            pubspec: true
+        });
+        assert.equal(r.rc, 0);
+        assert.ok(r.out.indexOf('toolchain: dart 3.2.1 (CI: none, match: no)') !== -1,
+            'got: ' + r.out);
+        var warningLines = r.out.split('\n').filter(function (l) {
+            return l.indexOf('⚠️') !== -1 && l.indexOf('differ from CI') !== -1;
+        });
+        assert.ok(warningLines.length >= 1,
+            'the no-pin fallback must add a warning line to the summary (AC2), got: ' + r.out);
+    });
+
+    test('summary never touches the network (channel_latest down → summary still works)', function () {
+        var r = dsRunRaw('summary', {
+            managedBanner: 'Dart SDK version: 3.2.1 (stable) on "linux_x64"',
+            stubCurlFails: true,
+            pubspec: true
+        });
+        assert.equal(r.rc, 0, 'summary must be network-free, got rc=' + r.rc + ': ' + r.out);
+        assert.ok(r.out.indexOf('toolchain: dart 3.2.1 (CI: none, match: no)') !== -1, 'got: ' + r.out);
+    });
+
+    test('channel-only CI pin (channel: beta) + beta SDK → CI: beta, match: yes', function () {
+        var r = dsRunRaw('summary', {
+            qualityYml: DS_QUALITY_BETA,
+            managedBanner: 'Dart SDK version: 3.14.0-315.1.beta (beta) on "linux_x64"',
+            pubspec: true
+        });
+        assert.equal(r.rc, 0);
+        assert.ok(r.out.indexOf('toolchain: dart 3.14.0-315.1.beta (CI: beta, match: yes)') !== -1,
+            'a channel pin matches on channel identity (CI runs channel latest), got: ' + r.out);
+    });
+
+    test('channel-only CI pin but the leg resolved another channel → match: no', function () {
+        var r = dsRunRaw('summary', {
+            qualityYml: DS_QUALITY_BETA,
+            managedBanner: 'Dart SDK version: 3.14.0-315.1.beta (beta) on "linux_x64"',
+            env: ['DART_VERSION=stable'],
+            pubspec: true
+        });
+        assert.equal(r.rc, 0);
+        assert.ok(r.out.indexOf('match: no') !== -1, 'got: ' + r.out);
+        assert.ok(r.out.indexOf('match: yes') === -1, 'got: ' + r.out);
+    });
+
+    test('non-Dart repo (no pubspec.yaml) → match: n/a skip line, no warning noise', function () {
+        var r = dsRunRaw('summary', { managedBanner: 'Dart SDK version: 3.2.1 (stable) on "linux_x64"' });
+        assert.equal(r.rc, 0);
+        var toolchainLines = r.out.split('\n').filter(function (l) {
+            return l.indexOf('toolchain:') === 0;
+        });
+        assert.equal(toolchainLines.length, 1, 'got: ' + r.out);
+        assert.ok(toolchainLines[0].indexOf('match: n/a') !== -1, 'got: ' + toolchainLines[0]);
+        assert.ok(toolchainLines[0].indexOf('dart none') !== -1, 'got: ' + toolchainLines[0]);
+    });
+
+    test('version-file pin is reported as the CI slot value with a matching SDK', function () {
+        var r = dsRunRaw('summary', {
+            versionFile: '3.13.5\n',
+            managedBanner: 'Dart SDK version: 3.13.5 (stable) on "linux_x64"',
+            pubspec: true
+        });
+        assert.equal(r.rc, 0);
+        assert.ok(r.out.indexOf('toolchain: dart 3.13.5 (CI: 3.13.5, match: yes)') !== -1,
+            'got: ' + r.out);
+    });
+
+    test('summary without any installed dart still reports the resolved target honestly', function () {
+        var r = dsRunRaw('summary', {
+            qualityYml: DS_QUALITY_PIN_3135,
+            noHostDart: true,
+            pubspec: true
+        });
+        assert.equal(r.rc, 0);
+        // No dart installed → the summary still names the CI pin and cannot
+        // claim a match (the install has not run yet).
+        assert.ok(r.out.indexOf('(CI: 3.13.5, match: no)') !== -1, 'got: ' + r.out);
+    });
+});
+
+suite('setup/dart.sh: install-path fallback warning + non-Dart skip (gh-1137)', function () {
+
+    if (!_dsCanRun_) {
+        console.log('  ⏭️  skipped — bash not executable here');
+        return;
+    }
+
+    test('AC1 shape: quality.yml sdk: 3.13.5 resolves version mode on the stable channel', function () {
+        var r = dsRun('plan', { qualityYml: DS_QUALITY_PIN_3135 });
+        assert.equal(r.mode, 'version');
+        assert.equal(r.version, '3.13.5');
+        assert.equal(r.channel, 'stable');
+        assert.equal(r.source, 'quality workflow');
+        assert.ok(String(r.sdk_url).indexOf('/channels/stable/release/3.13.5/sdk/') !== -1,
+            'the install URL must pin 3.13.5 exactly, got: ' + r.sdk_url);
+    });
+
+    test('Dart repo, no pin → install path prints the loud may-differ-from-CI warning', function () {
+        // stubCurlFails kills the download AFTER resolution — the warning must
+        // already be out by then (it precedes any network I/O).
+        var r = dsRunRaw('', { stubCurlFails: true, pubspec: true });
+        assert.ok(r.rc !== 0, 'the (stub) install itself still fails — the test only asserts the warning');
+        assert.ok(r.out.indexOf('differ from CI') !== -1,
+            'the stable fallback must print a loud warning (ticket step 3), got: ' + r.out);
+    });
+
+    test('Dart repo, no pin, warning also fires when a stable SDK is already installed (degraded keep)', function () {
+        // The degraded-keep branch exits 0 without downloading — the warning
+        // must not depend on the download path being reached.
+        var r = dsRunRaw('', {
+            managedBanner: 'Dart SDK version: 3.2.1 (stable) on "linux_x64"',
+            stubCurlFails: true,
+            pubspec: true
+        });
+        assert.equal(r.rc, 0, 'degraded keep exits 0, got: ' + r.out);
+        assert.ok(r.out.indexOf('differ from CI') !== -1, 'got: ' + r.out);
+    });
+
+    test('non-Dart repo, no pin → install path SKIPS entirely (rc 0, no download attempt)', function () {
+        // stubCurlFails proves no download was attempted: any curl call would
+        // red the run. The skip must exit 0 before any network I/O.
+        var r = dsRunRaw('', { stubCurlFails: true });
+        assert.equal(r.rc, 0, 'a non-Dart repo must not install (or attempt) any SDK, got: ' + r.out);
+        assert.ok(r.out.indexOf('differ from CI') === -1,
+            'no warning — the skip is not a mismatch, got: ' + r.out);
+    });
+
+    test('non-Dart repo with an explicit pin still installs (operator intent wins over the skip)', function () {
+        // DART_VERSION=beta + failing curl → the install IS attempted (and the
+        // stub curl fails it) — proving the skip did not swallow explicit pins.
+        var r = dsRunRaw('', { stubCurlFails: true, env: ['DART_VERSION=beta'] });
+        assert.ok(r.rc !== 0, 'an explicit target must reach the download step, got rc=0: ' + r.out);
+    });
+
+    test('pinned Dart repo install path prints NO fallback warning', function () {
+        var r = dsRunRaw('', {
+            qualityYml: DS_QUALITY_PIN_3135,
+            managedBanner: 'Dart SDK version: 3.13.5 (stable) on "linux_x64"',
+            stubCurlFails: true,
+            pubspec: true
+        });
+        assert.equal(r.rc, 0, 'cache hit: installed==pin, got: ' + r.out);
+        assert.ok(r.out.indexOf('differ from CI') === -1,
+            'a matching install must not warn, got: ' + r.out);
+        assert.ok(r.out.indexOf('3.13.5') !== -1, 'got: ' + r.out);
     });
 });
