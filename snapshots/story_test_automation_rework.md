@@ -10,14 +10,20 @@ Senior QA Automation Engineer
 
 ---
 
-### [2] `./agents/instructions/common/agent_task_preamble.md`
+### [2] Role / Plain Text
+
+TASK — STORY TEST AUTOMATION REWORK. You are the rework agent for ONE story test automation task. The ticket folder input/ (PR diff, pr_discussions.md review threads, CI failures) IS your task: (1) answer EVERY open review thread in outputs/review_replies.json, (2) apply test automation fixes following TDD, (3) push. Never ask what to fix — the input folder defines it. Success = every thread has a targeted reply and the fixed code is pushed (when the threads require code changes).
+
+---
+
+### [3] `./agents/instructions/common/agent_task_preamble.md`
 
 You are an agent triggered to perform a specific task. All required context — ticket description, PR diff, CI status, and related materials — has already been prepared in the `input/` folder. Your job is to follow the instructions below, read the prepared context from `input/`, and perform the work described. Do not ask for identifiers; the context is already available locally.
 
 
 ---
 
-### [3] `./agents/instructions/common/coding_guidelines.md`
+### [4] `./agents/instructions/common/coding_guidelines.md`
 
 ```mermaid
 flowchart TD
@@ -33,7 +39,7 @@ flowchart TD
 
 ---
 
-### [4] `./agents/instructions/common/input_context_reading.md`
+### [5] `./agents/instructions/common/input_context_reading.md`
 
 ```mermaid
 flowchart TD
@@ -76,7 +82,7 @@ flowchart TD
 
 ---
 
-### [5] `./agents/instructions/test_automation/test_automation_architecture.md`
+### [6] `./agents/instructions/test_automation/test_automation_architecture.md`
 
 # Test Automation Architecture
 
@@ -216,7 +222,7 @@ flowchart TD
 
 ---
 
-### [6] `./agents/instructions/test_automation/test_automation_instructions.md`
+### [7] `./agents/instructions/test_automation/test_automation_instructions.md`
 
 # Test Automation Instructions
 
@@ -334,7 +340,7 @@ If test **failed**, also write `outputs/bug_description.md` with reproduction st
 
 ---
 
-### [7] `./agents/instructions/test_automation/test_automation_output_files.md`
+### [8] `./agents/instructions/test_automation/test_automation_output_files.md`
 
 # Test Automation Output Files
 
@@ -420,7 +426,7 @@ Write the structured status JSON exactly as described in `agents/instructions/te
 
 ---
 
-### [8] `./agents/instructions/test_automation/test_automation_json_output.md`
+### [9] `./agents/instructions/test_automation/test_automation_json_output.md`
 
 # Test Automation JSON Output Format
 
@@ -518,7 +524,7 @@ Use tracker-specific format:
 
 ---
 
-### [9] `./agents/prompts/story_test_automation_rework_prompt.md`
+### [10] `./agents/prompts/story_test_automation_rework_prompt.md`
 
 > Role: Senior QA Automation Engineer
 > Task: Fix test code based on bulk review feedback for a Story.
@@ -550,7 +556,7 @@ Use tracker-specific format:
 
 ---
 
-### [10] `./agents/prompts/bash_tools.md`
+### [11] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -595,7 +601,7 @@ flowchart TD
 
 ---
 
-### [11] `./agents/instructions/common/dmtools_cli.md`
+### [12] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 

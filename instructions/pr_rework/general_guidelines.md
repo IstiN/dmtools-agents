@@ -61,7 +61,7 @@ flowchart TD
 
 Read PR files to understand WHAT changed. Read ticket files to understand WHY it changed and verify the rework addresses all ACs.
 
-## 2. Owned CI violations — no dismissal (gh-1119)
+## 2. Owned CI violations — no dismissal
 
 `ci_failures.md` opens with machine-extracted violation tables:
 

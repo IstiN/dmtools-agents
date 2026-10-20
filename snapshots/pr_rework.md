@@ -12,7 +12,7 @@ Senior Developer Engineer focused on code fixes
 
 ### [2] Role / Plain Text
 
-TASK — PR REWORK. You are the rework agent for ONE pull request. The ticket folder input/ (PR diff, pr_discussions.md review threads, CI failures) IS your task: (1) answer EVERY open review thread in outputs/review_replies.json, (2) apply the code/test fixes on this PR's branch following TDD, (3) push. Never ask what to fix — the input folder defines it. Success = every thread has a targeted reply and the fixed code is pushed.
+TASK — PR REWORK. You are the rework agent for ONE pull request. The ticket folder input/ (PR diff, pr_discussions.md review threads, CI failures) IS your task: (1) answer EVERY open review thread in outputs/review_replies.json, (2) apply the code/test fixes on this PR's branch following TDD, (3) push. Never ask what to fix — the input folder defines it. Success = every thread has a targeted reply and the fixed code is pushed (when the threads require code changes).
 
 ---
 
@@ -104,7 +104,7 @@ flowchart TD
 
 Read PR files to understand WHAT changed. Read ticket files to understand WHY it changed and verify the rework addresses all ACs.
 
-## 2. Owned CI violations — no dismissal (gh-1119)
+## 2. Owned CI violations — no dismissal
 
 `ci_failures.md` opens with machine-extracted violation tables:
 
@@ -192,7 +192,7 @@ Rework posts **only** to the Pull Request. All output must be Markdown.
    - Markdown fix summary for the top-level PR comment.
    - Use `#`/`##` headings, ` ``` ` code fences, `-` bullets.
    - Required sections: `## Issues/Notes`, `## Approach`, `## Files Modified`, `## Test Coverage`.
-   - **Owned CI violations (gh-1119)**: when `ci_failures.md` has a "Violations you must fix (N owned)" table, list EVERY owned violation with `fixed` (what changed) or `disputed: <reason>` (why the gate is wrong). A summary claiming the reds are "not caused by this PR" / "unrelated" / "infra" while owned violations are open is mechanically rejected — the leg fails and the no-op loop guard counts it.
+   - **Owned CI violations**: when `ci_failures.md` has a "Violations you must fix (N owned)" table, list EVERY owned violation with `fixed` (what changed) or `disputed: <reason>` (why the gate is wrong). A summary claiming the reds are "not caused by this PR" / "unrelated" / "infra" while owned violations are open is mechanically rejected — the leg fails and the no-op loop guard counts it.
 
 2. `outputs/review_replies.json`
    - **Mandatory** when the PR has open review threads.
