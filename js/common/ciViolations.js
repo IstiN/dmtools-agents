@@ -391,7 +391,11 @@ function extractViolations(logs, checkName) {
     // "path:line:"-shaped line) appearing later in the SAME concatenated job
     // log — an owned red mangled into a foreign-looking item. dart-analyze
     // bullets and dart-test "[E]" lines never match the other parsers, so
-    // claiming them first is safe for every pinned fixture.
+    // claiming them first is safe for every pinned fixture. The dart-format
+    // "Formatted <file>" line (gh-1134) is the strictest anchor of all
+    // (bare line, ends in .dart) and no other parser can match it — run it
+    // first so a concatenated log's format reds can never be swallowed.
+    dartFormatViolations(lines, checkName, taken, out);
     dartAnalyzeViolations(lines, checkName, taken, out);
     dartTestViolations(lines, checkName, taken, out);
     crap4jViolations(lines, checkName, taken, out);
