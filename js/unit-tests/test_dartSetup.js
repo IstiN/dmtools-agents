@@ -8,7 +8,7 @@
  * stayed in place (gh-918 evidence: #408 operator-fixed CRAP 9.00, #413
  * rework "success" with method_size violations left in place, #414 operator
  * refactor). setup/dart.sh is the fix: same pattern as the golden-test
- * Flutter toolchain for fa legs — cached per resolved version, exposed on
+ * Flutter toolchain for dev/rework legs — cached per resolved version, exposed on
  * PATH for the leg session, resolving the SAME channel/version the checked
  * out repo's quality workflow (dart-lang/setup-dart step) uses.
  *
@@ -73,12 +73,20 @@ function dsOsArch() {
 }
 
 /**
- * Run `setup/dart.sh <subcommand>` inside a fresh mktemp sandbox.
- * opts: qualityYml — contents written to <sandbox>/.github/workflows/quality.yml
- *       env        — extra `KEY=value` strings prefixed to the invocation
- *       stubDart   — version banner a fake `dart` on PATH prints (status tests)
+ * Shared sandbox-script builder for dsRun/dsRunRaw (CRAP ratchet: the two
+ * runners must not duplicate the fixture logic — the duplicated version
+ * measured dsRun 15 / dsRunRaw 11, over the CRAP 8 bar). Writes the opts
+ * fixtures into a fresh mktemp sandbox shell script and returns
+ * { lines, env } — the caller appends its own invocation + capture lines.
+ * opts: qualityYml   — contents written to <sandbox>/.github/workflows/quality.yml
+ *       stubDart     — version banner a fake `dart` on PATH prints (status tests)
+ *       managedBanner— banner for a fake SDK at <DART_INSTALL_DIR>/dart-sdk/bin/dart
+ *       stubCurlFails— a curl on PATH that always exits 1 (network-hiccup path)
+ *       versionFile  — contents written to <sandbox>/.dart-version (gh-1137 pin)
+ *       pubspec      — truthy marks the sandbox as a Dart repo
+ *       env          — extra `KEY=value` strings prefixed to the invocation
  */
-function dsRun(subcommand, opts) {
+function dsSandbox(opts) {
     opts = opts || {};
     var lines = ['r="$(pwd)"', 'd="$(mktemp -d)"'];
     if (opts.qualityYml !== undefined) {
@@ -126,13 +134,30 @@ function dsRun(subcommand, opts) {
     // of this very ticket) would leak into `status`/`plan`. Point the
     // install dir INSIDE the sandbox for every invocation.
     env.push('DART_INSTALL_DIR="$d/nodart"');
+    return { lines: lines, env: env };
+}
+
+/** PATH assembly shared by the runners (host-dart hermeticity vs stub exposure). */
+function dsSandboxPathEnv(sandbox, opts) {
     if (opts.noHostDart) {
         // Hermetic against a dart already on the host PATH: only the sandbox bin + system dirs.
-        lines.push('mkdir -p "$d/bin"');
-        env.push('PATH="$d/bin:/usr/bin:/bin"');
+        sandbox.lines.push('mkdir -p "$d/bin"');
+        sandbox.env.push('PATH="$d/bin:/usr/bin:/bin"');
     } else if (opts.stubDart !== undefined || opts.stubCurlFails) {
-        env.push('PATH="$d/bin:$PATH"');
+        sandbox.env.push('PATH="$d/bin:$PATH"');
     }
+    return sandbox.env;
+}
+
+/**
+ * Run `setup/dart.sh <subcommand>` inside a fresh mktemp sandbox and parse
+ * the script's key=value output.
+ */
+function dsRun(subcommand, opts) {
+    opts = opts || {};
+    var sandbox = dsSandbox(opts);
+    var lines = sandbox.lines;
+    var env = dsSandboxPathEnv(sandbox, opts);
     if (opts.trailTarget !== undefined) {
         // register_path's parent-visible trail (/tmp/_registered_paths) is
         // how the sandbox can observe WHICH dirs the script put on PATH for
@@ -203,33 +228,9 @@ var DS_QUALITY_PIN_3135 = DS_QUALITY_BETA.replace('          channel: beta', '  
  */
 function dsRunRaw(subcommand, opts) {
     opts = opts || {};
-    var lines = ['r="$(pwd)"', 'd="$(mktemp -d)"'];
-    if (opts.qualityYml !== undefined) {
-        lines.push('mkdir -p "$d/.github/workflows"');
-        lines.push('printf %s ' + dsShq(opts.qualityYml) + ' > "$d/.github/workflows/quality.yml"');
-    }
-    if (opts.versionFile !== undefined) {
-        lines.push('printf %s ' + dsShq(opts.versionFile) + ' > "$d/.dart-version"');
-    }
-    if (opts.pubspec) {
-        lines.push('printf %s ' + dsShq('name: sandbox\nenvironment:\n  sdk: ^3.0.0\n') + ' > "$d/pubspec.yaml"');
-    }
-    if (opts.managedBanner !== undefined) {
-        lines.push('mkdir -p "$d/nodart/dart-sdk/bin"');
-        lines.push('printf %s ' + dsShq('#!/bin/sh\necho ' + dsShq(opts.managedBanner)) +
-            ' > "$d/nodart/dart-sdk/bin/dart"');
-        lines.push('chmod +x "$d/nodart/dart-sdk/bin/dart"');
-    }
-    if (opts.stubCurlFails) {
-        lines.push('mkdir -p "$d/bin"');
-        lines.push('printf %s ' + dsShq('#!/bin/sh\nexit 1') + ' > "$d/bin/curl"');
-        lines.push('chmod +x "$d/bin/curl"');
-    }
-    var env = (opts.env || []).slice();
-    env.push('DART_INSTALL_DIR="$d/nodart"');
-    if (opts.stubCurlFails) {
-        env.push('PATH="$d/bin:$PATH"');
-    }
+    var sandbox = dsSandbox(opts);
+    var lines = sandbox.lines;
+    var env = dsSandboxPathEnv(sandbox, opts);
     lines.push('cd "$d"');
     lines.push('out="$( (' + (env.length ? env.join(' ') + ' ' : '') +
         'bash "$r/setup/dart.sh" ' + subcommand + ') 2>&1 )"; rc=$?');
@@ -653,6 +654,22 @@ suite('setup/dart.sh: toolchain summary line (gh-1137 AC2 + AC3)', function () {
             'got: ' + r.out);
     });
 
+    test('a v-prefixed .dart-version pin with the exact matching SDK reports match: yes', function () {
+        // gh-1137 review: cmd_summary used to compare the RAW pin token
+        // (v3.13.5) against the installed version (3.13.5) — a false
+        // match: no on a leg that provably ran the pinned SDK. The pin must
+        // come from what resolve_target already consumed (v stripped), and
+        // the CI slot must show the same token the install path resolves.
+        var r = dsRunRaw('summary', {
+            versionFile: 'v3.13.5\n',
+            managedBanner: 'Dart SDK version: 3.13.5 (stable) on "linux_x64"',
+            pubspec: true
+        });
+        assert.equal(r.rc, 0, 'got: ' + r.out);
+        assert.ok(r.out.indexOf('toolchain: dart 3.13.5 (CI: 3.13.5, match: yes)') !== -1,
+            'a v-prefixed pin must not report a false mismatch, got: ' + r.out);
+    });
+
     test('summary output contract: exactly one toolchain line when pinned and matching', function () {
         var r = dsRunRaw('summary', {
             qualityYml: DS_QUALITY_PIN_3135,
@@ -689,10 +706,10 @@ suite('setup/dart.sh: toolchain summary line (gh-1137 AC2 + AC3)', function () {
         assert.ok(r.out.indexOf('toolchain: dart 3.2.1 (CI: none, match: no)') !== -1,
             'got: ' + r.out);
         var warningLines = r.out.split('\n').filter(function (l) {
-            return l.indexOf('⚠️') !== -1 && l.indexOf('differ from CI') !== -1;
+            return l.indexOf('toolchain-warn:') !== -1;
         });
         assert.ok(warningLines.length >= 1,
-            'the no-pin fallback must add a warning line to the summary (AC2), got: ' + r.out);
+            'the no-pin fallback must add the toolchain-warn: line to the summary (AC2), got: ' + r.out);
     });
 
     test('summary never touches the network (channel_latest down → summary still works)', function () {

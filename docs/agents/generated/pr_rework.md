@@ -126,7 +126,6 @@ _Push Rework Changes Post-Action_
   - `removeLabel`
   - `removeLabels`
   - `scmProvider`
-  - `setupCommands`
   - `smFallback`
   - `squashReworkWip`
   - `stageFallback`

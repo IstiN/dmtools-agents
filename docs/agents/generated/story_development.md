@@ -128,7 +128,6 @@ _Develop Ticket and Create PR Action_
   - `removeLabels`
   - `removeLabels.forEach`
   - `scmProvider`
-  - `setupCommands`
   - `smFallback`
   - `stageFallback`
   - `targetRepository`

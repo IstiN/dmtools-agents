@@ -126,7 +126,6 @@ _Develop Bug and Create PR Post-Action_
   - `removeLabels`
   - `removeLabels.forEach`
   - `scmProvider`
-  - `setupCommands`
   - `smFallback`
   - `stageFallback`
   - `targetRepository`

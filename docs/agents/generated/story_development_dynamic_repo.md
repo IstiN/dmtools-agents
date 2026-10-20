@@ -99,7 +99,6 @@ _Post-Action Development — Dynamic Repository variant_
   - `repoNameStrategy`
   - `repositoriesFile`
   - `scmProvider`
-  - `setupCommands`
   - `smFallback`
   - `stageFallback`
   - `targetRepository`

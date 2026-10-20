@@ -18,9 +18,10 @@
  * Wiring contracts covered here:
  *   - developTicketAndCreatePR.js (dev leg) consumes the helper;
  *   - pushReworkChanges.js (rework leg) consumes the helper;
- *   - the fa dev/rework runner configs (.dmtools/runners/) carry the dart
- *     preamble in customParams.setupCommands so the SDK is installed BEFORE
- *     the CLI agent starts.
+ *   - any runner config that declares a dart preamble in
+ *     customParams.setupCommands must run the repo-owned setup/dart.sh
+ *     (deployment-specific runner configs live in the consuming repo, not
+ *     here — the preamble contract itself stays generic).
  *
  * Uses: loadModule(), makeRequire(), assert, test(), suite()
  */
@@ -38,20 +39,26 @@ suite('toolchainSummary: dart.sh resolution inside the leg workspace', function 
 
     test('prefers <workingDir>/setup/dart.sh (self-hosted engine layout)', function () {
         var seen = [];
-        var commandUsed = null;
+        var argsUsed = null;
         var ts = loadToolchainSummary({
             file_read: function(opts) {
                 seen.push(opts.path);
                 return opts.path === 'repo/setup/dart.sh' ? '#!/usr/bin/env bash' : null;
             },
             cli_execute_command: function(args) {
-                commandUsed = args.command;
+                argsUsed = args;
                 return 'toolchain: dart 3.13.5 (CI: 3.13.5, match: yes)';
             }
         });
         var out = ts.withToolchainLine('## Fix\n- done', { workingDir: 'repo' });
-        assert.equal(commandUsed, 'bash repo/setup/dart.sh summary',
-            'the FIRST existing candidate wins, got: ' + commandUsed);
+        // gh-1137 review: command text is workingDirectory-RELATIVE in this
+        // engine — the workingDir-prefixed probe path is only for file_read.
+        // Running the prefixed path INSIDE workingDirectory would double the
+        // prefix and silently exit 127 on nested layouts.
+        assert.equal(argsUsed.command, 'bash setup/dart.sh summary',
+            'the command must be workingDir-relative, got: ' + argsUsed.command);
+        assert.equal(argsUsed.workingDirectory, 'repo',
+            'the command must run inside the leg workingDir, got: ' + JSON.stringify(argsUsed));
         assert.equal(seen.indexOf('repo/agents/setup/dart.sh'), -1,
             'no probe past the first hit, seen: ' + seen.join(','));
         assert.ok(out.indexOf('toolchain: dart 3.13.5 (CI: 3.13.5, match: yes)') !== -1, 'got: ' + out);
@@ -63,12 +70,27 @@ suite('toolchainSummary: dart.sh resolution inside the leg workspace', function 
                 return opts.path === 'repo/agents/setup/dart.sh' ? '#!/usr/bin/env bash' : null;
             },
             cli_execute_command: function(args) {
-                assert.equal(args.command, 'bash repo/agents/setup/dart.sh summary', 'got: ' + args.command);
+                assert.equal(args.command, 'bash agents/setup/dart.sh summary', 'got: ' + args.command);
                 assert.equal(args.workingDirectory, 'repo');
                 return 'toolchain: dart 3.13.5 (CI: 3.13.5, match: yes)';
             }
         });
         var out = ts.withToolchainLine('body', { workingDir: 'repo' });
+        assert.ok(out.indexOf('match: yes') !== -1, 'got: ' + out);
+    });
+
+    test('a dot workingDir (engine-rooted leg) runs the repo-relative path too', function () {
+        var ts = loadToolchainSummary({
+            file_read: function(opts) {
+                return opts.path === './setup/dart.sh' ? '#!/usr/bin/env bash' : null;
+            },
+            cli_execute_command: function(args) {
+                assert.equal(args.command, 'bash setup/dart.sh summary', 'got: ' + args.command);
+                assert.equal(args.workingDirectory, '.');
+                return 'toolchain: dart 3.9.4 (CI: 3.9.4, match: yes)';
+            }
+        });
+        var out = ts.withToolchainLine('body', { workingDir: '.' });
         assert.ok(out.indexOf('match: yes') !== -1, 'got: ' + out);
     });
 
@@ -102,10 +124,17 @@ suite('toolchainSummary.withToolchainLine: the leg summary gains the toolchain l
     test('a no-pin run carries the warning line too (gh-1137 AC2 at the summary level)', function () {
         var ts = tsWithCommandOutput(
             'toolchain: dart 3.2.1 (CI: none, match: no)\n' +
-            '⚠️ toolchain warning: no Dart SDK pin found — local dart format/analyzer results may differ from CI');
+            '⚠️ toolchain-warn: no Dart SDK pin found — local dart format/analyzer results may differ from CI');
         var out = ts.withToolchainLine('body', { workingDir: 'repo' });
         assert.ok(out.indexOf('toolchain: dart 3.2.1 (CI: none, match: no)') !== -1, 'got: ' + out);
         assert.ok(out.indexOf('may differ from CI') !== -1, 'the warning line must ride along, got: ' + out);
+    });
+
+    test('a warn line NOT immediately after the toolchain line does not ride along', function () {
+        var ts = tsWithCommandOutput(
+            'noise before\ntoolchain: dart 3.2.1 (CI: none, match: no)');
+        var out = ts.withToolchainLine('body', { workingDir: 'repo' });
+        assert.ok(out.indexOf('toolchain: dart 3.2.1') !== -1, 'got: ' + out);
     });
 
     test('non-Dart repo skip line (dart none) → no annotation noise on JS/Kotlin legs', function () {
@@ -166,17 +195,41 @@ suite('toolchainSummary: leg wiring contracts (gh-1137)', function () {
             'rework leg must run the fix summary through withToolchainLine');
     });
 
-    test('fa dev runner carries the dart preamble in customParams.setupCommands', function () {
-        var cfg = JSON.parse(file_read({ path: '.dmtools/runners/fa-story-dev.json' }));
-        var cmds = (cfg.params.customParams || {}).setupCommands || [];
-        assert.ok(cmds.some(function(c) { return /dart\.sh$/.test(c); }),
-            'fa-story-dev.json customParams.setupCommands must run the dart preamble, got: ' + JSON.stringify(cmds));
+    test('any runner config declaring a dart preamble must run the repo-owned setup/dart.sh', function () {
+        // gh-1137 review round 1: deployment-specific runner configs (fa-*)
+        // do not belong in this repo — the preamble CONTRACT is what stays:
+        // any config that opts into a dart preamble must run the repo-owned
+        // setup/dart.sh (root-mounted or agents/ submodule layout), never a
+        // copied/engine-local variant that could drift from this repo.
+        var tracked = String(cli_execute_command({ command: 'git ls-files ".dmtools/runners/*.json"' }) || '')
+            .split('\n').map(function (s) { return s.trim(); })
+            .filter(function (s) { return /\.json$/.test(s); });
+        assert.ok(tracked.length > 0, 'runner configs must be enumerable (git ls-files)');
+        tracked.forEach(function (configPath) {
+            var raw = file_read({ path: configPath });
+            if (!raw) {
+                return;
+            }
+            var cfg = JSON.parse(raw);
+            var cmds = (((cfg.params || {}).customParams) || {}).setupCommands || [];
+            cmds.forEach(function (cmd) {
+                if (/dart\.sh/.test(String(cmd))) {
+                    assert.ok(/^bash (agents\/)?setup\/dart\.sh$/.test(String(cmd).trim()),
+                        configPath + ' dart preamble must run the repo-owned setup/dart.sh, got: ' + cmd);
+                }
+            });
+        });
     });
 
-    test('fa rework runner carries the dart preamble in customParams.setupCommands', function () {
-        var cfg = JSON.parse(file_read({ path: '.dmtools/runners/fa-rework.json' }));
-        var cmds = (cfg.params.customParams || {}).setupCommands || [];
-        assert.ok(cmds.some(function(c) { return /dart\.sh$/.test(c); }),
-            'fa-rework.json customParams.setupCommands must run the dart preamble, got: ' + JSON.stringify(cmds));
+    test('the toolchain-warn marker is a wiring contract between setup/dart.sh and this module', function () {
+        // gh-1137 review: the no-pin warning pickup must match a STABLE
+        // token, not dart.sh prose — a reworded warning must not silently
+        // disappear from leg summaries with everything green.
+        var sh = file_read({ path: 'setup/dart.sh' });
+        assert.ok(sh.indexOf('toolchain-warn:') !== -1,
+            'dart.sh summary must emit the stable toolchain-warn: marker');
+        var ts = file_read({ path: 'js/common/toolchainSummary.js' });
+        assert.ok(ts.indexOf("'toolchain-warn:'") !== -1,
+            'toolchainSummary must match the stable toolchain-warn: token (never dart.sh prose)');
     });
 });
