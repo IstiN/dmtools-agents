@@ -168,6 +168,17 @@ suite('guestTransplant: predicates and sanitizers', function () {
             'Ada <ada[bot]@users.noreply.github.com>');
     });
 
+    test('sanitizeCoAuthor truncates a 60+ char name; an empty login falls back to guest', function () {
+        var longName = 'N'.repeat(80);
+        var co = mod.sanitizeCoAuthor(longName, 'extc');
+        assert.ok(co.indexOf('N'.repeat(60) + ' <extc@') === 0,
+            'the name is truncated to 60 chars, the login survives');
+        assert.equal(mod.sanitizeCoAuthor('Guest Author', ''),
+            'Guest Author <guest@users.noreply.github.com>', 'empty login falls back');
+        assert.equal(mod.sanitizeCoAuthor('Guest Author', null),
+            'Guest Author <guest@users.noreply.github.com>', 'null login falls back too');
+    });
+
     test('guestPrTitle: prefix + sanitized source title, capped as a whole', function () {
         assert.equal(mod.guestPrTitle(baseCfg(), 42, 'Fix the widget'), '[guest #42] Fix the widget');
         assert.equal(mod.guestPrTitle(baseCfg(), 7, 'a'.repeat(200)).length, 80);
@@ -217,6 +228,20 @@ suite('guestTransplant: marker build/parse (snapshot semantics, E1/E5)', functio
     test('no marker anywhere — null (fail closed)', function () {
         assert.equal(mod.parseTransplantMarker([]), null);
         assert.equal(mod.parseTransplantMarker(null), null);
+
+    test('a marker comment WITHOUT a state is skipped; a later valid marker still wins', function () {
+        var stateless = '<!-- guest-transplant source="42" head="nope" --> half a marker';
+        var valid = mod.transplantMarkerComment({
+            state: 'armed', source: 43, head: SHA_B, branch: 'ai/guest-43'
+        });
+        var parsed = mod.parseTransplantMarker([{ body: stateless }, { body: valid }]);
+        assert.notEqual(parsed, null, 'the valid marker is found');
+        assert.equal(parsed.state, 'armed');
+        assert.equal(parsed.source, 43);
+        assert.equal(parsed.head, SHA_B);
+        var onlyStateless = mod.parseTransplantMarker([{ body: stateless }]);
+        assert.equal(onlyStateless, null, 'a stateless marker parses to null (fail closed)');
+    });
         assert.equal(mod.parseTransplantMarker([{ body: 'plain talk' }]), null);
     });
 
@@ -540,6 +565,16 @@ suite('guestTransplant: Security Gate wiring (AC3, UT-gate)', function () {
         assert.equal(mod.validateGateWiring([{ id: 'security-gate', needs: [] }], null).ok, false);
     });
 
+    test('transitivelyNeeds terminates on a needs-cycle (the seen-set guard)', function () {
+        var cyclic = { a: { id: 'a', needs: ['b'] }, b: { id: 'b', needs: ['a'] } };
+        assert.equal(mod.transitivelyNeeds('a', { z: true }, cyclic, {}), false,
+            'a cycle that never reaches the target is false — and terminates');
+        assert.equal(mod.transitivelyNeeds('b', { a: true }, cyclic, {}), true,
+            'the walk closes through the cycle onto the target');
+        assert.equal(mod.transitivelyNeeds('a', { a: true }, cyclic, {}), true,
+            'the job itself being a gate job short-circuits');
+    });
+
     test('the serialized dispatch plan puts EVERY gate job ahead of EVERY secret job (byte-scan)', function () {
         var jobs = [
             { id: 'validate', needs: ['build'] },
@@ -593,6 +628,33 @@ suite('guestTransplant: transport command builders (byte-pinned; no fork ref is 
         assert.equal(payload.head, 'ai/guest-42');
         assert.equal(payload.base, 'main');
         assert.equal(payload.body, 'body text');
+    });
+
+    test('guestPrBody names the fork source, the head sha, the gate jobs and the co-author trailer', function () {
+        var body = mod.guestPrBody({
+            sourceFull: 'extc/fork', sourcePrNumber: 42, sourceTitle: 'Fix the widget',
+            sourceAuthor: 'extcontributor', sourceLogin: 'extc', headSha: SHA_A,
+            gateJobs: ['security-gate', 'secret-scan']
+        });
+        assert.ok(body.indexOf('extc/fork#42') !== -1, 'body names source repo#number');
+        assert.ok(body.indexOf('Fix the widget') !== -1);
+        assert.ok(body.indexOf(SHA_A) !== -1, 'body names the transplanted head');
+        assert.ok(body.indexOf('https://github.com/extc/fork/pull/42') !== -1, 'body links the source');
+        assert.ok(body.indexOf('security-gate, secret-scan') !== -1, 'the gate manifest travels into the body');
+        assert.ok(body.indexOf('Co-authored-by: extcontributor <extc@') !== -1, 'co-author trailer');
+    });
+
+    test('guestPrBody: carried verdicts list EVERY label; degenerate opts degrade to the defaults', function () {
+        var carried = mod.guestPrBody({
+            sourcePrNumber: 7, carriedLabels: ['pr_approved', 'ai_pr_reviewed']
+        });
+        assert.ok(carried.indexOf('Carried review verdicts: pr_approved, ai_pr_reviewed') !== -1,
+            '2+ carried labels join into one line');
+        var fresh = mod.guestPrBody(null);
+        assert.ok(fresh.indexOf('owner/repo#undefined') !== -1, 'degenerate source degrades');
+        assert.ok(fresh.indexOf('`unknown`') !== -1, 'no head sha reads unknown');
+        assert.ok(fresh.indexOf('security-gate') !== -1, 'gate jobs default');
+        assert.ok(fresh.indexOf('Fresh review + validation') !== -1, 'no carry — fresh pipeline line');
     });
 
     test('close, delete-ref, main-head probe, branch list and PR-by-head are base-repo commands', function () {
