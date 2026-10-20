@@ -67,6 +67,11 @@ var LAYERS = {
     'validated-green': 'L3',
     // L4 agents — rework/dev/review legs.
     'conflict-rework': 'L4',
+    // gh-1140 guest transplant — a routing/creation leg: it closes the
+    // source and opens the machine PR (no existing head moves), so the
+    // transplant runs first among the agent legs and the new machine PR
+    // is picked up by the standard lanes next tick.
+    'guest-transplant': 'L4',
     'rework-on-red-ci': 'L4',
     'rework-on-label': 'L4',
     'rework-arm-restore': 'L4',
