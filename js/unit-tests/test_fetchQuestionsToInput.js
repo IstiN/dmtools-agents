@@ -87,7 +87,7 @@ function loadFetchQuestionsWithMocks(options) {
     options = options || {};
     var parentCalls = [];
     var parentContextMock = {
-        action: function (p) { parentCalls.push(p); }
+        action: options.parentAction || function (p) { parentCalls.push(p); }
     };
     var projectConfig = {
         jira: {
@@ -277,6 +277,61 @@ suite('fetchQuestionsToInput.action — tracker-aware query layer (gh-770)', fun
         });
         assert.ok(!passesRawObject,
             'the raw error object must NOT be passed through (renders as {} on the host console)');
+    });
+
+});
+
+// ── gh-1112: skipParentContext — preCliContentOutputSetup owns the step ──────
+// The pre-CLI chain runs fetchParentContextToInput explicitly (fault-isolated
+// in its own step) and suppresses this module's built-in call so the
+// parent-context JQL is not fired twice per run.
+
+suite('fetchQuestionsToInput.action — skipParentContext (gh-1112)', function () {
+
+    function githubLoader(parentAction) {
+        return loadFetchQuestionsWithMocks({
+            trackerProvider: 'github',
+            parentAction: parentAction,
+            globals: {
+                jira_search_by_jql: function () { return []; },
+                file_write: function () { return null; }
+            }
+        });
+    }
+
+    test('default: parent-context enrichment runs exactly once with the original params', function () {
+        var loaded = githubLoader();
+        var params = { inputFolderPath: 'input/PROJ-20', jobParams: {} };
+        loaded.mod.action(params);
+        assert.equal(loaded.parentCalls.length, 1, 'parent enrichment runs once by default');
+        assert.equal(loaded.parentCalls[0], params, 'the original params object is forwarded');
+    });
+
+    test('skipParentContext: true — the built-in parent-context call is suppressed', function () {
+        var loaded = githubLoader();
+        loaded.mod.action({ inputFolderPath: 'input/PROJ-21', jobParams: {}, skipParentContext: true });
+        assert.equal(loaded.parentCalls.length, 0,
+            'preCliContentOutputSetup fires the parent-context step itself — no second JQL here');
+    });
+
+    test('skipParentContext: false behaves like the default (enrichment runs)', function () {
+        var loaded = githubLoader();
+        loaded.mod.action({ inputFolderPath: 'input/PROJ-22', jobParams: {}, skipParentContext: false });
+        assert.equal(loaded.parentCalls.length, 1);
+    });
+
+    test('a parent-context throw stays non-fatal (warned, never propagated)', function () {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function (m) { warns.push(String(m)); };
+        try {
+            var loaded = githubLoader(function () { throw new Error('parent jql exploded'); });
+            loaded.mod.action({ inputFolderPath: 'input/PROJ-23', jobParams: {} });
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(warns.some(function (w) { return w.indexOf('fetchParentContextToInput') !== -1; }), true,
+            'the failure is announced as a non-fatal warning');
     });
 
 });

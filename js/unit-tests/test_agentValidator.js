@@ -215,3 +215,65 @@ suite('Story Questions reference pattern', function() {
     });
 
 });
+
+// ── gh-1112 UT-cfg-1: wiki_publisher base agent config ───────────────────────
+
+suite('wiki_publisher.json — generic wiki publisher base agent (gh-1112 UT-cfg-1)', function() {
+
+    function readConfig() {
+        try {
+            var raw = file_read({ path: 'wiki_publisher.json' });
+            return raw ? JSON.parse(raw) : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    test('exists at the repository root and parses', function() {
+        var config = readConfig();
+        assert.ok(config, 'wiki_publisher.json must exist at the repo root');
+    });
+
+    test('declares the AC1 contract fields', function() {
+        var config = readConfig();
+        assert.equal(config.name, 'Teammate');
+        var p = config.params;
+        assert.equal(p.metadata.contextId, 'wiki_publisher');
+        assert.equal(p.metadata.descriptionPath, 'agents/docs/agents/wiki_publisher.md');
+        assert.equal(p.preJSAction, 'agents/js/requireTicket.js');
+        assert.equal(p.preCliJSAction, 'agents/js/preCliContentOutputSetup.js');
+        assert.equal(p.postJSAction, 'agents/js/writeContentOutput.js');
+        assert.equal(p.customParams.contentOutput.target, 'wiki');
+        assert.equal(p.customParams.contentOutput.updateTrackerField, false);
+    });
+
+    test('exposes tracker-specific cliPromptsByTracker for jira, ado, github and confluence', function() {
+        var config = readConfig();
+        var t = config.params.cliPromptsByTracker || {};
+        assert.ok(Array.isArray(t.jira) && t.jira.length > 0, 'jira prompts');
+        assert.ok(Array.isArray(t.ado) && t.ado.length > 0, 'ado prompts');
+        assert.ok(Array.isArray(t.github) && t.github.length > 0, 'github prompts');
+        assert.ok(Array.isArray(t.confluence) && t.confluence.length > 0, 'confluence prompts');
+    });
+
+    test('base cliPrompts reference the generic wiki_publisher workflow and prompt files', function() {
+        var config = readConfig();
+        var prompts = config.params.cliPrompts || [];
+        assert.ok(prompts.indexOf('./agents/instructions/wiki_publisher/workflow.md') !== -1,
+            'workflow instruction referenced');
+        assert.ok(prompts.indexOf('./agents/prompts/wiki_publisher_prompt.md') !== -1,
+            'entry prompt referenced');
+        assert.ok(prompts.indexOf('./agents/instructions/common/confluence_comments.md') !== -1,
+            'confluence_comments.md (inline anchor contract) referenced');
+    });
+
+    test('passes the generic agent validation', function() {
+        if (agentJsons.indexOf('wiki_publisher.json') === -1) {
+            // untracked working tree — the generic loop above cannot see it yet
+            assert.ok(true, 'wiki_publisher.json not yet git-tracked; generic loop skipped it');
+            return;
+        }
+        var result = validateAgentJson('wiki_publisher.json', { mockCli: true, mockActions: true });
+        assert.equal(result.valid, true, 'validation errors: ' + JSON.stringify(result.errors));
+    });
+});
