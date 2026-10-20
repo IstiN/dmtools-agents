@@ -257,3 +257,82 @@ test('shellQuote single-quotes hostile text the factoryState way', function () {
 });
 
 });
+
+// ── gh-1118 never-again: ONE retry before a stamp is counted as failed ──────
+// The tick log showed ⚠️ lines but the check-runs stayed absent downstream —
+// a transient gh/sh hiccup must re-fire before the failure is surfaced in
+// stamps_failed. The helper keeps the retry OUT of the SM stamp loop so the
+// loop's CRAP stays flat; the caller counts `false` returns.
+suite('checkRunStamp: postCheckRunStampRetryOnce (gh-1118 retry-once)', function () {
+
+    function captureIo(execResults, writeResults) {
+        var io = { execs: 0, writes: 0, dels: 0, retries: [] };
+        io.write = function () {
+            var err = (writeResults && writeResults.length > io.writes) ? writeResults[io.writes] : null;
+            io.writes++;
+            if (err) throw err;
+            return true;
+        };
+        io.exec = function () {
+            var err = (execResults && execResults.length > io.execs) ? execResults[io.execs] : null;
+            io.execs++;
+            if (err) throw err;
+            return '';
+        };
+        io.del = function () { io.dels++; return true; };
+        io.onRetry = function (e) { io.retries.push(e); };
+        return io;
+    }
+
+    var BODY = { name: 'Quality gate', head_sha: 'abc', status: 'completed',
+        output: { title: 't', summary: 's' } };
+
+    test('immediate success: one attempt, no retry callback', function () {
+        var io = captureIo([]);
+        var ok = crs.postCheckRunStampRetryOnce({ owner: 'o', repo: 'r' }, BODY,
+            '/tmp/sm-check-run-1-1.json', io, io.onRetry);
+        assert.equal(ok, true, 'a clean first attempt posts');
+        assert.equal(io.execs, 1, 'exactly one gh call');
+        assert.equal(io.retries.length, 0, 'no retry fired');
+        assert.equal(io.dels, 1, 'the temp file is still cleaned up');
+    });
+
+    test('transient failure recovers on the retry: true, two attempts, one retry callback', function () {
+        var io = captureIo([new Error('transient exit 1')]);
+        var ok = crs.postCheckRunStampRetryOnce({ owner: 'o', repo: 'r' }, BODY,
+            '/tmp/sm-check-run-1-2.json', io, io.onRetry);
+        assert.equal(ok, true, 'the retry succeeded');
+        assert.equal(io.execs, 2, 'first attempt + one retry — never a third');
+        assert.equal(io.retries.length, 1, 'the caller is told about the first failure');
+        assert.equal(io.retries[0].message, 'transient exit 1');
+        assert.equal(io.dels, 2, 'each attempt cleans up its temp file');
+    });
+
+    test('persistent failure: false after exactly one retry (two attempts total)', function () {
+        var io = captureIo([new Error('exit 2: Bad substitution'),
+                            new Error('exit 2: Bad substitution')]);
+        var ok = crs.postCheckRunStampRetryOnce({ owner: 'o', repo: 'r' }, BODY,
+            '/tmp/sm-check-run-1-3.json', io, io.onRetry);
+        assert.equal(ok, false, 'the caller counts the stamp as failed');
+        assert.equal(io.execs, 2, 'bounded at two attempts');
+        assert.equal(io.retries.length, 1, 'only the first failure notifies');
+    });
+
+    test('a failed body-file write (E2) is retried too and recovers', function () {
+        var io = captureIo([], [new Error('EACCES: temp dir unwritable')]);
+        var ok = crs.postCheckRunStampRetryOnce({ owner: 'o', repo: 'r' }, BODY,
+            '/tmp/sm-check-run-1-4.json', io, io.onRetry);
+        assert.equal(ok, true, 'the write retry succeeded');
+        assert.equal(io.writes, 2, 'two body writes');
+        assert.equal(io.execs, 1, 'the gh call ran once the write landed');
+    });
+
+    test('a missing onRetry callback still retries (never a crash)', function () {
+        var io = captureIo([new Error('exit 2'), new Error('exit 2')]);
+        var ok = crs.postCheckRunStampRetryOnce({ owner: 'o', repo: 'r' }, BODY,
+            '/tmp/sm-check-run-1-5.json', io, null);
+        assert.equal(ok, false);
+        assert.equal(io.execs, 2);
+    });
+
+});
