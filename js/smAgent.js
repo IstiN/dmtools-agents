@@ -151,6 +151,9 @@ var invisibleRequiredModule = require('./common/invisibleRequiredChecks.js');
 var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
 var smProviderModule = require('./common/smProvider.js');
+// gh-1140: the guest transplant decision core (po_accept rule) — pure
+// plan/sequence/gate-wiring module; this file only executes its steps.
+var guestTransplantModule = require('./common/guestTransplant.js');
 var trackersModule = require('./common/trackers.js');
 // gh-916 review: the DEFAULT status names (config.js STATUSES) back the second pass of
 // stageKeyForStatusName — a project that renames a status still keeps the sm.json literal
@@ -1715,6 +1718,28 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     }
 
     var tickets = [];
+    // gh-1140: the guest-transplant rule resolves its knob BEFORE the
+    // query — INERT unless the project configures smGuestTransplant
+    // (REG-guest113: the gh-113 manual-arm lane behaves unchanged on
+    // repos without the label configured), patches the query's label to
+    // the configured spelling, and runs the once-per-tick branch GC
+    // sweep (AC7) + orphan completion (E5) before any source is read.
+    var guestCfg = null;
+    if (rule.guestTransplant === true) {
+        guestCfg = guestTransplantModule.resolveGuestTransplantConfig(
+            RUN_JOB_PARAMS, effectiveConfig);
+        if (!guestCfg) {
+            console.log('  ⏸️  guest-transplant inert — smGuestTransplant not configured (REG-guest113)');
+            return { processedKeys: [], skippedKeys: [] };
+        }
+        if (rule.query) rule.query.labels = [guestCfg.label];
+        try {
+            sweepClosedGuestBranches(effectiveRepoInfo, guestCfg,
+                verdictMachineLogins(effectiveConfig));
+        } catch (eGc) {
+            console.warn('  ⚠️  guest-transplant GC sweep failed: ' + (eGc.message || eGc));
+        }
+    }
     try {
         var sourceMod = smSource.resolve(rule);
         tickets = sourceMod.query(rule, {
@@ -4677,6 +4702,29 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ complete_validation failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
+        if (rule.localAction === 'transplant_guest_pr') {
+            // gh-1140 guest transplant: the po_accept rule. Every decision
+            // lives in js/common/guestTransplant.js (UT-plan/UT-gate); this
+            // block only probes the live state and executes the returned
+            // steps. Machine-actor arms, human holds and already-run
+            // transplants land as audit lines — zero side effects. A
+            // merges-API conflict swaps in the pure AC4 park plan.
+            try {
+                var gCfg = guestCfg || guestTransplantModule.resolveGuestTransplantConfig(
+                    RUN_JOB_PARAMS, effectiveConfig);
+                if (!gCfg) {
+                    console.log('  ⏸️  ' + key + ' guest-transplant inert (no smGuestTransplant) — skipped');
+                    continue;
+                }
+                transplantGuestPrAction(effectiveRepoInfo, ticket, gCfg,
+                    verdictMachineLogins(effectiveConfig));
+                processedKeys.push(key);
+            } catch (e) {
+                console.error('  ❌ transplant_guest_pr failed for ' + key + ': ' + (e.message || e));
             }
             continue;
         }
@@ -8226,6 +8274,448 @@ function parkedHeadSha(repoInfo, prNumber) {
         console.warn('  ⚠️  park-head probe failed: ' + (e.message || e));
         return null;
     }
+}
+
+// ── gh-1140 guest transplant — the `transplant_guest_pr` executor ────────
+// Every decision lives in js/common/guestTransplant.js (unit-tested);
+// this wiring only probes the live state, executes the returned steps in
+// order, and turns a merges-API conflict into the pure park plan. The
+// transport NEVER targets a fork-owned ref: every command addresses the
+// base repo and the machine-owned ai/guest-<N> branch (impossible-by-
+// construction invariant), and the arm-actor probe refuses without a
+// human `labeled` event proof.
+
+function guestExec(repoInfo, command) {
+    var res = cli_execute_command({ command: command });
+    var out = String((res && (res.output || res.stdout)) || res || '');
+    return { out: out.trim() };
+}
+
+// The live branch probe: 0 → exists, anything else → absent (the same
+// fail-closed spelling as the smProvider #639 branch probe).
+function guestBranchExists(repoInfo, branch) {
+    try {
+        cli_execute_command({
+            command: 'gh api repos/' + repoInfo.owner + '/' + repoInfo.repo +
+                '/branches/' + branch + ' --jq .name'
+        });
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+// machineLogins (threads 13/17): the machineAuthor allowlist — the
+// marker format is public (this repo) and the marker lives on the
+// GUEST's own PR, so only markers authored by a configured machine
+// login are trusted; an empty list trusts nothing (the same doctrine
+// readVerdictRecords applies to the verdict markers).
+function guestMarker(repoInfo, prNumber, machineLogins) {
+    try {
+        var res = github_get_pr_comments({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestId: String(prNumber)
+        });
+        var obj = typeof res === 'string' ? JSON.parse(res) : (res || []);
+        var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+        return guestTransplantModule.parseTransplantMarker(
+            list, Array.isArray(machineLogins) ? machineLogins : []);
+    } catch (e) {
+        console.warn('  ⚠️  transplant marker probe failed (fail closed): ' + (e.message || e));
+        return null;
+    }
+}
+
+// The arm-actor proof: the newest `labeled` event for the transplant
+// label. null → the sequence refuses (AC5: the label is the voucher).
+function guestArmEvent(repoInfo, prNumber, label) {
+    try {
+        var res = cli_execute_command({
+            command: guestTransplantModule.buildListLabelEventsCommand(
+                repoInfo.owner, repoInfo.repo, prNumber)
+        });
+        var out = String((res && (res.output || res.stdout)) || res || '');
+        return guestTransplantModule.parseLabelEvents(out, label);
+    } catch (e) {
+        console.warn('  ⚠️  arm-event probe failed (fail closed): ' + (e.message || e));
+        return null;
+    }
+}
+
+function guestOpenPrOnBranch(repoInfo, branch) {
+    try {
+        var res = mcpParse(github_list_prs({
+            workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open'
+        }));
+        var list = Array.isArray(res) ? res : ((res && res.data) || []);
+        for (var i = 0; i < list.length; i++) {
+            var p = list[i];
+            if (p && p.head && p.head.ref === branch) {
+                return { number: p.number };
+            }
+        }
+    } catch (e) { /* probe failure reads as absent */ }
+    return null;
+}
+
+// PR diff text for the AC6 carry decision (the diff-tools tier used by
+// scm.js: the text tool first, the legacy stats tool as the fallback —
+// both null → the carry decision fails closed to a fresh pipeline).
+function guestPrDiffText(repoInfo, prNumber) {
+    try {
+        var raw = github_get_pr_diff_text({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestID: String(prNumber)
+        });
+        var obj = mcpParse(raw);
+        if (typeof obj === 'string' && obj.length) return obj;
+        if (obj && typeof obj.diff === 'string' && obj.diff.length) return obj.diff;
+    } catch (e) { /* fall through */ }
+    try {
+        var raw2 = github_get_pr_diff({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestID: String(prNumber)
+        });
+        var obj2 = mcpParse(raw2);
+        if (typeof obj2 === 'string' && obj2.length) return obj2;
+    } catch (e2) { /* both tiers failed */ }
+    return null;
+}
+
+// One step of the sequence. Returns extra context for later steps:
+// the created PR number (open_pr), the merge sha (merge), the carry
+// labels (carry_decision). Throws on hard transport failures.
+function guestApplyStep(repoInfo, cfg, s, ctx, dry) {
+    var tr = githubTracker(repoInfo.owner, repoInfo.repo);
+    switch (s.op) {
+        case 'comment':
+            if (dry) { console.log('  🧪 [dry] would comment on #' + s.prNumber); return {}; }
+            tr.postComment(s.prNumber, s.text);
+            return {};
+        case 'add_label':
+            if (dry) { console.log('  🧪 [dry] would label #' + s.prNumber + ' +' + s.label); return {}; }
+            tr.addLabel(s.prNumber, s.label);
+            return {};
+        case 'remove_label':
+            if (dry) { console.log('  🧪 [dry] would unlabel #' + s.prNumber + ' -' + s.label); return {}; }
+            tr.removeLabel(s.prNumber, s.label);
+            return {};
+        case 'create_ref': {
+            if (dry) { console.log('  🧪 [dry] would create branch ' + s.branch + ' at ' + s.atBranch); return {}; }
+            var main = guestExec(repoInfo, guestTransplantModule.buildMainHeadCommand(
+                repoInfo.owner, repoInfo.repo, s.atBranch)).out;
+            var shaOk = /^[0-9a-f]{40}$/.test(main);
+            if (!shaOk) throw new Error('base head probe failed for ' + s.atBranch + ' — no branch cut');
+            guestExec(repoInfo, guestTransplantModule.buildCreateRefCommand(
+                repoInfo.owner, repoInfo.repo, s.branch, main));
+            console.log('  🌿 branch ' + s.branch + ' cut at ' + s.atBranch + ' (' + main.substring(0, 8) + ')');
+            return {};
+        }
+        case 'merge': {
+            if (dry) { console.log('  🧪 [dry] would API-merge ' + s.headSha + ' → ' + s.branch); return { mergedSha: s.headSha }; }
+            var res;
+            try {
+                res = guestExec(repoInfo, guestTransplantModule.buildApiMergeCommand(
+                    repoInfo.owner, repoInfo.repo, s.branch, s.headSha));
+            } catch (eMerge) {
+                // 409 Conflict (and GitHub's "Merge conflict" 409 body) —
+                // mark the conflict HERE, on the only step that can
+                // legitimately 409, so the caller's park decision can
+                // never fire on an unrelated step's error message (a
+                // rate-limit page or proxy error merely CONTAINING the
+                // substring must surface as the failure it is).
+                if (guestTransplantModule.isMergeConflictError(eMerge)) {
+                    eMerge.isMergeConflict = true;
+                }
+                throw eMerge;
+            }
+            var mergedSha = '';
+            try {
+                var mj = JSON.parse(res.out);
+                mergedSha = (mj && mj.sha) || '';
+            } catch (eParse) { mergedSha = ''; }
+            console.log('  🧬 merged ' + String(s.headSha).substring(0, 8) + ' into ' + s.branch +
+                (mergedSha ? ' at ' + String(mergedSha).substring(0, 8) : ''));
+            return { mergedSha: mergedSha || s.headSha };
+        }
+        case 'open_pr': {
+            if (dry) { console.log('  🧪 [dry] would open PR "' + s.title + '" (' + s.branch + ' → ' + s.baseBranch + ')'); return { newPrNumber: null }; }
+            // The whole payload travels via a temp file — zero untrusted
+            // bytes in the shell string. Repo-RELATIVE name, same shape as
+            // the cited scm.js updatePrBody precedent (pr_body_update_tmp_*),
+            // not a POSIX-only absolute /tmp path.
+            var payloadPath = 'gt_pr_payload_tmp_' + Number(Date.now()) + '-' +
+                String(s.branch).replace(/[^0-9a-zA-Z-]/g, '') + '.json';
+            try {
+                file_write({ path: payloadPath, content: guestTransplantModule.buildGuestPrPayload({
+                    owner: repoInfo.owner, repo: repoInfo.repo, branch: s.branch,
+                    baseBranch: s.baseBranch, title: s.title, body: s.body
+                }) });
+                var res2 = guestExec(repoInfo, guestTransplantModule.buildCreateGuestPrCommand(
+                    repoInfo.owner, repoInfo.repo, payloadPath));
+                var prNum = null;
+                try {
+                    var pj = JSON.parse(res2.out);
+                    prNum = (pj && (pj.number || (pj.data && pj.data.number))) || null;
+                } catch (ePj) { prNum = null; }
+                console.log('  📬 machine PR opened: #' + (prNum || '?') + ' "' + s.title + '"');
+                return { newPrNumber: prNum };
+            } finally {
+                try { file_delete({ path: payloadPath }); } catch (eDel) { /* best-effort cleanup */ }
+            }
+        }
+        case 'carry_decision': {
+            // AC6: byte-identical diff → carry the configured verdict
+            // labels onto the new PR; anything else stays label-free.
+            var sourceDiff = guestPrDiffText(repoInfo, ctx.sourcePrNumber);
+            var newDiff = ctx.newPrNumber ? guestPrDiffText(repoInfo, ctx.newPrNumber) : null;
+            var decision = guestTransplantModule.carryDecision(sourceDiff, newDiff, cfg);
+            if (decision.carry && !dry) {
+                for (var li = 0; li < decision.labels.length; li++) {
+                    tr.addLabel(ctx.newPrNumber, decision.labels[li]);
+                }
+            }
+            console.log('  ⚖️ verdict carry: ' + decision.reason +
+                (decision.carry ? ' → [' + decision.labels.join(', ') + ']' : ' → fresh pipeline'));
+            return { carriedLabels: decision.carry ? decision.labels : [] };
+        }
+        case 'transplant_comment': {
+            if (dry) { console.log('  🧪 [dry] would post the transplant comment on #' + s.prNumber); return {}; }
+            tr.postComment(s.prNumber, guestTransplantModule.buildTransplantComment({
+                sourcePrNumber: s.prNumber, sourceSha: ctx.usedSha,
+                mergedSha: ctx.mergedSha || ctx.usedSha,
+                transplantPrNumber: ctx.newPrNumber || 0,
+                carriedLabels: ctx.carriedLabels || []
+            }));
+            return {};
+        }
+        case 'close_pr':
+            if (dry) { console.log('  🧪 [dry] would close source PR #' + s.prNumber); return {}; }
+            guestExec(repoInfo, guestTransplantModule.buildClosePrCommand(
+                repoInfo.owner, repoInfo.repo, s.prNumber));
+            console.log('  🔒 source PR #' + s.prNumber + ' closed (transplanted)');
+            return {};
+        case 'transplanted_marker':
+            // The TERMINAL snapshot (threads 12/16) — rendered here, not in
+            // the plan: the created PR number and merge sha exist only at
+            // runtime. A reopened source reads this marker and no-ops.
+            if (dry) { console.log('  🧪 [dry] would post the transplanted marker on #' + s.prNumber); return {}; }
+            tr.postComment(s.prNumber, guestTransplantModule.transplantMarkerComment({
+                state: 'transplanted',
+                source: s.prNumber,
+                head: ctx.usedSha || s.head || null,
+                branch: s.branch,
+                transplant: ctx.newPrNumber || null,
+                merged: ctx.mergedSha || ctx.usedSha || null,
+                actor: ctx.actorLogin || null
+            }));
+            console.log('  🧬 transplanted marker posted on #' + s.prNumber);
+            return {};
+        case 'delete_ref':
+            if (dry) { console.log('  🧪 [dry] would delete branch ' + s.branch); return {}; }
+            guestExec(repoInfo, guestTransplantModule.buildDeleteRefCommand(
+                repoInfo.owner, repoInfo.repo, s.branch));
+            console.log('  🪦 branch ' + s.branch + ' deleted (GC)');
+            return {};
+        default:
+            console.warn('  ⚠️  unknown transplant step: ' + s.op);
+            return {};
+    }
+}
+
+// Executes a step list in order, threading the runtime context. A merges
+// conflict (409) surfaces as a thrown transport error naming the merge —
+// the caller swaps in the pure conflict park steps.
+function guestRunSteps(repoInfo, cfg, steps, startCtx, dry) {
+    var ctx = startCtx;
+    var out = {};
+    for (var i = 0; i < steps.length; i++) {
+        var s = steps[i];
+        out = guestApplyStep(repoInfo, cfg, s, ctx, dry);
+        if (out && out.newPrNumber !== undefined) ctx.newPrNumber = out.newPrNumber;
+        if (out && out.mergedSha !== undefined) ctx.mergedSha = out.mergedSha;
+        if (out && out.carriedLabels !== undefined) ctx.carriedLabels = out.carriedLabels;
+    }
+    return ctx;
+}
+
+// The localAction body: probe → pure sequence → execute. Refusals,
+// skips and no-ops land as audit lines only.
+function transplantGuestPrAction(repoInfo, ticket, cfg, machineLogins) {
+    var dry = DRY === true;
+    var prNumber = ticket.prNumber;
+    var branch = guestTransplantModule.transplantBranchName(cfg.branchPrefix, prNumber);
+    var marker = guestMarker(repoInfo, prNumber, machineLogins);
+    var armEvent = guestArmEvent(repoInfo, prNumber, cfg.label);
+    var headSha = resolveHeadSha(repoInfo, ticket);
+    var seq = guestTransplantModule.transplantSequence({
+        cfg: cfg,
+        base: { owner: repoInfo.owner, repo: repoInfo.repo, baseBranch: cfg.baseBranch },
+        source: {
+            prNumber: prNumber,
+            title: ticket.title || '',
+            author: ticket.author || '',
+            labels: ticket.labels || [],
+            headRepo: ticket.headRepo || (ticket.pr && ticket.pr.headRepo) || null,
+            draft: !!ticket.draft,
+            state: (ticket.pr && ticket.pr.state) || 'OPEN'
+        },
+        headSha: headSha,
+        armEvent: armEvent,
+        machineLogins: machineLogins,
+        // The marker writer identity (threads 13/17): the first configured
+        // machineAuthor login — stamped into every marker this machine
+        // posts; trust itself comes from the comment AUTHOR (guestMarker).
+        actorLogin: (Array.isArray(machineLogins) && machineLogins.length)
+            ? machineLogins[0] : null,
+        marker: marker,
+        marker: marker,
+        branchExists: guestBranchExists(repoInfo, branch),
+        openTransplantPr: guestOpenPrOnBranch(repoInfo, branch),
+        // The E5 completion re-entry (GC sweep): the arm actor was vetted
+        // when the `armed` marker was written — the actor/cross-repo
+        // refusals must not re-run against the synthetic headless ticket.
+        completionRentry: ticket.completionRentry === true
+    });
+    console.log('  🧬 ' + seq.audit);
+    if (seq.decision !== 'transplant' && seq.decision !== 'complete-orphan') return;
+
+    // A resume (thread: a tick that died between open_pr and close_pr)
+    // carries the EXISTING machine PR number — the carry probe and the
+    // close comment address it instead of opening a second PR.
+    var ctx = { sourcePrNumber: prNumber, usedSha: null,
+                newPrNumber: seq.resumePrNumber || null,
+                actorLogin: (Array.isArray(machineLogins) && machineLogins.length)
+                    ? machineLogins[0] : null };
+    if (dry) {
+        guestRunSteps(repoInfo, cfg, seq.steps, ctx, true);
+        return;
+    }
+    try {
+        // Pin the sha the transplant actually uses for the close comment:
+        // the merge step's OWN sha (sequenceHeadSha) — the park-reset path
+        // re-arms at the NEW head, and the marker's stale recorded sha
+        // must not leak into the comment (threads 11/15).
+        var shaInfo = guestTransplantModule.resolveTransplantSha(marker, headSha);
+        ctx.usedSha = guestTransplantModule.sequenceHeadSha(seq) ||
+            (shaInfo ? shaInfo.sha : null);
+        guestRunSteps(repoInfo, cfg, seq.steps, ctx, false);
+    } catch (eRun) {
+        if (eRun && eRun.isMergeConflict === true) {
+            console.log('  ⚠️  transplant merge conflict — parking the source (AC4)');
+            guestRunSteps(repoInfo, cfg,
+                guestTransplantModule.parkSteps('conflict', {
+                    cfg: cfg, source: { prNumber: prNumber }, headSha: ctx.usedSha,
+                    actorLogin: ctx.actorLogin
+                }), ctx, false);
+            return;
+        }
+        throw eRun;
+    }
+}
+
+// ONE sweep-entry probe: the find-PRs-by-head list decides the branch's
+// PR state (an OPEN entry anywhere on the head keeps the branch alive —
+// never list[0]'s arbitrary pick), and a branch with no PR at all reads
+// its source marker for the E5 orphan completion. Fail-closed: a failed
+// probe reads as 'no PR'.
+function guestSweepEntry(repoInfo, cfg, branch, machineLogins) {
+    var prState = null;
+    var marker = null;
+    try {
+        var raw = cli_execute_command({
+            command: guestTransplantModule.buildFindPrByHeadCommand(
+                repoInfo.owner, repoInfo.repo, branch)
+        });
+        var list = JSON.parse(String((raw && (raw.output || raw.stdout)) || raw || '[]'));
+        prState = guestTransplantModule.prStateFromFindList(list);
+    } catch (ePr) { prState = null; }
+    if (!prState) {
+        var n = guestTransplantModule.parseGuestBranch(branch, cfg.branchPrefix);
+        marker = n ? guestMarker(repoInfo, n, machineLogins) : null;
+    }
+    return { branch: branch, prState: prState, marker: marker };
+}
+
+// The sweep's human-hold probe (thread 19): the source's current labels,
+// or null when the probe fails — the completion then holds (fail closed
+// toward the fa#939 freeze; the branch survives to a later tick).
+function guestPrLabels(repoInfo, prNumber) {
+    try {
+        var out = guestExec(repoInfo, guestTransplantModule.buildPrLabelsCommand(
+            repoInfo.owner, repoInfo.repo, prNumber)).out;
+        return String(out || '').split(',').map(function (s) { return s.trim(); })
+            .filter(function (s) { return s.length > 0; });
+    } catch (eL) { return null; }
+}
+
+// Once-per-tick GC sweep (AC7 + E5): every ai/guest-* branch whose
+// transplant PR reached ANY closed state is deleted; an orphan branch
+// with no transplant PR completes from its arm marker or is GC'd.
+// The actionable window is maxGcBranches EXECUTED steps per tick; the
+// probe scan walks the FULL (paginated) name list in order until the
+// window fills, bounded by the gh-1027 over-scan budget (cap + 15) —
+// the window applies AFTER actionability, never as a lexicographic
+// pre-slice that an OPEN-transplant prefix can starve. Runs on the
+// configured rule only — inert deployments never sweep.
+function sweepClosedGuestBranches(repoInfo, cfg, machineLogins) {
+    var res = cli_execute_command({
+        command: guestTransplantModule.buildListBranchesCommand(repoInfo.owner, repoInfo.repo)
+    });
+    var out = String((res && (res.output || res.stdout)) || res || '');
+    var names = out.split('\n').map(function (n) { return n.trim(); })
+        .filter(function (n) { return n.indexOf(cfg.branchPrefix) === 0; });
+    if (!names.length) return;
+    var cap = guestTransplantModule.gcActionableCap(cfg.maxGcBranches);
+    var budget = guestTransplantModule.gcScanBudget(cfg.maxGcBranches);
+    var sweep = [];
+    var probed = 0;
+    for (var i = 0; i < names.length; i++) {
+        if (sweep.length >= cap || probed >= budget) break;
+        var entry = guestSweepEntry(repoInfo, cfg, names[i], machineLogins);
+        probed++;
+        if (guestTransplantModule.gcSteps([entry]).length) sweep.push(entry);
+    }
+    var steps = guestTransplantModule.gcSteps(sweep);
+    steps.forEach(function (s) {
+        if (s.op === 'delete_ref') {
+            if (DRY) { console.log('  🧪 [dry] GC would delete ' + s.branch); return; }
+            try {
+                guestExec(repoInfo, guestTransplantModule.buildDeleteRefCommand(
+                    repoInfo.owner, repoInfo.repo, s.branch));
+                console.log('  🪦 guest branch GC: ' + s.branch);
+            } catch (eDel) {
+                console.warn('  ⚠️  GC delete failed for ' + s.branch + ': ' + (eDel.message || eDel));
+            }
+            return;
+        }
+        if (s.op === 'complete_orphan') {
+            // The fa#939 freeze (thread 19): the re-entry's synthetic
+            // ticket bypasses the AC5 refusal, so the hold is probed HERE
+            // — a source carrying the park label without OUR park marker
+            // is a human hold; the branch is left for a later tick. An
+            // unreadable label probe holds too.
+            var holdLabels = guestPrLabels(repoInfo, s.sourcePrNumber);
+            var entryMarker = null;
+            for (var k = 0; k < sweep.length; k++) {
+                if (sweep[k].branch === s.branch) entryMarker = sweep[k].marker;
+            }
+            if (guestTransplantModule.completionHold(holdLabels, cfg.parkedLabel, entryMarker)) {
+                console.log('  ⏸️ orphan completion held on ' + s.branch +
+                    ' — the source carries a human hold (fa#939)');
+                return;
+            }
+            console.log('  🧩 completing orphan transplant on ' + s.branch + ' (E5)');
+            transplantGuestPrAction(repoInfo, {
+                prNumber: s.sourcePrNumber,
+                title: '', author: '',
+                labels: [cfg.label],
+                headRepo: null, draft: false, state: 'OPEN',
+                completionRentry: true   // the armed marker already vetted the arm actor
+            }, cfg, machineLogins || []);
+            return;
+        }
+    });
 }
 
 function isMachineParkPush(lastCommitter, actorLogin, machineAuthorLogin) {

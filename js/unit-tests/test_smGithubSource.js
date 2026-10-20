@@ -58,6 +58,9 @@ suite('sm github source', function () {
             }
         }), tools || {});
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return providerStub; },
@@ -65,7 +68,10 @@ suite('sm github source', function () {
                 ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': smAsyncMod,
-            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {})
         }), tools);
     }
 
@@ -1623,6 +1629,9 @@ suite('sm github source — runAsync batching', function () {
             }
         }), tools || {});
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return seqStub; },
@@ -1630,7 +1639,10 @@ suite('sm github source — runAsync batching', function () {
                 ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': smAsyncMod,
-            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {})
         }), tools);
     }
 
@@ -1698,6 +1710,9 @@ suite('sm github source — runAsync batching', function () {
             }
         }), merged);
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return batchStub; },
@@ -1705,7 +1720,10 @@ suite('sm github source — runAsync batching', function () {
                 ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': smAsyncMod,
-            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {})
         }), merged);
     }
 
@@ -1857,12 +1875,18 @@ function maskedGreenHarness() {
             './common/smProvider.js': { createSmProvider: function () { return providerStub; } }
         }), mergedTools);
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': { createSmProvider: function () { return providerStub; },
                 ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
                 ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify },
             '../../common/smAsync.js': smAsyncMod,
-            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {})
         }), mergedTools);
     }
 
@@ -2457,6 +2481,9 @@ suite('sm github source: trigger fail-open overfetch (gh-922)', function () {
             }
         }), tools || {});
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return localProvider; },
@@ -2464,7 +2491,10 @@ suite('sm github source: trigger fail-open overfetch (gh-922)', function () {
                 ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': smAsyncMod,
-            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {})
         }), tools);
     };
 
@@ -2768,6 +2798,9 @@ suite('sm github source: dev-on-assignment re-derive (gh-944)', function () {
             }
         }), tools || {});
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return devStub; },
@@ -2775,7 +2808,10 @@ suite('sm github source: dev-on-assignment re-derive (gh-944)', function () {
                 ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': smAsyncMod,
-            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {})
         }), tools);
     }
 
@@ -2918,6 +2954,9 @@ suite('sm github source — gh-1009 CRAP characterization (paths touched by the 
         providerStub._status = statuses || {};
         providerStub.listOpenPrs = null;
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return providerStub; },
@@ -2925,6 +2964,9 @@ suite('sm github source — gh-1009 CRAP characterization (paths touched by the 
                 ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
             '../../common/smAsync.js': loadModule('js/common/smAsync.js', makeRequire({
                 './common/smProvider.js': { createSmProvider: function () { return providerStub; } }
             }), tools || {})
@@ -3037,12 +3079,18 @@ suite('sm github source — gh-1009 CRAP characterization (paths touched by the 
 suite('sm github source: gh-1000 phantom-heal helpers', function () {
     function loadBare() {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': { createSmProvider: function () { return null; },
                 ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
                 ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify },
             '../../common/smAsync.js': {},
-            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {})
         }), {});
     }
     function pr(n, labels) { return { number: n, labels: labels }; }
@@ -3140,6 +3188,9 @@ suite('sm github source: gh-1000 phantom-heal helpers', function () {
 suite('sm github source: gh-1000 phantom-heal probe edges', function () {
     function loadBare2(dropSpy) {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return null; },
@@ -3148,7 +3199,10 @@ suite('sm github source: gh-1000 phantom-heal probe edges', function () {
                 ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': {},
-            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {})
         }), {});
     }
     function pr2(n, labels) { return { number: n, labels: labels }; }
@@ -3183,6 +3237,9 @@ suite('sm github source: gh-1000 IT-1 phantom self-heal through queryPrs (AC2)',
     // cannot rot again without one of these failing.
     function loadSrc(ioCacheDrop) {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return null; },
@@ -3191,7 +3248,10 @@ suite('sm github source: gh-1000 IT-1 phantom self-heal through queryPrs (AC2)',
                 ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
             },
             '../../common/smAsync.js': {},
-            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {})
         }), {});
     }
 
@@ -3318,6 +3378,9 @@ suite('sm github source: gh-807 latestVerdict receiver binding (fa tick crash 20
             './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), tools)
         }), tools);
         var srcMod = loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
             '../../common/machineAuthor.js': machineAuthor,
             '../../common/smAsync.js': {},
             '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), tools),
@@ -3335,6 +3398,9 @@ suite('githubSource — gh-1070 maintainer-edits probe on the PR item', function
 
     function load(tools) {
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () {
@@ -3348,7 +3414,10 @@ suite('githubSource — gh-1070 maintainer-edits probe on the PR item', function
                     return { branchExists: function () { return true; } };
                 } }
             }), tools || {}),
-            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {})
         }), tools || {});
     }
 
@@ -3391,5 +3460,141 @@ suite('githubSource — gh-1070 maintainer-edits probe on the PR item', function
         assert.equal(byNum[303].maintainerCanModify, false, 'GraphQL maintainerCanModify dialect rides the item');
         assert.equal(byNum[302].maintainerCanModify, null,
             'a payload without the field resolves to null — the lane re-probes fresh (fail closed)');
+    });
+});
+
+// ── gh-1140 guest transplant: the crossRepo + allowBlockedItems guards ──
+suite('sm github source — guest-transplant guards (gh-1140)', function () {
+
+    function gtLoad(tools) {
+        var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
+            './common/smProvider.js': { createSmProvider: function () { return null; } }
+        }), tools || {});
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': {
+                createSmProvider: function () { return null; },
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
+            },
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {})
+        }), tools || {});
+    }
+
+    function forkPrsFixture() {
+        return [
+            { number: 401, state: 'open', draft: false, body: '',
+              head: { sha: 'a1', ref: 'patch-1', repo: { full_name: 'extc/fork' } },
+              labels: [{ name: 'po_accept' }], user: { login: 'extc' } },
+            { number: 402, state: 'open', draft: false, body: '',
+              head: { sha: 'a2', ref: 'same-repo-branch', repo: { full_name: 'o/r' } },
+              labels: [{ name: 'po_accept' }], user: { login: 'localdev' } },
+            { number: 403, state: 'open', draft: false, body: '',
+              head: { sha: 'a3', ref: 'gone', repo: null },
+              labels: [{ name: 'po_accept' }], user: { login: 'extc' } }
+        ];
+    }
+
+    function gtQuery(prs, query) {
+        return gtLoad({
+            github_list_prs: function () { return prs; }
+        }).query({ query: query, limit: 5 },
+            { repoInfo: { owner: 'o', repo: 'r' },
+              provider: { branchExists: function () { return true; } } });
+    }
+
+    test('crossRepo: true keeps ONLY fork-headed PRs — same-repo and deleted-fork drop (fail closed)', function () {
+        var items = gtQuery(forkPrsFixture(),
+            { type: 'pr', labels: ['po_accept'], draft: false, crossRepo: true });
+        assert.deepEqual(items.map(function (i) { return i.prNumber; }), [401],
+            'a fork head matches; the same-repo head (402) and the deleted fork (403, head.repo null) never do');
+    });
+
+    test('crossRepo absent — the guard is inert (every rule keeps its old shape)', function () {
+        var items = gtQuery(forkPrsFixture(),
+            { type: 'pr', labels: ['po_accept'], draft: false });
+        assert.deepEqual(items.map(function (i) { return i.prNumber; }), [401, 402, 403],
+            'no crossRepo guard — all three PRs pass (REG-samerepo: decision shapes unchanged)');
+    });
+
+    test('allowBlockedItems: true opts the rule back into parked sources; the default freeze holds', function () {
+        var prs = forkPrsFixture().concat([
+            { number: 404, state: 'open', draft: false, body: '',
+              head: { sha: 'a4', ref: 'parked-fork', repo: { full_name: 'extc/fork' } },
+              labels: [{ name: 'po_accept' }, { name: 'blocked' }], user: { login: 'extc' } }
+        ]);
+        var withFreeze = gtQuery(prs,
+            { type: 'pr', labels: ['po_accept'], draft: false, crossRepo: true });
+        assert.deepEqual(withFreeze.map(function (i) { return i.prNumber; }), [401],
+            'fa#939 freeze: the parked source is invisible without the opt-in');
+
+        var optedIn = gtQuery(prs,
+            { type: 'pr', labels: ['po_accept'], draft: false, crossRepo: true,
+              allowBlockedItems: true });
+        assert.deepEqual(optedIn.map(function (i) { return i.prNumber; }), [401, 404],
+            'the AC4 park-reset lane sees its own parked source (the decision core still honors human holds)');
+    });
+});
+
+suite('sm github source — matchesGuards guard table (direct, provider-free)', function () {
+
+    function mgLoad() {
+        var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
+            './common/smProvider.js': { createSmProvider: function () { return null; } }
+        }), {});
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': { createSmProvider: function () { return null; } },
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {})
+        }), {});
+    }
+
+    function dirtyClosedItem() {
+        return { prNumber: 501, labels: [], headRepo: 'o/r',
+                 pr: { state: 'closed', mergeState: 'DIRTY', mergeable: false } };
+    }
+
+    test('prState / prMergeState / mergeState-list mismatches fail the chain directly', function () {
+        var gt = mgLoad();
+        var item = dirtyClosedItem();
+        var repoInfo = { owner: 'o', repo: 'r' };
+        assert.equal(gt.matchesGuards(item,
+            { query: { type: 'pr', prState: 'open' } }, null, null, 'o', repoInfo), false,
+            'prState mismatch (closed vs open) fails');
+        assert.equal(gt.matchesGuards(item,
+            { query: { type: 'pr', prMergeState: 'CLEAN' } }, null, null, 'o', repoInfo), false,
+            'prMergeState mismatch (DIRTY vs CLEAN) fails');
+        assert.equal(gt.matchesGuards(item,
+            { query: { type: 'pr', mergeState: ['CLEAN', 'BLOCKED'] } }, null, null, 'o', repoInfo), false,
+            'mergeState not in the allowed list fails');
+        assert.equal(gt.matchesGuards(item,
+            { query: { type: 'pr', notMergeState: ['DIRTY'] } }, null, null, 'o', repoInfo), false,
+            'mergeState on the not-list fails');
+    });
+
+    test('a matching PR state survives the chain; crossRepo false-paths a same-repo head in-chain', function () {
+        var gt = mgLoad();
+        var repoInfo = { owner: 'o', repo: 'r' };
+        var open = { prNumber: 502, labels: [], headRepo: 'o/r',
+                     pr: { state: 'open', mergeState: 'CLEAN', mergeable: true } };
+        assert.equal(gt.matchesGuards(open,
+            { query: { type: 'pr', prState: 'open', prMergeState: 'CLEAN' } },
+            null, null, 'o', repoInfo), true, 'matching state + merge state pass');
+        assert.equal(gt.matchesGuards(open,
+            { query: { type: 'pr', crossRepo: true } }, null, null, 'o', repoInfo), false,
+            'crossRepo: same-repo head fails inside matchesGuards');
+        var fork = { prNumber: 503, labels: [], headRepo: 'extc/fork',
+                     pr: { state: 'open', mergeState: 'CLEAN', mergeable: true } };
+        assert.equal(gt.matchesGuards(fork,
+            { query: { type: 'pr', crossRepo: true } }, null, null, 'o', repoInfo), true,
+            'crossRepo: a fork head passes inside matchesGuards');
     });
 });

@@ -350,7 +350,10 @@ function makeSmAgent(opts) {
                 '../../common/machineAuthor.js': machineAuthorModule,
                 '../../common/smProvider.js': smProviderStub,
                 '../../common/smAsync.js': smAsyncForSource,
-                '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+                '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+                '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                    './machineAuthor.js': machineAuthorModule
+                }), {})
             }),
             smMocks
         );
@@ -375,6 +378,11 @@ function makeSmAgent(opts) {
             './common/scm.js': mockScmModule,
             './common/buildEncodedConfig.js': buildEncodedConfigModule,
             './common/machineAuthor.js': machineAuthorModule,
+            // gh-1140: the guest-transplant decision core (loaded once for
+            // every smAgent require map in this file).
+            './common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': machineAuthorModule
+            }), {}),
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
             './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({}), {}),
             './common/reworkConsumption.js': loadModule('js/common/reworkConsumption.js', makeRequire({}), {}),
