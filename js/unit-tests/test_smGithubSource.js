@@ -3539,3 +3539,62 @@ suite('sm github source — guest-transplant guards (gh-1140)', function () {
             'the AC4 park-reset lane sees its own parked source (the decision core still honors human holds)');
     });
 });
+
+suite('sm github source — matchesGuards guard table (direct, provider-free)', function () {
+
+    function mgLoad() {
+        var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
+            './common/smProvider.js': { createSmProvider: function () { return null; } }
+        }), {});
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': { createSmProvider: function () { return null; } },
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {}),
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {})
+        }), {});
+    }
+
+    function dirtyClosedItem() {
+        return { prNumber: 501, labels: [], headRepo: 'o/r',
+                 pr: { state: 'closed', mergeState: 'DIRTY', mergeable: false } };
+    }
+
+    test('prState / prMergeState / mergeState-list mismatches fail the chain directly', function () {
+        var gt = mgLoad();
+        var item = dirtyClosedItem();
+        var repoInfo = { owner: 'o', repo: 'r' };
+        assert.equal(gt.matchesGuards(item,
+            { query: { type: 'pr', prState: 'open' } }, null, null, 'o', repoInfo), false,
+            'prState mismatch (closed vs open) fails');
+        assert.equal(gt.matchesGuards(item,
+            { query: { type: 'pr', prMergeState: 'CLEAN' } }, null, null, 'o', repoInfo), false,
+            'prMergeState mismatch (DIRTY vs CLEAN) fails');
+        assert.equal(gt.matchesGuards(item,
+            { query: { type: 'pr', mergeState: ['CLEAN', 'BLOCKED'] } }, null, null, 'o', repoInfo), false,
+            'mergeState not in the allowed list fails');
+        assert.equal(gt.matchesGuards(item,
+            { query: { type: 'pr', notMergeState: ['DIRTY'] } }, null, null, 'o', repoInfo), false,
+            'mergeState on the not-list fails');
+    });
+
+    test('a matching PR state survives the chain; crossRepo false-paths a same-repo head in-chain', function () {
+        var gt = mgLoad();
+        var repoInfo = { owner: 'o', repo: 'r' };
+        var open = { prNumber: 502, labels: [], headRepo: 'o/r',
+                     pr: { state: 'open', mergeState: 'CLEAN', mergeable: true } };
+        assert.equal(gt.matchesGuards(open,
+            { query: { type: 'pr', prState: 'open', prMergeState: 'CLEAN' } },
+            null, null, 'o', repoInfo), true, 'matching state + merge state pass');
+        assert.equal(gt.matchesGuards(open,
+            { query: { type: 'pr', crossRepo: true } }, null, null, 'o', repoInfo), false,
+            'crossRepo: same-repo head fails inside matchesGuards');
+        var fork = { prNumber: 503, labels: [], headRepo: 'extc/fork',
+                     pr: { state: 'open', mergeState: 'CLEAN', mergeable: true } };
+        assert.equal(gt.matchesGuards(fork,
+            { query: { type: 'pr', crossRepo: true } }, null, null, 'o', repoInfo), true,
+            'crossRepo: a fork head passes inside matchesGuards');
+    });
+});

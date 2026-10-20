@@ -361,6 +361,15 @@ function _notMergeStateListGuardFail(q, item) {
     return false;
 }
 
+// Composite: every merge-state guard (string equality, allowed list,
+// not-list) behind ONE chain slot — matchesGuards stays a flat guard
+// table instead of growing a branch per new merge-state knob.
+function _mergeStateGuardsFail(q, item) {
+    if (_prMergeStateGuardFail(q, item)) return true;
+    if (_mergeStateListGuardFail(q, item)) return true;
+    return _notMergeStateListGuardFail(q, item);
+}
+
 function _latchWantedLabels(q, item) {
     var latchState = item.pr.mergeState;
     var latchWant = latchState ? q.mergeStateLatch[latchState] : null;
@@ -500,6 +509,13 @@ function _prStateGuardFail(q, item) {
     return false;
 }
 
+// Composite: mergeable + PR-state (the two plain PR-state knobs) behind
+// ONE chain slot — same reason as _mergeStateGuardsFail above.
+function _prStateGuardsFail(q, item) {
+    if (_mergeableGuardFail(q, item)) return true;
+    return _prStateGuardFail(q, item);
+}
+
 function _prSideBlockedLabel(prLs) {
     // 'blocked' on the PR side of an issue-carrier item freezes it too.
     return prLs.indexOf('blocked') !== -1;
@@ -525,9 +541,7 @@ function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
     var labels = item.labels || [];
     if (_issueCarrierGuardsFail(q, labels, item)) return false;
     if (_prChecksGuardsFail(q, item)) return false;
-    if (_prMergeStateGuardFail(q, item)) return false;
-    if (_mergeStateListGuardFail(q, item)) return false;
-    if (_notMergeStateListGuardFail(q, item)) return false;
+    if (_mergeStateGuardsFail(q, item)) return false;
     if (q.mergeStateLatch && _mergeStateLatchGuardFail(q, item, repoInfo)) return false;
     if (_reviewStaleGuardFail(q, item, provider)) return false;
     if (_staleVerdictGuardFail(q, item, provider)) return false;
@@ -535,8 +549,7 @@ function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
     if (_threadsGuardsFail(q, item, provider)) return false;
     if (_machineAuthorGuardFail(q, item, machineAuthor, owner)) return false;
     if (_crossRepoGuardFail(q, item, repoInfo)) return false;
-    if (_mergeableGuardFail(q, item)) return false;
-    if (_prStateGuardFail(q, item)) return false;
+    if (_prStateGuardsFail(q, item)) return false;
     if (_prLabelGuardsFail(q, item)) return false;
     return true;
 }
@@ -1161,6 +1174,22 @@ function _sortAndSlicePrCandidates(matched, limit, priorityLabels, repoInfo) {
     return matched.slice(0, limit + TRIGGER_FALLTHROUGH_RESERVE);
 }
 
+// fa#939 human hold × gh-1140 park-reset opt-in — the ONE blocked-label
+// predicate every queryPrs filter reads (complexity lives here, off the
+// queryPrs ledger; behavior: 'blocked' items are invisible to every rule
+// EXCEPT a rule that opted in with query.allowBlockedItems).
+function _blockedHoldVisible(q, it) {
+    if (q.allowBlockedItems === true) return true;
+    return it.labels.indexOf('blocked') === -1;
+}
+
+// The same predicate in guard form for the matched filter (defensive
+// twin of the pre-mutex filter — see matchesGuards).
+function _blockedQueryHoldFail(q2, labels) {
+    if (q2.allowBlockedItems) return false;
+    return labels.indexOf('blocked') !== -1;
+}
+
 function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {
     var q = rule.query || {};
     var items = _buildPrItems(_openPrList(provider, repoInfo));
@@ -1177,10 +1206,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
     // stays intact for every other rule, and the transplant decision core
     // still refuses to act on a 'blocked' item that does not carry the
     // lane's own park marker (human holds are never touched).
-    var allowBlocked = q.allowBlockedItems === true;
-    items = items.filter(function (it) {
-        return allowBlocked || it.labels.indexOf('blocked') === -1;
-    });
+    items = items.filter(function (it) { return _blockedHoldVisible(q, it); });
 
     // Mutex: gh-1009 split — _applyMutexFilter owns the defer decision;
     // gh-1000's phantom-holder reconciliation (phantomHealIfFull, inside
@@ -1240,8 +1266,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
             if (!among) return true;
             return among.some(function (l) { return it.labels.indexOf(l) !== -1; });
         };
-        var mutexMax = (typeof q.mutexMax === 'number' && isFinite(q.mutexMax))
-            ? Math.max(1, Math.floor(q.mutexMax)) : 1;
+        var mutexMax = _mutexMaxOf(q);
         var holders = items.filter(holdsMutex);
         if (q.mutexExcludeSelf) {
             items = items.filter(function (candidate) {
@@ -1290,7 +1315,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
         // #939: human hold — filtered pre-mutex too; see matchesGuards.
         // gh-1140: q.allowBlockedItems opts the guest-transplant lane back
         // in (its own AC4 park-reset needs the parked sources).
-        if (!q2.allowBlockedItems && labels.indexOf('blocked') !== -1) return false; // #939: human hold — filtered pre-mutex too; see matchesGuards
+        if (_blockedQueryHoldFail(q2, labels)) return false;
         if (q2.labels && !q2.labels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
         if (q2.notLabels && q2.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
         if (q2.draft === false && item.draft) return false;

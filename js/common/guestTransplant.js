@@ -169,11 +169,11 @@ function sanitizeCoAuthor(name, login) {
 }
 
 function guestPrTitle(cfg, sourceNumber, title) {
+    var cap = (cfg && cfg.titleMaxLen) || DEFAULTS.titleMaxLen;
     var prefix = String((cfg && cfg.titlePrefix) || DEFAULTS.titlePrefix)
         .replace(/\{N\}/g, String(sourceNumber));
-    var body = sanitizeGuestTitle(title, (cfg && cfg.titleMaxLen) || DEFAULTS.titleMaxLen);
+    var body = sanitizeGuestTitle(title, cap);
     var rest = body || 'guest change';
-    var cap = (cfg && cfg.titleMaxLen) || DEFAULTS.titleMaxLen;
     var full = sanitizeGuestTitle(prefix + ' ' + rest, cap);
     return full || prefix.trim();
 }
@@ -238,21 +238,31 @@ function transplantMarkerComment(fields) {
 
 // Newest marker across a comment feed (chronological — last wins).
 // Accepts [{body}] items or raw strings. null when none (fail closed).
+// ONE comment body → the marker object, or null when the body carries no
+// complete marker (no HTML payload, or no state — a half-written marker
+// never reads as a transplant snapshot; fail closed).
+function _markerObject(body) {
+    var m = /<!--\s*guest-transplant\s+([\s\S]*?)-->/.exec(body);
+    if (!m) return null;
+    var obj = {};
+    var pairRe = /([a-z]+)="([^"]*)"/g;
+    var pm;
+    while ((pm = pairRe.exec(m[1])) !== null) obj[pm[1]] = pm[2];
+    if (!obj.state) return null;
+    if (obj.source) obj.source = parseInt(obj.source, 10);
+    if (obj.transplant) obj.transplant = parseInt(obj.transplant, 10);
+    return obj;
+}
+
+// Newest marker across a comment feed (chronological — last wins).
+// Accepts [{body}] items or raw strings. null when none (fail closed).
 function parseTransplantMarker(comments) {
     if (!comments || !comments.length) return null;
     var found = null;
     for (var i = 0; i < comments.length; i++) {
         var body = String((comments[i] && comments[i].body) || comments[i] || '');
-        var m = /<!--\s*guest-transplant\s+([\s\S]*?)-->/.exec(body);
-        if (!m) continue;
-        var obj = {};
-        var pairRe = /([a-z]+)="([^"]*)"/g;
-        var pm;
-        while ((pm = pairRe.exec(m[1])) !== null) obj[pm[1]] = pm[2];
-        if (!obj.state) continue;
-        if (obj.source) obj.source = parseInt(obj.source, 10);
-        if (obj.transplant) obj.transplant = parseInt(obj.transplant, 10);
-        found = obj;
+        var hit = _markerObject(body);
+        if (hit) found = hit;
     }
     return found;
 }
@@ -397,23 +407,40 @@ function buildListLabelEventsCommand(owner, repo, prNumber) {
 // Newest `labeled` event for ONE label from an events feed (JSON array;
 // chronological — last match wins). null when none / unusable (the
 // caller refuses — fail closed).
-function parseLabelEvents(raw, labelName) {
+// The events feed as an array (JSON text or an already-parsed array).
+// null when neither — the caller refuses (fail closed).
+function _parsedEventList(raw) {
     var list = null;
     try {
         var obj = (typeof raw === 'string') ? JSON.parse(raw) : raw;
         list = Array.isArray(obj) ? obj : null;
     } catch (e) { list = null; }
+    return list;
+}
+
+// ONE feed event → {login, createdAt} when it labels the wanted label,
+// null otherwise (not a labeled event / different label). Both the
+// {name} object and the plain-string label spelling are accepted.
+function _labeledEventFor(ev, labelName) {
+    if (!ev || ev.event !== 'labeled') return null;
+    var name = (ev.label && typeof ev.label === 'object') ? ev.label.name : ev.label;
+    if (String(name) !== String(labelName)) return null;
+    return {
+        login: (ev.actor && ev.actor.login) || null,
+        createdAt: ev.created_at || null
+    };
+}
+
+// Newest `labeled` event for ONE label from an events feed (JSON array;
+// chronological — last match wins). null when none / unusable (the
+// caller refuses — fail closed).
+function parseLabelEvents(raw, labelName) {
+    var list = _parsedEventList(raw);
     if (!list) return null;
     var newest = null;
     for (var i = 0; i < list.length; i++) {
-        var ev = list[i];
-        if (!ev || ev.event !== 'labeled') continue;
-        var name = (ev.label && typeof ev.label === 'object') ? ev.label.name : ev.label;
-        if (String(name) !== String(labelName)) continue;
-        newest = {
-            login: (ev.actor && ev.actor.login) || null,
-            createdAt: ev.created_at || null
-        };
+        var hit = _labeledEventFor(list[i], labelName);
+        if (hit) newest = hit;
     }
     return newest;
 }
@@ -442,13 +469,18 @@ function toIdSet(list) {
 
 // AC3 structural check: every manifest job must EXIST in the graph, and
 // every secret-consuming job must transitively `needs` a gate job.
-function validateGateWiring(jobs, gate) {
-    var out = { ok: false, violations: [] };
-    if (!Array.isArray(jobs) || !jobs.length || !gate) return out;
+// The workflow graph keyed by job id (the wiring check's lookup shape).
+function _jobsByIdOf(jobs) {
     var jobsById = {};
     jobs.forEach(function (j) {
         if (j && j.id) jobsById[String(j.id)] = { id: String(j.id), needs: (j.needs || []).map(String) };
     });
+    return jobsById;
+}
+
+// The manifest violations: absent gate jobs, absent secret jobs, secret
+// jobs that never reach a gate job through the needs graph.
+function _wiringViolations(jobsById, gate) {
     var gateSet = toIdSet(gate.gateJobs);
     var violations = [];
     gate.gateJobs.forEach(function (g) {
@@ -463,6 +495,15 @@ function validateGateWiring(jobs, gate) {
             violations.push('secret job "' + s + '" does not transitively need a security gate job');
         }
     });
+    return violations;
+}
+
+// AC3 structural check: every manifest job must EXIST in the graph, and
+// every secret-consuming job must transitively `needs` a gate job.
+function validateGateWiring(jobs, gate) {
+    var out = { ok: false, violations: [] };
+    if (!Array.isArray(jobs) || !jobs.length || !gate) return out;
+    var violations = _wiringViolations(_jobsByIdOf(jobs), gate);
     out.violations = violations;
     out.ok = violations.length === 0;
     return out;
@@ -585,114 +626,106 @@ function transplantBodySteps(ctx, sha) {
     ];
 }
 
-// The one decision core. Input/output shapes are documented in the test
-// suite; every branch maps to exactly one AC/edge case.
-function transplantSequence(input) {
-    var cfg = input.cfg;
-    var source = input.source || {};
-    var labels = source.labels || [];
-    var base = input.base || { owner: '', repo: '', baseBranch: cfg.baseBranch };
-    var audit = 'guest-transplant: #' + String(source.prNumber) + ' ';
+// ── The decision core (UT-plan) — decomposed ─────────────────────────────
+// transplantSequence stays the ONE entry point; each AC/edge case below
+// maps to exactly one focused helper (the CRAP gate caps per-function
+// complexity — a 27-branch core violates it even at full coverage).
 
-    // AC5 — a source closed by hand before the tick is skipped.
+// AC5 — a source closed by hand before the tick, or the configured label
+// missing entirely: both skip (the rule query should have filtered them).
+function _transplantSkipDecision(source, labels, cfg, audit) {
     if (source.state && source.state !== 'OPEN') {
         return { decision: 'skip', reason: 'source-closed', steps: [],
                  audit: audit + 'skipped — source is ' + source.state };
     }
-    // The configured label must actually be present.
     if (labels.indexOf(cfg.label) === -1) {
         return { decision: 'skip', reason: 'not-armed', steps: [],
                  audit: audit + 'skipped — no ' + cfg.label + ' label' };
     }
-    // AC5 — only a HUMAN actor's label arms a transplant; missing proof
-    // refuses (fail closed — the label is the voucher).
+    return null;
+}
+
+// AC5 — only a HUMAN actor's label arms a transplant (missing proof
+// refuses, fail closed); E3 — cross-repo heads only; AC5 snapshot
+// semantics — one live transplant per source.
+function _transplantRefuseDecision(input, source, base, audit) {
     var actor = classifyArmActor(input.armEvent, input.machineLogins);
     if (actor !== 'human') {
         return { decision: 'refuse', reason: actor === 'machine' ? 'machine-actor' : 'actor-unverified',
                  steps: [], audit: audit + 'REFUSED — arm actor is ' + actor + ' (audit only, no action)' };
     }
-    // E3 — transplant is cross-repo only; a same-repo label is a no-op.
     if (!isCrossRepoHead(source.headRepo, base.owner, base.repo)) {
         return { decision: 'skip', reason: 'same-repo', steps: [],
                  audit: audit + 'skipped — same-repo head (transplant is cross-repo only)' };
     }
-    // AC5 — snapshot semantics: one live transplant per source.
     if (input.openTransplantPr ||
         (input.marker && input.marker.state === 'transplanted')) {
         return { decision: 'noop', reason: 'already-transplanted', steps: [],
                  audit: audit + 'no-op — transplant already exists' };
     }
+    return null;
+}
 
-    var parkedHere = labels.indexOf(cfg.parkedLabel) !== -1;
-    var marker = input.marker || null;
-
-    // AC4 — the park is a pure function of the head (#633 semantics): a
-    // parked source whose head CHANGED re-arms (label off, transplant
-    // proceeds below); an unchanged head stays parked; a human 'blocked'
-    // with NO park marker of ours is a human hold — never touched.
-    if (parkedHere) {
-        var isOurPark = marker && marker.state === 'parked';
-        if (!isOurPark) {
-            return { decision: 'skip', reason: 'human-blocked', steps: [],
-                     audit: audit + 'skipped — ' + cfg.parkedLabel + ' without a transplant park marker (human hold)' };
-        }
-        var moved = input.headSha && marker.head && input.headSha !== marker.head;
-        if (!moved) {
-            return { decision: 'noop', reason: 'parked-head-unchanged', steps: [],
-                     audit: audit + 'no-op — parked head unchanged' };
-        }
-        var unpark = [step('remove_label', { prNumber: source.prNumber, label: cfg.parkedLabel })];
-        var rearmMarker = step('comment', {
-            prNumber: source.prNumber,
-            text: transplantMarkerComment({
-                state: 'armed', source: source.prNumber,
-                head: input.headSha,
-                branch: transplantBranchName(cfg.branchPrefix, source.prNumber)
-            })
-        });
-        return {
-            decision: 'transplant',
-            reason: 'park-reset',
-            steps: unpark.concat([rearmMarker, step('create_ref', {
-                branch: transplantBranchName(cfg.branchPrefix, source.prNumber),
-                atBranch: cfg.baseBranch
-            })]).concat(transplantBodySteps(
-                { cfg: cfg, base: base, source: source }, input.headSha)),
-            audit: audit + 'park reset — head moved ' + String(marker.head) + ' → ' +
-                String(input.headSha) + ' (re-arming the transplant)'
-        };
+// AC4 — the park is a pure function of the head (#633 semantics): a
+// parked source whose head CHANGED re-arms (label off, transplant
+// proceeds); an unchanged head stays parked; a human 'blocked' with NO
+// park marker of ours is a human hold — never touched.
+function _parkResetDecision(input, cfg, source, labels, marker, base, audit) {
+    if (labels.indexOf(cfg.parkedLabel) === -1) return null;
+    var isOurPark = marker && marker.state === 'parked';
+    if (!isOurPark) {
+        return { decision: 'skip', reason: 'human-blocked', steps: [],
+                 audit: audit + 'skipped — ' + cfg.parkedLabel + ' without a transplant park marker (human hold)' };
     }
-
-    // The transplant sha: the marker's recorded arm-time sha wins (E1).
-    var shaInfo = resolveTransplantSha(marker, input.headSha);
-    if (!shaInfo) {
-        // AC4 fallback — no readable head: park with the no-ref reason.
-        var steps = parkSteps('no-ref', { cfg: cfg, source: source, headSha: null });
-        return { decision: 'park', reason: 'no-ref', steps: steps,
-                 audit: audit + 'parked — no-ref (source head unreadable)' };
+    var moved = input.headSha && marker.head && input.headSha !== marker.head;
+    if (!moved) {
+        return { decision: 'noop', reason: 'parked-head-unchanged', steps: [],
+                 audit: audit + 'no-op — parked head unchanged' };
     }
+    var unpark = [step('remove_label', { prNumber: source.prNumber, label: cfg.parkedLabel })];
+    var rearmMarker = step('comment', {
+        prNumber: source.prNumber,
+        text: transplantMarkerComment({
+            state: 'armed', source: source.prNumber,
+            head: input.headSha,
+            branch: transplantBranchName(cfg.branchPrefix, source.prNumber)
+        })
+    });
+    return {
+        decision: 'transplant',
+        reason: 'park-reset',
+        steps: unpark.concat([rearmMarker, step('create_ref', {
+            branch: transplantBranchName(cfg.branchPrefix, source.prNumber),
+            atBranch: cfg.baseBranch
+        })]).concat(transplantBodySteps(
+            { cfg: cfg, base: base, source: source }, input.headSha)),
+        audit: audit + 'park reset — head moved ' + String(marker.head) + ' → ' +
+            String(input.headSha) + ' (re-arming the transplant)'
+    };
+}
 
-    var branch = transplantBranchName(cfg.branchPrefix, source.prNumber);
-
-    // E5 — an orphan branch from a dead tick completes from the marker
-    // (merge re-issued: an already-merged API merge is a harmless
-    // no-content answer) instead of crashing the key idempotency.
-    if (input.branchExists && !input.openTransplantPr) {
-        if (!marker) {
-            return { decision: 'gc-orphan', reason: 'orphan-branch-no-marker',
-                     steps: [step('delete_ref', { branch: branch })],
-                     audit: audit + 'GC — orphan branch ' + branch + ' with no arm marker' };
-        }
-        return {
-            decision: 'complete-orphan',
-            reason: 'orphan-branch-completed',
-            steps: transplantBodySteps({ cfg: cfg, base: base, source: source }, shaInfo.sha),
-            audit: audit + 'completing orphan transplant from branch ' + branch
-        };
+// E5 — an orphan branch from a dead tick completes from the marker
+// (merge re-issued: an already-merged API merge is a harmless no-content
+// answer) instead of crashing the key idempotency; a marker-less orphan
+// is unrecoverable and GCs.
+function _orphanDecision(input, cfg, source, base, marker, shaInfo, branch, audit) {
+    if (!input.branchExists || input.openTransplantPr) return null;
+    if (!marker) {
+        return { decision: 'gc-orphan', reason: 'orphan-branch-no-marker',
+                 steps: [step('delete_ref', { branch: branch })],
+                 audit: audit + 'GC — orphan branch ' + branch + ' with no arm marker' };
     }
+    return {
+        decision: 'complete-orphan',
+        reason: 'orphan-branch-completed',
+        steps: transplantBodySteps({ cfg: cfg, base: base, source: source }, shaInfo.sha),
+        audit: audit + 'completing orphan transplant from branch ' + branch
+    };
+}
 
-    // Fresh transplant: record the arm marker (the snapshot for E1/E5),
-    // cut the branch at main, merge the recorded sha, open the machine PR.
+// Fresh transplant: record the arm marker (the snapshot for E1/E5), cut
+// the branch at main, merge the recorded sha, open the machine PR.
+function _freshSequence(input, cfg, source, marker, shaInfo, branch, audit) {
     var fresh = [];
     if (!marker) {
         fresh.push(step('comment', {
@@ -711,6 +744,41 @@ function transplantSequence(input) {
             (shaInfo.drifted ? ' (RECORDED at arm time — current head moved)' : '') +
             ' onto ' + branch
     };
+}
+
+// The one decision core. Input/output shapes are documented in the test
+// suite; every branch maps to exactly one AC/edge case.
+function transplantSequence(input) {
+    var cfg = input.cfg;
+    var source = input.source || {};
+    var labels = source.labels || [];
+    var base = input.base || { owner: '', repo: '', baseBranch: cfg.baseBranch };
+    var audit = 'guest-transplant: #' + String(source.prNumber) + ' ';
+
+    var skip = _transplantSkipDecision(source, labels, cfg, audit);
+    if (skip) return skip;
+    var refusal = _transplantRefuseDecision(input, source, base, audit);
+    if (refusal) return refusal;
+
+    var marker = input.marker || null;
+
+    var parked = _parkResetDecision(input, cfg, source, labels, marker, base, audit);
+    if (parked) return parked;
+
+    // The transplant sha: the marker's recorded arm-time sha wins (E1).
+    var shaInfo = resolveTransplantSha(marker, input.headSha);
+    if (!shaInfo) {
+        // AC4 fallback — no readable head: park with the no-ref reason.
+        var steps = parkSteps('no-ref', { cfg: cfg, source: source, headSha: null });
+        return { decision: 'park', reason: 'no-ref', steps: steps,
+                 audit: audit + 'parked — no-ref (source head unreadable)' };
+    }
+
+    var branch = transplantBranchName(cfg.branchPrefix, source.prNumber);
+    var orphan = _orphanDecision(input, cfg, source, base, marker, shaInfo, branch, audit);
+    if (orphan) return orphan;
+
+    return _freshSequence(input, cfg, source, marker, shaInfo, branch, audit);
 }
 
 // ── Branch GC sweep (AC7) ────────────────────────────────────────────────

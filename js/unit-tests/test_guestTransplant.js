@@ -695,6 +695,19 @@ suite('guestTransplant: transport command builders (byte-pinned; no fork ref is 
         assert.equal(mod.classifyArmActor(null, logins), 'unverified');
         assert.equal(mod.classifyArmActor({ login: '' }, logins), 'unverified');
     });
+
+    test('parseLabelEvents also accepts an ALREADY-parsed event array (no double-parse)', function () {
+        var feed = [{ event: 'labeled', label: 'po_accept', actor: { login: 'human3' } }];
+        var ev = mod.parseLabelEvents(feed, 'po_accept');
+        assert.equal(ev.login, 'human3', 'plain string label spelling parses too');
+    });
+
+    test('classifyArmActor: an EMPTY machine-login allowlist reads every arm as human', function () {
+        assert.equal(mod.classifyArmActor({ login: 'whoever' }, []), 'human',
+            'no allowlist to match against — cannot call the actor a machine');
+        assert.equal(mod.classifyArmActor({ login: 'whoever' }, ''), 'human',
+            'a blank knob reads the same as an empty list');
+    });
 });
 
 suite('guestTransplant: close comment (AC1 names both SHAs)', function () {
