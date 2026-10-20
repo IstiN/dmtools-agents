@@ -328,8 +328,8 @@ suite('guestTransplant: transplantSequence — the happy path (AC1)', function (
         assert.equal(openPr.title, '[guest #42] Fix the widget', 'AC1 title shape');
         assert.ok(openPr.body.indexOf('acme/widget#42') !== -1, 'body links the source');
         assert.ok(openPr.body.indexOf('Co-authored-by:') !== -1, 'AC1 co-author trailer');
-        assert.ok(openPr.body.indexOf('productowner@users.noreply.github.com') !== -1,
-            'the machine PR credits the guest author');
+        assert.ok(openPr.body.indexOf('extcontributor@users.noreply.github.com') !== -1,
+            'the machine PR credits the guest PR author');
 
         assert.equal(stepsOf('close_pr', seq)[0].prNumber, 42, 'AC1: the source closes');
     });

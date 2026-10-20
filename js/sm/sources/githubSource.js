@@ -29,7 +29,10 @@ var smProviderModule = require('../../common/smProvider.js');
 var machineAuthorModule = require('../../common/machineAuthor.js');
 var smAsyncModule = require('../../common/smAsync.js');
 var mutexRegistryModule = require('../../common/mutexRegistry.js');
-var mutexRegistryModule = require('../../common/mutexRegistry.js');
+// gh-1140 guest transplant: the `crossRepo` query guard shares the ONE
+// cross-repo predicate with the transplant decision core — hoisted,
+// never lazy (gh-823 pack-require rule).
+var guestTransplantModule = require('../../common/guestTransplant.js');
 
 // runAsync worker sources — STRING literals of CLOSURE-FREE functions.
 // The Dart runtime serializes them via fn.toString() and runs each on a
@@ -468,6 +471,19 @@ function _machineAuthorGuardFail(q, item, machineAuthor, owner) {
     return !machineAuthorModule.isMachineAuthored(item, machineAuthor, owner);
 }
 
+// gh-1140 guest transplant: `crossRepo: true` matches CROSS-REPO heads
+// only (the head repository full name exists and differs from the base).
+// A same-repo PR, a deleted fork (head.repo null) or a malformed spec
+// all fail the guard (fail closed) — the guest lane never touches a
+// head it cannot attribute. Reads the PR-list item's headRepo (resolved
+// by the shared gh-1059 resolver) with the prStatus twin as fallback;
+// issue-carrier items carry neither → inert there.
+function _crossRepoGuardFail(q, item, repoInfo) {
+    if (!q.crossRepo) return false;
+    var headFull = item.headRepo || (item.pr && item.pr.headRepo) || null;
+    return !guestTransplantModule.isCrossRepoHead(headFull, repoInfo.owner, repoInfo.repo);
+}
+
 function _mergeableGuardFail(q, item) {
     if (q.mergeable === true && (!item.pr || item.pr.mergeable !== true)) return true;
     return false;
@@ -512,6 +528,7 @@ function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
     if (_verdictRecordGuardsFail(q, item, provider, machineAuthor)) return false;
     if (_threadsGuardsFail(q, item, provider)) return false;
     if (_machineAuthorGuardFail(q, item, machineAuthor, owner)) return false;
+    if (_crossRepoGuardFail(q, item, repoInfo)) return false;
     if (_mergeableGuardFail(q, item)) return false;
     if (_prStateGuardFail(q, item)) return false;
     if (_prLabelGuardsFail(q, item)) return false;
