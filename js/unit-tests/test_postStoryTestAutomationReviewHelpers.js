@@ -17,6 +17,7 @@ function loadPrReviewComments() {
     var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
     var outputFilesModule = loadModule('js/common/outputFiles.js', makeRequire({}), {});
     return loadModule('js/postPRReviewComments.js', makeRequire({
+        './common/ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
         './config.js': configModule,
         'config': configModule,
         './common/scm.js': { createScm: function() { return {}; } },
