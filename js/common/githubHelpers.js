@@ -22,6 +22,7 @@ const prHelper = require('./pullRequest.js');
 const gitOps = require('./gitOps.js');
 const reviewThreadInventory = require('./reviewThreadInventory.js');
 const ciModule = require('./ci.js');
+const ciViolations = require('./ciViolations.js');
 
 // Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
 // common/pullRequest.js once — this delegate keeps every local call site.
@@ -305,6 +306,111 @@ function getPRDetails(scmOrWorkspace, repositoryOrPrId, pullRequestIdOpt) {
     }
 }
 
+// ── fetchDiscussionsAndRawData helpers (gh-1086 extraction) ──────────────────
+// Each helper keeps the exact call order, log text and fallback semantics of
+// the original inline implementation.
+
+function fetchPrConversations(workspace, repository, prIdStr) {
+    var conversations = [];
+    try {
+        conversations = github_get_pr_conversations({
+            workspace: workspace,
+            repository: repository,
+            pullRequestId: prIdStr
+        }) || [];
+    } catch (e) {
+        console.warn('github_get_pr_conversations failed:', e.message || e);
+    }
+    return conversations;
+}
+
+function fetchPrReviewThreadsRaw(workspace, repository, prIdStr) {
+    var graphqlRaw = null;
+    try {
+        graphqlRaw = github_get_pr_review_threads({
+            workspace: workspace,
+            repository: repository,
+            pullRequestId: prIdStr
+        });
+        console.log('Got', reviewThreadInventory.parseGraphQLNodes(graphqlRaw).length, 'review threads for GraphQL IDs');
+    } catch (e) {
+        console.warn('github_get_pr_review_threads failed (falling back to conversations-only inventory):', e.message || e);
+    }
+    return graphqlRaw;
+}
+
+/**
+ * Build the review-thread inventory from the conversations export and the
+ * GraphQL census, pushing thread rows into rawThreads and the markdown
+ * section into sections when EITHER source has data. Returns the inventory
+ * (its census flows into the raw payload), or null when the build failed.
+ */
+function appendReviewThreadInventory(conversations, graphqlRaw, sections, rawThreads) {
+    var inv = null;
+    try {
+        inv = reviewThreadInventory.collectThreadInventory(conversations, graphqlRaw);
+        if (conversations.length > 0 || inv.threads.length > 0) {
+            inv.threads.forEach(function(t) { rawThreads.push(t); });
+            sections.push(inv.markdownSection);
+            var invCounts = inv.counts;
+            console.log('Discussions: ' + invCounts.total + ' threads (' + invCounts.open + ' open, ' + invCounts.resolved + ' resolved, ' + invCounts.bot + ' bot, ' + invCounts.notices + ' machine notices),',
+                rawThreads.filter(function(t) { return t.rootCommentId; }).length + ' reply IDs,',
+                rawThreads.filter(function(t) { return t.threadId; }).length + ' resolve IDs' +
+                (inv.census.graphqlUnresolved !== null
+                    ? ' — GraphQL census: ' + inv.census.graphqlUnresolved + ' unresolved (arm-rule count)'
+                    : ''));
+        }
+    } catch (e) {
+        console.warn('review-thread inventory build failed:', e.message || e);
+    }
+    return inv;
+}
+
+/**
+ * Render the general PR comments section body (marker comments skipped,
+ * bodies trimmed, per-comment separator). Callers gate on comments being
+ * non-empty, exactly like the pre-extraction inline code.
+ */
+function buildGeneralCommentsSection(comments) {
+    var section = '## General PR Comments\n\n';
+    comments.forEach(function(comment) {
+        if (_isDmtoolsMarkerComment(comment)) return;
+        var author = (comment.user && comment.user.login) ? comment.user.login : 'unknown';
+        var date = comment.created_at ? comment.created_at.substring(0, 10) : '';
+        section += '**' + author + '** (' + date + '):\n\n';
+        section += (comment.body || '').trim() + '\n\n---\n\n';
+    });
+    return section;
+}
+
+/**
+ * Fetch general PR comments and render their section; null when the fetch
+ * fails or there are no comments (no section is pushed in either case).
+ */
+function fetchGeneralCommentsSection(workspace, repository, prIdStr) {
+    try {
+        var comments = github_get_pr_comments({
+            workspace: workspace,
+            repository: repository,
+            pullRequestId: prIdStr
+        });
+        if (comments && comments.length > 0) {
+            return buildGeneralCommentsSection(comments);
+        }
+    } catch (e) {
+        console.warn('github_get_pr_comments failed:', e.message || e);
+    }
+    return null;
+}
+
+function buildDiscussionsMarkdown(sections, pullRequestId) {
+    return sections.length > 0
+        ? '# PR Discussion History\n\n' +
+          '_Previous review discussions for PR #' + pullRequestId + '._\n\n' +
+          sections.join('\n')
+        : null;
+}
+
 /**
  * Fetch PR discussions and raw thread data for reply/resolve.
  *
@@ -339,78 +445,30 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
     // export is empty/incomplete but whose GraphQL census carries open
     // threads (the live dart #424 shape) must still produce the full
     // inventory.
-    var conversations = [];
-    try {
-        conversations = github_get_pr_conversations({
-            workspace: workspace,
-            repository: repository,
-            pullRequestId: prIdStr
-        }) || [];
-    } catch (e) {
-        console.warn('github_get_pr_conversations failed:', e.message || e);
-    }
-    var graphqlRaw = null;
-    try {
-        graphqlRaw = github_get_pr_review_threads({
-            workspace: workspace,
-            repository: repository,
-            pullRequestId: prIdStr
-        });
-        console.log('Got', reviewThreadInventory.parseGraphQLNodes(graphqlRaw).length, 'review threads for GraphQL IDs');
-    } catch (e) {
-        console.warn('github_get_pr_review_threads failed (falling back to conversations-only inventory):', e.message || e);
-    }
-    var inv = null;
-    try {
-        inv = reviewThreadInventory.collectThreadInventory(conversations, graphqlRaw);
-        if (conversations.length > 0 || inv.threads.length > 0) {
-            inv.threads.forEach(function(t) { rawThreads.push(t); });
-            sections.push(inv.markdownSection);
-            var invCounts = inv.counts;
-            console.log('Discussions: ' + invCounts.total + ' threads (' + invCounts.open + ' open, ' + invCounts.resolved + ' resolved, ' + invCounts.bot + ' bot, ' + invCounts.notices + ' machine notices),',
-                rawThreads.filter(function(t) { return t.rootCommentId; }).length + ' reply IDs,',
-                rawThreads.filter(function(t) { return t.threadId; }).length + ' resolve IDs' +
-                (inv.census.graphqlUnresolved !== null
-                    ? ' — GraphQL census: ' + inv.census.graphqlUnresolved + ' unresolved (arm-rule count)'
-                    : ''));
-        }
-    } catch (e) {
-        console.warn('review-thread inventory build failed:', e.message || e);
-    }
+    var conversations = fetchPrConversations(workspace, repository, prIdStr);
+    var graphqlRaw = fetchPrReviewThreadsRaw(workspace, repository, prIdStr);
+    var inv = appendReviewThreadInventory(conversations, graphqlRaw, sections, rawThreads);
 
     // General PR comments
-    try {
-        const comments = github_get_pr_comments({
-            workspace: workspace,
-            repository: repository,
-            pullRequestId: prIdStr
-        });
-
-        if (comments && comments.length > 0) {
-            let section = '## General PR Comments\n\n';
-            comments.forEach(function(comment) {
-                const author = (comment.user && comment.user.login) ? comment.user.login : 'unknown';
-                const date = comment.created_at ? comment.created_at.substring(0, 10) : '';
-                section += '**' + author + '** (' + date + '):\n\n';
-                section += (comment.body || '').trim() + '\n\n---\n\n';
-            });
-            sections.push(section);
-        }
-    } catch (e) {
-        console.warn('github_get_pr_comments failed:', e.message || e);
+    var commentsSection = fetchGeneralCommentsSection(workspace, repository, prIdStr);
+    if (commentsSection !== null) {
+        sections.push(commentsSection);
     }
 
-    const markdown = sections.length > 0
-        ? '# PR Discussion History\n\n' +
-          '_Previous review discussions for PR #' + pullRequestId + '._\n\n' +
-          sections.join('\n')
-        : null;
+    const markdown = buildDiscussionsMarkdown(sections, pullRequestId);
 
     const raw = rawThreads.length > 0
         ? { threads: rawThreads, census: inv ? inv.census : null }
         : null;
 
     return { markdown: markdown, rawThreads: raw };
+}
+
+// gh-1097 follow-up: hidden `<!-- dmtools:` audit comments (naked-pr-rearm
+// etc.) are machine bookkeeping — never review feedback. Mirrors
+// machineNotice.isDmtoolsMarkerBody (inlined: keeps loader maps unchanged).
+function _isDmtoolsMarkerComment(comment) {
+    return String((comment && comment.body) || '').replace(/^\s+/, '').indexOf('<!-- dmtools:') === 0;
 }
 
 /**
@@ -487,7 +545,9 @@ function extractJenkinsBuildTarget(detailsUrl, jenkinsBasePath) {
     return { jobPath: jobPathParts.join('/'), buildNumber: buildNumber };
 }
 
-/** Build the md snippet + full-log block for one failed check, or null when there are no logs. */
+/** Build the md snippet + full-log block for one failed check, or null when there are no logs.
+ * gh-1119: the RAW logs ride along (sections.logs) so the violation extractor can run
+ * on them without re-parsing the rendered markdown. */
 function buildLogSections(check, logs, label) {
     if (!logs) return null;
     var lines = logs.split('\n');
@@ -496,7 +556,8 @@ function buildLogSections(check, logs, label) {
         md: '**' + label + ' (last 500 lines)**:\n\n```\n' + snippet + '\n```\n\n',
         full: '=== ' + label + ' for: ' + check.name + ' ===\n' +
               'URL: ' + (check.details_url || 'N/A') + '\n' +
-              logs + '\n\n'
+              logs + '\n\n',
+        logs: logs
     };
 }
 
@@ -681,24 +742,124 @@ function buildCheckLogSections(check, scm, owner, repo, jenkinsBasePath) {
 
     var md = '';
     var full = '';
+    var logs = '';
     if (ghResult.logs) {
         var ghSections = buildLogSections(check, ghResult.logs, 'Error log');
         md += ghSections.md;
         full += ghSections.full;
+        logs += ghResult.logs + '\n';
     }
     if (jenkinsResult.logs) {
         var jenkinsSections = buildLogSections(check, jenkinsResult.logs, 'Jenkins error log');
         md += jenkinsSections.md;
         full += jenkinsSections.full;
+        logs += jenkinsResult.logs + '\n';
     }
-    if (full) return { md: md, full: full };
-    var reason = checkLogFailureReason(ghResult, jenkinsResult);
+    if (full) return { md: md, full: full, logs: logs, ok: true };
+    return failedLogSections(check, checkLogFailureReason(ghResult, jenkinsResult));
+}
+
+/** gh-1045: the loud per-check failure entry (md + full-log marker). */
+function failedLogSections(check, reason) {
     return {
         md: '- ⚠️ **Log**: log fetch failed: ' + reason + '\n\n',
         full: '=== LOG FETCH FAILED for: ' + check.name + ' ===\n' +
               'URL: ' + (check.details_url || 'N/A') + '\n' +
-              'Reason: ' + reason + '\n\n'
+              'Reason: ' + reason + '\n\n',
+        ok: false,
+        reason: reason
     };
+}
+
+// Max CI runs on the head scanned for an orphan's same-named job (bounds calls).
+var ORPHAN_FALLBACK_MAX_RUNS = 5;
+
+/** Parse a list-workflow-runs payload (object / JSON string / array) into runs. */
+function runsOfPayload(raw) {
+    var p = _unwrapToolResult(raw);
+    if (typeof p === 'string') {
+        try { p = JSON.parse(p); } catch (e) { return []; }
+    }
+    if (Array.isArray(p)) return p;
+    return (p && (p.workflow_runs || p.workflowRuns)) || [];
+}
+
+/** Workflow runs on headSha, newest first (gh-orphan fallback). */
+function listRunsForHead(scm, owner, repo, headSha) {
+    var raw = (scm && typeof scm.listWorkflowRuns === 'function')
+        ? scm.listWorkflowRuns(null, null, 50)
+        : github_list_workflow_runs({ workspace: owner, repository: repo, perPage: 50 });
+    return runsOfPayload(raw).filter(function (r) {
+        return r && String(r.head_sha || r.headSha) === String(headSha);
+    }).sort(function (a, b) { return Number(b.id) - Number(a.id); });
+}
+
+/** Logs of the failed job named `name` in one run, or null. */
+function sameNamedJobLogs(scm, owner, repo, run, name) {
+    var job = ciModule._jobsOf(fetchWorkflowRunJobs(scm, owner, repo, String(run.id)))
+        .filter(function (j) { return isFailedRunJob(j) && j.name === name; })[0];
+    if (!job) return null;
+    var logs = _fetchJobLogs(scm, owner, repo, job.id);
+    return logs ? { logs: logs, runUrl: run.html_url || ('run ' + run.id) } : null;
+}
+
+/**
+ * Orphan/placeholder check-runs (SM-kicker mirrored verdicts, 0 steps) have
+ * no job logs by nature — the job-log endpoint 404s. Their REAL logs live in
+ * the same-named failed job of the latest CI run on the same head.
+ * Returns { logs, runUrl } or null.
+ */
+function findSameNamedJobLogsOnHead(check, scm, owner, repo, headSha) {
+    try {
+        var runs = listRunsForHead(scm, owner, repo, headSha).slice(0, ORPHAN_FALLBACK_MAX_RUNS);
+        for (var i = 0; i < runs.length; i++) {
+            var found = sameNamedJobLogs(scm, owner, repo, runs[i], check.name);
+            if (found) return found;
+        }
+    } catch (e) {
+        console.warn('Orphan fallback for', check.name, 'failed:', fetchFailureDetail(e));
+    }
+    return null;
+}
+
+/** Clear reason for an orphan check whose real logs could not be found. */
+function orphanReason(check, priorReason) {
+    return 'orphan check-run (no job logs; mirrored verdict) — see run ' + (check.details_url || 'N/A') +
+        (priorReason ? ' [' + priorReason + ']' : '');
+}
+
+/** Resolve an orphan check's sections via the same-head fallback or the orphan reason. */
+function resolveOrphanSections(check, scm, owner, repo, headSha, priorReason) {
+    var found = findSameNamedJobLogsOnHead(check, scm, owner, repo, headSha);
+    if (!found) return failedLogSections(check, orphanReason(check, priorReason));
+    var sections = buildLogSections(check, '(orphan check-run — logs from same-named job in ' + found.runUrl + ')\n' + found.logs, 'Error log');
+    sections.ok = true;
+    return sections;
+}
+
+/** True when a same-named failed check already resolved real logs. */
+function hasResolvedTwin(entry, entries) {
+    return entries.some(function (other) {
+        return other !== entry && other.sections.ok && other.check.name === entry.check.name;
+    });
+}
+
+/**
+ * Resolve every failed check's sections, then handle orphan check-runs
+ * (bare /runs/{id} whose log fetch failed): dedupe into a same-named check
+ * that has real logs, else fall back to the same-named job on the head.
+ * Returns the surviving [{ check, sections }].
+ */
+function resolveFailedCheckSections(failedChecks, scm, owner, repo, headSha, jenkinsBasePath) {
+    var entries = failedChecks.map(function (check) {
+        return { check: check, sections: buildCheckLogSections(check, scm, owner, repo, jenkinsBasePath) };
+    });
+    return entries.filter(function (entry) {
+        if (entry.sections.ok || !extractGithubCheckRunId(entry.check)) return true;
+        if (hasResolvedTwin(entry, entries)) return false;
+        entry.sections = resolveOrphanSections(entry.check, scm, owner, repo, headSha, entry.sections.reason);
+        return true;
+    });
 }
 
 /**
@@ -742,21 +903,59 @@ function buildCiFailuresResolutionSection(hasFullLog) {
     return section;
 }
 
-function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt) {
+/** gh-1119: extract+tag violations from every check whose logs resolved. */
+function extractViolationsFromEntries(entries, diffText) {
+    var checkLogs = [];
+    (entries || []).forEach(function(entry) {
+        if (entry.sections && entry.sections.ok && entry.sections.logs) {
+            checkLogs.push({ name: entry.check.name, logs: entry.sections.logs });
+        }
+    });
+    if (checkLogs.length === 0) return [];
+    var violations = ciViolations.extractAndTagViolations(checkLogs, diffText);
+    if (violations.length > 0) {
+        console.log('⚠️ Extracted ' + violations.length + ' gate violation(s) from the failed-check logs (' +
+            ciViolations.ownedViolations(violations).length + ' owned)');
+    }
+    return violations;
+}
+
+/** gh-1119: best-effort ci_violations.json write (full uncapped list, E2). */
+function writeViolationsJson(inputFolder, violations) {
+    if (!violations || violations.length === 0) return;
+    try {
+        file_write({
+            path: inputFolder + '/ci_violations.json',
+            content: JSON.stringify(ciViolations.violationsSummaryJson(violations), null, 2)
+        });
+        console.log('✅ Wrote ci_violations.json (' + violations.length + ' violation(s))');
+    } catch (e) {
+        console.warn('Could not write ci_violations.json (non-fatal):', e && e.message ? e.message : String(e));
+    }
+}
+
+/** gh-1119: '' when nothing was extracted — today's file, unchanged (AC5/I3). */
+function buildViolationsBlock(violations) {
+    return ciViolations.buildViolationsMarkdown(violations);
+}
+
+function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt, diffTextOpt) {
     var scm = null;
-    var owner, repo, headSha, inputFolder, jenkinsBasePath;
+    var owner, repo, headSha, inputFolder, jenkinsBasePath, diffText;
 
     if (_isScm(scmOrOwner)) {
         scm = scmOrOwner;
         headSha = repoOrHeadSha;
         inputFolder = headShaOrInputFolder;
         jenkinsBasePath = inputFolderOpt;
+        diffText = diffTextOpt;
     } else {
         owner = scmOrOwner;
         repo = repoOrHeadSha;
         headSha = headShaOrInputFolder;
         inputFolder = inputFolderOpt;
         jenkinsBasePath = jenkinsBasePathOpt;
+        diffText = diffTextOpt;
     }
 
     try {
@@ -801,10 +1000,20 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
 
         console.warn('⚠️ ' + failedChecks.length + ' CI check(s) failed:', failedChecks.map(function(c) { return c.name; }).join(', '));
 
+        var entries = resolveFailedCheckSections(failedChecks, scm, owner, repo, headSha, jenkinsBasePath);
+        failedChecks = entries.map(function(e) { return e.check; });
+
+        // gh-1119: extract gate violations from the RAW resolved logs and tag
+        // each one owned/foreign against the PR diff file list. The block is
+        // prepended to ci_failures.md so the rework leg cannot miss it; with
+        // zero extracted violations (unknown log shape, I3) nothing changes.
+        var violations = extractViolationsFromEntries(entries, diffText);
+
         var mdBody = '';
         var fullLogContent = '';
 
-        failedChecks.forEach(function(check) {
+        entries.forEach(function(entry) {
+            var check = entry.check;
             mdBody += '## ❌ ' + check.name + '\n\n';
             mdBody += '- **Conclusion**: ' + check.conclusion + '\n';
             if (check.details_url) {
@@ -814,9 +1023,8 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
 
             // gh-1045: every failed check resolves to logs OR a loud reason —
             // a silently missing log is what sent the #423 rework legs in blind.
-            var sections = buildCheckLogSections(check, scm, owner, repo, jenkinsBasePath);
-            mdBody += sections.md;
-            fullLogContent += sections.full;
+            mdBody += entry.sections.md;
+            fullLogContent += entry.sections.full;
         });
 
         // gh-1045: the full log is written FIRST, whenever failed checks exist
@@ -833,7 +1041,12 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
                 writeErr && writeErr.message ? writeErr.message : String(writeErr));
         }
 
+        // gh-1119: the full uncapped violation list lands in ci_violations.json
+        // (E2) — best-effort, a write failure never costs the leg its table.
+        writeViolationsJson(inputFolder, violations);
+
         var md = buildCiFailuresHeader(failedChecks, headSha, fullLogWritten) +
+                 buildViolationsBlock(violations) +
                  mdBody +
                  buildCiFailuresResolutionSection(fullLogWritten);
 
@@ -857,7 +1070,14 @@ module.exports = {
     findMergedPRForTicket: findMergedPRForTicket,
     getPRDetails: getPRDetails,
     fetchDiscussionsAndRawData: fetchDiscussionsAndRawData,
+    fetchPrConversations: fetchPrConversations,
+    fetchPrReviewThreadsRaw: fetchPrReviewThreadsRaw,
+    appendReviewThreadInventory: appendReviewThreadInventory,
+    buildGeneralCommentsSection: buildGeneralCommentsSection,
+    fetchGeneralCommentsSection: fetchGeneralCommentsSection,
+    buildDiscussionsMarkdown: buildDiscussionsMarkdown,
     detectFailedChecks: detectFailedChecks,
+    _runsOfPayload: runsOfPayload,
 
     // Pure helpers extracted from detectFailedChecks (gh-1007, extended by
     // gh-1045) — exported for unit testing. gh-1045 DELIBERATELY changed
@@ -870,6 +1090,8 @@ module.exports = {
     fetchGithubCheckLogsDetailed: fetchGithubCheckLogsDetailed,
     fetchGithubJobLogsDetailed: fetchGithubJobLogsDetailed,
     fetchGithubCheckRunLogsDetailed: fetchGithubCheckRunLogsDetailed,
+    resolveFailedCheckSections: resolveFailedCheckSections,
+    findSameNamedJobLogsOnHead: findSameNamedJobLogsOnHead,
     fetchGithubRunLogs: fetchGithubRunLogs,
     fetchGithubRunLogsDetailed: fetchGithubRunLogsDetailed,
     runLogsFailureReason: runLogsFailureReason,
@@ -887,6 +1109,9 @@ module.exports = {
     buildLogSections: buildLogSections,
     buildCiFailuresHeader: buildCiFailuresHeader,
     buildCiFailuresResolutionSection: buildCiFailuresResolutionSection,
+    extractViolationsFromEntries: extractViolationsFromEntries,
+    writeViolationsJson: writeViolationsJson,
+    buildViolationsBlock: buildViolationsBlock,
 
     // Re-exported from ./gitOps.js for backward compatibility — these are
     // plain git-CLI operations, not GitHub-specific. New code should prefer

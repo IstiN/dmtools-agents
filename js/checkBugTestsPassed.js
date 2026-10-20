@@ -22,6 +22,7 @@ const tokenUsageComment = require('./common/tokenUsageComment.js');
 const scmModule = require('./common/scm.js');
 const trackersModule = require('./common/trackers.js');
 const checkHelpers = require('./checkBugTestsPassedHelpers.js');
+const linkedIssuesReport = require('./common/linkedIssuesReport.js');
 
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
@@ -95,7 +96,7 @@ function action(params) {
     function findAllLinkedTCs() {
         try {
             // JQL text: provider-specific query (WIQL on ado)
-            return tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '"', {
+            return tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(tracker.provider(), ticketKey, 'issuetype = "' + testCaseType + '"', { issueType: testCaseType }), {
                 maxResults: 100
             }) || [];
         } catch (e) {
@@ -107,7 +108,7 @@ function action(params) {
     function findLinkedBugs(tcKey) {
         try {
             // JQL text: provider-specific query (WIQL on ado)
-            return tracker.searchIssues('issue in linkedIssues("' + tcKey + '") AND issuetype = "' + bugType + '"', {
+            return tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(tracker.provider(), tcKey, 'issuetype = "' + bugType + '"', { issueType: bugType }), {
                 maxResults: 50
             }) || [];
         } catch (e) {

@@ -85,6 +85,7 @@ suite('wave2d1 tracker — checkBugTestsPassed / checkBugToFixReady', function()
             './configLoader.js': makeDefaultConfigLoaderMock(),
             './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': d1Trackers(rec.mocks),
             './common/scm.js': { createScm: function() { return { listPrs: function() { return []; } }; } }
         }), rec.mocks);
@@ -98,7 +99,7 @@ suite('wave2d1 tracker — checkBugTestsPassed / checkBugToFixReady', function()
     test('ado: checkBugToFixReady moves a Test Case via ado_move_to_state when all bugs are Done', function() {
         var rec = d1Recorder({
             ado_search_by_wiql: function(a) {
-                if (a.wiql.indexOf('status != "Done"') !== -1) return { value: [] };
+                if (a.wiql.indexOf('[Target].[System.State] <> \'Done\'') !== -1) return { value: [] };
                 return { value: [d1Item(91, 'b', 'Done', 'Bug')] };
             }
         });
@@ -106,6 +107,7 @@ suite('wave2d1 tracker — checkBugTestsPassed / checkBugToFixReady', function()
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock(),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': d1Trackers(rec.mocks)
         }), rec.mocks);
         var r = mod.action({
@@ -132,6 +134,7 @@ suite('wave2d1 tracker — createRepoTasksMulti', function() {
         });
         var mod = loadModule('js/createRepoTasksMulti.js', makeRequire({
             './config.js': configModule,
+            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': d1Trackers(rec.mocks)
         }), Object.assign({ java: { lang: { System: { getenv: function() { return ''; } } } } }, rec.mocks));
         var r = mod.action({ ticket: { key: '100' }, jobParams: { customParams: { trackerProvider: 'ado', labels: ['development'] } } });
@@ -177,6 +180,7 @@ suite('wave2d1 tracker — fetchLinkedBugsToInput / prepareBulkBugsCreationConte
         var mod = loadModule('js/prepareBulkBugsCreationContext.js', makeRequire({
             './configLoader.js': makeDefaultConfigLoaderMock(),
             './config.js': configModule,
+            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': d1Trackers(mocks)
         }), mocks);
         mod.action({ inputFolderPath: 'input/X', customParams: { trackerProvider: 'ado', failedTCsJql: 'FAILED', openBugsJql: 'OPEN' } });

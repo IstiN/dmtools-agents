@@ -33,6 +33,7 @@ function loadRecoverFailedTCBugStatus(mocks) {
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock(),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': d4TrackersWith(Object.assign({}, defaults, mocks || {}))
         }),
         Object.assign({}, defaults, mocks || {})

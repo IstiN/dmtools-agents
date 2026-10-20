@@ -1,0 +1,24 @@
+diff --git a/test/js/require_base_resolution_test.dart b/test/js/require_base_resolution_test.dart
+index 0000000..abc1234 100644
+--- a/test/js/require_base_resolution_test.dart
++++ b/test/js/require_base_resolution_test.dart
+@@ -2,7 +2,8 @@
+ context line
++line added by the PR
+ context line
+diff --git a/lib/src/js/async_job_pool.dart b/lib/src/js/async_job_pool.dart
+index 1111111..2222222 100644
+--- a/lib/src/js/async_job_pool.dart
++++ b/lib/src/js/async_job_pool.dart
+@@ -10,7 +10,8 @@
+ context line
++line added by the PR
+ context line
+diff --git a/lib/src/cli/run_command_processor.dart b/lib/src/cli/run_command_processor.dart
+index 3333333..4444444 100644
+--- a/lib/src/cli/run_command_processor.dart
++++ b/lib/src/cli/run_command_processor.dart
+@@ -20,7 +20,8 @@
+ context line
++line added by the PR
+ context line

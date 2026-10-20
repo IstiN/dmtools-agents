@@ -28,6 +28,7 @@ const { LABELS } = require('./config.js');
 var feedbackLoop = require('./common/feedbackLoop.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var configLoader = require('./configLoader.js');
+var linkedIssuesReport = require('./common/linkedIssuesReport.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
@@ -114,7 +115,7 @@ function findLinkedStoryForTC(tcKey) {
     if (!tcKey) return null;
     try {
         // JQL text: provider-specific query (WIQL on ado)
-        var result = getTracker().searchIssues('issue in linkedIssues("' + tcKey + '") AND issuetype = Story', {
+        var result = getTracker().searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(getTracker().provider(), tcKey, 'issuetype = Story', { issueType: 'Story' }), {
             fields: ['key'],
             maxResults: 1
         });
@@ -167,7 +168,7 @@ function findLinkedNonDoneBug(tcKey) {
     if (!tcKey) return null;
     try {
         // JQL text: provider-specific query (WIQL on ado)
-        var result = getTracker().searchIssues('issue in linkedIssues("' + tcKey + '") AND issuetype = Bug AND status not in (Done)', {
+        var result = getTracker().searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(getTracker().provider(), tcKey, 'issuetype = Bug AND status not in (Done)', { issueType: 'Bug', statusNotIn: ['Done'] }), {
             fields: ['key', 'summary', 'status'],
             maxResults: 1
         });

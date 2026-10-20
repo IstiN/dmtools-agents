@@ -70,6 +70,11 @@ var MACHINE_NOTICE_MARKERS = [
     '🔧 Story Test Rework Complete —'
 ];
 
+// Generic body-start prefix of every hidden machine audit marker
+// (js/common/nakedPrReconcile.js `<!-- dmtools:naked-pr-rearm `,
+// reworkLoopGuard, reworkConsumption, reviewVerdicts).
+var DMTOOLS_MARKER_PREFIX = '<!-- dmtools:';
+
 // Bot accounts whose PR threads are informational by platform convention
 // (CI status, dependency updates) — shared by both collection paths so the
 // heuristic lives in exactly one place.
@@ -96,10 +101,26 @@ function stripLeadingHeading(text) {
 function isMachineNoticeBody(body) {
     var s = stripLeadingHeading(body);
     if (!s) return false;
+    // Hidden `<!-- dmtools:... -->` audit markers (naked-pr-rearm, rework-lap,
+    // rework-consume, review-verdict, ...) are machine-only bookkeeping —
+    // a reviewer never opens a comment with one.
+    if (isDmtoolsMarkerBody(s)) return true;
     for (var i = 0; i < MACHINE_NOTICE_MARKERS.length; i++) {
         if (s.indexOf(MACHINE_NOTICE_MARKERS[i]) === 0) return true;
     }
     return false;
+}
+
+/**
+ * True when the body opens with a hidden `<!-- dmtools:` audit marker
+ * (gh-1097 naked-pr-rearm and friends): machine bookkeeping, never review
+ * feedback — excluded from threads AND the general-comments section.
+ *
+ * @param {string|null} body raw comment body
+ * @returns {boolean}
+ */
+function isDmtoolsMarkerBody(body) {
+    return String(body || '').replace(/^\s+/, '').indexOf(DMTOOLS_MARKER_PREFIX) === 0;
 }
 
 /**
@@ -131,9 +152,11 @@ function isBotAuthor(login) {
 
 module.exports = {
     MACHINE_NOTICE_MARKERS: MACHINE_NOTICE_MARKERS,
+    DMTOOLS_MARKER_PREFIX: DMTOOLS_MARKER_PREFIX,
     BOT_AUTHORS: BOT_AUTHORS,
     stripLeadingHeading: stripLeadingHeading,
     isMachineNoticeBody: isMachineNoticeBody,
+    isDmtoolsMarkerBody: isDmtoolsMarkerBody,
     isMachineNotice: isMachineNotice,
     isBotAuthor: isBotAuthor
 };

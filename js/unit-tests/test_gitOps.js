@@ -9,6 +9,7 @@
  */
 
 var gitStagingModuleForGitOps = loadModule('js/common/gitStaging.js');
+var forkCheckoutModule = loadModule('js/common/forkCheckout.js', makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}) }), {});
 // Real PR helper (gh-912): the remote-existence probes live there — the
 // strict ref-line parser must be exercised, not a stub.
 var prHelperRealForGitOps = loadModule('js/common/pullRequest.js',
@@ -21,6 +22,7 @@ function loadGitOps(mocks) {
             '../config.js': configModule,
             'config': configModule,
             './gitStaging.js': gitStagingModuleForGitOps,
+            './forkCheckout.js': forkCheckoutModule,
             './pullRequest.js': prHelperRealForGitOps
         }),
         mocks || {}

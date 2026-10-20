@@ -18,6 +18,8 @@
  * Uses: configModule, loadModule(), makeRequire(), assert, test(), suite()
  */
 
+var forkCheckoutModule = loadModule('js/common/forkCheckout.js', makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}) }), {});
+
 // ── Loader helpers ────────────────────────────────────────────────────────────
 
 function loadMachineNotice() {
@@ -65,7 +67,8 @@ function loadGithubHelpers(mocks) {
             },
             './machineNotice.js': loadMachineNotice(),
             './reviewThreadInventory.js': loadReviewThreadInventory(),
-            './ci.js': loadModule('js/common/ci.js')
+            './ci.js': loadModule('js/common/ci.js'),
+            './ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         mocks || {}
     );
@@ -84,6 +87,7 @@ function loadPreCliReworkSetup(mocks, gitOpsStub) {
                 fetchDiscussionsAndRawData: function() {},
                 detectFailedChecks: function() {}
             },
+            './forkCheckout.js': forkCheckoutModule,
             './common/gitOps.js': gitOpsStub,
             './common/commentMarkup.js': loadModule('js/common/commentMarkup.js',
                 makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') })),
@@ -433,3 +437,13 @@ suite('gh-808 AC3 — notices-only PR keeps the verdict contract', function() {
 function mn_isNoticeBody(body) {
     return loadMachineNotice().isMachineNoticeBody(body);
 }
+
+suite('machineNotice — hidden dmtools: markers (gh-1097 naked-pr-rearm)', function() {
+    test('naked-pr-rearm and other dmtools: markers classify as notices; quotes do not', function() {
+        var mn = loadMachineNotice();
+        assert.ok(mn.isMachineNoticeBody('<!-- dmtools:naked-pr-rearm {"pr":1} -->\n🩹 re-armed'));
+        assert.ok(mn.isMachineNoticeBody('<!-- dmtools:rework-lap {} -->'));
+        assert.notOk(mn.isMachineNoticeBody('please see `<!-- dmtools:naked-pr-rearm` above'));
+        assert.ok(mn.isDmtoolsMarkerBody('  <!-- dmtools:x -->'));
+    });
+});

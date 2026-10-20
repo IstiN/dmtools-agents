@@ -18,6 +18,7 @@
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const trackersModule = require('./common/trackers.js');
+const linkedIssuesReport = require('./common/linkedIssuesReport.js');
 
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
@@ -55,18 +56,18 @@ function action(params) {
     function findLinkedBugs(entityKey) {
         var key = entityKey || ticketKey;
         // JQL text: provider-specific query (WIQL on ado)
-        return toPlain(tracker.searchIssues('issue in linkedIssues("' + key + '") AND issuetype = Bug', { maxResults: 50 })) || [];
+        return toPlain(tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(tracker.provider(), key, 'issuetype = Bug', { issueType: 'Bug' }), { maxResults: 50 })) || [];
     }
 
     function findNotDoneBugs(entityKey) {
         var key = entityKey || ticketKey;
         // JQL text: provider-specific query (WIQL on ado)
-        return toPlain(tracker.searchIssues('issue in linkedIssues("' + key + '") AND issuetype = Bug AND status != "' + jiraConfig.statuses.DONE + '"', { maxResults: 50 })) || [];
+        return toPlain(tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(tracker.provider(), key, 'issuetype = Bug AND status != "' + jiraConfig.statuses.DONE + '"', { issueType: 'Bug', statusNotEquals: jiraConfig.statuses.DONE }), { maxResults: 50 })) || [];
     }
 
     function findLinkedTestCases() {
         // JQL text: provider-specific query (WIQL on ado)
-        return toPlain(tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = "Test Case"', { maxResults: 100 })) || [];
+        return toPlain(tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(tracker.provider(), ticketKey, 'issuetype = "Test Case"', { issueType: 'Test Case' }), { maxResults: 100 })) || [];
     }
 
     function findPendingBugsInLinkedTestCases() {

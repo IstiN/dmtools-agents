@@ -159,3 +159,72 @@ suite('branchLegGuard — predicates', function () {
         assert.notOk(guard.matchesBranch({}, BRANCH));
     });
 });
+
+// ── gh-1075 fork reroute: pull-keyed leg probe ──────────────────────────────
+// A rerouted fork-PR dispatch lands on the base machine ref ('main'), so the
+// run's head_branch is 'main' — SHARED by every fork dispatch in the repo.
+// Keying the gh-1028 probe on 'main' would serialize unrelated fork legs, and
+// keying it on refs/pull/<N>/head matches nothing (GitHub records the
+// DISPATCH ref as head_branch, never the checkout plan). The per-PR
+// discriminator is the run-title pr anchor: the leg workflow's run-name
+// renders '▶ <leg> (SM) · pr-<N>' whenever inputs.pr is set — which the
+// gh-1075 fork path ALWAYS backfills. Forward-compat: a run whose
+// head_branch IS the pull ref (a leg dispatched directly on it) also counts.
+
+suite('branchLegGuard — hasActiveLegRunForPull (gh-1075 fork reroute)', function () {
+    var PR = 1591;
+
+    function forkLegRun(opts) {
+        opts = opts || {};
+        var r = run('in_progress', { branch: 'main' });
+        r.display_title = opts.title !== undefined ? opts.title : '▶ rework (SM) · pr-1591';
+        if (opts.pullBranch) r.head_branch = 'refs/pull/1591/head';
+        if (opts.path) r.path = opts.path;
+        return r;
+    }
+
+    test('an in-flight leg for the SAME PR (rerouted onto main, titled · pr-<N>) suppresses', function () {
+        var runs = [forkLegRun()];
+        assert.ok(guard.hasActiveLegRunForPull(runs, PR, { nowMs: NOW_MS }),
+            'the second rework arm sees the first fork leg even though its head_branch is the shared machine ref');
+    });
+
+    test('a run whose head_branch IS the pull ref matches (forward-compat)', function () {
+        var runs = [forkLegRun({ pullBranch: true, title: 'workflow_dispatch' })];
+        assert.ok(guard.hasActiveLegRunForPull(runs, PR, { nowMs: NOW_MS }));
+    });
+
+    test('an in-flight leg for a DIFFERENT PR does not suppress', function () {
+        var runs = [forkLegRun({ title: '▶ rework (SM) · pr-2000' })];
+        assert.notOk(guard.hasActiveLegRunForPull(runs, PR, { nowMs: NOW_MS }));
+    });
+
+    test('a same-number title PREFIX never matches (pr-1591 vs pr-15910)', function () {
+        var runs = [forkLegRun({ title: '▶ rework (SM) · pr-15910' })];
+        assert.notOk(guard.hasActiveLegRunForPull(runs, PR, { nowMs: NOW_MS }),
+            'whole-token boundary — a longer PR number must not suppress this PR');
+    });
+
+    test('a NON-leg workflow run on main with the pr token does not suppress', function () {
+        var runs = [forkLegRun({ path: OTHER_PATH })];
+        assert.notOk(guard.hasActiveLegRunForPull(runs, PR, { nowMs: NOW_MS }),
+            'validation CI on main stays inert for the leg guard (isLegRun parity)');
+    });
+
+    test('a COMPLETED leg run for this PR does not suppress (dead-letter re-fire intact)', function () {
+        var r = forkLegRun(); r.status = 'completed'; r.conclusion = 'success';
+        assert.notOk(guard.hasActiveLegRunForPull([r], PR, { nowMs: NOW_MS }));
+    });
+
+    test('a titleless in-flight leg run on main does not suppress', function () {
+        var runs = [forkLegRun({ title: '' })];
+        assert.notOk(guard.hasActiveLegRunForPull(runs, PR, { nowMs: NOW_MS }),
+            'older workflow copies without the run-name anchor degrade to fail-open, same as the gh-1028 title guards');
+    });
+
+    test('no clock: degrades to fail-closed (queued run counts)', function () {
+        var r = forkLegRun({ title: '▶ rework (SM) · pr-1591' }); r.status = 'queued';
+        delete r.updated_at; delete r.created_at;
+        assert.ok(guard.hasActiveLegRunForPull([r], PR, {}));
+    });
+});

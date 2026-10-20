@@ -394,6 +394,17 @@ This document describes every agent in the `agents/` directory: what ticket it h
   ```
 - **Wiring the trigger**: add a rule via `smRules`/`smMergeRules` in the project's own config (e.g. JQL on a `Discovery` status or label), pointing `configFile` at `agents/discovery.json` — see `AGENTS.md`'s "SM rules override and custom agents" section for the pattern.
 
+### Wiki publishing
+
+#### `wiki_publisher.json` — Generic wiki page publisher (base agent)
+- **ContextId**: `wiki_publisher`
+- **Ticket type**: any (not wired into `sm.json` by default — consuming repos add their own SM rule and specialize the agent via `"parent"` inheritance)
+- **Pre-actions**: `requireTicket.js`, `preCliContentOutputSetup.js` — bundles questions, parent context and the existing wiki page snapshot (Markdown + inline-comment anchors) into `input/<KEY>/`
+- **Post-action**: `writeContentOutput.js` — posts inline-comment replies, syncs `outputs/response.md` to the ticket's page via `confluence_sync_markdown_directory` (`contentOutput.target: "wiki"`), and notifies the originating tracker through the tracker-agnostic layer (no tracker-field writes by default)
+- **Outputs**: `outputs/response.md` (page body, GFM) + optional `outputs/confluence_replies.json`
+- **Specialization**: child config declares `"parent": { "path": ".../wiki_publisher.json", "merge": ["params.cliPrompts"] }` and adds project skill `.md` files; project config routes the page via `customParams.contentOutput` (`space`, `parentPageId`, `pageTitleSuffix`)
+- **Wiring the trigger**: same `smRules` pattern as discovery, pointing `configFile` at the child agent config
+
 ### Reporting & watchdog
 
 | Config | Script | Purpose | Outputs |

@@ -250,3 +250,33 @@ suite('postMobileTestAutomationResultsHelpers: comment builders', function() {
     });
 
 });
+
+// ── Suite: feature-PR label pair decision (gh-1083) ──────────────────────────
+
+suite('postMobileTestAutomationResultsHelpers: decideFeaturePrLabels', function() {
+
+    test('passed → adds the passed label and removes the failed one', function() {
+        var h = loadMobileHelpers();
+        assert.deepEqual(h.decideFeaturePrLabels(true, 'tests_passed', 'tests_failed'),
+            { addLabel: 'tests_passed', removeLabel: 'tests_failed' });
+    });
+
+    test('failed → adds the failed label and removes the passed one', function() {
+        var h = loadMobileHelpers();
+        assert.deepEqual(h.decideFeaturePrLabels(false, 'tests_passed', 'tests_failed'),
+            { addLabel: 'tests_failed', removeLabel: 'tests_passed' });
+    });
+
+    test('falsy passed (null/undefined) behaves like failed', function() {
+        var h = loadMobileHelpers();
+        assert.equal(h.decideFeaturePrLabels(null, 'p', 'f').addLabel, 'f');
+        assert.equal(h.decideFeaturePrLabels(undefined, 'p', 'f').removeLabel, 'p');
+    });
+
+    test('custom label names flow through unchanged', function() {
+        var h = loadMobileHelpers();
+        assert.deepEqual(h.decideFeaturePrLabels(true, 'qa_approved', 'qa_rejected'),
+            { addLabel: 'qa_approved', removeLabel: 'qa_rejected' });
+    });
+
+});

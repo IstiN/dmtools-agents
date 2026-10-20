@@ -16,6 +16,11 @@ var cacheToReleases = require('./cacheToReleases.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const commentMarkup = require('./common/commentMarkup.js');
 const gitStaging = require('./common/gitStaging.js');
+// gh-1087: quota circuit-breaker — a hard provider-quota failure (403
+// usage-limit body / exhausted provider chain) parks the lane instead of
+// burning a per-tick retry against the quota wall.
+var quotaBreaker = require('./common/quotaCircuitBreaker.js');
+var toolchainSummary = require('./common/toolchainSummary.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
@@ -666,11 +671,95 @@ function readResponseMd(ticketKey) {
  * applicable / did not land — the caller then continues into its existing
  * cold-reset path unchanged.
  */
-function recoverMissingResponse(ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage) {
+// gh-1087: the caller's development context for the quota gate — the park
+// labels the open PR and resolves jobParams config. Callers without a full
+// ctx (standalone recovery) get a minimal derived one.
+function quotaContextOf(ctx, ticketKey, customParams) {
+    if (ctx) return ctx;
+    return {
+        ticketKey: ticketKey,
+        customParams: customParams,
+        metadata: null,
+        expectedBranch: null,
+        branchName: null,
+        jobParams: {}
+    };
+}
+
+// gh-1087 AC1/AC2 gate: runs BEFORE the fatal-environment throw and the
+// bounded resume — a resume against an exhausted provider chain is a
+// guaranteed 403 burn, and a quota wall is not a CLI-environment defect.
+// No-op unless the failure text classifies as quota_exhausted.
+function quotaParkGate(quotaCtx) {
+    var quota = quotaClassificationOf(quotaCtx);
+    if (quota) {
+        parkQuotaExhaustedDevelopment(quotaCtx, quota);
+    }
+}
+
+function recoverMissingResponse(ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage, ctx) {
+    var quotaCtx = quotaContextOf(ctx, ticketKey, customParams);
+    quotaCtx.cliErrorMessage = cliErrorMessage;
+    quotaCtx.developmentSummary = developmentSummary;
+    quotaParkGate(quotaCtx);
     if (isFatalCliEnvironmentError(developmentSummary, cliHasFatalError)) {
         console.error('CLI/environment failure detected (e.g. AI CLI binary missing from PATH, or a fatal provider/network error reported by dmtools) — failing the job explicitly instead of resetting for retry.');
         throwFatalCliEnvironmentError(ticketKey, cliErrorMessage || developmentSummary);
     }
+    // gh-1121: a whole-provider-chain transient outage (Provider chain
+    // exhausted with only 5xx/429/network attempts — no quota/auth text)
+    // gets ONE resume of the persisted fa session even when the generic
+    // feedbackLoop flag is off, after a configurable backoff. The cold
+    // reset below stays the fallback when the resume also fails (or is
+    // explicitly opted out), and the reset comment then names the real
+    // cause (providers + codes) instead of guessing a rate limit.
+    var outage = providerOutageOf(cliErrorMessage, developmentSummary);
+    if (outage) {
+        return tryResumeForProviderOutage(ticketKey, customParams, outage, ctx);
+    }
+    return tryGenericResumeForMissingResponse(ticketKey, customParams);
+}
+
+// gh-1121 log labels for the outage hand-off — the honest models/codes lists
+// with the same fallbacks the reset header uses (outageResetHeaderOf).
+function outageModelsLabelOf(outage) {
+    return (outage && outage.models && outage.models.length) ? outage.models.join(', ') : 'unknown models';
+}
+
+function outageCodesLabelOf(outage) {
+    return (outage && outage.codes && outage.codes.length) ? outage.codes.join(', ') : 'n/a';
+}
+
+// gh-1121: the bounded outage resume — ONE re-invocation of the persisted fa
+// session after the configured backoff (see resumeOnceForProviderOutage).
+// Returns the recovered outputs/response.md content when the resume landed
+// it, null to continue to the existing reset path. The classified outage is
+// stashed on ctx so the reset comment can name the real cause (models+codes).
+function tryResumeForProviderOutage(ticketKey, customParams, outage, ctx) {
+    console.log('⏸️ Whole provider chain failed with transient errors (' +
+        outageModelsLabelOf(outage) + '; codes: ' + outageCodesLabelOf(outage) + ') — classified provider_transient (gh-1121).');
+    if (ctx) ctx.providerOutage = outage;
+    var outageResume = feedbackLoop.resumeOnceForProviderOutage({
+        ticketKey: ticketKey,
+        customParams: customParams
+    });
+    if (!outageResume.attempted) {
+        console.log('Bounded outage resume not attempted (' + (outageResume.reason || 'unknown') + ') — continuing to the existing reset path.');
+        return null;
+    }
+    var outageRecovered = readResponseMd(ticketKey);
+    if (outageRecovered && outageRecovered.trim()) {
+        console.log('✅ Bounded outage resume landed outputs/response.md — continuing the normal path (no cold reset).');
+        return outageRecovered;
+    }
+    console.log('Bounded outage resume did not land outputs/response.md — continuing to the existing reset path.');
+    return null;
+}
+
+// gh-75: the generic bounded resume for a missing deliverable — returns the
+// recovered outputs/response.md content, or null to continue to the existing
+// reset path. Split out of recoverMissingResponse for the CRAP gate.
+function tryGenericResumeForMissingResponse(ticketKey, customParams) {
     var resume = feedbackLoop.resumeOnceForMissingResponse({
         ticketKey: ticketKey,
         customParams: customParams
@@ -1007,6 +1096,8 @@ function initDevelopmentContext(params) {
     var customParams = customParamsOf(params, actualParams);
     initTracker(config, customParams);
     var ctx = ticketDescriptorOf(actualParams);
+    // gh-1087: park label name + probe cadence are jobParams config.
+    ctx.jobParams = params.jobParams || {};
     // Resolve statuses — allows per-project overrides via customParams.customStatuses
     ctx.customParams = customParams;
     ctx.statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
@@ -1125,7 +1216,7 @@ function noChangesResponse(ctx) {
     // can never fix them — then exactly ONE bounded resume attempt runs,
     // before ANY tracker side effect in the paths below.
     if (!agentResponse || !agentResponse.trim()) {
-        agentResponse = recoverMissingResponse(ctx.ticketKey, ctx.customParams, ctx.developmentSummary, ctx.cliHasFatalError, ctx.cliErrorMessage);
+        agentResponse = recoverMissingResponse(ctx.ticketKey, ctx.customParams, ctx.developmentSummary, ctx.cliHasFatalError, ctx.cliErrorMessage, ctx);
     }
     return (agentResponse && agentResponse.trim()) ? agentResponse : null;
 }
@@ -1164,17 +1255,126 @@ function finalizeNoChangesOutcome(ctx, agentResponse) {
     return { success: true, path: 'no-changes-needed', ticketKey: ctx.ticketKey };
 }
 
-function interruptedNoChangesComment(ticketKey) {
+function interruptedNoChangesComment(ticketKey, outage) {
     var m = commentMarkup.forTicket(ticketKey);
+    // gh-1121 AC5: name the real cause — an honest "provider outage" with the
+    // failing models and codes, never a guessed "rate limit" when the chain
+    // answered 5xx.
+    if (outage && outage.kind === 'provider_transient') {
+        return m.h(3, quotaBreaker.outageResetHeaderOf(outage)) + '\nThe whole provider chain failed with transient errors, interrupting the AI agent before it could finish. The ticket has been reset to ' + m.bold('Ready For Development') + ' and will be automatically retried.';
+    }
     return m.h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to ' + m.bold('Ready For Development') + ' and will be automatically retried.';
 }
 
-function interruptedPartialWorkComment(ticketKey, branchName) {
+function interruptedPartialWorkComment(ticketKey, branchName, outage) {
     var m = commentMarkup.forTicket(ticketKey);
+    if (outage && outage.kind === 'provider_transient') {
+        return m.h(3, quotaBreaker.outageResetHeaderOf(outage)) + '\nThe whole provider chain failed with transient errors, interrupting the AI agent mid-run (partial work was pushed to branch ' + m.bold(branchName) + '). The ticket has been reset to ' + m.bold('Ready For Development') + ' and will be automatically retried.\n\nThe agent can resume from the existing branch.';
+    }
     return m.h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted before completing the implementation (partial work was pushed to branch ' + m.bold(branchName) + '). The ticket has been reset to ' + m.bold('Ready For Development') + ' and will be automatically retried.\n\nThe agent can resume from the existing branch.';
 }
 
+/**
+ * gh-1087: shared failure-classification text contract — concatenates every
+ * failure signal the leg has (Teammate's authoritative CLI error message +
+ * the CLI output summary) into one text for quotaBreaker.classifyFailure.
+ * Exported so the bug leg classifies byte-identically.
+ */
+function classifyInterruptedText(cliErrorMessage, developmentSummary) {
+    return String(cliErrorMessage || '') + '\n' + String(developmentSummary || '');
+}
+
+/**
+ * gh-1121: classifies the leg's failure text as a whole-provider-chain
+ * transient outage (kind provider_transient) — null otherwise. Quota
+ * evidence keeps priority (I1): classifyFailure never returns
+ * provider_transient for a 403/quota chain, so this helper cannot divert
+ * a quota wall into the outage resume.
+ */
+function providerOutageOf(cliErrorMessage, developmentSummary) {
+    var cls = quotaBreaker.classifyFailure(classifyInterruptedText(cliErrorMessage, developmentSummary));
+    return (cls && cls.kind === 'provider_transient') ? cls : null;
+}
+
+/**
+ * gh-1087 AC1 gate: classifies the leg's failure text. Returns the
+ * classification when the leg must be PARKED (quota_exhausted), null
+ * otherwise (transient/unknown keeps the gh-742 reset-for-retry path).
+ */
+function quotaClassificationOf(ctx) {
+    var cls = quotaBreaker.classifyFailure(classifyInterruptedText(ctx.cliErrorMessage, ctx.developmentSummary));
+    return (cls && cls.kind === 'quota_exhausted') ? cls : null;
+}
+
+/**
+ * gh-1087 AC2: parks the ticket's lane on a hard provider-quota failure —
+ * label on the ticket (and on the open PR for the leg's branch, if one
+ * exists) plus a reason comment naming the provider, the quota window and
+ * the reset condition. The ticket is deliberately NOT moved: no Ready For
+ * Development reset (an immediate retry is guaranteed to fail again), the
+ * SM dispatch lanes skip the park label, and a bounded probe (or a human)
+ * lifts the park later (AC3).
+ *
+ * The run still fails loudly (marked quotaPark error, same dead-letter
+ * contract as gh-742) so a parked no-PR leg never reads as green success.
+ */
+// gh-1087 AC2: the open PR for the leg's branch (if any) carries the park
+// label too, so the PR reads parked to humans and review automation.
+function parkLabelOpenPr(parkLabel, branchName) {
+    try {
+        var pr = findOpenPrForBranch(_scm, branchName);
+        if (pr && pr.number) {
+            _scm.addLabel(pr.number, parkLabel);
+            console.log('🅿️  Added quota park label', parkLabel, 'to PR #' + pr.number);
+        }
+    } catch (e) {
+        console.warn('Failed to label the open PR with the quota park label (non-fatal):', e);
+    }
+}
+
+function parkQuotaExhaustedDevelopment(ctx, classification) {
+    var jobParams = ctx.jobParams || {};
+    var parkLabel = quotaBreaker.parkLabelOf(jobParams);
+    var everyN = quotaBreaker.probeEveryOf(jobParams);
+    var m = commentMarkup.forTicket(ctx.ticketKey);
+    try {
+        getTracker().postComment(ctx.ticketKey, quotaBreaker.parkComment(m, classification, parkLabel, everyN));
+    } catch (e) { }
+    try {
+        getTracker().addLabel(ctx.ticketKey, parkLabel);
+        console.log('🅿️  Added quota park label', parkLabel, 'to', ctx.ticketKey);
+    } catch (e) {
+        console.warn('Failed to add quota park label ' + parkLabel + ':', e);
+    }
+    parkLabelOpenPr(parkLabel, ctx.expectedBranch || ctx.branchName);
+    removeWipLabelQuietly(ctx.ticketKey, wipLabelFor(ctx.metadata));
+    console.log('🅿️  Quota-exhausted leg parked — ticket NOT reset; the SM will skip the', parkLabel,
+        'lane until the quota window resets (probe every', everyN, 'ticks) or a human removes the label.');
+    throwQuotaPark(ctx.ticketKey, parkLabel);
+}
+
+/**
+ * gh-1087: the marked-error twin of throwInterruptedReset — the park side
+ * effects above have ALREADY happened before this throws, so only the run's
+ * conclusion changes (green → red dead letter).
+ */
+function throwQuotaPark(ticketKey, parkLabel) {
+    var err = new Error('Provider quota exhausted — ' + ticketKey + ' was parked with label ' + parkLabel +
+        ' instead of reset for retry (gh-1087)');
+    err.quotaPark = true;
+    throw err;
+}
+
 function resetInterruptedDevelopment(ctx, commentBody) {
+    // gh-1087 AC1/AC2: a hard provider-quota failure parks the lane instead
+    // of resetting for retry — resetting here would re-dispatch the same leg
+    // into the same exhausted provider chain on the next SM tick (per-tick
+    // retry burn). Transient/unknown classifications fall through to the
+    // classic gh-742 reset unchanged (AC4).
+    var quota = quotaClassificationOf(ctx);
+    if (quota) {
+        parkQuotaExhaustedDevelopment(ctx, quota);
+    }
     try {
         getTracker().postComment(ctx.ticketKey, commentBody);
     } catch (e) { }
@@ -1205,7 +1405,7 @@ function recoverNoChangesOutcome(params, ctx) {
     // preempts it), so this block only runs for a genuinely interrupted agent
     // whose one bounded resume attempt (if any) did not land the deliverable.
     console.log('No git changes detected AND no response.md — CLI agent was interrupted. Resetting ticket for retry.');
-    resetInterruptedDevelopment(ctx, interruptedNoChangesComment(ctx.ticketKey));
+    resetInterruptedDevelopment(ctx, interruptedNoChangesComment(ctx.ticketKey, ctx.providerOutage));
 }
 
 function recoverGenericGitFailure(params, ctx, gitResult, stages) {
@@ -1245,15 +1445,19 @@ function ensureResponseForPrBody(ctx) {
         // one step away from writing the deliverable (live fa gh-1341). The
         // tracker side effects below fire only if the deliverable is still
         // missing after the attempt resolves.
-        responseContent = recoverMissingResponse(ctx.ticketKey, ctx.customParams, ctx.developmentSummary, ctx.cliHasFatalError, ctx.cliErrorMessage) || responseContent;
+        responseContent = recoverMissingResponse(ctx.ticketKey, ctx.customParams, ctx.developmentSummary, ctx.cliHasFatalError, ctx.cliErrorMessage, ctx) || responseContent;
         if (!responseContent || !responseContent.trim()) {
             // Agent was interrupted after committing partial work (e.g. outputs/rca.md) but
             // before writing response.md. Reset ticket for retry rather than posting an error.
             console.log('outputs/response.md missing after commit — CLI agent was interrupted mid-way. Resetting for retry.');
-            resetInterruptedDevelopment(ctx, interruptedPartialWorkComment(ctx.ticketKey, ctx.branchName));
+            resetInterruptedDevelopment(ctx, interruptedPartialWorkComment(ctx.ticketKey, ctx.branchName, ctx.providerOutage));
         }
     }
-    return responseContent;
+    // gh-1137: the PR body (the leg summary) must state which Dart SDK the leg
+    // verified with — `toolchain: dart <v> (CI: <pin>, match: yes|no)` — so
+    // format/analyzer claims are checkable against CI. No-op on failure, on
+    // non-Dart repos, and when the agent already carried the line.
+    return toolchainSummary.withToolchainLine(responseContent, { workingDir: _workingDir });
 }
 
 function recoverPrCreationFailure(params, ctx, prResult) {
@@ -1368,9 +1572,10 @@ function postDevelopmentTelemetry(params, ctx) {
 function rethrownAsIs(error) {
     // Marked failures already performed their tracker side effects before
     // throwing — rethrow them so the run is RED and the dead leg stays
-    // visible (fatal CLI environment; gh-683 / gh-729 / gh-742 dead letters).
+    // visible (fatal CLI environment; gh-683 / gh-729 / gh-742 dead letters;
+    // gh-1087 quota park).
     return !!(error && (error.fatalCliEnvironment || error.gitOperationsFailure ||
-        error.prCreationFailure || error.interruptedReset));
+        error.prCreationFailure || error.interruptedReset || error.quotaPark));
 }
 
 function recoverUnexpectedError(params, error) {
@@ -1557,7 +1762,10 @@ function action(params) {
 // Export for dmtools standalone execution
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        action, throwInterruptedReset, recoverMissingResponse, generateUniqueBranchName,
+        action, throwInterruptedReset, throwQuotaPark, recoverMissingResponse, generateUniqueBranchName,
+        // gh-1087: the bug leg reuses the classification contract and the
+        // quota park path entry points so both legs classify byte-identically.
+        classifyInterruptedText, quotaClassificationOf, parkQuotaExhaustedDevelopment,
         // gh-1003: pure helpers extracted from performGitOperations — exported
         // for direct characterization tests.
         sanitizeCommitMessage, parseAheadCount, hasStagedChanges, detectPushFailure,

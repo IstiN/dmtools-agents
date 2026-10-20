@@ -223,6 +223,17 @@ function checksRollup(commitSha, pr, job, owner, name) {
  * already reports 'behind' for those; keep BLOCKED (checks pending under
  * protection) and CLEAN as REST says, DIRTY/BEHIND/other as REST says.
  */
+// gh-1101 (live dart #435): rollup green + approved + BLOCKED is the
+// "required checks invisible to PR" shape (required contexts ran in a
+// workflow_dispatch suite) — the SM fresh-sha resets it; say so.
+function blockedWaitLine(number, ms, approved) {
+    if (ms === 'BLOCKED' && approved) {
+        return '⏳ pr-' + number + ' checks green but mergeState=BLOCKED — required checks' +
+            ' invisible to PR? (SM fresh-sha reset owns it, gh-1101)';
+    }
+    return '⏳ pr-' + number + ' mergeState=' + ms + ' — waiting (checks settling)';
+}
+
 function mergeStateOf(pr) {
     if (pr.mergeable === false) return 'DIRTY';
     var ms = pr.mergeStateStatus ||
@@ -754,7 +765,7 @@ function action(params) {
             if (shouldUnarmStaleHead(ms, approved)) {
                 acted += unarmStaleHeadState(owner, name, pr, ms, say);
             } else {
-                say('⏳ pr-' + pr.number + ' mergeState=' + ms + ' — waiting (checks settling)');
+                say(blockedWaitLine(pr.number, ms, approved));
             }
             continue;
         }
@@ -779,5 +790,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action: action, checksRollup: checksRollup, rollupDetail: rollupDetail, mergeStateOf: mergeStateOf, labelNames: labelNames };
+    module.exports = { action: action, checksRollup: checksRollup, rollupDetail: rollupDetail, mergeStateOf: mergeStateOf, blockedWaitLine: blockedWaitLine, labelNames: labelNames };
 }

@@ -29,7 +29,10 @@ var smProviderModule = require('../../common/smProvider.js');
 var machineAuthorModule = require('../../common/machineAuthor.js');
 var smAsyncModule = require('../../common/smAsync.js');
 var mutexRegistryModule = require('../../common/mutexRegistry.js');
-var mutexRegistryModule = require('../../common/mutexRegistry.js');
+// gh-1140 guest transplant: the `crossRepo` query guard shares the ONE
+// cross-repo predicate with the transplant decision core — hoisted,
+// never lazy (gh-823 pack-require rule).
+var guestTransplantModule = require('../../common/guestTransplant.js');
 
 // runAsync worker sources — STRING literals of CLOSURE-FREE functions.
 // The Dart runtime serializes them via fn.toString() and runs each on a
@@ -319,7 +322,13 @@ function _issueCarrierGuardsFail(q, labels, item) {
     if (hasOpenLinkedPr(q, item)) return true;
     // 'blocked' = human hold (fa #939): the machine skips the item
     // ENTIRELY — all rules, all legs — until a human removes the label.
-    if (labels.indexOf('blocked') !== -1) return true;
+    // gh-1140: q.allowBlockedItems (the guest-transplant AC4 park-reset
+    // lane) opts back in HERE too — the engine-level freeze spans this
+    // guard, the queryPrs pre-mutex filter and the matched filter, and
+    // all three must open together or the parked source stays invisible.
+    // The decision core still refuses a blocked item without the lane's
+    // own park marker, so human holds are never acted on.
+    if (!q.allowBlockedItems && labels.indexOf('blocked') !== -1) return true;
     return false;
 }
 
@@ -350,6 +359,15 @@ function _notMergeStateListGuardFail(q, item) {
     var nmsWant = wantList(q.notMergeState);
     if (nmsWant && (!item.pr || nmsWant.indexOf(item.pr.mergeState) !== -1)) return true;
     return false;
+}
+
+// Composite: every merge-state guard (string equality, allowed list,
+// not-list) behind ONE chain slot — matchesGuards stays a flat guard
+// table instead of growing a branch per new merge-state knob.
+function _mergeStateGuardsFail(q, item) {
+    if (_prMergeStateGuardFail(q, item)) return true;
+    if (_mergeStateListGuardFail(q, item)) return true;
+    return _notMergeStateListGuardFail(q, item);
 }
 
 function _latchWantedLabels(q, item) {
@@ -468,6 +486,19 @@ function _machineAuthorGuardFail(q, item, machineAuthor, owner) {
     return !machineAuthorModule.isMachineAuthored(item, machineAuthor, owner);
 }
 
+// gh-1140 guest transplant: `crossRepo: true` matches CROSS-REPO heads
+// only (the head repository full name exists and differs from the base).
+// A same-repo PR, a deleted fork (head.repo null) or a malformed spec
+// all fail the guard (fail closed) — the guest lane never touches a
+// head it cannot attribute. Reads the PR-list item's headRepo (resolved
+// by the shared gh-1059 resolver) with the prStatus twin as fallback;
+// issue-carrier items carry neither → inert there.
+function _crossRepoGuardFail(q, item, repoInfo) {
+    if (!q.crossRepo) return false;
+    var headFull = item.headRepo || (item.pr && item.pr.headRepo) || null;
+    return !guestTransplantModule.isCrossRepoHead(headFull, repoInfo.owner, repoInfo.repo);
+}
+
 function _mergeableGuardFail(q, item) {
     if (q.mergeable === true && (!item.pr || item.pr.mergeable !== true)) return true;
     return false;
@@ -476,6 +507,13 @@ function _mergeableGuardFail(q, item) {
 function _prStateGuardFail(q, item) {
     if (q.prState && (!item.pr || item.pr.state !== q.prState)) return true;
     return false;
+}
+
+// Composite: mergeable + PR-state (the two plain PR-state knobs) behind
+// ONE chain slot — same reason as _mergeStateGuardsFail above.
+function _prStateGuardsFail(q, item) {
+    if (_mergeableGuardFail(q, item)) return true;
+    return _prStateGuardFail(q, item);
 }
 
 function _prSideBlockedLabel(prLs) {
@@ -503,17 +541,15 @@ function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
     var labels = item.labels || [];
     if (_issueCarrierGuardsFail(q, labels, item)) return false;
     if (_prChecksGuardsFail(q, item)) return false;
-    if (_prMergeStateGuardFail(q, item)) return false;
-    if (_mergeStateListGuardFail(q, item)) return false;
-    if (_notMergeStateListGuardFail(q, item)) return false;
+    if (_mergeStateGuardsFail(q, item)) return false;
     if (q.mergeStateLatch && _mergeStateLatchGuardFail(q, item, repoInfo)) return false;
     if (_reviewStaleGuardFail(q, item, provider)) return false;
     if (_staleVerdictGuardFail(q, item, provider)) return false;
     if (_verdictRecordGuardsFail(q, item, provider, machineAuthor)) return false;
     if (_threadsGuardsFail(q, item, provider)) return false;
     if (_machineAuthorGuardFail(q, item, machineAuthor, owner)) return false;
-    if (_mergeableGuardFail(q, item)) return false;
-    if (_prStateGuardFail(q, item)) return false;
+    if (_crossRepoGuardFail(q, item, repoInfo)) return false;
+    if (_prStateGuardsFail(q, item)) return false;
     if (_prLabelGuardsFail(q, item)) return false;
     return true;
 }
@@ -531,7 +567,7 @@ function query(rule, ctx) {
         scm: { provider: 'github' },
         repository: repoInfo
     });
-    var branchPrefix = rule.branchPrefix || 'ai/gh-';
+    var branchPrefix = branchPrefixOf(rule);
     var limit = rule.limit || 50;
 
     var machineAuthor = machineAuthorModule.resolveMachineAuthor(ctx, ctx && ctx.config);
@@ -694,27 +730,44 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
 // → the whole SM cycle red every 15 min). Qualified mentions are stripped
 // before scraping; existence of what remains is verified at dispatch time
 // (smAgent localIssueExists), so dangling bare refs degrade the same way.
-function linkedIssueNumber(body) {
-    var text = String(body || '');
-    // Strip repo-qualified mentions: a qualifier token (owner, repo, or
-    // owner/repo — word chars/dots/dashes, optionally slash-separated)
-    // before '#'. Only REAL qualifiers count — the token must contain a
-    // '.' or '/' ('dm.ai #601', 'org/repo#N', 'org/repo #603') or attach
-    // directly to the '#' ('word#N' is not autolinked by GitHub either);
-    // a plain English word followed by a spaced '#N' ('Related to #45')
-    // stays a LOCAL bare-mention ref. The boundary class keeps closing
-    // keywords ('Closes #123') intact — and the keyword check below is
-    // belt-and-suspenders for 'closes repo#N'.
-    text = text.replace(/(^|[^A-Za-z0-9_.\-/])([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?)([ \t]*)(#\d+)/g,
-        function (m0, boundary, qualifier, gap) {
-            if (/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)/i.test(qualifier)) {
-                return m0; // closing keyword, not a repo qualifier
-            }
-            if (gap === '' || qualifier.indexOf('.') !== -1 || qualifier.indexOf('/') !== -1) {
-                return boundary + ' '; // cross-repo mention — drop it
-            }
-            return m0; // spaced plain word — the #N stays a local ref
-        });
+//
+// A qualifier naming THIS repository ('acme/widgets#12' in acme/widgets) is
+// not cross-repo: it is the composite ticket key the dev leg writes into the
+// PR (title and body heading), and dropping it left such a PR unlinked — no
+// latch, no validation, no review. It stays a local ref.
+// Repo-qualified '#N' mentions: a qualifier token (owner, repo, or owner/repo — word
+// chars/dots/dashes, optionally slash-separated) before '#'. The boundary class keeps closing
+// keywords ('Closes #123') intact.
+var QUALIFIED_REF = /(^|[^A-Za-z0-9_.\-/])([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?)([ \t]*)(#\d+)/g;
+var CLOSING_KEYWORD = /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)/i;
+
+// 'owner/repo' of the repository the rule reads, lowercased; null when unknown.
+function ownRepoName(repoInfo) {
+    if (!repoInfo || !repoInfo.owner || !repoInfo.repo) return null;
+    return (repoInfo.owner + '/' + repoInfo.repo).toLowerCase();
+}
+
+// Only REAL qualifiers count — the token must contain a '.' or '/' ('dm.ai #601', 'org/repo#N',
+// 'org/repo #603') or attach directly to the '#' ('word#N' is not autolinked by GitHub either);
+// a plain English word followed by a spaced '#N' ('Related to #45') stays a LOCAL bare-mention ref.
+function isRepoQualifier(qualifier, gap) {
+    return gap === '' || qualifier.indexOf('.') !== -1 || qualifier.indexOf('/') !== -1;
+}
+
+// What one 'qualifier #N' match becomes: unchanged (a closing keyword, or a spaced plain word),
+// a bare local '#N' (a qualifier naming THIS repository), or dropped (another repository).
+function rewriteQualifiedRef(ownRepo, m0, boundary, qualifier, gap, hash) {
+    if (CLOSING_KEYWORD.test(qualifier)) return m0;
+    if (ownRepo && gap === '' && qualifier.toLowerCase() === ownRepo) return boundary + hash;
+    if (isRepoQualifier(qualifier, gap)) return boundary + ' ';
+    return m0;
+}
+
+function linkedIssueNumber(body, repoInfo) {
+    var ownRepo = ownRepoName(repoInfo);
+    var text = String(body || '').replace(QUALIFIED_REF, function (m0, boundary, qualifier, gap, hash) {
+        return rewriteQualifiedRef(ownRepo, m0, boundary, qualifier, gap, hash);
+    });
     var m = /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i.exec(text);
     if (m) return parseInt(m[1], 10);
     m = /(^|[^0-9])#(\d+)([^0-9]|$)/.exec(text);
@@ -905,6 +958,29 @@ function _prListBranch(p) {
     return (p.head && p.head.ref) || p.headRefName || '';
 }
 
+// The issue a machine branch was cut for: '<branchPrefix><n>' exactly
+// ('ai/gh-12'). The issue-carrier side already links a PR to its issue by
+// this branch (provider.findPr); the PR-carrier side used only the body
+// scrape, so a PR whose body names no issue stayed unlinked.
+// The machine branch prefix of a rule (default 'ai/gh-') — one default for both carriers.
+function branchPrefixOf(rule) {
+    return rule.branchPrefix || 'ai/gh-';
+}
+
+function issueNumberFromBranch(branch, branchPrefix) {
+    var b = String(branch || '');
+    var prefix = String(branchPrefix || '');
+    if (!prefix || b.indexOf(prefix) !== 0) return null;
+    var rest = b.substring(prefix.length);
+    return /^\d+$/.test(rest) ? parseInt(rest, 10) : null;
+}
+
+// An explicit reference in the body wins; the machine branch name is the fallback.
+function _prIssueNumber(p, repoInfo, branchPrefix) {
+    var bodyIssue = linkedIssueNumber(p.body, repoInfo);
+    return bodyIssue !== null ? bodyIssue : issueNumberFromBranch(_prListBranch(p), branchPrefix);
+}
+
 // gh-1057: the head REPOSITORY of the PR as an 'owner/repo' full name
 // (REST head.repo.full_name; null when the fork is deleted) — the
 // dead-head bench oracle must probe THERE for fork PRs, not the base.
@@ -919,12 +995,12 @@ function _prListAuthor(p) {
     return '';
 }
 
-function _prItemFromPr(p) {
+function _prItemFromPr(p, repoInfo, branchPrefix) {
     return {
         key: 'pr-' + p.number,
         labels: prLabels(p),
         pr: null,
-        issueNumber: linkedIssueNumber(p.body),
+        issueNumber: _prIssueNumber(p, repoInfo, branchPrefix),
         prNumber: p.number,
         draft: !!p.draft,
         branch: _prListBranch(p),
@@ -940,9 +1016,9 @@ function _prItemFromPr(p) {
     };
 }
 
-function _buildPrItems(prs) {
+function _buildPrItems(prs, repoInfo, branchPrefix) {
     var items = [];
-    for (var i = 0; i < prs.length; i++) items.push(_prItemFromPr(prs[i]));
+    for (var i = 0; i < prs.length; i++) items.push(_prItemFromPr(prs[i], repoInfo, branchPrefix));
     return items;
 }
 
@@ -1138,16 +1214,39 @@ function _sortAndSlicePrCandidates(matched, limit, priorityLabels, repoInfo) {
     return matched.slice(0, limit + TRIGGER_FALLTHROUGH_RESERVE);
 }
 
+// fa#939 human hold × gh-1140 park-reset opt-in — the ONE blocked-label
+// predicate every queryPrs filter reads (complexity lives here, off the
+// queryPrs ledger; behavior: 'blocked' items are invisible to every rule
+// EXCEPT a rule that opted in with query.allowBlockedItems).
+function _blockedHoldVisible(q, it) {
+    if (q.allowBlockedItems === true) return true;
+    return it.labels.indexOf('blocked') === -1;
+}
+
+// The same predicate in guard form for the matched filter (defensive
+// twin of the pre-mutex filter — see matchesGuards).
+function _blockedQueryHoldFail(q2, labels) {
+    if (q2.allowBlockedItems) return false;
+    return labels.indexOf('blocked') !== -1;
+}
+
 function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {
     var q = rule.query || {};
-    var items = _buildPrItems(_openPrList(provider, repoInfo));
+    var items = _buildPrItems(_openPrList(provider, repoInfo), repoInfo, branchPrefixOf(rule));
 
     // 'blocked' = human hold (fa #939 — documented in matchesGuards): the
     // item is invisible to EVERY rule, so it must not even act as a mutex
     // holder — a frozen PR's stale ai_validating arm would otherwise
     // serialize the whole queue forever. Filtered before the mutex scan;
     // the matchesGuards check remains the engine-level guard.
-    items = items.filter(function (it) { return it.labels.indexOf('blocked') === -1; });
+    // gh-1140 exception (q.allowBlockedItems): the guest-transplant rule
+    // must SEE its own parked sources — AC4's automatic re-arm is the #633
+    // head-change reset, and a parked source (parkedLabel 'blocked') is
+    // otherwise invisible to every lane forever. Opt-in only: the freeze
+    // stays intact for every other rule, and the transplant decision core
+    // still refuses to act on a 'blocked' item that does not carry the
+    // lane's own park marker (human holds are never touched).
+    items = items.filter(function (it) { return _blockedHoldVisible(q, it); });
 
     // Mutex: gh-1009 split — _applyMutexFilter owns the defer decision;
     // gh-1000's phantom-holder reconciliation (phantomHealIfFull, inside
@@ -1207,8 +1306,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
             if (!among) return true;
             return among.some(function (l) { return it.labels.indexOf(l) !== -1; });
         };
-        var mutexMax = (typeof q.mutexMax === 'number' && isFinite(q.mutexMax))
-            ? Math.max(1, Math.floor(q.mutexMax)) : 1;
+        var mutexMax = _mutexMaxOf(q);
         var holders = items.filter(holdsMutex);
         if (q.mutexExcludeSelf) {
             items = items.filter(function (candidate) {
@@ -1254,7 +1352,10 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
     var matched = items.filter(function (item) {
         var labels = item.labels;
         var q2 = rule.query || {};
-        if (labels.indexOf('blocked') !== -1) return false; // #939: human hold — filtered pre-mutex too; see matchesGuards
+        // #939: human hold — filtered pre-mutex too; see matchesGuards.
+        // gh-1140: q.allowBlockedItems opts the guest-transplant lane back
+        // in (its own AC4 park-reset needs the parked sources).
+        if (_blockedQueryHoldFail(q2, labels)) return false;
         if (q2.labels && !q2.labels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
         if (q2.notLabels && q2.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
         if (q2.draft === false && item.draft) return false;
@@ -1276,6 +1377,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { query: query, matchesGuards: matchesGuards,
+        linkedIssueNumber: linkedIssueNumber,
         takeMutexTickSnapshot: takeMutexTickSnapshot,
         mutexHoldersOf: mutexHoldersOf, rederiveHoldersLive: rederiveHoldersLive,
         logPhantomHeal: logPhantomHeal };
