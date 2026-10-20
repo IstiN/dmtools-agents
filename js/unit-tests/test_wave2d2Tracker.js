@@ -52,6 +52,7 @@ suite('wave2d2 ado — checkStoryTestsPassed', function() {
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock({ jira: { issueTypes: { TEST_CASE: 'Test Case', BUG: 'Bug' } } }),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': w2Trackers(rec.mocks)
         }), rec.mocks);
         var r = mod.action({ ticket: { key: '10' }, jobParams: { customParams: { trackerProvider: 'ado', removeLabel: 'sm_x' } } });
@@ -150,7 +151,7 @@ suite('wave2d2 ado — createRepoTasks', function() {
             ado_search_by_wiql: function() { return []; },
             ado_create_work_item: function() { n++; return { id: 200 + n }; }
         });
-        var mod = loadModule('js/createRepoTasks.js', makeRequire({ './config.js': configModule, './common/trackers.js': w2Trackers(rec.mocks) }),
+        var mod = loadModule('js/createRepoTasks.js', makeRequire({ './config.js': configModule, './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'), './common/trackers.js': w2Trackers(rec.mocks) }),
             Object.assign({ java: { lang: { System: { getenv: function() { return ''; } } } } }, rec.mocks));
         var r = mod.action({ ticket: { key: '100' }, customParams: { trackerProvider: 'ado' } });
         assert.equal(r.success, true);
@@ -206,6 +207,7 @@ suite('wave2d2 ado — postBulkBugsCreation', function() {
             './config.js': configModule, './configLoader.js': cfgLoader,
             './common/feedbackLoop.js': { resumeAgent: function() { return { attempted: false }; } },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': w2Trackers(rec.mocks)
         }), Object.assign({}, rec.mocks, { file_read: rec.mocks.file_read }));
         var r = mod.action({ jobParams: { customParams: { trackerProvider: 'ado', removeLabel: 'sm_a', smTriggerLabel: 'sm_b' } } });

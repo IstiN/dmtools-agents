@@ -9,6 +9,7 @@ const { ISSUE_TYPES, STATUSES } = require('./config.js');
 const trackersModule = require('./common/trackers.js');
 const { setTicketPriority } = require('./common/jiraHelpers.js');
 const { buildSummary } = require('./common/aiResponseParser.js');
+const linkedIssuesReport = require('./common/linkedIssuesReport.js');
 
 // Tracker for the current action() run (built inside action(), never at module load).
 var tracker = null;
@@ -129,7 +130,7 @@ function fetchExistingStoriesByParent(parentKey, issueTypeName) {
     if (!parentKey) return summaryToKey;
 
     // JQL text: provider-specific query (WIQL on ado)
-    var issues = tracker.searchIssues('parent = ' + parentKey + ' AND issuetype = "' + issueTypeName + '" ORDER BY created ASC', {
+    var issues = tracker.searchIssues(linkedIssuesReport.buildChildrenQuery(tracker.provider(), parentKey, 'parent = ' + parentKey + ' AND issuetype = "' + issueTypeName + '" ORDER BY created ASC', issueTypeName), {
         fields: ['key', 'summary']
     }) || [];
 

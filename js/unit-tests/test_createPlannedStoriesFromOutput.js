@@ -30,7 +30,8 @@ function loadStoryPlanAction(mocks) {
                 'js/common/aiResponseParser.js',
                 makeRequire({ '../config.js': configModule }),
                 {}
-            )
+            ),
+            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js')
         }),
         allMocks
     );

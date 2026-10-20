@@ -63,6 +63,7 @@ function loadPrepareBulkBugsCreationContext(mocks) {
         makeRequire({
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
+            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks)
         }),
         allMocks
@@ -291,7 +292,7 @@ suite('creation automation queries follow jira.statuses when the project opts in
             jira_get_ticket: function() { return JSON.stringify({ key: 'TS-9', fields: { summary: 'tc' } }); }
         });
         var mod = loadModule('js/prepareBulkBugsCreationContext.js', makeRequire({
-            './configLoader.js': loaderWith(jiraOverrides), './config.js': configModule, './common/trackers.js': bulkTrackers
+            './configLoader.js': loaderWith(jiraOverrides), './config.js': configModule, './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'), './common/trackers.js': bulkTrackers
         }), mocks);
         mod.action({ inputFolderPath: 'input/bulk', customParams: customParams || { batchSize: 5 }, jira: { project: 'TS' } });
         return searches;
@@ -363,6 +364,7 @@ function loadBulk(mocks, requireOverrides, configModuleOverride) {
     var req = {
         './configLoader.js': configLoaderModule,
         './config.js': configModuleOverride || configModule,
+        './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
         './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModuleOverride || configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks)
     };
     Object.keys(requireOverrides || {}).forEach(function(k) { req[k] = requireOverrides[k]; });
@@ -630,6 +632,7 @@ function loadBulkPure(configModuleOverride) {
     return loadModule('js/prepareBulkBugsCreationContext.js', makeRequire({
         './configLoader.js': configLoaderModule,
         './config.js': configModuleOverride || configModule,
+        './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
         './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModuleOverride || configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), {})
     }), {});
 }
@@ -818,6 +821,7 @@ suite('prepareBulkBugsCreationContext: extracted helpers (gh-1081)', function() 
         var empty = loadModule('js/prepareBulkBugsCreationContext.js', makeRequire({
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
+            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), {
                 jira_search_by_jql: function() { return []; }
             })
@@ -848,6 +852,7 @@ suite('prepareBulkBugsCreationContext: extracted helpers (gh-1081)', function() 
         var mod2 = loadModule('js/prepareBulkBugsCreationContext.js', makeRequire({
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
+            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), {})
         }), { file_write: w.file_write });
         mod2.writeOpenBugs('input/x', []);
@@ -865,6 +870,24 @@ suite('prepareBulkBugsCreationContext: extracted helpers (gh-1081)', function() 
         assert.contains(md, 'Historical Done linked bugs**: 7');
         assert.contains(md, 'input/failed_tcs.json');
         assert.contains(md, 'input/open_bugs.json');
+    });
+
+    test('defaultOpenBugsTemplate, defaultFailedTCsTemplate, and buildQueries support ado provider (gh-1122)', function() {
+        assert.contains(mod.defaultOpenBugsTemplate('ado'), "FROM WorkItems WHERE [System.TeamProject] = '{jiraProject}'");
+        assert.contains(mod.defaultOpenBugsTemplate('jira'), 'project = {jiraProject}');
+        assert.contains(mod.defaultFailedTCsTemplate('ado'), "FROM WorkItems WHERE [System.TeamProject] = '{jiraProject}'");
+        assert.contains(mod.defaultFailedTCsTemplate('jira'), 'project = {jiraProject}');
+
+        var sc = mod.buildStatusConfig({ jira: { statuses: { DONE: 'Closed', FAILED: 'Failed' }, useConfiguredStatusesInQueries: true } }, 'MyProj');
+        var adoQueries = mod.buildQueries({}, sc, 'ado');
+        assert.equal(
+            adoQueries.openBugsJql,
+            "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'MyProj' AND [System.WorkItemType] = 'Bug' AND [System.State] NOT IN ('Closed')"
+        );
+        assert.equal(
+            adoQueries.failedTCsJql,
+            "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'MyProj' AND [System.WorkItemType] = 'Test Case' AND [System.State] IN ('Failed') AND NOT [System.Tags] CONTAINS 'sm_bug_creation_triggered' ORDER BY [System.CreatedDate] ASC"
+        );
     });
 });
 

@@ -9,6 +9,7 @@
 
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const linkedIssuesReport = require('./common/linkedIssuesReport.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
@@ -32,6 +33,27 @@ function removeLabel(ticketKey, label) {
     } catch (e) {}
 }
 
+function moveFailedTcToBugToFix(ticketKey, jiraConfig) {
+    var b2fMove = getTracker().moveToStatusOrMark(ticketKey, jiraConfig.statuses.BUG_TO_FIX, 'BUG_TO_FIX');
+    if (b2fMove.moved || b2fMove.marked) {
+        console.log('Moved', ticketKey, 'to', jiraConfig.statuses.BUG_TO_FIX);
+    }
+    removeLabel(ticketKey, 'sm_bug_creation_triggered');
+    removeLabel(ticketKey, 'sm_bulk_bugs_creation_triggered');
+    removeLabel(ticketKey, 'sm_test_automation_triggered');
+    getTracker().postComment(ticketKey, 'h3. 🐛 Linked Non-Done Bug Found — Moved to Bug To Fix\n\n' +
+            'This failed test case already has linked non-Done Bug issue(s), so it was moved to *' +
+            jiraConfig.statuses.BUG_TO_FIX + '* instead of staying in *Failed* and re-running bug creation.');
+}
+
+function postTokenUsageSafely(ticketKey, params) {
+    try {
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
 function action(params) {
     var ticketKey = params.ticket && params.ticket.key;
     if (!ticketKey) {
@@ -43,41 +65,22 @@ function action(params) {
 
     console.log('=== Failed TC bug status recovery for', ticketKey, '===');
 
-    // JQL text: provider-specific query (WIQL on ado)
-
-    var linkedBugs = getTracker().searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status not in ("' + jiraConfig.statuses.DONE + '")', { maxResults: 50 }) || [];
+    var query = linkedIssuesReport.buildLinkedIssuesQuery(
+        getTracker().provider(),
+        ticketKey,
+        'issuetype = Bug AND status not in ("' + jiraConfig.statuses.DONE + '")',
+        { issueType: 'Bug', statusNotIn: [jiraConfig.statuses.DONE] }
+    );
+    var linkedBugs = getTracker().searchIssues(query, { maxResults: 50 }) || [];
 
     if (linkedBugs.length === 0) {
         console.log('No linked non-Done Bugs found for', ticketKey);
-        // The old single bug_creation rule is disabled, but its trigger label
-        // can remain on Failed TCs and exclude them from bulk_bugs_creation JQL.
-        // Clear only that stale single-run label so the active bulk path can
-        // pick the TC up on the next SM pass.
         removeLabel(ticketKey, 'sm_bug_creation_triggered');
         return { success: true, action: 'released_for_bulk_bug_creation', ticketKey: ticketKey };
     }
 
-    // gh-916: BUG_TO_FIX can be tag-only (restricted ADO workflows) — stage-label fallback.
-    var b2fMove = getTracker().moveToStatusOrMark(ticketKey, jiraConfig.statuses.BUG_TO_FIX, 'BUG_TO_FIX');
-    if (b2fMove.moved || b2fMove.marked) {
-        console.log('Moved', ticketKey, 'to', jiraConfig.statuses.BUG_TO_FIX);
-    }
-
-    removeLabel(ticketKey, 'sm_bug_creation_triggered');
-    removeLabel(ticketKey, 'sm_bulk_bugs_creation_triggered');
-    removeLabel(ticketKey, 'sm_test_automation_triggered');
-
-    getTracker().postComment(ticketKey, 'h3. 🐛 Linked Non-Done Bug Found — Moved to Bug To Fix\n\n' +
-            'This failed test case already has linked non-Done Bug issue(s), so it was moved to *' +
-            jiraConfig.statuses.BUG_TO_FIX + '* instead of staying in *Failed* and re-running bug creation.');
-
-    // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-    // wrote outputs/*_usage.json during the agent run.
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    moveFailedTcToBugToFix(ticketKey, jiraConfig);
+    postTokenUsageSafely(ticketKey, params);
 
     return {
         success: true,

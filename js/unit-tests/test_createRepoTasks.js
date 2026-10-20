@@ -23,7 +23,7 @@ function makeModule(globals) {
 
     return loadModule(
         'js/createRepoTasks.js',
-        makeRequire({ './config.js': configModule, './common/trackers.js': d2Trackers(defaultGlobals) }),
+        makeRequire({ './config.js': configModule, './common/trackers.js': d2Trackers(defaultGlobals), './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js') }),
         defaultGlobals
     );
 }
