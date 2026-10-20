@@ -265,9 +265,13 @@ function _markerObject(body) {
 // a feed with no trusted marker reads as NO marker (fail closed — the
 // fresh path re-arms from the human label event instead).
 function parseTransplantMarker(comments, trustedLogins) {
-    if (!comments || !comments.length) return null;
     var allow = Array.isArray(trustedLogins) ? trustedLogins : null;
-    if (!allow || !allow.length) return null;
+    if (!comments || !comments.length || !allow || !allow.length) return null;
+    return _newestAllowedMarker(comments, allow);
+}
+
+// The newest allowed comment body that carries a complete marker.
+function _newestAllowedMarker(comments, allow) {
     var found = null;
     for (var i = 0; i < comments.length; i++) {
         if (!_authorAllowed(comments[i], allow)) continue;
@@ -661,9 +665,9 @@ function parkSteps(reason, ctx) {
             prNumber: ctx.source.prNumber,
             text: transplantMarkerComment({
                 state: 'parked', source: ctx.source.prNumber,
-                head: ctx.headSha || null,
+                head: ctx.headSha,
                 branch: transplantBranchName(cfg.branchPrefix, ctx.source.prNumber),
-                reason: reason, actor: ctx.actorLogin || null
+                reason: reason, actor: ctx.actorLogin
             }),
             reason: reason
         })
@@ -821,7 +825,7 @@ function _parkResetDecision(input, cfg, source, marker, base, audit) {
             state: 'armed', source: source.prNumber,
             head: input.headSha,
             branch: transplantBranchName(cfg.branchPrefix, source.prNumber),
-            actor: input.actorLogin || null
+            actor: input.actorLogin
         })
     });
     return {
@@ -865,7 +869,7 @@ function _freshSequence(input, cfg, source, base, marker, shaInfo, branch, audit
             prNumber: source.prNumber,
             text: transplantMarkerComment({
                 state: 'armed', source: source.prNumber, head: shaInfo.sha, branch: branch,
-                actor: input.actorLogin || null
+                actor: input.actorLogin
             })
         }));
     }
@@ -904,7 +908,7 @@ function transplantSequence(input) {
     if (!shaInfo) {
         // AC4 fallback — no readable head: park with the no-ref reason.
         var steps = parkSteps('no-ref', { cfg: cfg, source: source, headSha: null,
-            actorLogin: input.actorLogin || null });
+            actorLogin: input.actorLogin });
         return { decision: 'park', reason: 'no-ref', steps: steps,
                  audit: audit + 'parked — no-ref (source head unreadable)' };
     }

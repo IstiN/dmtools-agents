@@ -1081,22 +1081,23 @@ suite('guestTransplant: rework round 3 — terminal transplanted marker (threads
     // Faithful wiring replay: guestApplyStep renders every marker comment
     // via transplantMarkerComment with the runtime ctx (newPrNumber,
     // mergedSha) — the same function the tests call.
+    function markerPostText(s, ctx) {
+        return mod.transplantMarkerComment({
+            state: 'transplanted', source: s.prNumber,
+            head: ctx.usedSha, branch: s.branch,
+            transplant: ctx.newPrNumber, merged: ctx.mergedSha || ctx.usedSha,
+            actor: ctx.actorLogin
+        });
+    }
     function wiringReplay(seq, ctx0) {
         var ctx = { usedSha: SHA_A, newPrNumber: null, mergedSha: null,
                     actorLogin: 'ai-bot[bot]' };
         if (ctx0) { for (var k in ctx0) ctx[k] = ctx0[k]; }
         var posted = [];
         seq.steps.forEach(function (s) {
-            if (s.op === 'comment' || s.op === 'transplanted_marker') {
-                posted.push(mComment('ai-bot[bot]',
-                    s.op === 'transplanted_marker'
-                        ? mod.transplantMarkerComment({
-                            state: 'transplanted', source: s.prNumber,
-                            head: ctx.usedSha || s.head, branch: s.branch,
-                            transplant: ctx.newPrNumber, merged: ctx.mergedSha || ctx.usedSha,
-                            actor: ctx.actorLogin
-                        })
-                        : s.text));
+            if (s.op === 'comment') posted.push(mComment('ai-bot[bot]', s.text));
+            if (s.op === 'transplanted_marker') {
+                posted.push(mComment('ai-bot[bot]', markerPostText(s, ctx)));
             }
             if (s.op === 'open_pr') ctx.newPrNumber = 99;
             if (s.op === 'merge') ctx.mergedSha = SHA_B;
