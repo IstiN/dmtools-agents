@@ -1734,7 +1734,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
         if (rule.query) rule.query.labels = [guestCfg.label];
         try {
-            sweepClosedGuestBranches(effectiveRepoInfo, guestCfg);
+            sweepClosedGuestBranches(effectiveRepoInfo, guestCfg,
+                verdictMachineLogins(effectiveConfig));
         } catch (eGc) {
             console.warn('  ⚠️  guest-transplant GC sweep failed: ' + (eGc.message || eGc));
         }
@@ -8304,7 +8305,12 @@ function guestBranchExists(repoInfo, branch) {
     }
 }
 
-function guestMarker(repoInfo, prNumber) {
+// machineLogins (threads 13/17): the machineAuthor allowlist — the
+// marker format is public (this repo) and the marker lives on the
+// GUEST's own PR, so only markers authored by a configured machine
+// login are trusted; an empty list trusts nothing (the same doctrine
+// readVerdictRecords applies to the verdict markers).
+function guestMarker(repoInfo, prNumber, machineLogins) {
     try {
         var res = github_get_pr_comments({
             workspace: repoInfo.owner, repository: repoInfo.repo,
@@ -8312,7 +8318,8 @@ function guestMarker(repoInfo, prNumber) {
         });
         var obj = typeof res === 'string' ? JSON.parse(res) : (res || []);
         var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
-        return guestTransplantModule.parseTransplantMarker(list);
+        return guestTransplantModule.parseTransplantMarker(
+            list, Array.isArray(machineLogins) ? machineLogins : []);
     } catch (e) {
         console.warn('  ⚠️  transplant marker probe failed (fail closed): ' + (e.message || e));
         return null;
@@ -8488,6 +8495,22 @@ function guestApplyStep(repoInfo, cfg, s, ctx, dry) {
                 repoInfo.owner, repoInfo.repo, s.prNumber));
             console.log('  🔒 source PR #' + s.prNumber + ' closed (transplanted)');
             return {};
+        case 'transplanted_marker':
+            // The TERMINAL snapshot (threads 12/16) — rendered here, not in
+            // the plan: the created PR number and merge sha exist only at
+            // runtime. A reopened source reads this marker and no-ops.
+            if (dry) { console.log('  🧪 [dry] would post the transplanted marker on #' + s.prNumber); return {}; }
+            tr.postComment(s.prNumber, guestTransplantModule.transplantMarkerComment({
+                state: 'transplanted',
+                source: s.prNumber,
+                head: ctx.usedSha || s.head || null,
+                branch: s.branch,
+                transplant: ctx.newPrNumber || null,
+                merged: ctx.mergedSha || ctx.usedSha || null,
+                actor: ctx.actorLogin || null
+            }));
+            console.log('  🧬 transplanted marker posted on #' + s.prNumber);
+            return {};
         case 'delete_ref':
             if (dry) { console.log('  🧪 [dry] would delete branch ' + s.branch); return {}; }
             guestExec(repoInfo, guestTransplantModule.buildDeleteRefCommand(
@@ -8522,7 +8545,7 @@ function transplantGuestPrAction(repoInfo, ticket, cfg, machineLogins) {
     var dry = DRY === true;
     var prNumber = ticket.prNumber;
     var branch = guestTransplantModule.transplantBranchName(cfg.branchPrefix, prNumber);
-    var marker = guestMarker(repoInfo, prNumber);
+    var marker = guestMarker(repoInfo, prNumber, machineLogins);
     var armEvent = guestArmEvent(repoInfo, prNumber, cfg.label);
     var headSha = resolveHeadSha(repoInfo, ticket);
     var seq = guestTransplantModule.transplantSequence({
@@ -8540,6 +8563,12 @@ function transplantGuestPrAction(repoInfo, ticket, cfg, machineLogins) {
         headSha: headSha,
         armEvent: armEvent,
         machineLogins: machineLogins,
+        // The marker writer identity (threads 13/17): the first configured
+        // machineAuthor login — stamped into every marker this machine
+        // posts; trust itself comes from the comment AUTHOR (guestMarker).
+        actorLogin: (Array.isArray(machineLogins) && machineLogins.length)
+            ? machineLogins[0] : null,
+        marker: marker,
         marker: marker,
         branchExists: guestBranchExists(repoInfo, branch),
         openTransplantPr: guestOpenPrOnBranch(repoInfo, branch),
@@ -8555,23 +8584,29 @@ function transplantGuestPrAction(repoInfo, ticket, cfg, machineLogins) {
     // carries the EXISTING machine PR number — the carry probe and the
     // close comment address it instead of opening a second PR.
     var ctx = { sourcePrNumber: prNumber, usedSha: null,
-                newPrNumber: seq.resumePrNumber || null };
+                newPrNumber: seq.resumePrNumber || null,
+                actorLogin: (Array.isArray(machineLogins) && machineLogins.length)
+                    ? machineLogins[0] : null };
     if (dry) {
         guestRunSteps(repoInfo, cfg, seq.steps, ctx, true);
         return;
     }
     try {
-        // Pin the sha the transplant actually uses (the recorded arm-time
-        // sha on a drifted head) for the close comment.
+        // Pin the sha the transplant actually uses for the close comment:
+        // the merge step's OWN sha (sequenceHeadSha) — the park-reset path
+        // re-arms at the NEW head, and the marker's stale recorded sha
+        // must not leak into the comment (threads 11/15).
         var shaInfo = guestTransplantModule.resolveTransplantSha(marker, headSha);
-        ctx.usedSha = shaInfo ? shaInfo.sha : null;
+        ctx.usedSha = guestTransplantModule.sequenceHeadSha(seq) ||
+            (shaInfo ? shaInfo.sha : null);
         guestRunSteps(repoInfo, cfg, seq.steps, ctx, false);
     } catch (eRun) {
         if (eRun && eRun.isMergeConflict === true) {
             console.log('  ⚠️  transplant merge conflict — parking the source (AC4)');
             guestRunSteps(repoInfo, cfg,
                 guestTransplantModule.parkSteps('conflict', {
-                    cfg: cfg, source: { prNumber: prNumber }, headSha: ctx.usedSha
+                    cfg: cfg, source: { prNumber: prNumber }, headSha: ctx.usedSha,
+                    actorLogin: ctx.actorLogin
                 }), ctx, false);
             return;
         }
@@ -8584,7 +8619,7 @@ function transplantGuestPrAction(repoInfo, ticket, cfg, machineLogins) {
 // never list[0]'s arbitrary pick), and a branch with no PR at all reads
 // its source marker for the E5 orphan completion. Fail-closed: a failed
 // probe reads as 'no PR'.
-function guestSweepEntry(repoInfo, cfg, branch) {
+function guestSweepEntry(repoInfo, cfg, branch, machineLogins) {
     var prState = null;
     var marker = null;
     try {
@@ -8597,9 +8632,21 @@ function guestSweepEntry(repoInfo, cfg, branch) {
     } catch (ePr) { prState = null; }
     if (!prState) {
         var n = guestTransplantModule.parseGuestBranch(branch, cfg.branchPrefix);
-        marker = n ? guestMarker(repoInfo, n) : null;
+        marker = n ? guestMarker(repoInfo, n, machineLogins) : null;
     }
     return { branch: branch, prState: prState, marker: marker };
+}
+
+// The sweep's human-hold probe (thread 19): the source's current labels,
+// or null when the probe fails — the completion then holds (fail closed
+// toward the fa#939 freeze; the branch survives to a later tick).
+function guestPrLabels(repoInfo, prNumber) {
+    try {
+        var out = guestExec(repoInfo, guestTransplantModule.buildPrLabelsCommand(
+            repoInfo.owner, repoInfo.repo, prNumber)).out;
+        return String(out || '').split(',').map(function (s) { return s.trim(); })
+            .filter(function (s) { return s.length > 0; });
+    } catch (eL) { return null; }
 }
 
 // Once-per-tick GC sweep (AC7 + E5): every ai/guest-* branch whose
@@ -8611,7 +8658,7 @@ function guestSweepEntry(repoInfo, cfg, branch) {
 // the window applies AFTER actionability, never as a lexicographic
 // pre-slice that an OPEN-transplant prefix can starve. Runs on the
 // configured rule only — inert deployments never sweep.
-function sweepClosedGuestBranches(repoInfo, cfg) {
+function sweepClosedGuestBranches(repoInfo, cfg, machineLogins) {
     var res = cli_execute_command({
         command: guestTransplantModule.buildListBranchesCommand(repoInfo.owner, repoInfo.repo)
     });
@@ -8625,7 +8672,7 @@ function sweepClosedGuestBranches(repoInfo, cfg) {
     var probed = 0;
     for (var i = 0; i < names.length; i++) {
         if (sweep.length >= cap || probed >= budget) break;
-        var entry = guestSweepEntry(repoInfo, cfg, names[i]);
+        var entry = guestSweepEntry(repoInfo, cfg, names[i], machineLogins);
         probed++;
         if (guestTransplantModule.gcSteps([entry]).length) sweep.push(entry);
     }
@@ -8643,6 +8690,21 @@ function sweepClosedGuestBranches(repoInfo, cfg) {
             return;
         }
         if (s.op === 'complete_orphan') {
+            // The fa#939 freeze (thread 19): the re-entry's synthetic
+            // ticket bypasses the AC5 refusal, so the hold is probed HERE
+            // — a source carrying the park label without OUR park marker
+            // is a human hold; the branch is left for a later tick. An
+            // unreadable label probe holds too.
+            var holdLabels = guestPrLabels(repoInfo, s.sourcePrNumber);
+            var entryMarker = null;
+            for (var k = 0; k < sweep.length; k++) {
+                if (sweep[k].branch === s.branch) entryMarker = sweep[k].marker;
+            }
+            if (guestTransplantModule.completionHold(holdLabels, cfg.parkedLabel, entryMarker)) {
+                console.log('  ⏸️ orphan completion held on ' + s.branch +
+                    ' — the source carries a human hold (fa#939)');
+                return;
+            }
             console.log('  🧩 completing orphan transplant on ' + s.branch + ' (E5)');
             transplantGuestPrAction(repoInfo, {
                 prNumber: s.sourcePrNumber,
@@ -8650,7 +8712,7 @@ function sweepClosedGuestBranches(repoInfo, cfg) {
                 labels: [cfg.label],
                 headRepo: null, draft: false, state: 'OPEN',
                 completionRentry: true   // the armed marker already vetted the arm actor
-            }, cfg, []);
+            }, cfg, machineLogins || []);
             return;
         }
     });

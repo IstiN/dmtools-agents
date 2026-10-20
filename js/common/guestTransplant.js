@@ -598,6 +598,19 @@ function gateOrderedIds(jobs, gate) {
 // The dispatch plan for a guest-transplant validation leg: wiring must
 // be valid, then the byte-stable plan string names the workflow and the
 // gate-first job order (UT-gate byte-scan). ok:false → no plan.
+//
+// INTEGRATION CONTRACT (threads 14/18) — this checker is the PROJECT-SIDE
+// hook, not an in-repo enforcement point: the machine PR walks the
+// project's standard validate-fresh lane with zero fork-specific code,
+// so the consuming project's validate leg fetches the dispatched
+// workflow's job graph (the ticket's threat model grants `needs:`
+// visibility) and calls guestValidationDispatchPlan(jobs, cfg.gate,
+// workflowFile) BEFORE dispatching a guest-transplant leg. ok:false MUST
+// fail the leg — every secret-consuming job is then unreachable while a
+// gate job is non-green, which is what "impossible by construction"
+// means here: structural, but only where the project wires this check
+// in. A deployment that skips the hook has no gate enforcement (and the
+// rule description says so).
 function guestValidationDispatchPlan(jobs, gate, workflowFile) {
     var wiring = validateGateWiring(jobs, gate);
     if (!wiring.ok) {

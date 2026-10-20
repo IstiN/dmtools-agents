@@ -489,7 +489,8 @@ suite('guestTransplant: parks and resets (AC4)', function () {
         assert.equal(seq.decision, 'park');
         assert.equal(seq.reason, 'no-ref');
         var ops = seq.steps.map(function (s) { return s.op; });
-        assert.deepEqual(ops, ['add_label', 'comment']);
+        assert.deepEqual(ops, ['add_label', 'comment', 'comment'],
+            'label + human comment + the parked machine marker');
     });
 });
 
@@ -502,8 +503,9 @@ suite('guestTransplant: orphan branch recovery (E5)', function () {
         }));
         assert.equal(seq.decision, 'complete-orphan');
         var ops = seq.steps.map(function (s) { return s.op; });
-        assert.deepEqual(ops, ['merge', 'open_pr', 'carry_decision', 'transplant_comment', 'close_pr'],
-            'no create_ref, no duplicate marker');
+        assert.deepEqual(ops,
+            ['merge', 'open_pr', 'carry_decision', 'transplant_comment', 'close_pr', 'transplanted_marker'],
+            'no create_ref, no duplicate arm marker; the terminal marker closes the loop');
         assert.equal(stepsOf('merge', seq)[0].headSha, SHA_A);
     });
 
@@ -777,7 +779,7 @@ suite('guestTransplant: rework round 2 — E5 completion re-entry (thread 1)', f
         assert.equal(seq.decision, 'complete-orphan',
             'marker-driven completion bypasses the E3 same-repo refusal');
         assert.deepEqual(seq.steps.map(function (s) { return s.op; }),
-            ['merge', 'open_pr', 'carry_decision', 'transplant_comment', 'close_pr']);
+            ['merge', 'open_pr', 'carry_decision', 'transplant_comment', 'close_pr', 'transplanted_marker']);
         assert.equal(seq.steps[0].headSha, SHA_A, 'the RECORDED arm-time sha merges (E1)');
     });
 
