@@ -97,6 +97,28 @@ function postCheckRunStamp(repoInfo, body, tempPath, io) {
     return posted;
 }
 
+/**
+ * gh-1118 never-again: ONE retry before a stamp is given up on. A transient
+ * gh/network/sh hiccup used to leave a gate's check-run absent from the PR
+ * head — branch protection stayed pending and the merge bot waited forever
+ * on a context that never arrived. Retries BOTH failure surfaces (the body
+ * write and the gh call), notifies the caller once via `onRetry(error)` so
+ * the SM loop can warn without growing its own branches, and returns true
+ * on success / false after the second attempt failed (the caller counts it
+ * into stamps_failed). Bounded at two attempts — never a third.
+ */
+function postCheckRunStampRetryOnce(repoInfo, body, tempPath, io, onRetry) {
+    for (var attempt = 0; attempt < 2; attempt++) {
+        try {
+            postCheckRunStamp(repoInfo, body, tempPath, io);
+            return true;
+        } catch (eStamp) {
+            if (attempt === 0 && typeof onRetry === 'function') onRetry(eStamp);
+        }
+    }
+    return false;
+}
+
 module.exports = {
     shellQuote: shellQuote,
     SUMMARY_CHAR_LIMIT: SUMMARY_CHAR_LIMIT,
@@ -105,5 +127,6 @@ module.exports = {
     buildCheckRunBody: buildCheckRunBody,
     tempBodyPath: tempBodyPath,
     stampCommand: stampCommand,
-    postCheckRunStamp: postCheckRunStamp
+    postCheckRunStamp: postCheckRunStamp,
+    postCheckRunStampRetryOnce: postCheckRunStampRetryOnce
 };
