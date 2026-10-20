@@ -16823,16 +16823,29 @@ suite('smAgent: guest validation path (gh-113)', function () {
 
     // cli router: the arm-event probe (full JSON feed), the parkedSince
     // probe (--jq max), the head-commit actor probe, and the head-run
-    // rollup probe answer from one table.
+    // rollup probe answer from one table. Split into a route table + a
+    // tiny matcher — the crap4js gate (CRAP <= 8) measures test helpers
+    // too, and one 5-route closure blows past it.
+    var CLI_ROUTES = [
+        { key: 'events', needle: '/events?per_page=100"', jq: false },
+        { key: 'parkedAt', needle: '/events?per_page=100', jq: true },
+        { key: 'commit', needle: '/commits/', jq: null },
+        { key: 'headRuns', needle: '/actions/runs?head_sha=', jq: null }
+    ];
+
+    function cliRouteHit(c, route) {
+        if (c.indexOf(route.needle) === -1) return false;
+        if (route.jq === null) return true;
+        return (c.indexOf('--jq') !== -1) === route.jq;
+    }
+
     function cliRouter(map) {
         return function (cmdOpts) {
-            var c = String(cmdOpts && cmdOpts.command || '');
-            if (map.events && c.indexOf('/events?per_page=100"') !== -1 &&
-                c.indexOf('--jq') === -1) return map.events;
-            if (map.parkedAt && c.indexOf('/events?per_page=100') !== -1 &&
-                c.indexOf('--jq') !== -1) return map.parkedAt;
-            if (map.commit && c.indexOf('/commits/') !== -1) return map.commit;
-            if (map.headRuns && c.indexOf('/actions/runs?head_sha=') !== -1) return map.headRuns;
+            var c = String((cmdOpts && cmdOpts.command) || '');
+            for (var i = 0; i < CLI_ROUTES.length; i++) {
+                var route = CLI_ROUTES[i];
+                if (map[route.key] && cliRouteHit(c, route)) return map[route.key];
+            }
             return '';
         };
     }

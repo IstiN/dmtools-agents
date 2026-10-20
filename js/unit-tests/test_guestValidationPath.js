@@ -109,6 +109,15 @@ suite('guestValidationPath: realCheckTally (gh-113)', function () {
         assert.equal(t.real, 1);
     });
 
+    test('degraded input and garbage entries fail closed, never crash', function () {
+        var t = mod.realCheckTally(null, null);
+        assert.equal(t.real, 0, 'null rollup — the zero tally');
+        assert.equal(t.red, 0);
+        var g = mod.realCheckTally([null, {}], null);
+        assert.equal(g.pending, 2, 'an unreadable entry carries no verdict — it pends');
+        assert.equal(g.real, 2, '…but it is not bookkeeping either');
+    });
+
     test('custom prefix list overrides the defaults (deployment knob parity)', function () {
         var t = mod.realCheckTally([
             { name: 'merge / 1', status: 'COMPLETED', conclusion: 'SKIPPED' }
@@ -197,6 +206,17 @@ suite('guestValidationPath: external validation arm (gh-113)', function () {
         assert.ok(arm && arm.login === 'carol');
     });
 
+    test('newestArmEvent: a label event with no actor/createdAt degrades to nulls', function () {
+        var arm = mod.newestArmEvent([
+            { event: 'labeled', label: { name: 'ai_validating' } }
+        ]);
+        assert.ok(arm, 'the arm event is still found');
+        assert.equal(arm.login, null, 'no actor — no login proof');
+        assert.equal(arm.createdAt, null);
+        assert.equal(mod.isManualArm(arm, 'ai-teammate'), false,
+            'an arm with no login is no proof — the gate fails closed');
+    });
+
     test('isManualArm: a human actor arms; a machine login does not (gh-1025 bot suffix)', function () {
         assert.equal(mod.isManualArm({ login: 'yury-by' }, 'ai-teammate'), true);
         assert.equal(mod.isManualArm({ login: 'ai-teammate' }, 'ai-teammate'), false);
@@ -252,6 +272,19 @@ suite('guestValidationPath: dead-zone scan shape (gh-113 AC3)', function () {
             item(6, ['pr_approved', 'ai_validating']), null, isGuest), null,
             'status probe failed — never counted (fail closed)');
     });
+
+    test('counting guards: garbage items never crash the scan; one label alone arms', function () {
+        var isGuest = true;
+        assert.equal(mod.blockedGuestEntry(null, pr('CLEAN', 'pending'), isGuest), null,
+            'no item — nothing to count');
+        assert.equal(mod.blockedGuestEntry({ labels: ['ai_validating'] }, pr('CLEAN', 'none'), isGuest), null,
+            'no prNumber — uncountable');
+        var e = mod.blockedGuestEntry(item(7, ['ai_validating']), pr('CLEAN', 'none'), isGuest);
+        assert.ok(e && e.prNumber === 7, 'ai_validating alone arms (approved OR armed)');
+        assert.deepEqual(e.labels, ['ai_validating'], 'the entry carries the labels it was read from');
+        assert.equal(mod.blockedGuestEntry(item(8, undefined), pr('CLEAN', 'none'), isGuest), null,
+            'no labels at all — unapproved and unarmed');
+    });
 });
 
 suite('guestValidationPath: cross-tick carry (gh-113 AC3)', function () {
@@ -277,5 +310,23 @@ suite('guestValidationPath: cross-tick carry (gh-113 AC3)', function () {
         var cary = mod.mergeDeadZoneCary(null, { blocked: [{ prNumber: 7 }], scannedAt: '2026-10-19T23:00:00Z' });
         assert.equal(cary.blockedAt['7'], '2026-10-19T23:00:00Z');
         assert.equal(mod.mergeDeadZoneCary({ blocked: 'garbage' }, null).blocked.length, 0);
+    });
+
+    test('every degraded shape degrades to a fresh carry, never a crash', function () {
+        // blockedAt of the wrong type is not trusted — stamps start over.
+        var cary = mod.mergeDeadZoneCary(
+            { blockedAt: 'garbage' },
+            { blocked: [{ prNumber: 9 }], scannedAt: '2026-10-19T23:00:00Z' });
+        assert.equal(cary.blockedAt['9'], '2026-10-19T23:00:00Z');
+        // No scannedAt on the current scan — the carry stamps now itself.
+        var unstamped = mod.mergeDeadZoneCary(null, { blocked: [{ prNumber: 10 }] });
+        assert.equal(typeof unstamped.blockedAt['10'], 'string', 'stamped with the scan time');
+        assert.ok(unstamped.blockedAt['10'].indexOf('T') !== -1, 'an ISO timestamp');
+        // Malformed entries drop out; the readable ones stay.
+        var mixed = mod.mergeDeadZoneCary(null, {
+            blocked: [null, {}, { prNumber: 11 }], scannedAt: '2026-10-19T23:00:00Z'
+        });
+        assert.equal(mixed.blocked.length, 1);
+        assert.equal(mixed.blockedAt['11'], '2026-10-19T23:00:00Z');
     });
 });

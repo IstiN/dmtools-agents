@@ -77,14 +77,22 @@ var RED_CONCLUSIONS = ['FAILURE', 'TIMED_OUT'];
 var PENDING_STATUSES = ['QUEUED', 'IN_PROGRESS', 'WAITING', 'PENDING'];
 
 // Classify ONE check-run entry (CheckRun name/conclusion/status or
-// StatusContext context/state — same dual read as the provider).
+// StatusContext context/state — same dual read as the provider). Kept in
+// tiny pieces: the crap4js gate (CRAP <= 8) measures every helper, and
+// GraalJS forbids the array combinators that would shrink the branching.
+function _runField(c, primary, fallback) {
+    return (c && (c[primary] || c[fallback])) || null;
+}
+
+function _upperOrNull(v) {
+    return v ? String(v).toUpperCase() : null;
+}
+
 function _normalizeRun(c) {
     return {
-        name: String((c && (c.name || c.context)) || ''),
-        conclusion: (c && c.conclusion)
-            ? String(c.conclusion).toUpperCase()
-            : ((c && c.state) ? String(c.state).toUpperCase() : null),
-        status: (c && c.status) ? String(c.status).toUpperCase() : null
+        name: String(_runField(c, 'name', 'context') || ''),
+        conclusion: _upperOrNull(_runField(c, 'conclusion', 'state')),
+        status: _upperOrNull(c && c.status)
     };
 }
 
@@ -94,6 +102,25 @@ function _isBookeeping(name, prefixes) {
         if (name.indexOf(list[i]) === 0) return true;
     }
     return false;
+}
+
+function _isRedConclusion(conclusion) {
+    return !!conclusion && RED_CONCLUSIONS.indexOf(conclusion) !== -1;
+}
+
+function _isPendingRun(conclusion, status) {
+    return !conclusion || PENDING_STATUSES.indexOf(status) !== -1;
+}
+
+// One run → exactly one tally bucket ('bokept' | 'canceled' | 'red' |
+// 'pending' | 'real'). Order is the policy: stubs and CANCELLED are
+// never verdicts; a red conclusion is never also pending.
+function _tallyBucket(c, bookeepingPrefixes) {
+    if (_isBookeeping(c.name, bookeepingPrefixes)) return 'bokept';
+    if (c.conclusion === 'CANCELLED') return 'canceled';
+    if (_isRedConclusion(c.conclusion)) return 'red';
+    if (_isPendingRun(c.conclusion, c.status)) return 'pending';
+    return 'real';
 }
 
 /**
@@ -109,12 +136,9 @@ function realCheckTally(checkRuns, bookeepingPrefixes) {
     var t = { red: 0, pending: 0, real: 0, bokept: 0, canceled: 0 };
     if (!checkRuns || !checkRuns.length) return t;
     for (var i = 0; i < checkRuns.length; i++) {
-        var c = _normalizeRun(checkRuns[i]);
-        if (_isBookeeping(c.name, bookeepingPrefixes)) { t.bokept++; continue; }
-        if (c.conclusion === 'CANCELLED') { t.canceled++; continue; }
-        t.real++;
-        if (c.conclusion && RED_CONCLUSIONS.indexOf(c.conclusion) !== -1) t.red++;
-        else if (!c.conclusion || PENDING_STATUSES.indexOf(c.status) !== -1) t.pending++;
+        var bucket = _tallyBucket(_normalizeRun(checkRuns[i]), bookeepingPrefixes);
+        if (bucket === 'red' || bucket === 'pending') t.real++;
+        t[bucket]++;
     }
     return t;
 }
@@ -137,6 +161,22 @@ function recoverableZeroRed(tally) {
     return !!tally && tally.red === 0 && tally.real >= 1;
 }
 
+// The label spelling of one event (object {name} or plain string).
+function _labelName(e) {
+    return (e.label && typeof e.label === 'object') ? e.label.name : e.label;
+}
+
+// One event → the arm shape, or null when it is not an ai_validating
+// labeling event.
+function _armEventOf(e) {
+    if (!e || e.event !== 'labeled') return null;
+    if (_labelName(e) !== 'ai_validating') return null;
+    return {
+        login: (e.actor && e.actor.login) || null,
+        createdAt: e.created_at || null
+    };
+}
+
 /**
  * The newest ai_validating labeling event from an issue-events feed.
  * GitHub returns events chronological (oldest first) — the LAST match
@@ -146,15 +186,8 @@ function newestArmEvent(events) {
     if (!events || !events.length) return null;
     var newest = null;
     for (var i = 0; i < events.length; i++) {
-        var e = events[i];
-        if (!e || e.event !== 'labeled') continue;
-        var name = e.label && typeof e.label === 'object'
-            ? e.label.name : e.label;
-        if (name !== 'ai_validating') continue;
-        newest = {
-            login: (e.actor && e.actor.login) || null,
-            createdAt: e.created_at || null
-        };
+        var arm = _armEventOf(events[i]);
+        if (arm) newest = arm;
     }
     return newest;
 }
@@ -172,6 +205,30 @@ function isManualArm(armEvent, machineAuthor) {
     return !machineAuthorModule.loginMatchesList(armEvent.login, logins);
 }
 
+// The lifecycle-arm test on the item's labels: approved and/or armed.
+function _armedLabels(labels) {
+    var list = labels || [];
+    return list.indexOf('pr_approved') !== -1 ||
+        list.indexOf('ai_validating') !== -1;
+}
+
+// A countable item: a GUEST with a PR number — or null. Garbage in, null
+// out (the scan never counts what it cannot read).
+function _knownGuestItem(item, isGuest) {
+    if (!isGuest || !item || !item.prNumber) return null;
+    return (item.labels || []);
+}
+
+// A verdict-less CLEAN head (the dead-zone rollup: none | pending) — or
+// null. A failed/absent status probe (pr === null) is NEVER counted
+// (fail closed).
+function _deadZoneRollup(pr) {
+    if (!pr) return null;
+    if (pr.mergeState !== 'CLEAN') return null;
+    if (pr.checkConclusion !== 'none' && pr.checkConclusion !== 'pending') return null;
+    return pr;
+}
+
 /**
  * The tick dead-zone shape (gh-113 AC3): a GUEST PR, approved and/or
  * armed, sitting CLEAN (behind=0) with NO concluded check verdict —
@@ -185,20 +242,30 @@ function isManualArm(armEvent, machineAuthor) {
  * @returns {Object|null} {prNumber, labels, checkConclusion, mergeState}
  */
 function blockedGuestEntry(item, pr, isGuest) {
-    if (!isGuest || !item || !item.prNumber) return null;
-    if (!pr) return null; // probe failed — never counted (fail closed)
-    var labels = (item.labels || []);
-    var armed = labels.indexOf('pr_approved') !== -1 ||
-        labels.indexOf('ai_validating') !== -1;
-    if (!armed) return null;
-    if (pr.mergeState !== 'CLEAN') return null;
-    if (pr.checkConclusion !== 'none' && pr.checkConclusion !== 'pending') return null;
+    var labels = _knownGuestItem(item, isGuest);
+    if (!labels || !_armedLabels(labels) || !_deadZoneRollup(pr)) return null;
     return {
         prNumber: item.prNumber,
         labels: labels,
         checkConclusion: pr.checkConclusion,
         mergeState: pr.mergeState
     };
+}
+
+// The previous snapshot's first-seen stamps — or {} when absent/garbage.
+function _prevBlockedAt(prev) {
+    return (prev && prev.blockedAt && typeof prev.blockedAt === 'object')
+        ? prev.blockedAt : {};
+}
+
+// This scan's blocked list — or [] when absent/garbage.
+function _blockedEntries(current) {
+    return (current && Array.isArray(current.blocked)) ? current.blocked : [];
+}
+
+// The scan timestamp — or now() when the caller did not stamp one.
+function _scannedAtOf(current) {
+    return (current && current.scannedAt) || new Date().toISOString();
 }
 
 /**
@@ -209,17 +276,15 @@ function blockedGuestEntry(item, pr, isGuest) {
  */
 function mergeDeadZoneCary(prev, current) {
     var cary = { blocked: [], blockedAt: {} };
-    var scannedAt = current && current.scannedAt;
-    if (!scannedAt) scannedAt = new Date().toISOString();
-    var prevAt = (prev && prev.blockedAt && typeof prev.blockedAt === 'object')
-        ? prev.blockedAt : {};
-    var blocked = (current && Array.isArray(current.blocked)) ? current.blocked : [];
+    var scannedAt = _scannedAtOf(current);
+    var prevAt = _prevBlockedAt(prev);
+    var blocked = _blockedEntries(current);
     for (var i = 0; i < blocked.length; i++) {
         var entry = blocked[i];
         if (!entry || !entry.prNumber) continue;
         cary.blocked.push(entry);
-        var key = String(entry.prNumber);
-        cary.blockedAt[key] = prevAt[key] || scannedAt;
+        cary.blockedAt[String(entry.prNumber)] =
+            prevAt[String(entry.prNumber)] || scannedAt;
     }
     return cary;
 }
