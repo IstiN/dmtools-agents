@@ -87,7 +87,6 @@ function dsOsArch() {
  *       env          — extra `KEY=value` strings prefixed to the invocation
  */
 function dsSandbox(opts) {
-    opts = opts || {};
     var lines = ['r="$(pwd)"', 'd="$(mktemp -d)"'];
     if (opts.qualityYml !== undefined) {
         lines.push('mkdir -p "$d/.github/workflows"');

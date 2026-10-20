@@ -165,6 +165,18 @@ function hasToolchainLine(responseText) {
 }
 
 /**
+ * fetchToolchainLines must never throw into the post action — null on any
+ * failure (its own failure paths already return null; this guards the seam).
+ */
+function safeFetchToolchainLines(workingDir) {
+    try {
+        return fetchToolchainLines(workingDir);
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
  * Append the toolchain line to the leg summary text.
  *
  * @param {string} responseText - the outputs/response.md content (may be null/blank)
@@ -178,13 +190,9 @@ function withToolchainLine(responseText, opts) {
     if (isBlankResponse(responseText) || hasToolchainLine(responseText)) {
         return responseText;
     }
-    var lines = null;
-    try {
-        lines = fetchToolchainLines(opts.workingDir);
-    } catch (e) {
-        lines = null;
-    }
-    if (!lines || lines.length === 0 || isSkippedToolchainLine(lines[0])) {
+    // pickToolchainLines returns null or at least one line — no empty-array state.
+    var lines = safeFetchToolchainLines(opts.workingDir);
+    if (!lines || isSkippedToolchainLine(lines[0])) {
         return responseText;
     }
     return String(responseText).replace(/\s+$/, '') + '\n' + lines.join('\n') + '\n';
