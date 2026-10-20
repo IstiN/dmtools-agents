@@ -1214,10 +1214,13 @@ hosted runner images ship no `dart`, so a rework leg on a Dart repo could not
 run `dart analyze/test/format` or `crap4dart check` and claimed success while
 quality-gate violations stayed in place. The installer:
 
-- resolves the target exactly the way the repo's CI does — explicit
-  argument/env first, then the `dart-lang/setup-dart` step's `sdk:`/`channel:`
+- resolves the target the way the repo's own toolchain intent does (gh-1137) —
+  explicit argument/env first, then a `.dart-version` pin at the repo root,
+  then the `dart-lang/setup-dart` step's `sdk:`/`channel:`
   inputs in the checked-out repo's `.github/workflows/*.yml` ("same channel
-  the repo's quality.yml uses"), else `stable`; an unrecognized target
+  the repo's quality.yml uses"), else `stable` with a loud warning that local
+  format/analyzer results may differ from CI; a repo with no `pubspec.yaml`
+  skips the install entirely; an unrecognized target
   (`--help`, a typo) fails fast with a usage error instead of resolving as a
   version and dying as a late CDN 404 (a leading `v` is stripped —
   `dart.sh v3.9.4` works);
