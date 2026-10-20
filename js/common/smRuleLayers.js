@@ -53,6 +53,7 @@ var LAYERS = {
     'park-reset': 'L1',
     // L2 verdict — merge/fail/arm/sweep on heads that did NOT move this tick.
     'merge-validated': 'L2',
+    'merge-validated-guest': 'L2',
     'fail-validation': 'L2',
     'rework-on-red-gate-unlatched': 'L2',
     'rework-on-validation-failed': 'L2',
