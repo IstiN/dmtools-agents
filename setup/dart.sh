@@ -86,7 +86,6 @@ channel_latest() {
     | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
 }
 
-# ── Quality-workflow detection ("same channel the repo's quality.yml uses") ──
 # ── Version-file pin (gh-1137 step 1) ────────────────────────────────────────
 # The repo's own pin convention beats the CI workflow line: a one-token
 # .dart-version at the repo root (same muscle memory as .nvmrc/.java-version).
@@ -119,6 +118,7 @@ warn_unpinned_stable_fallback() {
   echo "⚠️⚠️  LOCAL dart format/analyzer RESULTS MAY DIFFER FROM CI — pin the SDK (.dart-version or the CI workflow's setup-dart sdk: input) to make leg gates reproducible" >&2
 }
 
+# ── Quality-workflow detection ("same channel the repo's quality.yml uses") ──
 # Scan the checked-out repo's workflows for the dart-lang/setup-dart step and
 # read its with: inputs. Echoes "found|sdk|channel" (any field may be empty).
 quality_detection() {
