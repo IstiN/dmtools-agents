@@ -25,6 +25,7 @@ var quotaBreakerModule = loadModule('js/common/quotaCircuitBreaker.js');
 
 function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
     return (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
+            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
             './common/submodules.js': {},
@@ -63,6 +64,7 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks) {
         './mergeState.js': loadModule('js/common/mergeState.js'),
     }), {});
     return (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
+            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': realPrHelper,
             './common/submodules.js': { pushManagedSubmodules: function () { } },
@@ -406,6 +408,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
             }
         });
         var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
+                './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
                 './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
                 './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
                 './common/submodules.js': { pushManagedSubmodules: function () {} },
@@ -482,6 +485,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
             }
         });
         var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
+                './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
                 './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
                 './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
                 './common/submodules.js': { pushManagedSubmodules: function () {} },
@@ -558,6 +562,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
             }
         });
         var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
+                './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
                 './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
                 './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
                 './common/submodules.js': { pushManagedSubmodules: function () {} },
@@ -697,6 +702,7 @@ function loadForLandingGuard(mocks, opts) {
     });
     var resumeCalls = [];
     var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
+            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': realPrHelper,
             './common/submodules.js': { pushManagedSubmodules: function () { } },
@@ -907,6 +913,7 @@ function loadForPrTail(mocks, opts) {
     var logs = [];
     var errors = [];
     var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
+            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': realPrHelper,
             './common/submodules.js': { pushManagedSubmodules: function () { } },
@@ -1190,6 +1197,7 @@ function loadForMissingResponseResume(opts) {
         file_delete: function () { }
     });
     var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
+            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': realPrHelper,
             './common/submodules.js': { pushManagedSubmodules: function () { } },
@@ -1771,6 +1779,7 @@ function loadForOutcomePinning(mocks, opts) {
         ? Object.assign({}, configLoaderModule, { createScm: function () { return opts.scm; } })
         : configLoaderModule;
     var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
+            './common/toolchainSummary.js': { withToolchainLine: function(t) { return t; } },
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': realPrHelperForOutcomes(),
             './common/submodules.js': { pushManagedSubmodules: function () { } },

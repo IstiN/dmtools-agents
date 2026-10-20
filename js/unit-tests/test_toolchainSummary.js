@@ -63,7 +63,7 @@ suite('toolchainSummary: dart.sh resolution inside the leg workspace', function 
                 return opts.path === 'repo/agents/setup/dart.sh' ? '#!/usr/bin/env bash' : null;
             },
             cli_execute_command: function(args) {
-                assert.equal(args.command, 'bash agents/setup/dart.sh summary', 'got: ' + args.command);
+                assert.equal(args.command, 'bash repo/agents/setup/dart.sh summary', 'got: ' + args.command);
                 assert.equal(args.workingDirectory, 'repo');
                 return 'toolchain: dart 3.13.5 (CI: 3.13.5, match: yes)';
             }

@@ -20,7 +20,10 @@
       "targetRepository": {
         "workingDir": ".",
         "baseBranch": "main"
-      }
+      },
+      "setupCommands": [
+        "bash setup/dart.sh"
+      ]
     }
   }
 }
