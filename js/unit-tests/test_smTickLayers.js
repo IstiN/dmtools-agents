@@ -69,9 +69,9 @@ suite('smRuleLayers: gh-1114 layer map (UT-1 / AC6)', function () {
         'L1 freshness = unarm + the two head-movers');
         assert.deepEqual(Object.keys(smRuleLayers.LAYERS).filter(function (id) {
             return smRuleLayers.LAYERS[id] === 'L2';
-        }), ['merge-validated', 'fail-validation', 'rework-on-red-gate-unlatched',
+        }), ['merge-validated', 'merge-validated-guest', 'fail-validation', 'rework-on-red-gate-unlatched',
             'rework-on-validation-failed', 'sweep-stale-validating'],
-        'L2 verdict = the four guarded actions plus the merge window');
+        'L2 verdict = the four guarded actions plus the merge window (its gh-113 guest twin)');
     });
 
     test('deployed order invariants: #682 rerun-first, reconcile before the merge window, #637 merge before sweep, red-yields-the-slot, gh-994 park-reset in L1', function () {
