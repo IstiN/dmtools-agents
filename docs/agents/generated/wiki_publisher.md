@@ -23,6 +23,10 @@ _Human doc: [`agents/docs/agents/wiki_publisher.md`](agents/docs/agents/wiki_pub
 | outputType | `none` |
 | skipAIProcessing | `true` |
 
+## Prompt snapshot
+
+Full prompt / instruction set: [`agents/snapshots/wiki_publisher.md`](agents/snapshots/wiki_publisher.md)
+
 ## Actions
 
 ### preJSAction: `requireTicket.js`
@@ -86,6 +90,7 @@ _Write Content Output — unified post-action for content-generating agents_
 ## LLM step
 
 - outputType: `none`
+- Prompt snapshot: `agents/snapshots/wiki_publisher.md`
 
 ## Custom params
 

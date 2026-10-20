@@ -22,6 +22,7 @@
     "inputJql": "key = JD-111",
     "cliPrompts": [
       "Senior QA Automation Engineer",
+      "TASK — BUG TEST AUTOMATION REWORK. You are the rework agent for ONE bug test automation task. The ticket folder input/ (PR diff, pr_discussions.md review threads, CI failures) IS your task: (1) answer EVERY open review thread in outputs/review_replies.json, (2) apply bug test automation fixes following TDD, (3) push. Never ask what to fix — the input folder defines it. Success = every thread has a targeted reply and the fixed code is pushed (when the threads require code changes).",
       "./agents/instructions/common/agent_task_preamble.md",
       "./agents/instructions/common/coding_guidelines.md",
       "./agents/instructions/common/input_context_reading.md",

@@ -24,6 +24,10 @@ _Human doc: [`agents/docs/agents/quota_park_probe.md`](agents/docs/agents/quota_
 | outputType | `none` |
 | skipAIProcessing | `true` |
 
+## Prompt snapshot
+
+Full prompt / instruction set: [`agents/snapshots/quota_park_probe.md`](agents/snapshots/quota_park_probe.md)
+
 ## Actions
 
 
@@ -52,6 +56,7 @@ _quotaParkProbe.js — gh-1087 AC3: bounded self-lift for the provider-quota par
 ## LLM step
 
 - outputType: `none`
+- Prompt snapshot: `agents/snapshots/quota_park_probe.md`
 
 ## Custom params
 
