@@ -328,18 +328,10 @@ export_dart_env() {
 do_install() {
   echo "🎯 Dart SDK [target=${TARGET:-<detect>} mode=${MODE} channel=${CHANNEL} os=${OS} arch=${ARCH} ci=$(detect_ci)]"
 
-  # gh-1137: the AUTO path (no explicit target anywhere — no argument, no
-  # DART_VERSION, no repo/CI pin) on a NON-Dart repo skips the SDK entirely:
-  # a ~215 MB download a pure JS/Kotlin repo can never run is pure waste.
-  # Any explicit target still installs — operator intent outranks the gate.
-  if [ "${SOURCE}" = "default" ] && [ "$(is_dart_repo)" != "1" ]; then
-    echo "⏭️  not a Dart repo (no pubspec.yaml) — Dart SDK install skipped"
-    return 0
-  fi
   # gh-1137 step 3: SOURCE=default on a Dart repo means NO pin anywhere —
-  # stable is about to be installed (or kept). Warn BEFORE any download so
-  # the warning survives even a failed transfer.
-  if [ "${SOURCE}" = "default" ]; then
+  # stable is about to be installed (or kept). Warn BEFORE any resolution or
+  # download so the warning survives even a failed transfer.
+  if [ "${SOURCE}" = "default" ] && [ "$(is_dart_repo)" = "1" ]; then
     warn_unpinned_stable_fallback
   fi
 
@@ -385,6 +377,17 @@ do_install() {
   fi
   if [ -n "${have}" ]; then
     echo "🔄 Dart SDK ${have} installed but ${resolved:-${CHANNEL}} requested — reinstalling"
+  fi
+
+  # gh-1137: the AUTO path (no explicit target anywhere — no argument, no
+  # DART_VERSION, no repo/CI pin) on a NON-Dart repo never downloads: a
+  # ~215 MB SDK a pure JS/Kotlin repo can never run is pure waste. It sits
+  # AFTER the keep/cache-hit branches on purpose — an already-installed SDK
+  # is still registered honestly (same machine may serve Dart-repo legs),
+  # but nothing new is ever fetched. Any explicit target still installs.
+  if [ "${SOURCE}" = "default" ] && [ "$(is_dart_repo)" != "1" ]; then
+    echo "⏭️  not a Dart repo (no pubspec.yaml) — Dart SDK install skipped"
+    return 0
   fi
 
   local url tmp

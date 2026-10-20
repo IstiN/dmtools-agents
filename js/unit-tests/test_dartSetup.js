@@ -785,7 +785,7 @@ suite('setup/dart.sh: install-path fallback warning + non-Dart skip (gh-1137)', 
         // already be out by then (it precedes any network I/O).
         var r = dsRunRaw('', { stubCurlFails: true, pubspec: true });
         assert.ok(r.rc !== 0, 'the (stub) install itself still fails — the test only asserts the warning');
-        assert.ok(r.out.indexOf('differ from CI') !== -1,
+        assert.ok(r.out.indexOf('RESULTS MAY DIFFER FROM CI') !== -1,
             'the stable fallback must print a loud warning (ticket step 3), got: ' + r.out);
     });
 
@@ -798,7 +798,7 @@ suite('setup/dart.sh: install-path fallback warning + non-Dart skip (gh-1137)', 
             pubspec: true
         });
         assert.equal(r.rc, 0, 'degraded keep exits 0, got: ' + r.out);
-        assert.ok(r.out.indexOf('differ from CI') !== -1, 'got: ' + r.out);
+        assert.ok(r.out.indexOf('RESULTS MAY DIFFER FROM CI') !== -1, 'got: ' + r.out);
     });
 
     test('non-Dart repo, no pin → install path SKIPS entirely (rc 0, no download attempt)', function () {

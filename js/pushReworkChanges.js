@@ -31,6 +31,7 @@ var reworkLoopGuard = require('./common/reworkLoopGuard.js');
 // (ci_violations.json) is validated against the fix summary before the
 // rework cycle may close.
 var ciViolations = require('./common/ciViolations.js');
+var toolchainSummary = require('./common/toolchainSummary.js');
 
 // ── gh-957: lap audit (loop guard) + audit-resolve support ──────────────────
 //
@@ -2537,8 +2538,15 @@ function action(params) {
     try {
         const actualParams = params.ticket ? params : (params.jobParams || params);
         const ticketKey = actualParams.ticket.key;
-        const fixSummary = actualParams.response || '_(No fix summary generated)_';
-        var config = configLoader.loadProjectConfig(params.jobParams || params);
+        // gh-1137: the fix summary (the leg summary) must state which Dart SDK
+        // the leg verified with — `toolchain: dart <v> (CI: <pin>, match:
+        // yes|no)` — so format/analyzer claims are checkable against CI (live
+        // #433: a mismatched SDK made the leg dispute a mechanical red).
+        // No-op on failure, on non-Dart repos, and when the line is carried.
+        const fixSummary = toolchainSummary.withToolchainLine(
+            actualParams.response,
+            { workingDir: resolveCustomParams(params, actualParams, config).workingDir }
+        ) || '_(No fix summary generated)_';
         var scm = scmModule.createScm(config);
         const _customParams = resolveCustomParams(params, actualParams, config);
         const statuses = resolveStatuses(_customParams, config.jira && config.jira.statuses);
