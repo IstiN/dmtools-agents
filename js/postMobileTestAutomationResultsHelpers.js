@@ -55,6 +55,17 @@ function decideFeatureTarget(customParams) {
     };
 }
 
+/**
+ * Label pair for the feature-PR result update (gh-1083): passed → add the
+ * passed label and remove the failed one, otherwise the mirror image.
+ */
+function decideFeaturePrLabels(passed, labelPassed, labelFailed) {
+    return {
+        addLabel: passed ? labelPassed : labelFailed,
+        removeLabel: passed ? labelFailed : labelPassed
+    };
+}
+
 /** WIP label: context-specific or the mobile default. */
 function decideWipLabel(metadata) {
     return metadata && metadata.contextId
@@ -148,6 +159,7 @@ if (typeof module !== 'undefined' && module.exports) {
         hasA11yWarnings: hasA11yWarnings,
         decideLabels: decideLabels,
         decideFeatureTarget: decideFeatureTarget,
+        decideFeaturePrLabels: decideFeaturePrLabels,
         decideWipLabel: decideWipLabel,
         decideSmTriggerLabel: decideSmTriggerLabel,
         resolveFeatureSummary: resolveFeatureSummary,

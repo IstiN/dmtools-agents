@@ -541,21 +541,135 @@ function autoStartTestReview(ticketKey, config, customParams, noCodeChanges) {
     }
 }
 
+// ── gh-1083: action() split — thin executors, same calls in the same order ──
+
+/** Steps 2+3: configure the git author and read the current branch. */
+function resolveCurrentBranch(config, workingDir) {
+    try {
+        runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
+        runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
+    } catch (e) {
+        console.warn('Failed to configure git author:', e);
+    }
+
+    var rawBranch = runInRepo('git branch --show-current', workingDir) || '';
+    console.log('Raw branch output length:', rawBranch.length, 'content:', JSON.stringify(rawBranch.substring(0, 200)));
+    var branchName = cleanCommandOutput(rawBranch);
+    console.log('Cleaned branch name:', JSON.stringify(branchName));
+    if (!branchName) {
+        console.warn('Could not determine current branch — skipping git operations');
+    }
+    return branchName;
+}
+
+/** create-pr route: PR creation, then the conflict-guidance check (gh-1083). */
+function createPrAndCheckConflicts(branchName, ticketKey, ticketSummary, workingDir, config, scm, jiraConfig, params) {
+    var prTitle = configLoader.formatTemplate(config.formats.prTitle.testAutomation, {ticketKey: ticketKey, ticketSummary: ticketSummary});
+    var prResult = createPullRequest(prTitle, branchName, config.git.baseBranch, workingDir, scm, ticketKey);
+    var prUrl = prResult.prUrl;
+    if (!prResult.success || !prUrl) {
+        return { prUrl: prUrl, terminal: resetToBacklogAfterPrFailure(ticketKey, branchName, prResult, jiraConfig, params) };
+    }
+
+    if (hasBranchConflictGuidance(ticketKey, workingDir)) {
+        var mergeable = getPrMergeability(prUrl, workingDir);
+        console.log('PR mergeability after branch conflict guidance:', mergeable || '(unknown)');
+        if (mergeable === 'CONFLICTING') {
+            return {
+                prUrl: prUrl,
+                terminal: handleConflictingPr(ticketKey, branchName, config.git.baseBranch, prUrl, jiraConfig, params)
+            };
+        }
+    }
+
+    return { prUrl: prUrl, terminal: null };
+}
+
+/**
+ * Step 4: commit + push + create PR for the resolved branch. Returns
+ * { prUrl, noCodeChanges, terminal } — terminal is the pre-built early-exit
+ * result (PR failure, conflicting PR, git failure); the caller returns it
+ * unchanged, before any further tracker call.
+ */
+function runBranchStage(branchName, ticketKey, ticketSummary, workingDir, testFilesPath, config, scm, jiraConfig, params) {
+    if (!branchName) {
+        return { prUrl: null, noCodeChanges: false, terminal: null };
+    }
+
+    var commitMessage = configLoader.formatTemplate(config.formats.commitMessage.testAutomation, {ticketKey: ticketKey, ticketSummary: ticketSummary});
+    var gitResult = performGitOperations(branchName, commitMessage, workingDir, testFilesPath);
+    var route = postHelpers.decideGitStageRoute(gitResult);
+
+    if (route === 'no-new-commit') {
+        console.log('ℹ️ No test code changes — skipping PR review, moving ticket directly');
+        return { prUrl: null, noCodeChanges: true, terminal: null };
+    }
+    if (route === 'git-failure') {
+        return { prUrl: null, noCodeChanges: false, terminal: resetToBacklogAfterGitFailure(ticketKey, gitResult, jiraConfig) };
+    }
+
+    var pr = createPrAndCheckConflicts(branchName, ticketKey, ticketSummary, workingDir, config, scm, jiraConfig, params);
+    return { prUrl: pr.prUrl, noCodeChanges: false, terminal: pr.terminal };
+}
+
+/** Step 5: post the final tracker comment (failures are non-fatal warns). */
+function postFinalOutcomeComment(ticketKey, jiraComment, prUrl, noCodeChanges) {
+    try {
+        var comment = postHelpers.buildFinalComment(jiraComment, prUrl, noCodeChanges);
+        if (comment) {
+            tracker.postComment(ticketKey, comment);
+            console.log('✅ Posted test result comment to Jira');
+        }
+    } catch (e) {
+        console.warn('Failed to post Jira comment:', e);
+    }
+}
+
+/** Step 6b: trigger the configured review workflow, else the SM idle trigger. */
+function triggerReviewOrIdle(ticketKey, config, customParams, noCodeChanges) {
+    if (!autoStartTestReview(ticketKey, config, customParams, noCodeChanges)) {
+        autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
+    }
+}
+
+/** Token usage summary comments (outputs/*_usage.json); failures are non-fatal. */
+function postUsageSummaryComments(ticketKey, params) {
+    try {
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
+/** Outer-catch side effects: error comment + SM trigger label removal (best-effort). */
+function handleActionError(trackerRef, params, error) {
+    try {
+        trackerRef.postComment(params.ticket.key, postHelpers.buildErrorComment(error));
+    } catch (e) {}
+    try {
+        var smTriggerLabel = postHelpers.decideSmTriggerLabel(params);
+        if (smTriggerLabel) {
+            trackerRef.removeLabel(params.ticket.key, smTriggerLabel);
+            console.log('✅ Removed SM trigger label on error:', smTriggerLabel);
+        }
+    } catch (e) {}
+}
+
 function action(params) {
-    var jobParams = params.jobParams || params;
+    var jobParams = postHelpers.resolveJobParams(params);
     var customParams = jobParams.customParams || {};
     // Early tracker so the catch-path can still comment if config loading fails
     tracker = trackersModule.createTracker(null, customParams);
     try {
-        const ticketKey = params.ticket.key;
-        const ticketSummary = params.ticket.fields ? params.ticket.fields.summary : ticketKey;
-        const projectKey = ticketKey.split('-')[0];
+        var identity = postHelpers.resolveTicketIdentity(params);
+        const ticketKey = identity.ticketKey;
         var config = configLoader.loadProjectConfig(jobParams);
         tracker = trackersModule.createTracker(config, customParams);
         var jiraConfig = config.jira;
         var scm = configLoader.createScm(config);
-        var workingDir = config.workingDir || null;
-        var testFilesPath = customParams.testFilesGlob || 'testing/';
+        var paths = postHelpers.resolveRunPaths(config, customParams);
+        var workingDir = paths.workingDir;
+        var testFilesPath = paths.testFilesPath;
         const jiraComment = readJiraComment(params, workingDir, ticketKey);
 
         console.log('=== Processing test automation results for', ticketKey, '===');
@@ -563,70 +677,24 @@ function action(params) {
         // Step 1: Read structured result
         const result = readResultJson(workingDir, ticketKey);
         if (!result) {
-            return handleMissingResult(params, config, ticketKey, ticketSummary, workingDir, testFilesPath, jiraConfig);
+            return handleMissingResult(params, config, ticketKey, identity.ticketSummary, workingDir, testFilesPath, jiraConfig);
         }
 
         const outcome = postHelpers.parseOutcome(result);
         const passed = outcome.passed;
         const blockedByHuman = outcome.blockedByHuman;
 
-        // Step 2: Configure git author
-        try {
-            runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
-            runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
-        } catch (e) {
-            console.warn('Failed to configure git author:', e);
+        // Steps 2-4: git author, current branch, commit/push + PR creation
+        var branchName = resolveCurrentBranch(config, workingDir);
+        var stage = runBranchStage(branchName, ticketKey, identity.ticketSummary, workingDir, testFilesPath, config, scm, jiraConfig, params);
+        if (stage.terminal) {
+            return stage.terminal;
         }
-
-        // Step 3: Read current branch (set by preCliTestAutomationSetup)
-        var rawBranch = runInRepo('git branch --show-current', workingDir) || '';
-        console.log('Raw branch output length:', rawBranch.length, 'content:', JSON.stringify(rawBranch.substring(0, 200)));
-        const branchName = cleanCommandOutput(rawBranch);
-        console.log('Cleaned branch name:', JSON.stringify(branchName));
-        if (!branchName) {
-            console.warn('Could not determine current branch — skipping git operations');
-        }
-
-        // Step 4: Commit + push + create PR
-        let prUrl = null;
-        let noCodeChanges = false;
-        if (branchName) {
-            const commitMessage = configLoader.formatTemplate(config.formats.commitMessage.testAutomation, {ticketKey: ticketKey, ticketSummary: ticketSummary});
-            const gitResult = performGitOperations(branchName, commitMessage, workingDir, testFilesPath);
-
-            if (gitResult.success && !gitResult.noNewCommit) {
-                const prTitle = configLoader.formatTemplate(config.formats.prTitle.testAutomation, {ticketKey: ticketKey, ticketSummary: ticketSummary});
-                const prResult = createPullRequest(prTitle, branchName, config.git.baseBranch, workingDir, scm, ticketKey);
-                prUrl = prResult.prUrl;
-                if (!prResult.success || !prUrl) {
-                    return resetToBacklogAfterPrFailure(ticketKey, branchName, prResult, jiraConfig, params);
-                }
-
-                if (hasBranchConflictGuidance(ticketKey, workingDir)) {
-                    var mergeable = getPrMergeability(prUrl, workingDir);
-                    console.log('PR mergeability after branch conflict guidance:', mergeable || '(unknown)');
-                    if (mergeable === 'CONFLICTING') {
-                        return handleConflictingPr(ticketKey, branchName, config.git.baseBranch, prUrl, jiraConfig, params);
-                    }
-                }
-            } else if (gitResult.noNewCommit) {
-                noCodeChanges = true;
-                console.log('ℹ️ No test code changes — skipping PR review, moving ticket directly');
-            } else {
-                return resetToBacklogAfterGitFailure(ticketKey, gitResult, jiraConfig);
-            }
-        }
+        var prUrl = stage.prUrl;
+        var noCodeChanges = stage.noCodeChanges;
 
         // Step 5: Post Jira comment
-        try {
-            let comment = postHelpers.buildFinalComment(jiraComment, prUrl, noCodeChanges);
-            if (comment) {
-                tracker.postComment(ticketKey, comment);
-                console.log('✅ Posted test result comment to Jira');
-            }
-        } catch (e) {
-            console.warn('Failed to post Jira comment:', e);
-        }
+        postFinalOutcomeComment(ticketKey, jiraComment, prUrl, noCodeChanges);
 
         // Step 6: Handle outcome
         // When no code changes, skip "In Review" and move directly to final status
@@ -635,30 +703,19 @@ function action(params) {
             return handleBlockedByHuman(ticketKey, result, prUrl, jiraConfig, params);
         }
 
-        if (passed) {
-            moveToOutcomeStatus(true, noCodeChanges, ticketKey, jiraConfig);
-        } else {
-            // Bug creation is handled by the bug_creation agent when TC reaches Failed status
-            moveToOutcomeStatus(false, noCodeChanges, ticketKey, jiraConfig);
-        }
+        // Bug creation is handled by the bug_creation agent when TC reaches Failed status
+        moveToOutcomeStatus(passed, noCodeChanges, ticketKey, jiraConfig);
 
-        if (!blockedByHuman) {
-            if (!autoStartTestReview(ticketKey, config, customParams, noCodeChanges)) {
-                autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
-            }
-        }
+        // blocked_by_human returned above — review workflow, else the SM idle trigger
+        triggerReviewOrIdle(ticketKey, config, customParams, noCodeChanges);
 
         finalizeTicketLabels(ticketKey, params);
 
-        console.log('✅ Test automation workflow complete:', passed ? 'PASSED' : 'FAILED');
+        console.log('✅ Test automation workflow complete:', postHelpers.decideOutcomeWord(passed));
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
+        postUsageSummaryComments(ticketKey, params);
 
         return {
             success: true,
@@ -669,16 +726,7 @@ function action(params) {
 
     } catch (error) {
         console.error('❌ Error in postTestAutomationResults:', error);
-        try {
-            tracker.postComment(params.ticket.key, postHelpers.buildErrorComment(error));
-        } catch (e) {}
-        try {
-            const smTriggerLabel = postHelpers.decideSmTriggerLabel(params);
-            if (smTriggerLabel) {
-                tracker.removeLabel(params.ticket.key, smTriggerLabel);
-                console.log('✅ Removed SM trigger label on error:', smTriggerLabel);
-            }
-        } catch (e) {}
+        handleActionError(tracker, params, error);
         return { success: false, error: error.toString() };
     }
 }
