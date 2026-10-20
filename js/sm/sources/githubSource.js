@@ -322,7 +322,13 @@ function _issueCarrierGuardsFail(q, labels, item) {
     if (hasOpenLinkedPr(q, item)) return true;
     // 'blocked' = human hold (fa #939): the machine skips the item
     // ENTIRELY — all rules, all legs — until a human removes the label.
-    if (labels.indexOf('blocked') !== -1) return true;
+    // gh-1140: q.allowBlockedItems (the guest-transplant AC4 park-reset
+    // lane) opts back in HERE too — the engine-level freeze spans this
+    // guard, the queryPrs pre-mutex filter and the matched filter, and
+    // all three must open together or the parked source stays invisible.
+    // The decision core still refuses a blocked item without the lane's
+    // own park marker, so human holds are never acted on.
+    if (!q.allowBlockedItems && labels.indexOf('blocked') !== -1) return true;
     return false;
 }
 

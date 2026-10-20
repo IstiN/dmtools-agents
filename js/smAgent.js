@@ -4705,6 +4705,29 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             continue;
         }
 
+        if (rule.localAction === 'transplant_guest_pr') {
+            // gh-1140 guest transplant: the po_accept rule. Every decision
+            // lives in js/common/guestTransplant.js (UT-plan/UT-gate); this
+            // block only probes the live state and executes the returned
+            // steps. Machine-actor arms, human holds and already-run
+            // transplants land as audit lines — zero side effects. A
+            // merges-API conflict swaps in the pure AC4 park plan.
+            try {
+                var gCfg = guestCfg || guestTransplantModule.resolveGuestTransplantConfig(
+                    RUN_JOB_PARAMS, effectiveConfig);
+                if (!gCfg) {
+                    console.log('  ⏸️  ' + key + ' guest-transplant inert (no smGuestTransplant) — skipped');
+                    continue;
+                }
+                transplantGuestPrAction(effectiveRepoInfo, ticket, gCfg,
+                    verdictMachineLogins(effectiveConfig));
+                processedKeys.push(key);
+            } catch (e) {
+                console.error('  ❌ transplant_guest_pr failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
         var sweepFailure = false;
         if (rule.localAction === 'sweep_stale_validation') {
             // Stale-arm sweeper (live: fa #999 — ai_validating held 7h with
