@@ -230,6 +230,16 @@ function readyChildren(open, plan, cfg, isKeyClosed) {
     });
 }
 
+function parentBlockers(plan) {
+    return (plan && plan.blockedBy) ? plan.blockedBy : [];
+}
+
+function pickStartBatch(open, plan, cfg, isKeyClosed) {
+    var slots = cfg.maxParallel - activeChildren(open, cfg).length;
+    if (slots <= 0) return [];
+    return readyChildren(open, plan, cfg, isKeyClosed).slice(0, slots);
+}
+
 /**
  * The next step for a planned parent.
  *
@@ -250,14 +260,12 @@ function readyChildren(open, plan, cfg, isKeyClosed) {
  */
 function decideNextSteps(children, plan, cfg, isKeyClosed) {
     var list = Array.isArray(children) ? children : [];
-    var total = list.length;
-    if (total === 0) return { type: 'empty', start: [], total: 0 };
-    if (!allClosed((plan && plan.blockedBy) || [], isKeyClosed)) return { type: 'blocked', start: [], total: total };
+    if (list.length === 0) return { type: 'empty', start: [], total: 0 };
+    if (!allClosed(parentBlockers(plan), isKeyClosed)) return { type: 'blocked', start: [], total: list.length };
     var open = list.filter(function (c) { return !isClosed(c); });
-    if (open.length === 0) return { type: 'complete', start: [], total: total };
-    var slots = cfg.maxParallel - activeChildren(open, cfg).length;
-    var start = slots > 0 ? readyChildren(open, plan, cfg, isKeyClosed).slice(0, slots) : [];
-    return { type: start.length ? 'start' : 'wait', start: start, total: total };
+    if (open.length === 0) return { type: 'complete', start: [], total: list.length };
+    var start = pickStartBatch(open, plan, cfg, isKeyClosed);
+    return { type: start.length ? 'start' : 'wait', start: start, total: list.length };
 }
 
 /** The comment on the parent when the SM starts sub-issues. */
