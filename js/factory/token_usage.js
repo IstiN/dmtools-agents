@@ -358,9 +358,7 @@ function tryPutViaInputFile(io, repo, path, tempPath, putOpts) {
 
 /** Log a one-time warning when falling back to inline argv PUT on a large payload. */
 function warnInlineFallbackIfLarge(io, attempt, putOpts) {
-    if (!io || typeof io.log !== 'function') return;
-    var jsonLen = (putOpts && putOpts.json) ? String(putOpts.json).length : 0;
-    if (Number(attempt || 1) <= 1 && jsonLen >= 96000) {
+    if (Number(attempt) <= 1 && String(putOpts.json).length >= 96000) {
         io.log('::warning::file_write unavailable — inline argv PUT fallback (E2BIG risk at >=96 KB payloads)');
     }
 }
