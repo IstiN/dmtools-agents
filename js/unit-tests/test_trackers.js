@@ -1678,3 +1678,101 @@ suite('trackers.js — ADO project for created work items (agents#870, found on 
     });
 });
 
+suite('trackers.js — tracker-agnostic status transitions & stageFallback (gh-932)', function () {
+    test('stageFallback precedence: customParams > tracker.stageFallback > jira.stageFallback > none (fail alias)', function () {
+        var mod = loadTrackers(jiraMocks());
+        assert.equal(mod.createTracker({}, { trackerProvider: 'jira' }).stageFallback(), 'none');
+        assert.equal(mod.createTracker({ jira: { stageFallback: 'label' } }, { trackerProvider: 'jira' }).stageFallback(), 'label');
+        assert.equal(mod.createTracker({ tracker: { stageFallback: 'label' }, jira: { stageFallback: 'none' } }, { trackerProvider: 'jira' }).stageFallback(), 'label');
+        assert.equal(mod.createTracker({ tracker: { stageFallback: 'fail' }, jira: { stageFallback: 'label' } }, { trackerProvider: 'jira' }).stageFallback(), 'none');
+        assert.equal(mod.createTracker({ tracker: { stageFallback: 'label' } }, { trackerProvider: 'jira', stageFallback: 'fail' }).stageFallback(), 'none');
+        assert.equal(mod.createTracker({ tracker: { stageFallback: 'none' } }, { trackerProvider: 'jira', stageFallback: 'label' }).stageFallback(), 'label');
+    });
+
+    test('moveToStatus routes through moveToStatusOrMark in label mode and adds stage_<key> on rejection', function () {
+        var m = jiraMocks();
+        m.jira_move_to_status = recorder('jira_move_to_status', { __throw__: new Error('Transition not allowed') });
+        m.jira_get_ticket = recorder('jira_get_ticket', JSON.stringify({ key: 'PS-1', fields: { summary: 's', labels: ['stage_ba_analysis', 'wip'] } }));
+        var t = loadTrackers(m).createTracker({ tracker: { stageFallback: 'label' } }, { trackerProvider: 'jira' });
+        var r = t.moveToStatus('PS-1', 'In Review');
+        assert.deepEqual(r, { moved: false, marked: true, label: 'stage_in_review', error: 'Transition not allowed' });
+        assert.equal(m.jira_add_label.calls[0].label, 'stage_in_review');
+        assert.deepEqual(m.jira_remove_label.calls.map(function (c) { return c.label; }), ['stage_ba_analysis']);
+        assert.contains(m.jira_post_comment.calls[0].comment, 'stage_in_review');
+    });
+
+    test('moveToStatus in default none / fail mode rethrows original error with zero extra API calls', function () {
+        ['none', 'fail'].forEach(function (mode) {
+            var m = jiraMocks();
+            m.jira_move_to_status = recorder('jira_move_to_status', { __throw__: new Error('bad status') });
+            var t = loadTrackers(m).createTracker({ tracker: { stageFallback: mode } }, { trackerProvider: 'jira' });
+            assert.throws(function () { t.moveToStatus('PS-1', 'In Review'); }, /bad status/);
+            assert.equal(m.jira_add_label.calls.length, 0);
+            assert.equal(m.jira_remove_label.calls.length, 0);
+            assert.equal(m.jira_get_ticket.calls.length, 0);
+            assert.equal(m.jira_post_comment.calls.length, 0);
+        });
+    });
+
+    test('moveToStatus reverse-maps custom statusName to canonical STAGE_KEY (jira.statuses, tracker.statuses, per-provider, customStatuses)', function () {
+        var m1 = jiraMocks();
+        m1.jira_move_to_status = recorder('jira_move_to_status', { __throw__: new Error('no') });
+        var t1 = loadTrackers(m1).createTracker({
+            tracker: { stageFallback: 'label', statuses: { PO_REVIEW: 'In Spec' } }
+        }, { trackerProvider: 'jira' });
+        assert.equal(t1.moveToStatus('PS-1', 'In Spec').label, 'stage_po_review');
+
+        var m2 = {
+            ado_move_to_state: recorder('ado_move_to_state', { __throw__: new Error('no state') }),
+            ado_add_work_item_label: recorder('ado_add_work_item_label', '{}'),
+            ado_add_work_item_comment: recorder('ado_add_work_item_comment', '{}'),
+            ado_get_work_item: recorder('ado_get_work_item', JSON.stringify({ id: 9, fields: { 'System.Title': 't', 'System.Tags': '' } }))
+        };
+        var t2 = loadTrackers(m2).createTracker({
+            tracker: { provider: 'ado', stageFallback: 'label', statuses: { ado: { READY_FOR_TESTING: 'QA Ready' } } }
+        });
+        assert.equal(t2.moveToStatus('9', 'qa ready').label, 'stage_ready_for_testing');
+
+        var m3 = jiraMocks();
+        m3.jira_move_to_status = recorder('jira_move_to_status', { __throw__: new Error('no') });
+        var t3 = loadTrackers(m3).createTracker(
+            { jira: { stageFallback: 'label' } },
+            { trackerProvider: 'jira', customStatuses: { SOLUTION_ARCHITECTURE: 'Arch Review' } }
+        );
+        assert.equal(t3.moveToStatus('PS-1', 'Arch Review').label, 'stage_solution_architecture');
+
+        // Unknown custom status falls back to stageLabel(statusName)
+        assert.equal(t3.moveToStatus('PS-1', 'Custom Freeform State').label, 'stage_custom_freeform_state');
+    });
+
+    test('GitHub provider in label mode never adds stage_* labels on moveToStatus or moveToStatusOrMark', function () {
+        var ghLabels = recorder('github_add_labels', '{}');
+        var ghClose = recorder('github_close_issue', '{}');
+        var ghComment = recorder('github_create_comment', '{}');
+        var t = loadTrackers({
+            github_add_labels: ghLabels,
+            github_close_issue: ghClose,
+            github_create_comment: ghComment,
+            github_move_issue_to_status: null
+        }).createTracker({
+            tracker: { provider: 'github', stageFallback: 'label' },
+            repository: { owner: 'acme', repo: 'widgets' }
+        });
+        t.moveToStatus('acme/widgets#7', 'In Review');
+        var r = t.moveToStatusOrMark('acme/widgets#7', 'Done', 'DONE');
+        assert.deepEqual(r, { moved: true, marked: false, label: null, error: null });
+        assert.equal(ghLabels.calls.length, 1);
+        assert.deepEqual(ghLabels.calls[0].labels, ['In Review']);
+        assert.equal(ghClose.calls.length, 1);
+        assert.equal(ghComment.calls.length, 0);
+    });
+
+    test('moveToStatusStrict always calls impl.moveToStatus and throws on rejection even when stageFallback is label', function () {
+        var m = jiraMocks();
+        m.jira_move_to_status = recorder('jira_move_to_status', { __throw__: new Error('strict failure') });
+        var t = loadTrackers(m).createTracker({ tracker: { stageFallback: 'label' } }, { trackerProvider: 'jira' });
+        assert.throws(function () { t.moveToStatusStrict('PS-1', 'PO Review'); }, /strict failure/);
+        assert.equal(m.jira_add_label.calls.length, 0);
+        assert.equal(m.jira_post_comment.calls.length, 0);
+    });
+});

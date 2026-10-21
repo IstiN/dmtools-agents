@@ -2014,3 +2014,72 @@ suite('configLoader.resolveInstructions — extracted helpers', function() {
         assert.notEqual(merged, base);
     });
 });
+// ── Tracker-neutral config resolution (gh-932) ────────────────────────────────
+
+suite('configLoader & config.resolveStatuses — tracker-neutral config (gh-932)', function() {
+
+    test('resolveStageFallbackMode precedence: customParams > tracker.stageFallback > jira.stageFallback > none (fail alias)', function() {
+        assert.equal(configLoaderModule.resolveStageFallbackMode({}), 'none');
+        assert.equal(configLoaderModule.resolveStageFallbackMode({ jira: { stageFallback: 'label' } }), 'label');
+        assert.equal(configLoaderModule.resolveStageFallbackMode({ tracker: { stageFallback: 'label' }, jira: { stageFallback: 'none' } }), 'label');
+        assert.equal(configLoaderModule.resolveStageFallbackMode({ tracker: { stageFallback: 'fail' }, jira: { stageFallback: 'label' } }), 'none');
+        assert.equal(configLoaderModule.resolveStageFallbackMode({ tracker: { stageFallback: 'label' } }, { stageFallback: 'fail' }), 'none');
+        assert.equal(configLoaderModule.resolveStageFallbackMode({ tracker: { stageFallback: 'none' } }, { stageFallback: 'label' }), 'label');
+    });
+
+    test('mergeProjectConfig & loadProjectConfig sync tracker.statuses into jira.statuses with provider support', function() {
+        var merged = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
+            tracker: {
+                provider: 'ado',
+                statuses: {
+                    IN_REVIEW: 'Code Review',
+                    ado: { IN_REVIEW: 'ADO Review', DONE: 'Resolved' }
+                }
+            }
+        });
+        assert.equal(merged.jira.statuses.IN_REVIEW, 'ADO Review');
+        assert.equal(merged.jira.statuses.DONE, 'Resolved');
+        assert.equal(merged.jira.statuses.BACKLOG, 'Backlog');
+    });
+
+    test('config.resolveStatuses supports flat and per-provider projectStatuses plus customParams.customStatuses', function() {
+        var trackerStatuses = {
+            IN_REVIEW: 'Tracker Review',
+            ado: { IN_REVIEW: 'ADO Review', PO_REVIEW: 'ADO Spec' }
+        };
+        var s1 = configModule.resolveStatuses({}, trackerStatuses, 'ado');
+        assert.equal(s1.IN_REVIEW, 'ADO Review');
+        assert.equal(s1.PO_REVIEW, 'ADO Spec');
+        var s2 = configModule.resolveStatuses({ customStatuses: { IN_REVIEW: 'Custom Review' } }, trackerStatuses, 'ado');
+        assert.equal(s2.IN_REVIEW, 'Custom Review');
+        assert.equal(s2.PO_REVIEW, 'ADO Spec');
+    });
+
+    test('interpolateJql honours tracker.statuses, tracker.useConfiguredStatusesInQueries, and tracker.stageFallback', function() {
+        var cfg = {
+            jira: { project: 'PRJ', parentTicket: '' },
+            tracker: {
+                provider: 'ado',
+                stageFallback: 'label',
+                useConfiguredStatusesInQueries: true,
+                statuses: {
+                    PO_REVIEW: 'Generic Spec',
+                    DONE: 'Generic Done',
+                    ado: { PO_REVIEW: 'ADO Spec' }
+                }
+            }
+        };
+        assert.equal(
+            configLoaderModule.interpolateJql("{stage.PO_REVIEW:PO Review} AND [System.State] <> '{status.DONE:Done}'", cfg, 'ado'),
+            "([System.State] IN ('ADO Spec') OR [System.Tags] CONTAINS 'stage_po_review') AND [System.State] <> 'Generic Done'"
+        );
+    });
+
+    test('tracker.useConfiguredStatusesInQueries boolean false overrides jira.useConfiguredStatusesInQueries true', function() {
+        var cfg = {
+            jira: { project: 'PRJ', statuses: { DONE: 'Closed' }, useConfiguredStatusesInQueries: true },
+            tracker: { useConfiguredStatusesInQueries: false }
+        };
+        assert.equal(configLoaderModule.interpolateJql("status = '{status.DONE:Done}'", cfg), "status = 'Done'");
+    });
+});

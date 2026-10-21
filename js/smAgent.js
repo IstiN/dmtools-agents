@@ -1204,7 +1204,7 @@ function moveStatus(ticketKey, targetStatus) {
             if (stageKey) {
                 smTracker().moveToStatusOrMark(ticketKey, targetStatus, stageKey);
             } else {
-                smTracker().moveToStatus(ticketKey, targetStatus);
+                smTracker().moveToStatusStrict(ticketKey, targetStatus);
             }
         }
         console.log('  ✅ ' + ticketKey + ' → ' + targetStatus);

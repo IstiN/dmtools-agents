@@ -166,12 +166,29 @@ function truncateSummary(summary, maxLength) {
  *   }
  *
  * @param {Object} customParams - customParams from agent config
- * @param {Object} [projectStatuses] - project-wide status overrides (config.jira.statuses)
+ * @param {Object} customParams - customParams from agent config
+ * @param {Object} [projectStatuses] - project-wide status overrides (config.jira.statuses or config.tracker.statuses)
+ * @param {string} [trackerProvider] - optional tracker provider ('jira' | 'ado' | 'github') for per-provider overrides
  * @returns {Object} STATUSES merged with project and customParams overrides
  */
-function resolveStatuses(customParams, projectStatuses) {
-    var merged = (projectStatuses && typeof projectStatuses === 'object')
-        ? Object.assign({}, STATUSES, projectStatuses)
+function _extractStatusEntries(projectStatuses, trackerProvider) {
+    if (!projectStatuses || typeof projectStatuses !== 'object') return {};
+    var base = {};
+    var keys = Object.keys(projectStatuses);
+    for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (typeof projectStatuses[k] === 'string') base[k] = projectStatuses[k];
+    }
+    var prov = trackerProvider ? String(trackerProvider).toLowerCase() : '';
+    var provMap = prov && projectStatuses[prov];
+    if (provMap && typeof provMap === 'object') Object.assign(base, provMap);
+    return base;
+}
+
+function resolveStatuses(customParams, projectStatuses, trackerProvider) {
+    var entries = _extractStatusEntries(projectStatuses, trackerProvider);
+    var merged = Object.keys(entries).length > 0
+        ? Object.assign({}, STATUSES, entries)
         : STATUSES;
     if (!customParams || !customParams.customStatuses) return merged;
     return Object.assign({}, merged, customParams.customStatuses);
