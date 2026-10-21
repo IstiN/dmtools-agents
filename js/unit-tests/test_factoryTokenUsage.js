@@ -297,30 +297,6 @@ suite('factoryTokenUsage — gh-1152 base64EncodeUtf8 & --input PUT transport', 
     return JSON.stringify(bigCur);
   }
 
-  var B64_ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' + 'abcdefghijklmnopqrstuvwxyz' + '0123456789+/';
-
-  /** Pure-JS base64 → UTF-8 decoder for GraalJS / QuickJS test assertions (no Node Buffer). */
-  function base64DecodeUtf8(b64) {
-    var s = String(b64 || '').replace(/=+$/, '');
-    var bytes = [];
-    for (var i = 0; i < s.length; i += 4) {
-      var c0 = B64_ABC.indexOf(s.charAt(i));
-      var c1 = B64_ABC.indexOf(s.charAt(i + 1));
-      var c2 = (i + 2 < s.length) ? B64_ABC.indexOf(s.charAt(i + 2)) : -1;
-      var c3 = (i + 3 < s.length) ? B64_ABC.indexOf(s.charAt(i + 3)) : -1;
-      var n = (c0 << 18) | (c1 << 12) | ((c2 >= 0 ? c2 : 0) << 6) | (c3 >= 0 ? c3 : 0);
-      bytes.push((n >> 16) & 255);
-      if (c2 >= 0) bytes.push((n >> 8) & 255);
-      if (c3 >= 0) bytes.push(n & 255);
-    }
-    var pct = '';
-    for (var j = 0; j < bytes.length; j++) {
-      var hex = bytes[j].toString(16);
-      pct += '%' + (hex.length < 2 ? '0' + hex : hex);
-    }
-    return decodeURIComponent(pct);
-  }
-
   function noop() {}
 
   test('base64EncodeUtf8 encodes empty, ASCII, padding (1/2/3 mod 3), and multi-byte UTF-8', function () {
@@ -332,7 +308,6 @@ suite('factoryTokenUsage — gh-1152 base64EncodeUtf8 & --input PUT transport', 
     var utf8Sample = '{"msg":"leg tokens — pr-1665 ✅ кириллица"}';
     var expected = 'eyJtc2ciOiJsZWcgdG9rZW5zIOKAlC' + 'Bwci0xNjY1IOKchSDQutC40YDQuNC70LvQuNGG0LAifQ==';
     assert.equal(tuModule.base64EncodeUtf8(utf8Sample), expected);
-    assert.equal(base64DecodeUtf8(tuModule.base64EncodeUtf8(utf8Sample)), utf8Sample);
   });
 
   test('buildContentsPutBody produces branch, message, base64 content, and optional sha', function () {
@@ -345,7 +320,7 @@ suite('factoryTokenUsage — gh-1152 base64EncodeUtf8 & --input PUT transport', 
     assert.deepEqual(Object.keys(withoutSha).sort(), ['branch', 'content', 'message']);
     assert.equal(withoutSha.branch, 'factory-data');
     assert.equal(withoutSha.message, 'leg tokens — pr-1665 rework [skip ci]');
-    assert.equal(base64DecodeUtf8(withoutSha.content), '{"pr-1665":[]}');
+    assert.equal(withoutSha.content, tuModule.base64EncodeUtf8('{"pr-1665":[]}'));
 
     var withSha = tuModule.buildContentsPutBody({
       branch: 'factory-data',
@@ -358,7 +333,7 @@ suite('factoryTokenUsage — gh-1152 base64EncodeUtf8 & --input PUT transport', 
     var defaults = tuModule.buildContentsPutBody();
     assert.equal(defaults.branch, 'factory-data');
     assert.equal(defaults.message, '');
-    assert.equal(base64DecodeUtf8(defaults.content), '{}');
+    assert.equal(defaults.content, tuModule.base64EncodeUtf8('{}'));
   });
 
   test('tempPutBodyPath and contentsPutInputCommand keep argv tiny and metachar-free', function () {
@@ -395,10 +370,13 @@ suite('factoryTokenUsage — gh-1152 base64EncodeUtf8 & --input PUT transport', 
     assert.equal(parsedBody.branch, 'factory-data');
     assert.equal(parsedBody.message, 'leg tokens — pr-1665 rework [skip ci]');
     assert.equal(parsedBody.sha, 'sha1152');
-    var decodedJson = JSON.parse(base64DecodeUtf8(parsedBody.content));
-    assert.equal(decodedJson['pr-1665'].length, 1);
-    assert.equal(decodedJson['pr-1665'][0].leg, 'rework');
-    assert.equal(decodedJson['pr-1665'][0].total, 600);
+    var expectedRowJson = JSON.stringify({
+      "pr-1665": [{
+        leg: "rework", at: NOW, prompt: 500, completion: 100,
+        total: 600, cacheRead: 2000, model: "claude-opus-4-7"
+      }]
+    });
+    assert.equal(parsedBody.content, tuModule.base64EncodeUtf8(expectedRowJson));
   });
 
   test('putTokenContents logs a one-time warning when file_write is unavailable and falls back to inline PUT', function () {

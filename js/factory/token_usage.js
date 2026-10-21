@@ -356,15 +356,21 @@ function tryPutViaInputFile(io, repo, path, tempPath, putOpts) {
     }
 }
 
+/** Log a one-time warning when falling back to inline argv PUT on a large payload. */
+function warnInlineFallbackIfLarge(io, attempt, putOpts) {
+    if (!io || typeof io.log !== 'function') return;
+    var jsonLen = (putOpts && putOpts.json) ? String(putOpts.json).length : 0;
+    if (Number(attempt || 1) <= 1 && jsonLen >= 96000) {
+        io.log('::warning::file_write unavailable — inline argv PUT fallback (E2BIG risk at >=96 KB payloads)');
+    }
+}
+
 /** Dispatch PUT via `--input` temp file when `io.write` is wired, else inline fallback. */
 function putTokenContents(io, repo, path, now, attempt, putOpts) {
     if (io && typeof io.write === 'function') {
         return tryPutViaInputFile(io, repo, path, tempPutBodyPath(now, attempt), putOpts);
     }
-    if (io && typeof io.log === 'function' && Number(attempt || 1) <= 1 &&
-            putOpts && String(putOpts.json || '').length >= 96000) {
-        io.log('::warning::file_write unavailable — inline argv PUT fallback (E2BIG risk at >=96 KB payloads)');
-    }
+    warnInlineFallbackIfLarge(io, attempt, putOpts);
     return tryExec(io && io.exec, contentsPutCommand(repo, path, putOpts));
 }
 
