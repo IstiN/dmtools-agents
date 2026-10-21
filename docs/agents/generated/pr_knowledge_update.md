@@ -52,6 +52,7 @@ _Pre-CLI Knowledge Update Setup Action (preCliJSAction for pr_knowledge_update a
   - `prTitle`
   - `prUrl`
   - `scmProvider`
+  - `stageFallback`
   - `targetRepository`
   - `ticket`
 
@@ -74,6 +75,7 @@ _Push Knowledge Update Post-Action (postJSAction for pr_knowledge_update agent)_
   - `prNumber`
   - `prSearchFnPath`
   - `scmProvider`
+  - `stageFallback`
   - `targetRepository`
 
 
@@ -97,6 +99,7 @@ _Push Knowledge Update Post-Action (postJSAction for pr_knowledge_update agent)_
 - `prTitle` _(used by JS action)_
 - `prUrl` _(used by JS action)_
 - `scmProvider` _(used by JS action)_
+- `stageFallback` _(used by JS action)_
 - `targetRepository` _(used by JS action)_
 - `ticket` _(used by JS action)_
 

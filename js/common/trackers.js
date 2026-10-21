@@ -161,25 +161,73 @@ function _adoProjectEnv() {
     }
 }
 
+function _cfgSection(config, key) {
+    return (config && config[key]) || {};
+}
+
+function _rawProviderCandidate(config, customParams) {
+    customParams = customParams || {};
+    return customParams.trackerProvider || _cfgSection(config, 'tracker').provider || _defaultTrackerEnv() || (config && config.defaultTracker) || '';
+}
+
+function _resolveProviderName(config, customParams) {
+    var low = String(_rawProviderCandidate(config, customParams)).toLowerCase();
+    return ['jira', 'ado', 'github'].indexOf(low) !== -1 ? low : 'jira';
+}
+
+function _resolveAdoMarkdown(config, customParams) {
+    customParams = customParams || {};
+    var raw = customParams.adoTextFormat || _cfgSection(config, 'tracker').adoTextFormat || 'markdown';
+    return String(raw).toLowerCase() === 'markdown';
+}
+
+function _rawStageFallbackCandidate(config, customParams) {
+    customParams = customParams || {};
+    return customParams.stageFallback || _cfgSection(config, 'tracker').stageFallback || _cfgSection(config, 'jira').stageFallback || 'none';
+}
+
+function _resolveStageFallback(config, customParams) {
+    return String(_rawStageFallbackCandidate(config, customParams)).toLowerCase() === 'label' ? 'label' : 'none';
+}
+
+function _copyStringStatusKeys(target, source) {
+    var keys = Object.keys(source);
+    for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (typeof source[k] === 'string') target[k] = source[k];
+    }
+}
+
+function _copyStatusEntries(target, source, providerName) {
+    if (!source || typeof source !== 'object') return;
+    _copyStringStatusKeys(target, source);
+    var provMap = providerName && source[providerName];
+    if (provMap && typeof provMap === 'object') Object.assign(target, provMap);
+}
+
+function _buildEffectiveStatuses(config, customParams, providerName) {
+    customParams = customParams || {};
+    var merged = Object.assign({}, STATUSES);
+    _copyStatusEntries(merged, _cfgSection(config, 'jira').statuses, providerName);
+    _copyStatusEntries(merged, _cfgSection(config, 'tracker').statuses, providerName);
+    _copyStatusEntries(merged, customParams.customStatuses, providerName);
+    return merged;
+}
+
+function _findStageKeyForStatus(statusMap, statusName) {
+    if (!statusName || !statusMap) return null;
+    var target = String(statusName).trim().toLowerCase();
+    var keys = Object.keys(statusMap);
+    for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (String(statusMap[k] || '').trim().toLowerCase() === target) return k;
+    }
+    return null;
+}
+
 function createTracker(config, customParams) {
-    var VALID = ['jira', 'ado', 'github'];
-    var raw =
-        (customParams && customParams.trackerProvider) ||
-        (config && config.tracker && config.tracker.provider) ||
-        _defaultTrackerEnv() ||
-        (config && config.defaultTracker) ||
-        '';
-    var providerName = VALID.indexOf(String(raw).toLowerCase()) !== -1
-        ? String(raw).toLowerCase()
-        : 'jira';
-    // Text format sent to Azure DevOps for descriptions, long-text fields and comments (agents#805).
-    // ADO instructions (ado_markup_transform.md) make the model write Markdown, and ADO renders it
-    // only when the write says so — otherwise the raw Markdown shows up in the UI. Default
-    // 'markdown'; set customParams.adoTextFormat / config.tracker.adoTextFormat = 'html' to keep the
-    // previous HTML-only writes.
-    var adoFormatRaw = (customParams && customParams.adoTextFormat) ||
-        (config && config.tracker && config.tracker.adoTextFormat) || 'markdown';
-    var adoMarkdown = String(adoFormatRaw).toLowerCase() === 'markdown';
+    var providerName = _resolveProviderName(config, customParams);
+    var adoMarkdown = _resolveAdoMarkdown(config, customParams);
     var owner = (config && config.repository && config.repository.owner) || '';
     var repo  = (config && config.repository && config.repository.repo)  || '';
     var aiLabel = (config && config.labels && config.labels.aiGenerated)
@@ -1102,10 +1150,8 @@ function createTracker(config, customParams) {
     // behaviour — the error propagates to the caller, which logs it. 'label' leaves a stage marker on the
     // ticket instead, so a restricted workflow (no such state, no admin rights) does not silently lose the
     // hand-off. Set via customParams.stageFallback or config.jira.stageFallback.
-    var stageFallbackRaw = (customParams && customParams.stageFallback) ||
-        (config && config.jira && config.jira.stageFallback) || 'none';
-    var stageFallback = String(stageFallbackRaw).toLowerCase() === 'label' ? 'label' : 'none';
-
+    var stageFallback = _resolveStageFallback(config, customParams);
+    var effectiveStatuses = _buildEffectiveStatuses(config, customParams, providerName);
     var _stageLabel = stageLabelOf;
     var STAGE_LABEL_PREFIX = _stageLabel('');   // 'stage_'
 
@@ -1151,13 +1197,52 @@ function createTracker(config, customParams) {
      * @param {string} [previousStageKey] optional, kept for compatibility: its label is always removed; in
      *        'label' mode every other stale stage_* label on the ticket is removed as well (agents#907)
      */
+    function _resolveStageKey(statusName, stageKey) {
+        if (stageKey) return stageKey;
+        return _findStageKeyForStatus(effectiveStatuses, statusName) || statusName;
+    }
+
+    function _errorText(err, fallback) {
+        if (!err) return fallback;
+        return String(err.message || err);
+    }
+
+    function _addStageMarkerOrThrow(ticketKey, statusName, label, reason) {
+        try {
+            impl.addLabel(ticketKey, label);
+        } catch (labelError) {
+            throw new Error('Status transition to "' + statusName + '" was rejected (' + reason +
+                ') and the stage label "' + label + '" could not be added: ' + _errorText(labelError, 'unknown error'));
+        }
+    }
+
+    function _postFallbackComment(ticketKey, statusName, label, reason) {
+        try {
+            impl.postComment(ticketKey, 'Could not move this ticket to "' + statusName + '" (' + reason +
+                '). The stage is recorded with the label `' + label + '` instead.');
+        } catch (commentError) {
+            console.warn('Could not post the stage-fallback comment on ' + ticketKey + ':', commentError);
+        }
+    }
+
+    function _applyFallbackStageLabel(ticketKey, statusName, stageKey, previousStageKey, moveError) {
+        var label = _stageLabel(_resolveStageKey(statusName, stageKey));
+        var reason = _errorText(moveError, 'unknown error');
+        _addStageMarkerOrThrow(ticketKey, statusName, label, reason);
+        _removeLabels(ticketKey, _staleStageLabels(ticketKey, label, previousStageKey));
+        _postFallbackComment(ticketKey, statusName, label, reason);
+        console.warn('⚠️ ' + ticketKey + ': transition to "' + statusName + '" rejected — marked with label "' + label + '"');
+        return { moved: false, marked: true, label: label, error: reason };
+    }
+
     function moveToStatusOrMark(ticketKey, statusName, stageKey, previousStageKey) {
+        if (providerName === 'github') {
+            impl.moveToStatus(ticketKey, statusName);
+            return { moved: true, marked: false, label: null, error: null };
+        }
         try {
             impl.moveToStatus(ticketKey, statusName);
             if (stageFallback === 'label') {
-                // the ticket advanced for real: every stage marker left by earlier rejected hand-offs is
-                // stale and would make the SM select it again (agents#907 sweep). Only in 'label' mode,
-                // so the default adds no API call.
                 _removeLabels(ticketKey, _staleStageLabels(ticketKey, null, previousStageKey));
             }
             return { moved: true, marked: false, label: null, error: null };
@@ -1165,27 +1250,19 @@ function createTracker(config, customParams) {
             if (stageFallback !== 'label') {
                 throw moveError;
             }
-            var label = _stageLabel(stageKey || statusName);
-            var reason = String((moveError && (moveError.message || moveError)) || 'unknown error');
-            try {
-                impl.addLabel(ticketKey, label);
-            } catch (labelError) {
-                // Neither the transition nor the marker worked: report it loudly instead of pretending.
-                throw new Error('Status transition to "' + statusName + '" was rejected (' + reason +
-                    ') and the stage label "' + label + '" could not be added: ' +
-                    String((labelError && (labelError.message || labelError)) || labelError));
-            }
-            // agents#907: the new marker is now the only valid one — drop every other stage_* label.
-            _removeLabels(ticketKey, _staleStageLabels(ticketKey, label, previousStageKey));
-            try {
-                impl.postComment(ticketKey, 'Could not move this ticket to "' + statusName + '" (' + reason +
-                    '). The stage is recorded with the label `' + label + '` instead.');
-            } catch (commentError) {
-                console.warn('Could not post the stage-fallback comment on ' + ticketKey + ':', commentError);
-            }
-            console.warn('⚠️ ' + ticketKey + ': transition to "' + statusName + '" rejected — marked with label "' + label + '"');
-            return { moved: false, marked: true, label: label, error: reason };
+            return _applyFallbackStageLabel(ticketKey, statusName, stageKey, previousStageKey, moveError);
         }
+    }
+
+    function moveToStatus(ticketKey, statusName, stageKey, previousStageKey) {
+        if (providerName === 'github') {
+            return impl.moveToStatus(ticketKey, statusName);
+        }
+        return moveToStatusOrMark(ticketKey, statusName, stageKey, previousStageKey);
+    }
+
+    function moveToStatusStrict(ticketKey, statusName) {
+        return impl.moveToStatus(ticketKey, statusName);
     }
 
     /**
@@ -1222,7 +1299,8 @@ function createTracker(config, customParams) {
         getComments: function (k) { return impl.getComments(k); },
         addLabel: function (k, l) { return impl.addLabel(k, l); },
         removeLabel: function (k, l) { return impl.removeLabel(k, l); },
-        moveToStatus: function (k, s) { return impl.moveToStatus(k, s); },
+        moveToStatus: moveToStatus,
+        moveToStatusStrict: moveToStatusStrict,
         assignTo: function (k, u) { return impl.assignTo(k, u); },
         createTicket: function (p, t, ti, d) { return impl.createTicket(p, t, ti, d); },
         getIssue: function (k, f) { return impl.getIssue(k, f); },

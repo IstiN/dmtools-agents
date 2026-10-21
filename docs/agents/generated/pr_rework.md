@@ -154,6 +154,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
   - `featureBranchEnabled`
   - `prSearchFnPath`
   - `scmProvider`
+  - `stageFallback`
   - `targetRepository`
 
 ## LLM step

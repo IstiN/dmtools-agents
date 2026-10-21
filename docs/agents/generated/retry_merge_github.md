@@ -53,6 +53,7 @@ _retryMergeGithubPR.js — GitHub-issues machine loop: merge leg._
   - `removeLabel`
   - `reworkLabel`
   - `scmProvider`
+  - `stageFallback`
   - `targetRepository`
 
 
@@ -75,6 +76,7 @@ _retryMergeGithubPR.js — GitHub-issues machine loop: merge leg._
 - `prNumber` _(used by JS action)_
 - `prSearchFnPath` _(used by JS action)_
 - `scmProvider` _(used by JS action)_
+- `stageFallback` _(used by JS action)_
 - `targetRepository` _(used by JS action)_
 
 ---

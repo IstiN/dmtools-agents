@@ -187,6 +187,49 @@ function deepMerge(target, source) {
  * - jira.questions, labels, smRules, smMergeRules: full replacement
  * - everything else: deep merge
  */
+/**
+ * Copy flat string entries (and optional per-provider sub-map entries) from a
+ * tracker/jira statuses object onto target.
+ */
+function _copyStringStatuses(target, statuses) {
+    var keys = Object.keys(statuses);
+    for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (typeof statuses[k] === 'string') target[k] = statuses[k];
+    }
+    return target;
+}
+
+function _applyProviderSubmap(target, statuses, provider) {
+    if (!provider) return target;
+    var provMap = statuses[provider];
+    return (provMap && typeof provMap === 'object') ? Object.assign(target, provMap) : target;
+}
+
+function copyStatusEntries(target, statuses, provider) {
+    if (!statuses || typeof statuses !== 'object') return target;
+    return _applyProviderSubmap(_copyStringStatuses(target, statuses), statuses, provider);
+}
+
+function _trackerProviderOf(config, trackerProvider) {
+    var trackerCfg = (config && config.tracker) || {};
+    var raw = trackerProvider || trackerCfg.provider || (config && config.defaultTracker) || '';
+    return String(raw).toLowerCase();
+}
+
+function _trackerStatusesOf(overrides) {
+    var tr = overrides && overrides.tracker;
+    return (tr && tr.statuses && typeof tr.statuses === 'object') ? tr.statuses : null;
+}
+
+function syncTrackerStatuses(result, defaults, overrides) {
+    var jiraCfg = result.jira || (result.jira = {});
+    jiraCfg.statuses = Object.assign({}, defaults.jira.statuses, jiraCfg.statuses || {});
+    var trackerStatuses = _trackerStatusesOf(overrides);
+    if (!trackerStatuses) return;
+    jiraCfg.statuses = copyStatusEntries(jiraCfg.statuses, trackerStatuses, _trackerProviderOf(result));
+}
+
 function mergeProjectConfig(defaults, overrides) {
     if (!overrides) return defaults;
 
@@ -233,6 +276,7 @@ function mergeProjectConfig(defaults, overrides) {
         result.jobParamPatches = overrides.jobParamPatches;
     }
 
+    syncTrackerStatuses(result, defaults, overrides);
     return result;
 }
 
@@ -745,69 +789,93 @@ function formatTemplate(template, vars) {
  * word stays bare (so the default query is byte-identical to the old literal) and any other value is
  * wrapped in double quotes.
  */
-function interpolateStatusPlaceholders(jql, config) {
-    var jiraCfg = (config && config.jira) || {};
-    var statuses = jiraCfg.statuses || {};
-    var useConfigured = jiraCfg.useConfiguredStatusesInQueries === true;
+/**
+ * Resolve effective status map for placeholder interpolation:
+ * built-in defaults < jira.statuses < tracker.statuses < tracker.statuses.<provider>.
+ */
+function _sectionOf(config, key) {
+    return (config && config[key]) || {};
+}
+
+function resolveEffectiveStatuses(config, trackerProvider) {
+    var prov = _trackerProviderOf(config, trackerProvider);
+    var merged = copyStatusEntries({}, _sectionOf(config, 'jira').statuses, prov);
+    return copyStatusEntries(merged, _sectionOf(config, 'tracker').statuses, prov);
+}
+
+function resolveUseConfiguredStatuses(config) {
+    var trackerFlag = _sectionOf(config, 'tracker').useConfiguredStatusesInQueries;
+    if (typeof trackerFlag === 'boolean') return trackerFlag;
+    return _sectionOf(config, 'jira').useConfiguredStatusesInQueries === true;
+}
+
+function _rawStageFallback(config, customParams) {
+    customParams = customParams || _sectionOf(config, 'customParams');
+    return customParams.stageFallback || _sectionOf(config, 'tracker').stageFallback || _sectionOf(config, 'jira').stageFallback || 'none';
+}
+
+function resolveStageFallbackMode(config, customParams) {
+    return String(_rawStageFallback(config, customParams)).toLowerCase() === 'label' ? 'label' : 'none';
+}
+
+/** Pick the status name for a `{status.KEY[:Literal]}` or `{stage.KEY[:Literal]}` placeholder. */
+function pickPlaceholderStatus(statuses, useConfigured, key, literal) {
+    var configured = statuses[key];
+    if (literal !== undefined) {
+        return (useConfigured && configured) ? String(configured) : String(literal);
+    }
+    return configured ? String(configured) : null;
+}
+
+/** Quote or escape a status value according to its surrounding characters in a query template. */
+function formatStatusToken(value, before, after) {
+    var quoted = (before === "'" || before === '"') && after === before;
+    if (quoted) {
+        return value.replace(new RegExp(before, 'g'), '\\' + before);
+    }
+    return /^[A-Za-z0-9_]+$/.test(value) ? value : '"' + value.replace(/"/g, '\\"') + '"';
+}
+
+function interpolateStatusPlaceholders(jql, config, trackerProvider) {
+    var statuses = resolveEffectiveStatuses(config, trackerProvider);
+    var useConfigured = resolveUseConfiguredStatuses(config);
     return String(jql).replace(/\{status\.([A-Za-z0-9_]+)(?::([^}]*))?\}/g, function (match, key, literal, offset, whole) {
-        var configured = statuses[key];
-        var hasLiteral = literal !== undefined;
-        var value;
-        if (hasLiteral) {
-            value = (useConfigured && configured) ? configured : literal;
-        } else if (configured) {
-            value = configured;
-        } else {
-            return match;
-        }
-        value = String(value);
+        var value = pickPlaceholderStatus(statuses, useConfigured, key, literal);
+        if (value === null) return match;
         var before = offset > 0 ? whole.charAt(offset - 1) : '';
         var after = whole.charAt(offset + match.length);
-        var quoted = (before === "'" || before === '"') && after === before;
-        if (quoted) {
-            // the template already quotes it: only escape the same quote character
-            return value.replace(new RegExp(before, 'g'), '\\' + before);
-        }
-        // Unquoted position (e.g. `status not in ({status.DONE:Done})`): a plain word stays bare, so the
-        // default query is byte-identical to the old literal; anything else (spaces, dashes) is quoted so a
-        // configured multi-word status cannot break the query.
-        return /^[A-Za-z0-9_]+$/.test(value) ? value : '"' + value.replace(/"/g, '\\"') + '"';
+        return formatStatusToken(value, before, after);
     });
+}
+
+/** Build the status clause and optional stage-label fallback clause for `{stage.KEY[:Literal]}`. */
+function formatStageClause(name, key, withLabel, ado) {
+    var quotedName = "'" + name.replace(/'/g, "\\'") + "'";
+    var statusClause = ado ? '[System.State] IN (' + quotedName + ')' : 'status in (' + quotedName + ')';
+    if (!withLabel) return statusClause;
+    var label = DEFAULT_CONFIG.stageLabel(key);
+    var labelClause = ado ? "[System.Tags] CONTAINS '" + label + "'" : "labels = '" + label + "'";
+    return '(' + statusClause + ' OR ' + labelClause + ')';
 }
 
 /**
  * Expands `{stage.KEY:Literal}` into a clause that selects a ticket by its status OR by the stage label a
- * rejected status transition left behind (agents#855/#856), in the syntax of the tracker in use:
+ * rejected status transition left behind (agents#855/#856/#932), in the syntax of the tracker in use:
  *   Jira / GitHub:  (status in ('X') OR labels = 'stage_x')
  *   Azure DevOps:   ([System.State] IN ('X') OR [System.Tags] CONTAINS 'stage_x')
  * It is OFF by default — the placeholder then expands to the plain status clause the rule always had
  * (`status in ('X')` / `[System.State] IN ('X')`), so nothing changes unless the project sets
- * `jira.stageFallback: 'label'` (the same switch that makes the tracker write the label). The status value
- * itself follows the `{status.KEY:Literal}` rules above.
+ * `tracker.stageFallback: 'label'` or `jira.stageFallback: 'label'`.
  */
 function interpolateStagePlaceholders(jql, config, trackerProvider) {
-    var jiraCfg = (config && config.jira) || {};
-    var statuses = jiraCfg.statuses || {};
-    var useConfigured = jiraCfg.useConfiguredStatusesInQueries === true;
-    var withLabel = String(jiraCfg.stageFallback || '').toLowerCase() === 'label';
+    var statuses = resolveEffectiveStatuses(config, trackerProvider);
+    var useConfigured = resolveUseConfiguredStatuses(config);
+    var withLabel = resolveStageFallbackMode(config) === 'label';
     var ado = String(trackerProvider || '').toLowerCase() === 'ado';
     return String(jql).replace(/\{stage\.([A-Za-z0-9_]+)(?::([^}]*))?\}/g, function (match, key, literal) {
-        var configured = statuses[key];
-        var name = literal !== undefined
-            ? ((useConfigured && configured) ? configured : literal)
-            : configured;
-        if (!name) return match;
-        name = String(name);
-        var quotedName = "'" + name.replace(/'/g, "\\'") + "'";
-        var statusClause = ado
-            ? '[System.State] IN (' + quotedName + ')'
-            : 'status in (' + quotedName + ')';
-        if (!withLabel) return statusClause;
-        var label = DEFAULT_CONFIG.stageLabel(key);
-        var labelClause = ado
-            ? "[System.Tags] CONTAINS '" + label + "'"
-            : "labels = '" + label + "'";
-        return '(' + statusClause + ' OR ' + labelClause + ')';
+        var name = pickPlaceholderStatus(statuses, useConfigured, key, literal);
+        if (name === null || name === '') return match;
+        return formatStageClause(name, key, withLabel, ado);
     });
 }
 
@@ -833,9 +901,12 @@ function selectRuleQuery(rule, trackerProvider) {
  */
 function interpolateJql(jql, config, trackerProvider) {
     if (!jql) return jql;
-    return formatTemplate(interpolateStatusPlaceholders(interpolateStagePlaceholders(jql, config, trackerProvider), config), {
-        jiraProject: config.jira.project,
-        parentTicket: config.jira.parentTicket
+    var jiraCfg = (config && config.jira) || {};
+    var withStage = interpolateStagePlaceholders(jql, config, trackerProvider);
+    var withStatus = interpolateStatusPlaceholders(withStage, config, trackerProvider);
+    return formatTemplate(withStatus, {
+        jiraProject: jiraCfg.project,
+        parentTicket: jiraCfg.parentTicket
     });
 }
 
@@ -1105,6 +1176,9 @@ module.exports = {
     interpolateStatusPlaceholders: interpolateStatusPlaceholders,
     interpolateStagePlaceholders: interpolateStagePlaceholders,
     selectRuleQuery: selectRuleQuery,
+    resolveEffectiveStatuses: resolveEffectiveStatuses,
+    resolveUseConfiguredStatuses: resolveUseConfiguredStatuses,
+    resolveStageFallbackMode: resolveStageFallbackMode,
     formatBranchName: formatBranchName,
     resolveBranchName: resolveBranchName,
     resolvePRTargetBranch: resolvePRTargetBranch,

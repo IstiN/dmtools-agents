@@ -166,12 +166,36 @@ function truncateSummary(summary, maxLength) {
  *   }
  *
  * @param {Object} customParams - customParams from agent config
- * @param {Object} [projectStatuses] - project-wide status overrides (config.jira.statuses)
+ * @param {Object} customParams - customParams from agent config
+ * @param {Object} [projectStatuses] - project-wide status overrides (config.jira.statuses or config.tracker.statuses)
+ * @param {string} [trackerProvider] - optional tracker provider ('jira' | 'ado' | 'github') for per-provider overrides
  * @returns {Object} STATUSES merged with project and customParams overrides
  */
-function resolveStatuses(customParams, projectStatuses) {
-    var merged = (projectStatuses && typeof projectStatuses === 'object')
-        ? Object.assign({}, STATUSES, projectStatuses)
+function _copyStringEntries(base, source) {
+    var keys = Object.keys(source);
+    for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (typeof source[k] === 'string') base[k] = source[k];
+    }
+    return base;
+}
+
+function _applyProviderStatuses(base, source, trackerProvider) {
+    if (!trackerProvider) return base;
+    var provMap = source[String(trackerProvider).toLowerCase()];
+    return (provMap && typeof provMap === 'object') ? Object.assign(base, provMap) : base;
+}
+
+function _extractStatusEntries(projectStatuses, trackerProvider) {
+    if (!projectStatuses || typeof projectStatuses !== 'object') return {};
+    var base = _copyStringEntries({}, projectStatuses);
+    return _applyProviderStatuses(base, projectStatuses, trackerProvider);
+}
+
+function resolveStatuses(customParams, projectStatuses, trackerProvider) {
+    var entries = _extractStatusEntries(projectStatuses, trackerProvider);
+    var merged = Object.keys(entries).length > 0
+        ? Object.assign({}, STATUSES, entries)
         : STATUSES;
     if (!customParams || !customParams.customStatuses) return merged;
     return Object.assign({}, merged, customParams.customStatuses);
