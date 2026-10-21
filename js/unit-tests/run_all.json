@@ -190,6 +190,7 @@
         "js/unit-tests/test_wave2d2Tracker.js",
         "js/unit-tests/test_wave2d1Tracker.js",
         "js/unit-tests/test_forkCheckout.js",
+        "js/unit-tests/test_sessionDelta.js",
         "js/unit-tests/test_createSolutionDesignTicketsAndAssignForReview.js"
       ]
     }
