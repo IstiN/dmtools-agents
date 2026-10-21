@@ -130,6 +130,8 @@
         "js/unit-tests/test_writeSolutionAndLabels.js",
         "js/unit-tests/test_createPlannedStoriesFromOutput.js",
         "js/unit-tests/test_createBugFixBatchEpic.js",
+        "js/unit-tests/test_issuePlan.js",
+        "js/unit-tests/test_planAdvance.js",
         "js/unit-tests/test_releaseArtefacts.js",
         "js/unit-tests/test_timerAutoCommitAndSave.js",
         "js/unit-tests/test_storyTestAutomationRework.js",

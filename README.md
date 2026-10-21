@@ -648,7 +648,7 @@ All scripts are located in `agents/js/`.
 | Script | Description |
 |--------|-------------|
 | `fetchQuestionsToInput.js` | Fetches existing question subtasks (label `q`) for a Story and injects them as context into the CLI agent prompt, preventing duplicate questions. |
-| `fetchEpicsToInput.js` | Fetches active Epics and their Stories with custom fields and injects them into the intake agent prompt for proper hierarchy mapping. |
+| `fetchEpicsToInput.js` | Fetches active Epics and their Stories with custom fields and injects them into the intake agent prompt for proper hierarchy mapping. On GitHub it provides the issue's existing sub-issues instead. |
 
 ### Utility
 
@@ -660,7 +660,7 @@ All scripts are located in `agents/js/`.
 | `moveToDone.js` | Transitions a Jira ticket to `Done` (used as postJS after test case generation for bugs). |
 | `notifyBugMerged.js` | When a Bug is merged, calls the Gemini API to generate an RCA and Solution summary and writes it back to the Jira Bug's custom fields. |
 | `closeQuestionTicket.js` | Marks the `q`-labelled question subtask as `Done` and removes the `q` label after PO refinement. |
-| `createIntakeTickets.js` | Parses the AI-structured intake output and creates Epics and Stories in Jira with correct field mappings, links, and assignees. |
+| `createIntakeTickets.js` | Parses the AI-structured intake output and creates Epics and Stories in Jira with correct field mappings, links, and assignees. On GitHub it creates them as sub-issues (idempotent on re-run), records the `blockedBy` order and labels the issue `ai_planned` for the SM rule `plan-advance`. |
 
 ---
 

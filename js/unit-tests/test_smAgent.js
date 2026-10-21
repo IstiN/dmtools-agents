@@ -417,6 +417,10 @@ function makeSmAgent(opts) {
             './common/branchLegGuard.js': loadModule('js/common/branchLegGuard.js', makeRequire({}), {}),
             './common/nakedPrReconcile.js': loadModule('js/common/nakedPrReconcile.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
+            './common/issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {}),
+            './common/planAdvance.js': loadModule('js/common/planAdvance.js', makeRequire({
+                './issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {})
+            }), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {
                     return {
@@ -2072,6 +2076,118 @@ suite('smAgent: localAction mark_developed (github machine-loop backfill)', func
 
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no label churn');
         assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
+});
+
+suite('smAgent: localAction advance_plan (issue plans from intake)', function () {
+
+    var PLAN_RULE = {
+        source: 'github',
+        query: { type: 'issue', labels: ['ai_planned'] },
+        localAction: 'advance_plan',
+        limit: 10,
+        id: 'plan-advance'
+    };
+    var CONFIG = 'module.exports = { repository: { owner: "acme", repo: "widgets" } };';
+
+    // A named CLI mock: anonymous onCliExecute closures are numbered by position in this file,
+    // so a new anonymous one would renumber (and mis-attribute) the existing ones.
+    function subIssuesCli(subIssues) {
+        var payload = typeof subIssues === 'string' ? subIssues : JSON.stringify(subIssues);
+        return function answerSubIssues(cmd) {
+            return String(cmd.command).indexOf('/issues/12/sub_issues') !== -1 ? payload : '';
+        };
+    }
+
+    function planned(subIssues, extra) {
+        var opts = {
+            fileMap: { '../.dmtools/config.js': (extra && extra.config) || CONFIG },
+            github: {
+                items: [{ key: 'gh-12', labels: ['ai_planned'], issueNumber: 12, prNumber: null, pr: null }],
+                prComments: (extra && extra.comments) || []
+            },
+            onCliExecute: subIssuesCli(subIssues)
+        };
+        return makeSmAgent(opts);
+    }
+
+    function issue(n, state, labels) {
+        return { id: 1000 + n, number: n, title: 'Step ' + n, state: state,
+                 labels: (labels || []).map(function (l) { return { name: l }; }) };
+    }
+
+    test('starts the first open sub-issue when nothing is in development', function () {
+        var sm = planned([issue(13, 'closed', ['agent:dev']), issue(14, 'open'), issue(15, 'open')]);
+        sm.action(baseParams('acme', 'widgets', [PLAN_RULE]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'exactly one step starts');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 14);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:dev']);
+        assert.equal(sm.capturedPrComments.length, 1);
+        assert.equal(sm.capturedPrComments[0].number, 12, 'the comment goes on the parent');
+        assert.contains(sm.capturedPrComments[0].body, 'Starting #14');
+        assert.equal(sm.capturedCloses.length, 0);
+        assert.equal(sm.capturedTriggers.length, 0, 'localAction never dispatches workflows');
+    });
+
+    test('waits while a sub-issue is in development — the next one never starts early', function () {
+        var sm = planned([issue(13, 'open', ['agent:dev']), issue(14, 'open')]);
+        sm.action(baseParams('acme', 'widgets', [PLAN_RULE]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0);
+        assert.equal(sm.capturedPrComments.length, 0);
+        assert.equal(sm.capturedCloses.length, 0);
+    });
+
+    test('closes the parent when every sub-issue is closed', function () {
+        var sm = planned([issue(13, 'closed'), issue(14, 'closed')]);
+        sm.action(baseParams('acme', 'widgets', [PLAN_RULE]));
+
+        assert.equal(sm.capturedCloses.length, 1);
+        assert.equal(sm.capturedCloses[0].number, 12);
+        assert.contains(sm.capturedPrComments[0].body, 'All 2 sub-issues');
+        assert.equal(sm.capturedPrLabelAdds.length, 0);
+    });
+
+    test('uses the dev label of the project issuePlanning config', function () {
+        var sm = planned([issue(13, 'open')], {
+            config: 'module.exports = { repository: { owner: "acme", repo: "widgets" }, issuePlanning: { devLabel: "start-dev" } };'
+        });
+        sm.action(baseParams('acme', 'widgets', [PLAN_RULE]));
+
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['start-dev']);
+    });
+
+    test('the blockedBy order recorded by intake skips a sub-issue whose blocker is open', function () {
+        var marker = '<!-- dmtools:issue-plan ' + JSON.stringify({
+            blockedBy: [], deps: { 'acme/widgets#13': ['acme/widgets#15'], 'acme/widgets#15': [] }
+        }) + ' -->';
+        var sm = planned([issue(13, 'open'), issue(14, 'closed'), issue(15, 'open')], {
+            comments: [{ body: 'Plan ' + marker, user: { login: 'bot' } }]
+        });
+        sm.action(baseParams('acme', 'widgets', [PLAN_RULE]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1);
+        assert.equal(sm.capturedPrLabelAdds[0].number, 15);
+    });
+
+    test('dry run plans the step without touching the issues', function () {
+        var sm = planned([issue(13, 'open')]);
+        sm.action(baseParams('acme', 'widgets', [PLAN_RULE], { dryRun: true }));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0);
+        assert.equal(sm.capturedPrComments.length, 0);
+        assert.equal(sm.capturedCloses.length, 0);
+    });
+
+    test('a parent with no sub-issues or an unreadable list changes nothing', function () {
+        [[], '{"message": "Not Found"}'].forEach(function (response) {
+            var sm = planned(response);
+            sm.action(baseParams('acme', 'widgets', [PLAN_RULE]));
+            assert.equal(sm.capturedPrLabelAdds.length, 0);
+            assert.equal(sm.capturedPrComments.length, 0);
+            assert.equal(sm.capturedCloses.length, 0);
+        });
     });
 });
 

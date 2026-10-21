@@ -14,6 +14,33 @@
 // Load-time require (gh-823): a deferred require would resolve against the
 // pack js/ root only — hoist every require to the top of the module.
 var trackersModule = require("./common/trackers.js");
+var configLoader = require("./configLoader.js");
+
+/**
+ * GitHub has no epics: the existing work of an issue is its sub-issues (a
+ * previous intake run may have created some). Written as existing_stories.json
+ * so the agent does not plan them again; existing_epics.json is empty.
+ */
+function mapSubIssue(issueKey, child) {
+    return {
+        key: child.key,
+        summary: child.title || '',
+        description: child.description || '',
+        status: child.status || '',
+        parent: issueKey
+    };
+}
+
+function writeGithubSubIssues(tracker, folder, issueKey) {
+    try {
+        var stories = tracker.listChildTickets(issueKey).map(function (c) { return mapSubIssue(issueKey, c); });
+        writeEpicsFile(folder, '{"epics":[]}');
+        writeStoriesFile(folder, '{"stories":' + JSON.stringify(stories, null, 2) + '}');
+        console.log('Wrote ' + stories.length + ' existing sub-issue(s) of ' + issueKey + ' to ' + folder);
+    } catch (subIssueError) {
+        console.error('Failed to fetch sub-issues, continuing without files:', subIssueError);
+    }
+}
 
 /**
  * Find a field value by partial key name (handles "Display Name (customfieldXXX)" keys).
@@ -40,8 +67,11 @@ function projectOf(ticketKey) {
 }
 
 // customParams as seen by this action: jobParams win, then the params body.
+// The project config carries the repository that GitHub issue keys resolve against.
 function createTrackerFor(params) {
-    return trackersModule.createTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+    var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+    var projectConfig = (configLoader && configLoader.loadProjectConfig && configLoader.loadProjectConfig(params.jobParams || params)) || null;
+    return trackersModule.createTracker(projectConfig, customParams);
 }
 
 function priorityNameOf(fields) {
@@ -164,6 +194,10 @@ function action(params) {
         var ticketKey = folderKeyOf(folder);
         var project = projectOf(ticketKey);
         var tracker = createTrackerFor(params);
+        if (tracker.provider && tracker.provider() === 'github') {
+            writeGithubSubIssues(tracker, folder, ticketKey);
+            return;
+        }
         console.log('Fetching existing epics for project ' + project + '...');
 
         fetchAndWrite(tracker, folder, epicSpec(project));

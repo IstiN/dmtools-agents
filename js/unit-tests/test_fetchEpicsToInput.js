@@ -43,7 +43,10 @@ function loadFetchEpicsToInput(opts) {
 
     var mod = loadModule(
         'js/fetchEpicsToInput.js',
-        makeRequire({ './common/trackers.js': trackersMock }),
+        makeRequire({
+            './common/trackers.js': trackersMock,
+            './configLoader.js': { loadProjectConfig: function () { return opts.projectConfig || null; } }
+        }),
         globalMocks
     );
 

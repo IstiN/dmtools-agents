@@ -86,8 +86,9 @@ var LAYERS = {
     'rework-unresolved-threads': 'L4',
     'review-on-label': 'L4',
     'review-on-issue-label': 'L4',
-    // L5 close.
-    'close-on-merge': 'L5'
+    // L5 close / plan advance.
+    'close-on-merge': 'L5',
+    'plan-advance': 'L5'
 };
 
 // The L2 verdict actions (gh-1114 AC7): skipped for a PR whose head moved

@@ -108,7 +108,8 @@ suite('wave2d2 ado — fetchEpicsToInput', function() {
             ado_search_by_wiql: function() { return [w2Wi(5, 'Epic five', 'New')]; },
             ado_get_work_item: function(a) { return w2Wi(Number(a.id), 'Item ' + a.id, 'New'); }
         });
-        var mod = loadModule('js/fetchEpicsToInput.js', makeRequire({ './common/trackers.js': w2Trackers(rec.mocks) }),
+        var mod = loadModule('js/fetchEpicsToInput.js', makeRequire({ './common/trackers.js': w2Trackers(rec.mocks),
+                './configLoader.js': { loadProjectConfig: function() { return {}; } } }),
             Object.assign({ file_write: function(p, c) { writes[p] = c; } }, rec.mocks));
         mod.action({ inputFolderPath: 'input/TS-1', jobParams: W2_ADO });
         assert.deepEqual(w2Args(rec.calls, 'ado_get_work_item').map(function(a) { return a.id; }), ['5', '5']);
@@ -117,6 +118,42 @@ suite('wave2d2 ado — fetchEpicsToInput', function() {
         assert.equal(epics[0].key, '5');
         assert.equal(epics[0].summary, 'Item 5');
         w2NoJira(rec.calls);
+    });
+});
+
+suite('github — fetchEpicsToInput', function() {
+    test('writes the existing sub-issues of the issue as existing stories, and no epics', function() {
+        var writes = {};
+        var commands = [];
+        var mocks = {
+            cli_execute_command: function(a) {
+                commands.push(a.command);
+                return JSON.stringify([{ id: 1, number: 13, title: 'Step one', state: 'open', body: 'b' }]);
+            }
+        };
+        var mod = loadModule('js/fetchEpicsToInput.js', makeRequire({
+            './common/trackers.js': w2Trackers(mocks),
+            './configLoader.js': { loadProjectConfig: function() { return { repository: { owner: 'acme', repo: 'widgets' } }; } }
+        }), Object.assign({ file_write: function(p, c) { writes[p] = c; } }, mocks));
+        mod.action({ inputFolderPath: 'input/gh-12', jobParams: { customParams: { trackerProvider: 'github' } } });
+        assert.contains(commands[0], 'repos/acme/widgets/issues/12/sub_issues');
+        assert.deepEqual(JSON.parse(writes['input/gh-12/existing_epics.json']).epics, []);
+        var stories = JSON.parse(writes['input/gh-12/existing_stories.json']).stories;
+        assert.equal(stories.length, 1);
+        assert.equal(stories[0].key, 'acme/widgets#13');
+        assert.equal(stories[0].summary, 'Step one');
+        assert.equal(stories[0].status, 'open');
+    });
+
+    test('a sub-issue read failure writes nothing and does not throw', function() {
+        var writes = {};
+        var mocks = { cli_execute_command: function() { return 'gh: command not found'; } };
+        var mod = loadModule('js/fetchEpicsToInput.js', makeRequire({
+            './common/trackers.js': w2Trackers(mocks),
+            './configLoader.js': { loadProjectConfig: function() { return { repository: { owner: 'acme', repo: 'widgets' } }; } }
+        }), Object.assign({ file_write: function(p, c) { writes[p] = c; } }, mocks));
+        mod.action({ inputFolderPath: 'input/gh-12', jobParams: { customParams: { trackerProvider: 'github' } } });
+        assert.equal(Object.keys(writes).length, 0);
     });
 });
 

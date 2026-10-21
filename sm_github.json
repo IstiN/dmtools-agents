@@ -564,6 +564,8 @@
               "ai_developed",
               "ai_pr_reviewed",
               "pr_approved",
+              "ai_planned",
+              "ai_intake",
               "agent:rework",
               "agent:review",
               "agent:skip"
@@ -828,6 +830,19 @@
           "localAction": "close_issue",
           "limit": 5,
           "id": "close-on-merge"
+        },
+        {
+          "description": "GitHub: issue plan (intake agent) -> start the next sub-issues. A parent labeled ai_planned has its work as sub-issues and its blockedBy ordering in a plan comment; the sub-issues whose blockers are closed get the dev label (issuePlanning.devLabel, default agent:dev), in order and at most issuePlanning.maxParallel (default 1) at a time, and the parent closes when every sub-issue is closed. Runs AFTER close-on-merge so a sub-issue closed this tick unblocks the next one in the same tick. Labels come from the project's issuePlanning config block; a project with a different planned label overrides this query.",
+          "source": "github",
+          "query": {
+            "type": "issue",
+            "labels": [
+              "ai_planned"
+            ]
+          },
+          "localAction": "advance_plan",
+          "limit": 10,
+          "id": "plan-advance"
         }
       ]
     }

@@ -162,6 +162,10 @@ var configModule = require('./config.js');
 // gh-807: machine review-verdict records + their reconciliation logic.
 var reviewVerdictsModule = require('./common/reviewVerdicts.js');
 var redConvergenceModule = require('./common/redConvergence.js');
+// Issue plans (intake on GitHub): the planning knobs and the advance_plan
+// localAction (rule plan-advance).
+var issuePlanModule = require('./common/issuePlan.js');
+var planAdvanceModule = require('./common/planAdvance.js');
 // gh-840 (hoisted, never lazy — the gh-823 pack-require rule): fail-closed
 // agent:rework consumption bookkeeping — the consume-audit markers the
 // processRule consumeLabels paths stamp, and the pure consumed-without-work
@@ -1866,6 +1870,35 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ close_issue failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
+        if (rule.localAction === 'advance_plan') {
+            // Issue plans (intake on GitHub): start the sub-issues of this
+            // planned parent whose blockers are closed, or close the parent
+            // when every sub-issue is closed. The logic lives in
+            // common/planAdvance.js; this branch only dispatches.
+            try {
+                var planCfg = issuePlanModule.resolvePlanningConfig(effectiveConfig,
+                    (RUN_JOB_PARAMS && RUN_JOB_PARAMS.customParams) || {});
+                var planTracker = rule.source === 'github'
+                    ? githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo)
+                    : smTracker(effectiveConfig);
+                var planStep = planAdvanceModule.advancePlan(planTracker, ticket.issueNumber || key, planCfg, {
+                    dryRun: DRY,
+                    closeIssue: function () {
+                        github_close_issue({
+                            workspace: effectiveRepoInfo.owner,
+                            repository: effectiveRepoInfo.repo,
+                            number: ticket.issueNumber
+                        });
+                    }
+                });
+                console.log('  ' + (DRY ? '🧪 [dry] ' : '') + key + ' plan: ' + planAdvanceModule.describe(planStep, planCfg));
+                (planStep.type === 'start' || planStep.type === 'complete' ? processedKeys : skippedKeys).push(key);
+            } catch (e) {
+                console.error('  ❌ advance_plan failed for ' + key + ': ' + (e.message || e));
             }
             continue;
         }

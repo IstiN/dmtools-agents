@@ -1099,12 +1099,121 @@ suite('trackers.js extended operations — ado provider', function () {
 suite('trackers.js extended operations — github provider', function () {
     test('operations GitHub cannot express fail with a provider-named error', function () {
         var t = loadTrackers({}).createTracker({ tracker: { provider: 'github' } });
-        ['linkIssues', 'updateField', 'setPriority', 'attachFile', 'createTicketWithParent', 'createTicketWithFields', 'updateDescription'].forEach(function (op) {
+        ['linkIssues', 'updateField', 'setPriority', 'attachFile', 'createTicketWithFields', 'updateDescription'].forEach(function (op) {
             var msg = '';
             try { t[op]('k', 'a', 'b'); } catch (e) { msg = String(e.message); }
             assert.ok(msg.indexOf('github') !== -1 && msg.indexOf(op) !== -1, op + ' -> ' + msg);
         });
         assert.equal(t.fieldCode('p', 'n'), null);
+    });
+
+    function githubTracker(mocks) {
+        return loadTrackers(mocks).createTracker({
+            tracker: { provider: 'github' },
+            repository: { owner: 'acme', repo: 'widgets' }
+        });
+    }
+
+    test('createTicketWithParent creates the issue and attaches it as a sub-issue by REST id', function () {
+        var ghCreate = recorder('github_create_issue', { id: 9001, number: 43, title: 'Step 1', state: 'open' });
+        var cli = recorder('cli_execute_command', '{"id": 77, "number": 12}');
+        var key = githubTracker({ github_create_issue: ghCreate, cli_execute_command: cli })
+            .createTicketWithParent(null, 'Story', 'Step 1', 'Part of #12', 'acme/widgets#12');
+        assert.equal(key, 'acme/widgets#43');
+        assert.deepEqual(ghCreate.calls[0], { owner: 'acme', repo: 'widgets', title: 'Step 1', body: 'Part of #12' });
+        assert.equal(cli.calls[0].command,
+            'gh api --method POST repos/acme/widgets/issues/12/sub_issues -F sub_issue_id=9001');
+    });
+
+    test('createTicketWithParent resolves a bare parent number against the configured repository', function () {
+        var cli = recorder('cli_execute_command', '{}');
+        githubTracker({
+            github_create_issue: recorder('github_create_issue', { id: 5, number: 6, state: 'open' }),
+            cli_execute_command: cli
+        }).createTicketWithParent(null, 'Story', 't', 'd', '12');
+        assert.contains(cli.calls[0].command, 'repos/acme/widgets/issues/12/sub_issues');
+    });
+
+    test('createTicketWithParent fails loudly when the created issue has no id, before linking', function () {
+        var cli = recorder('cli_execute_command', '{}');
+        assert.throws(function () {
+            githubTracker({
+                github_create_issue: recorder('github_create_issue', { message: 'Validation Failed' }),
+                cli_execute_command: cli
+            }).createTicketWithParent(null, 'Story', 't', 'd', '12');
+        });
+        assert.equal(cli.calls.length, 0, 'nothing is linked without a created issue');
+    });
+
+    test('createTicketWithParent with no repository for a bare parent number throws a clear error', function () {
+        var msg = '';
+        try {
+            loadTrackers({ github_create_issue: recorder('github_create_issue', { id: 1, number: 2 }) })
+                .createTracker({ tracker: { provider: 'github' } })
+                .createTicketWithParent(null, 'Story', 't', 'd', '12');
+        } catch (e) { msg = String(e.message); }
+        assert.contains(msg, 'no repository');
+    });
+
+    test('listChildTickets returns the sub-issues in the parent order as flat views', function () {
+        var cli = recorder('cli_execute_command', JSON.stringify([
+            { id: 1, number: 13, title: 'Step 1', state: 'closed', labels: [{ name: 'agent:dev' }] },
+            { id: 2, number: 14, title: 'Step 2', state: 'open', labels: [] }
+        ]));
+        var children = githubTracker({ cli_execute_command: cli }).listChildTickets('acme/widgets#12');
+        assert.equal(cli.calls[0].command,
+            'gh api --method GET repos/acme/widgets/issues/12/sub_issues -F per_page=100 -F page=1');
+        assert.equal(cli.calls.length, 1, 'a short page is the last page');
+        assert.equal(children.length, 2);
+        assert.equal(children[0].key, 'acme/widgets#13');
+        assert.equal(children[0].status, 'closed');
+        assert.deepEqual(children[0].labels, ['agent:dev']);
+        assert.equal(children[1].key, 'acme/widgets#14');
+    });
+
+    test('listChildTickets tolerates leading output noise before the JSON', function () {
+        var cli = recorder('cli_execute_command', 'warning: something\n[{"id": 1, "number": 13, "state": "open"}]');
+        var children = githubTracker({ cli_execute_command: cli }).listChildTickets('12');
+        assert.equal(children.length, 1);
+        assert.equal(children[0].key, 'acme/widgets#13');
+    });
+
+    test('listChildTickets reads every page while pages are full', function () {
+        var full = [];
+        for (var i = 0; i < 100; i++) full.push({ id: i, number: 100 + i, state: 'open' });
+        var pages = [JSON.stringify(full), JSON.stringify([{ id: 500, number: 500, state: 'open' }])];
+        var commands = [];
+        var cli = function (a) { commands.push(a.command); return pages[commands.length - 1]; };
+        var children = githubTracker({ cli_execute_command: cli }).listChildTickets('12');
+        assert.equal(children.length, 101);
+        assert.equal(children[100].key, 'acme/widgets#500');
+        assert.equal(commands.length, 2);
+        assert.contains(commands[1], '-F page=2');
+        commands.forEach(function (c) { assert.equal(c.indexOf('&'), -1, 'no shell metacharacters: ' + c); });
+    });
+
+    test('a missing or unauthenticated gh fails with an error that names the requirement', function () {
+        var msg = '';
+        try {
+            githubTracker({ cli_execute_command: recorder('cli_execute_command', 'bash: gh: command not found') })
+                .listChildTickets('12');
+        } catch (e) { msg = String(e.message); }
+        assert.contains(msg, 'GitHub CLI (gh)');
+        assert.contains(msg, 'command not found');
+    });
+
+    test('listChildTickets throws on a response that is not a list', function () {
+        var cli = recorder('cli_execute_command', '{"message": "Not Found"}');
+        assert.throws(function () { githubTracker({ cli_execute_command: cli }).listChildTickets('12'); });
+    });
+
+    test('listChildTickets is GitHub-only: jira and ado throw a provider-named error', function () {
+        ['jira', 'ado'].forEach(function (provider) {
+            var msg = '';
+            try { loadTrackers({}).createTracker({ tracker: { provider: provider } }).listChildTickets('X-1'); }
+            catch (e) { msg = String(e.message); }
+            assert.ok(msg.indexOf(provider) !== -1 && msg.indexOf('listChildTickets') !== -1, provider + ' -> ' + msg);
+        });
     });
 });
 
