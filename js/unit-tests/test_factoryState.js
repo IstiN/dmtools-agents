@@ -411,6 +411,64 @@ suite('factoryState — merged_recent (7d window)', function () {
     assert.equal(c53.history.length, 2);
     assert.equal(c53.tokens.length, 1);
   });
+
+  test('gh-1150 REG: merged_recent caps at MERGED_LANE_CAP (50 newest) and stays under command-size ceiling', function () {
+    assert.equal(fsModule.MERGED_LANE_CAP, 50, 'MERGED_LANE_CAP is 50');
+    var nowMs = Date.parse(NOW);
+    var manyMerged = [];
+    var prevMerged = [];
+    var tokens = {};
+    for (var i = 1; i <= 100; i++) {
+      var num = 1000 + i;
+      var mAt = new Date(nowMs - i * 3600 * 1000).toISOString();
+      var cAt = new Date(nowMs - (i + 4) * 3600 * 1000).toISOString();
+      manyMerged.push({
+        number: num,
+        title: 'feat(factoryState): extend MERGED_WINDOW_MS to 7d (gh-' + num + ')',
+        labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }, { name: 'ai_pr_reviewed' }],
+        head: { ref: 'feat/gh-' + num, sha: '4a844d855d9286f7ebb7176bddd49577fc6ce2' + (i < 10 ? '0' + i : i) },
+        user: { login: 'dmtools-factory-bot' },
+        created_at: cAt,
+        merged_at: mAt
+      });
+      prevMerged.push({
+        pr: num,
+        labels: ['pr_approved', 'ai_validating', 'ai_pr_reviewed'],
+        reviewedAt: cAt, approvedAt: cAt, validatingAt: cAt,
+        checks: {
+          verdict: 'success', at: mAt,
+          url: 'https://github.com/IstiN/dmtools-agents/actions/runs/123456789' + i,
+          runId: 1234567890 + i, name: 'Unit Tests', sha: 'sha' + num,
+          conclusion: 'success', runStartedAt: cAt, updatedAt: mAt
+        },
+        history: [
+          { state: 'pr_created', at: cAt },
+          { state: 'review', at: cAt },
+          { state: 'approved_queue', at: cAt },
+          { state: 'validating', at: cAt },
+          { state: 'merged_recent', at: mAt }
+        ]
+      });
+      tokens['pr-' + num] = [
+        { leg: 'story_development', at: cAt, prompt: 120000, completion: 5000, total: 125000, cacheRead: 90000, model: 'claude-opus-4-7' }
+      ];
+    }
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'IstiN', repo: 'dmtools-agents' },
+      now: NOW,
+      prev: { lanes: { merged_recent: prevMerged } },
+      mergedPrs: manyMerged,
+      prs: [], runs: [], tokens: tokens
+    });
+    assert.equal(st.lanes.merged_recent.length, 50, 'capped at MERGED_LANE_CAP (50)');
+    assert.equal(st.counts.merged_recent, 50, 'counts match capped lane');
+    assert.equal(st.lanes.merged_recent[0].pr, 1001, 'newest merge kept first');
+    assert.equal(st.lanes.merged_recent[49].pr, 1050, '50th newest merge kept');
+    var jsonBytes = JSON.stringify(st).length;
+    assert.ok(jsonBytes < 96752, 'state JSON (' + jsonBytes + 'B) stays under 96,752B ceiling');
+    var putCmd = fsModule.publishCommands(st, { repo: 'IstiN/dmtools-agents' })[1];
+    assert.ok(putCmd.indexOf('-F content=@- <<__FA_EOF__') > 0, 'PUT streams base64 via stdin heredoc');
+  });
 });
 
 // ── schema 2 — development lane (issue side) ─────────────────────────────────
@@ -1099,6 +1157,24 @@ suite('factoryState — history (board time travel)', function () {
     assert.ok(url.indexOf('/data/fa-state-history.json') > 0);
   });
 
+  function withHistoryIndex(snaps, run) {
+    var seen = [];
+    var cfg = { repo: 'IstiN/flutter_agent_harness', asset: 'fa-state.json' };
+    if (snaps.keep !== undefined) cfg.historyKeep = snaps.keep;
+    fsModule.updateHistory(ST, cfg, function (a) {
+      seen.push(a.command);
+      if (a.command.indexOf('--jq .sha') > 0) return { output: 'feedface\n' };
+      if (a.command.indexOf('--jq .content') > 0) {
+        return { output: JSON.stringify(snaps.old) };
+      }
+      return undefined;
+    });
+    var idxPut = seen[seen.length - 1];
+    var urls = [];
+    idxPut.replace(/"url":"([^"]+)"/g, function (_, u) { urls.push(u); return u; });
+    run(seen, idxPut, urls);
+  }
+
   test('updateHistory: existing index — append, carry sha, trim to keep', function () {
     var KEEP = 3;
     var old = { schema: 1, repo: 'IstiN/flutter_agent_harness',
@@ -1108,55 +1184,39 @@ suite('factoryState — history (board time travel)', function () {
         { ts: 't2', tick: 'a2', stamp: 's2', url: 'u2' },
         { ts: 't1', tick: 'a1', stamp: 's1', url: 'u1' }
       ] };
-    var seen = [];
-    fsModule.updateHistory(ST,
-      { repo: 'IstiN/flutter_agent_harness', asset: 'fa-state.json',
-        historyKeep: KEEP },
-      function (a) {
-        seen.push(a.command);
-        if (a.command.indexOf('--jq .sha') > 0) return { output: 'feedface\n' };
-        if (a.command.indexOf('--jq .content') > 0) {
-          return { output: JSON.stringify(old) };
-        }
-        return undefined;
-      });
-    var idxPut = seen[seen.length - 1];
-    assert.ok(idxPut.indexOf("-f sha='feedface'") > 0, 'update carries probed sha');
-    var m = idxPut.match(/"snapshots":\[(.*)\]/);
-    assert.ok(m, 'index payload present');
-    var urls = [];
-    idxPut.replace(/"url":"([^"]+)"/g, function (_, u) { urls.push(u); return u; });
-    assert.equal(urls.length, KEEP, 'trimmed to historyKeep');
-    assert.ok(urls[0].indexOf('fa-state-20260923-2235.json') > 0,
-              'newest snapshot first');
+    withHistoryIndex({ keep: KEEP, old: old }, function (seen, idxPut, urls) {
+      assert.ok(idxPut.indexOf("-f sha='feedface'") > 0, 'update carries probed sha');
+      assert.ok(idxPut.match(/"snapshots":\[(.*)\]/), 'index payload present');
+      assert.equal(urls.length, KEEP, 'trimmed to historyKeep');
+      assert.ok(urls[0].indexOf('fa-state-20260923-2235.json') > 0,
+                'newest snapshot first');
+    });
   });
-  test('gh-1150 AC2: updateHistory default HISTORY_KEEP is 500 when cfg.historyKeep is omitted', function () {
+
+  test('gh-1150 AC2: updateHistory default HISTORY_KEEP is 500 when cfg.historyKeep is omitted and streams via stdin', function () {
     assert.equal(fsModule.HISTORY_KEEP, 500, 'HISTORY_KEEP is 500');
     var snaps = [];
     for (var i = 0; i < 505; i++) {
-      snaps.push({ ts: 't' + i, tick: 'a' + i, stamp: 's' + i, url: 'u' + i });
+      snaps.push({
+        ts: '2026-10-21T20:41:09.805Z',
+        tick: '2026-10-21T20:41:09.805Z',
+        stamp: '20261021-2041',
+        url: 'https://raw.githubusercontent.com/IstiN/flutter_agent_harness/factory-data/data/fa-state-s' + i + '.json'
+      });
     }
     var old = {
       schema: 1, repo: 'IstiN/flutter_agent_harness',
       asset: 'fa-state.json', snapshots: snaps
     };
-    var seen = [];
-    fsModule.updateHistory(ST,
-      { repo: 'IstiN/flutter_agent_harness', asset: 'fa-state.json' },
-      function (a) {
-        seen.push(a.command);
-        if (a.command.indexOf('--jq .sha') > 0) return { output: 'feedface\n' };
-        if (a.command.indexOf('--jq .content') > 0) {
-          return { output: JSON.stringify(old) };
-        }
-        return undefined;
-      });
-    var idxPut = seen[seen.length - 1];
-    var urls = [];
-    idxPut.replace(/"url":"([^"]+)"/g, function (_, u) { urls.push(u); return u; });
-    assert.equal(urls.length, 500, 'trimmed to default HISTORY_KEEP (500)');
-    assert.ok(urls[0].indexOf('fa-state-20260923-2235.json') > 0, 'newest snapshot first');
-    assert.equal(urls[499], 'u498', '500th entry is u498 (1 new + 499 carried)');
+    withHistoryIndex({ old: old }, function (seen, idxPut, urls) {
+      assert.equal(urls.length, 500, 'trimmed to default HISTORY_KEEP (500)');
+      assert.ok(urls[0].indexOf('fa-state-20260923-2235.json') > 0, 'newest snapshot first');
+      assert.ok(urls[499].indexOf('fa-state-s498.json') > 0, '500th entry is s498 (1 new + 499 carried)');
+      assert.ok(idxPut.indexOf('-F content=@-') > 0 && idxPut.indexOf('<<__FA_EOF__') > 0,
+        'REG: history PUT streams base64 over stdin heredoc so 500-entry index never hits argv MAX_ARG_STRLEN');
+      var argvHead = idxPut.split('<<__FA_EOF__')[0];
+      assert.ok(argvHead.length < 1024, 'gh api argv stays tiny (<1KB) regardless of 500-entry index size');
+    });
   });
 });
 
