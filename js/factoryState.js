@@ -25,7 +25,7 @@
  * PR → review → approve → validate → merge) is measurable:
  *
  *   prCreated     GitHub PR.created_at (github_list_prs — free, exact)
- *   mergedAt      GitHub PR.merged_at (merged PRs, last 24h lane)
+ *   mergedAt      GitHub PR.merged_at (merged PRs, last 7d lane)
  *   reviewedAt    ai_pr_reviewed  label time
  *   approvedAt    pr_approved     label time
  *   validatingAt  ai_validating   label time (the arm)
@@ -87,7 +87,7 @@
 //   approved_queue  pr_approved on, not armed (FIFO by PR number — the
 //                   same FIFO the mutex uses)
 //   validating      ai_validating on (armed/mutex)
-//   merged_recent   merged within the last 24h (terminal, observation window)
+//   merged_recent   merged within the last 7d (terminal, observation window)
 //
 // changes-requested / rework lanes show via labels on cards (board-side).
 
@@ -182,7 +182,7 @@ var LANE_ENTERED_AT = {
     merged_recent: 'mergedAt'
 };
 
-var MERGED_WINDOW_MS = 24 * 60 * 60 * 1000;   // merged_recent retention
+var MERGED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // merged_recent retention (7d)
 var DEV_LABEL = 'agent:dev';                  // dev-leg handoff (machine label)
 var DEV_DONE_LABEL = 'ai_developed';          // dev leg produced a green PR
 
@@ -203,7 +203,8 @@ var BACKLOG_BUCKETS = ['in_dev', 'queued', 'blocked', 'inbox'];
 var DEFAULT_MACHINE_AUTHOR = 'ai-teammate';   // back-compat/tests only — an
                                               // unset machineAuthor means NO
                                               // assignment bucketing (null)
-var HISTORY_CAP = 24;                         // bound snapshot growth
+var HISTORY_CAP = 100;                        // bound snapshot growth
+var HISTORY_KEEP = 500;                       // default snapshot index depth
 var DEFAULT_TOKENS_FILE = 'outputs/token_usage/factory_tokens.json';
 var FACTORY_TOKENS_ASSET = 'fa-tokens.json';   // data/<asset> on the data
                                                // branch (gh-781; the leg-side
@@ -217,6 +218,12 @@ var BACKLOG_CAP = 50;                         // per bucket — github_search_is
                                               // returns ONE page (no perPage),
                                               // so the snapshot stays bounded
                                               // and backlogCounts stay honest
+var MERGED_LANE_CAP = 50;                     // merged_recent cap — github_list_prs
+                                              // returns ONE page of 100 merged PRs;
+                                              // capping to the 50 newest inside the
+                                              // 7d window keeps the state snapshot
+                                              // well under the CLI arg-size ceiling
+                                              // and counts.merged_recent honest
 
 /**
  * Backlog bucket for an open issue — deterministic read of the machine's
@@ -254,9 +261,10 @@ function nextHistory(prevCard, prevKey, key, now, hasPrev, terminalAt) {
     var h = ((prevCard && prevCard.history) || []).slice();
     if (terminalAt) {
         // dedupe: merged cards are re-derived from the previous snapshot
-        // every tick inside the 24h merged_recent window — without this
+        // every tick inside the 7d merged_recent window — without this
         // guard each tick appends a second terminal entry and HISTORY_CAP
-        // evicts the card's real timeline within ~4h at 10-min cadence.
+        // evicts the card's real timeline within ~16.7h at 10-min cadence
+        // (~8.3h at 5-min).
         if (!h.length || h[h.length - 1].state !== key) {
             h.push({ state: key, at: terminalAt });
         }
@@ -1049,7 +1057,7 @@ function openPrEntries(prs, verdictFor, now, tmap, pix, hasPrev) {
     }).sort(function (a, b) { return a.card.pr - b.card.pr; });
 }
 
-/** merged_recent retention: merged within the last 24h (parseable merged_at). */
+/** merged_recent retention: merged within the last 7d (parseable merged_at). */
 function mergedInWindow(pr, nowMs) {
     var t = Date.parse(pr.merged_at || '');
     return !isNaN(t) && (nowMs - t) < MERGED_WINDOW_MS;
@@ -1058,7 +1066,7 @@ function mergedInWindow(pr, nowMs) {
 // gh-816 rework thread 3: a carried record whose conclusion never landed
 // (the runs rotated out of the window while validation was still in
 // flight) is carried MARKED — without the marker the merged card would
-// read "validation in flight" for the whole 24h window, since nothing
+// read "validation in flight" for the whole 7d window, since nothing
 // ever resolves it.
 function carriedMergeChecks(prevCard) {
     var mergedChecks = Object.assign({}, prevCard.checks);
@@ -1101,7 +1109,7 @@ function mergedPrCard(pr, mergedChecks, now, tmap, pix) {
     return card;
 }
 
-/** All merged_recent cards, newest merge first. */
+/** All merged_recent cards, newest merge first, capped at MERGED_LANE_CAP. */
 function mergedCards(mergedPrs, nowMs, verdictFor, now, tmap, pix) {
     return mergedPrs.filter(function (pr) {
         return mergedInWindow(pr, nowMs);
@@ -1110,7 +1118,7 @@ function mergedCards(mergedPrs, nowMs, verdictFor, now, tmap, pix) {
             now, tmap, pix);
     }).sort(function (a, b) {
         return Date.parse(b.mergedAt) - Date.parse(a.mergedAt);
-    });
+    }).slice(0, MERGED_LANE_CAP);
 }
 
 // Approved FIFO positions (1-based; the mutex takes pos 1 on arm).
@@ -1227,15 +1235,10 @@ function publishCommands(state, cfg, existingSha) {
     // existing-file sha comes from the caller (publishFactoryState
     // probes it via exec) — omit it and a first publish CREATES the
     // file. Every command MUST start with `gh`: the executor whitelists
-    // the first token, so no leading `S=$( ... )` tricks.
-    var put = 'gh api -X PUT repos/' + repo + '/contents/' + path +
-        ' -f branch=' + branch +
-        ' -f message=' + shellQuote('factory state — ' +
-            ((state.tick && state.tick.at) || '') + ' [skip ci]') +
-        ' -f content="$(printf %s ' + shellQuote(json) + ' | base64)"';
-    if (existingSha) {
-        put += " -f sha=" + shellQuote(existingSha);
-    }
+    // the first token, so no leading `S=$( ... )` tricks. `-F content=@-`
+    // streams the base64 payload over stdin (`<<__FA_EOF__`) instead of a
+    // command-line argv token, avoiding Linux MAX_ARG_STRLEN (~96.7KB JSON
+    // ceiling on `-f content="$(printf ... | base64)"`).
     return [
         // '|| true': the normal case is "branch already exists" (422) — the
         // executor throws on non-zero exit, which would abort the commit.
@@ -1243,7 +1246,8 @@ function publishCommands(state, cfg, existingSha) {
             ' -f sha="$(gh api repos/' + repo +
             '/git/ref/heads/$(gh api repos/' + repo +
             ' --jq .default_branch) --jq .object.sha)" || true',
-        put
+        contentsPutStdin(repo, path, branch, 'factory state — ' +
+            ((state.tick && state.tick.at) || '') + ' [skip ci]', json, existingSha)
     ];
 }
 
@@ -1276,11 +1280,28 @@ function shellQuote(s) {
 }
 
 /**
+ * gh api PUT to Contents API with base64 content piped via stdin (`-F content=@-`
+ * + heredoc) so large state/history JSON payloads never hit Linux MAX_ARG_STRLEN
+ * (131,072B per execve argument, ~96.7KB of raw JSON when base64-expanded in argv).
+ */
+function contentsPutStdin(repo, path, branch, message, json, existingSha) {
+    var put = 'gh api -X PUT repos/' + repo + '/contents/' + path +
+        ' -f branch=' + branch +
+        ' -f message=' + shellQuote(message) +
+        ' -F content=@-';
+    if (existingSha) {
+        put += ' -f sha=' + shellQuote(existingSha);
+    }
+    return put + ' <<__FA_EOF__\n$(printf %s ' + shellQuote(json) +
+        ' | base64)\n__FA_EOF__';
+}
+
+/**
  * Time-travel history (owner 2026-09-24): every tick also lands a
  * timestamped snapshot `<base>-<stamp>.json` (unique name → always a
  * create, no sha) and rewrites the rolling index `<base>-history.json`
  * the factory board probes for its scrub/play controls. The index keeps
- * the newest `cfg.historyKeep` (default 72 = 12h at the 10-min cadence)
+ * the newest `cfg.historyKeep` (default 500 = ~41h at 5-min / ~83h at 10-min)
  * snapshots; snapshot URLs are absolute raw links the board fetches
  * directly. Every command starts with `gh` (executor whitelist); the
  * index body is decoded in-shell (`| base64 -d`), so the JS side never
@@ -1295,29 +1316,18 @@ function stampOf(state) {
 function snapshotPutCommand(state, cfg, stamp) {
     var repo = (cfg && cfg.repo) || state.repo;
     var base = assetName(state, cfg).replace(/\.json$/, '');
-    var json = JSON.stringify(state);
-    return 'gh api -X PUT repos/' + repo + '/contents/data/' + base + '-' +
-        stamp + '.json' +
-        ' -f branch=' + tagOf(cfg) +
-        ' -f message=' + shellQuote('factory state snapshot ' + stamp +
-            ' [skip ci]') +
-        ' -f content="$(printf %s ' + shellQuote(json) + ' | base64)"';
+    return contentsPutStdin(repo, 'data/' + base + '-' + stamp + '.json',
+        tagOf(cfg), 'factory state snapshot ' + stamp + ' [skip ci]',
+        JSON.stringify(state), '');
 }
 
 function historyPutCommand(state, cfg, index, existingSha) {
     var repo = (cfg && cfg.repo) || state.repo;
     var base = assetName(state, cfg).replace(/\.json$/, '');
-    var path = 'data/' + base + '-history.json';
-    var put = 'gh api -X PUT repos/' + repo + '/contents/' + path +
-        ' -f branch=' + tagOf(cfg) +
-        ' -f message=' + shellQuote('factory state history — ' +
-            ((state.tick && state.tick.at) || '') + ' [skip ci]') +
-        ' -f content="$(printf %s ' + shellQuote(JSON.stringify(index)) +
-        ' | base64)"';
-    if (existingSha) {
-        put += " -f sha=" + shellQuote(existingSha);
-    }
-    return put;
+    return contentsPutStdin(repo, 'data/' + base + '-history.json',
+        tagOf(cfg), 'factory state history — ' +
+            ((state.tick && state.tick.at) || '') + ' [skip ci]',
+        JSON.stringify(index), existingSha);
 }
 
 function execOut(exec, command) {
@@ -1346,7 +1356,7 @@ function updateHistory(state, cfg, exec) {
     var repo = (cfg && cfg.repo) || state.repo;
     var branch = tagOf(cfg);
     var base = assetName(state, cfg).replace(/\.json$/, '');
-    var keep = (cfg && cfg.historyKeep) || 72;
+    var keep = (cfg && cfg.historyKeep) || HISTORY_KEEP;
     var stamp = stampOf(state);
     exec({ command: snapshotPutCommand(state, cfg, stamp) });
     var indexPath = 'data/' + base + '-history.json';
@@ -1450,11 +1460,14 @@ module.exports = {
     DEV_DONE_LABEL: DEV_DONE_LABEL,
     BLOCKED_LABEL: BLOCKED_LABEL,
     DEFAULT_MACHINE_AUTHOR: DEFAULT_MACHINE_AUTHOR,
+    MERGED_WINDOW_MS: MERGED_WINDOW_MS,
     HISTORY_CAP: HISTORY_CAP,
+    HISTORY_KEEP: HISTORY_KEEP,
     DEFAULT_TOKENS_FILE: DEFAULT_TOKENS_FILE,
     DEFAULT_PRICING_FILE: DEFAULT_PRICING_FILE,
     COST_WINDOW_DAYS: COST_WINDOW_DAYS,
     COST_WINDOW_MS: COST_WINDOW_MS,
     BACKLOG_CAP: BACKLOG_CAP,
+    MERGED_LANE_CAP: MERGED_LANE_CAP,
     DEFAULT_TAG: DEFAULT_TAG
 };
