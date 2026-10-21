@@ -25,7 +25,7 @@
  * PR → review → approve → validate → merge) is measurable:
  *
  *   prCreated     GitHub PR.created_at (github_list_prs — free, exact)
- *   mergedAt      GitHub PR.merged_at (merged PRs, last 24h lane)
+ *   mergedAt      GitHub PR.merged_at (merged PRs, last 7d lane)
  *   reviewedAt    ai_pr_reviewed  label time
  *   approvedAt    pr_approved     label time
  *   validatingAt  ai_validating   label time (the arm)
@@ -87,7 +87,7 @@
 //   approved_queue  pr_approved on, not armed (FIFO by PR number — the
 //                   same FIFO the mutex uses)
 //   validating      ai_validating on (armed/mutex)
-//   merged_recent   merged within the last 24h (terminal, observation window)
+//   merged_recent   merged within the last 7d (terminal, observation window)
 //
 // changes-requested / rework lanes show via labels on cards (board-side).
 
@@ -182,7 +182,7 @@ var LANE_ENTERED_AT = {
     merged_recent: 'mergedAt'
 };
 
-var MERGED_WINDOW_MS = 24 * 60 * 60 * 1000;   // merged_recent retention
+var MERGED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // merged_recent retention (7d)
 var DEV_LABEL = 'agent:dev';                  // dev-leg handoff (machine label)
 var DEV_DONE_LABEL = 'ai_developed';          // dev leg produced a green PR
 
@@ -203,7 +203,8 @@ var BACKLOG_BUCKETS = ['in_dev', 'queued', 'blocked', 'inbox'];
 var DEFAULT_MACHINE_AUTHOR = 'ai-teammate';   // back-compat/tests only — an
                                               // unset machineAuthor means NO
                                               // assignment bucketing (null)
-var HISTORY_CAP = 24;                         // bound snapshot growth
+var HISTORY_CAP = 100;                        // bound snapshot growth
+var HISTORY_KEEP = 500;                       // default snapshot index depth
 var DEFAULT_TOKENS_FILE = 'outputs/token_usage/factory_tokens.json';
 var FACTORY_TOKENS_ASSET = 'fa-tokens.json';   // data/<asset> on the data
                                                // branch (gh-781; the leg-side
@@ -254,7 +255,7 @@ function nextHistory(prevCard, prevKey, key, now, hasPrev, terminalAt) {
     var h = ((prevCard && prevCard.history) || []).slice();
     if (terminalAt) {
         // dedupe: merged cards are re-derived from the previous snapshot
-        // every tick inside the 24h merged_recent window — without this
+        // every tick inside the 7d merged_recent window — without this
         // guard each tick appends a second terminal entry and HISTORY_CAP
         // evicts the card's real timeline within ~4h at 10-min cadence.
         if (!h.length || h[h.length - 1].state !== key) {
@@ -1049,7 +1050,7 @@ function openPrEntries(prs, verdictFor, now, tmap, pix, hasPrev) {
     }).sort(function (a, b) { return a.card.pr - b.card.pr; });
 }
 
-/** merged_recent retention: merged within the last 24h (parseable merged_at). */
+/** merged_recent retention: merged within the last 7d (parseable merged_at). */
 function mergedInWindow(pr, nowMs) {
     var t = Date.parse(pr.merged_at || '');
     return !isNaN(t) && (nowMs - t) < MERGED_WINDOW_MS;
@@ -1280,7 +1281,7 @@ function shellQuote(s) {
  * timestamped snapshot `<base>-<stamp>.json` (unique name → always a
  * create, no sha) and rewrites the rolling index `<base>-history.json`
  * the factory board probes for its scrub/play controls. The index keeps
- * the newest `cfg.historyKeep` (default 72 = 12h at the 10-min cadence)
+ * the newest `cfg.historyKeep` (default 500 = ~41h at 5-min / ~83h at 10-min)
  * snapshots; snapshot URLs are absolute raw links the board fetches
  * directly. Every command starts with `gh` (executor whitelist); the
  * index body is decoded in-shell (`| base64 -d`), so the JS side never
@@ -1346,7 +1347,7 @@ function updateHistory(state, cfg, exec) {
     var repo = (cfg && cfg.repo) || state.repo;
     var branch = tagOf(cfg);
     var base = assetName(state, cfg).replace(/\.json$/, '');
-    var keep = (cfg && cfg.historyKeep) || 72;
+    var keep = (cfg && cfg.historyKeep) || HISTORY_KEEP;
     var stamp = stampOf(state);
     exec({ command: snapshotPutCommand(state, cfg, stamp) });
     var indexPath = 'data/' + base + '-history.json';
@@ -1450,7 +1451,9 @@ module.exports = {
     DEV_DONE_LABEL: DEV_DONE_LABEL,
     BLOCKED_LABEL: BLOCKED_LABEL,
     DEFAULT_MACHINE_AUTHOR: DEFAULT_MACHINE_AUTHOR,
+    MERGED_WINDOW_MS: MERGED_WINDOW_MS,
     HISTORY_CAP: HISTORY_CAP,
+    HISTORY_KEEP: HISTORY_KEEP,
     DEFAULT_TOKENS_FILE: DEFAULT_TOKENS_FILE,
     DEFAULT_PRICING_FILE: DEFAULT_PRICING_FILE,
     COST_WINDOW_DAYS: COST_WINDOW_DAYS,

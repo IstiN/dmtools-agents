@@ -331,7 +331,7 @@ suite('factoryState — lifecycle timestamps (accumulation)', function () {
 
 // ── schema 2 — merged_recent lane ────────────────────────────────────────────
 
-suite('factoryState — merged_recent (24h window)', function () {
+suite('factoryState — merged_recent (7d window)', function () {
   var NOW = '2026-10-01T13:10:00Z';
   function merged(n, mergedAt) {
     return { number: n, title: 'm' + n, labels: [],
@@ -339,10 +339,10 @@ suite('factoryState — merged_recent (24h window)', function () {
       created_at: '2026-09-29T08:00:00Z', merged_at: mergedAt };
   }
 
-  test('merged within 24h land (newest first); older drops out', function () {
+  test('merged within 7d land (newest first); older drops out', function () {
     var st = fsModule.buildFactoryState({
       repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
-      mergedPrs: [merged(41, '2026-09-30T01:00:00Z'),   // >24h — dropped
+      mergedPrs: [merged(41, '2026-09-23T01:00:00Z'),   // >7d — dropped
                   merged(42, '2026-10-01T12:00:00Z'),
                   merged(43, '2026-10-01T09:00:00Z')],
       prs: [], runs: []
@@ -366,6 +366,50 @@ suite('factoryState — merged_recent (24h window)', function () {
     assert.equal(card.approvedAt, '2026-10-01T07:00:00Z');
     assert.equal(card.validatingAt, '2026-10-01T08:00:00Z');
     assert.equal(card.mergedAt, '2026-10-01T09:30:00Z');
+  });
+  test('gh-1150 AC1: merged PRs at 48h and 6d stay in merged_recent with prev stamps, history, and tokens; >7d excluded', function () {
+    assert.equal(fsModule.MERGED_WINDOW_MS, 7 * 24 * 60 * 60 * 1000,
+      'MERGED_WINDOW_MS is 7 days (604800000 ms)');
+    var prev = {
+      lanes: {
+        merged_recent: [
+          { pr: 52, labels: [], reviewedAt: '2026-09-29T10:00:00Z',
+            approvedAt: '2026-09-29T11:00:00Z', validatingAt: '2026-09-29T12:00:00Z',
+            history: [{ state: 'pr_created', at: '2026-09-29T08:00:00Z' },
+                      { state: 'review', at: '2026-09-29T10:00:00Z' },
+                      { state: 'merged_recent', at: '2026-09-29T13:10:00Z' }] },
+          { pr: 53, labels: [], reviewedAt: '2026-09-25T10:00:00Z',
+            approvedAt: '2026-09-25T11:00:00Z', validatingAt: '2026-09-25T12:00:00Z',
+            history: [{ state: 'pr_created', at: '2026-09-25T08:00:00Z' },
+                      { state: 'merged_recent', at: '2026-09-25T13:10:00Z' }] }
+        ]
+      }
+    };
+    var tokens = {
+      'pr-52': [{ leg: 'dev', at: '2026-09-29T09:00:00Z', prompt: 100, completion: 50, total: 150 }],
+      'pr-53': [{ leg: 'review', at: '2026-09-25T10:00:00Z', prompt: 200, completion: 80, total: 280 }],
+      'pr-54': [{ leg: 'dev', at: '2026-09-22T09:00:00Z', prompt: 300, completion: 90, total: 390 }]
+    };
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prev: prev, tokens: tokens,
+      mergedPrs: [
+        merged(52, '2026-09-29T13:10:00Z'), // 48h ago (inside 7d)
+        merged(53, '2026-09-25T13:10:00Z'), // 6d ago (inside 7d)
+        merged(54, '2026-09-23T13:10:00Z')  // 8d ago (outside 7d)
+      ],
+      prs: [], runs: []
+    });
+    assert.deepEqual(st.lanes.merged_recent.map(function (c) { return c.pr; }), [52, 53]);
+    var c52 = st.lanes.merged_recent[0];
+    assert.equal(c52.reviewedAt, '2026-09-29T10:00:00Z');
+    assert.equal(c52.approvedAt, '2026-09-29T11:00:00Z');
+    assert.equal(c52.validatingAt, '2026-09-29T12:00:00Z');
+    assert.equal(c52.history.length, 3);
+    assert.equal(c52.tokens.length, 1);
+    var c53 = st.lanes.merged_recent[1];
+    assert.equal(c53.reviewedAt, '2026-09-25T10:00:00Z');
+    assert.equal(c53.history.length, 2);
+    assert.equal(c53.tokens.length, 1);
   });
 });
 
@@ -516,10 +560,9 @@ suite('factoryState — v3 card history (accumulation)', function () {
 
   test('merged card rebuilt tick-over-tick: terminal entry NOT duplicated (real timeline survives)', function () {
     // merged cards are RE-DERIVED from the previous snapshot every tick
-    // while they sit in the 24h merged_recent window — the terminalAt
+    // while they sit in the 7d merged_recent window — the terminalAt
     // path must not append a second merged_recent entry per tick, or
-    // HISTORY_CAP (24) evicts the card's real pipeline timeline within
-    // ~4h at the 10-min cadence.
+    // HISTORY_CAP (100) evicts the card's real pipeline timeline.
     var prev = { lanes: { validating: [{ pr: 17,
       labels: ['pr_approved', 'ai_validating'],
       history: [{ state: 'pr_created' },
@@ -528,7 +571,7 @@ suite('factoryState — v3 card history (accumulation)', function () {
       head: { ref: 'b17', sha: 'sha17' }, user: { login: 'bot' },
       created_at: '2026-10-03T05:00:00Z', merged_at: '2026-10-03T09:30:00Z' };
     var st = null;
-    for (var i = 0; i < 31; i++) {   // > HISTORY_CAP ticks in the window
+    for (var i = 0; i < 110; i++) {  // > HISTORY_CAP ticks in the window
       st = fsModule.buildFactoryState({
         repoInfo: { owner: 'o', repo: 'r' },
         now: '2026-10-03T13:10:00Z',
@@ -544,15 +587,28 @@ suite('factoryState — v3 card history (accumulation)', function () {
     assert.equal(terminals[0].at, '2026-10-03T09:30:00Z');
   });
 
-  test('history is capped (snapshot cannot grow unbounded)', function () {
+  test('history is capped at HISTORY_CAP (100) so snapshot cannot grow unbounded (gh-1150 AC3)', function () {
+    assert.equal(fsModule.HISTORY_CAP, 100, 'HISTORY_CAP is 100');
+    var fifty = [];
+    for (var j = 0; j < 50; j++) fifty.push({ state: 'review', at: NOW });
+    var prev50 = { lanes: { pr_created: [{ pr: 160, labels: [], history: fifty }] } };
+    var st50 = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prev: prev50,
+      prs: [pr(160, ['ai_pr_reviewed'])], runs: []
+    });
+    assert.equal(st50.lanes.review[0].history.length, 51,
+      '50carried + 1 transition stays intact under 100 cap');
+
     var long = [];
-    for (var i = 0; i < 40; i++) long.push({ state: 'review', at: NOW });
+    for (var i = 0; i < 120; i++) long.push({ state: 's' + i, at: NOW });
     var prev = { lanes: { pr_created: [{ pr: 16, labels: [], history: long }] } };
     var st = fsModule.buildFactoryState({
       repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prev: prev,
       prs: [pr(16, ['ai_pr_reviewed'])], runs: []
     });
-    assert.ok(st.lanes.review[0].history.length <= 24, 'capped at 24');
+    assert.equal(st.lanes.review[0].history.length, 100, 'capped at 100');
+    assert.equal(st.lanes.review[0].history[0].state, 's21', 'retains most recent 100 entries');
+    assert.equal(st.lanes.review[0].history[99].state, 'review');
   });
 });
 
@@ -668,11 +724,11 @@ suite('factoryState — v3 backlog (issue lanes)', function () {
 
   test('backlog history capped identically', function () {
     var long = [];
-    for (var i = 0; i < 40; i++) long.push({ state: 'inbox', at: NOW });
+    for (var i = 0; i < 120; i++) long.push({ state: 'inbox', at: NOW });
     var prev = { backlog: { inbox: [{ issue: 28, labels: [], bucket: 'inbox',
       history: long }] } };
     var st = build([issue(28, [])], { prev: prev });
-    assert.ok(st.backlog.inbox[0].history.length <= 24);
+    assert.equal(st.backlog.inbox[0].history.length, 100);
   });
 
   test('backlog buckets cap at BACKLOG_CAP newest (snapshot bounded, counts honest)', function () {
@@ -1074,7 +1130,34 @@ suite('factoryState — history (board time travel)', function () {
     assert.ok(urls[0].indexOf('fa-state-20260923-2235.json') > 0,
               'newest snapshot first');
   });
-
+  test('gh-1150 AC2: updateHistory default HISTORY_KEEP is 500 when cfg.historyKeep is omitted', function () {
+    assert.equal(fsModule.HISTORY_KEEP, 500, 'HISTORY_KEEP is 500');
+    var snaps = [];
+    for (var i = 0; i < 505; i++) {
+      snaps.push({ ts: 't' + i, tick: 'a' + i, stamp: 's' + i, url: 'u' + i });
+    }
+    var old = {
+      schema: 1, repo: 'IstiN/flutter_agent_harness',
+      asset: 'fa-state.json', snapshots: snaps
+    };
+    var seen = [];
+    fsModule.updateHistory(ST,
+      { repo: 'IstiN/flutter_agent_harness', asset: 'fa-state.json' },
+      function (a) {
+        seen.push(a.command);
+        if (a.command.indexOf('--jq .sha') > 0) return { output: 'feedface\n' };
+        if (a.command.indexOf('--jq .content') > 0) {
+          return { output: JSON.stringify(old) };
+        }
+        return undefined;
+      });
+    var idxPut = seen[seen.length - 1];
+    var urls = [];
+    idxPut.replace(/"url":"([^"]+)"/g, function (_, u) { urls.push(u); return u; });
+    assert.equal(urls.length, 500, 'trimmed to default HISTORY_KEEP (500)');
+    assert.ok(urls[0].indexOf('fa-state-20260923-2235.json') > 0, 'newest snapshot first');
+    assert.equal(urls[499], 'u498', '500th entry is u498 (1 new + 499 carried)');
+  });
 });
 
 // ── gh-806: reworkInFlight — the rework in-flight latch rides the snapshot ──
@@ -2381,7 +2464,7 @@ suite('factoryState — gh-1108 REG guards (agents token stream)', function () {
     assert.notOk('tokens' in st.lanes.pr_created[0]);
   });
 
-  test('AC6: merged_recent cards inside the 24h window keep their tokens rows', function () {
+  test('AC6: merged_recent cards inside the 7d window keep their tokens rows', function () {
     var st = fsModule.buildFactoryState({
       repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prs: [], runs: [],
       tokens: TOKENS,
@@ -2402,8 +2485,8 @@ suite('factoryState — gh-1108 REG guards (agents token stream)', function () {
       tokens: TOKENS,
       mergedPrs: [{ number: 31, title: 'old merge', labels: [],
         user: { login: 'bot' },
-        created_at: '2026-10-01T06:00:00Z',
-        merged_at: '2026-10-01T12:30:00Z' }]
+        created_at: '2026-09-20T06:00:00Z',
+        merged_at: '2026-09-25T12:30:00Z' }]
     });
     assert.equal(st.lanes.merged_recent.length, 0,
       'outside the window the card (and its rows) drop — E1 honesty');
