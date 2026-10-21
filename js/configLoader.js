@@ -191,29 +191,43 @@ function deepMerge(target, source) {
  * Copy flat string entries (and optional per-provider sub-map entries) from a
  * tracker/jira statuses object onto target.
  */
-function copyStatusEntries(target, statuses, provider) {
-    if (!statuses || typeof statuses !== 'object') return target;
+function _copyStringStatuses(target, statuses) {
     var keys = Object.keys(statuses);
     for (var i = 0; i < keys.length; i++) {
         var k = keys[i];
         if (typeof statuses[k] === 'string') target[k] = statuses[k];
     }
-    var provMap = provider && statuses[provider];
-    if (provMap && typeof provMap === 'object') Object.assign(target, provMap);
     return target;
 }
 
-/**
- * Synchronize tracker.statuses and jira.statuses on a merged config so callers
- * reading config.jira.statuses also see tracker.statuses overrides.
- */
+function _applyProviderSubmap(target, statuses, provider) {
+    if (!provider) return target;
+    var provMap = statuses[provider];
+    return (provMap && typeof provMap === 'object') ? Object.assign(target, provMap) : target;
+}
+
+function copyStatusEntries(target, statuses, provider) {
+    if (!statuses || typeof statuses !== 'object') return target;
+    return _applyProviderSubmap(_copyStringStatuses(target, statuses), statuses, provider);
+}
+
+function _trackerProviderOf(config, trackerProvider) {
+    var trackerCfg = (config && config.tracker) || {};
+    var raw = trackerProvider || trackerCfg.provider || (config && config.defaultTracker) || '';
+    return String(raw).toLowerCase();
+}
+
+function _trackerStatusesOf(overrides) {
+    var tr = overrides && overrides.tracker;
+    return (tr && tr.statuses && typeof tr.statuses === 'object') ? tr.statuses : null;
+}
+
 function syncTrackerStatuses(result, defaults, overrides) {
     var jiraCfg = result.jira || (result.jira = {});
     jiraCfg.statuses = Object.assign({}, defaults.jira.statuses, jiraCfg.statuses || {});
-    var trackerStatuses = overrides && overrides.tracker && overrides.tracker.statuses;
-    if (!trackerStatuses || typeof trackerStatuses !== 'object') return;
-    var prov = String((result.tracker && result.tracker.provider) || result.defaultTracker || '').toLowerCase();
-    jiraCfg.statuses = copyStatusEntries(jiraCfg.statuses, trackerStatuses, prov);
+    var trackerStatuses = _trackerStatusesOf(overrides);
+    if (!trackerStatuses) return;
+    jiraCfg.statuses = copyStatusEntries(jiraCfg.statuses, trackerStatuses, _trackerProviderOf(result));
 }
 
 function mergeProjectConfig(defaults, overrides) {
@@ -779,38 +793,29 @@ function formatTemplate(template, vars) {
  * Resolve effective status map for placeholder interpolation:
  * built-in defaults < jira.statuses < tracker.statuses < tracker.statuses.<provider>.
  */
+function _sectionOf(config, key) {
+    return (config && config[key]) || {};
+}
+
 function resolveEffectiveStatuses(config, trackerProvider) {
-    var jiraCfg = (config && config.jira) || {};
-    var trackerCfg = (config && config.tracker) || {};
-    var prov = String(trackerProvider || trackerCfg.provider || (config && config.defaultTracker) || '').toLowerCase();
-    var merged = copyStatusEntries({}, jiraCfg.statuses, prov);
-    return copyStatusEntries(merged, trackerCfg.statuses, prov);
+    var prov = _trackerProviderOf(config, trackerProvider);
+    var merged = copyStatusEntries({}, _sectionOf(config, 'jira').statuses, prov);
+    return copyStatusEntries(merged, _sectionOf(config, 'tracker').statuses, prov);
 }
 
-/**
- * Resolve effective useConfiguredStatusesInQueries flag:
- * config.tracker.useConfiguredStatusesInQueries (boolean) > config.jira.useConfiguredStatusesInQueries (boolean) > false.
- */
 function resolveUseConfiguredStatuses(config) {
-    var trackerCfg = (config && config.tracker) || {};
-    if (typeof trackerCfg.useConfiguredStatusesInQueries === 'boolean') {
-        return trackerCfg.useConfiguredStatusesInQueries;
-    }
-    var jiraCfg = (config && config.jira) || {};
-    return jiraCfg.useConfiguredStatusesInQueries === true;
+    var trackerFlag = _sectionOf(config, 'tracker').useConfiguredStatusesInQueries;
+    if (typeof trackerFlag === 'boolean') return trackerFlag;
+    return _sectionOf(config, 'jira').useConfiguredStatusesInQueries === true;
 }
 
-/**
- * Resolve effective stageFallback mode ('label' | 'none'):
- * customParams.stageFallback > config.tracker.stageFallback > config.jira.stageFallback > 'none'.
- * 'fail' and any other non-'label' value normalize to 'none'.
- */
+function _rawStageFallback(config, customParams) {
+    customParams = customParams || _sectionOf(config, 'customParams');
+    return customParams.stageFallback || _sectionOf(config, 'tracker').stageFallback || _sectionOf(config, 'jira').stageFallback || 'none';
+}
+
 function resolveStageFallbackMode(config, customParams) {
-    var cp = customParams || (config && config.customParams) || {};
-    var trackerCfg = (config && config.tracker) || {};
-    var jiraCfg = (config && config.jira) || {};
-    var raw = cp.stageFallback || trackerCfg.stageFallback || jiraCfg.stageFallback || 'none';
-    return String(raw).toLowerCase() === 'label' ? 'label' : 'none';
+    return String(_rawStageFallback(config, customParams)).toLowerCase() === 'label' ? 'label' : 'none';
 }
 
 /** Pick the status name for a `{status.KEY[:Literal]}` or `{stage.KEY[:Literal]}` placeholder. */
