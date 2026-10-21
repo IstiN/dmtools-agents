@@ -138,32 +138,40 @@ suite('scm github provider', function () {
         assert.deepEqual(calls, [{ workspace: 'my-owner', repository: 'my-repo', jobId: '1234' }]);
     });
 
-    test('listWorkflowRuns delegates with default owner/repo/limit', function () {
+    test('listWorkflowRuns delegates with named args object and default owner/repo/limit (UT-scm-1)', function () {
         var calls = [];
         var scm = makeGithub({
-            github_list_workflow_runs: function (owner, repo, status, workflowId, limit) {
-                calls.push([owner, repo, status, workflowId, limit]);
+            github_list_workflow_runs: function (args) {
+                calls.push(args);
                 return 'runs';
             }
         });
         assert.equal(scm.listWorkflowRuns('completed', 'ci.yml'), 'runs');
-        assert.equal(scm.listWorkflowRuns('completed', 'ci.yml', 10, 'other-owner', 'other-repo'), 'runs');
+        assert.equal(scm.listWorkflowRuns('in_progress', 'ai-teammate.yml', 50, 'O', 'R'), 'runs');
+        assert.equal(scm.listWorkflowRuns(null, null, 10, 'other-owner', 'other-repo'), 'runs');
         assert.deepEqual(calls, [
-            ['my-owner', 'my-repo', 'completed', 'ci.yml', 50],
-            ['other-owner', 'other-repo', 'completed', 'ci.yml', 10]
+            { workspace: 'my-owner', repository: 'my-repo', perPage: 50, status: 'completed', workflowId: 'ci.yml' },
+            { workspace: 'O', repository: 'R', perPage: 50, status: 'in_progress', workflowId: 'ai-teammate.yml' },
+            { workspace: 'other-owner', repository: 'other-repo', perPage: 10 }
         ]);
     });
 
-    test('triggerWorkflow delegates positionally', function () {
+    test('triggerWorkflow delegates with named args object and stringifies object payloads (UT-scm-2)', function () {
         var calls = [];
         var scm = makeGithub({
-            github_trigger_workflow: function (owner, repo, workflowFile, payload, ref) {
-                calls.push([owner, repo, workflowFile, payload, ref]);
+            github_trigger_workflow: function (args) {
+                calls.push(args);
                 return 'triggered';
             }
         });
         scm.triggerWorkflow('o', 'r', 'wf.yml', '{"a":1}', 'dev');
-        assert.deepEqual(calls, [['o', 'r', 'wf.yml', '{"a":1}', 'dev']]);
+        scm.triggerWorkflow('O', 'R', 'ai-teammate.yml', { issue: '1' }, 'feat/branch');
+        scm.triggerWorkflow(null, null, 'wf.yml', null, '');
+        assert.deepEqual(calls, [
+            { workspace: 'o', repository: 'r', workflowId: 'wf.yml', inputs: '{"a":1}', ref: 'dev' },
+            { workspace: 'O', repository: 'R', workflowId: 'ai-teammate.yml', inputs: '{"issue":"1"}', ref: 'feat/branch' },
+            { workspace: 'my-owner', repository: 'my-repo', workflowId: 'wf.yml', inputs: '{}' }
+        ]);
     });
 
     test('updateBranch shells out via gh api update-branch (prId NOT stringified)', function () {

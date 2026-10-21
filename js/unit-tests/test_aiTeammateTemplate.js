@@ -170,4 +170,17 @@ suite('ai-teammate.yml.template — gh-1073: the event-path dedup gate is mirror
         assert.ok(tpl.indexOf('nowMs: Date.now()') !== -1,
             'the probe passes the wall clock into the decision');
     });
+
+    test('UT-wf-1 (template): probe passes INPUT_PR + INPUT_LEG and runs decideEventDedup on workflow_dispatch', function () {
+        assert.ok(tpl.indexOf("INPUT_PR: ${{ github.event.inputs.pr || '' }}") !== -1,
+            'template dedup probe step receives INPUT_PR');
+        assert.ok(tpl.indexOf("INPUT_LEG: ${{ github.event.inputs.leg || '' }}") !== -1,
+            'template dedup probe step receives INPUT_LEG');
+        assert.ok(tpl.indexOf('pr: parseInt(env.INPUT_PR, 10)') !== -1,
+            'template decideEventDedup receives pr anchor');
+        assert.ok(tpl.indexOf('leg: env.INPUT_LEG') !== -1,
+            'template decideEventDedup receives explicit leg');
+        assert.ok(tpl.indexOf("if (env.EVENT_NAME === 'workflow_dispatch')") === -1,
+            'template workflow_dispatch early bypass is removed');
+    });
 });

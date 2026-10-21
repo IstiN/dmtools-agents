@@ -230,6 +230,68 @@ suite('smProvider', function () {
         assert.equal(empty.lastReview(9), null);
     });
 
+    test('UT-prov-1: github lastReview ignores trailing empty-body COMMENTED inline replies so stale CHANGES_REQUESTED is preserved', function () {
+        var p = loadProvider('github', {
+            github_list_pr_reviews: function () {
+                return [
+                    { state: 'CHANGES_REQUESTED', commit_id: 'shaA', body: 'Please fix x', user: { login: 'ai-teammate' } },
+                    { state: 'COMMENTED', commit_id: 'shaB', body: '', user: { login: 'ai-teammate' } },
+                    { state: 'COMMENTED', commit_id: 'shaB', body: '   ', user: { login: 'human' } }
+                ];
+            }
+        });
+        assert.deepEqual(p.lastReview(1151), {
+            state: 'CHANGES_REQUESTED',
+            commitId: 'shaA',
+            author: 'ai-teammate'
+        });
+    });
+
+    test('UT-prov-2: github lastReview picks newer APPROVED verdict and falls back to last COMMENTED when all are empty-body', function () {
+        var p = loadProvider('github', {
+            github_list_pr_reviews: function () {
+                return [
+                    { state: 'CHANGES_REQUESTED', commit_id: 'shaA', body: 'Fix', user: { login: 'ai-teammate' } },
+                    { state: 'APPROVED', commit_id: 'shaB', body: '', user: { login: 'ai-teammate' } },
+                    { state: 'COMMENTED', commit_id: 'shaB', body: '', user: { login: 'ai-teammate' } }
+                ];
+            }
+        });
+        assert.deepEqual(p.lastReview(1151), {
+            state: 'APPROVED',
+            commitId: 'shaB',
+            author: 'ai-teammate'
+        });
+
+        var pCommentedSummary = loadProvider('github', {
+            github_list_pr_reviews: function () {
+                return [
+                    { state: 'COMMENTED', commit_id: 'shaA', body: '## Automated Code Review', user: { login: 'ai-teammate' } },
+                    { state: 'COMMENTED', commit_id: 'shaB', body: '', user: { login: 'ai-teammate' } }
+                ];
+            }
+        });
+        assert.deepEqual(pCommentedSummary.lastReview(1151), {
+            state: 'COMMENTED',
+            commitId: 'shaA',
+            author: 'ai-teammate'
+        });
+
+        var pAllEmpty = loadProvider('github', {
+            github_list_pr_reviews: function () {
+                return [
+                    { state: 'COMMENTED', commit_id: 'shaA', body: '', user: { login: 'u1' } },
+                    { state: 'COMMENTED', commit_id: 'shaB', body: '', user: { login: 'u2' } }
+                ];
+            }
+        });
+        assert.deepEqual(pAllEmpty.lastReview(1151), {
+            state: 'COMMENTED',
+            commitId: 'shaB',
+            author: 'u2'
+        });
+    });
+
     test('github: reviewThreads counts resolved/unresolved (GraphQL envelope)', function () {
         // Threads are GraphQL-only; the provider must navigate
         // data.repository.pullRequest.reviewThreads.nodes and count

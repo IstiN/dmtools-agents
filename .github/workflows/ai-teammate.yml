@@ -95,7 +95,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: ai-teammate-${{ github.event.issue.number || github.event.inputs.issue }}
+  group: ai-teammate-${{ github.event.issue.number || github.event.inputs.issue || (github.event.inputs.pr && format('pr-{0}', github.event.inputs.pr)) || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -145,6 +145,8 @@ jobs:
           ACTION: ${{ github.event.action }}
           ISSUE_LABELS: ${{ toJson(github.event.issue.labels.*.name) }}
           ISSUE: ${{ github.event.issue.number || github.event.inputs.issue }}
+          INPUT_PR: ${{ github.event.inputs.pr || '' }}
+          INPUT_LEG: ${{ github.event.inputs.leg || '' }}
           ASSIGNEES: ${{ toJson(github.event.issue.assignees.*.login) }}
           SELF_ID: ${{ github.run_id }}
           SELF_RUN_NUMBER: ${{ github.run_number }}
@@ -180,13 +182,12 @@ jobs:
           try {
             // gh-1076: the `labeled` trigger is gone — `labeled` never
             // reaches this probe. Skip the probe entirely (no API burn)
-            // for the dispatch path (SM-side gh-1028 dedup governs it) and
             // for assigns not addressed to ai-teammate (the job gate
-            // rejects them; zero jobs execute).
+            // rejects them; zero jobs execute). gh-1153: workflow_dispatch
+            // ALSO runs decideEventDedup against older in-flight runs for
+            // the same issue or PR anchor + leg.
             let preflight = null;
-            if (env.EVENT_NAME === 'workflow_dispatch') {
-              preflight = 'dispatch path: governed by the SM-side gh-1028 dedup';
-            } else if (env.ACTION === 'assigned' && assignees.indexOf('ai-teammate') === -1) {
+            if (env.EVENT_NAME === 'issues' && env.ACTION === 'assigned' && assignees.indexOf('ai-teammate') === -1) {
               preflight = 'not assigned to ai-teammate: the teammate gate rejects it; no probe spent';
             }
             if (preflight) {
@@ -226,6 +227,8 @@ jobs:
               labelName: undefined, // gh-1076: no labeled trigger — only assigned/dispatch reach the probe
               issueLabelNames: issueLabels,
               issue: parseInt(env.ISSUE, 10),
+              pr: parseInt(env.INPUT_PR, 10),
+              leg: env.INPUT_LEG,
               workflowFile: env.WORKFLOW_FILE,
               runs: runs,
               // The run_number tie-break needs no clock on the self side:

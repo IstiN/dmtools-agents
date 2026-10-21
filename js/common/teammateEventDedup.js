@@ -71,8 +71,8 @@
 // FOLLOW-UP note in the header.
 var DEFAULT_WORKFLOW_FILE = 'ai-teammate.yml';
 
-// Active-state vocabulary — branchLegGuard parity, one list.
-var ACTIVE_RUN_STATES = ['queued', 'in_progress', 'waiting', 'pending'];
+// Active-state vocabulary — branchLegGuard parity, one list (gh-1153 adds 'requested').
+var ACTIVE_RUN_STATES = ['queued', 'in_progress', 'waiting', 'pending', 'requested'];
 
 // gh-1028 stale bound for NON-running active states (queued/waiting/pending
 // zombies aged out own nothing). in_progress runs never age out.
@@ -172,6 +172,16 @@ function issueOfRunName(name) {
     var issue = anchoredNumberOf(name, /#(\d+)/g);
     if (issue !== null) return issue;
     return anchoredNumberOf(name, /(?:^|[^0-9a-zA-Z])gh-(\d+)/g);
+}
+
+/**
+ * The PR anchor carried by a run title ('teammate: workflow_dispatch # · pr-1151 review'
+ * or '▶ review (SM) · pr-1151'). Uses the same non-digit boundary guard as
+ * issueOfRunName so 'pr-115' never matches 'pr-1151'. Returns a number or null.
+ */
+function prOfRunName(name) {
+    if (!name || typeof name !== 'string') return null;
+    return anchoredNumberOf(name, /(?:^|[^0-9a-zA-Z])pr-(\d+)/g);
 }
 
 // Emoji-marker → leg for the template title family ('🔧 rework · ...',
@@ -425,8 +435,74 @@ function issueNumberOf(input) {
     return typeof input.issue === 'number' ? input.issue : parseInt(input.issue, 10);
 }
 
+function prNumberOf(input) {
+    return typeof input.pr === 'number' ? input.pr : parseInt(input.pr, 10);
+}
+
 function hasRuns(runs) {
     return Array.isArray(runs) && runs.length > 0;
+}
+
+function isInFlightRun(run, nowMs, staleMs) {
+    if (!run || !isActiveStatus(run.status)) return false;
+    if (run.status !== 'in_progress' && nowMs !== null &&
+        isStaleNonRunning(run, nowMs, staleMs)) return false;
+    return true;
+}
+
+function runMatchesDispatchAnchor(run, ctx) {
+    if (!isNaN(ctx.issue) && issueOfRunName(run.name) === ctx.issue) return true;
+    return !isNaN(ctx.pr) && prOfRunName(run.name) === ctx.pr;
+}
+
+function isDispatchSuppressorRun(run, ctx) {
+    if (ctx.selfId !== null && run.id === ctx.selfId) return false;
+    if (!isLegWorkflowRun(run, ctx.workflowFile)) return false;
+    if (!runMatchesDispatchAnchor(run, ctx)) return false;
+    if (!legsCompatible(ctx.leg, legOfRunName(run.name))) return false;
+    if (!isInFlightRun(run, ctx.nowMs, ctx.staleMs)) return false;
+    return isOlderRun(run, ctx.selfRun);
+}
+
+function findDispatchSuppressor(runs, ctx) {
+    for (var i = 0; i < runs.length; i++) {
+        var run = runs[i] || {};
+        if (isDispatchSuppressorRun(run, ctx)) return run;
+    }
+    return null;
+}
+
+function dispatchAnchorLabel(issue, pr) {
+    return !isNaN(pr) ? ('pr-' + pr) : ('#' + issue);
+}
+
+function duplicateDispatchVerdict(run, anchorLabel, leg) {
+    var owner = run.run_number !== undefined ? ('run ' + run.run_number) : ('run id ' + run.id);
+    return {
+        proceed: false,
+        reason: 'duplicate',
+        audit: '⏭️ teammate dedup (gh-1153): dropped workflow_dispatch on ' + anchorLabel +
+            ' (leg \'' + (leg || 'any') + '\') — ' + owner +
+            ' for the same anchor+leg is in flight (' + run.status + '); this dispatch is a duplicate'
+    };
+}
+
+function decideDispatchDedup(input) {
+    var issue = issueNumberOf(input);
+    var pr = prNumberOf(input);
+    if ((isNaN(issue) && isNaN(pr)) || !hasRuns(input.runs)) {
+        return proceedVerdict('dispatch-path',
+            'teammate dedup (gh-1065): workflow_dispatch path — governed by the SM-side gh-1028 dedup; proceeding');
+    }
+    var leg = String(input.leg || '');
+    var ctx = scanContextOf(input, issue, leg);
+    ctx.pr = pr;
+    var anchorLabel = dispatchAnchorLabel(issue, pr);
+    var owner = findDispatchSuppressor(input.runs, ctx);
+    if (owner) return duplicateDispatchVerdict(owner, anchorLabel, leg);
+    return proceedVerdict('first-trigger',
+        'teammate dedup (gh-1153): no in-flight run for ' + anchorLabel +
+        ' (leg \'' + (leg || 'any') + '\') — proceeding');
 }
 
 function duplicateVerdict(run, input, issue, leg) {
@@ -489,6 +565,9 @@ function scanVerdict(input, derived) {
  */
 function decideEventDedup(input) {
     input = input || {};
+    if (input.eventName === 'workflow_dispatch') {
+        return decideDispatchDedup(input);
+    }
     if (input.eventName !== 'issues') {
         return proceedVerdict('dispatch-path',
             'teammate dedup (gh-1065): ' + (input.eventName || 'dispatch') +
@@ -512,6 +591,7 @@ module.exports = {
     armingLegOfLabel: armingLegOfLabel,
     deriveEventLeg: deriveEventLeg,
     issueOfRunName: issueOfRunName,
+    prOfRunName: prOfRunName,
     legOfRunName: legOfRunName,
     legsCompatible: legsCompatible,
     completedLegsCompatible: completedLegsCompatible,

@@ -650,15 +650,29 @@ function _ghMemoPrStatus(owner, repo, prNumber, data) {
     if (data) ioCachePut(owner, repo, 'prStatus', prNumber, data);
 }
 
+function _isSubstantiveReview(r) {
+    if (!r) return false;
+    if (r.state === 'APPROVED' || r.state === 'CHANGES_REQUESTED') return true;
+    return String(r.body || '').trim() !== '';
+}
+
+function _pickLatestVerdictReview(list) {
+    for (var i = list.length - 1; i >= 0; i--) {
+        if (_isSubstantiveReview(list[i])) return list[i];
+    }
+    return list[list.length - 1];
+}
+
 function _ghLastReview(owner, repo, prNumber) {
-    // REST: reviews arrive chronological, the last entry is the
-    // latest verdict; commit_id pins the head it was rendered on
-    // (GraphQL spelling commitId kept as a fallback).
+    // REST: reviews arrive chronological. Scan newest-to-oldest for the
+    // latest substantive review (APPROVED / CHANGES_REQUESTED or non-empty
+    // body) so bare inline thread replies (state: 'COMMENTED', body: '')
+    // on a newer commit never mask an earlier review verdict (gh-1153).
     var list = asList(parseMcp(github_list_pr_reviews({
         workspace: owner, repository: repo, pullRequestId: String(prNumber)
     })));
     if (!list.length) return null;
-    var r = list[list.length - 1];
+    var r = _pickLatestVerdictReview(list);
     return {
         state: r.state || null,
         commitId: r.commit_id || r.commitId || null,

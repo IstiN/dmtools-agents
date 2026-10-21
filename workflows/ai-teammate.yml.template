@@ -254,6 +254,8 @@ jobs:
           LABEL_NAME: ${{ github.event.label.name }}
           ISSUE_LABELS: ${{ toJson(github.event.issue.labels.*.name) }}
           ISSUE: ${{ github.event.issue.number || github.event.inputs.issue }}
+          INPUT_PR: ${{ github.event.inputs.pr || '' }}
+          INPUT_LEG: ${{ github.event.inputs.leg || '' }}
           ASSIGNEES: ${{ toJson(github.event.issue.assignees.*.login) }}
           SELF_ID: ${{ github.run_id }}
           SELF_RUN_NUMBER: ${{ github.run_number }}
@@ -289,15 +291,14 @@ jobs:
           try {
             // Mirror of the guard/teammate gate: skip the probe entirely
             // (no API burn, gh-1029 parity) for everything the gate below
-            // would reject, and for the dispatch path (SM-side dedup
-            // governs it).
+            // would reject. gh-1153: workflow_dispatch ALSO runs
+            // decideEventDedup against older in-flight runs for the same
+            // issue or PR anchor + leg.
             let preflight = null;
-            if (env.EVENT_NAME === 'workflow_dispatch') {
-              preflight = 'dispatch path: governed by the SM-side gh-1028 dedup';
-            } else if (env.ACTION === 'labeled' &&
-                       !dedup.ARMING_LABEL_LEGS.hasOwnProperty(env.LABEL_NAME || '')) {
+            if (env.EVENT_NAME === 'issues' && env.ACTION === 'labeled' &&
+                !dedup.ARMING_LABEL_LEGS.hasOwnProperty(env.LABEL_NAME || '')) {
               preflight = 'non-arming label: the teammate gate rejects it; no probe spent';
-            } else if (env.ACTION === 'assigned' && assignees.indexOf('ai-teammate') === -1) {
+            } else if (env.EVENT_NAME === 'issues' && env.ACTION === 'assigned' && assignees.indexOf('ai-teammate') === -1) {
               preflight = 'not assigned to ai-teammate: the teammate gate rejects it; no probe spent';
             }
             if (preflight) {
@@ -337,6 +338,8 @@ jobs:
               labelName: env.LABEL_NAME || undefined,
               issueLabelNames: issueLabels,
               issue: parseInt(env.ISSUE, 10),
+              pr: parseInt(env.INPUT_PR, 10),
+              leg: env.INPUT_LEG,
               workflowFile: env.WORKFLOW_FILE,
               runs: runs,
               // The run_number tie-break needs no clock on the self side:
