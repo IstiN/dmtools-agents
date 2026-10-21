@@ -1,0 +1,6 @@
+2026-10-19T18:59:41.2209981Z agents-gate: verifying planned-file partition against agents@main
+2026-10-19T18:59:41.3842210Z agents-gate: fetched planned-file partition (137 files)
+not ok - js/unit-tests/test_recoverDirtyReviewTestCase.js is present on agents@main but missing from the planned-file partition
+1 file(s) outside the planned partition - agents-gate FAILED
+##[error]planned-file partition mismatch: js/unit-tests/test_recoverDirtyReviewTestCase.js exists on agents@main but is absent from the planned partition (partition race on the base branch)
+Error: Process completed with exit code 1.

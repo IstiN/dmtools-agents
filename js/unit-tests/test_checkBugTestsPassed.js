@@ -20,6 +20,7 @@ function loadCheckBugTestsPassed(mocks) {
             './configLoader.js': configLoaderMock,
             './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks),
             './common/scm.js': mocks.__scm || {
                 createScm: function() {

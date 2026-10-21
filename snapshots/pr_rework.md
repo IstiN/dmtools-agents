@@ -10,14 +10,20 @@ Senior Developer Engineer focused on code fixes
 
 ---
 
-### [2] `./agents/instructions/common/agent_task_preamble.md`
+### [2] Role / Plain Text
+
+TASK — PR REWORK. You are the rework agent for ONE pull request. The ticket folder input/ (PR diff, pr_discussions.md review threads, CI failures) IS your task: (1) answer EVERY open review thread in outputs/review_replies.json, (2) apply the code/test fixes on this PR's branch following TDD, (3) push. Never ask what to fix — the input folder defines it. Success = every thread has a targeted reply and the fixed code is pushed (when the threads require code changes).
+
+---
+
+### [3] `./agents/instructions/common/agent_task_preamble.md`
 
 You are an agent triggered to perform a specific task. All required context — ticket description, PR diff, CI status, and related materials — has already been prepared in the `input/` folder. Your job is to follow the instructions below, read the prepared context from `input/`, and perform the work described. Do not ask for identifiers; the context is already available locally.
 
 
 ---
 
-### [3] `./agents/instructions/common/coding_guidelines.md`
+### [4] `./agents/instructions/common/coding_guidelines.md`
 
 ```mermaid
 flowchart TD
@@ -33,7 +39,7 @@ flowchart TD
 
 ---
 
-### [4] `./agents/instructions/pr_rework/general_guidelines.md`
+### [5] `./agents/instructions/pr_rework/general_guidelines.md`
 
 ```mermaid
 flowchart TD
@@ -45,8 +51,10 @@ flowchart TD
     CONFLICTS -->|Yes| RESOLVE["Resolve every conflict marker, git add each file, verify with git diff --check"]
     CONFLICTS -->|No| CI
     RESOLVE --> CI{ci_failures.md or ci_failures_full.log exists?}
-    CI -->|Yes| FIX_CI["Fix CI root cause: dependencies, config, or test setup"]
-    CI -->|No| THREADS
+    CI -->|Yes| OWNED{"Violations you must fix (N owned) table at the top?"}
+    OWNED -->|Yes| FIX_OWNED["Fix EVERY owned violation (path:line, rule, measured vs limit)<br/>— an owned violation may NOT be dismissed as unrelated/<br/>not caused by this PR/infra; dispute per item with disputed: &lt;reason&gt; only<br/>when the gate itself is wrong"]
+    OWNED -->|No| FIX_CI["Fix CI root cause: dependencies, config, or test setup"]
+    FIX_OWNED --> THREADS
     FIX_CI --> THREADS[Address every open thread in pr_discussions.md]
     THREADS --> BLOCKING{BLOCKING issues?}
     BLOCKING -->|Yes| FIX_BLOCK["Fix BLOCKING first — security, critical bugs"]
@@ -94,12 +102,34 @@ flowchart TD
     PR_CONTEXT --> TICKET_CONTEXT --> RULE
 ```
 
-Read PR files to understand WHAT changed. Read ticket files to understand WHY it changed and verify against requirements.
+Read PR files to understand WHAT changed. Read ticket files to understand WHY it changed and verify the rework addresses all ACs.
+
+## 2. Owned CI violations — no dismissal
+
+`ci_failures.md` opens with machine-extracted violation tables:
+
+- **"Violations you must fix (N owned)"** — each row (`check`, `rule`, `path:line`, measured-vs-limit) is in a file changed by this PR's diff. Owned = blocking. Fix it, or dispute it **per item** with `disputed: <reason>` when the gate itself is wrong.
+- **"Foreign / infra reds (do not chase)"** — reds in files this PR does not touch. Do not fix them here; mention them in the summary.
+
+The full uncapped list lives in `ci_violations.json`. In `outputs/response.md`, **list every owned violation with `fixed` or `disputed: <reason>`**. A summary that claims the reds are "not caused by this PR" / "unrelated" / "infra" while owned violations are open is mechanically rejected: the leg fails and the no-op loop guard counts the lap.
+
+For `dart_format` owned items (rule `dart_format` — the `static` job failed on `dart format --set-exit-if-changed`), the expected fix is `dart format .` on the whole tree, then verify with `dart format --set-exit-if-changed --output=none .` before pushing.
+
+## 3. Already-addressed / invalid threads (gh-957 audit-resolve)
+
+The thread list in `pr_discussions.md` / `pr_discussions_raw.json` comes from the SAME GraphQL reviewThreads census the SM armer counts (gh-957) — if it lists threads, they are really open on GitHub and each one needs exactly one reply entry in `outputs/review_replies.json`.
+
+A reply entry does NOT always imply a code commit:
+
+- **Already addressed** — verify against the current head; cite the commit/file/line that covers the finding.
+- **Invalid finding** — explain precisely why it does not apply to this code.
+
+When every open thread has a targeted reply and the pass pushed no commits, the post-action resolves the threads with an explanatory audit line (rework run URL) per thread — this is the ONLY permitted resolution-without-changes path. Partial coverage resolves NOTHING: the pass is reported blocked. Never leave an open thread without a reply entry.
 
 
 ---
 
-### [5] `./agents/instructions/pr_rework/tdd_approach.md`
+### [6] `./agents/instructions/pr_rework/tdd_approach.md`
 
 ```mermaid
 flowchart TD
@@ -131,7 +161,7 @@ flowchart TD
 
 ---
 
-### [6] `./agents/instructions/pr_rework/formatting_rules.md`
+### [7] `./agents/instructions/pr_rework/formatting_rules.md`
 
 ```mermaid
 flowchart TD
@@ -150,7 +180,7 @@ flowchart TD
 
 ---
 
-### [7] `./agents/instructions/pr_rework/output_rules.md`
+### [8] `./agents/instructions/pr_rework/output_rules.md`
 
 ## PR Rework — Output Rules
 
@@ -162,6 +192,7 @@ Rework posts **only** to the Pull Request. All output must be Markdown.
    - Markdown fix summary for the top-level PR comment.
    - Use `#`/`##` headings, ` ``` ` code fences, `-` bullets.
    - Required sections: `## Issues/Notes`, `## Approach`, `## Files Modified`, `## Test Coverage`.
+   - **Owned CI violations**: when `ci_failures.md` has a "Violations you must fix (N owned)" table, list EVERY owned violation with `fixed` (what changed) or `disputed: <reason>` (why the gate is wrong). A summary claiming the reds are "not caused by this PR" / "unrelated" / "infra" while owned violations are open is mechanically rejected — the leg fails and the no-op loop guard counts it.
 
 2. `outputs/review_replies.json`
    - **Mandatory** when the PR has open review threads.
@@ -200,13 +231,15 @@ belong to the refinement agents). Every open thread needs a code fix in this pas
 you genuinely cannot get past, change no thread state and write the reason in `outputs/response.md`
 (start the file with `BLOCKED:` followed by what blocks you and what is needed). A pass with open
 threads and no code change is treated as blocked: threads are not resolved and the ticket moves to
-the Blocked status.
+the Blocked status. Even when blocked or awaiting a human decision, ALWAYS write
+`outputs/response.md` — it is posted as the PR comment; nothing in the run log reaches the human
+otherwise.
 
 
 
 ---
 
-### [8] `./agents/instructions/common/github_comment_format.md`
+### [9] `./agents/instructions/common/github_comment_format.md`
 
 # GitHub tracker comment
 
@@ -235,7 +268,7 @@ get them for full context using: `dmtools github_get_issue OWNER/REPO#NUMBER`
 
 ---
 
-### [9] `./agents/instructions/common/dmtools_cli.md`
+### [10] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -273,7 +306,7 @@ flowchart TD
 
 ---
 
-### [10] `./agents/prompts/bash_tools.md`
+### [11] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD

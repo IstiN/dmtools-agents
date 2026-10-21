@@ -1,0 +1,9 @@
+2026-10-19T18:59:02.1011221Z crap4dart: analyzing 5903 methods in 412 files
+2026-10-19T18:59:07.8843312Z crap4dart: thresholds loaded (method_size max 60, method_complexity max 8)
+[PASS] method_complexity: 0 violations in 5903 methods over their complexity limits
+[PASS] file_size: 0 violations in 412 files over their size limits
+[FAIL] method_size: 1 violations in 5903 methods over their size limits
+ test/js/require_base_resolution_test.dart:13: main has 100 lines > max 60
+[PASS] method_count: 0 violations in 412 files over their count limits
+Summary: 1 violation(s) across 4 rule(s) - quality gate FAILED
+Error: Process completed with exit code 1.

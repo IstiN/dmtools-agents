@@ -22,6 +22,7 @@
  * Project override (.dmtools/config.js), per-agent override (customParams):
  *   issuePlanning: {
  *     devLabel:     'agent:dev',   // label that starts the dev leg of an issue
+ *     devAssignee:  null,          // optional assignee login (e.g. 'ai-teammate') when starting a sub-issue
  *     plannedLabel: 'ai_planned',  // marks a parent whose sub-issues are sequenced
  *     maxParallel:  1              // sub-issues of one parent in development at once
  *   }
@@ -29,6 +30,7 @@
 
 var DEFAULTS = {
     devLabel: 'agent:dev',
+    devAssignee: null,
     plannedLabel: 'ai_planned',
     maxParallel: 1
 };
@@ -56,9 +58,11 @@ function issuePlanningOf(source) {
 // One override layer over cfg: a valid value replaces the current one, an invalid one is ignored.
 function applyPlanningLayer(cfg, layer) {
     var devLabel = nonEmptyString(layer.devLabel);
+    var devAssignee = nonEmptyString(layer.devAssignee);
     var plannedLabel = nonEmptyString(layer.plannedLabel);
     var maxParallel = positiveInt(layer.maxParallel);
     if (devLabel) cfg.devLabel = devLabel;
+    if (devAssignee) cfg.devAssignee = devAssignee;
     if (plannedLabel) cfg.plannedLabel = plannedLabel;
     if (maxParallel) cfg.maxParallel = maxParallel;
     return cfg;
@@ -70,11 +74,12 @@ function applyPlanningLayer(cfg, layer) {
  *
  * @param {Object} projectConfig loaded .dmtools/config.js (may be null)
  * @param {Object} customParams  agent / job customParams (may be null)
- * @returns {{devLabel: string, plannedLabel: string, maxParallel: number}}
+ * @returns {{devLabel: string, devAssignee: (string|null), plannedLabel: string, maxParallel: number}}
  */
 function resolvePlanningConfig(projectConfig, customParams) {
     var cfg = {
         devLabel: DEFAULTS.devLabel,
+        devAssignee: DEFAULTS.devAssignee,
         plannedLabel: DEFAULTS.plannedLabel,
         maxParallel: DEFAULTS.maxParallel
     };
@@ -257,8 +262,10 @@ function decideNextSteps(children, plan, cfg, isKeyClosed) {
 
 /** The comment on the parent when the SM starts sub-issues. */
 function renderStartComment(decision, cfg) {
+    var detail = 'label `' + cfg.devLabel + '`' +
+        (cfg && cfg.devAssignee ? ', assignee `' + cfg.devAssignee + '`' : '');
     return 'Starting ' + decision.start.map(function (c) { return displayRef(c.key); }).join(', ') +
-        ' (label `' + cfg.devLabel + '`).';
+        ' (' + detail + ').';
 }
 
 /** The comment on the parent when every sub-issue is closed. */

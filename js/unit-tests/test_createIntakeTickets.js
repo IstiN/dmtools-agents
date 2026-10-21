@@ -345,8 +345,8 @@ suite('createIntakeTickets: GitHub sub-issues', function() {
         assert.contains(comments[2].text, '- #16 (Story) - Order import');
         assert.contains(comments[2].text, '**Total:** 4 sub-issue(s)');
         assert.equal(comments[2].text.indexOf('Not every entry exists'), -1);
-        // No Jira-only extras: no Ready For Development / Blocked moves, no links, no attachments
-        assert.deepEqual(w.of('move').map(function(a) { return a.statusName; }), ['In Progress']);
+        // No Jira-only extras on a planned GitHub parent: no status moves, no links, no attachments
+        assert.deepEqual(w.of('move'), []);
     });
 
     test('a failed entry leaves every parent unplanned; the re-run reuses what exists and creates only the rest', function() {

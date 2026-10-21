@@ -8,6 +8,7 @@ Rework posts **only** to the Pull Request. All output must be Markdown.
    - Markdown fix summary for the top-level PR comment.
    - Use `#`/`##` headings, ` ``` ` code fences, `-` bullets.
    - Required sections: `## Issues/Notes`, `## Approach`, `## Files Modified`, `## Test Coverage`.
+   - **Owned CI violations**: when `ci_failures.md` has a "Violations you must fix (N owned)" table, list EVERY owned violation with `fixed` (what changed) or `disputed: <reason>` (why the gate is wrong). A summary claiming the reds are "not caused by this PR" / "unrelated" / "infra" while owned violations are open is mechanically rejected — the leg fails and the no-op loop guard counts it.
 
 2. `outputs/review_replies.json`
    - **Mandatory** when the PR has open review threads.

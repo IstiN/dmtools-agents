@@ -365,8 +365,9 @@ function findFeaturePR(ticketKey, scm, owner, repo) {
 
 /** Add the appropriate result label to the feature PR, removing the opposite one. */
 function updateFeaturePRLabel(owner, repo, prNumber, passed, labelPassed, labelFailed) {
-    var addLabel = passed ? labelPassed : labelFailed;
-    var removeLabel = passed ? labelFailed : labelPassed;
+    var labels = mobileHelpers.decideFeaturePrLabels(passed, labelPassed, labelFailed);
+    var addLabel = labels.addLabel;
+    var removeLabel = labels.removeLabel;
 
     try {
         try {
@@ -381,8 +382,9 @@ function updateFeaturePRLabel(owner, repo, prNumber, passed, labelPassed, labelF
 }
 
 function updateFeaturePRLabelWithScm(scm, prNumber, passed, labelPassed, labelFailed) {
-    var addLabel = passed ? labelPassed : labelFailed;
-    var removeLabel = passed ? labelFailed : labelPassed;
+    var labels = mobileHelpers.decideFeaturePrLabels(passed, labelPassed, labelFailed);
+    var addLabel = labels.addLabel;
+    var removeLabel = labels.removeLabel;
 
     try {
         try { scm.removeLabel(prNumber, removeLabel); } catch (_) {}
@@ -725,5 +727,10 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action: action,
+        // gh-1083 test surface: direct github-globals label path (kept for
+        // flows without the SCM abstraction — characterization-tested).
+        updateFeaturePRLabel: updateFeaturePRLabel
+    };
 }

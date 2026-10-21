@@ -2,6 +2,12 @@
  * Unit tests for aiTeammateTokenUsageReporter.js
  */
 
+// gh-1108: the reporter now requires two pure siblings at the top (hoisted
+// per the pack-require rule) — map them to the REAL modules so every
+// loadReporter call below exercises the production wiring.
+var dedupModule = loadModule('js/common/teammateEventDedup.js', makeRequire({}), {});
+var tokenUsageModule = loadModule('js/factory/token_usage.js', makeRequire({}), {});
+
 function loadReporter(overrides, projectConfig) {
     var configLoaderMock = {
         loadProjectConfig: function() {
@@ -12,7 +18,13 @@ function loadReporter(overrides, projectConfig) {
         file_write: function() {},
         github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); }
     }, overrides || {});
-    return loadModule('js/aiTeammateTokenUsageReporter.js', makeRequire({ './configLoader.js': configLoaderMock }), globals);
+    return loadModule('js/aiTeammateTokenUsageReporter.js',
+        makeRequire({
+            './configLoader.js': configLoaderMock,
+            './common/teammateEventDedup.js': dedupModule,
+            './factory/token_usage.js': tokenUsageModule
+        }),
+        globals);
 }
 
 suite('aiTeammateTokenUsageReporter parsing', function() {
@@ -1199,5 +1211,997 @@ suite('aiTeammateTokenUsageReporter action helpers', function() {
         assert.equal(disabled.enabled, false);
         assert.equal(disabled.path, '');
         assert.equal(disabled.maxLogDownloads, null);
+    });
+});
+
+// ── gh-1108 — run-title anchor + leg (one vocabulary with the dedup module) ──
+
+suite('aiTeammateTokenUsageReporter parseRunAnchor (gh-1108)', function() {
+
+    test('stub title with a PR anchor keys pr-N and keeps the leg', function() {
+        var reporter = loadReporter();
+        var a = reporter.parseRunAnchor('teammate: workflow_dispatch #1040 · pr-1123 review');
+        assert.equal(a.key, 'pr-1123');
+        assert.equal(a.pr, 1123);
+        assert.equal(a.issue, 1040);
+        assert.equal(a.leg, 'review');
+    });
+
+    test('issue-only stub title keys issue-N', function() {
+        var reporter = loadReporter();
+        var a = reporter.parseRunAnchor('teammate: workflow_dispatch #1040 dev');
+        assert.equal(a.key, 'issue-1040');
+        assert.equal(a.pr, null);
+        assert.equal(a.issue, 1040);
+        assert.equal(a.leg, 'dev');
+    });
+
+    test('bare event-path title keys issue-N with an unknown leg', function() {
+        var reporter = loadReporter();
+        var a = reporter.parseRunAnchor('teammate: assigned #1040');
+        assert.equal(a.key, 'issue-1040');
+        assert.equal(a.leg, '');
+    });
+
+    test('factory SM title family keys issue-N via the gh-<n> anchor', function() {
+        var reporter = loadReporter();
+        var a = reporter.parseRunAnchor('▶ review (SM) · gh-1040');
+        assert.equal(a.key, 'issue-1040');
+        assert.equal(a.leg, 'review');
+    });
+
+    test('template emoji title family keys issue-N via the gh-<n> anchor', function() {
+        var reporter = loadReporter();
+        var a = reporter.parseRunAnchor('⚒️ dev · gh-1041');
+        assert.equal(a.key, 'issue-1041');
+        assert.equal(a.leg, 'dev');
+    });
+
+    test('trailing-digit guard: #1040 is never #104, pr-1123 never pr-112', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.parseRunAnchor('teammate: assigned #1040').issue, 1040);
+        assert.equal(reporter.parseRunAnchor('· pr-1123 review').pr, 1123);
+    });
+
+    test('PR anchor wins when a title carries both anchors', function() {
+        var reporter = loadReporter();
+        var a = reporter.parseRunAnchor('teammate: workflow_dispatch #1040 · pr-1123 rework');
+        assert.equal(a.key, 'pr-1123', 'the PR is the finer anchor');
+        assert.equal(a.leg, 'rework');
+    });
+
+    test('unresolvable title (Jira-key family) yields a null key — never a wrong key', function() {
+        var reporter = loadReporter();
+        var a = reporter.parseRunAnchor('agents/bug_development.json : TS-1307 : bug_development');
+        assert.equal(a.key, null);
+        assert.equal(a.pr, null);
+        assert.equal(a.issue, null);
+    });
+
+    test('empty / absent title yields a null key', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.parseRunAnchor('').key, null);
+        assert.equal(reporter.parseRunAnchor(null).key, null);
+    });
+});
+
+// ── gh-1108 — the keyed tokens projection (UT-prod-1/2) ──────────────────────
+
+suite('aiTeammateTokenUsageReporter buildTokensMap (gh-1108 UT-prod)', function() {
+
+    function row(over) {
+        return Object.assign({
+            runId: '1', createdAt: '2026-10-13T10:00:00Z',
+            agent: 'story_development', ticketKey: '',
+            title: 'teammate: workflow_dispatch #1040 dev',
+            readTokens: 1000, writeTokens: 500, cachedTokens: 900
+        }, over || {});
+    }
+
+    test('maps runs to pr-N rows; a multi-row key keeps every leg (2+ items)', function() {
+        var reporter = loadReporter();
+        var map = reporter.buildTokensMap([
+            row({ title: 'teammate: workflow_dispatch #1040 · pr-1123 review',
+                  agent: 'pr_review', createdAt: '2026-10-13T09:00:00Z',
+                  readTokens: 2000, writeTokens: 300, cachedTokens: 1500 }),
+            row({ title: 'teammate: workflow_dispatch #1040 · pr-1123 rework',
+                  agent: 'pr_rework', createdAt: '2026-10-13T11:00:00Z',
+                  readTokens: 3000, writeTokens: 700, cachedTokens: 2500 }),
+            row()
+        ]);
+        assert.equal(map['pr-1123'].length, 2, 'both PR legs ride the same key');
+        assert.equal(map['issue-1040'].length, 1);
+    });
+
+    test('row shape is the printf contract the tick normalizes', function() {
+        var reporter = loadReporter();
+        var map = reporter.buildTokensMap([row({
+            title: 'teammate: workflow_dispatch #1040 · pr-1123 review',
+            agent: 'pr_review', createdAt: '2026-10-13T09:00:00Z',
+            readTokens: 2000, writeTokens: 300, cachedTokens: 1500 })]);
+        assert.deepEqual(map['pr-1123'], [{
+            leg: 'review', at: '2026-10-13T09:00:00Z',
+            prompt: 2000, completion: 300, total: 2300,
+            cacheRead: 1500, model: ''
+        }]);
+    });
+
+    test('unresolvable run yields NO row (never a wrong key)', function() {
+        var reporter = loadReporter();
+        var map = reporter.buildTokensMap([
+            row({ title: 'agents/bug_development.json : TS-1307 : bug_development',
+                  readTokens: 999999, writeTokens: 999999 }),
+            row({ title: '', agent: '' })
+        ]);
+        assert.deepEqual(map, {}, 'an unanchorable run is dropped, not mis-keyed');
+    });
+
+    test('agent basename recovers the leg when the title carries none', function() {
+        var reporter = loadReporter();
+        var map = reporter.buildTokensMap([
+            row({ title: 'teammate: assigned #1040', agent: 'pr_rework' }),
+            row({ title: 'teammate: assigned #1041', agent: 'story_development' }),
+            row({ title: 'teammate: assigned #1042', agent: 'pr_review' })
+        ]);
+        assert.equal(map['issue-1040'][0].leg, 'rework');
+        assert.equal(map['issue-1041'][0].leg, 'dev');
+        assert.equal(map['issue-1042'][0].leg, 'review');
+    });
+
+    test('rows sort by at ascending inside a key', function() {
+        var reporter = loadReporter();
+        var map = reporter.buildTokensMap([
+            row({ runId: '2', createdAt: '2026-10-13T11:00:00Z' }),
+            row({ runId: '1', createdAt: '2026-10-13T09:00:00Z' })
+        ]);
+        assert.equal(map['issue-1040'][0].at, '2026-10-13T09:00:00Z');
+        assert.equal(map['issue-1040'][1].at, '2026-10-13T11:00:00Z');
+    });
+
+    test('retention: rows older than the window drop, keep-per-key caps the tail', function() {
+        var reporter = loadReporter();
+        var rows = [];
+        for (var i = 1; i <= 5; i++) {
+            rows.push(row({ runId: String(i), agent: 'pr_review',
+                title: 'teammate: workflow_dispatch #1040 · pr-1123 review',
+                createdAt: '2026-10-' + (10 + i) + 'T10:00:00Z' }));
+        }
+        rows.push(row({ runId: '9', createdAt: '2026-09-01T10:00:00Z' })); // stale
+        var map = reporter.buildTokensMap(rows, { now: '2026-10-16T10:00:00Z',
+            windowDays: 14, keepPerKey: 3 });
+        assert.equal(map['pr-1123'].length, 3, 'capped to the newest 3');
+        assert.equal(map['pr-1123'][0].at, '2026-10-13T10:00:00Z');
+        assert.equal(map['pr-1123'][2].at, '2026-10-15T10:00:00Z');
+    });
+
+    test('rows outside the 14d window are dropped entirely', function() {
+        var reporter = loadReporter();
+        var map = reporter.buildTokensMap(
+            [row({ createdAt: '2026-09-01T10:00:00Z' })],
+            { now: '2026-10-16T10:00:00Z', windowDays: 14, keepPerKey: 40 });
+        assert.deepEqual(map, {});
+    });
+
+    test('numbers only: the serialized map carries no log text and no URLs', function() {
+        var reporter = loadReporter();
+        var json = JSON.stringify(reporter.buildTokensMap([
+            row({ url: 'https://example.test/run/1' })
+        ]));
+        assert.notContains(json, 'http', 'no URLs beyond the state snapshot');
+        assert.notContains(json, 'rawTokensLine', 'no raw log excerpts');
+        assert.notContains(json, 'resumeStages', 'no log metadata');
+    });
+
+    test('empty / null rows produce an empty map', function() {
+        var reporter = loadReporter();
+        assert.deepEqual(reporter.buildTokensMap([]), {});
+        assert.deepEqual(reporter.buildTokensMap(null), {});
+    });
+});
+
+// ── gh-1108 — the publish step (IT-pub-1): keyed map → factory-data branch ───
+
+suite('aiTeammateTokenUsageReporter publishTokensMap (gh-1108 IT-pub-1)', function() {
+
+    var MAP = { 'pr-31': [{ leg: 'review', at: '2026-10-13T09:00:00Z',
+        prompt: 2000, completion: 300, total: 2300, cacheRead: 1500, model: '' }] };
+
+    function stubGhPut(state, map) {
+        state.puts += 1;
+        if (state.puts <= (map.failPuts || 0)) {
+            state.failed += 1;
+            throw new Error('gh: 409 sha was not supplied');
+        }
+        return { output: '' };
+    }
+
+    function stubGhSha(map) {
+        if (map.sha == null) throw new Error('gh: Not Found (404)');
+        return { output: map.sha };
+    }
+
+    function stubGhBody(map) {
+        if (map.body == null) throw new Error('gh: Not Found (404)');
+        return { output: map.body };
+    }
+
+    function stubGhCommand(state, map, cmd) {
+        if (cmd.indexOf('-X PUT') !== -1) return stubGhPut(state, map);
+        if (cmd.indexOf('--jq .sha') !== -1) return stubGhSha(map);
+        if (cmd.indexOf('base64 -d') !== -1) return stubGhBody(map);
+        return { output: '' }; // bootstrap ref POST
+    }
+
+    function publishExec(map) {
+        // map: { sha: '…', body: '…', failPuts: N } — failPuts PUTs throw
+        // before succeeding, mirroring the Contents API 409 dance between
+        // concurrent publishers.
+        var state = { commands: [], puts: 0, failed: 0 };
+        return {
+            state: state,
+            exec: function (args) {
+                var cmd = String((args && args.command) || args || '');
+                state.commands.push(cmd);
+                return stubGhCommand(state, map, cmd);
+            }
+        };
+    }
+
+    function embeddedJson(putCommand) {
+        var marker = "printf %s '";
+        var start = putCommand.indexOf(marker);
+        var end = putCommand.indexOf("' | base64", start);
+        return JSON.parse(putCommand.substring(start + marker.length, end));
+    }
+
+    test('first publish: bootstraps the branch, PUTs the keyed JSON at the exact asset path', function() {
+        var reporter = loadReporter();
+        var stub = publishExec({});
+        var res = reporter.publishTokensMap(MAP, { repo: 'o/r', asset: 'agents-tokens.json' },
+            { exec: stub.exec, log: function () {} });
+        assert.equal(res.status, 'published');
+        assert.equal(res.path, 'data/agents-tokens.json');
+        var put = stub.state.commands.filter(function (c) { return c.indexOf('-X PUT') !== -1; })[0];
+        assert.ok(put.indexOf('repos/o/r/contents/data/agents-tokens.json ') !== -1,
+            'PUT hits data/agents-tokens.json');
+        assert.contains(put, '-f branch=factory-data');
+        assert.deepEqual(embeddedJson(put), MAP, 'the branch file IS the keyed map');
+        var boot = stub.state.commands[0];
+        assert.contains(boot, 'git/refs -f ref=refs/heads/factory-data', 'branch bootstrap first');
+    });
+
+    test('update: the existing-file sha rides the PUT', function() {
+        var reporter = loadReporter();
+        var stub = publishExec({ sha: 'abc123' });
+        var res = reporter.publishTokensMap(MAP, { repo: 'o/r', asset: 'agents-tokens.json' },
+            { exec: stub.exec, log: function () {} });
+        assert.equal(res.status, 'published');
+        var put = stub.state.commands.filter(function (c) { return c.indexOf('-X PUT') !== -1; })[0];
+        assert.contains(put, "-f sha='abc123'");
+    });
+
+    test('PUT conflict refetches and retries; exhaustion gives up without throwing', function() {
+        var reporter = loadReporter();
+        var retry = publishExec({ failPuts: 1 });
+        var ok = reporter.publishTokensMap(MAP, { repo: 'o/r', asset: 'agents-tokens.json' },
+            { exec: retry.exec, log: function () {} });
+        assert.equal(ok.status, 'published');
+        assert.equal(ok.attempts, 2);
+
+        var dead = publishExec({ failPuts: 99 });
+        var gaveUp = reporter.publishTokensMap(MAP, { repo: 'o/r', asset: 'agents-tokens.json' },
+            { exec: dead.exec, log: function () {} });
+        assert.equal(gaveUp.status, 'gave-up');
+        assert.equal(gaveUp.attempts, 3, 'default 3 attempts, then honest surrender');
+    });
+
+    test('empty map skips with ZERO gh traffic (never erase the previous file)', function() {
+        var reporter = loadReporter();
+        var stub = publishExec({});
+        var res = reporter.publishTokensMap({}, { repo: 'o/r', asset: 'agents-tokens.json' },
+            { exec: stub.exec, log: function () {} });
+        assert.equal(res.status, 'skipped');
+        assert.equal(res.reason, 'no-rows');
+        assert.equal(stub.state.commands.length, 0);
+    });
+
+    test('asset defaults to <repoName>-tokens.json (fetchPreviousState derivation)', function() {
+        var reporter = loadReporter();
+        var stub = publishExec({});
+        var res = reporter.publishTokensMap(MAP, { repo: 'o/coolwidgets' },
+            { exec: stub.exec, log: function () {} });
+        assert.equal(res.path, 'data/coolwidgets-tokens.json');
+    });
+
+    test('missing repo skips — nothing to publish against', function() {
+        var reporter = loadReporter();
+        var stub = publishExec({});
+        var res = reporter.publishTokensMap(MAP, {}, { exec: stub.exec, log: function () {} });
+        assert.equal(res.status, 'skipped');
+        assert.equal(stub.state.commands.length, 0);
+    });
+
+    test('AC1: the published map fed to buildFactoryState lands on cards in the normTokenRow contract shape', function() {
+        var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+        var reworkLatchModule = loadModule('js/common/reworkLatch.js', makeRequire({}), {});
+        var fsModule = loadModule('js/factoryState.js',
+            makeRequire({
+                './common/machineAuthor.js': machineAuthorModule,
+                './common/reworkLatch.js': reworkLatchModule
+            }), {});
+        var reporter = loadReporter();
+        function row2(title, agent, at, read, write, cached) {
+            return { runId: '1', createdAt: at, agent: agent, title: title,
+                readTokens: read, writeTokens: write, cachedTokens: cached };
+        }
+        var map = reporter.buildTokensMap([
+            row2('teammate: workflow_dispatch #1040 · pr-31 review', 'pr_review',
+                '2026-10-13T09:00:00Z', 2000, 300, 1500)
+        ]);
+        var st = fsModule.buildFactoryState({
+            repoInfo: { owner: 'o', repo: 'r' }, now: '2026-10-13T13:10:00Z',
+            prs: [{ number: 31, title: 't', labels: [],
+                head: { ref: 'b', sha: 's' }, user: { login: 'bot' },
+                created_at: '2026-10-13T06:00:00Z' }],
+            runs: [], tokens: map
+        });
+        var tokens = st.lanes.pr_created[0].tokens;
+        assert.equal(tokens.length, 1);
+        assert.deepEqual(Object.keys(tokens[0]).sort(),
+            ['at', 'cacheRead', 'completion', 'leg', 'model', 'prompt', 'total'],
+            'exactly the normTokenRow contract, nothing more');
+        assert.equal(tokens[0].prompt, 2000);
+        assert.equal(tokens[0].completion, 300);
+        assert.equal(tokens[0].total, 2300);
+        assert.equal(tokens[0].cacheRead, 1500);
+        assert.equal(tokens[0].model, null, 'logs carry no model id — honest unknown');
+    });
+});
+
+// ── gh-1108 — deployment wiring (AC3): asset isolation is a CONFIG fact ──────
+
+suite('gh-1108 deployment wiring (AC3)', function() {
+
+    test('machine-sm.yml statePublish carries tokensAsset agents-tokens.json, never fa-tokens.json', function() {
+        var yml = file_read({ path: '.github/workflows/machine-sm.yml' });
+        assert.ok(yml, 'machine-sm.yml readable');
+        var m = /state-publish:\s*'([^']+)'/.exec(yml);
+        assert.ok(m, 'state-publish payload present');
+        var cfg = JSON.parse(m[1]);
+        assert.equal(cfg.tokensAsset, 'agents-tokens.json',
+            'the agents tick resolves ITS asset — asset isolation (AC3)');
+        assert.notContains(yml, 'fa-tokens.json',
+            'data/fa-tokens.json is never consulted by this deployment');
+    });
+
+    test('the producer config publishes the same asset', function() {
+        var cfg = JSON.parse(file_read({ path: 'ai_teammate_token_usage_reporter.json' }));
+        var custom = cfg.params.jobParams.customParams;
+        assert.equal(custom.tokensAsset, 'agents-tokens.json',
+            'producer and tick must agree on the asset name');
+        assert.equal(custom.publishTokens, true, 'publish path is wired on');
+    });
+});
+
+suite('gh-1108 action wiring — publish rides the scan', function() {
+
+    test('action publishes the keyed map when publishTokens is set', function() {
+        var writes = [];
+        var execCalls = [];
+        var reporter = loadReporter({
+            file_write: function (o) { writes.push(o); },
+            github_list_workflow_runs: function () {
+                return JSON.stringify({ total_count: 1, workflow_runs: [{
+                    id: 77, status: 'completed', conclusion: 'success',
+                    created_at: '2026-10-13T09:00:00Z',
+                    run_started_at: '2026-10-13T09:00:00Z',
+                    updated_at: '2026-10-13T10:00:00Z',
+                    display_title: 'teammate: workflow_dispatch #1040 · pr-1123 review',
+                    html_url: 'https://example.test/run/77', run_number: 5
+                }] });
+            },
+            github_get_workflow_run_logs: function () {
+                return 'fa-tokens: {"sessionId":"s","segment":1,"input":200,"output":300,"cacheRead":150,"source":"reported"}';
+            },
+            cli_execute_command: function (args) {
+                var cmd = String((args && args.command) || '');
+                execCalls.push(cmd);
+                if (cmd.indexOf('-X PUT') !== -1) return { output: '' };
+                if (cmd.indexOf('--jq .sha') !== -1) throw new Error('gh: Not Found (404)');
+                return { output: '' };
+            }
+        });
+        var res = reporter.action({ jobParams: { customParams: {
+            workspace: 'o', repository: 'r',
+            publishTokens: true, tokensAsset: 'agents-tokens.json',
+            tokensNow: '2026-10-16T10:00:00Z'
+        } } });
+        assert.equal(res.success, true);
+        assert.ok(res.tokens, 'publish summary rides the action result');
+        assert.equal(res.tokens.status, 'published');
+        assert.equal(res.tokens.path, 'data/agents-tokens.json');
+        assert.equal(res.tokens.rowCount, 1);
+        var keyed = writes.filter(function (w) {
+            return w.path === 'outputs/token_usage/agents-tokens.json';
+        })[0];
+        assert.ok(keyed, 'local keyed copy written next to the reports');
+        var map = JSON.parse(keyed.content);
+        assert.ok(map['pr-1123'] && map['pr-1123'][0].prompt === 200 &&
+            map['pr-1123'][0].cacheRead === 150, 'keyed rows carry the run usage');
+        assert.ok(execCalls.some(function (c) {
+            return c.indexOf('data/agents-tokens.json') !== -1 && c.indexOf('-X PUT') !== -1;
+        }), 'the branch PUT hits the exact asset path');
+    });
+
+    test('action skips the publish entirely when publishTokens is unset', function() {
+        var execCalls = [];
+        var reporter = loadReporter({
+            cli_execute_command: function (args) {
+                execCalls.push(String((args && args.command) || ''));
+                return { output: '' };
+            }
+        });
+        var res = reporter.action({ jobParams: { customParams: {
+            cacheOnly: true, repository: 'o/r'
+        } } });
+        assert.equal(res.success, true);
+        assert.equal(res.tokens, undefined, 'no tokens key when the knob is off');
+        assert.equal(execCalls.length, 0, 'zero gh traffic without the knob');
+    });
+});
+
+suite('gh-1108 publish hardening — decorative by contract', function() {
+
+    test('no exec transport skips without throwing', function() {
+        var reporter = loadReporter();
+        var res = reporter.publishTokensMap(
+            { 'pr-31': [{ leg: 'dev', at: 't', prompt: 1, completion: 2,
+                total: 3, cacheRead: 0, model: '' }] },
+            { repo: 'o/r', asset: 'agents-tokens.json' },
+            { exec: null, log: function () {} });
+        assert.equal(res.status, 'skipped');
+        assert.equal(res.reason, 'no-exec');
+    });
+
+    test('a failing local keyed copy never blocks the branch publish', function() {
+        var execCalls = [];
+        var reporter = loadReporter({
+            file_write: function () { throw new Error('disk full'); },
+            cli_execute_command: function (args) {
+                var cmd = String((args && args.command) || '');
+                execCalls.push(cmd);
+                if (cmd.indexOf('-X PUT') !== -1) return { output: '' };
+                if (cmd.indexOf('--jq .sha') !== -1) throw new Error('gh: Not Found (404)');
+                return { output: '' };
+            }
+        });
+        var res = reporter.publishKeyedTokens(
+            { publishTokens: true, workspace: 'o', repository: 'r',
+              tokensAsset: 'agents-tokens.json' },
+            { outputDir: 'outputs/token_usage' },
+            [{ runId: '1', createdAt: '2026-10-13T09:00:00Z', agent: 'pr_review',
+               title: 'teammate: workflow_dispatch #1040 · pr-1123 review',
+               readTokens: 10, writeTokens: 20, cachedTokens: 5 }]);
+        assert.ok(res, 'publish summary returned');
+        assert.equal(res.status, 'published');
+        assert.ok(execCalls.some(function (c) {
+            return c.indexOf('-X PUT') !== -1;
+        }), 'the branch publish still ran');
+    });
+});
+
+suite('gh-1108 asset default — the derivation path', function() {
+
+    test('publishKeyedTokens derives <repoName>-tokens.json when the knob is omitted', function() {
+        var writes = [];
+        var reporter = loadReporter({
+            file_write: function (o) { writes.push(o); },
+            cli_execute_command: function (args) {
+                var cmd = String((args && args.command) || '');
+                if (cmd.indexOf('-X PUT') !== -1) return { output: '' };
+                if (cmd.indexOf('--jq .sha') !== -1) throw new Error('gh: Not Found (404)');
+                return { output: '' };
+            }
+        });
+        var res = reporter.publishKeyedTokens(
+            { publishTokens: true, workspace: 'o', repository: 'coolwidgets' },
+            { outputDir: 'outputs/token_usage' },
+            [{ runId: '1', createdAt: '2026-10-13T09:00:00Z', agent: 'pr_review',
+               title: 'teammate: workflow_dispatch #1040 · pr-31 review',
+               readTokens: 10, writeTokens: 20, cachedTokens: 5 }]);
+        assert.equal(res.status, 'published');
+        assert.equal(res.asset, 'coolwidgets-tokens.json',
+            'fetchPreviousState-style derivation, not a fixed cross-factory asset');
+        assert.ok(writes.some(function (w) {
+            return w.path === 'outputs/token_usage/coolwidgets-tokens.json';
+        }), 'the local keyed copy rides the derived asset name');
+    });
+});
+
+suite('aiTeammateTokenUsageReporter extraction characterization (gh-1078)', function() {
+
+    test('extractTokenUsage returns null for null, empty and tokenless logs', function() {
+        var reporter = loadReporter();
+
+        assert.equal(reporter.extractTokenUsage(null), null);
+        assert.equal(reporter.extractTokenUsage(''), null);
+        assert.equal(reporter.extractTokenUsage('just a plain log line'), null);
+    });
+
+    test('extractTokenUsage tolerates empty lines interleaved with content', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            '',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100 • 50 (cached)',
+            '',
+            '[INFO] CommandLineUtils - Tokens    ↑ 2k • ↓ 200 • 60 (cached)',
+            ''
+        ].join('\n'));
+
+        assert.notEqual(usage, null);
+        assert.equal(usage.samples, 2);
+        assert.equal(usage.readTokens, 3000);
+        assert.equal(usage.writeTokens, 300);
+        assert.equal(usage.cachedTokens, 110);
+    });
+
+    test('bare --resume marker marks resume without a feedback loop stage', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            './scripts/run-agent.sh --resume --ticket TS-1',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100'
+        ].join('\n'));
+
+        assert.equal(usage.resumeDetected, true);
+        assert.equal(usage.feedbackLoopCount, 0);
+        assert.deepEqual(usage.resumeStages, []);
+        assert.equal(usage.rateLimitRetryCount, 0);
+    });
+
+    test('run-agent.sh --continue marker marks resume without a feedback loop stage', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            './scripts/run-agent.sh --continue',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100'
+        ].join('\n'));
+
+        assert.equal(usage.resumeDetected, true);
+        assert.equal(usage.feedbackLoopCount, 0);
+        assert.deepEqual(usage.resumeStages, []);
+    });
+
+    test('feedback loop line takes precedence over the --resume marker check', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            'Feedback loop: resuming agent for review_comments attempt 2/3 --resume',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100'
+        ].join('\n'));
+
+        assert.equal(usage.resumeDetected, true);
+        assert.equal(usage.feedbackLoopCount, 1);
+        assert.deepEqual(usage.resumeStages, ['review_comments 2/3']);
+    });
+
+    test('generic rate limit wording marks detection without a retry count', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            "You've hit your rate limit. Limit resets at 17:00 UTC",
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100'
+        ].join('\n'));
+
+        assert.equal(usage.rateLimitDetected, true);
+        assert.equal(usage.rateLimitRetryCount, 0);
+    });
+
+    test('limit reset wording marks detection without a retry count', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            'rate limit reset in 42 minutes',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100'
+        ].join('\n'));
+
+        assert.equal(usage.rateLimitDetected, true);
+        assert.equal(usage.rateLimitRetryCount, 0);
+    });
+
+    test('counts every timeout marker variant across the log', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            'Command failed (exit code 124): ./agents/scripts/run-agent.sh',
+            'The command timed out after 30 minutes',
+            'cli_execute_command hit the command timeout of 1800s',
+            'timeout guard killed the runaway process',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100'
+        ].join('\n'));
+
+        assert.equal(usage.timeoutCount, 4);
+        assert.equal(usage.samples, 1);
+    });
+
+    test('samples without any Requests line keep empty request metadata', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage('[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100');
+
+        assert.notEqual(usage, null);
+        assert.equal(usage.requests, 0);
+        assert.equal(usage.requestTier, '');
+        assert.equal(usage.requestDuration, '');
+    });
+
+    test('non-fa samples merge the most recent Requests line, fa samples never do', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            '[INFO] CommandLineUtils - Requests  3 Premium (11m 0s)',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100',
+            '[INFO] CommandLineUtils - Requests  4 Pro (12m 0s)',
+            'fa-tokens: {"sessionId":"s9","segment":1,"input":500,"output":50,"cacheRead":10,"requests":2,"source":"reported"}'
+        ].join('\n'));
+
+        assert.equal(usage.attempts.length, 2);
+        assert.equal(usage.attempts[0].requests, 3);
+        assert.equal(usage.attempts[0].requestTier, 'Premium');
+        assert.equal(usage.attempts[1].requests, 2);
+        assert.equal(usage.attempts[1].requestTier, '');
+        assert.equal(usage.attempts[1].attemptIndex, 2);
+    });
+
+    test('source is empty when only CommandLineUtils samples exist', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage('[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100');
+
+        assert.equal(usage.source, '');
+    });
+
+    test('single resume with one sample still flags resumeDetected from the marker', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            'Feedback loop: resuming agent for polish attempt 1/2',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100'
+        ].join('\n'));
+
+        assert.equal(usage.resumeDetected, true);
+        assert.equal(usage.samples, 1);
+        assert.equal(usage.resumeStages.length, 1);
+    });
+
+    test('resumeDetected falls back to true for multi-sample logs without markers', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100',
+            '[INFO] CommandLineUtils - Tokens    ↑ 2k • ↓ 200'
+        ].join('\n'));
+
+        assert.equal(usage.resumeDetected, true);
+        assert.equal(usage.feedbackLoopCount, 0);
+        assert.deepEqual(usage.resumeStages, []);
+    });
+
+    test('processRunLogs sleeps between downloads when logDownloadSleepMs is set', function() {
+        var reporter = loadReporter({
+            github_get_workflow_run_logs: function() {
+                return '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100';
+            }
+        });
+        var run = { id: 9, run_number: 1, created_at: '2026-06-01T00:00:00Z', html_url: 'https://example.test/run/9' };
+        var meta = { title: 'agents/x.json : TS-1 : TS-1', configFile: 'agents/x.json', agent: 'x', ticketKey: 'TS-1' };
+        var state = {
+            rows: [],
+            attemptRows: [],
+            cache: { version: 1, entries: {} },
+            downloadedLogs: 1,
+            cacheHits: 0,
+            stoppedByDownloadLimit: false,
+            verbose: false,
+            cachePath: 'cache.json'
+        };
+        var options = { useCache: false, cacheWriteEvery: 25, logDownloadSleepMs: '5', maxLogDownloads: null };
+
+        var startedAt = Date.now();
+        reporter.processRunLogs({}, run, '9', meta, 60, '1m 0s', state, options);
+        var elapsed = Date.now() - startedAt;
+
+        assert.equal(state.downloadedLogs, 2);
+        assert.equal(state.rows.length, 1);
+        assert.equal(state.stoppedByDownloadLimit, false);
+        assert.equal(elapsed >= 5, true, 'expected a >=5ms pause between downloads, got ' + elapsed + 'ms');
+    });
+
+    test('processRunLogs skips the sleep for the first download and for unparseable values', function() {
+        var reporter = loadReporter({
+            github_get_workflow_run_logs: function() {
+                return '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100';
+            }
+        });
+        var run = { id: 9, run_number: 1, created_at: '2026-06-01T00:00:00Z', html_url: 'https://example.test/run/9' };
+        var meta = { title: 'agents/x.json : TS-1 : TS-1', configFile: 'agents/x.json', agent: 'x', ticketKey: 'TS-1' };
+        var firstState = {
+            rows: [], attemptRows: [], cache: { version: 1, entries: {} },
+            downloadedLogs: 0, cacheHits: 0, stoppedByDownloadLimit: false, verbose: false, cachePath: 'cache.json'
+        };
+
+        var startedAt = Date.now();
+        reporter.processRunLogs({}, run, '9', meta, 60, '1m 0s', firstState, { useCache: false, cacheWriteEvery: 25, logDownloadSleepMs: '5000', maxLogDownloads: null });
+        assert.equal(Date.now() - startedAt < 1000, true, 'first download must not sleep');
+
+        var junkState = {
+            rows: [], attemptRows: [], cache: { version: 1, entries: {} },
+            downloadedLogs: 1, cacheHits: 0, stoppedByDownloadLimit: false, verbose: false, cachePath: 'cache.json'
+        };
+        startedAt = Date.now();
+        reporter.processRunLogs({}, run, '9', meta, 60, '1m 0s', junkState, { useCache: false, cacheWriteEvery: 25, logDownloadSleepMs: 'soon', maxLogDownloads: null });
+        assert.equal(Date.now() - startedAt < 1000, true, 'unparseable sleep value must not sleep');
+        assert.equal(junkState.downloadedLogs, 2);
+    });
+
+    test('processRunLogs checks maxLogDownloads before sleeping or downloading', function() {
+        var downloads = [];
+        var reporter = loadReporter({
+            github_get_workflow_run_logs: function(args) {
+                downloads.push(args.runId);
+                return '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100';
+            }
+        });
+        var run = { id: 9, run_number: 1, created_at: '2026-06-01T00:00:00Z', html_url: 'https://example.test/run/9' };
+        var meta = { title: 'agents/x.json : TS-1 : TS-1', configFile: 'agents/x.json', agent: 'x', ticketKey: 'TS-1' };
+        var state = {
+            rows: [], attemptRows: [], cache: { version: 1, entries: {} },
+            downloadedLogs: 2, cacheHits: 0, stoppedByDownloadLimit: false, verbose: false, cachePath: 'cache.json'
+        };
+        var options = { useCache: false, cacheWriteEvery: 25, logDownloadSleepMs: '5000', maxLogDownloads: 2 };
+
+        var startedAt = Date.now();
+        reporter.processRunLogs({}, run, '9', meta, 60, '1m 0s', state, options);
+
+        assert.equal(downloads.length, 0);
+        assert.equal(state.downloadedLogs, 2);
+        assert.equal(state.stoppedByDownloadLimit, true);
+        assert.equal(Date.now() - startedAt < 1000, true, 'limit check must precede the sleep');
+    });
+});
+
+suite('aiTeammateTokenUsageReporter extraction helpers (gh-1078)', function() {
+
+    test('newUsageTracking starts zeroed', function() {
+        var reporter = loadReporter();
+        assert.deepEqual(reporter.newUsageTracking(), {
+            lastRequests: null,
+            samples: [],
+            seenFaSegments: {},
+            resumeDetected: false,
+            resumeStages: [],
+            feedbackLoopCount: 0,
+            rateLimitRetryCount: 0,
+            rateLimitDetected: false,
+            timeoutCount: 0
+        });
+    });
+
+    test('parseResumeSignal classifies feedback loop, markers and clean lines', function() {
+        var reporter = loadReporter();
+
+        var feedback = reporter.parseResumeSignal('Feedback loop: resuming agent for rework attempt 2/4');
+        assert.equal(feedback.resumed, true);
+        assert.equal(feedback.feedbackStage, 'rework 2/4');
+
+        var bareResume = reporter.parseResumeSignal('./scripts/run-agent.sh --resume --ticket TS-1');
+        assert.equal(bareResume.resumed, true);
+        assert.equal(bareResume.feedbackStage, null);
+
+        var continueMarker = reporter.parseResumeSignal('./scripts/run-agent.sh --continue');
+        assert.equal(continueMarker.resumed, true);
+        assert.equal(continueMarker.feedbackStage, null);
+
+        var clean = reporter.parseResumeSignal('just a plain log line');
+        assert.equal(clean.resumed, false);
+        assert.equal(clean.feedbackStage, null);
+    });
+
+    test('parseRateLimitSignal separates retries from plain detection', function() {
+        var reporter = loadReporter();
+
+        assert.deepEqual(
+            reporter.parseRateLimitSignal('Copilot rate limit detected; retrying in 90s'),
+            { retry: true, detected: true }
+        );
+        assert.deepEqual(
+            reporter.parseRateLimitSignal("You've hit your rate limit. Limit resets at 17:00"),
+            { retry: false, detected: true }
+        );
+        assert.deepEqual(
+            reporter.parseRateLimitSignal('all good here'),
+            { retry: false, detected: false }
+        );
+    });
+
+    test('isTimeoutLine matches every marker variant', function() {
+        var reporter = loadReporter();
+
+        assert.equal(reporter.isTimeoutLine('failed with exit code 124'), true);
+        assert.equal(reporter.isTimeoutLine('the command timed out'), true);
+        assert.equal(reporter.isTimeoutLine('command timeout of 1800s'), true);
+        assert.equal(reporter.isTimeoutLine('timeout guard intervened'), true);
+        assert.equal(reporter.isTimeoutLine('completed successfully'), false);
+    });
+
+    test('applyLogSignals routes resume, rate limit and timeout onto the tracker', function() {
+        var reporter = loadReporter();
+        var tracking = reporter.newUsageTracking();
+
+        reporter.applyLogSignals(tracking, 'Feedback loop: resuming agent for polish attempt 1/2', ''.toLowerCase());
+        reporter.applyLogSignals(tracking, 'Copilot rate limit detected; retrying in 90s', 'copilot rate limit detected; retrying in 90s');
+        reporter.applyLogSignals(tracking, 'Command failed (exit code 124)', 'command failed (exit code 124)');
+        reporter.applyLogSignals(tracking, 'nothing notable', 'nothing notable');
+
+        assert.equal(tracking.resumeDetected, true);
+        assert.deepEqual(tracking.resumeStages, ['polish 1/2']);
+        assert.equal(tracking.feedbackLoopCount, 1);
+        assert.equal(tracking.rateLimitRetryCount, 1);
+        assert.equal(tracking.rateLimitDetected, true);
+        assert.equal(tracking.timeoutCount, 1);
+
+        var untouched = reporter.newUsageTracking();
+        reporter.applyLogSignals(untouched, 'nothing notable', 'nothing notable');
+        assert.equal(untouched.resumeDetected, false);
+        assert.equal(untouched.rateLimitDetected, false);
+        assert.equal(untouched.timeoutCount, 0);
+    });
+
+    test('isFaSegmentReplay dedupes by sessionId+segment and ignores segmentless lines', function() {
+        var reporter = loadReporter();
+        var tracking = reporter.newUsageTracking();
+
+        assert.equal(reporter.isFaSegmentReplay(tracking, { faSessionId: 's1', faSegment: 1 }), false);
+        assert.equal(reporter.isFaSegmentReplay(tracking, { faSessionId: 's1', faSegment: 1 }), true, 'same segment must replay');
+        assert.equal(reporter.isFaSegmentReplay(tracking, { faSessionId: 's1', faSegment: 2 }), false);
+        assert.equal(reporter.isFaSegmentReplay(tracking, { faSessionId: 's2', faSegment: 1 }), false);
+        assert.equal(reporter.isFaSegmentReplay(tracking, { faSessionId: '', faSegment: 1 }), false);
+        assert.equal(reporter.isFaSegmentReplay(tracking, { faSessionId: 's1', faSegment: null }), false);
+    });
+
+    test('appendUsageSample numbers attempts and merges only unsourced request metadata', function() {
+        var reporter = loadReporter();
+        var tracking = reporter.newUsageTracking();
+        tracking.lastRequests = { requests: 3, requestTier: 'Premium', requestDuration: '11m 0s' };
+
+        reporter.appendUsageSample(tracking, { readTokens: 100, writeTokens: 10 });
+        reporter.appendUsageSample(tracking, { readTokens: 200, writeTokens: 20, requests: 7, requestTier: 'Pro', requestDuration: '12m 0s' });
+
+        assert.equal(tracking.samples.length, 2);
+        assert.equal(tracking.samples[0].attemptIndex, 1);
+        assert.equal(tracking.samples[0].requests, 3);
+        assert.equal(tracking.samples[0].requestTier, 'Premium');
+        assert.equal(tracking.samples[1].attemptIndex, 2);
+        assert.equal(tracking.samples[1].requests, 7);
+        assert.equal(tracking.samples[1].requestTier, 'Pro');
+    });
+
+    test('collectUsageSamples walks lines end-to-end into samples', function() {
+        var reporter = loadReporter();
+        var tracking = reporter.newUsageTracking();
+        reporter.collectUsageSamples(tracking, [
+            'Feedback loop: resuming agent for rework attempt 1/2',
+            '[INFO] CommandLineUtils - Requests  2 Premium (5m 0s)',
+            '[INFO] CommandLineUtils - Tokens    ↑ 1k • ↓ 100',
+            'fa-tokens: {"sessionId":"s1","segment":1,"input":500,"output":50,"cacheRead":10,"requests":2,"source":"reported"}',
+            'fa-tokens: {"sessionId":"s1","segment":1,"input":500,"output":50,"cacheRead":10,"requests":2,"source":"reported"}'
+        ]);
+
+        assert.equal(tracking.samples.length, 2);
+        assert.equal(tracking.lastRequests.requests, 2);
+        assert.equal(tracking.resumeStages[0], 'rework 1/2');
+        assert.deepEqual(tracking.seenFaSegments, { 's1:1': true });
+    });
+
+    test('buildUsageAggregate returns null for empty samples and sums otherwise', function() {
+        var reporter = loadReporter();
+
+        assert.equal(reporter.buildUsageAggregate(reporter.newUsageTracking()), null);
+
+        var tracking = reporter.newUsageTracking();
+        reporter.appendUsageSample(tracking, { readTokens: 100, writeTokens: 10, cachedTokens: 5, reasoningTokens: 1, requests: 2, requestTier: 'Pro', requestDuration: '3m 0s' });
+        reporter.appendUsageSample(tracking, { readTokens: 200, writeTokens: 20, cachedTokens: 6, reasoningTokens: 2, requests: 3, requestTier: 'Premium', requestDuration: '4m 0s', source: 'reported' });
+        var aggregate = reporter.buildUsageAggregate(tracking);
+
+        assert.equal(aggregate.readTokens, 300);
+        assert.equal(aggregate.writeTokens, 30);
+        assert.equal(aggregate.cachedTokens, 11);
+        assert.equal(aggregate.reasoningTokens, 3);
+        assert.equal(aggregate.requests, 5);
+        assert.equal(aggregate.samples, 2);
+        assert.equal(aggregate.source, 'reported');
+        assert.equal(aggregate.requestTier, 'Premium', 'final sample wins');
+        assert.equal(aggregate.requestDuration, '4m 0s');
+    });
+
+    test('buildUsageAggregate derives source as empty, single or mixed', function() {
+        var reporter = loadReporter();
+
+        var noSource = reporter.newUsageTracking();
+        reporter.appendUsageSample(noSource, { readTokens: 1 });
+        assert.equal(reporter.buildUsageAggregate(noSource).source, '');
+
+        var single = reporter.newUsageTracking();
+        reporter.appendUsageSample(single, { readTokens: 1, source: 'estimated' });
+        assert.equal(reporter.buildUsageAggregate(single).source, 'estimated');
+
+        var mixed = reporter.newUsageTracking();
+        reporter.appendUsageSample(mixed, { readTokens: 1, source: 'reported' });
+        reporter.appendUsageSample(mixed, { readTokens: 2, source: 'estimated' });
+        assert.equal(reporter.buildUsageAggregate(mixed).source, 'mixed');
+    });
+
+    test('buildUsageAggregate flags resume from markers or multiple samples', function() {
+        var reporter = loadReporter();
+
+        var markerResume = reporter.newUsageTracking();
+        reporter.applyLogSignals(markerResume, 'run-agent.sh --continue', 'run-agent.sh --continue');
+        reporter.appendUsageSample(markerResume, { readTokens: 1 });
+        assert.equal(reporter.buildUsageAggregate(markerResume).resumeDetected, true);
+
+        var multiSample = reporter.newUsageTracking();
+        reporter.appendUsageSample(multiSample, { readTokens: 1 });
+        reporter.appendUsageSample(multiSample, { readTokens: 2 });
+        assert.equal(reporter.buildUsageAggregate(multiSample).resumeDetected, true);
+    });
+});
+
+suite('aiTeammateTokenUsageReporter sleepMilliseconds helpers (gh-1078)', function() {
+
+    function loadReporterWithJava(javaGlobal) {
+        return loadReporter({ Java: javaGlobal });
+    }
+
+    test('parseSleepMilliseconds clamps unparseable and non-positive values to 0', function() {
+        var reporter = loadReporter();
+
+        assert.equal(reporter.parseSleepMilliseconds('5'), 5);
+        assert.equal(reporter.parseSleepMilliseconds(250), 250);
+        assert.equal(reporter.parseSleepMilliseconds('12px'), 12);
+        assert.equal(reporter.parseSleepMilliseconds('abc'), 0);
+        assert.equal(reporter.parseSleepMilliseconds(0), 0);
+        assert.equal(reporter.parseSleepMilliseconds(-3), 0);
+        assert.equal(reporter.parseSleepMilliseconds(null), 0);
+        assert.equal(reporter.parseSleepMilliseconds(undefined), 0);
+    });
+
+    test('hasJavaThread is true only when the Java interop exposes type', function() {
+        assert.equal(loadReporterWithJava({ type: function() { return {}; } }).hasJavaThread(), true);
+        assert.equal(loadReporterWithJava({}).hasJavaThread(), false);
+    });
+
+    test('sleepMilliseconds routes positive durations to Thread.sleep under the Java interop', function() {
+        var sleeps = [];
+        var reporter = loadReporterWithJava({
+            type: function(name) {
+                return { sleep: function(ms) { sleeps.push({ name: name, ms: ms }); } };
+            }
+        });
+
+        reporter.sleepMilliseconds('7');
+        reporter.sleepMilliseconds(0);
+        reporter.sleepMilliseconds(-5);
+        reporter.sleepMilliseconds('soon');
+
+        assert.equal(sleeps.length, 1);
+        assert.equal(sleeps[0].name, 'java.lang.Thread');
+        assert.equal(sleeps[0].ms, 7);
+    });
+
+    test('sleepMilliseconds busy-waits when the Java interop is unavailable', function() {
+        var reporter = loadReporter();
+
+        var startedAt = Date.now();
+        reporter.sleepMilliseconds(2);
+        var elapsed = Date.now() - startedAt;
+        assert.equal(elapsed >= 2, true, 'expected a >=2ms busy wait, got ' + elapsed + 'ms');
+    });
+
+    test('sleepMilliseconds busy-waits when Java.type is absent even with Java defined', function() {
+        var reporter = loadReporterWithJava({});
+
+        var startedAt = Date.now();
+        reporter.sleepMilliseconds(2);
+        var elapsed = Date.now() - startedAt;
+        assert.equal(elapsed >= 2, true, 'expected a >=2ms busy wait fallback, got ' + elapsed + 'ms');
     });
 });

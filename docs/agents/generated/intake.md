@@ -7,7 +7,7 @@ Product intake: analyzes a raw request against existing epics and stories, then 
 Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
 - `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
-- `issuePlanning` (GitHub) — `{ devLabel, plannedLabel, maxParallel }`, defaults `agent:dev`, `ai_planned`, `1`; shared with the GitHub SM rule `plan-advance`.
+- `issuePlanning` (GitHub) — `{ devLabel, devAssignee, plannedLabel, maxParallel }`, defaults `agent:dev`, `null`, `ai_planned`, `1`; shared with the GitHub SM rule `plan-advance`. When `devAssignee` is set (e.g. `'ai-teammate'`), starting a sub-issue also assigns it to that user.
 
 ## GitHub
 

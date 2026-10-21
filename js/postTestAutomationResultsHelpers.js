@@ -133,6 +133,60 @@ function decidePublishStrategy(localSha, remoteSha, mergeBase) {
     return 'diverged';
 }
 
+/**
+ * Ticket identity for action() logging/comments (gh-1083): the key, the
+ * operator-facing summary (fields.summary degrading to the key) and the
+ * project key (part before the first dash).
+ */
+function resolveTicketIdentity(params) {
+    var ticketKey = params.ticket.key;
+    var ticketSummary = params.ticket.fields ? params.ticket.fields.summary : ticketKey;
+    return {
+        ticketKey: ticketKey,
+        ticketSummary: ticketSummary,
+        projectKey: ticketKey.split('-')[0]
+    };
+}
+
+/**
+ * Which route the git stage of action() takes (gh-1083): a new commit means
+ * create the PR, a no-op sync means skip straight to the outcome move, a
+ * failed git result means reset to Backlog. Mirrors the original
+ * `gitResult.success && !gitResult.noNewCommit` /
+ * `else if (gitResult.noNewCommit)` / `else` chain EXACTLY — note the second
+ * condition intentionally ignores `success`, and a null gitResult throws
+ * here exactly like the original field access threw in action().
+ */
+function decideGitStageRoute(gitResult) {
+    if (gitResult.success && !gitResult.noNewCommit) return 'create-pr';
+    if (gitResult.noNewCommit) return 'no-new-commit';
+    return 'git-failure';
+}
+
+/**
+ * Dispatch params for action() (gh-1083): the jobParams body when wrapped,
+ * the params object itself otherwise.
+ */
+function resolveJobParams(params) {
+    return params.jobParams || params;
+}
+
+/**
+ * Where the run works (gh-1083): the configured workingDir (null = repo root)
+ * and the test-files path to stage (default testing/).
+ */
+function resolveRunPaths(config, customParams) {
+    return {
+        workingDir: config.workingDir || null,
+        testFilesPath: customParams.testFilesGlob || 'testing/'
+    };
+}
+
+/** The PASSED/FAILED completion-log word for the run outcome. */
+function decideOutcomeWord(passed) {
+    return passed ? 'PASSED' : 'FAILED';
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         parseOutcome: parseOutcome,
@@ -148,6 +202,11 @@ if (typeof module !== 'undefined' && module.exports) {
         buildErrorComment: buildErrorComment,
         buildPartialCommitMessage: buildPartialCommitMessage,
         decideTargetStatus: decideTargetStatus,
-        decidePublishStrategy: decidePublishStrategy
+        decidePublishStrategy: decidePublishStrategy,
+        resolveTicketIdentity: resolveTicketIdentity,
+        decideGitStageRoute: decideGitStageRoute,
+        resolveJobParams: resolveJobParams,
+        resolveRunPaths: resolveRunPaths,
+        decideOutcomeWord: decideOutcomeWord
     };
 }

@@ -20,21 +20,21 @@ function neverClosed() { return false; }
 suite('issuePlan — resolvePlanningConfig', function () {
     test('defaults apply without any config', function () {
         var cfg = loadIssuePlan().resolvePlanningConfig(null, null);
-        assert.deepEqual(cfg, { devLabel: 'agent:dev', plannedLabel: 'ai_planned', maxParallel: 1 });
+        assert.deepEqual(cfg, { devLabel: 'agent:dev', devAssignee: null, plannedLabel: 'ai_planned', maxParallel: 1 });
     });
 
     test('project config overrides the defaults and customParams override the project', function () {
         var cfg = loadIssuePlan().resolvePlanningConfig(
-            { issuePlanning: { devLabel: 'start-dev', maxParallel: 5 } },
-            { issuePlanning: { maxParallel: '3', plannedLabel: 'planned' } }
+            { issuePlanning: { devLabel: 'start-dev', devAssignee: 'bot-a', maxParallel: 5 } },
+            { issuePlanning: { maxParallel: '3', devAssignee: 'bot-b', plannedLabel: 'planned' } }
         );
-        assert.deepEqual(cfg, { devLabel: 'start-dev', plannedLabel: 'planned', maxParallel: 3 });
+        assert.deepEqual(cfg, { devLabel: 'start-dev', devAssignee: 'bot-b', plannedLabel: 'planned', maxParallel: 3 });
     });
 
     test('invalid values are ignored', function () {
         var cfg = loadIssuePlan().resolvePlanningConfig(
-            { issuePlanning: { devLabel: '  ', maxParallel: 0, plannedLabel: 7 } }, {});
-        assert.deepEqual(cfg, { devLabel: 'agent:dev', plannedLabel: 'ai_planned', maxParallel: 1 });
+            { issuePlanning: { devLabel: '  ', devAssignee: '  ', maxParallel: 0, plannedLabel: 7 } }, {});
+        assert.deepEqual(cfg, { devLabel: 'agent:dev', devAssignee: null, plannedLabel: 'ai_planned', maxParallel: 1 });
     });
 });
 
@@ -132,6 +132,9 @@ suite('issuePlan — decideNextSteps', function () {
         var ip = loadIssuePlan();
         assert.equal(ip.renderStartComment({ start: [view(2), view(3)] }, PLAN_CFG),
             'Starting #2, #3 (label `agent:dev`).');
+        assert.equal(ip.renderStartComment({ start: [view(2)] },
+            { devLabel: 'agent:dev', devAssignee: 'ai-teammate', plannedLabel: 'ai_planned', maxParallel: 1 }),
+            'Starting #2 (label `agent:dev`, assignee `ai-teammate`).');
         assert.contains(ip.renderCompleteComment({ total: 4 }), 'All 4 sub-issues');
     });
 });

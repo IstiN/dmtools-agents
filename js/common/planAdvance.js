@@ -29,7 +29,10 @@ function closedLookup(tracker, children) {
 }
 
 function startChildren(tracker, parentKey, decision, cfg) {
-    decision.start.forEach(function (child) { tracker.addLabel(child.key, cfg.devLabel); });
+    decision.start.forEach(function (child) {
+        tracker.addLabel(child.key, cfg.devLabel);
+        if (cfg && cfg.devAssignee) tracker.assignTo(child.key, cfg.devAssignee);
+    });
     tracker.postComment(parentKey, issuePlan.renderStartComment(decision, cfg));
 }
 
@@ -71,7 +74,8 @@ var DESCRIPTIONS = {
 /** One log line for a decision. */
 function describe(decision, cfg) {
     if (decision.type !== 'start') return DESCRIPTIONS[decision.type] || decision.type;
-    return 'starting ' + decision.start.map(function (c) { return c.key; }).join(', ') + ' +' + cfg.devLabel;
+    var suffix = ' +' + cfg.devLabel + (cfg && cfg.devAssignee ? ' @' + cfg.devAssignee : '');
+    return 'starting ' + decision.start.map(function (c) { return c.key; }).join(', ') + suffix;
 }
 
 if (typeof module !== 'undefined' && module.exports) {

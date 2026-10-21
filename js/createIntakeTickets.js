@@ -777,7 +777,7 @@ function postTokenUsage(ctx, params) {
 function finalizeIntakeTicket(ctx, results, params, planned) {
     postFinalComment(ctx, results, planned);
     addIntakeLabels(ctx);
-    assignAndMoveToInProgress(ctx);
+    if (!planned) assignAndMoveToInProgress(ctx);
     removeWipLabel(ctx);
     postTokenUsage(ctx, params);
 }

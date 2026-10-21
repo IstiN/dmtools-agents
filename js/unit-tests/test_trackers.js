@@ -1323,6 +1323,18 @@ suite('trackers.js getIssue / searchIssues (Jira-shaped reads)', function () {
         var t = make('jira', { jira_get_ticket: recorder('jira_get_ticket', JSON.stringify({ key: 'A-1', fields: { labels: ['x'] } })) });
         assert.equal(t.getIssue('A-1', ['labels']).key, 'A-1');
     });
+
+    test('UT-1126-1: adoSearchFields strips comment/comments/COMMENT sentinels while keeping Custom.Answer', function () {
+        var s = recorder('ado_search_by_wiql', JSON.stringify({ value: [] }));
+        make('ado', { ado_search_by_wiql: s }).searchIssues('q', {
+            fields: ['key', 'id', 'comment', 'comments', 'COMMENT', 'Custom.Answer']
+        });
+        var f = s.calls[0].fields;
+        assert.equal(f.indexOf('comment'), -1);
+        assert.equal(f.indexOf('comments'), -1);
+        assert.equal(f.indexOf('COMMENT'), -1);
+        assert.ok(f.indexOf('Custom.Answer') !== -1, 'preserves custom WIT field Custom.Answer');
+    });
 });
 
 suite('trackers.js — moveToStatusOrMark / stageFallback (agents#856)', function () {

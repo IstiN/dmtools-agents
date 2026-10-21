@@ -26,6 +26,9 @@ var gh = require('./common/githubHelpers.js');
 const commentMarkup = require('./common/commentMarkup.js');
 var reviewVerdicts = require('./common/reviewVerdicts.js');
 var reviewSpecClaims = require('./common/reviewSpecClaims.js');
+// The runtime's input folder name for a ticket (input/gh-N for a GitHub key): the Java runtime
+// passes params.inputFolderPath to pre-CLI actions only, so a post-action derives it.
+var ticketKeyShapes = require('./common/ticketKeyShapes.js');
 
 var RESUME_MARKER = 'outputs/.pr-review-missing-output-resume-attempted';
 
@@ -1373,16 +1376,26 @@ function resolveRepoInfo(config, scm) {
     return scm.getRemoteRepoInfo();
 }
 
-function readPRInfoMarkdown(inputFolderPath, ticketKey) {
+function readFolderPRInfo(inputFolder) {
     try {
-        var inputFolder = inputFolderPath || ('input/' + ticketKey);
         return file_read({
             path: inputFolder + '/pr_info.md'
-        });
+        }) || null;
     } catch (error) {
-        console.warn('Could not read PR info from input folder:', error);
         return null;
     }
+}
+
+// First pr_info.md along the folder chain: the folder the runtime passed, the Java runtime's
+// input/<inputFolderNameFor(key)>, then the legacy input/<ticketKey> (Dart and older runtimes).
+function readPRInfoMarkdown(inputFolderPath, ticketKey) {
+    var candidates = ticketKeyShapes.inputFolderCandidates(inputFolderPath, ticketKey);
+    for (var i = 0; i < candidates.length; i++) {
+        var prInfo = readFolderPRInfo(candidates[i]);
+        if (prInfo) return prInfo;
+    }
+    console.warn('Could not read PR info from any input folder: ' + candidates.join(', '));
+    return null;
 }
 
 function applyPRInfoMarkdown(prInfo, prAnchor, pr) {
@@ -2160,6 +2173,7 @@ if (typeof module !== 'undefined' && module.exports) {
         parsePRAnchor,
         resolveReviewTicketKey,
         parsePRInfoMarkdown,
+        readPRInfoMarkdown,
         normalizeRecommendation,
         normalizeIssueCounts,
         hasAnyOpenIssue,

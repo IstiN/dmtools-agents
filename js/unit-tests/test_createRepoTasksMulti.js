@@ -16,7 +16,7 @@ function makeModule(globals) {
 
     return loadModule(
         'js/createRepoTasksMulti.js',
-        makeRequire({ './config.js': configModule, './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), defaultGlobals) }),
+        makeRequire({ './config.js': configModule, './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'), './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), defaultGlobals) }),
         defaultGlobals
     );
 }

@@ -366,3 +366,185 @@ suite('validationLiveness fork-aware silent-update routing (gh-1070)', function 
         assert.ok(url.indexOf('${GH_TOKEN}') !== -1, 'the token rides the child env, never the source');
     });
 });
+
+// ── gh-1074: failure-surface stderr tail ─────────────────────────────────────
+// Live fa PR #1591: the fork silent-update push failed 3× and the run log
+// preserved only the BEGINNING of stderr ("Cloning into '…' / Updating
+// files: N%") — cli_execute_command's exception embeds the output head,
+// while git writes the decisive rejection ("remote: error: …",
+// "! [remote rejected] HEAD:branch (reason)") at the END. The silent-update
+// chain now tees its stderr to a side file; these helpers turn the capture
+// into the failure surface: the propagated error (UT-1), the one-line
+// rejection reason on the marker comment (UT-2/AC2), and the same secrets
+// hygiene the command line gets (UT-3/AC3).
+
+suite('validationLiveness silent-update stderr tail (gh-1074)', function () {
+
+    function longStderr(lines) {
+        var out = [];
+        for (var i = 1; i <= lines; i++) out.push('Updating files: ' + i + '%');
+        out.push("remote: error: GH006: Protected branch update failed for refs/heads/ai/gh-1591");
+        out.push('To https://github.com/YuryBY/dmtools-dart.git');
+        out.push(' ! [remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)');
+        out.push("error: failed to push some refs to 'https://github.com/YuryBY/dmtools-dart.git'");
+        return out.join('\n') + '\n';
+    }
+
+    test('UT-1: silentUpdateStderrTail keeps the LAST ~20 lines of a long stderr, not the head', function () {
+        var tail = live.silentUpdateStderrTail(longStderr(60));
+        var tailLines = tail.split('\n');
+        assert.equal(tailLines.length, 20, 'bounded to the last 20 lines');
+        assert.ok(tail.indexOf('Updating files: 1%') === -1, 'the head progress is dropped');
+        assert.ok(tail.indexOf('Updating files: 41%') === -1, 'lines older than the window are dropped');
+        assert.ok(tail.indexOf('[remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)') !== -1,
+            'the decisive rejection at the END is preserved');
+        assert.ok(tail.indexOf('Updating files: 60%') !== -1, 'the window boundary line is preserved');
+    });
+
+    test('silentUpdateStderrTail: short stderr passes through whole; CRLR line-endings normalize; empty → empty', function () {
+        assert.equal(live.silentUpdateStderrTail('only\nthree\nlines\n'), 'only\nthree\nlines');
+        assert.equal(live.silentUpdateStderrTail('a\r\nb\r\nc'), 'a\nb\nc');
+        assert.equal(live.silentUpdateStderrTail(''), '');
+        assert.equal(live.silentUpdateStderrTail(null), '');
+        assert.equal(live.silentUpdateStderrTail('x\ny', 1), 'y', 'maxLines overrides the default');
+    });
+
+    test('UT-2: silentUpdateRejectionReason extracts the [remote rejected] … (reason) fragment', function () {
+        var reason = live.silentUpdateRejectionReason(live.silentUpdateStderrTail(longStderr(60)));
+        assert.ok(reason.indexOf('[remote rejected]') !== -1, 'the rejection fragment is found');
+        assert.ok(reason.indexOf('(protected branch hook declined)') !== -1, 'the reason parenthetical is kept');
+        assert.ok(reason.indexOf('\n') === -1, 'one line');
+    });
+
+    test('UT-2: the remote: error line is the fallback when no [remote rejected] fragment exists', function () {
+        var reason = live.silentUpdateRejectionReason('Cloning into x\nremote: error: hook declined the push\n');
+        assert.ok(reason.indexOf('remote: error: hook declined the push') !== -1);
+        assert.equal(live.silentUpdateRejectionReason('Cloning into x\nUpdating files: 10%\n'), null,
+            'a progress-only tail carries no reason');
+        assert.equal(live.silentUpdateRejectionReason(null), null);
+        assert.equal(live.silentUpdateRejectionReason(''), null);
+    });
+
+    test('UT-3: redactSilentUpdateSecrets scrubs the token URL git echoes and token-shaped strings', function () {
+        // the token-shaped strings are assembled from split literals: the
+        // dev sandbox redacts contiguous token patterns in file writes
+        // (the repo's TOK convention — see smAgent's split-literal note)
+        var TOK = 'ghp_' + 'Nhz2Q1rN8ZsZv9mR2tK7wX4yP5bH3cD6fG8hJ9k';
+        var PAT = 'github' + '_pat_' + '11ABCDEFGH0klmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQR';
+        var scrubbed = live.redactSilentUpdateSecrets(
+            'To https://x-access-' + 'token:' + TOK + '@github.com/o/r.git\n' +
+            'fatal: token ' + TOK + ' leaked in hook output\n' +
+            'and a fine-grained ' + PAT + ' too\n');
+        assert.ok(scrubbed.indexOf(TOK) === -1, 'the raw token is gone');
+        assert.ok(scrubbed.indexOf(PAT) === -1, 'the fine-grained PAT is gone');
+        assert.ok(scrubbed.indexOf('x-access-token:[REDACTED]@') !== -1,
+            'the token URL collapses to the redacted credential form');
+        assert.ok(scrubbed.indexOf('ghp_') === -1, 'the ghp_ token shape is redacted');
+        var clean = live.redactSilentUpdateSecrets('remote: error: declined\n');
+        assert.equal(clean, 'remote: error: declined\n', 'clean text passes through untouched');
+    });
+
+    test('AC2: silentUpdateFailureLine appends the one-line reason and still round-trips through the counter', function () {
+        var line = live.silentUpdateFailureLine(2, '2026-10-19T05:51:00Z',
+            '[remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)');
+        assert.ok(line.indexOf('⚠️ silent-update failure — attempt 2 at 2026-10-19T05:51:00Z') === 0,
+            'the marker prefix is unchanged');
+        assert.ok(line.indexOf('[remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)') !== -1,
+            'the reason rides the same marker line');
+        var out = live.silentUpdateFailureCount([line]);
+        assert.deepEqual(out, { count: 2, newest: '2026-10-19T05:51:00Z' },
+            'the counting regex still parses the extended marker');
+        // absent reason → byte-identical to the pre-gh-1074 marker
+        assert.equal(live.silentUpdateFailureLine(1, '2026-10-17T19:14:00Z'),
+            '⚠️ silent-update failure — attempt 1 at 2026-10-17T19:14:00Z');
+        // a multi-line / oversized reason collapses to one bounded line
+        var noisy = live.silentUpdateFailureLine(1, '2026-10-19T05:51:00Z', 'line one\nline two');
+        assert.ok(noisy.indexOf('\n') === -1, 'the marker stays a single line');
+    });
+});
+
+// ── gh-1106: the workflows-permission rejection classifier ─────────────────
+// Live fa PR #1591 (2026-10-19 17:16Z): the fork silent-update push with the
+// silent token (github.token) is refused the moment the merge touches
+// `.github/workflows/*` — GITHUB_TOKEN can never gain that capability (no
+// `permissions:` key grants `workflows`), so the failure is deterministic
+// and gh-1070's "maintainer edits revoked" 3-strike trail mis-frames a
+// platform fact as an author decision. The classifier is the pure half: the
+// smAgent/provider wiring escalates exactly once with a workflow-write
+// token; anything NOT matching stays on the existing trails untouched.
+
+suite('validationLiveness workflows-permission rejection (gh-1106)', function () {
+    var live = loadModule('js/common/validationLiveness.js', makeRequire({}), {});
+
+    // The exact IstiN/flutter_agent_harness#1591 stderr tail shape (17:16Z):
+    // progress head, the decisive refusal at the END.
+    function appRejectionTail() {
+        var lines = [];
+        for (var i = 1; i <= 25; i++) lines.push('Updating files: ' + i + '%');
+        lines.push('remote: error: GH013: refusing to allow a GitHub App to create or update ' +
+            'workflow `build-mobile.yml` without `workflows` permission.');
+        lines.push('To https://github.com/YuryBY/flutter_agent_harness.git');
+        lines.push(' ! [remote rejected] HEAD -> fix/android-dap-home-sandbox (refusing to allow ' +
+            'a GitHub App to create or update workflow `.github/workflows/build-mobile.yml` ' +
+            'without `workflows` permission)');
+        lines.push("error: failed to push some refs to 'https://github.com/YuryBY/flutter_agent_harness.git'");
+        return lines.join('\n') + '\n';
+    }
+
+    test('UT-1 fixture: the exact #1591 App-App refusal classifies as workflows-permission', function () {
+        assert.equal(live.isWorkflowsPermissionRejection(appRejectionTail()), true);
+    });
+
+    test('the OAuth-App / classic-PAT variant (missing `workflow` scope) classifies too', function () {
+        var tail = 'remote: error: GH013: refusing to allow an OAuth App to create or update ' +
+            'workflow `ci.yml` without `workflow` scope.\n' +
+            ' ! [remote rejected] HEAD:main (refusing to allow an OAuth App to create or update ' +
+            'workflow `.github/workflows/ci.yml` without `workflow` scope)\n';
+        assert.equal(live.isWorkflowsPermissionRejection(tail), true);
+        assert.equal(live.isWorkflowsPermissionRejection(
+            'refusing to allow an OAuth App to create or update workflow `ci.yml` without `workflow` scope'), true,
+            'the bare gh API error line classifies as well');
+    });
+
+    test('REG-1 guard: unrelated rejections stay generic — the escalation is a targeted cure', function () {
+        assert.equal(live.isWorkflowsPermissionRejection(
+            ' ! [remote rejected] HEAD:ai/gh-1591 (protected branch hook declined)'), false);
+        assert.equal(live.isWorkflowsPermissionRejection(
+            'denied — edits revoked mid-flight'), false,
+            'E2: a genuine maintainer-edit revocation keeps the old gh-1070 path');
+        assert.equal(live.isWorkflowsPermissionRejection(
+            'fatal: could not read Username for \'https://github.com\': No such device'), false);
+        assert.equal(live.isWorkflowsPermissionRejection(''), false);
+        assert.equal(live.isWorkflowsPermissionRejection(null), false);
+        assert.equal(live.isWorkflowsPermissionRejection(undefined), false);
+    });
+
+    test('E4: a tail truncated BEFORE the marker phrase is generic (safe default)', function () {
+        // cli_execute_command embeds the output HEAD; a long clone progress
+        // log can push the refusal past the truncation point — no phrase,
+        // no classification, the failure stays on the old surface.
+        var truncated = appRejectionTail().split('\n').slice(0, 25).join('\n');
+        assert.equal(truncated.indexOf('refusing to allow'), -1, 'fixture sanity: the phrase is gone');
+        assert.equal(live.isWorkflowsPermissionRejection(truncated), false);
+    });
+
+    test('workflowWriteParkLine marks the parked head; workflowWriteParkMarked dedupes per head', function () {
+        var SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+        var line = live.workflowWriteParkLine(SHA, '2026-10-19T17:20:00Z');
+        assert.ok(line.indexOf('workflow-write park (gh-1106)') !== -1,
+            'the marker names the distinct reason');
+        assert.ok(line.indexOf('parked-head: ' + SHA) !== -1,
+            'the marker carries parked-head: <sha> — the gh-994 reset keys on it');
+        assert.equal(live.workflowWriteParkMarked([line, 'chatter'], SHA), true,
+            'the marker for THIS head is found');
+        assert.equal(live.workflowWriteParkMarked([line], 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'), false,
+            'a DIFFERENT head is not deduped — the new park event must post');
+        assert.equal(live.workflowWriteParkMarked([], SHA), false);
+        assert.equal(live.workflowWriteParkMarked(null, SHA), false);
+        // R5: multiple bodies, marker in the last one, mixed-case sha —
+        // a single-item scan can pass while multi-item logic is wrong.
+        var other = live.workflowWriteParkLine('cccccccccccccccccccccccccccccccccccccccc', '2026-10-19T17:21:00Z');
+        assert.equal(live.workflowWriteParkMarked(['x', other, line], SHA.toUpperCase()), true,
+            'multi-body scan finds the marker (sha compare is case-insensitive)');
+    });
+});

@@ -28,6 +28,7 @@ function fakeTracker(children, comments, others) {
     t.getComments = function() { return comments || []; };
     t.getTicket = function(key) { t.writes.push(['get', key]); return (others || {})[key] || { key: key, status: 'open' }; };
     t.addLabel = function(key, label) { t.writes.push(['label', key, label]); };
+    t.assignTo = function(key, user) { t.writes.push(['assign', key, user]); };
     t.postComment = function(key, text) { t.writes.push(['comment', key, text]); };
     return t;
 }
@@ -129,6 +130,20 @@ suite('planAdvance: next step of a planned parent', function() {
     test('describe gives one log line per decision', function() {
         var pa = loadPlanAdvance();
         assert.contains(pa.describe({ type: 'start', start: [child(14, 'open')] }, CFG), 'acme/widgets#14 +agent:dev');
+        assert.contains(pa.describe({ type: 'start', start: [child(14, 'open')] },
+            { devLabel: 'agent:dev', devAssignee: 'ai-teammate', plannedLabel: 'ai_planned', maxParallel: 1 }),
+            'acme/widgets#14 +agent:dev @ai-teammate');
         assert.contains(pa.describe({ type: 'unsupported', start: [] }, CFG), 'GitHub only');
+    });
+
+    test('when devAssignee is configured, starting a sub-issue also assigns it', function() {
+        var t = fakeTracker([child(14, 'open')]);
+        var cfgWithAssignee = { devLabel: 'agent:dev', devAssignee: 'ai-teammate', plannedLabel: 'ai_planned', maxParallel: 1 };
+        var d = run(t, cfgWithAssignee);
+        assert.equal(d.type, 'start');
+        assert.deepEqual(t.writes.filter(function(w) { return w[0] === 'assign'; }),
+            [['assign', 'acme/widgets#14', 'ai-teammate']]);
+        var comment = t.writes.filter(function(w) { return w[0] === 'comment'; })[0];
+        assert.contains(comment[2], 'assignee `ai-teammate`');
     });
 });

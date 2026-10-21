@@ -1,0 +1,10 @@
+2026-10-19T19:05:00.000Z Gate job — combined steps: crap4dart ratchet + dart analyze (one check, concatenated logs)
+##[group]Run crap4dart ratchet
+[PASS] method_complexity: 0 violations
+[FAIL] method_size: 1 violations in 5903 methods over their size limits
+   test/js/require_base_resolution_test.dart:13: main has 100 lines > max 60
+##[endgroup]
+##[group]Run dart analyze
+Analyzing project...
+ error • The method 'build' isn't defined • lib/widgets/foo_widget.dart:12:34 • undefined_method
+##[error]Process completed with exit code 1.

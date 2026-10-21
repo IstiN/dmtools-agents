@@ -684,3 +684,452 @@ suite('factoryReviewVerdict — applyReviewVerdict guards (round-3 rework)', fun
     assert.contains(prList, '\\\\b(closes|fixes|resolves)\\\\s+#' + NUMBER + '\\\\b');
   });
 });
+
+// ── gh-1101: approval on an already-green head kicks ONE SM tick ────────────
+suite('review verdict — gh-1101 SM tick on approval', function () {
+  var SHA = '1fbfd41a1fbfd41a1fbfd41a1fbfd41a1fbfd41a';
+  function kickRules(green, smLive) {
+    return [
+      ['headRefOid', 'out', SHA + '\n'],
+      ['actions/workflows/quality.yml/runs', 'out', green + '\n'],
+      ['run list', 'out', smLive + '\n'],
+      ['workflow run', 'out', 'ok']
+    ].concat(baseRules({ rollup: 'SUCCESS\n' }));
+  }
+  function smKicks(st) {
+    return st.commands.filter(function (c) { return c.indexOf('gh workflow run') === 0; });
+  }
+  function approve(rules, optsOver) {
+    var st = withParser(execStub(rules), contractLines({ decision: 'approve' }));
+    var r = rvModule.applyReviewVerdict(Object.assign(baseOpts(), optsOver || {}), ioStub(st));
+    return { st: st, r: r };
+  }
+
+  test('(d) approval with a green dispatched run on the head ⇒ exactly one SM tick', function () {
+    var x = approve(kickRules(1, 0));
+    assert.equal(x.r.status, 'approved');
+    assert.equal(x.r.smKicked, true);
+    assert.equal(smKicks(x.st).length, 1);
+    assert.contains(smKicks(x.st)[0], "'machine-sm.yml'");
+  });
+
+  test('SM tick already queued/running ⇒ no duplicate', function () {
+    var x = approve(kickRules(1, 1));
+    assert.equal(x.r.smKicked, false);
+    assert.equal(smKicks(x.st).length, 0);
+  });
+
+  test('no green run on the current head ⇒ no SM tick', function () {
+    var x = approve(kickRules(0, 0));
+    assert.equal(smKicks(x.st).length, 0);
+  });
+
+  test('configured smWorkflow / ciWorkflow are honored; smKick=false disables', function () {
+    var rules = [['actions/workflows/ci.yml/runs', 'out', '1\n']].concat(kickRules(0, 0));
+    var x = approve(rules, { smWorkflow: 'sm.yml', ciWorkflow: 'ci.yml' });
+    assert.equal(smKicks(x.st).length, 1);
+    assert.contains(smKicks(x.st)[0], "'sm.yml'");
+    var y = approve(kickRules(1, 0), { smKick: 'false' });
+    assert.equal(smKicks(y.st).length, 0);
+  });
+
+  test('SM liveness probe failure counts as live (never risk a duplicate)', function () {
+    var rules = [['run list', 'throw', 'boom']].concat(kickRules(1, 0));
+    var x = approve(rules);
+    assert.equal(smKicks(x.st).length, 0);
+  });
+
+  test('SM dispatch failure is tolerated', function () {
+    var rules = [['workflow run', 'throw', 'boom']].concat(kickRules(1, 0));
+    var x = approve(rules);
+    assert.equal(x.r.status, 'approved');
+    assert.equal(x.r.smKicked, false);
+  });
+});
+
+// ── gh-1079: applyReviewVerdict characterization ─────────────────────────────
+// Pins the currently-uncovered branches (entry defaults, unwrap/parse edge
+// contracts, legacy parser fallback, parser-env defaults, probe failure,
+// missing round_labels/diagnosis/maxRounds rendering, clock-less io, SM-kick
+// warn paths) BEFORE the handler extraction — green now, must stay green.
+
+suite('factoryReviewVerdict — applyReviewVerdict characterization (gh-1079)', function () {
+
+  // gh-1101 kick-world rules (suite-local copy — the original lives inside
+  // the gh-1101 suite): green dispatched run on the head, SM idle.
+  var KICK_SHA = '1fbfd41a1fbfd41a1fbfd41a1fbfd41a1fbfd41a';
+  function kickRules(green, smLive) {
+    return [
+      ['headRefOid', 'out', KICK_SHA + '\n'],
+      ['actions/workflows/quality.yml/runs', 'out', green + '\n'],
+      ['run list', 'out', smLive + '\n'],
+      ['workflow run', 'out', 'ok']
+    ].concat(baseRules({ rollup: 'SUCCESS\n' }));
+  }
+
+  test('applyReviewVerdict() with no arguments short-circuits to no-token, zero calls', function () {
+    var r = rvModule.applyReviewVerdict();
+    assert.deepEqual(r, { status: 'no-token' });
+
+    var st = execStub([]);
+    var r2 = rvModule.applyReviewVerdict(baseOpts({ ghToken: '' }), ioStub(st));
+    assert.deepEqual(r2, { status: 'no-token' });
+    assert.equal(st.commands.length, 0);
+  });
+
+  test('unwrap contract: absent/empty object output is empty, plain strings ride verbatim', function () {
+    assert.equal(rvModule.unwrap({}), '');
+    assert.equal(rvModule.unwrap(null), '');
+    assert.equal(rvModule.unwrap(undefined), '');
+    assert.equal(rvModule.unwrap({ output: '' }), '');
+    assert.equal(rvModule.unwrap({ stdout: 's' }), 's');
+    assert.equal(rvModule.unwrap('raw-string'), 'raw-string');
+    assert.equal(rvModule.unwrap(0), '');
+  });
+
+  test('parseVerdictContract(null/undefined) yields the all-default contract', function () {
+    var c = rvModule.parseVerdictContract(null);
+    assert.equal(c.decision, '');
+    assert.equal(c.source, '');
+    assert.equal(c.override, '');
+    assert.equal(c.blocking_markers, '');
+    assert.equal(c.rounds_done, 0);
+    assert.equal(c.next_round, 0);
+    assert.equal(c.escalate, false);
+    assert.equal(c.round_labels, '');
+    assert.equal(c.diagnosis, '');
+    assert.equal(rvModule.parseVerdictContract(undefined).decision, '');
+  });
+
+  test('pickVerdictSh: probe exec failure still falls back to the legacy tree', function () {
+    var st = execStub([["bash -c 'ls -1", 'throw', 'exploded']]);
+    var io = ioStub(st);
+    var r = rvModule.pickVerdictSh(baseOpts(), io);
+    assert.equal(r, STUB_DIR + '/setup/review-verdict.sh');
+    assert.contains(io.logs.join('\n'),
+      '→ verdict logic: legacy tree ' + r + ' (no pr_review pack loop/verdict.sh unpacked)');
+  });
+
+  test('pickVerdictSh: absent config/factoryRoot still resolve a (rootless) legacy path', function () {
+    var st = execStub([['bash -c', 'out', '\n']]);
+    var io = ioStub(st);
+    var r = rvModule.pickVerdictSh({}, io);
+    assert.equal(r, '/setup/review-verdict.sh');
+  });
+
+  test('parser env: MAX_ROUNDS empty when undefined; RUN_OUTPUT falls back to the sh default', function () {
+    var opts = baseOpts();
+    delete opts.maxRounds;
+    delete opts.runOutput;
+    var st = withParser(execStub(baseRules()), contractLines({ decision: 'rework' }));
+    var io = ioStub(st);
+    rvModule.applyReviewVerdict(opts, io);
+    var c = st.lastParserCmd;
+    assert.contains(c, "MAX_ROUNDS=''");
+    assert.contains(c, "RUN_OUTPUT='.dmtools/run-output.txt'");
+  });
+
+  test('probe failure (parser exec throws) → empty contract → unknown decision → LOUD path with no diagnosis', function () {
+    var rules = [['decide', 'throw', 'parser exploded']];
+    Array.prototype.push.apply(rules, baseRules());
+    var st = execStub(rules);
+    var io = ioStub(st);
+    var threw = null;
+    try { rvModule.applyReviewVerdict(baseOpts(), io); } catch (e) { threw = e; }
+    assert.ok(threw, 'probe failure degrades to unknown → the loud exit-1 path');
+    assert.contains(String(threw && threw.message || threw), 'review verdict missing');
+    assert.contains(io.logs.join('\n'), '→ diagnosis: none');
+    var commentCmds = st.commands.filter(function (c) { return c.indexOf('issue comment') !== -1; });
+    var bodyPath = commentCmds[0].replace(/^.*--body-file '/, '').replace(/'$/, '');
+    assert.contains(io.written[bodyPath], 'Per-source diagnosis: `n/a`');
+  });
+
+  test('parser chatter with NO decision line → unknown decision → the loud path too', function () {
+    var st = withParser(execStub(baseRules()), 'just chatter\nno keys here\n');
+    var io = ioStub(st);
+    var threw = null;
+    try { rvModule.applyReviewVerdict(baseOpts(), io); } catch (e) { threw = e; }
+    assert.ok(threw);
+    assert.contains(io.logs.join('\n'), '→ review decision: unknown (source=none, override=false, rounds_done=0)');
+  });
+
+  test('rework with an empty round_labels contract: only needs-human is removed', function () {
+    var st = withParser(execStub(baseRules()), contractLines({ decision: 'rework', roundLabels: '' }));
+    var io = ioStub(st);
+    var r = rvModule.applyReviewVerdict(baseOpts(), io);
+    assert.equal(r.status, 'rework');
+    var removes = st.commands.filter(function (c) { return c.indexOf('--remove-label') !== -1; });
+    assert.equal(removes.length, 1, 'no round labels in the contract → nothing else to strip');
+    assert.contains(removes[0], "--remove-label 'needs-human'");
+    assert.notContains(removes.join('\n'), 'rework-round');
+  });
+
+  test('rework with maxRounds undefined: the queue log renders an empty cap', function () {
+    var opts = baseOpts();
+    delete opts.maxRounds;
+    var st = withParser(execStub(baseRules()), contractLines({ decision: 'rework' }));
+    var io = ioStub(st);
+    rvModule.applyReviewVerdict(opts, io);
+    assert.contains(io.logs.join('\n'),
+      '→ labeled agent:rework (round 3/) — rework run queued (re-review follows automatically)');
+  });
+
+  test('escalate with maxRounds undefined: the comment renders an empty cap', function () {
+    var opts = baseOpts();
+    delete opts.maxRounds;
+    var st = withParser(execStub(baseRules()), contractLines({ decision: 'rework', escalate: 'true' }),
+      'thread summary line\n');
+    var io = ioStub(st);
+    var r = rvModule.applyReviewVerdict(opts, io);
+    assert.equal(r.status, 'escalated');
+    var commentCmds = st.commands.filter(function (c) { return c.indexOf('issue comment') !== -1; });
+    var bodyPath = commentCmds[0].replace(/^.*--body-file '/, '').replace(/'$/, '');
+    assert.contains(io.written[bodyPath],
+      '🛑 **Auto-rework loop capped** — 2 automatic rework rounds without an APPROVE verdict (cap: ). The machine stopped labeling `agent:rework`.');
+  });
+
+  test('approve path tolerates a clock-less io (new Date() clock, no crash)', function () {
+    var st = withParser(execStub(baseRules({ rollup: 'SUCCESS\n' })),
+      contractLines({ decision: 'approve' }));
+    var io = ioStub(st);
+    delete io.clock;
+    var r = rvModule.applyReviewVerdict(baseOpts(), io);
+    assert.equal(r.status, 'approved');
+    var adds = st.commands.filter(function (c) { return c.indexOf('--add-label') !== -1; });
+    assert.contains(adds.join('\n'), "--add-label 'pr_approved'");
+  });
+
+  test('SM dispatch failure with a non-Error throw warns via String(e)', function () {
+    var st = withParser(execStub(kickRules(1, 0)), contractLines({ decision: 'approve' }));
+    st.exec = (function (orig) {
+      return function (cmd) {
+        if (cmd.indexOf('gh workflow run') === 0) { throw 'plain-string-failure'; }
+        return orig(cmd);
+      };
+    })(st.exec);
+    var io = ioStub(st);
+    var r = rvModule.applyReviewVerdict(baseOpts(), io);
+    assert.equal(r.status, 'approved');
+    assert.equal(r.smKicked, false);
+    assert.contains(io.logs.join('\n'), '::warning::SM tick dispatch failed: plain-string-failure');
+  });
+
+  test('kickSmOnGreenHead works with a log-less io (default no-op logger)', function () {
+    var st = execStub(kickRules(1, 0));
+    var io = ioStub(st);
+    delete io.log;
+    var kicked = rvModule.kickSmOnGreenHead(baseOpts(), io, PR);
+    assert.equal(kicked, true);
+    assert.equal(st.commands.filter(function (c) { return c.indexOf('gh workflow run') === 0; }).length, 1);
+  });
+
+});
+
+// ── gh-1079: extracted verdict-handler helper contracts ─────────────────────
+// Direct pins for the pure pieces the characterization suite exercises
+// through applyReviewVerdict — they document the seams the refactor opened.
+
+suite('factoryReviewVerdict — extracted helper contracts (gh-1079)', function () {
+
+  function parseC(text) { return rvModule.parseVerdictContract(text); }
+  function baseCtx(over) {
+    over = over || {};
+    var ctx = {
+      log: function () {},
+      repo: REPO,
+      number: NUMBER,
+      labels: 'needs-human',
+      pr: PR,
+      prCommentsPath: '/tmp/rv-pr_comments.json',
+      issueCommentsPath: '/tmp/rv-issue_comments.json',
+      machineAuthor: 'machine-reviewer[bot]',
+      verdictSh: VERDICT_SH,
+      contract: parseC(contractLines({ decision: 'rework' })),
+      decision: 'rework'
+    };
+    if (over.contract) ctx.contract = over.contract;
+    if (over.decision) ctx.decision = over.decision;
+    return ctx;
+  }
+
+  test('verdictParserCommand: the full env contract with quoted payloads', function () {
+    var cmd = rvModule.verdictParserCommand(
+      { maxRounds: '2', runOutput: '.dmtools/run-output.txt' }, baseCtx());
+    assert.contains(cmd, "MAX_ROUNDS='2'");
+    assert.contains(cmd, "PR_REVIEW_JSON='outputs/pr_review.json'");
+    assert.contains(cmd, "PR_REVIEW_JSON_ALT='outputs/gh-42/pr_review.json'");
+    assert.contains(cmd, "RUN_OUTPUT='.dmtools/run-output.txt'");
+    assert.contains(cmd, "PR_COMMENTS_JSON='/tmp/rv-pr_comments.json'");
+    assert.contains(cmd, "ISSUE_COMMENTS_JSON='/tmp/rv-issue_comments.json'");
+    assert.contains(cmd, "MACHINE_AUTHOR='machine-reviewer[bot]'");
+    assert.contains(cmd, "ISSUE_LABELS='needs-human'");
+    assert.contains(cmd, "bash '" + VERDICT_SH + "' decide");
+  });
+
+  test('assessRollup: green / red / pending / blank-line / fetch-failure decisions', function () {
+    var logs = [];
+    var log = function (l) { logs.push(l); };
+    assert.equal(rvModule.assessRollup('SUCCESS\n', PR, log), 'green');
+    assert.contains(logs.join('\n'), '→ PR #' + PR + ' checks green');
+    assert.equal(rvModule.assessRollup('SKIPPED\nNEUTRAL\n', PR, log), 'green');
+    assert.equal(rvModule.assessRollup('FAILURE\n', PR, log), 'red');
+    assert.contains(logs.join('\n'), '::warning::PR #' + PR + ' checks FAILED — verdict not trusted, no label (a fresh dev/rework round must fix CI first)');
+    assert.equal(rvModule.assessRollup('PENDING\n', PR, log), 'pending');
+    assert.equal(rvModule.assessRollup('SUCCESS\nPENDING\n', PR, log), 'pending', 'any non-green conclusion keeps polling');
+    assert.equal(rvModule.assessRollup('SUCCESS\n\n', PR, log), 'green', 'blank lines are skipped, not counted as non-green');
+    assert.equal(rvModule.assessRollup('', PR, log), 'pending', 'fetch failure (`|| true` → empty) keeps polling');
+  });
+
+  test('buildEscalationCommentBody: the three body variants, byte-exact', function () {
+    assert.equal(
+      rvModule.buildEscalationCommentBody(2, '2', PR, 'thread summary line'),
+      '🛑 **Auto-rework loop capped** — 2 automatic rework rounds without an APPROVE verdict (cap: 2). The machine stopped labeling `agent:rework`.\n' +
+      '\n' +
+      '### Unresolved review threads on PR #' + PR + '\n' +
+      '\n' +
+      'thread summary line\n' +
+      '\n' +
+      '_If no threads are listed, the findings live in the PR general comments._\n' +
+      '\n' +
+      '**Next step (human):** fix the remaining findings directly and re-label `agent:review` for a fresh review — or re-label `agent:rework` to re-arm the agent loop with a fresh round cap.\n',
+      'the caller (applyEscalatedVerdict) strips trailing newlines before handing the summary over');
+    assert.equal(
+      rvModule.buildEscalationCommentBody(1, '3', PR, ''),
+      '🛑 **Auto-rework loop capped** — 1 automatic rework rounds without an APPROVE verdict (cap: 3). The machine stopped labeling `agent:rework`.\n' +
+      '\n' +
+      '### Unresolved review threads on PR #' + PR + '\n' +
+      '\n' +
+      '\n' +
+      '_If no threads are listed, the findings live in the PR general comments._\n' +
+      '\n' +
+      '**Next step (human):** fix the remaining findings directly and re-label `agent:review` for a fresh review — or re-label `agent:rework` to re-arm the agent loop with a fresh round cap.\n',
+      'empty summary → no summary block (the blank line after the header stays, as before)');
+    assert.equal(
+      rvModule.buildEscalationCommentBody(2, undefined, '', ''),
+      '🛑 **Auto-rework loop capped** — 2 automatic rework rounds without an APPROVE verdict (cap: ). The machine stopped labeling `agent:rework`.\n' +
+      '\n' +
+      '_No linked open PR found for this issue._\n' +
+      '\n' +
+      '**Next step (human):** fix the remaining findings directly and re-label `agent:review` for a fresh review — or re-label `agent:rework` to re-arm the agent loop with a fresh round cap.\n',
+      'no PR → the no-PR variant, undefined cap renders empty');
+  });
+
+  test('buildNoVerdictComment: diagnosis present and absent', function () {
+    assert.contains(rvModule.buildNoVerdictComment('pr_review.json=present'), 'Per-source diagnosis: `pr_review.json=present`');
+    assert.contains(rvModule.buildNoVerdictComment(''), 'Per-source diagnosis: `n/a`');
+  });
+
+  test('entryGuard: token gate first, then the numeric-NUMBER guard', function () {
+    var logs = [];
+    assert.deepEqual(rvModule.entryGuard({ ghToken: '', number: 'abc' }, { log: function (l) { logs.push(l); } }),
+      { status: 'no-token' });
+    assert.equal(logs.length, 1, 'the skip warning is logged once');
+    var threw = null;
+    try { rvModule.entryGuard({ ghToken: 't', number: '4 2' }, { log: function () {} }); } catch (e) { threw = e; }
+    assert.ok(threw, 'non-numeric NUMBER throws');
+    assert.contains(String(threw && threw.message || threw), 'review verdict: NUMBER must be numeric, got: 4 2');
+    assert.equal(rvModule.entryGuard({ ghToken: 't', number: '42' }, { log: function () {} }), null);
+  });
+
+  test('tryExec: unwraps success, returns the fallback on throw', function () {
+    var io = { exec: function (cmd) { if (cmd === 'bad') throw new Error('x'); return { output: 'out' }; } };
+    assert.equal(rvModule.tryExec(io, 'good', 'fb'), 'out');
+    assert.equal(rvModule.tryExec(io, 'bad', 'fb'), 'fb');
+  });
+
+  test('probeVerdictContract: parser output rides into the contract, decision defaults to unknown', function () {
+    var io = { exec: function () { return 'decision=rework\nescalate=true\nrounds_done=1\nnext_round=2\n'; } };
+    var probed = rvModule.probeVerdictContract({}, io, baseCtx());
+    assert.equal(probed.decision, 'rework');
+    assert.equal(probed.contract.escalate, true);
+    assert.equal(probed.contract.rounds_done, 1);
+
+    var quiet = { exec: function () { return 'no verdict chatter'; } };
+    var empty = rvModule.probeVerdictContract({}, quiet, baseCtx());
+    assert.equal(empty.decision, 'unknown', 'no decision key → unknown (the loud-path trigger)');
+  });
+
+  test('label primitives emit the exact gh commands (create/edit/comment order)', function () {
+    var cmds = [];
+    var written = {};
+    var io = {
+      exec: function (c) { cmds.push(c); if (c.indexOf('label create boom') !== -1) throw new Error('exists'); },
+      writeFile: function (p, c) { written[p] = c; },
+      tempFile: function (h) { return '/tmp/rv-' + h; }
+    };
+    var ctx = baseCtx({ contract: parseC('round_labels=rework-round-2 rework-round-3\n') });
+
+    rvModule.ensureLabel(io, ctx, 'boom', 'FF0000');
+    rvModule.ensureLabel(io, ctx, 'ok', 'B60205');
+    assert.equal(cmds.filter(function (c) { return c === "gh label create 'boom' --repo '" + REPO + "' --color 'FF0000' --force"; }).length, 1,
+      'the failed create is swallowed (idempotent), the command still rode the transport');
+
+    rvModule.stripRoundLabels(io, ctx);
+    var removes = cmds.filter(function (c) { return c.indexOf('--remove-label') !== -1; });
+    assert.equal(removes.length, 2);
+    assert.contains(removes[0], "--remove-label 'rework-round-2'");
+    assert.contains(removes[1], "--remove-label 'rework-round-3'");
+
+    rvModule.addLabel(io, ctx, 'agent:rework');
+    assert.contains(cmds[cmds.length - 1], "gh issue edit '42' --repo '" + REPO + "' --add-label 'agent:rework'");
+
+    rvModule.removeNeedsHumanQuietly(io, ctx);
+    assert.contains(cmds[cmds.length - 1], "gh issue edit '42' --repo '" + REPO + "' --remove-label 'needs-human'");
+
+    rvModule.postIssueComment(io, ctx, 'the body');
+    assert.equal(written['/tmp/rv-comment.md'], 'the body');
+    assert.contains(cmds[cmds.length - 1], "gh issue comment '42' --repo '" + REPO + "' --body-file '/tmp/rv-comment.md'");
+  });
+
+  test('waitForGreenChecks: red exits first, green breaks, deadline warns with bounded sleeps', function () {
+    var ctx = baseCtx({ decision: 'approve' });
+
+    var redIo = { exec: function () { return 'FAILURE\n'; }, log: function () {} };
+    assert.deepEqual(rvModule.waitForGreenChecks(redIo, ctx),
+      { status: 'ci-red', decision: 'approve', pr: PR });
+
+    var greenIo = { exec: function () { return 'SUCCESS\n'; }, log: function () {}, clock: function () { return new Date(0); } };
+    assert.equal(rvModule.waitForGreenChecks(greenIo, ctx), null);
+
+    var t = 0;
+    var sleeps = [];
+    var timeoutIo = {
+      exec: function () { return 'PENDING\n'; },
+      log: function () {},
+      clock: function () { return new Date(t += 300000); },
+      sleepMs: function (ms) { sleeps.push(ms); }
+    };
+    assert.deepEqual(rvModule.waitForGreenChecks(timeoutIo, ctx),
+      { status: 'ci-timeout', decision: 'approve', pr: PR });
+    assert.deepEqual(sleeps, [30000], 'exactly one 30s poll sleep before the deadline hit');
+  });
+
+  test('applyReworkVerdict dispatches on the escalate flag', function () {
+    var cmds = [];
+    function mkIo() {
+      return {
+        exec: function (c) { cmds.push(c); return 'thread summary line\n'; },
+        writeFile: function () {},
+        tempFile: function (h) { return '/tmp/rv-' + h; },
+        log: function () {}
+      };
+    }
+    var escalateCtx = baseCtx({
+      contract: parseC(contractLines({ decision: 'rework', escalate: 'true' })),
+      decision: 'rework'
+    });
+    var r = rvModule.applyReworkVerdict(baseOpts(), mkIo(), escalateCtx);
+    assert.equal(r.status, 'escalated');
+    assert.equal(cmds.filter(function (c) { return c.indexOf('api graphql') !== -1; }).length, 1,
+      'escalate path fetched the review threads');
+
+    cmds.length = 0;
+    var plainCtx = baseCtx({ decision: 'rework' });
+    var r2 = rvModule.applyReworkVerdict(baseOpts(), mkIo(), plainCtx);
+    assert.equal(r2.status, 'rework');
+    assert.equal(r2.nextRound, 3);
+    assert.equal(cmds.filter(function (c) { return c.indexOf('api graphql') !== -1; }).length, 0,
+      'plain rework never touches the threads query');
+  });
+
+});

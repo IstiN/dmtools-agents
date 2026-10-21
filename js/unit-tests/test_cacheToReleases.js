@@ -10,47 +10,61 @@
  * Uses: loadModule(), makeRequire(), assert, test(), suite()
  */
 
-function loadCacheToReleases(opts) {
-    opts = opts || {};
-    var uploadArtefactCalls = [];
-    var releaseArtefactsMock = {
-        buildTag: function(ticketKey, template) {
-            var t = (template || 'ai-{ticketKey}').replace(/\{ticketKey\}/g, ticketKey);
-            return t.toLowerCase().replace(/[^a-z0-9._/-]/g, '-');
-        },
-        buildReleaseName: function(ticketKey, template) {
-            return (template || '[AI] [{ticketKey}] Artefacts').replace(/\{ticketKey\}/g, ticketKey);
-        },
-        resolveTemplate: function(template, ticketKey) {
-            if (!template) return template;
-            return template.replace(/\{ticketKey\}/g, ticketKey);
-        },
-        resolveArtefactRepository: function(customParams) {
-            if (!customParams) return null;
-            var repo = customParams.artefactRepository || customParams.aiRepository || customParams.targetRepository;
-            if (!repo || !repo.owner || !repo.repo) return null;
-            return { owner: repo.owner, repo: repo.repo };
-        },
+// ── mock builders (gh-1085: named top-level factories keep every helper's
+//    complexity — and CRAP — small; the anonymous property callbacks count
+//    toward their enclosing factory, so each stays tiny) ────────────────────
+
+function fakeBuildTag(ticketKey, template) {
+    var t = (template || 'ai-{ticketKey}').replace(/\{ticketKey\}/g, ticketKey);
+    return t.toLowerCase().replace(/[^a-z0-9._/-]/g, '-');
+}
+
+function fakeBuildReleaseName(ticketKey, template) {
+    return (template || '[AI] [{ticketKey}] Artefacts').replace(/\{ticketKey\}/g, ticketKey);
+}
+
+function fakeResolveTemplate(template, ticketKey) {
+    if (!template) return template;
+    return template.replace(/\{ticketKey\}/g, ticketKey);
+}
+
+function fakeResolveArtefactRepository(customParams) {
+    if (!customParams) return null;
+    var repo = customParams.artefactRepository || customParams.aiRepository || customParams.targetRepository;
+    if (!repo || !repo.owner || !repo.repo) return null;
+    return { owner: repo.owner, repo: repo.repo };
+}
+
+function makeReleaseArtefactsMock(opts, uploadArtefactCalls) {
+    return {
+        buildTag: fakeBuildTag,
+        buildReleaseName: fakeBuildReleaseName,
+        resolveTemplate: fakeResolveTemplate,
+        resolveArtefactRepository: fakeResolveArtefactRepository,
         uploadArtefact: function(owner, repo, ticketKey, releaseConfig, asset, providerName) {
             uploadArtefactCalls.push({ owner: owner, repo: repo, ticketKey: ticketKey, asset: asset, providerName: providerName });
             if (opts.uploadArtefactImpl) return opts.uploadArtefactImpl(asset);
             return { success: true, releaseUrl: 'https://example.com/releases/ai-' + ticketKey.toLowerCase(), assetUrl: 'https://example.com/asset', error: null };
         }
     };
+}
 
-    var scmCalls = { listPrs: [], addComment: [] };
-    var scmMock = {
+function makeScmMock(opts, scmCalls) {
+    return {
         listPrs: function(state) {
             scmCalls.listPrs.push(state);
             return opts.prs || [];
         },
         addComment: function(prId, text) {
+            if (opts.addCommentThrows) throw new Error('comment API down');
             scmCalls.addComment.push({ prId: prId, text: text });
             return '{}';
         }
     };
+}
 
-    var configLoaderMock = {
+function makeConfigLoaderMock(opts, scmMock) {
+    return {
         loadProjectConfig: function(params) {
             return { scm: { provider: opts.scmProvider || 'github' } };
         },
@@ -58,10 +72,16 @@ function loadCacheToReleases(opts) {
             return scmMock;
         }
     };
+}
 
+function loadCacheToReleases(opts) {
+    opts = opts || {};
+    var uploadArtefactCalls = [];
+    var scmCalls = { listPrs: [], addComment: [] };
+    var scmMock = makeScmMock(opts, scmCalls);
     var requireFn = makeRequire({
-        './common/releaseArtefacts.js': releaseArtefactsMock,
-        './configLoader.js': configLoaderMock
+        './common/releaseArtefacts.js': makeReleaseArtefactsMock(opts, uploadArtefactCalls),
+        './configLoader.js': makeConfigLoaderMock(opts, scmMock)
     });
 
     var mod = loadModule('js/cacheToReleases.js', requireFn, {});
@@ -182,4 +202,154 @@ suite('cacheToReleases', function() {
         assert.equal(m._scmCalls.addComment.length, 0);
     });
 
+    // ── gh-1085 characterization: skip paths, per-asset guards, error edges ──
+
+    test('skips when assets are missing or empty (config without assets / empty list)', function() {
+        var m = loadCacheToReleases();
+        var noKey = m.action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: { customParams: { artefactRepository: { owner: 'O', repo: 'r' }, cacheToReleases: {} } }
+        });
+        var empty = loadCacheToReleases().action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: { customParams: { artefactRepository: { owner: 'O', repo: 'r' }, cacheToReleases: { assets: [] } } }
+        });
+        assert.ok(noKey.skipped);
+        assert.ok(empty.skipped);
+        assert.equal(m._uploadArtefactCalls.length, 0);
+    });
+
+    test('MULTI-ITEM: assets missing fromFolder or name are skipped with a warning; valid siblings still upload', function() {
+        var m = loadCacheToReleases({
+            uploadArtefactImpl: function(asset) {
+                return { success: true, releaseUrl: 'https://example.com/r/' + asset.name, error: null };
+            }
+        });
+        var result = m.action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: {
+                customParams: {
+                    artefactRepository: { owner: 'Org', repo: 'repo' },
+                    cacheToReleases: {
+                        assets: [
+                            { name: 'no-folder' },
+                            { fromFolder: 'outputs/{ticketKey}' },
+                            { fromFolder: 'outputs/{ticketKey}', name: 'good' }
+                        ]
+                    }
+                }
+            }
+        });
+        assert.equal(m._uploadArtefactCalls.length, 1, 'only the complete asset uploads');
+        assert.equal(m._uploadArtefactCalls[0].asset.name, 'good');
+        assert.equal(result.success, true);
+        assert.equal(result.results.length, 1);
+        assert.equal(result.releaseUrl, 'https://example.com/r/good');
+    });
+
+    test('postToPRComment skipped (with a warning) when targetRepository is not configured', function() {
+        var m = loadCacheToReleases({
+            prs: [{ number: 7, title: 'PROJ-1 fix', head: { ref: 'feature/proj-1' } }]
+        });
+        var result = m.action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: {
+                customParams: {
+                    artefactRepository: { owner: 'Org', repo: 'repo' },
+                    cacheToReleases: {
+                        assets: [{ fromFolder: 'a/{ticketKey}', name: 'a', postToPRComment: true }]
+                    }
+                }
+            }
+        });
+        assert.equal(m._scmCalls.listPrs.length, 0, 'no PR listing without a target repository');
+        assert.equal(m._scmCalls.addComment.length, 0);
+        assert.equal(result.success, true);
+    });
+
+    test('a failing PR comment is caught — the release itself still succeeds', function() {
+        var m = loadCacheToReleases({
+            addCommentThrows: true,
+            prs: [{ number: 42, title: 'PROJ-1 fix', head: { ref: 'feature/proj-1' } }]
+        });
+        var result = m.action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: {
+                customParams: {
+                    artefactRepository: { owner: 'Org', repo: 'repo' },
+                    targetRepository: { owner: 'Org', repo: 'repo' },
+                    cacheToReleases: {
+                        assets: [{ fromFolder: 'a/{ticketKey}', name: 'a', postToPRComment: true }]
+                    }
+                }
+            }
+        });
+        assert.equal(m._uploadArtefactCalls.length, 1);
+        assert.equal(result.success, true);
+        assert.equal(result.results.length, 1);
+        assert.equal(result.results[0].result.success, true);
+    });
+
+    test('a failed upload is reported per asset: releaseUrl stays null and successCount reflects failures', function() {
+        var m = loadCacheToReleases({
+            uploadArtefactImpl: function() {
+                return { success: false, releaseUrl: null, error: 'boom' };
+            }
+        });
+        var result = m.action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: {
+                customParams: {
+                    artefactRepository: { owner: 'Org', repo: 'repo' },
+                    cacheToReleases: {
+                        assets: [
+                            { fromFolder: 'a/{ticketKey}', name: 'a' },
+                            { fromFolder: 'b/{ticketKey}', name: 'b' }
+                        ]
+                    }
+                }
+            }
+        });
+        assert.equal(result.success, true, 'the action itself completes');
+        assert.equal(result.results.length, 2);
+        assert.equal(result.results[0].result.success, false);
+        assert.ok(!result.releaseUrl, 'no releaseUrl when every upload failed');
+    });
+
+    test('an uploadArtefact throw escapes the loop — action reports { success: false, error }', function() {
+        var m = loadCacheToReleases({
+            uploadArtefactImpl: function() { throw new Error('upload exploded'); }
+        });
+        var result = m.action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: {
+                customParams: {
+                    artefactRepository: { owner: 'Org', repo: 'repo' },
+                    cacheToReleases: { assets: [{ fromFolder: 'a/{ticketKey}', name: 'a' }] }
+                }
+            }
+        });
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'upload exploded');
+    });
+
+    test('PR matching prefers the title and falls back to the head ref (case-insensitive)', function() {
+        var m = loadCacheToReleases({
+            prs: [{ number: 5, title: 'unrelated', head: { ref: 'feature/PROJ-1-payload' } }]
+        });
+        m.action({
+            ticket: { key: 'PROJ-1' },
+            jobParams: {
+                customParams: {
+                    artefactRepository: { owner: 'Org', repo: 'repo' },
+                    targetRepository: { owner: 'Org', repo: 'repo' },
+                    cacheToReleases: {
+                        assets: [{ fromFolder: 'a/{ticketKey}', name: 'a', postToPRComment: true }]
+                    }
+                }
+            }
+        });
+        assert.equal(m._scmCalls.addComment.length, 1);
+        assert.equal(m._scmCalls.addComment[0].prId, 5);
+    });
 });

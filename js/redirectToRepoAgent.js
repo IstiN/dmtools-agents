@@ -35,51 +35,93 @@ function getTracker() {
     return _trackerInst;
 }
 
-function action(params) {
-    var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
-    var folder = actualParams.inputFolderPath || '';
-    var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams || {};
-    var targetAgentName = customParams.targetAgentName || 'story_development.json';
-    initTracker(null, customParams);
+// ── pure parse/build helpers (CRAP gate: each ≤ 8) ──────────────────────────
 
-    var ticket = params.ticket || actualParams.ticket;
+// Last path segment of the input folder — the ticket key container.
+function folderKey(folder) {
+    return (folder || '').split('/').pop() || '';
+}
+
+// customParams as seen by this action: jobParams win, then the params body.
+function customParamsOf(params, actualParams) {
+    return (params.jobParams && params.jobParams.customParams) || actualParams.customParams || {};
+}
+
+// CI run URL forwarded to the target agent for ticket↔run tracing.
+function ciRunUrlOf(params, actualParams) {
+    return actualParams.ciRunUrl || params.ciRunUrl || (params.jobParams && params.jobParams.ciRunUrl) || '';
+}
+
+// Everything action() needs to know about the incoming dmtools params.
+function resolveRunScope(params) {
+    var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
+    var customParams = customParamsOf(params, actualParams);
+    return {
+        actualParams: actualParams,
+        folder: actualParams.inputFolderPath || '',
+        customParams: customParams,
+        targetAgentName: customParams.targetAgentName || 'story_development.json',
+        agentsDir: customParams.repoAgentsDir || 'repo-agents',
+        ciRunUrl: ciRunUrlOf(params, actualParams)
+    };
+}
+
+// Ticket key: the ticket itself is authoritative, the folder is the fallback.
+function ticketKeyOf(ticket, folder) {
+    return (ticket && ticket.key) ? ticket.key : folderKey(folder);
+}
+
+// Summary string of a fetched ticket, '' when the shape is unexpected.
+function summaryOf(ticket) {
+    return (ticket && ticket.fields && ticket.fields.summary)
+        ? ticket.fields.summary.toString()
+        : '';
+}
+
+// [repo] tag parsed from the summary — null when absent or malformed.
+function repoTagOf(summary) {
+    if (!summary || summary.charAt(0) !== '[') return null;
+    var bracketEnd = summary.indexOf(']');
+    if (bracketEnd === -1) return null;
+    return summary.substring(1, bracketEnd).trim();
+}
+
+// The nested dmtools run command (— --debug keeps java-side logging visible).
+function buildRunCommand(agent, ticketKey, ciRunUrl) {
+    var command = 'dmtools --debug run "' + agent + '" --inputJql "key=' + ticketKey + '"';
+    if (ciRunUrl) {
+        command += ' --ciRunUrl "' + ciRunUrl + '"';
+    }
+    return command;
+}
+
+function action(params) {
+    var scope = resolveRunScope(params);
+    initTracker(null, scope.customParams);
+
+    var ticket = params.ticket || scope.actualParams.ticket;
     if (!ticket || !ticket.fields) {
-        var keyFromFolder = folder.split('/').pop() || '';
         try {
-            ticket = getTracker().getIssue(keyFromFolder);
+            ticket = getTracker().getIssue(folderKey(scope.folder));
         } catch (e) {
             console.error('redirectToRepoAgent: could not fetch ticket: ' + e);
             return false;
         }
     }
 
-    // ticket.key is the authoritative source — inputFolderPath may be empty when ticketContextDepth=0
-    var ticketKey = (ticket && ticket.key) ? ticket.key : (folder.split('/').pop() || '');
-
-    var summary = (ticket && ticket.fields && ticket.fields.summary)
-        ? ticket.fields.summary.toString()
-        : '';
-
-    var bracketEnd = summary.indexOf(']');
-    if (summary.charAt(0) !== '[' || bracketEnd === -1) {
+    var ticketKey = ticketKeyOf(ticket, scope.folder);
+    var summary = summaryOf(ticket);
+    var repoName = repoTagOf(summary);
+    if (!repoName) {
         console.error('redirectToRepoAgent: no [repo] tag found in summary: "' + summary + '"');
         return false;
     }
-    var repoName = summary.substring(1, bracketEnd).trim();
-    var agentsDir = customParams.repoAgentsDir || 'repo-agents';
-    var agent = agentsDir + '/' + repoName + '/' + targetAgentName;
+    var agent = scope.agentsDir + '/' + repoName + '/' + scope.targetAgentName;
 
     console.log('redirectToRepoAgent: ' + ticketKey + ' \u2192 ' + agent);
 
-    // Forward the CI run URL so the target agent traces its run to the ticket
-    var ciRunUrl = actualParams.ciRunUrl || params.ciRunUrl || (params.jobParams && params.jobParams.ciRunUrl) || '';
-    var command = 'dmtools --debug run "' + agent + '" --inputJql "key=' + ticketKey + '"';
-    if (ciRunUrl) {
-        command += ' --ciRunUrl "' + ciRunUrl + '"';
-    }
-
     try {
-        cli_execute_command({ command: command });
+        cli_execute_command({ command: buildRunCommand(agent, ticketKey, scope.ciRunUrl) });
     } catch (e) {
         console.error('redirectToRepoAgent: failed to run ' + agent + ': ' + e);
         return false;

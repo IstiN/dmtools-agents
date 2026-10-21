@@ -1,0 +1,7 @@
+Analyzing dart project...
+
+ error • The method 'build' isn't defined for the type 'FooWidget' • lib/widgets/foo_widget.dart:12:34 • undefined_method
+warning • Unused import: 'dart:developer' • lib/utils/legacy.dart:3:1 • unused_import
+ info • Don't use consecutive blank lines • lib/widgets/foo_widget.dart:15:3 • blank_line_check
+
+3 issues found.

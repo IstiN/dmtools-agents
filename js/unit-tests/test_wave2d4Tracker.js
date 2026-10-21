@@ -48,6 +48,7 @@ suite('wave2d4 tracker — recoverFailedTCBugStatus', function() {
                 return { jira: { statuses: { DONE: 'Done', BUG_TO_FIX: 'Bug To Fix' } } };
             } },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': d4Trackers(mocks)
         }), mocks);
     }
@@ -60,7 +61,7 @@ suite('wave2d4 tracker — recoverFailedTCBugStatus', function() {
         assert.deepEqual(d4Find(calls, 'ado_move_to_state')[0].args, { id: '222', state: 'Bug To Fix' });
         assert.equal(d4Find(calls, 'ado_remove_work_item_label').length, 3);
         assert.equal(d4Find(calls, 'ado_add_work_item_comment')[0].args.id, '222');
-        assert.contains(d4Find(calls, 'ado_search_by_wiql')[0].args.wiql, 'linkedIssues("222")');
+        assert.contains(d4Find(calls, 'ado_search_by_wiql')[0].args.wiql, 'FROM WorkItemLinks WHERE [Source].[System.Id] = 222');
     });
 });
 

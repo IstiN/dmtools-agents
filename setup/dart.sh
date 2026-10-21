@@ -6,8 +6,8 @@
 # they could not run `dart analyze/test/format` or `crap4dart check`, so they
 # could neither see nor verify quality-gate violations (CRAP / method_size /
 # format) and claimed success while violations stayed in place. Same pattern
-# as the golden-test Flutter toolchain for fa legs: the SDK is cached per
-# resolved version and exposed on PATH for the leg session, resolving the SAME
+# as the golden-test Flutter toolchain for dev/rework legs: the SDK is cached
+# per resolved version and exposed on PATH for the leg session, resolving the SAME
 # channel (and pinned version, when CI pins one) the checked-out repo's
 # quality workflow uses — the `dart-lang/setup-dart` step's `channel:`/`sdk:`
 # inputs in `.github/workflows/*.yml`. The SDK itself downloads from the same
@@ -19,7 +19,8 @@
 # an ancient binary shadow the requested toolchain forever.
 #
 # Usage:
-#   dart.sh [stable|beta|dev|<version>]  # default: dart-lang/setup-dart detection, else stable
+#   dart.sh [stable|beta|dev|<version>]  # default: .dart-version pin, else
+#                                        # dart-lang/setup-dart detection, else stable
 #   DART_VERSION=beta dart.sh
 #   DART_INSTALL_DIR=... dart.sh         # default: ~/.dart-sdk (SDK lands at <dir>/dart-sdk)
 #
@@ -28,6 +29,10 @@
 #       print the resolved target/URL/layout as key=value — no download
 #   dart.sh status
 #       print installed=<version from the dart --version banner> ('' when absent)
+#   dart.sh summary
+#       print the leg-summary line (gh-1137): `toolchain: dart <version>
+#       (CI: <pin>, match: yes/no)` — plus a loud warning line when the repo
+#       has no pin at all, and a n/a skip line on non-Dart repos. No download.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,6 +86,38 @@ channel_latest() {
     | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
 }
 
+# ── Version-file pin (gh-1137 step 1) ────────────────────────────────────────
+# The repo's own pin convention beats the CI workflow line: a one-token
+# .dart-version at the repo root (same muscle memory as .nvmrc/.java-version).
+# The first live token wins — comment and blank lines are skipped, inline
+# comments stripped, whitespace trimmed. Empty output = no pin.
+repo_version_pin() {
+  [ -f "${PWD}/.dart-version" ] || return 0
+  awk '{ sub(/#.*/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); if (NF) { print; exit } }' \
+    "${PWD}/.dart-version" 2>/dev/null
+}
+
+# ── Dart-repo gate (gh-1137) ─────────────────────────────────────────────────
+# The AUTO path (no explicit target anywhere) only makes sense on a repo that
+# actually has Dart code — a pure JS/Kotlin repo leg must not pull a ~215 MB
+# SDK it can never run. Echoes 1 (pubspec.yaml present) or 0.
+is_dart_repo() {
+  if [ -f "${PWD}/pubspec.yaml" ]; then
+    echo "1"
+  else
+    echo "0"
+  fi
+}
+
+# ── Loud stable-fallback warning (gh-1137 step 3) ────────────────────────────
+# A Dart repo with NEITHER a version-file pin NOR a dart-lang/setup-dart line
+# in CI resolves to stable — correct per contract, but local format/analyzer
+# output is then NOT CI truth. Say so, loudly, before any download starts.
+warn_unpinned_stable_fallback() {
+  echo "⚠️⚠️  Dart SDK: no version pin found (no .dart-version, no dart-lang/setup-dart sdk:/channel: in .github/workflows) — falling back to stable" >&2
+  echo "⚠️⚠️  LOCAL dart format/analyzer RESULTS MAY DIFFER FROM CI — pin the SDK (.dart-version or the CI workflow's setup-dart sdk: input) to make leg gates reproducible" >&2
+}
+
 # ── Quality-workflow detection ("same channel the repo's quality.yml uses") ──
 # Scan the checked-out repo's workflows for the dart-lang/setup-dart step and
 # read its with: inputs. Echoes "found|sdk|channel" (any field may be empty).
@@ -122,20 +159,23 @@ EOF
 usage() {
   cat <<'EOF'
 Usage: dart.sh [stable|beta|dev|latest|<version>]
-            # default target: the repo's quality.yml dart-lang/setup-dart
-            # channel/sdk detection, else stable
+            # default target: the repo's .dart-version pin, else the
+            # quality.yml dart-lang/setup-dart channel/sdk detection, else
+            # stable (+ loud warning) — skipped entirely on non-Dart repos
        DART_VERSION=<channel|version> dart.sh
        dart.sh plan [stable|beta|dev|latest|<version>]   # network-free preview
        dart.sh status                                    # installed version + dir
+       dart.sh summary        # leg-summary line: toolchain: dart <v> (CI: <pin>, match: yes|no)
 EOF
 }
 
 # ── Target resolution ─────────────────────────────────────────────────────────
-# Precedence (sets TARGET/MODE/CHANNEL/VERSION/SOURCE):
+# Precedence (sets TARGET/MODE/CHANNEL/VERSION/SOURCE) — gh-1137 order:
 #   1. explicit argument           → source=argument
 #   2. DART_VERSION env            → source=environment
-#   3. quality.yml sdk:/channel:   → source=quality workflow
-#   4. stable                      → source=default
+#   3. .dart-version repo pin      → source=version file   (ticket step 1)
+#   4. quality.yml sdk:/channel:   → source=quality workflow (ticket step 2)
+#   5. stable                      → source=default (+ LOUD warning, ticket step 3)
 # A pinned version rides the DETECTED channel (setup-dart keeps using the
 # channel for a full version), so leg output keeps matching CI exactly.
 resolve_target() {
@@ -152,6 +192,17 @@ resolve_target() {
   det="$(quality_detection)"
   found="${det%%|*}"; det="${det#*|}"
   det_sdk="${det%%|*}"; det_channel="${det#*|}"
+
+  if [ -z "${TARGET}" ]; then
+    # gh-1137 step 1: the repo's own version-file pin outranks the CI workflow
+    # line — a repo that pins .dart-version means it, even before CI does.
+    local vp
+    vp="$(repo_version_pin)"
+    if [ -n "${vp}" ]; then
+      TARGET="${vp}"
+      SOURCE="version file"
+    fi
+  fi
 
   if [ -z "${TARGET}" ]; then
     [ "${found}" = "1" ] && SOURCE="quality workflow"
@@ -277,6 +328,13 @@ export_dart_env() {
 do_install() {
   echo "🎯 Dart SDK [target=${TARGET:-<detect>} mode=${MODE} channel=${CHANNEL} os=${OS} arch=${ARCH} ci=$(detect_ci)]"
 
+  # gh-1137 step 3: SOURCE=default on a Dart repo means NO pin anywhere —
+  # stable is about to be installed (or kept). Warn BEFORE any resolution or
+  # download so the warning survives even a failed transfer.
+  if [ "${SOURCE}" = "default" ] && [ "$(is_dart_repo)" = "1" ]; then
+    warn_unpinned_stable_fallback
+  fi
+
   # Resolve the concrete version for channel mode — it drives BOTH the
   # version-aware cache check below and the cache key.
   local resolved=""
@@ -321,6 +379,17 @@ do_install() {
     echo "🔄 Dart SDK ${have} installed but ${resolved:-${CHANNEL}} requested — reinstalling"
   fi
 
+  # gh-1137: the AUTO path (no explicit target anywhere — no argument, no
+  # DART_VERSION, no repo/CI pin) on a NON-Dart repo never downloads: a
+  # ~215 MB SDK a pure JS/Kotlin repo can never run is pure waste. It sits
+  # AFTER the keep/cache-hit branches on purpose — an already-installed SDK
+  # is still registered honestly (same machine may serve Dart-repo legs),
+  # but nothing new is ever fetched. Any explicit target still installs.
+  if [ "${SOURCE}" = "default" ] && [ "$(is_dart_repo)" != "1" ]; then
+    echo "⏭️  not a Dart repo (no pubspec.yaml) — Dart SDK install skipped"
+    return 0
+  fi
+
   local url tmp
   tmp="$(mktemp -d)"
   # The ~215 MB fetch must never hang the leg until the workflow-level
@@ -345,6 +414,75 @@ do_install() {
   echo "✅ Dart SDK installed: $(dart --version 2>&1 | head -1)"
 }
 
+# ── Leg-summary line (gh-1137) ────────────────────────────────────────────────
+# Network-free. Prints the ONE line the leg summary carries:
+#   toolchain: dart <version> (CI: <pin>, match: yes|no)
+# <pin> is the repo's pin (version file first, then the CI workflow's
+# sdk:/channel: input); match compares what the leg ACTUALLY runs (the
+# installed managed SDK banner) against that pin — a channel pin matches on
+# channel identity, a version pin on the full version token. A Dart repo with
+# NO pin gets match: no PLUS a loud warning line (ticket step 3); a non-Dart
+# repo gets a n/a skip line instead of a fake toolchain claim.
+cmd_summary() {
+  if [ "$(is_dart_repo)" != "1" ]; then
+    echo "toolchain: dart none (CI: none, match: n/a) — not a Dart repo (no pubspec.yaml); SDK install skipped"
+    return 0
+  fi
+
+  # Resolve the leg's target exactly like the install path does (same
+  # precedence), so the summary describes the toolchain the session runs.
+  resolve_target ""
+
+  # The CI slot reports the repo's pin — taken from what resolve_target
+  # ALREADY consumed, never from a raw re-read of the pin source (review
+  # gh-1137: the raw token carried a muscle-memory `v` prefix the install
+  # path strips, so the summary claimed match: no while the leg provably ran
+  # the pinned SDK). On a repo-sourced target the resolved VERSION/CHANNEL IS
+  # the pin; on an operator override (argument/environment/default) the CI
+  # slot still reports the repo's own pin, v-stripped like resolve_target does.
+  local pin pin_kind="version" running effective match
+  case "${SOURCE}" in
+    "version file"|"quality workflow")
+      if [ "${MODE}" = "version" ]; then
+        pin="${VERSION}"
+      else
+        pin="${CHANNEL}"
+        pin_kind="channel"
+      fi
+      ;;
+    *)
+      pin="$(repo_version_pin)"
+      pin="${pin#v}"
+      case "${pin}" in stable|beta|dev) pin_kind="channel" ;; esac
+      if [ -z "${pin}" ]; then
+        local det det_sdk det_channel
+        det="$(quality_detection)"
+        det="${det#*|}"
+        det_sdk="${det%%|*}"; det_channel="${det#*|}"
+        if [ -n "${det_sdk}" ]; then
+          pin="${det_sdk#v}"; pin_kind="version"
+        elif [ -n "${det_channel}" ]; then
+          pin="${det_channel}"; pin_kind="channel"
+        fi
+      fi
+      ;;
+  esac
+
+  running="$(installed_version)"
+  effective="${running:-${VERSION:-${CHANNEL}}}"
+  if [ -z "${pin}" ]; then
+    echo "toolchain: dart ${effective} (CI: none, match: no)"
+    echo "⚠️ toolchain-warn: no Dart SDK pin found (.dart-version or dart-lang/setup-dart sdk:/channel: in .github/workflows) — local dart format/analyzer results may differ from CI"
+    return 0
+  fi
+  if [ "${pin_kind}" = "channel" ]; then
+    if [ "${CHANNEL}" = "${pin}" ] && [ -n "${running}" ]; then match="yes"; else match="no"; fi
+  else
+    if [ "${running}" = "${pin}" ]; then match="yes"; else match="no"; fi
+  fi
+  echo "toolchain: dart ${effective} (CI: ${pin}, match: ${match})"
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 CMD="${1:-}"
 [ $# -gt 0 ] && shift
@@ -358,6 +496,10 @@ case "${CMD}" in
   status)
     echo "installed=$(installed_version)"
     echo "install_dir=${DART_INSTALL_DIR}"
+    ;;
+  summary)
+    # Network-free by contract — never os_arch/channel_latest here.
+    cmd_summary
     ;;
   help|-h|--help)
     usage
