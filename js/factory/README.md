@@ -51,16 +51,18 @@ Behavior contract is identical:
 | `DATA_BRANCH` | `dataBranch` | target branch                                  | `factory-data`       |
 | `DATA_PATH`   | `dataPath`   | target path                                    | `data/fa-tokens.json`|
 
-Files touched: only the Contents API on `DATA_BRANCH`/`DATA_PATH` (no local
-writes). Transport is gh-first (`gh api …` — executor whitelist), base64
-stays in-shell (`printf %s … | base64`, `--jq .content | base64 -d`), same
-as `factoryState.js`.
+Files touched: only the Contents API on `DATA_BRANCH`/`DATA_PATH` (plus a
+short-lived `/tmp/fa-tokens-put-<ms>-<attempt>.json` body file deleted in
+`finally`). Transport is gh-first (`gh api … --input <tempFile>` — executor
+whitelist, zero payload bytes in argv to avoid `E2BIG` past 128 KiB), with
+pure-JS UTF-8 base64 encoding on PUT and `--jq .content | base64 -d` on GET.
 
 ### token_usage_publish.js — JSRunner entry
 
 `action(params, deps)` glue: resolves `jobParams.customParams` → env →
-defaults (via `resolveParams`), wires `exec` → `cli_execute_command` and
-`read` → `file_read`, calls `publishTokenUsage`, logs the grep-able
+defaults (via `resolveParams`), wires `exec` → `cli_execute_command`,
+`read` → `file_read`, `write` → `file_write`, and `del` → `file_delete`,
+calls `publishTokenUsage`, logs the grep-able
 `leg tokens: …` line plus a `🪙 token publish: <status>` summary line, and
 returns `{ status, reason, key, leg, row, attempts }`. Never throws — skip
 and gave-up are statuses, not errors (the workflow step runs under

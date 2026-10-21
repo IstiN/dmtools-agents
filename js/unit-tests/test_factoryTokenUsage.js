@@ -277,6 +277,157 @@ suite('factoryTokenUsage — gh command builders', function () {
   });
 });
 
+// ── gh-1152: base64EncodeUtf8 + --input temp-file transport (MAX_ARG_STRLEN) ─
+
+suite('factoryTokenUsage — gh-1152 base64EncodeUtf8 & --input PUT transport', function () {
+
+  function buildLargeTokensJson() {
+    var bigCur = {};
+    for (var k = 1500; k < 1700; k++) {
+      var list = [];
+      for (var r = 0; r < 6; r++) {
+        list.push({
+          leg: 'dev', at: '2026-10-10T10:00:0' + r + 'Z',
+          prompt: 123456, completion: 7890, total: 131346,
+          cacheRead: 987654, model: 'claude-opus-4-7'
+        });
+      }
+      bigCur['pr-' + k] = list;
+    }
+    return JSON.stringify(bigCur);
+  }
+
+  function noop() {}
+
+  test('base64EncodeUtf8 encodes empty, ASCII, padding (1/2/3 mod 3), and multi-byte UTF-8', function () {
+    assert.equal(tuModule.base64EncodeUtf8(''), '');
+    assert.equal(tuModule.base64EncodeUtf8(null), '');
+    assert.equal(tuModule.base64EncodeUtf8('f'), 'Zg==');
+    assert.equal(tuModule.base64EncodeUtf8('fo'), 'Zm8=');
+    assert.equal(tuModule.base64EncodeUtf8('foo'), 'Zm9v');
+    var utf8Sample = '{"msg":"leg tokens — pr-1665 ✅ кириллица"}';
+    var expected = 'eyJtc2ciOiJsZWcgdG9rZW5zIOKAlC' + 'Bwci0xNjY1IOKchSDQutC40YDQuNC70LvQuNGG0LAifQ==';
+    assert.equal(tuModule.base64EncodeUtf8(utf8Sample), expected);
+  });
+
+  test('buildContentsPutBody produces branch, message, base64 content, and optional sha', function () {
+    var withoutSha = tuModule.buildContentsPutBody({
+      branch: 'factory-data',
+      message: 'leg tokens — pr-1665 rework [skip ci]',
+      json: '{"pr-1665":[]}',
+      sha: ''
+    });
+    assert.deepEqual(Object.keys(withoutSha).sort(), ['branch', 'content', 'message']);
+    assert.equal(withoutSha.branch, 'factory-data');
+    assert.equal(withoutSha.message, 'leg tokens — pr-1665 rework [skip ci]');
+    assert.equal(withoutSha.content, tuModule.base64EncodeUtf8('{"pr-1665":[]}'));
+
+    var withSha = tuModule.buildContentsPutBody({
+      branch: 'factory-data',
+      message: 'm',
+      json: '{}',
+      sha: 'deadbeef'
+    });
+    assert.equal(withSha.sha, 'deadbeef');
+
+    var defaults = tuModule.buildContentsPutBody();
+    assert.equal(defaults.branch, 'factory-data');
+    assert.equal(defaults.message, '');
+    assert.equal(defaults.content, tuModule.base64EncodeUtf8('{}'));
+  });
+
+  test('tempPutBodyPath and contentsPutInputCommand keep argv tiny and metachar-free', function () {
+    var p = tuModule.tempPutBodyPath(NOW, 2);
+    assert.ok(/^\/tmp\/fa-tokens-put-\d+-2\.json$/.test(p), 'got: ' + p);
+    assert.equal(tuModule.tempPutBodyPath('not-a-date', 0), '/tmp/fa-tokens-put-0-0.json');
+    var cmd = tuModule.contentsPutInputCommand('IstiN/flutter_agent_harness', 'data/fa-tokens.json', p);
+    assert.equal(cmd, 'gh api -X PUT repos/IstiN/flutter_agent_harness/contents/data/fa-tokens.json --input ' + p);
+  });
+
+  test('publishTokenUsage with write/del uses --input temp file and cleans up on success & conflict', function () {
+    var writes = [];
+    var deleted = [];
+    var stub = execStub({ failPuts: 1, sha: 'sha1152', body: '{}' });
+    var res = tuModule.publishTokenUsage({
+      runOutput: 'out.txt', configPath: 'config-rework.json', kind: 'dev',
+      anchor: 'pr-1665', repo: 'IstiN/flutter_agent_harness',
+      dataBranch: 'factory-data', dataPath: 'data/fa-tokens.json', now: NOW
+    }, {
+      exec: stub.exec,
+      read: function () { return 'fa-tokens: {"input":500,"output":100,"cacheRead":2000,"model":"claude-opus-4-7"}'; },
+      write: function (o) { writes.push(o); },
+      del: function (o) { deleted.push(o.path); },
+      sleepMs: function () {},
+      log: function () {}
+    });
+    assert.equal(res.status, 'published');
+    assert.equal(res.attempts, 2);
+    assert.equal(writes.length, 2, 'written once per attempt');
+    assert.equal(deleted.length, 2, 'cleaned up in finally on both failed and succeeded attempts');
+    assert.equal(writes[0].path, deleted[0]);
+    assert.equal(writes[1].path, deleted[1]);
+    var parsedBody = JSON.parse(writes[1].content);
+    assert.equal(parsedBody.branch, 'factory-data');
+    assert.equal(parsedBody.message, 'leg tokens — pr-1665 rework [skip ci]');
+    assert.equal(parsedBody.sha, 'sha1152');
+    var expectedRowJson = JSON.stringify({
+      "pr-1665": [{
+        leg: "rework", at: NOW, prompt: 500, completion: 100,
+        total: 600, cacheRead: 2000, model: "claude-opus-4-7"
+      }]
+    });
+    assert.equal(parsedBody.content, tuModule.base64EncodeUtf8(expectedRowJson));
+  });
+
+  test('putTokenContents logs a one-time warning when file_write is unavailable and falls back to inline PUT', function () {
+    var logs = [];
+    var cmds = [];
+    var io = {
+      exec: function (o) { cmds.push(o.command); return {}; },
+      log: function (m) { logs.push(m); }
+    };
+    var bigJson = buildLargeTokensJson();
+    assert.equal(tuModule.putTokenContents(io, 'O/R', 'data/fa-tokens.json', NOW, 1, {
+      branch: 'factory-data', message: 'm', json: bigJson, sha: 's1'
+    }), true);
+    assert.equal(tuModule.putTokenContents(io, 'O/R', 'data/fa-tokens.json', NOW, 2, {
+      branch: 'factory-data', message: 'm', json: bigJson, sha: 's1'
+    }), true);
+    assert.equal(logs.length, 1, 'warning logged once on attempt 1');
+    assert.contains(logs[0], 'file_write unavailable');
+    assert.equal(cmds.length, 2);
+  });
+
+  test('120 KB payload (>96 KB JSON / >131,072 MAX_ARG_STRLEN base64) keeps shell command <200 bytes', function () {
+    var bigBodyStr = buildLargeTokensJson();
+    assert.ok(bigBodyStr.length > 100000, 'fixture exceeds 100 KB raw JSON, got ' + bigBodyStr.length);
+    var writes = [];
+    var stub = execStub({ sha: '21a0fb08', body: bigBodyStr });
+    var res = tuModule.publishTokenUsage({
+      runOutput: 'out.txt', configPath: 'config-dev.json', kind: 'dev',
+      anchor: 'pr-1715', repo: 'IstiN/flutter_agent_harness',
+      dataBranch: 'factory-data', dataPath: 'data/fa-tokens.json', now: NOW
+    }, {
+      exec: stub.exec,
+      read: function () { return 'fa-tokens: {"input":1000,"output":250,"cacheRead":500,"model":"claude-opus-4-7"}'; },
+      write: function (o) { writes.push(o); },
+      del: noop,
+      sleepMs: noop,
+      log: noop
+    });
+    assert.equal(res.status, 'published');
+    assert.equal(writes.length, 1);
+    var putBody = JSON.parse(writes[0].content);
+    assert.ok(putBody.content.length > 131072,
+        'base64 content exceeds Linux 131,072-byte MAX_ARG_STRLEN, got ' + putBody.content.length);
+    var putCmd = stub.state.commands[3];
+    assert.ok(putCmd.length < 200, 'shell command stays tiny (<200 bytes), got ' + putCmd.length);
+    assert.contains(putCmd, '--input /tmp/fa-tokens-put-');
+    assert.equal(putCmd.indexOf('base64'), -1, 'no inline base64 expansion in argv');
+    assert.equal(putCmd.indexOf('pr-1715'), -1, 'no JSON payload in argv');
+  });
+});
+
 // ── publishTokenUsage (orchestrator, exec/read capturers) ────────────────────
 
 suite('factoryTokenUsage — publishTokenUsage', function () {
@@ -462,25 +613,39 @@ suite('factoryTokenUsage — entry action (token_usage_publish.js)', function ()
     assert.equal(d.dataPath, 'data/fa-tokens.json', 'default path');
   });
 
-  test('action wires exec→cli_execute_command and read→file_read (mock-injected)', function () {
-    var commands = [];
+  function recordPath(arr) {
+    return function (args) { arr.push(args && args.path); };
+  }
+
+  function recordLedgerRead(arr) {
+    return function (args) {
+      arr.push(args && args.path);
+      return 'fa-tokens: {"input":3,"output":4}';
+    };
+  }
+
+  test('action wires exec→cli_execute_command, read→file_read, write→file_write, del→file_delete', function () {
     var readPaths = [];
+    var writes = [];
+    var deleted = [];
+    var stub = execStub({});
     var result = entry.action(
       { jobParams: { customParams: {
         runOutput: '.dmtools/run-output.txt', configPath: 'config-dev.json',
         kind: 'dev', anchor: 'pr-783', repo: 'O/R', now: NOW
       } } },
       {
-        cli_execute_command: execStub({}).exec,
-        file_read: function (args) {
-          readPaths.push(args && args.path);
-          return 'fa-tokens: {"input":3,"output":4}';
-        }
+        cli_execute_command: stub.exec,
+        file_read: recordLedgerRead(readPaths),
+        file_write: function (args) { writes.push(args); },
+        file_delete: recordPath(deleted)
       });
     assert.equal(result.status, 'published');
     assert.deepEqual(readPaths, ['.dmtools/run-output.txt'], 'ledger read via file_read');
+    assert.equal(writes.length, 1, 'PUT body written via file_write');
+    assert.equal(deleted.length, 1, 'temp file deleted via file_delete');
+    assert.contains(stub.state.commands[3], '--input /tmp/fa-tokens-put-');
   });
-
   test('action without any input degrades to the no-run-output skip (never throws)', function () {
     var result = entry.action({}, { cli_execute_command: execStub({}).exec,
       file_read: function () { throw new Error('missing'); } });

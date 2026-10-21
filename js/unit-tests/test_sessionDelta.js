@@ -455,6 +455,16 @@ suite('sessionDelta — UT-3: session-co-located storage, quarantine safety & po
     });
 });
 
+
+var _sdCanBash_ = typeof cli_execute_command === 'function';
+if (_sdCanBash_) {
+    try {
+        cli_execute_command({ command: 'bash -c "echo __sd_probe__"' });
+    } catch (eProbe) {
+        _sdCanBash_ = false;
+    }
+}
+
 suite('sessionDelta — UT-4 & IT-1: composite resume prompt & bash provider integration (AC1, AC4, REG-1)', function() {
 
     test('AC1: buildCompositeResumeNotice embeds session_delta.md and points to prompt_file', function() {
@@ -473,6 +483,7 @@ suite('sessionDelta — UT-4 & IT-1: composite resume prompt & bash provider int
     });
 
     test('IT-1 (bash): _common.sh resumed_session_reread_pointer_notice + promote_pending_session_manifest + fa.sh resume flow', function() {
+        if (!_sdCanBash_) return;
         var out = cli_execute_command({
             command: [
                 'bash -c \'set -euo pipefail',
@@ -510,6 +521,7 @@ suite('sessionDelta — UT-4 & IT-1: composite resume prompt & bash provider int
     });
 
     test('IT-1 (bash): fa.sh sends full prompt on fresh session and composite delta notice on resumed session', function() {
+        if (!_sdCanBash_) return;
         var out = cli_execute_command({
             command: [
                 'bash -c \'set -euo pipefail',

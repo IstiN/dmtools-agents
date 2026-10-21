@@ -72,6 +72,10 @@ echo "leg tokens: ${KEY} ${LEG} prompt=${SUM_IN} completion=${SUM_OUT} cached=${
 gh api "repos/${REPO}/git/ref/heads/$(gh api "repos/${REPO}" --jq .default_branch)" \
   --jq .object.sha \
   | xargs -I{} gh api -X POST "repos/${REPO}/git/refs" -f ref="refs/heads/${DATA_BRANCH}" -f sha={} || true
+NEXT_FILE="$(mktemp "${TMPDIR:-/tmp}/fa-tokens-next.XXXXXX")"
+BODY_FILE=""
+trap 'rm -f "${NEXT_FILE}" "${BODY_FILE}"' EXIT
+BODY_FILE="$(mktemp "${TMPDIR:-/tmp}/fa-tokens-body.XXXXXX")"
 ok=0
 for attempt in 1 2 3; do
   SHA=""
@@ -82,16 +86,17 @@ for attempt in 1 2 3; do
     printf %s "${CUR}" | jq empty >/dev/null 2>&1 || CUR='{}'
   fi
   CUTOFF="$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=14)).strftime('%Y-%m-%dT%H:%M:%SZ'))")"
-  NEXT="$(printf %s "${CUR}" | jq --argjson row "${ROW}" --arg key "${KEY}" --arg cutoff "${CUTOFF}" \
+  printf %s "${CUR}" | jq --argjson row "${ROW}" --arg key "${KEY}" --arg cutoff "${CUTOFF}" \
     '.[$key] = ((.[$key] // []) + [$row])
      | with_entries(.value |= (map(select((.at // "") >= $cutoff)) | .[-40:]))
-     | with_entries(select(.value | length > 0))')"
-  ARGS=(api -X PUT "repos/${REPO}/contents/${DATA_PATH}"
-    -f branch="${DATA_BRANCH}"
-    -f message="leg tokens — ${KEY} ${LEG} [skip ci]"
-    -f content="$(printf %s "${NEXT}" | base64)")
-  if [ -n "${SHA}" ]; then ARGS+=(-f sha="${SHA}"); fi
-  if gh "${ARGS[@]}"; then ok=1; break; fi
+     | with_entries(select(.value | length > 0))' > "${NEXT_FILE}"
+  jq -n \
+    --rawfile next "${NEXT_FILE}" \
+    --arg branch "${DATA_BRANCH}" \
+    --arg message "leg tokens — ${KEY} ${LEG} [skip ci]" \
+    --arg sha "${SHA}" \
+    '{branch: $branch, message: $message, content: ($next | @base64)} + (if $sha != "" then {sha: $sha} else {} end)' > "${BODY_FILE}"
+  if gh api -X PUT "repos/${REPO}/contents/${DATA_PATH}" --input "${BODY_FILE}"; then ok=1; break; fi
   echo "token publish attempt ${attempt} conflicted — refetching"
   sleep $((attempt * 2))
 done

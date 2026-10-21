@@ -264,7 +264,73 @@ function contentsBodyCommand(repo, path, branch) {
         ' --jq .content | base64 -d';
 }
 
-/** Contents PUT: message, branch, base64 content, sha only when present. */
+var BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** Convert a JS string to an array of UTF-8 byte values (0..255). */
+function utf8BytesOf(str) {
+    var s = String(str == null ? '' : str);
+    var utf8 = encodeURIComponent(s);
+    var bytes = [];
+    for (var i = 0; i < utf8.length; i++) {
+        if (utf8.charAt(i) === '%') {
+            bytes.push(parseInt(utf8.substr(i + 1, 2), 16));
+            i += 2;
+        } else {
+            bytes.push(utf8.charCodeAt(i));
+        }
+    }
+    return bytes;
+}
+
+/** Pure UTF-8 → Base64 encoder (runtime-agnostic: GraalJS, QuickJS, Node). */
+function base64EncodeUtf8(str) {
+    var bytes = utf8BytesOf(str);
+    var out = '';
+    for (var j = 0; j < bytes.length; j += 3) {
+        var b0 = bytes[j];
+        var has1 = (j + 1) < bytes.length;
+        var has2 = (j + 2) < bytes.length;
+        var b1 = has1 ? bytes[j + 1] : 0;
+        var b2 = has2 ? bytes[j + 2] : 0;
+        var triplet = (b0 << 16) | (b1 << 8) | b2;
+        out += BASE64_CHARS.charAt((triplet >> 18) & 63) +
+            BASE64_CHARS.charAt((triplet >> 12) & 63) +
+            (has1 ? BASE64_CHARS.charAt((triplet >> 6) & 63) : '=') +
+            (has2 ? BASE64_CHARS.charAt(triplet & 63) : '=');
+    }
+    return out;
+}
+
+/** Build the GitHub Contents API PUT JSON body (`--input <file>` payload). */
+function buildContentsPutBody(o) {
+    var p = o || {};
+    var body = {
+        branch: String(p.branch || DEFAULT_DATA_BRANCH),
+        message: String(p.message || ''),
+        content: base64EncodeUtf8(p.json == null ? '{}' : p.json)
+    };
+    if (p.sha) body.sha = String(p.sha);
+    return body;
+}
+
+/**
+ * Deterministic temp-file path for `--input` (digits-only suffixes, matching
+ * `checkRunStamp.js` `tempBodyPath` convention). Note: two concurrent legs on
+ * a shared host landing in the exact same millisecond + attempt share this
+ * path; each leg runs in its own job container/step in CI.
+ */
+function tempPutBodyPath(now, attempt) {
+    var ms = (now instanceof Date) ? now.getTime() : new Date(now).getTime();
+    if (isNaN(ms)) ms = 0;
+    return '/tmp/fa-tokens-put-' + Number(ms) + '-' + Number(attempt || 0) + '.json';
+}
+
+/** Contents PUT via `--input <tempPath>`: zero payload bytes in argv (gh-1152). */
+function contentsPutInputCommand(repo, path, tempPath) {
+    return 'gh api -X PUT repos/' + repo + '/contents/' + path + ' --input ' + tempPath;
+}
+
+/** Contents PUT (legacy inline argv builder): message, branch, base64 content, sha. */
 function contentsPutCommand(repo, path, o) {
     var cmd = 'gh api -X PUT repos/' + repo + '/contents/' + path +
         ' -f branch=' + (o.branch || DEFAULT_DATA_BRANCH) +
@@ -272,6 +338,38 @@ function contentsPutCommand(repo, path, o) {
         ' -f content="$(printf %s ' + shellQuote(o.json || '{}') + ' | base64)"';
     if (o.sha) cmd += ' -f sha=' + shellQuote(o.sha);
     return cmd;
+}
+
+/** Write PUT body to `tempPath`, run `gh api --input`, and best-effort delete in `finally`. */
+function tryPutViaInputFile(io, repo, path, tempPath, putOpts) {
+    var bodyText = JSON.stringify(buildContentsPutBody(putOpts));
+    try {
+        io.write({ path: tempPath, content: bodyText });
+        io.exec({ command: contentsPutInputCommand(repo, path, tempPath) });
+        return true;
+    } catch (e) {
+        return false;
+    } finally {
+        if (typeof io.del === 'function') {
+            try { io.del({ path: tempPath }); } catch (eDel) { /* best-effort cleanup */ }
+        }
+    }
+}
+
+/** Log a one-time warning when falling back to inline argv PUT on a large payload. */
+function warnInlineFallbackIfLarge(io, attempt, putOpts) {
+    if (Number(attempt) <= 1 && String(putOpts.json).length >= 96000) {
+        io.log('::warning::file_write unavailable — inline argv PUT fallback (E2BIG risk at >=96 KB payloads)');
+    }
+}
+
+/** Dispatch PUT via `--input` temp file when `io.write` is wired, else inline fallback. */
+function putTokenContents(io, repo, path, now, attempt, putOpts) {
+    if (io && typeof io.write === 'function') {
+        return tryPutViaInputFile(io, repo, path, tempPutBodyPath(now, attempt), putOpts);
+    }
+    warnInlineFallbackIfLarge(io, attempt, putOpts);
+    return tryExec(io && io.exec, contentsPutCommand(repo, path, putOpts));
 }
 
 // ── publisher (IO via injected capturers) ────────────────────────────────────
@@ -379,12 +477,12 @@ function publishTokenUsage(opts, io) {
             cur = JSON.parse(execOut(exec, contentsBodyCommand(repo, path, branch)) || '{}');
         } catch (e2) { cur = {}; } // `jq empty` guard — corrupt body → {}
         var next = mergeTokenRows(cur, key, row, cutoff);
-        var ok = tryExec(exec, contentsPutCommand(repo, path, {
+        var ok = putTokenContents(io, repo, path, now, attempt, {
             branch: branch,
             message: 'leg tokens — ' + key + ' ' + leg + ' [skip ci]',
             json: JSON.stringify(next),
             sha: sha
-        }));
+        });
         if (ok) {
             result.status = 'published';
             result.reason = null;
@@ -411,10 +509,16 @@ module.exports = {
     buildRow: buildRow,
     mergeTokenRows: mergeTokenRows,
     shellQuote: shellQuote,
+    base64EncodeUtf8: base64EncodeUtf8,
+    buildContentsPutBody: buildContentsPutBody,
+    tempPutBodyPath: tempPutBodyPath,
+    contentsPutInputCommand: contentsPutInputCommand,
     bootstrapBranchCommand: bootstrapBranchCommand,
     contentsShaCommand: contentsShaCommand,
     contentsBodyCommand: contentsBodyCommand,
     contentsPutCommand: contentsPutCommand,
+    tryPutViaInputFile: tryPutViaInputFile,
+    putTokenContents: putTokenContents,
     publishTokenUsage: publishTokenUsage,
     ROW_KEEP: ROW_KEEP,
     DEFAULT_WINDOW_DAYS: DEFAULT_WINDOW_DAYS,
