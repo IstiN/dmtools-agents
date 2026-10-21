@@ -246,6 +246,9 @@ esac
 # under `set -e`), so it's explicitly guarded with `|| true`.
 rescue_misplaced_outputs "$RESCUE_MARKER" || true
 rm -f "$RESCUE_MARKER"
+if [ "$exit_code" -eq 0 ] && command -v promote_pending_session_manifest >/dev/null 2>&1; then
+  promote_pending_session_manifest "$exit_code" || true
+fi
 [ -n "${GIT_GUARD_DIR:-}" ] && rm -rf "${GIT_GUARD_DIR}" || true
 
 exit $exit_code

@@ -49,14 +49,41 @@ run_fa() {
   [ -n "${FA_PROVIDER_NAME:-}" ] && echo "  Entry Name: ${FA_PROVIDER_NAME}"
   echo "  Config: ${FA_PROVIDER_CONFIG}"
 
+  # Detect whether a prior fa session already exists on disk under
+  # FA_SESSION_ROOT (excluding sidecar manifest files). When resuming an
+  # existing session across legs (and NOT an intra-leg feedbackLoop `--continue`
+  # / `--resume` call whose short prompt is already a targeted follow-up),
+  # send the composite resume notice (`resumed_session_reread_pointer_notice`)
+  # instead of re-sending the 50KB+ static prompt inline (gh-1064).
+  local fa_has_explicit_resume_flag=false
   local pass_args=()
   local arg
   for arg in ${PASS_ARGS[@]+"${PASS_ARGS[@]}"}; do
     case "$arg" in
-      --continue|--resume) ;;
+      --continue|--resume)
+        fa_has_explicit_resume_flag=true
+        ;;
       *) pass_args+=("$arg") ;;
     esac
   done
+
+  local fa_is_actual_resume=false
+  if [ "${fa_has_explicit_resume_flag}" = "false" ] \
+     && [ -n "${FA_SESSION_NAME:-}" ] && [ -n "${FA_SESSION_ROOT:-}" ] \
+     && _fa_session_exists_on_disk "${FA_SESSION_ROOT}"; then
+    fa_is_actual_resume=true
+    echo "♻️  Resuming existing fa session in ${FA_SESSION_ROOT}"
+  fi
+
+  local fa_prompt_message="${PROMPT}"
+  local fa_prompt_file="" fa_cleanup_prompt_file=false
+  if [ "${fa_is_actual_resume}" = "true" ] && command -v resumed_session_reread_pointer_notice >/dev/null 2>&1; then
+    fa_prompt_file="$(ensure_prompt_file)"
+    if [ ! -f "${PROMPT_ARG:-}" ]; then
+      fa_cleanup_prompt_file=true
+    fi
+    fa_prompt_message="$(resumed_session_reread_pointer_notice "${fa_prompt_file}")"
+  fi
 
   # Provider selection is driven entirely by the FA_PROVIDER_* env
   # preconfig (fa precedence: explicit flags > preconfig > saved config).
@@ -76,7 +103,7 @@ run_fa() {
     mkdir -p "$(dirname "${FA_LOG_FILE}")"
     cmd+=(--log-file "${FA_LOG_FILE}")
   fi
-  cmd+=(${pass_args[@]+"${pass_args[@]}"} -p "$PROMPT")
+  cmd+=(${pass_args[@]+"${pass_args[@]}"} -p "$fa_prompt_message")
 
   echo "Working directory: $(pwd)"
   echo ""
@@ -101,12 +128,35 @@ run_fa() {
   local exit_code=${PIPESTATUS[0]}
   set -e
 
+  if [ "${fa_cleanup_prompt_file}" = "true" ] && [ -n "${fa_prompt_file}" ]; then
+    rm -f "${fa_prompt_file}"
+  fi
+
+  if [ "${exit_code}" -eq 0 ] && command -v promote_pending_session_manifest >/dev/null 2>&1; then
+    promote_pending_session_manifest "${exit_code}" || true
+  fi
+
   record_codegraph_usage "$agent_log"
   rm -f "$agent_log"
 
   echo ""
   echo "=== Agent completed with exit code: $exit_code ==="
   return $exit_code
+}
+
+# True when FA_SESSION_ROOT already contains at least one non-manifest session
+# file (e.g. a `.jsonl` transcript from a previous leg).
+_fa_session_exists_on_disk() {
+  local root="${1:-}"
+  if [ -z "${root}" ] || [ ! -d "${root}" ]; then
+    return 1
+  fi
+  local found
+  found="$(find "${root}" -type f \
+    ! -name '.session-input-manifest.json' \
+    ! -name '.pending-input-manifest.json' \
+    -print -quit 2>/dev/null || true)"
+  [ -n "${found}" ]
 }
 
 # Configure the deterministic session when the setup script is available

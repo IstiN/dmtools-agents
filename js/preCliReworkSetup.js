@@ -26,6 +26,8 @@ const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var restoreFromReleases = require('./restoreFromReleases.js');
 var setupCommands = require('./common/setupCommands.js');
 var baseBranchMarker = require('./common/baseBranchMarker.js');
+var sessionDelta = null;
+try { sessionDelta = require('./common/sessionDelta.js'); } catch (e) { sessionDelta = null; }
 
 /**
  * Optionally syncs the PR's base branch with its own upstream (config.git.baseBranch)
@@ -578,6 +580,31 @@ function postReworkStartedCommentStep(tracker, ticketKey, customParams, ctx) {
 }
 
 /**
+ * Enrich input folder with question subtasks, parent context, and session
+ * delta snapshot/manifest (gh-1064). Every sub-step is non-fatal so it never
+ * blocks rework setup.
+ */
+function enrichReworkInputStep(params, actualParams, deltaCtx) {
+    try {
+        fetchQuestionsToInput.action(actualParams);
+    } catch (e) {
+        console.warn('Failed to fetch questions (non-fatal):', e);
+    }
+    try {
+        fetchParentContextToInput.action(params);
+    } catch (e2) {
+        console.warn('fetchParentContextToInput failed (non-fatal):', e2);
+    }
+    try {
+        if (sessionDelta && typeof sessionDelta.prepareLegSessionDelta === 'function' && deltaCtx) {
+            sessionDelta.prepareLegSessionDelta(deltaCtx);
+        }
+    } catch (e3) {
+        console.warn('sessionDelta.prepareLegSessionDelta failed (non-fatal):', e3);
+    }
+}
+
+/**
  * The ticket key an action()-level error should be reported to: derived from
  * inputFolderPath (flat params or jobParams), '' when none is derivable.
  * (gh-1002) Extracted from reportActionError().
@@ -768,12 +795,14 @@ function action(params) {
             console.warn('Input contract enforcement failed (non-fatal):', e);
         }
 
-        // Step 7: Fetch question subtasks with answers
-        try {
-            fetchQuestionsToInput.action(actualParams);
-        } catch (e) {
-            console.warn('Failed to fetch questions (non-fatal):', e);
-        }
+        // Step 7 & parent context + gh-1064 session delta snapshot/manifest
+        enrichReworkInputStep(params, actualParams, {
+            inputFolder: inputFolder,
+            ticketKey: ticketKey,
+            repo: repoInfo.owner + '/' + repoInfo.repo,
+            headSha: headSha,
+            baseBranch: baseBranch
+        });
 
         // Step 8: tracker comment — skipped for PR-anchored reworks (#544):
         // a 'pr-N' key parses to no tracker ticket (the PR comment comes
@@ -791,13 +820,6 @@ function action(params) {
         }
 
         console.log('✅ Rework setup complete — branch:', branchName, '| PR #' + prDetails.number);
-
-        // Enrich input with [BA]/[SA]/[VD] context from parent siblings
-        try {
-            fetchParentContextToInput.action(params);
-        } catch (e) {
-            console.warn('fetchParentContextToInput failed (non-fatal):', e);
-        }
 
         return {
             success: true,
@@ -836,6 +858,7 @@ if (typeof module !== 'undefined' && module.exports) {
         runSetupCommandsStep,
         writeReworkBaseHead,
         postReworkStartedCommentStep,
+        enrichReworkInputStep,
         reportActionError,
         createErrorTracker,
         postErrorComment,
