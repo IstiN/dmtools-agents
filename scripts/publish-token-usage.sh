@@ -73,8 +73,9 @@ gh api "repos/${REPO}/git/ref/heads/$(gh api "repos/${REPO}" --jq .default_branc
   --jq .object.sha \
   | xargs -I{} gh api -X POST "repos/${REPO}/git/refs" -f ref="refs/heads/${DATA_BRANCH}" -f sha={} || true
 NEXT_FILE="$(mktemp "${TMPDIR:-/tmp}/fa-tokens-next.XXXXXX")"
-BODY_FILE="$(mktemp "${TMPDIR:-/tmp}/fa-tokens-body.XXXXXX")"
+BODY_FILE=""
 trap 'rm -f "${NEXT_FILE}" "${BODY_FILE}"' EXIT
+BODY_FILE="$(mktemp "${TMPDIR:-/tmp}/fa-tokens-body.XXXXXX")"
 ok=0
 for attempt in 1 2 3; do
   SHA=""

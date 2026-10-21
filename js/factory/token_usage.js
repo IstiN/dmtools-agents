@@ -313,7 +313,12 @@ function buildContentsPutBody(o) {
     return body;
 }
 
-/** Deterministic temp-file path for `--input` (digits-only suffixes). */
+/**
+ * Deterministic temp-file path for `--input` (digits-only suffixes, matching
+ * `checkRunStamp.js` `tempBodyPath` convention). Note: two concurrent legs on
+ * a shared host landing in the exact same millisecond + attempt share this
+ * path; each leg runs in its own job container/step in CI.
+ */
 function tempPutBodyPath(now, attempt) {
     var ms = (now instanceof Date) ? now.getTime() : new Date(now).getTime();
     if (isNaN(ms)) ms = 0;
@@ -355,6 +360,10 @@ function tryPutViaInputFile(io, repo, path, tempPath, putOpts) {
 function putTokenContents(io, repo, path, now, attempt, putOpts) {
     if (io && typeof io.write === 'function') {
         return tryPutViaInputFile(io, repo, path, tempPutBodyPath(now, attempt), putOpts);
+    }
+    if (io && typeof io.log === 'function' && Number(attempt || 1) <= 1 &&
+            putOpts && String(putOpts.json || '').length >= 96000) {
+        io.log('::warning::file_write unavailable — inline argv PUT fallback (E2BIG risk at >=96 KB payloads)');
     }
     return tryExec(io && io.exec, contentsPutCommand(repo, path, putOpts));
 }
