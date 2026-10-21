@@ -209,11 +209,11 @@ function copyStatusEntries(target, statuses, provider) {
  */
 function syncTrackerStatuses(result, defaults, overrides) {
     var jiraCfg = result.jira || (result.jira = {});
-    if (!jiraCfg.statuses) jiraCfg.statuses = Object.assign({}, defaults.jira.statuses);
+    jiraCfg.statuses = Object.assign({}, defaults.jira.statuses, jiraCfg.statuses || {});
     var trackerStatuses = overrides && overrides.tracker && overrides.tracker.statuses;
     if (!trackerStatuses || typeof trackerStatuses !== 'object') return;
     var prov = String((result.tracker && result.tracker.provider) || result.defaultTracker || '').toLowerCase();
-    jiraCfg.statuses = copyStatusEntries(Object.assign({}, jiraCfg.statuses), trackerStatuses, prov);
+    jiraCfg.statuses = copyStatusEntries(jiraCfg.statuses, trackerStatuses, prov);
 }
 
 function mergeProjectConfig(defaults, overrides) {

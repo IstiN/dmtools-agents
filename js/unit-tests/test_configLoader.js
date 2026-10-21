@@ -2028,7 +2028,8 @@ suite('configLoader & config.resolveStatuses — tracker-neutral config (gh-932)
     });
 
     test('mergeProjectConfig & loadProjectConfig sync tracker.statuses into jira.statuses with provider support', function() {
-        var merged = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
+        var baseDefaults = JSON.parse(JSON.stringify(configLoaderModule.DEFAULTS));
+        var merged = configLoaderModule.mergeProjectConfig(baseDefaults, {
             tracker: {
                 provider: 'ado',
                 statuses: {
