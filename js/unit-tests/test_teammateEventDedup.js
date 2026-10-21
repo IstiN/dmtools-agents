@@ -114,6 +114,16 @@ suite('teammateEventDedup — title parsing', function () {
         assert.equal(dedup.issueOfRunName(null), null);
     });
 
+    test('prOfRunName reads the PR anchor (pr-<n>) and never cross-matches a longer number', function () {
+        assert.equal(dedup.prOfRunName('teammate: workflow_dispatch # · pr-1151 review'), 1151);
+        assert.equal(dedup.prOfRunName('▶ review (SM) · pr-1151'), 1151);
+        assert.equal(dedup.prOfRunName('▶ rework (SM) · pr-11510'), 11510);
+        assert.notEqual(dedup.prOfRunName('▶ rework (SM) · pr-11510'), 1151);
+        assert.equal(dedup.prOfRunName('teammate: issues #1040 '), null);
+        assert.equal(dedup.prOfRunName(''), null);
+        assert.equal(dedup.prOfRunName(null), null);
+    });
+
     test('legOfRunName reads the SM dispatch leg', function () {
         assert.equal(dedup.legOfRunName('▶ rework (SM) · gh-1040'), 'rework');
         assert.equal(dedup.legOfRunName('▶ review (SM) · gh-1040'), 'review');
@@ -357,10 +367,115 @@ suite('teammateEventDedup — decideEventDedup', function () {
         assert.equal(v.reason, 'non-arming-label');
     });
 
-    test('workflow_dispatch passes through — the SM-side gh-1028 dedup governs it', function () {
+    test('workflow_dispatch passes through when runs is null — backward-compat fallback', function () {
         var v = dedup.decideEventDedup({
             eventName: 'workflow_dispatch', action: null, issue: ISSUE, runs: null, selfRun: selfRun(500)
         });
+        assert.equal(v.proceed, true);
+        assert.equal(v.reason, 'dispatch-path');
+    });
+
+    test('UT-dedup-1: workflow_dispatch with pr: 1151, leg: review drops when an older run is in_progress or waiting', function () {
+        var olderInProgress = {
+            id: 39669780480, run_number: 3818,
+            name: 'teammate: workflow_dispatch # · pr-1151 review',
+            status: 'in_progress', path: LEG_PATH, created_at: FIVE_MIN_AGO, updated_at: FIVE_MIN_AGO
+        };
+        var v1 = dedup.decideEventDedup({
+            eventName: 'workflow_dispatch', pr: 1151, leg: 'review',
+            runs: [olderInProgress], selfRun: { id: 39670135797, runNumber: 3819, createdAt: NOW_MS }, nowMs: NOW_MS
+        });
+        assert.equal(v1.proceed, false);
+        assert.equal(v1.reason, 'duplicate');
+        assert.ok(v1.audit.indexOf('pr-1151') !== -1);
+
+        var olderWaiting = {
+            id: 39669780480, run_number: 3818,
+            name: 'teammate: workflow_dispatch # · pr-1151 review',
+            status: 'waiting', path: LEG_PATH, created_at: FIVE_MIN_AGO, updated_at: FIVE_MIN_AGO
+        };
+        var v2 = dedup.decideEventDedup({
+            eventName: 'workflow_dispatch', pr: 1151, leg: 'review',
+            runs: [olderWaiting], selfRun: { id: 39670135797, runNumber: 3819, createdAt: NOW_MS }, nowMs: NOW_MS
+        });
+        assert.equal(v2.proceed, false);
+        assert.equal(v2.reason, 'duplicate');
+    });
+
+    test('UT-dedup-2: workflow_dispatch with pr: 1151, leg: review proceeds when older run is completed (even within 10 min)', function () {
+        var completedRecent = {
+            id: 39669780480, run_number: 3818,
+            name: 'teammate: workflow_dispatch # · pr-1151 review',
+            status: 'completed', conclusion: 'success', path: LEG_PATH,
+            created_at: FIVE_MIN_AGO, updated_at: FIVE_MIN_AGO
+        };
+        var v = dedup.decideEventDedup({
+            eventName: 'workflow_dispatch', pr: 1151, leg: 'review',
+            runs: [completedRecent], selfRun: { id: 39670135797, runNumber: 3819, createdAt: NOW_MS }, nowMs: NOW_MS
+        });
+        assert.equal(v.proceed, true, 'completed runs never suppress explicit workflow_dispatch');
+        assert.equal(v.reason, 'first-trigger');
+    });
+
+    test('UT-dedup-3: workflow_dispatch with pr: 1151, leg: review proceeds when older active run is for a different PR or leg', function () {
+        var otherPr = {
+            id: 1, run_number: 3817,
+            name: 'teammate: workflow_dispatch # · pr-1149 review',
+            status: 'in_progress', path: LEG_PATH, created_at: FIVE_MIN_AGO, updated_at: FIVE_MIN_AGO
+        };
+        var otherLeg = {
+            id: 2, run_number: 3818,
+            name: 'teammate: workflow_dispatch # · pr-1151 rework',
+            status: 'in_progress', path: LEG_PATH, created_at: FIVE_MIN_AGO, updated_at: FIVE_MIN_AGO
+        };
+        var v = dedup.decideEventDedup({
+            eventName: 'workflow_dispatch', pr: 1151, leg: 'review',
+            runs: [otherPr, otherLeg], selfRun: { id: 3, runNumber: 3819, createdAt: NOW_MS }, nowMs: NOW_MS
+        });
+        assert.equal(v.proceed, true);
+        assert.equal(v.reason, 'first-trigger');
+    });
+
+    test('workflow_dispatch with issue anchor suppresses when older issue-anchored run is in flight', function () {
+        var olderIssueRun = {
+            id: 10, run_number: 499,
+            name: 'teammate: workflow_dispatch #1040 dev',
+            status: 'requested', path: LEG_PATH, created_at: FIVE_MIN_AGO, updated_at: FIVE_MIN_AGO
+        };
+        var v = dedup.decideEventDedup({
+            eventName: 'workflow_dispatch', issue: 1040, leg: 'dev',
+            runs: [olderIssueRun], selfRun: { id: 11, runNumber: 500, createdAt: NOW_MS }, nowMs: NOW_MS
+        });
+        assert.equal(v.proceed, false);
+        assert.equal(v.reason, 'duplicate');
+        assert.ok(v.audit.indexOf('#1040') !== -1);
+    });
+
+    test('workflow_dispatch ignores stale queued zombies and self run id', function () {
+        var zombie = {
+            id: 10, run_number: 498,
+            name: 'teammate: workflow_dispatch # · pr-1151 review',
+            status: 'queued', path: LEG_PATH, created_at: SEVEN_HOURS_AGO, updated_at: SEVEN_HOURS_AGO
+        };
+        var self = {
+            id: 11, run_number: 500,
+            name: 'teammate: workflow_dispatch # · pr-1151 review',
+            status: 'in_progress', path: LEG_PATH, created_at: FIVE_MIN_AGO, updated_at: FIVE_MIN_AGO
+        };
+        var foreignWf = {
+            id: 12, run_number: 499,
+            name: 'teammate: workflow_dispatch # · pr-1151 review',
+            status: 'in_progress', path: '.github/workflows/quality.yml', created_at: FIVE_MIN_AGO, updated_at: FIVE_MIN_AGO
+        };
+        var v = dedup.decideEventDedup({
+            eventName: 'workflow_dispatch', pr: 1151, leg: 'review',
+            runs: [zombie, self, foreignWf], selfRun: { id: 11, runNumber: 500, createdAt: NOW_MS }, nowMs: NOW_MS
+        });
+        assert.equal(v.proceed, true);
+    });
+
+    test('non-issues non-workflow_dispatch eventName passes through', function () {
+        var v = dedup.decideEventDedup({ eventName: 'schedule', runs: [] });
         assert.equal(v.proceed, true);
         assert.equal(v.reason, 'dispatch-path');
     });
@@ -506,5 +621,20 @@ suite('ai-teammate.yml — the dedup gate is wired into the stub', function () {
         // duplicates (AC2 dead in production).
         assert.ok(yml.indexOf('nowMs: Date.now()') !== -1,
             'the probe passes the wall clock into the decision');
+    });
+
+    test('UT-wf-1: concurrency.group isolates PR-anchored runs and probe passes INPUT_PR + INPUT_LEG', function () {
+        assert.ok(yml.indexOf("format('pr-{0}', github.event.inputs.pr)") !== -1,
+            'concurrency group falls back to pr-<N> when issue is empty');
+        assert.ok(yml.indexOf("INPUT_PR: ${{ github.event.inputs.pr || '' }}") !== -1,
+            'dedup probe step receives INPUT_PR');
+        assert.ok(yml.indexOf("INPUT_LEG: ${{ github.event.inputs.leg || '' }}") !== -1,
+            'dedup probe step receives INPUT_LEG');
+        assert.ok(yml.indexOf('pr: parseInt(env.INPUT_PR, 10)') !== -1,
+            'decideEventDedup receives pr anchor');
+        assert.ok(yml.indexOf('leg: env.INPUT_LEG') !== -1,
+            'decideEventDedup receives explicit leg');
+        assert.ok(yml.indexOf("if (env.EVENT_NAME === 'workflow_dispatch')") === -1,
+            'workflow_dispatch early bypass is removed so dispatch runs are deduplicated');
     });
 });

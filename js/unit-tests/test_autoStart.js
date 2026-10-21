@@ -24,15 +24,36 @@ function makeBuildEncodedConfigMock() {
     };
 }
 
+function wrapListWorkflowRunsMock(fn) {
+    if (!fn) return function() { return JSON.stringify({ workflow_runs: [] }); };
+    return function(a, b, c, d, e) {
+        if (a && typeof a === 'object') {
+            return fn(a.workspace, a.repository, a.status, a.workflowId, a.perPage);
+        }
+        return fn(a, b, c, d, e);
+    };
+}
+
+function wrapTriggerWorkflowMock(fn) {
+    if (!fn) return function() {};
+    return function(a, b, c, d, e) {
+        if (a && typeof a === 'object') {
+            return fn(a.workspace, a.repository, a.workflowId, a.inputs, a.ref);
+        }
+        return fn(a, b, c, d, e);
+    };
+}
+
 function loadAutoStartHelper(scmMocks, builderMock, extraMocks) {
+    var rawMocks = scmMocks || {};
     var scm = loadModule(
         'js/common/scm.js',
         makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js'),
             './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })) }),
-        Object.assign({
-            github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); },
-            github_trigger_workflow: function() {}
-        }, scmMocks || {})
+        Object.assign({}, rawMocks, {
+            github_list_workflow_runs: wrapListWorkflowRunsMock(rawMocks.github_list_workflow_runs),
+            github_trigger_workflow: wrapTriggerWorkflowMock(rawMocks.github_trigger_workflow)
+        })
     );
     var buildEncodedConfig = builderMock || makeBuildEncodedConfigMock();
     return loadModule(

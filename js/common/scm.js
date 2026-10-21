@@ -232,6 +232,20 @@ function _githubBuildInlineCommentOpts(workspace, repository, prId, filePath, li
     return opts;
 }
 
+function _githubListWorkflowRuns(workspace, repository, status, workflowId, limit, owner, repo) {
+    var args = { workspace: owner || workspace, repository: repo || repository, perPage: limit || 50 };
+    if (status) args.status = status;
+    if (workflowId) args.workflowId = workflowId;
+    return github_list_workflow_runs(args);
+}
+
+function _githubTriggerWorkflow(workspace, repository, owner, repo, workflowFile, payload, ref) {
+    var inputStr = (typeof payload === 'string') ? payload : JSON.stringify(payload || {});
+    var args = { workspace: owner || workspace, repository: repo || repository, workflowId: workflowFile, inputs: inputStr };
+    if (ref) args.ref = ref;
+    return github_trigger_workflow(args);
+}
+
 // Primary diff tier: DMTools v1.7.210+ exposes a tool that returns the raw
 // diff text (see the casing note on _githubGetDiffText). Returns the usable
 // diff or null so the caller falls back gracefully.
@@ -592,10 +606,10 @@ function _createGithubProvider(workspace, repository) {
             return github_get_job_logs({ workspace: workspace, repository: repository, jobId: String(jobId) });
         },
         listWorkflowRuns: function(status, workflowId, limit, owner, repo) {
-            return github_list_workflow_runs(owner || workspace, repo || repository, status, workflowId, limit || 50);
+            return _githubListWorkflowRuns(workspace, repository, status, workflowId, limit, owner, repo);
         },
         triggerWorkflow: function(owner, repo, workflowFile, payload, ref) {
-            return github_trigger_workflow(owner, repo, workflowFile, payload, ref);
+            return _githubTriggerWorkflow(workspace, repository, owner, repo, workflowFile, payload, ref);
         },
         updateBranch: function(prId, owner, repo) {
             return cli_execute_command({
