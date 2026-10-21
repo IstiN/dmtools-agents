@@ -60,29 +60,56 @@ function resolveParams(params, envMap) {
     };
 }
 
+function resolveGlobalFn(injected, globalFn) {
+    if (typeof injected === 'function') return injected;
+    if (typeof globalFn === 'function') return globalFn;
+    return null;
+}
+
+function invokeFn(fn) {
+    return fn ? function (a) { return fn(a); } : undefined;
+}
+
+function invokeRead(readRaw) {
+    return readRaw ? function (p) { return readRaw({ path: p }); } : undefined;
+}
+
+function buildIo(deps) {
+    var exec = resolveGlobalFn(deps.cli_execute_command,
+        typeof cli_execute_command === 'function' ? cli_execute_command : null);
+    var readRaw = resolveGlobalFn(deps.file_read,
+        typeof file_read === 'function' ? file_read : null);
+    var writeRaw = resolveGlobalFn(deps.file_write,
+        typeof file_write === 'function' ? file_write : null);
+    var delRaw = resolveGlobalFn(deps.file_delete,
+        typeof file_delete === 'function' ? file_delete : null);
+    return {
+        exec: invokeFn(exec),
+        read: invokeRead(readRaw),
+        write: invokeFn(writeRaw),
+        del: invokeFn(delRaw),
+        log: function (line) { console.log(line); }
+    };
+}
+
+function formatSummaryLine(result) {
+    return '  🪙 token publish: ' + result.status +
+        (result.reason ? ' (' + result.reason + ')' : '') +
+        (result.key ? ' — ' + result.key + ' ' + result.leg : '') +
+        (result.attempts ? ' after ' + result.attempts + ' attempt(s)' : '');
+}
+
 /**
  * JSRunner action. deps is a test seam: production resolves the dmtools
- * globals (cli_execute_command / file_read) exactly like smAgent.js wires
- * publishFactoryState — exec MUST return the child output for the sha
- * probe to work.
+ * globals (cli_execute_command / file_read / file_write / file_delete)
+ * exactly like smAgent.js wires checkRunStamp — exec MUST return the child
+ * output for the sha probe to work.
  */
 function action(params, deps) {
     deps = deps || {};
-    var exec = deps.cli_execute_command ||
-        (typeof cli_execute_command === 'function' ? cli_execute_command : null);
-    var readRaw = deps.file_read ||
-        (typeof file_read === 'function' ? file_read : null);
-    var read = readRaw ? function (p) { return readRaw({ path: p }); } : null;
     var opts = resolveParams(params, deps.env);
-    var result = tokenUsage.publishTokenUsage(opts, {
-        exec: exec ? function (args) { return exec(args); } : undefined,
-        read: read || undefined,
-        log: function (line) { console.log(line); }
-    });
-    console.log('  🪙 token publish: ' + result.status +
-        (result.reason ? ' (' + result.reason + ')' : '') +
-        (result.key ? ' — ' + result.key + ' ' + result.leg : '') +
-        (result.attempts ? ' after ' + result.attempts + ' attempt(s)' : ''));
+    var result = tokenUsage.publishTokenUsage(opts, buildIo(deps));
+    console.log(formatSummaryLine(result));
     return result;
 }
 
