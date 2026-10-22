@@ -441,7 +441,7 @@ function createTracker(config, customParams) {
     }
 
     function adoGetComments(key) {
-        return _commentPage(ado_get_work_item_comments({ id: String(key), ticket: {} }), 'value');
+        return _commentPage(ado_get_work_item_comments({ id: String(key) }), 'value');
     }
 
     function adoMoveToStatus(key, status) {

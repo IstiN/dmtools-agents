@@ -428,7 +428,8 @@ suite('fetchQuestionsToInput — gh-1126 ADO comment-thread sentinel & custom WI
         assert.equal(wiqlCalls.length, 1);
         assert.equal(wiqlCalls[0].fields.indexOf('comment'), -1, 'comment sentinel is not sent as a WIT field');
         assert.equal(commentCalls.length, 1);
-        assert.deepEqual(commentCalls[0], { id: '501', ticket: {} });
+        assert.deepEqual(commentCalls[0], { id: '501' });
+        assert.equal('ticket' in commentCalls[0], false, 'gh-1174: must not pass ticket: {}');
         assert.equal(writes.length, 1);
         var payload = JSON.parse(writes[0].content);
         assert.equal(payload.questions.length, 1);
