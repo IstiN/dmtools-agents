@@ -303,7 +303,8 @@ suite('trackers.js ado provider', function () {
         t.postComment('4242', 'hello');
         var comments = t.getComments('4242');
         assert.deepEqual(adoAdd.calls[0], { id: '4242', comment: 'hello', format: 'markdown' });
-        assert.deepEqual(adoList.calls[0], { id: '4242', ticket: {} });
+        assert.deepEqual(adoList.calls[0], { id: '4242' });
+        assert.equal('ticket' in adoList.calls[0], false, 'gh-1174: must not pass ticket: {} which throws ClassCastException in Java MCPToolExecutor');
         assert.equal(comments[0].body, 'n1');
         assert.equal(comments[0].author, 'A');
     });
