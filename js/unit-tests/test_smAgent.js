@@ -13140,11 +13140,12 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
         'claude-sonnet-4-5': { input: 3, output: 15, cacheRead: 0.3 },
         'default': null
     });
+    var MODEL_TOKENS_AT = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     var MODEL_TOKENS = JSON.stringify({
-        'pr-31': [{ leg: 'dev', at: '2026-10-08T10:00:00Z',
+        'pr-31': [{ leg: 'dev', at: MODEL_TOKENS_AT,
             prompt: 1000000, completion: 1000000, total: 2000000,
             model: 'claude-sonnet-4-5' }],
-        'issue-7': [{ leg: 'review', at: '2026-10-08T11:00:00Z',
+        'issue-7': [{ leg: 'review', at: MODEL_TOKENS_AT,
             prompt: 1, completion: 2, total: 3, model: 'mystery-model' }]
     });
     var PRICING_PATH = 'data/model-pricing.json';
