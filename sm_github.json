@@ -554,7 +554,7 @@
         },
         {
           "id": "dev-on-assignment",
-          "description": "SM dev re-derive \u2014 the event-driven derive safety net (gh-944, night 2026-10-17: six issues assigned in one burst produced six issues-event factory runs that all derived run=false within a minute; with no SM rule re-deriving dev, the items starved 3.5h until an operator explicit-dispatched leg=dev and the 00:52Z tick processed: 0). Matches OPEN issues ASSIGNED to the machine (query.assignee carries the {machineAuthor} deployment knob \u2014 the source resolves it against jobParams/config machineAuthor, a comma-separated list searches its first login; unconfigured matches nothing, fail-closed) that carry NO loop marker labels (ai_developed / ai_pr_reviewed / pr_approved / agent:rework / agent:review / agent:skip; blocked is engine-level) and NO OPEN linked PR (query.noOpenPr \u2014 post-dev issues belong to the PR lifecycle rules: validate-fresh, rework-on-red-gate-unlatched, develop-done; a MERGED-PR issue a human reopened and a PR-less issue stay eligible). Dispatches workflow_dispatch leg=dev on ai-teammate.yml \u2014 the factory guard picks bug vs story from the title/label exactly like an event run. Idempotent by construction: the in-flight guard (stub-anchor tokens, including the factory's '#<n>' run-title shape) suppresses while ANY leg on the anchor runs, and the notLabels set excludes every item the loop has claimed. limit 3: a burst drains over consecutive ticks under the global workflow budget; smRuleOverrides can disable per deployment.",
+          "description": "SM dev re-derive \u2014 the event-driven derive safety net (gh-944, night 2026-10-17: six issues assigned in one burst produced six issues-event factory runs that all derived run=false within a minute; with no SM rule re-deriving dev, the items starved 3.5h until an operator explicit-dispatched leg=dev and the 00:52Z tick processed: 0). Matches OPEN issues ASSIGNED to the machine (query.assignee carries the {machineAuthor} deployment knob \u2014 the source resolves it against jobParams/config machineAuthor, a comma-separated list searches its first login; unconfigured matches nothing, fail-closed) that carry NO loop marker labels (ai_developed / ai_pr_reviewed / pr_approved / agent:rework / agent:skip; blocked is engine-level) and NO OPEN linked PR (query.noOpenPr \u2014 post-dev issues belong to the PR lifecycle rules: validate-fresh, rework-on-red-gate-unlatched, develop-done; a MERGED-PR issue a human reopened and a PR-less issue stay eligible). gh-1156 (live fa#1735): agent:review is excluded from notLabels and moved to consumeLabels \u2014 review-on-issue-label requires prState:open, so agent:review on a noOpenPr:true issue without ai_developed is a stranded handoff from a non-PR dev exit (e.g. blocked_without_codegraph reset to Ready For Development); consuming it on dev re-derive self-heals already-poisoned issues automatically. Dispatches workflow_dispatch leg=dev on ai-teammate.yml \u2014 the factory guard picks bug vs story from the title/label exactly like an event run. Idempotent by construction: the in-flight guard (stub-anchor tokens, including the factory's '#<n>' run-title shape) suppresses while ANY leg on the anchor runs, and the notLabels set excludes every item the loop has claimed. limit 3: a burst drains over consecutive ticks under the global workflow budget; smRuleOverrides can disable per deployment.",
           "source": "github",
           "query": {
             "type": "issue",
@@ -567,10 +567,13 @@
               "ai_planned",
               "ai_intake",
               "agent:rework",
-              "agent:review",
-              "agent:skip"
+              "agent:skip",
+              "status:Blocked"
             ]
           },
+          "consumeLabels": [
+            "agent:review"
+          ],
           "inputs": {
             "issue": "{issueNumber}",
             "leg": "dev",

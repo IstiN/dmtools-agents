@@ -2974,16 +2974,48 @@ suite('sm github source: dev-on-assignment re-derive (gh-944)', function () {
             'the machine login is a deployment knob (resolved by the source), never a pack constant');
         assert.equal(r.query.noOpenPr, true,
             'issues the dev leg already produced a PR for stay with the PR lifecycle rules');
-        ['ai_developed', 'ai_pr_reviewed', 'pr_approved', 'agent:rework', 'agent:review', 'agent:skip']
+        ['ai_developed', 'ai_pr_reviewed', 'pr_approved', 'agent:rework', 'agent:skip', 'status:Blocked']
             .forEach(function (label) {
                 assert.ok((r.query.notLabels || []).indexOf(label) !== -1,
                     'notLabels must exclude the loop marker "' + label + '" — a live loop item is never re-derived');
             });
+        assert.equal((r.query.notLabels || []).indexOf('agent:review'), -1,
+            'gh-1156: agent:review on a noOpenPr issue without ai_developed is a stranded handoff, never a live review loop');
+        assert.deepEqual(r.consumeLabels, ['agent:review'],
+            'gh-1156: dev-on-assignment strips stranded agent:review on dispatch so poisoned issues self-heal');
         assert.equal(r.inputs.issue, '{issueNumber}', 'issue-anchored dispatch');
         assert.equal(r.inputs.leg, 'dev', 'the re-derived leg is dev');
         assert.equal(r.workflowFile, 'ai-teammate.yml', 'dispatches the factory workflow');
         assert.ok(r.limit >= 1 && r.limit <= 5,
             'bounded per tick — a burst drains over consecutive ticks (workflow budget caps concurrency)');
+    });
+
+    test('gh-1156: PR-less issue with stranded agent:review + status:Ready For Development stays eligible, while status:Blocked is excluded', function () {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.rules || (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules)) || [];
+        var r = rules.filter(function (x) { return x.id === 'dev-on-assignment'; })[0];
+        var srcMod = devLoad({
+            github_search_issues: function () {
+                return { items: [
+                    { number: 1735, labels: [{ name: 'bug' }, { name: 'agent:review' }, { name: 'status:Ready For Development' }] },
+                    { number: 1736, labels: [{ name: 'bug' }, { name: 'status:Blocked' }] },
+                    { number: 1737, labels: [{ name: 'bug' }, { name: 'ai_developed' }, { name: 'agent:review' }] }
+                ] };
+            }
+        });
+        var items = srcMod.query(r, { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: 'ai-teammate' });
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['gh-1735'],
+            'gh-1735 (stranded agent:review + Ready For Development, no open PR) matches; status:Blocked and ai_developed stay excluded');
+    });
+
+    test('gh-1156: scripts/hand-issue-to-reviewer.sh guards against non-PR dev outcomes', function () {
+        var script = file_read({ path: 'scripts/hand-issue-to-reviewer.sh' });
+        assert.contains(script, 'status:Ready For Development',
+            'hand-issue-to-reviewer.sh must skip adding agent:review when issue was reset to Ready For Development');
+        assert.contains(script, 'status:Blocked',
+            'hand-issue-to-reviewer.sh must skip adding agent:review when issue moved to Blocked');
+        assert.contains(script, 'ai_developed',
+            'hand-issue-to-reviewer.sh must require ai_developed or status:In Review before stamping agent:review');
     });
 });
 
