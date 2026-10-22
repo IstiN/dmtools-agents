@@ -508,7 +508,7 @@ suite('gh-1162 — root restoreDescription.js', function () {
                 return { legacyKey: key, desc: body.fields.description };
             }
         });
-        delete recLegacy.mocks.jira_update_description;
+        recLegacy.mocks.jira_update_description = undefined;
         var modLegacy = loadRestore(recLegacy, false, null, {
             java: { lang: { System: { getenv: function () { return 'https://env-jira.example.com/'; } } } }
         });
@@ -524,7 +524,7 @@ suite('gh-1162 — root restoreDescription.js', function () {
         // 4. Direct helper edge cases
         assert.equal(modLegacy.mergeDescriptions('Golden only', []), 'Golden only');
         assert.deepEqual(modLegacy.extractDescriptionChanges(null), []);
-        delete recLegacy.mocks.jira_update_ticket;
+        recLegacy.mocks.jira_update_ticket = undefined;
         var fallbackOnlyMod = loadRestore(recLegacy, false);
         var calledTrackerUpdate = false;
         fallbackOnlyMod.updateRestoredDescription('PROJ-1', 'text', {
