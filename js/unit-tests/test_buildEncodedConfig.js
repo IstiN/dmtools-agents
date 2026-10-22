@@ -11,8 +11,15 @@ function makeFileMapReader(fileMap) {
             return fileMap[p];
         }
         try {
-            return file_read(readOpts);
+            var res = file_read(readOpts);
+            if (res) return res;
         } catch (e) {}
+        if (typeof p === 'string' && p.indexOf('agents/') === 0) {
+            try {
+                var stripped = file_read({ path: p.substring('agents/'.length) });
+                if (stripped) return stripped;
+            } catch (e) {}
+        }
         return null;
     };
 }
