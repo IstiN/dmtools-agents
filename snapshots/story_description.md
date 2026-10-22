@@ -26,7 +26,7 @@ if you did not understand the task, or you can't finish it with right quality or
 **IMPORTANT** You must keep exact syntax and references to attachments if there are any in description of the ticket. Especially if we need it in future. If you remove reference from description we lose attachments. For instance, if initial description has !image-20250923-195553.png|width=763,alt="image-20250923-195553.png"!, it must be presented in new description as well.
 **IMPORTANT** You must keep ALL links and references from initial description logically inserted to output description. Otherwise you lose it. You can add section like: References [Link]
 **IMPORTANT** if current description looks fully correct look any mentions of tagging account like [~accountid:712020:39ae9870-8a56-44be-945e-a8ad26273932], which means user asked extra improvements. That can be in comments or in the texts.
-**IMPORTANT** Read 'input/existing_questions.json' to see existing question subtasks for this story (fields: key, summary, description, status, priority). Use these questions and their answers as context when writing the description.
+**IMPORTANT** Read 'input/existing_questions.json' to see existing question subtasks for this story (fields: key, summary, description, status, priority, answer). Only apply answers that are actually present in `answer` (or an explicit recorded decision in `description`). If `answer` is `null` or empty and no final decision is recorded, NEVER invent or guess an option — treat the question as unanswered / answer unavailable.
 
 
 ---
@@ -52,11 +52,11 @@ Your task is to write a story description. Write your output to `outputs/respons
 Always read these files first if present:
 - `request.md` — full ticket details and requirements
 - `comments.md` — ticket comment history with context and prior decisions
-- `existing_questions.json` — clarification Q&A. For each question entry:
-  - Read the full `description` field — it contains background, options, and the **Decision** (e.g. "Decision: Option A")
-  - The chosen option specifies exact behavior (numbers, limits, wording). **Use those exact values in every AC that relates to that question.**
-  - When an AC is directly based on a question decision, add a reference: `(see [TICKET-KEY])` at the end of the AC line, where TICKET-KEY is the key from `existing_questions.json`.
-  - NEVER fall back to the original/default values described in the background if the decision explicitly overrides them.
+- `existing_questions.json` — clarification Q&A. For each question entry (`key`, `summary`, `description`, `status`, `priority`, `answer`):
+  - Check the `answer` field first for the user's decision, and also read `description` for background, options, or an explicit recorded **Decision**.
+  - When a question has a confirmed answer (non-empty `answer` or an explicit final `Decision:` in `description`), the chosen option specifies exact behavior (numbers, limits, wording). **Use those exact values in every AC that relates to that question**, and NEVER fall back to original/default values that the decision overrides.
+  - When an AC is directly based on a confirmed question decision, add a reference: `(see [TICKET-KEY])` at the end of the AC line, where TICKET-KEY is the key from `existing_questions.json`.
+  - **CRITICAL: If `answer` is `null` or empty and `description` has no explicit final decision, NEVER invent, guess, or default to an option (such as "Option A").** Treat the question as unanswered (`answer unavailable`), do NOT attribute a decision to `(see [TICKET-KEY])`, and either leave the undecided behavior out or explicitly note that the question is still open / answer unavailable.
 - any other files in the input folder — attachments, designs, references
 
 **CRITICAL: Read ALL files in the input folder, including images.**

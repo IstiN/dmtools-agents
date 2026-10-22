@@ -441,7 +441,7 @@ function createTracker(config, customParams) {
     }
 
     function adoGetComments(key) {
-        return _commentPage(ado_get_work_item_comments({ id: String(key) }), 'value');
+        return _commentPage(ado_get_work_item_comments({ id: String(key), ticket: {} }), 'value');
     }
 
     function adoMoveToStatus(key, status) {
@@ -1156,7 +1156,7 @@ function createTracker(config, customParams) {
             } else {
                 impl.assignTo(ticketKey, initiatorId);
             }
-            impl.moveToStatus(ticketKey, statusName);
+            moveToStatusOrMark(ticketKey, statusName, 'IN_REVIEW');
             impl.addLabel(ticketKey, aiLabel);
             if (wipLabel) {
                 try {

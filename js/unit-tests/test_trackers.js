@@ -303,7 +303,7 @@ suite('trackers.js ado provider', function () {
         t.postComment('4242', 'hello');
         var comments = t.getComments('4242');
         assert.deepEqual(adoAdd.calls[0], { id: '4242', comment: 'hello', format: 'markdown' });
-        assert.deepEqual(adoList.calls[0], { id: '4242' });
+        assert.deepEqual(adoList.calls[0], { id: '4242', ticket: {} });
         assert.equal(comments[0].body, 'n1');
         assert.equal(comments[0].author, 'A');
     });
@@ -862,6 +862,54 @@ suite('trackers.js assignForReview', function () {
         var result = trackers.createTracker({}, { trackerProvider: 'jira' }).assignForReview('PROJ-123', 'acc-1');
         assert.notOk(result.success);
         assert.contains(result.error, 'boom');
+    });
+
+    test('gh-1168: stageFallback="label" falls back to stage_in_review label and completes handoff when moveToStatus fails', function () {
+        var adoMove = recorder('ado_move_to_state', {
+            __throw__: new Error("The field 'State' contains the value 'In Review' that is not in the list of supported values")
+        });
+        var adoAddLabel = recorder('ado_add_work_item_label', '{}');
+        var adoRemoveLabel = recorder('ado_remove_work_item_label', '{}');
+        var adoComment = recorder('ado_add_work_item_comment', '{}');
+        var adoGet = recorder('ado_get_work_item', JSON.stringify({
+            id: 491,
+            fields: { 'System.Title': 'Story', 'System.State': 'Active', 'System.Tags': 'story_wip' }
+        }));
+        var trackers = loadTrackers({
+            ado_move_to_state: adoMove,
+            ado_add_work_item_label: adoAddLabel,
+            ado_remove_work_item_label: adoRemoveLabel,
+            ado_add_work_item_comment: adoComment,
+            ado_get_work_item: adoGet
+        });
+        var t = trackers.createTracker(
+            { tracker: { provider: 'ado' }, jira: { stageFallback: 'label' } },
+            { trackerProvider: 'ado' }
+        );
+        var result = t.assignForReview('491', undefined, 'story_wip', 'In Review');
+        assert.equal(result.success, true, 'expected success with stageFallback=label: ' + JSON.stringify(result));
+        assert.deepEqual(
+            adoAddLabel.calls.map(function (c) { return c.label; }),
+            ['stage_in_review', configModule.LABELS.AI_GENERATED]
+        );
+        assert.deepEqual(
+            adoRemoveLabel.calls.map(function (c) { return c.label; }),
+            ['story_wip']
+        );
+        assert.equal(adoComment.calls.length, 1);
+        assert.contains(adoComment.calls[0].comment, 'stage_in_review');
+    });
+
+    test('gh-1168: default stageFallback="none" still fails assignForReview when moveToStatus throws', function () {
+        var mocks = jiraMocks();
+        mocks.jira_move_to_status = recorder('jira_move_to_status', {
+            __throw__: new Error("The field 'State' contains the value 'In Review' that is not in the list of supported values")
+        });
+        var trackers = loadTrackers(mocks);
+        var result = trackers.createTracker({}, { trackerProvider: 'jira' }).assignForReview('PROJ-123', 'acc-1', 'wip');
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'not in the list of supported values');
+        assert.equal(mocks.jira_add_label.calls.length, 0);
     });
 });
 
