@@ -1,13 +1,10 @@
 # story test automation rework
 
-Reworks a story-test-automation PR after review: fixes the test code per review comments and pushes the updates.
+Resolves open PR review threads (`outputs/review_replies.json`) and fixes test code on a bulk Story test automation branch (`test/{STORY_KEY}`), re-running affected Test Cases and updating `outputs/story_test_automation_result.json`.
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
-
-- `autoStartReview` — when `true`, automatically trigger the PR review workflow after this agent finishes.
-- `autoStartReviewConfigFile` — agent config file used for the auto-started review workflow.
-- `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
-- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
-- `testFilesGlob` — glob that selects which test files belong to this automation scope.
+- `removeLabel` — clears `sm_story_test_rework_triggered` after rework finishes.
+- `checkOpenPR` — verifies an open story test PR exists before starting.
+- `testFilesGlob` — restricts reworked commits to matching paths under `testing/`.
+- `autoStartReview` / `autoStartReviewConfigFile` — re-triggers `pr_story_test_automation_review` once fixes land.

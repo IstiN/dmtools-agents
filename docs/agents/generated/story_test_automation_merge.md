@@ -1,14 +1,12 @@
 # Story Test Automation Merge
 
-Merges an approved story-test-automation PR and updates the story ticket with the result.
+Merges an approved Story bulk test automation PR (`test/{STORY_KEY}`) and advances the Story and its passing Test Cases to Done.
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
-
-- `onlyAttemptMerge` — when `true`, only attempt the merge and report the result without further ticket transitions.
-- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
-- `storyTestMerge` — merge behavior overrides specific to story test automation PRs.
+- `removeLabel` — removes `sm_story_test_merge_triggered` after the run.
+- `onlyAttemptMerge` — when enabled, only merges the PR and skips story/test ticket transitions.
+- `storyTestMerge` — configuration block controlling bulk story test PR merge checks.
 
 _Human doc: [`agents/docs/agents/story_test_automation_merge.md`](agents/docs/agents/story_test_automation_merge.md)_
 

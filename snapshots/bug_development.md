@@ -147,7 +147,53 @@ flowchart TD
 
 ---
 
-### [7] `./agents/instructions/bug_development/output_rules.md`
+### [7] `./agents/instructions/common/tdd_test_directory.md`
+
+# TDD Test Directory Rules
+
+Write failing unit or widget tests in the project's standard unit-test tree **only**:
+
+- Flutter / Dart projects → `test/`
+- Node projects → `__tests__/` or `test/` according to the repo convention
+- Python projects → `tests/` or project-specific unit-test directory
+
+❌ **Never** place development TDD tests under `testing/`.
+`testing/` is owned by test-automation agents (regression probes, workflow observation tests, accessibility gates, etc.). If your production changes break existing tests there, leave them untouched and mention the breakage in `outputs/response.md` so the test-automation agent can update them.
+
+
+---
+
+### [8] `./agents/instructions/common/git_completion_guard.md`
+
+# Git Completion & Closing-Keyword Guard
+
+- **Completion guard**: Before writing `outputs/response.md`, run `git fetch origin main && git log origin/main..HEAD --oneline`. An empty result means your commits did not land — re-do or resume the work before declaring completion.
+- **No closing keywords in commits or PR bodies**: Do NOT include `Fixes #...`, `Closes #...`, or `Resolves #...` against tracker tickets unless explicitly instructed; ticket lifecycle transitions are managed by the post-action workflow.
+
+
+---
+
+### [9] `./agents/instructions/common/blocked_output_contract.md`
+
+# Blocked Output Contract (`outputs/blocked.json`)
+
+When work cannot proceed because required credentials, secrets, permissions, test data, or external human decisions are missing:
+
+1. Do **not** guess, hardcode, or fake a passing result.
+2. Write `outputs/blocked.json` at the repository root with the exact blocker details:
+   ```json
+   {
+     "reason": "Specific external blocker preventing completion",
+     "tried": ["What was checked or attempted"],
+     "needs": "Exact secret, permission, data, or decision a human must provide"
+   }
+   ```
+3. Also write `outputs/response.md` summarizing the blocker so the human sees the explanation in the ticket/PR comment.
+
+
+---
+
+### [10] `./agents/instructions/bug_development/output_rules.md`
 
 ```mermaid
 flowchart TD
@@ -172,17 +218,13 @@ flowchart TD
         A1["{<br/>commit: short hash,<br/>rca: one-sentence root cause,<br/>description: which commit/PR fixed it,<br/>verification_test: path/to/test::test name<br/>}"]
     end
 
-    subgraph BLOCKED["blocked.json format"]
-        B1["{<br/>reason: specific blocker,<br/>tried: [what was attempted],<br/>needs: what a human must provide<br/>}"]
-    end
-
-    OUTPUTS --> RCA --> ALREADY --> BLOCKED
+    OUTPUTS --> RCA --> ALREADY
 ```
 
 
 ---
 
-### [8] `./agents/instructions/bug_development/formatting_rules.md`
+### [11] `./agents/instructions/bug_development/formatting_rules.md`
 
 ```mermaid
 flowchart TD
@@ -199,7 +241,7 @@ flowchart TD
 
 ---
 
-### [9] `./agents/instructions/bug_development/few_shots.md`
+### [12] `./agents/instructions/bug_development/few_shots.md`
 
 Example bug fix PR descriptions — follow this structure and brevity:
 
@@ -215,7 +257,7 @@ flowchart TD
 
 ---
 
-### [10] `./agents/instructions/common/github_comment_format.md`
+### [13] `./agents/instructions/common/github_comment_format.md`
 
 # GitHub tracker comment
 
@@ -244,7 +286,7 @@ get them for full context using: `dmtools github_get_issue OWNER/REPO#NUMBER`
 
 ---
 
-### [11] `./agents/instructions/common/dmtools_cli.md`
+### [14] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -282,7 +324,7 @@ flowchart TD
 
 ---
 
-### [12] `./agents/instructions/common/session_ephemerality.md`
+### [15] `./agents/instructions/common/session_ephemerality.md`
 
 ```mermaid
 flowchart LR
@@ -301,7 +343,7 @@ dev runs on a completed implementation.
 
 ---
 
-### [13] `./agents/prompts/bash_tools.md`
+### [16] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD

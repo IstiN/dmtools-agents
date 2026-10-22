@@ -29,6 +29,7 @@
       "./agents/instructions/pr_test_automation_review/output_rules.md",
       "./agents/instructions/pr_test_automation_review/formatting_rules.md",
       "./agents/instructions/pr_test_automation_review/few_shots.md",
+      "./agents/instructions/pr_test_automation_review/inline_comment_mapping.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
     ],

@@ -20,9 +20,13 @@ var resolveCliPrompts = validatorModule.resolveCliPrompts;
 
 function listAgentJsons() {
     try {
-        var output = cli_execute_command({ command: 'git ls-files *.json' });
+        var output = cli_execute_command({ command: 'git ls-files "*.json"' });
         return (output || '').split('\n').filter(function(f) {
-            return f && f.trim() && f.indexOf('.json') !== -1;
+            if (!f || !f.trim()) return false;
+            var name = f.trim();
+            if (name.indexOf('/') !== -1) return false;
+            if (name === 'versions.json' || name === '.crap-baseline.json') return false;
+            return name.indexOf('.json') !== -1;
         }).map(function(f) { return f.trim(); });
     } catch (e) {
         console.warn('Could not list agent JSONs:', e);
@@ -109,19 +113,14 @@ suite('Agent JSON validation', function() {
                 var hasCliPrompts = json.params &&
                                     Array.isArray(json.params.cliPrompts) &&
                                     json.params.cliPrompts.length > 0;
+                var hasCliStep = json.name === 'Teammate' &&
+                                 !json.parent &&
+                                 json.params &&
+                                 Array.isArray(json.params.cliCommands) &&
+                                 json.params.cliCommands.length > 0;
 
-                // Agents that are intentionally not Teammate-based may skip this
-                var isNonTeammate = ['bug_test_cases_generator', 'df_manager',
-                    'recover_failed_tc_bug_status', 'recover_merged_pr',
-                    'recover_stuck_test_case', 'restoreDescription',
-                    'sm', 'sm_merge', 'test_cases_generator',
-                    'workflow_failure_reporter',
-                    'ai_teammate_token_usage_reporter'].some(function(prefix) {
-                        return agentName.indexOf(prefix) !== -1;
-                    });
-
-                if (!isNonTeammate) {
-                    assert.ok(hasCliPrompts, 'expected cliPrompts array for Teammate agent');
+                if (hasCliStep) {
+                    assert.ok(hasCliPrompts, 'expected cliPrompts array for CLI-running Teammate agent');
                 }
             });
 

@@ -133,14 +133,17 @@ function validateAgentJson(agentPath, options) {
 
     var params = agentJson.params;
     var isTeammate = agentJson.name === 'Teammate';
+    var hasCliStep = isTeammate && !agentJson.parent && Array.isArray(params.cliCommands) && params.cliCommands.length > 0;
 
-    // 3. Check cliPrompts (only for Teammate agents)
+    // 3. Check cliPrompts (only for Teammate agents that invoke a CLI step)
     if (!isTeammate) {
         addInfo(result, 'Non-Teammate agent (' + agentJson.name + ') — skipping Teammate-specific checks');
+    } else if (!hasCliStep) {
+        addInfo(result, 'JS-only Teammate agent (no cliCommands) — skipping cliPrompts requirement');
     }
 
     if (!params.cliPrompts || !Array.isArray(params.cliPrompts) || params.cliPrompts.length === 0) {
-        if (isTeammate) {
+        if (hasCliStep) {
             addError(result, 'Missing or empty "cliPrompts" array');
         }
     } else if (isTeammate) {

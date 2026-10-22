@@ -12,8 +12,7 @@
 
 ## Task steps
 
-1. **If `input/{STORY_KEY}/merge_conflicts.md` exists**, resolve all `<<<<<<<` / `=======` / `>>>>>>>` conflict markers in the listed files first, using `input/{STORY_KEY}/pr_diff.txt` for context. Stage each resolved file with `git add <file>`. Do NOT `git commit` or `git merge --abort`. Only proceed to test automation after the working directory is clean of conflicts.
-2. Run `codegraph context "{STORY_KEY} test automation existing tests and reusable helpers"` before grepping files.
+1. Resolve any `merge_conflicts.md` first per `agents/instructions/test_automation/bulk_test_automation_rules.md` and investigate existing helpers via `agents/instructions/common/codegraph_first.md`.
 2. For each linked Test Case `{TC_KEY}`:
    - Check `testing/tests/{TC_KEY}/`.
    - If the Test Case is **legacy, obsolete, or no longer applicable** (e.g., the product behavior or external contract it verified has been removed/changed), record `status: "irrelevant"` and do NOT write or keep test code for it.

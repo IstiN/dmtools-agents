@@ -38,6 +38,8 @@
       "./agents/instructions/common/coding_guidelines.md",
       "./agents/instructions/pr_rework/general_guidelines.md",
       "./agents/instructions/pr_rework/tdd_approach.md",
+      "./agents/instructions/common/tdd_test_directory.md",
+      "./agents/instructions/common/git_completion_guard.md",
       "./agents/instructions/pr_rework/formatting_rules.md",
       "./agents/instructions/pr_rework/output_rules.md",
       "./agents/instructions/common/github_comment_format.md",

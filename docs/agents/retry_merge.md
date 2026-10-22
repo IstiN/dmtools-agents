@@ -1,13 +1,10 @@
 # retry merge
 
-Retries a pull request merge that previously failed (for example due to temporary CI flakiness) and reports the outcome.
+Retries merging an approved feature or bug-fix pull request that was blocked by a transient conflict or CI check, syncing the branch and completing the ticket transition on success.
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
-
-- `autoStartRework` — when `true`, automatically trigger the rework workflow when the review asks for changes.
-- `autoStartReworkConfigFile` — agent config file used for the auto-started rework workflow.
-- `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
-- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
-- `testCaseMerge` — merge behavior overrides specific to test-case automation PRs.
+- `removeLabel` — clears `sm_retry_merge_triggered` after the retry finishes.
+- `checkOpenPR` — confirms the PR is still open before attempting the merge.
+- `testCaseMerge` — merge options shared with test-case PR merge handlers.
+- `autoStartRework` / `autoStartReworkConfigFile` — routes the PR to rework if merge conflicts or checks fail.

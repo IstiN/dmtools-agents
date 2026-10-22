@@ -161,7 +161,33 @@ flowchart TD
 
 ---
 
-### [7] `./agents/instructions/pr_rework/formatting_rules.md`
+### [7] `./agents/instructions/common/tdd_test_directory.md`
+
+# TDD Test Directory Rules
+
+Write failing unit or widget tests in the project's standard unit-test tree **only**:
+
+- Flutter / Dart projects → `test/`
+- Node projects → `__tests__/` or `test/` according to the repo convention
+- Python projects → `tests/` or project-specific unit-test directory
+
+❌ **Never** place development TDD tests under `testing/`.
+`testing/` is owned by test-automation agents (regression probes, workflow observation tests, accessibility gates, etc.). If your production changes break existing tests there, leave them untouched and mention the breakage in `outputs/response.md` so the test-automation agent can update them.
+
+
+---
+
+### [8] `./agents/instructions/common/git_completion_guard.md`
+
+# Git Completion & Closing-Keyword Guard
+
+- **Completion guard**: Before writing `outputs/response.md`, run `git fetch origin main && git log origin/main..HEAD --oneline`. An empty result means your commits did not land — re-do or resume the work before declaring completion.
+- **No closing keywords in commits or PR bodies**: Do NOT include `Fixes #...`, `Closes #...`, or `Resolves #...` against tracker tickets unless explicitly instructed; ticket lifecycle transitions are managed by the post-action workflow.
+
+
+---
+
+### [9] `./agents/instructions/pr_rework/formatting_rules.md`
 
 ```mermaid
 flowchart TD
@@ -180,7 +206,7 @@ flowchart TD
 
 ---
 
-### [8] `./agents/instructions/pr_rework/output_rules.md`
+### [10] `./agents/instructions/pr_rework/output_rules.md`
 
 ## PR Rework — Output Rules
 
@@ -239,7 +265,7 @@ otherwise.
 
 ---
 
-### [9] `./agents/instructions/common/github_comment_format.md`
+### [11] `./agents/instructions/common/github_comment_format.md`
 
 # GitHub tracker comment
 
@@ -268,7 +294,7 @@ get them for full context using: `dmtools github_get_issue OWNER/REPO#NUMBER`
 
 ---
 
-### [10] `./agents/instructions/common/dmtools_cli.md`
+### [12] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -306,7 +332,7 @@ flowchart TD
 
 ---
 
-### [11] `./agents/prompts/bash_tools.md`
+### [13] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD

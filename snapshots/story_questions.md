@@ -378,11 +378,11 @@ When the target tracker is Jira, replace every generic placeholder tag from the 
 
 ### Tracker: `ado`
 
-#### [1] `./agents/instructions/tracker/ado_markup_transform.md`
+#### [1] `./agents/instructions/tracker/gfm_markup_table.md`
 
-# ADO Markup Reference
+# GitHub-Flavored Markdown Placeholder Table
 
-When the target tracker is Azure DevOps, replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown below. Do not write literal XML-style tags in the final output.
+Replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown below. Do not write literal XML-style tags in the final output.
 
 | Generic placeholder | Markdown | Example |
 |---------------------|----------|---------|
@@ -398,13 +398,21 @@ When the target tracker is Azure DevOps, replace every generic placeholder tag f
 | `<heading1>X</heading1>` | `# X` | `# Title` |
 | `<heading2>X</heading2>` | `## X` | `## Section` |
 | `<heading3>X</heading3>` | `### X` | `### Subsection` |
-| `<link>text\|url</link>` | `[text](url)` | `[TS-24](https://dev.azure.com/.../12345)` |
+| `<link>text\|url</link>` | `[text](url)` | `[TS-24](https://tracker.example.com/browse/TS-24)` |
 | `<image>url</image>` | `![image](url)` | `![diagram](https://.../diagram.png)` |
 | `<quote>X</quote>` | `> X` | `> cited text` |
 | `<panel>X</panel>` | `> X` | `> note` |
 | `<color color="red">X</color>` | `<span style="color:red">X</span>` | `<span style="color:red">alert</span>` |
 | `<hr>` | `---` | `---` |
 
+
+---
+
+#### [2] `./agents/instructions/tracker/ado_markup_transform.md`
+
+# ADO Markup Reference
+
+When the target tracker is Azure DevOps, replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown in `agents/instructions/tracker/gfm_markup_table.md`. Do not write literal XML-style tags in the final output.
 ## Rules
 
 - Replace every placeholder tag with the Markdown shown above.

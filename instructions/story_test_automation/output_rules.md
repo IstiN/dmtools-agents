@@ -2,27 +2,7 @@
 
 ## Mandatory JSON output
 
-Write `outputs/story_test_automation_result.json` with exactly this schema in a single `Write` call. Do NOT use `Edit` on this file — if you need to correct it, rewrite the entire file. The post-action parses this file with a strict JSON parser; any `Edit`-induced formatting corruption will cause the whole run to fail.
-
-```json
-{
-  "storyKey": "TS-123",
-  "overall": "passed|failed|blocked_by_human",
-  "summary": "Short human-readable summary of what was done.",
-  "results": [
-    {
-      "testCaseKey": "TS-124",
-      "status": "passed|failed|skipped|irrelevant",
-      "testPath": "testing/tests/TS-124/...",
-      "failedDescriptionFile": "outputs/failed_description_TS-124.md",
-      "failureSummary": "One-line failure summary when status is failed."
-    }
-  ],
-  "blockedReason": "Explanation when overall is blocked_by_human."
-}
-```
-
-### Field rules
+Write `outputs/story_test_automation_result.json` using the shared contract defined in `agents/instructions/test_automation/bulk_test_automation_rules.md`.
 
 - `overall`:
   - `passed` — no `failed` results (combination of `passed`, `skipped`, and/or `irrelevant` is OK).

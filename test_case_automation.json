@@ -29,6 +29,8 @@
       "./agents/instructions/common/agent_task_preamble.md",
       "./agents/instructions/common/coding_guidelines.md",
       "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/common/codegraph_first.md",
+      "./agents/instructions/common/blocked_output_contract.md",
       "./agents/instructions/test_case_automation/general_guidelines.md",
       "./agents/instructions/test_case_automation/formatting_rules.md",
       "./agents/instructions/test_automation/test_automation_architecture.md",

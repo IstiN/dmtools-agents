@@ -82,7 +82,54 @@ flowchart TD
 
 ---
 
-### [6] `./agents/instructions/test_automation/test_automation_architecture.md`
+### [6] `./agents/instructions/test_automation/bulk_test_automation_rules.md`
+
+# Bulk Test Automation Shared Rules
+
+## Pre-flight merge conflict resolution
+
+If `merge_conflicts.md` exists in the ticket input folder, the test branch could not be cleanly synced with `origin/main`:
+1. Resolve every `<<<<<<<` / `=======` / `>>>>>>>` conflict marker in the listed files, using `pr_diff.txt` for context.
+2. Stage each resolved file with `git add <file>`.
+3. Do NOT `git commit` or `git merge --abort`. Only proceed to test automation after the working directory is clean of conflicts.
+
+## Failure classification
+
+- **Product failure**: the test ran and found a real defect or regression in the product → record status as `failed` and write `outputs/failed_description_{TC_KEY}.md`.
+- **Access / credential / permission / infrastructure failure**: the test account cannot reach a required service, repository, secret, or token → mark that Test Case as `skipped`, explain the blocker in `failureSummary`, and keep `overall` as `passed` if all other Test Cases passed. Do **not** mark it `failed`.
+- **All Test Cases blocked by missing setup**: set `overall` to `blocked_by_human` and produce `outputs/blocked.json`.
+
+## Shared `outputs/story_test_automation_result.json` contract
+
+Write `outputs/story_test_automation_result.json` in a single `Write` call (do NOT use `Edit` on this file; rewrite it completely if corrections are needed):
+
+```json
+{
+  "storyKey": "TS-123",
+  "overall": "passed|failed|blocked_by_human",
+  "summary": "Short human-readable summary of what was done.",
+  "results": [
+    {
+      "testCaseKey": "TS-124",
+      "status": "passed|failed|skipped|irrelevant",
+      "testPath": "testing/tests/TS-124/...",
+      "failedDescriptionFile": "outputs/failed_description_TS-124.md",
+      "failureSummary": "One-line failure summary when status is failed."
+    }
+  ],
+  "blockedReason": "Explanation when overall is blocked_by_human."
+}
+```
+
+- `results` must list every linked Test Case from `linked_test_cases.json`.
+- `failedDescriptionFile` and `failureSummary` are required for every `failed` entry.
+- `testPath` is required for every `passed` entry and omitted for `skipped` or `irrelevant`.
+- Also write `outputs/tracker_comment.md` summarizing the run and `outputs/failed_description_{TC_KEY}.md` for each failed Test Case.
+
+
+---
+
+### [7] `./agents/instructions/test_automation/test_automation_architecture.md`
 
 # Test Automation Architecture
 
@@ -222,7 +269,7 @@ flowchart TD
 
 ---
 
-### [7] `./agents/instructions/test_automation/test_automation_instructions.md`
+### [8] `./agents/instructions/test_automation/test_automation_instructions.md`
 
 # Test Automation Instructions
 
@@ -340,7 +387,7 @@ If test **failed**, also write `outputs/bug_description.md` with reproduction st
 
 ---
 
-### [8] `./agents/instructions/test_automation/test_automation_output_files.md`
+### [9] `./agents/instructions/test_automation/test_automation_output_files.md`
 
 # Test Automation Output Files
 
@@ -426,7 +473,7 @@ Write the structured status JSON exactly as described in `agents/instructions/te
 
 ---
 
-### [9] `./agents/instructions/test_automation/test_automation_json_output.md`
+### [10] `./agents/instructions/test_automation/test_automation_json_output.md`
 
 # Test Automation JSON Output Format
 
@@ -524,7 +571,7 @@ Use tracker-specific format:
 
 ---
 
-### [10] `./agents/prompts/bug_test_automation_rework_prompt.md`
+### [11] `./agents/prompts/bug_test_automation_rework_prompt.md`
 
 > Role: Senior QA Automation Engineer
 > Task: Fix test code based on bulk review feedback for a Bug.
@@ -549,7 +596,7 @@ Use tracker-specific format:
 
 ---
 
-### [11] `./agents/prompts/bash_tools.md`
+### [12] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -594,7 +641,7 @@ flowchart TD
 
 ---
 
-### [12] `./agents/instructions/common/dmtools_cli.md`
+### [13] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 

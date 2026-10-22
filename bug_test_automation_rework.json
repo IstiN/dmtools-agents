@@ -26,6 +26,7 @@
       "./agents/instructions/common/agent_task_preamble.md",
       "./agents/instructions/common/coding_guidelines.md",
       "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/test_automation/bulk_test_automation_rules.md",
       "./agents/instructions/test_automation/test_automation_architecture.md",
       "./agents/instructions/test_automation/test_automation_instructions.md",
       "./agents/instructions/test_automation/test_automation_output_files.md",

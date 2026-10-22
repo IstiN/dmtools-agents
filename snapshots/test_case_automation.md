@@ -76,7 +76,36 @@ flowchart TD
 
 ---
 
-### [5] `./agents/instructions/test_case_automation/general_guidelines.md`
+### [5] `./agents/instructions/common/codegraph_first.md`
+
+# CodeGraph-First Investigation Rule
+
+Before inspecting `testing/` or any source file with `grep`, `find`, `cat`, or `sed`, run a targeted CodeGraph command such as `codegraph context "<ticket key> test automation existing tests and reusable helpers"`. Use CodeGraph as the primary index for discovering existing tests, reusable helpers, and component call flows before opening files directly.
+
+
+---
+
+### [6] `./agents/instructions/common/blocked_output_contract.md`
+
+# Blocked Output Contract (`outputs/blocked.json`)
+
+When work cannot proceed because required credentials, secrets, permissions, test data, or external human decisions are missing:
+
+1. Do **not** guess, hardcode, or fake a passing result.
+2. Write `outputs/blocked.json` at the repository root with the exact blocker details:
+   ```json
+   {
+     "reason": "Specific external blocker preventing completion",
+     "tried": ["What was checked or attempted"],
+     "needs": "Exact secret, permission, data, or decision a human must provide"
+   }
+   ```
+3. Also write `outputs/response.md` summarizing the blocker so the human sees the explanation in the ticket/PR comment.
+
+
+---
+
+### [7] `./agents/instructions/test_case_automation/general_guidelines.md`
 
 ```mermaid
 flowchart TD
@@ -106,7 +135,7 @@ flowchart TD
 
 ---
 
-### [6] `./agents/instructions/test_case_automation/formatting_rules.md`
+### [8] `./agents/instructions/test_case_automation/formatting_rules.md`
 
 ```mermaid
 flowchart TD
@@ -120,7 +149,7 @@ flowchart TD
 
 ---
 
-### [7] `./agents/instructions/test_automation/test_automation_architecture.md`
+### [9] `./agents/instructions/test_automation/test_automation_architecture.md`
 
 # Test Automation Architecture
 
@@ -260,7 +289,7 @@ flowchart TD
 
 ---
 
-### [8] `./agents/instructions/test_automation/test_automation_instructions.md`
+### [10] `./agents/instructions/test_automation/test_automation_instructions.md`
 
 # Test Automation Instructions
 
@@ -378,7 +407,7 @@ If test **failed**, also write `outputs/bug_description.md` with reproduction st
 
 ---
 
-### [9] `./agents/instructions/test_automation/test_automation_output_files.md`
+### [11] `./agents/instructions/test_automation/test_automation_output_files.md`
 
 # Test Automation Output Files
 
@@ -464,7 +493,7 @@ Write the structured status JSON exactly as described in `agents/instructions/te
 
 ---
 
-### [10] `./agents/instructions/test_automation/test_automation_json_output.md`
+### [12] `./agents/instructions/test_automation/test_automation_json_output.md`
 
 # Test Automation JSON Output Format
 
@@ -562,7 +591,7 @@ Use tracker-specific format:
 
 ---
 
-### [11] `./agents/prompts/test_case_automation_prompt.md`
+### [13] `./agents/prompts/test_case_automation_prompt.md`
 
 **CRITICAL — linked bugs**: If `linked_bugs.md` is present in the input folder, read it carefully before writing any test.
 - Read the **Solution** field and **AI Fix Comments** for each bug.
@@ -576,7 +605,7 @@ If `merge_conflicts.md` is present in the input folder, the test branch could no
 
 ## Your task
 
-0. Before inspecting `testing/` or any source file, run a targeted CodeGraph command such as `codegraph context "<ticket key> test automation existing tests and reusable helpers"`. Use CodeGraph for code investigation before `grep`, `find`, `cat`, `sed`, or opening files directly.
+0. Follow `agents/instructions/common/codegraph_first.md` to query CodeGraph before inspecting `testing/` or source files.
 1. Analyze the Test Case: understand what needs to be verified, what type it is (web, mobile, API), and which framework fits best.
 2. Check `testing/` for existing components (pages, screens, services) and core utilities you can reuse.
 3. **Check if test already exists** in `testing/tests/{TICKET-KEY}/`. If it does, reuse and update it rather than rewriting from scratch. Only modify what is necessary.
@@ -621,7 +650,7 @@ Do NOT create branches or push. Do NOT modify any code outside `testing/`.
 
 ---
 
-### [12] `./agents/prompts/bash_tools.md`
+### [14] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -666,7 +695,7 @@ flowchart TD
 
 ---
 
-### [13] `./agents/instructions/common/dmtools_cli.md`
+### [15] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 

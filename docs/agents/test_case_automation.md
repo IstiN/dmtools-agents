@@ -1,13 +1,10 @@
 # test case automation
 
-Automates a single manual test case: converts it into executable test code and opens a PR with the result.
+Automates a single standalone `Test Case` ticket inside `testing/tests/{TICKET-KEY}/`, runs real user-style verification against the deployed implementation, and opens a dedicated test PR (or files a bug report in `outputs/bug_description.md` when a product defect is found).
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
-
-- `autoStartReview` — when `true`, automatically trigger the PR review workflow after this agent finishes.
-- `autoStartReviewConfigFile` — agent config file used for the auto-started review workflow.
-- `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
-- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
-- `testFilesGlob` — glob that selects which test files belong to this automation scope.
+- `removeLabel` — removes `sm_test_automation_triggered` when finished.
+- `checkOpenPR` — skips tickets that already have an active test PR.
+- `testFilesGlob` — file glob restricting which paths under `testing/` may be committed.
+- `autoStartReview` / `autoStartReviewConfigFile` — triggers `pr_test_automation_review` after the PR is created.
