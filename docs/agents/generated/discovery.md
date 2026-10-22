@@ -7,6 +7,7 @@ Runs continuous product discovery for a ticket and publishes the result as a Con
 Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
 
 - `feedbackLoop` — closes the loop after the post action: when `feedbackLoop.postAction.enabled` is `true`, reviewer answers posted after publication are re-read and the page tree is refined, at most `feedbackLoop.postAction.maxAttempts` times per ticket.
+- `contentOutput` — output routing (`target`: `'confluence'`), ensuring `cliPromptsByTracker.confluence` loads the discovery Confluence inline-comments contract.
 
 _Human doc: [`agents/docs/agents/discovery.md`](agents/docs/agents/discovery.md)_
 
@@ -107,6 +108,13 @@ _Publish Discovery To Confluence — postJSAction for the discovery agent._
     }
   }
   ```
+- `contentOutput`:
+
+  ```json
+  {
+    "target": "confluence"
+  }
+  ```
 - `adoTextFormat` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
 - `branchNamingFnPath` _(used by JS action)_
@@ -118,7 +126,6 @@ _Publish Discovery To Confluence — postJSAction for the discovery agent._
 - `stageFallback` _(used by JS action)_
 - `targetRepository` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_
-- `contentOutput` _(used by JS action)_
 - `providerTransientBackoffSec` _(used by JS action)_
 
 ---

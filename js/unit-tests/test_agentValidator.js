@@ -262,8 +262,9 @@ suite('wiki_publisher.json — generic wiki publisher base agent (gh-1112 UT-cfg
             'workflow instruction referenced');
         assert.ok(prompts.indexOf('./agents/prompts/wiki_publisher_prompt.md') !== -1,
             'entry prompt referenced');
-        assert.ok(prompts.indexOf('./agents/instructions/common/confluence_comments.md') !== -1,
-            'confluence_comments.md (inline anchor contract) referenced');
+        var t = config.params.cliPromptsByTracker || {};
+        assert.ok(Array.isArray(t.confluence) && t.confluence.indexOf('./agents/instructions/common/confluence_comments.md') !== -1,
+            'confluence_comments.md (inline anchor contract) referenced in cliPromptsByTracker.confluence');
     });
 
     test('passes the generic agent validation', function() {

@@ -209,7 +209,8 @@ jobs:
           set -e
           curl -fsSL https://github.com/IstiN/crap4dart/releases/download/v0.15.0/crap4dart-linux-x64 \
             -o "$RUNNER_TEMP/crap4dart-linux-x64" && chmod +x "$RUNNER_TEMP/crap4dart-linux-x64"
-          "$RUNNER_TEMP/crap4dart-linux-x64" check --only similarity --format json > "$RUNNER_TEMP/md-similarity.json" 2>/dev/null || true
+          "$RUNNER_TEMP/crap4dart-linux-x64" check --only similarity --format json > "$RUNNER_TEMP/md-similarity-check.json" 2>/dev/null || true
+          "$RUNNER_TEMP/crap4dart-linux-x64" similarity --jaccard 0.01 --containment 0.01 --format json > "$RUNNER_TEMP/md-similarity-all.json" 2>/dev/null || true
           node - <<'JS'
           const fs = require('fs'), path = require('path');
           const tmp = process.env.RUNNER_TEMP, thr = Number(process.env.CRAP_THRESHOLD);
@@ -233,15 +234,21 @@ jobs:
           w('crap-max.json', 'CRAP max', String(Math.round(max * 10) / 10), colorMax);
           w('crap-over.json', `CRAP > ${thr}`, `${over} fns`, colorOver);
           w('coverage.json', 'coverage', `${pct}%`, colorCov);
-          let mdPairs = 0, mdSummary = '0 similar';
+          let mdPairs = 0, maxJaccard = 0;
           try {
-            const sim = JSON.parse(fs.readFileSync(path.join(tmp, 'md-similarity.json'), 'utf8'));
+            const sim = JSON.parse(fs.readFileSync(path.join(tmp, 'md-similarity-check.json'), 'utf8'));
             const gate = (sim.gates || []).find((g) => g.id === 'similarity') || {};
             mdPairs = Array.isArray(gate.violations) ? gate.violations.length : 0;
-            const m = String(gate.summary || '').match(/(\d+)\s+files\s+scanned/);
-            mdSummary = mdPairs === 0 ? (m ? `0 / ${m[1]} files` : '0 similar') : `${mdPairs} similar`;
           } catch (_) {}
-          w('md-similarity.json', 'md similarity', mdSummary, mdPairs === 0 ? 'brightgreen' : mdPairs <= 5 ? 'yellow' : 'red');
+          try {
+            const allSim = JSON.parse(fs.readFileSync(path.join(tmp, 'md-similarity-all.json'), 'utf8'));
+            const pairs = Array.isArray(allSim.pairs) ? allSim.pairs : [];
+            if (pairs.length > 0) maxJaccard = Math.max(0, ...pairs.map((p) => Number(p.jaccard) || 0));
+          } catch (_) {}
+          const maxPct = Math.round(maxJaccard * 100);
+          const mdMsg = mdPairs === 0 ? `max ${maxPct}% (0 over 50%)` : `max ${maxPct}% (${mdPairs} over 50%)`;
+          const mdColor = mdPairs > 0 ? 'red' : maxJaccard <= 0.35 ? 'brightgreen' : maxJaccard <= 0.45 ? 'green' : 'yellow';
+          w('md-similarity.json', 'md similarity', mdMsg, mdColor);
           console.log(`badges: max=${max} over=${over} coverage=${pct}%`);
           JS
           cd "$RUNNER_TEMP/badges"

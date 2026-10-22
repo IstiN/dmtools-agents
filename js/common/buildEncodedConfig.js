@@ -145,7 +145,7 @@ function resolveConfluenceTrackerOverride(agentParamsRoot, effectiveConfig, agen
     if (patchedTarget) {
         target = patchedTarget;
     }
-    if (target !== 'confluence') {
+    if (target !== 'confluence' && target !== 'wiki') {
         return null;
     }
     var agentByTracker = agentParamsRoot && agentParamsRoot.cliPromptsByTracker;

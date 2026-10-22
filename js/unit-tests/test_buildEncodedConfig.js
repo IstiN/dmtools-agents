@@ -424,6 +424,9 @@ suite('buildEncodedConfig payload', function() {
             customParams: { contentOutput: { target: 'confluence' } }
         };
         assert.equal(builder.resolveConfluenceTrackerOverride(agentParamsRoot, {}, 'test'), 'confluence');
+        assert.equal(builder.resolveConfluenceTrackerOverride(
+            { cliPromptsByTracker: { confluence: ['./c.md'] }, customParams: { contentOutput: { target: 'wiki' } } },
+            {}, 'test'), 'confluence');
         // target both → no override (tracker field still needs tracker markup)
         assert.equal(builder.resolveConfluenceTrackerOverride(
             { cliPromptsByTracker: { confluence: ['./c.md'] }, customParams: { contentOutput: { target: 'both' } } },
