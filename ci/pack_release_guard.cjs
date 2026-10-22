@@ -30,6 +30,7 @@ function isLedgerFile(file) {
  */
 function isAgentConfigFile(file) {
   if (file.indexOf('/') !== -1) return false; // entry configs live at the root only
+  if (file.charAt(0) === '.') return false; // dot-files (.crap-baseline.json, etc.) are not agents
   // Suffix check must not use lastIndexOf: for any name shorter than 5 chars
   // lastIndexOf('.json') is -1 AND file.length - 5 is -1, so -1 !== -1 was
   // false and short root entries (.git, .fah, docs, site) passed as agents —

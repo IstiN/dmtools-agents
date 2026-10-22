@@ -55,6 +55,7 @@ function listAgentConfigs() {
     var files = fs.readdirSync(AGENTS_DIR);
     return files.filter(function(f) {
         return f.endsWith('.json') &&
+            !f.startsWith('.') &&
             f !== 'sm.json' &&
             f !== 'sm_merge.json' &&
             f !== 'versions.json' && // pack-version registry, not an agent config

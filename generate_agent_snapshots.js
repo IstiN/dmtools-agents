@@ -17,6 +17,12 @@ const REPO_ROOT = process.cwd();
 const AGENTS_DIR = REPO_ROOT;
 const SNAPSHOTS_DIR = path.join(REPO_ROOT, 'snapshots');
 
+const LEDGER_FILE = 'versions.json';
+const NON_AGENT_ROOT_JSON = {
+    'versions.json': true,
+    '.crap-baseline.json': true
+};
+
 function resolvePromptEntry(entry) {
     const trimmed = entry.trim();
     if (trimmed.endsWith('.md')) {
@@ -131,7 +137,7 @@ function generateSnapshot(agentJsonPath) {
 
 function main() {
     const files = fs.readdirSync(AGENTS_DIR)
-        .filter((f) => f.endsWith('.json'))
+        .filter((f) => f.endsWith('.json') && !NON_AGENT_ROOT_JSON[f] && !f.startsWith('.'))
         .sort();
 
     if (files.length === 0) {

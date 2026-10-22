@@ -31,31 +31,12 @@
  */
 
 // ── curated debt: unreachable files in otherwise-live directories ────────────
-// Each entry needs a linked issue deciding reference-vs-delete.
-var KNOWN_ORPHANS = [
-    'instructions/common/bash_tools.md',
-    'instructions/common/investigate_before_answer.md',
-    'instructions/common/investigate_before_questioning.md',
-    'instructions/common/json_validation.md',
-    'instructions/pr_story_test_automation_review/general_guidelines.md',
-    'instructions/story_questions/file_handling.md',
-    'instructions/test_automation/mobile_test_instructions.md',
-    'instructions/test_automation/pr_test_review_instructions.md'
-];
+// Emptied in gh-1147 after deleting all 44 verified-unreachable legacy .md files.
+var KNOWN_ORPHANS = [];
 
 // Directories that are 100% legacy (no reachable file at all) are skipped by
-// R2/R3 wholesale — they are pre-restructure leftovers awaiting a cleanup PR.
-// A directory leaves this list the moment any of its files becomes reachable.
-var LEGACY_DIRS = [
-    'instructions/bug',
-    'instructions/development',
-    'instructions/enhancement',
-    'instructions/intake',
-    'instructions/platform',
-    'instructions/review',
-    'instructions/rework',
-    'instructions/scm'
-];
+// R2/R3 wholesale. Emptied in gh-1147 after deleting all legacy directories.
+var LEGACY_DIRS = [];
 
 // Known dangling references — TEXT pointers inside JS actions that mention
 // files which never existed in git (prepareBugFixBatchContext.js points the
@@ -123,13 +104,14 @@ function listNames(dir) {
     return entries.map(function (e) {
         var s = String(e).replace(/\\/g, '/');
         var cut = s.indexOf('/instructions/');
+        if (cut === -1) cut = s.indexOf('/prompts/');
         if (cut !== -1) return s.slice(cut + 1);
         var slash = s.lastIndexOf('/');
         return slash === -1 ? s : s.slice(slash + 1);
     }).filter(function (n) { return n && n[0] !== '.'; });
 }
 
-// Recursively collect repo-relative 'instructions/**.md' paths.
+// Recursively collect repo-relative '<rootDir>/**.md' paths.
 function collectInstructionFiles(dir, acc) {
     acc = acc || {};
     var out = file_list(fsPath(dir));
@@ -137,6 +119,7 @@ function collectInstructionFiles(dir, acc) {
     ((out && out.entries) || []).forEach(function (e) {
         var s = String(e).replace(/\\/g, '/');
         var cut = s.indexOf('/instructions/');
+        if (cut === -1) cut = s.indexOf('/prompts/');
         var rel = cut !== -1 ? s.slice(cut + 1) : dir + '/' + s.slice(s.lastIndexOf('/') + 1);
         var name = rel.slice(rel.lastIndexOf('/') + 1);
         if (name[0] === '.') return;
@@ -192,7 +175,7 @@ function buildClosure() {
     while (queue.length) {
         var p = queue.pop();
         if (existsOnDisk(p)) scanFile(p);
-        else if (/^instructions\//.test(p)) dangling[p] = true;
+        else if (/^(?:instructions|prompts)\//.test(p)) dangling[p] = true;
     }
     return { reachable: reachable, dangling: Object.keys(dangling) };
 }
@@ -214,9 +197,10 @@ suite('instructionRefs — pack reference integrity', function () {
             'dangling references (file moved or typo?): ' + real.join(', '));
     });
 
-    test('R2: live instruction directories are fully reachable', function () {
+    test('R2: live instruction and prompt directories are fully reachable (0 orphans)', function () {
         var c = buildClosure();
-        var files = Object.keys(collectInstructionFiles('instructions'));
+        var files = Object.keys(collectInstructionFiles('instructions'))
+            .concat(Object.keys(collectInstructionFiles('prompts')));
         var byDir = {};
         files.forEach(function (f) {
             var d = dirOf(f);
@@ -226,12 +210,12 @@ suite('instructionRefs — pack reference integrity', function () {
         });
         var violators = [];
         Object.keys(byDir).forEach(function (d) {
-            if (byDir[d].any && !isLegacy(d) && byDir[d].missing.length) {
+            if (!isLegacy(d) && byDir[d].missing.length) {
                 violators.push(d + ': ' + byDir[d].missing.join(', '));
             }
         });
         assert.deepEqual(violators, [],
-            'files present in a live directory but never packed ' +
+            'files present in instructions/ or prompts/ but never packed ' +
             '(reference them from the base config or delete them): ' +
             violators.join(' | '));
     });
