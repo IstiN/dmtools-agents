@@ -65,21 +65,33 @@ function extractDescriptionChanges(values) {
     return descChanges;
 }
 
+function resolveEntryAuthor(entry) {
+    return (entry && entry.author && entry.author.displayName) ? entry.author.displayName : 'unknown';
+}
+
+function toDescriptionChangeRecord(entry, author, item) {
+    if (!item || item.field !== 'description') {
+        return null;
+    }
+    return {
+        created: entry.created,
+        author: author,
+        fromString: item.fromString || '',
+        toString: item.toString || ''
+    };
+}
+
 function appendEntryDescriptionChanges(descChanges, entry) {
     var items = (entry && entry.items) || [];
-    var author = (entry && entry.author && entry.author.displayName) ? entry.author.displayName : 'unknown';
+    var author = resolveEntryAuthor(entry);
     for (var j = 0; j < items.length; j++) {
-        var item = items[j];
-        if (item && item.field === 'description') {
-            descChanges.push({
-                created: entry.created,
-                author: author,
-                fromString: item.fromString || '',
-                toString: item.toString || ''
-            });
+        var record = toDescriptionChangeRecord(entry, author, items[j]);
+        if (record) {
+            descChanges.push(record);
         }
     }
 }
+
 
 function longerText(best, candidate) {
     return candidate.length > best.length ? candidate : best;
