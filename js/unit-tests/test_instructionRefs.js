@@ -96,15 +96,23 @@ function readText(p) {
     return typeof c === 'string' ? c : String(c);
 }
 
-// file_list(dir) -> { entries: [absolute paths] }; returns repo-relative names
-function listNames(dir) {
+function listEntries(dir) {
     var out = file_list(fsPath(dir));
     if (typeof out === 'string') out = JSON.parse(out);
-    var entries = (out && out.entries) || [];
-    return entries.map(function (e) {
+    return (out && out.entries) || [];
+}
+
+function toRelFromRootDir(s, dir) {
+    var cut = s.indexOf('/instructions/');
+    if (cut === -1) cut = s.indexOf('/prompts/');
+    return cut !== -1 ? s.slice(cut + 1) : dir + '/' + s.slice(s.lastIndexOf('/') + 1);
+}
+
+// file_list(dir) -> { entries: [absolute paths] }; returns repo-relative names
+function listNames(dir) {
+    return listEntries(dir).map(function (e) {
         var s = String(e).replace(/\\/g, '/');
         var cut = s.indexOf('/instructions/');
-        if (cut === -1) cut = s.indexOf('/prompts/');
         if (cut !== -1) return s.slice(cut + 1);
         var slash = s.lastIndexOf('/');
         return slash === -1 ? s : s.slice(slash + 1);
@@ -114,20 +122,12 @@ function listNames(dir) {
 // Recursively collect repo-relative '<rootDir>/**.md' paths.
 function collectInstructionFiles(dir, acc) {
     acc = acc || {};
-    var out = file_list(fsPath(dir));
-    if (typeof out === 'string') out = JSON.parse(out);
-    ((out && out.entries) || []).forEach(function (e) {
+    listEntries(dir).forEach(function (e) {
         var s = String(e).replace(/\\/g, '/');
-        var cut = s.indexOf('/instructions/');
-        if (cut === -1) cut = s.indexOf('/prompts/');
-        var rel = cut !== -1 ? s.slice(cut + 1) : dir + '/' + s.slice(s.lastIndexOf('/') + 1);
-        var name = rel.slice(rel.lastIndexOf('/') + 1);
-        if (name[0] === '.') return;
-        if (/\.md$/.test(rel)) {
-            acc[rel] = true;
-        } else if (file_exists(s) === true) {
-            collectInstructionFiles(rel, acc); // subdirectory (absolute probe)
-        }
+        var rel = toRelFromRootDir(s, dir);
+        if (rel.slice(rel.lastIndexOf('/') + 1)[0] === '.') return;
+        if (/\.md$/.test(rel)) acc[rel] = true;
+        else if (file_exists(s) === true) collectInstructionFiles(rel, acc);
     });
     return acc;
 }
