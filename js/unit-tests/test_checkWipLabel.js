@@ -299,6 +299,35 @@ suite('checkWipLabel: ado tracker provider', function() {
         assert.equal(calls[0].id, '101');
         assert.contains(calls[0].comment, 'work is in progress');
     });
+
+    test('repro (gh-1163): project config tracker.provider="ado" without customParams.trackerProvider routes checkOpenPR skip comment to ado_add_work_item_comment', function() {
+        var adoCalls = [];
+        var mocks = {
+            ado_add_work_item_comment: function(a) { adoCalls.push(a); },
+            jira_post_comment: function() { throw new Error('jira_post_comment must not be called on ado'); }
+        };
+        var module = loadModule('js/checkWipLabel.js', makeRequire({
+            './configLoader.js': {
+                loadProjectConfig: function() { return { tracker: { provider: 'ado' } }; },
+                createScm: function() { return {}; }
+            },
+            './common/githubHelpers.js': {
+                findPRForTicket: function() { return null; }
+            },
+            './common/trackers.js': trackersWith(mocks)
+        }), mocks);
+
+        var result = module.action({
+            ticket: makeTicket('2174969', []),
+            metadata: { contextId: 'pr_rework' },
+            jobParams: { customParams: { checkOpenPR: true } }
+        });
+
+        assert.equal(result, false);
+        assert.equal(adoCalls.length, 1);
+        assert.equal(adoCalls[0].id, '2174969');
+        assert.contains(adoCalls[0].comment, 'No open Pull Request found');
+    });
 });
 
 // ── gh-1077: open-PR guard branch coverage (characterization) ────────────────

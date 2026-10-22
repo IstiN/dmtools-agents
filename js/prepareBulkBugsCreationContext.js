@@ -145,9 +145,9 @@ function parentLabel(fields) {
     return fields.parent ? fields.parent.key + ' — ' + (fields.parent.fields && fields.parent.fields.summary || '') : '';
 }
 
-function fetchHistoricalDoneBugs(tcKey, tracker) {
+function fetchHistoricalDoneBugs(tcKey, tracker, config) {
     try {
-        tracker = tracker || trackersModule.createTracker(null, {});
+        tracker = tracker || trackersModule.createTracker(config, {});
         var provider = typeof tracker.provider === 'function' ? tracker.provider() : 'jira';
         // JQL text: provider-specific query (WIQL on ado)
         var bugs = tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(provider, tcKey, 'issuetype = Bug AND status in (Done) ORDER BY updated DESC', { issueType: 'Bug', statusIn: ['Done'] }), {

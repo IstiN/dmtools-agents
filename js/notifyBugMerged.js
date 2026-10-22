@@ -42,15 +42,23 @@ function findDevSummaryComment(comments) {
     return found.length > 0 ? found[found.length - 1].body : '';
 }
 
+function resolveProjectConfig(params) {
+    return loadProjectConfig(params && params.jobParams ? params.jobParams : params);
+}
+
+function _configuredBugSolutionField(fields) {
+    if (!fields) return 'Solution';
+    return fields.bugSolution || fields.solution || 'Solution';
+}
+
 /**
  * Use AI to generate a Solution field value from the bug description + dev summary.
  * Writes the result to the Jira "Solution" field so the TestCasesGenerator
  * has RCA context when generating regression and prevention test cases.
  */
 function resolveBugSolutionField(params) {
-    const config = loadProjectConfig(params && params.jobParams ? params.jobParams : params);
-    const fields = config && config.jira && config.jira.fields ? config.jira.fields : {};
-    return fields.bugSolution || fields.solution || 'Solution';
+    const config = resolveProjectConfig(params);
+    return _configuredBugSolutionField(config && config.jira && config.jira.fields);
 }
 
 function updateSolutionField(ticketKey, ticketDescription, comments, params) {
@@ -93,7 +101,8 @@ function updateSolutionField(ticketKey, ticketDescription, comments, params) {
 function action(params) {
     try {
         const ticketKey = params.ticket.key;
-        initTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+        const projectConfig = resolveProjectConfig(params);
+        initTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         const ticketDescription = params.ticket.fields && params.ticket.fields.description
             ? params.ticket.fields.description : '';
         console.log('=== Bug merged notification for', ticketKey, '===');
@@ -138,7 +147,7 @@ function action(params) {
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, config: projectConfig, customParams: tokenUsageComment.customParamsOf(params) });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }

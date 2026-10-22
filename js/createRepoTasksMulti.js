@@ -26,8 +26,14 @@
 var configModule = require('./config.js');
 var trackersModule = require('./common/trackers.js');
 var linkedIssuesReport = require('./common/linkedIssuesReport.js');
+var configLoader = null;
+try { configLoader = require('./configLoader.js'); } catch (e) {}
 var truncateSummary = configModule.truncateSummary;
 var JIRA_SUMMARY_MAX_LENGTH = configModule.JIRA_SUMMARY_MAX_LENGTH;
+
+function resolveProjectConfig(params) {
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
+}
 
 function getJiraBaseUrl() {
     try {
@@ -342,7 +348,7 @@ function action(params) {
         var blockedStatus      = customParams.blockedStatus      || 'Blocked';
         var ticketLabels       = customParams.labels             || ['development'];
 
-        var tracker = trackersModule.createTracker(null, customParams);
+        var tracker = trackersModule.createTracker(resolveProjectConfig(params), customParams);
         var saTicket = tracker.getIssue(saKey, ['description', 'summary', 'parent']);
         var saFields = saTicket && saTicket.fields ? saTicket.fields : saTicket;
         var description = saFields.description ? saFields.description.toString() : '';

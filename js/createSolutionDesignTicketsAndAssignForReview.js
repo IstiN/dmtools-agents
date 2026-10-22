@@ -6,6 +6,8 @@
 // Import common helper functions
 const { assignForReview, extractTicketKey } = require('./common/jiraHelpers.js');
 const { ISSUE_TYPES, PRIORITIES, LABELS, SOLUTION_DESIGN_MODULES } = require('./config.js');
+var configLoader = null;
+try { configLoader = require('./configLoader.js'); } catch (e) {}
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
@@ -18,6 +20,9 @@ function initTracker(config, customParams) {
 function getTracker() {
     if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
     return _trackerInst;
+}
+function resolveProjectConfig(params) {
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
 }
 
 
@@ -268,7 +273,7 @@ function action(params) {
         const ticketKey = params.ticket.key;
         const ticketSummary = params.ticket.fields.summary;
         const initiatorId = params.initiator;
-        initTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+        initTracker(resolveProjectConfig(params), (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         // Dynamically generate WIP label from contextId
         const wipLabel = resolveWipLabel(params);
 

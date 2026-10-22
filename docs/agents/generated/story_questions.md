@@ -35,8 +35,15 @@ _Require Ticket Pre-Action_
 - Source: `agents/js/requireTicket.js`
 - Parameters (customParams):
   - `adoTextFormat`
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
+  - `configPath`
   - `customStatuses`
+  - `featureBranchEnabled`
+  - `prSearchFnPath`
+  - `scmProvider`
   - `stageFallback`
+  - `targetRepository`
   - `trackerProvider`
 
 ### preCliJSAction: `fetchQuestionsToInput.js`
@@ -103,21 +110,21 @@ _Create Questions and Assign For Review Post-Action_
 ## Custom params
 
 - `adoTextFormat` _(used by JS action)_
-- `customStatuses` _(used by JS action)_
-- `stageFallback` _(used by JS action)_
-- `trackerProvider` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
 - `branchNamingFnPath` _(used by JS action)_
-- `childQuestions` _(used by JS action)_
 - `configPath` _(used by JS action)_
-- `contexts` _(used by JS action)_
+- `customStatuses` _(used by JS action)_
 - `featureBranchEnabled` _(used by JS action)_
+- `prSearchFnPath` _(used by JS action)_
+- `scmProvider` _(used by JS action)_
+- `stageFallback` _(used by JS action)_
+- `targetRepository` _(used by JS action)_
+- `trackerProvider` _(used by JS action)_
+- `childQuestions` _(used by JS action)_
+- `contexts` _(used by JS action)_
 - `fields` _(used by JS action)_
 - `jql` _(used by JS action)_
 - `parentContextFetch` _(used by JS action)_
-- `prSearchFnPath` _(used by JS action)_
-- `scmProvider` _(used by JS action)_
-- `targetRepository` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
 - `autoStartQuestionAnswer` _(used by JS action)_
 - `autoStartQuestionAnswerConfigFile` _(used by JS action)_

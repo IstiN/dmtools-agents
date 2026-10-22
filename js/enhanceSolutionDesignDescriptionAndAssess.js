@@ -9,6 +9,8 @@ const { extractTicketKey } = require('./common/jiraHelpers.js');
 const { STATUSES, LABELS, DIAGRAM_DEFAULTS, DIAGRAM_FORMAT, JIRA_FIELDS } = require('./config.js');
 const outputFiles = require('./common/outputFiles.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+var configLoader = null;
+try { configLoader = require('./configLoader.js'); } catch (e) {}
 
 // Tracker-agnostic ticket operations — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
@@ -21,6 +23,9 @@ function initTracker(config, customParams) {
 function getTracker() {
     if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
     return _trackerInst;
+}
+function resolveProjectConfig(params) {
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
 }
 
 /**
@@ -127,7 +132,7 @@ function action(params) {
     try {
         const ticketKey = params.ticket.key;
         const initiatorId = params.initiator;
-        initTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+        initTracker(resolveProjectConfig(params), (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         // Dynamically generate WIP label from contextId
         const wipLabel = params.metadata && params.metadata.contextId
             ? params.metadata.contextId + '_wip'

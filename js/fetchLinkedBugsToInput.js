@@ -15,6 +15,12 @@
 var trackersModule = require('./common/trackers.js');
 // Shared pure query/parse/markdown helpers (gh-1038) — no tracker/file side effects.
 var linkedIssuesReport = require('./common/linkedIssuesReport.js');
+var configLoader = null;
+try { configLoader = require('./configLoader.js'); } catch (e) {}
+
+function resolveProjectConfig(params) {
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
+}
 
 function fetchLinkedBugs(tracker, ticketKey) {
     try {
@@ -81,7 +87,7 @@ function writeLinkedBugsFile(tracker, folder, ticketKey, linkedBugs) {
 function action(params) {
     try {
         var ctx = linkedIssuesReport.resolveInputContext(params);
-        var tracker = trackersModule.createTracker(null, ctx.actualParams.customParams || (params.jobParams && params.jobParams.customParams) || {});
+        var tracker = trackersModule.createTracker(resolveProjectConfig(params), ctx.actualParams.customParams || (params.jobParams && params.jobParams.customParams) || {});
 
         console.log('Fetching linked bugs for', ctx.ticketKey, '...');
         var linkedBugs = fetchLinkedBugs(tracker, ctx.ticketKey);

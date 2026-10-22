@@ -15,6 +15,8 @@ const base = require('./writeSolutionAndDiagrams.js');
 const outputFiles = require('./common/outputFiles.js');
 var trackersModule = require('./common/trackers.js');
 const { JIRA_FIELDS } = require('./config.js');
+var configLoader = null;
+try { configLoader = require('./configLoader.js'); } catch (e) {}
 
 // ---------------------------------------------------------------------------
 // Topological sort
@@ -168,12 +170,22 @@ function buildConfluenceMarkdownSection(sorted) {
 // Tracker detection
 // ---------------------------------------------------------------------------
 
-function detectTrackerType() {
+function resolveProjectConfig(params) {
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
+}
+
+function _providerOfTracker(tracker) {
+    if (!tracker || typeof tracker.provider !== 'function') return null;
+    var p = tracker.provider();
+    return p ? String(p).toLowerCase().trim() : null;
+}
+
+function detectTrackerType(tracker) {
     try {
         var t = java.lang.System.getenv('DEFAULT_TRACKER');
         if (t) return t.toLowerCase().trim();
     } catch (e) { /* not in Java context (tests) */ }
-    return 'jira';
+    return _providerOfTracker(tracker) || 'jira';
 }
 
 // ---------------------------------------------------------------------------
@@ -196,8 +208,8 @@ function action(params) {
             var raw = JSON.parse(reposJson);
             if (Array.isArray(raw) && raw.length > 0) {
                 var sorted = topologicalSort(raw);
-                var tracker = trackersModule.createTracker(null, customParams);
-                var trackerType = detectTrackerType();
+                var tracker = trackersModule.createTracker(resolveProjectConfig(params), customParams);
+                var trackerType = detectTrackerType(tracker);
                 var section = (trackerType === 'ado')
                     ? buildMarkdownSection(sorted)
                     : buildJiraSection(sorted);

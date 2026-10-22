@@ -626,9 +626,13 @@ function finalizeTicketStatus(params, ticketKey, passed, jiraConfig) {
     removeSMTriggerLabel(params, ticketKey);
 }
 
+function loadConfigSafe(params) {
+    try { return configLoader.loadProjectConfig(params.jobParams || params); } catch (e) { return null; }
+}
+
 function action(params) {
     // Early tracker so the catch-path can still comment if config loading fails
-    tracker = trackersModule.createTracker(null, (params.jobParams || params).customParams || {});
+    tracker = trackersModule.createTracker(loadConfigSafe(params), (params.jobParams || params).customParams || {});
     try {
         var ticketKey = params.ticket.key;
         var ticketSummary = params.ticket.fields ? params.ticket.fields.summary : ticketKey;

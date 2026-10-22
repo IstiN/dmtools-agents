@@ -110,6 +110,14 @@ function wipLabelGate(ticket, wipLabel) {
     return false;
 }
 
+function loadConfigBestEffort(params) {
+    try {
+        return configLoader.loadProjectConfig(params);
+    } catch (e) {
+        return null;
+    }
+}
+
 // Optional: verify an open PR exists for review/rework agents. Returns the
 // gate's decision ({skip: boolean}) when it applied, null when the guard is
 // disabled or failed non-fatally (fail-open).
@@ -152,7 +160,7 @@ function action(params) {
 
         // Dynamically generate WIP label from contextId
         const wipLabel = wipLabelFor(metadata.contextId);
-        initTracker(null, resolveCustomParams(params));
+        initTracker(loadConfigBestEffort(params), resolveCustomParams(params));
 
         if (wipLabelGate(ticket, wipLabel)) {
             return false; // Stop processing

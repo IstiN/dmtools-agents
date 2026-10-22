@@ -273,11 +273,15 @@ function createQuestion(entry, parentKey, projectKey, jiraConfig, priorityMap) {
     }
 }
 
+function loadConfigSafe(params) {
+    try { return configLoader.loadProjectConfig(params); } catch (e) { return null; }
+}
+
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
         var projectKey = ticketKey.split('-')[0];
-        initTracker(null, (params.jobParams && params.jobParams.customParams) || {});
+        initTracker(loadConfigSafe(params), (params.jobParams && params.jobParams.customParams) || {});
         var initiatorId = params.initiator;
         var wipLabel = buildWipLabel(params.metadata);
 

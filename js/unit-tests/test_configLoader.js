@@ -1032,6 +1032,24 @@ suite('configLoader.resolveInstructions — global injections and tracker fallba
         }
     });
 
+    test('config.tracker.provider selects tracker prompts when DEFAULT_TRACKER env is unset (gh-1163)', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            tracker: { provider: 'ado' },
+            cliPromptsByTracker: {
+                jira: { my_agent: ['./jira.md'] },
+                ado: { my_agent: ['./ado.md'] }
+            }
+        });
+        var originalGetenv = java.lang.System.getenv;
+        java.lang.System.getenv = function() { return null; };
+        try {
+            var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+            assert.deepEqual(result.cliPrompts, ['./ado.md']);
+        } finally {
+            java.lang.System.getenv = originalGetenv;
+        }
+    });
+
     test('tracker falls back to jira when neither env nor config.defaultTracker is set', function() {
         var config = configLoaderModule.mergeProjectConfig(defaults, {
             cliPromptsByTracker: {

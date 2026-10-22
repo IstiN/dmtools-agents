@@ -65,8 +65,17 @@ function fetchBugContext(bug, jobParams) {
     }
 }
 
-function findBugsInEpic(epicKey, tracker) {
-    tracker = tracker || trackersModule.createTracker(null, {});
+function _loadBatchConfig() {
+    return configLoader.loadProjectConfig({});
+}
+
+function _resolveBatchTracker(tracker, config) {
+    if (tracker) return tracker;
+    return trackersModule.createTracker(config || _loadBatchConfig(), {});
+}
+
+function findBugsInEpic(epicKey, tracker, config) {
+    tracker = _resolveBatchTracker(tracker, config);
     var jqlParts = [
         'issue in linkedIssues("' + epicKey + '")',
         'AND issuetype = Bug',

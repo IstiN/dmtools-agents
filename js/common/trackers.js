@@ -53,6 +53,9 @@ const { STATUSES, LABELS, stageLabel: stageLabelOf } = require('../config.js');
 // never die with "cannot parse GitHub issue key".
 const ticketKeyShapes = require('./ticketKeyShapes.js');
 
+var configLoader = null;
+try { configLoader = require('../configLoader.js'); } catch (e) { /* unit tests may omit configLoader */ }
+
 /**
  * Parse a tool result that may arrive as an object or a JSON string.
  * Non-JSON strings pass through untouched (scm.js convention).
@@ -225,7 +228,35 @@ function _findStageKeyForStatus(statusMap, statusName) {
     return null;
 }
 
+function _extractJobParams(params) {
+    return (params && params.jobParams) ? params.jobParams : (params || {});
+}
+
+function _extractCustomParams(params) {
+    var jp = _extractJobParams(params);
+    return jp.customParams || (params && params.customParams) || {};
+}
+
+function _loadConfigSafe(arg) {
+    if (!configLoader) return null;
+    try {
+        return configLoader.loadProjectConfig(arg);
+    } catch (e) {
+        return null;
+    }
+}
+
+function resolveProjectConfig(params) {
+    return _loadConfigSafe(_extractJobParams(params));
+}
+
+function _resolveEffectiveConfig(config, customParams) {
+    if (config) return config;
+    return _loadConfigSafe({ customParams: customParams || {} });
+}
+
 function createTracker(config, customParams) {
+    config = _resolveEffectiveConfig(config, customParams);
     var providerName = _resolveProviderName(config, customParams);
     var adoMarkdown = _resolveAdoMarkdown(config, customParams);
     var owner = (config && config.repository && config.repository.owner) || '';
@@ -1364,8 +1395,21 @@ function createGithubTracker(owner, repo) {
     );
 }
 
+/**
+ * Build a tracker directly from an action's params (loads projectConfig via
+ * configLoader when available).
+ *
+ * @param {Object} params action params ({ jobParams, ticket, customParams })
+ * @returns {Object} tracker
+ */
+function createTrackerFromParams(params) {
+    return createTracker(resolveProjectConfig(params), _extractCustomParams(params));
+}
+
 module.exports = {
     createTracker: createTracker,
+    createTrackerFromParams: createTrackerFromParams,
+    resolveProjectConfig: resolveProjectConfig,
     createGithubTracker: createGithubTracker,
     extractTicketKey: extractTicketKey
 };

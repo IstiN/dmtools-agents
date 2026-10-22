@@ -6,12 +6,18 @@
  */
 
 var trackersModule = require('./common/trackers.js');
+var configLoader = null;
+try { configLoader = require('./configLoader.js'); } catch (e) {}
 
 // ── pure parse/build helpers (CRAP gate: each ≤ 8) ──────────────────────────
 
 // customParams as seen by this action: jobParams win, then the params body.
+function resolveProjectConfig(params) {
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
+}
+
 function createTrackerFor(params) {
-    return trackersModule.createTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+    return trackersModule.createTracker(resolveProjectConfig(params), (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 }
 
 function priorityNameOf(fields) {
