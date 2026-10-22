@@ -433,8 +433,8 @@ match ANY entry. Resolution order:
 | `fa-rework-zai.json` | z.ai glm | reads review threads + CI logs, fixes, re-pushes |
 | `retry_merge_github.json` | — (deterministic) | squash-merge + issue close + comment |
 
-Review queue (provider failover) is configured in the review runner's
-`envVariables`: `FA_PROVIDERS_QUEUE='[{"provider":"kimi",...},{"provider":"zai","model":"glm-5.3"}]'`
+Review queue (provider failover) is configured in the runner's
+`envVariables`: `FA_PROVIDERS_QUEUE="$ENV_VAR_REVIEW_QUEUE"` (where `ENV_VAR_REVIEW_QUEUE='[{"provider_type":"openai-completions","provider_config":{"baseUrl":"https://api.kimi.com/coding/v1","model":"k2p5","apiKeyEnv":"KIMI_CODE_KEY"}},{"provider_type":"zai","provider_config":{"model":"glm-5.3","apiKeyEnv":"ZAI_CODE_KEY"}}]'`)
 — first healthy provider wins.
 
 All runners share the `timerAutoCommitAndSave` WIP timer (5 min commits,

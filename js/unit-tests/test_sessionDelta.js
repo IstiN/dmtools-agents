@@ -576,6 +576,55 @@ suite('sessionDelta — UT-4 & IT-1: composite resume prompt & bash provider int
         assert.contains(out, 'FA_RESUME_IT_OK', 'fa.sh resume test failed: ' + out);
     });
 
+    test('IT-1 (bash): fa.sh _fa_resolve_env handles FA_PROVIDERS_QUEUE, indirect $VAR, and legacy FA_PROVIDER_TYPE', function() {
+        if (!_sdCanBash_) return;
+        var out = cli_execute_command({
+            command: [
+                'bash -c \'set -euo pipefail',
+                'REPO_ROOT="$(pwd)"',
+                'source "$REPO_ROOT/scripts/providers/fa.sh"',
+                '# Case 1: neither set -> fails',
+                'unset FA_PROVIDER_TYPE FA_PROVIDER_CONFIG FA_PROVIDERS_QUEUE',
+                'if _fa_resolve_env 2>/dev/null; then exit 1; fi',
+                '# Case 2: FA_PROVIDERS_QUEUE alone derives FA_PROVIDER_TYPE and FA_PROVIDER_CONFIG (with apiKeyEnvVar and stripped timeout keys)',
+                'export KIMI_KEY="secret-kimi"',
+                'export FA_PROVIDERS_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-5\\",\\"apiKeyEnv\\":\\"UNSET_ZAI_KEY\\",\\"connectTimeoutMs\\":5000}},{\\"provider_type\\":\\"openai-completions\\",\\"provider_config\\":{\\"baseUrl\\":\\"https://api.kimi.com/v1\\",\\"model\\":\\"kimi-k2\\",\\"apiKeyEnv\\":\\"KIMI_KEY\\",\\"streamIdleTimeoutMs\\":10000}}]"',
+                '_fa_resolve_env',
+                '[ "$FA_PROVIDER_TYPE" = "openai-completions" ]',
+                'printf "%s" "$FA_PROVIDER_CONFIG" | grep -q "\\"apiKeyEnvVar\\":\\"KIMI_KEY\\""',
+                'if printf "%s" "$FA_PROVIDER_CONFIG" | grep -q "streamIdleTimeoutMs"; then exit 1; fi',
+                '[ "$FA_KEY_ENV_VAR" = "KIMI_KEY" ]',
+                '# Case 3: indirect $ENV_VAR_DEV_QUEUE resolution and default baseUrl lookup for zai',
+                'unset FA_PROVIDER_TYPE FA_PROVIDER_CONFIG KIMI_KEY',
+                'export ENV_VAR_DEV_QUEUE="[{\\"provider_type\\":\\"zai\\",\\"provider_config\\":{\\"model\\":\\"glm-5.3-flash\\",\\"apiKeyEnv\\":\\"ZAI_CODE_KEY\\"}}]"',
+                'export FA_PROVIDERS_QUEUE="\\$ENV_VAR_DEV_QUEUE"',
+                '_fa_resolve_env',
+                '[ "$FA_PROVIDERS_QUEUE" = "$ENV_VAR_DEV_QUEUE" ]',
+                '[ "$FA_PROVIDER_TYPE" = "zai" ]',
+                'printf "%s" "$FA_PROVIDER_CONFIG" | grep -q "\\"baseUrl\\":\\"https://api.z.ai/api/coding/paas/v4\\""',
+                'printf "%s" "$FA_PROVIDER_CONFIG" | grep -q "\\"apiKeyEnvVar\\":\\"ZAI_CODE_KEY\\""',
+                '# Case 4: indirect unset var fails',
+                'unset FA_PROVIDER_TYPE FA_PROVIDER_CONFIG UNSET_QUEUE_REF',
+                'export FA_PROVIDERS_QUEUE="\\$UNSET_QUEUE_REF"',
+                'if _fa_resolve_env 2>/dev/null; then exit 1; fi',
+                '# Case 4b: un-derivable queues (invalid JSON, empty array, unknown provider without baseUrl, missing @file) fail fast',
+                'for bad_q in "not-json{" "[]" "[{\\"provider_type\\":\\"dial\\",\\"provider_config\\":{\\"model\\":\\"m1\\"}}]" "@/tmp/nonexistent-fa-queue-99999.json"; do',
+                '  unset FA_PROVIDER_TYPE FA_PROVIDER_CONFIG',
+                '  export FA_PROVIDERS_QUEUE="$bad_q"',
+                '  if _fa_resolve_env 2>/dev/null; then echo "expected failure for $bad_q"; exit 1; fi',
+                'done',
+                '# Case 5: legacy FA_PROVIDER_TYPE + FA_PROVIDER_CONFIG alone',
+                'unset FA_PROVIDERS_QUEUE',
+                'export FA_PROVIDER_TYPE="openai"',
+                'export FA_PROVIDER_CONFIG="{\\"baseUrl\\":\\"https://api.openai.com/v1\\",\\"model\\":\\"gpt-4o\\",\\"apiKeyEnvVar\\":\\"OPENAI_API_KEY\\"}"',
+                '_fa_resolve_env',
+                '[ "$FA_KEY_ENV_VAR" = "OPENAI_API_KEY" ]',
+                'echo "FA_QUEUE_IT_OK"\''
+            ].join('\n')
+        });
+        assert.contains(out, 'FA_QUEUE_IT_OK', 'fa.sh queue resolve test failed: ' + out);
+    });
+
     test('covers sessionGroupForConfig, defaultDeltaStorage file_read/file_write/file_list bridges, edited comments, and corrupt JSON on disk', function() {
         assert.equal(sessionDelta.sessionGroupForConfig('agents/story_development.json'), 'dev-write');
         assert.equal(sessionDelta.sessionGroupForConfig('agents/pr_review.json'), 'dev-review');

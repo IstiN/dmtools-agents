@@ -1,17 +1,19 @@
 #!/bin/bash
 # Fa provider for run-agent.sh
 #
-# fa headless contract (env preconfig — the declaration is machine-written
-# and self-contained; fa never guesses catalog defaults):
-#   FA_PROVIDER_TYPE     (required) catalog provider kind: anthropic,
-#                        google, dial, openai-completions, zai, aiin,
-#                        minimax, chatgpt-codex, copilot, codemie,
-#                        ollama, openai, openrouter, kimi, …
-#   FA_PROVIDER_CONFIG   (required, JSON) {"baseUrl": …, "model": …,
-#                        "apiKeyEnvVar": …} — baseUrl and model are
-#                        mandatory (fa fails the boot without them),
-#                        apiKeyEnvVar names the env var that carries the
-#                        API key (its _BASE64 twin also accepted)
+#   FA_PROVIDERS_QUEUE   (recommended, JSON array or @path) provider failover
+#                        queue: [{"provider_type": ..., "provider_config":
+#                        {"baseUrl": ..., "model": ..., "apiKeyEnv": ...}}]
+#                        (or "$VAR_NAME" indirect env reference).
+#   FA_PROVIDER_TYPE     (required when FA_PROVIDERS_QUEUE is unset) catalog
+#                        provider kind: anthropic, google, dial,
+#                        openai-completions, zai, aiin, minimax, chatgpt-codex,
+#                        copilot, codemie, ollama, openai, openrouter, kimi, …
+#   FA_PROVIDER_CONFIG   (required when FA_PROVIDERS_QUEUE is unset, JSON)
+#                        {"baseUrl": …, "model": …, "apiKeyEnvVar": …} —
+#                        baseUrl and model are mandatory, apiKeyEnvVar names
+#                        the env var that carries the API key (its _BASE64
+#                        twin also accepted)
 #   FA_PROVIDER_NAME     (optional) unique entry name override
 #   FA_PROVIDER_API_KEY  (optional) convenience: mapped into the env var
 #                        the config's apiKeyEnvVar names — ONLY inside
@@ -21,22 +23,133 @@
 # runs): --session "$FA_SESSION_NAME" --session-root "$FA_SESSION_ROOT"
 # resume-or-create the deterministic named session for repo:ticket:group.
 
-_fa_resolve_env() {
-  if [ -z "${FA_PROVIDER_TYPE:-}" ]; then
-    echo "Error: FA_PROVIDER_TYPE environment variable is required for fa provider" >&2
+# Single source of truth for catalog default base URLs and allowed legacy
+# FA_PROVIDER_CONFIG keys (stripped of queue-only connectTimeoutMs /
+# streamIdleTimeoutMs so pre-flutter_agent_harness#1781 binaries never reject).
+_FA_DEFAULT_URLS_JSON='{"zai":"https://api.z.ai/api/coding/paas/v4","copilot":"https://api.enterprise.githubcopilot.com","anthropic":"https://api.anthropic.com","openai":"https://api.openai.com/v1","openrouter":"https://openrouter.ai/api/v1","google":"https://generativelanguage.googleapis.com/v1beta"}'
+_FA_ALLOWED_CFG_KEYS_JSON='["baseUrl","model","input","thinkingLevel","contextWindow","maxTokens","wire"]'
+
+_fa_derive_from_queue() {
+  local queue_raw="${FA_PROVIDERS_QUEUE:-}"
+  if [ -z "${queue_raw}" ]; then
+    return 0
+  fi
+
+  local derived=""
+  if command -v node >/dev/null 2>&1; then
+    derived="$(FA_DEFAULT_URLS_JSON="${_FA_DEFAULT_URLS_JSON}" FA_ALLOWED_CFG_KEYS_JSON="${_FA_ALLOWED_CFG_KEYS_JSON}" node -e '
+      const fs = require("fs");
+      let raw = process.env.FA_PROVIDERS_QUEUE || "";
+      if (raw.startsWith("@")) raw = fs.readFileSync(raw.slice(1), "utf8");
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr) || arr.length === 0) process.exit(0);
+      const defaults = JSON.parse(process.env.FA_DEFAULT_URLS_JSON);
+      const allowed = JSON.parse(process.env.FA_ALLOWED_CFG_KEYS_JSON);
+      const entry = arr.find(e => {
+        const k = e && e.provider_config && (e.provider_config.apiKeyEnv || e.provider_config.apiKeyEnvVar);
+        return k && (process.env[k] || process.env[k + "_BASE64"]);
+      }) || arr[0];
+      if (!entry || !entry.provider_type || !entry.provider_config) process.exit(0);
+      const ptype = String(entry.provider_type);
+      const src = entry.provider_config;
+      const baseUrl = src.baseUrl || defaults[ptype] || "";
+      if (!baseUrl) process.exit(0);
+      const cfg = { baseUrl };
+      for (const k of allowed) {
+        if (k !== "baseUrl" && src[k] !== undefined) cfg[k] = src[k];
+      }
+      const keyEnv = src.apiKeyEnv || src.apiKeyEnvVar;
+      if (keyEnv) cfg.apiKeyEnvVar = keyEnv;
+      process.stdout.write(ptype + "\n" + JSON.stringify(cfg));
+    ' 2>/dev/null || true)"
+  elif command -v python3 >/dev/null 2>&1; then
+    derived="$(FA_DEFAULT_URLS_JSON="${_FA_DEFAULT_URLS_JSON}" FA_ALLOWED_CFG_KEYS_JSON="${_FA_ALLOWED_CFG_KEYS_JSON}" python3 -c '
+import json, os, sys
+raw = os.environ.get("FA_PROVIDERS_QUEUE", "")
+if raw.startswith("@"):
+    with open(raw[1:], "r", encoding="utf-8") as f:
+        raw = f.read()
+arr = json.loads(raw)
+if not isinstance(arr, list) or not arr:
+    sys.exit(0)
+defaults = json.loads(os.environ["FA_DEFAULT_URLS_JSON"])
+allowed = json.loads(os.environ["FA_ALLOWED_CFG_KEYS_JSON"])
+entry = next((e for e in arr if isinstance(e, dict) and isinstance(e.get("provider_config"), dict) and (lambda k: bool(k and (os.environ.get(k) or os.environ.get(k + "_BASE64"))))(e["provider_config"].get("apiKeyEnv") or e["provider_config"].get("apiKeyEnvVar"))), arr[0])
+if not isinstance(entry, dict) or not entry.get("provider_type") or not isinstance(entry.get("provider_config"), dict):
+    sys.exit(0)
+pt = str(entry["provider_type"])
+src = entry["provider_config"]
+url = src.get("baseUrl") or defaults.get(pt, "")
+if not pt or not url:
+    sys.exit(0)
+cfg = {"baseUrl": url}
+for k in allowed:
+    if k != "baseUrl" and k in src:
+        cfg[k] = src[k]
+ke = src.get("apiKeyEnv") or src.get("apiKeyEnvVar")
+if ke:
+    cfg["apiKeyEnvVar"] = ke
+sys.stdout.write(pt + "\n" + json.dumps(cfg, separators=(",", ":")))
+' 2>/dev/null || true)"
+  else
+    echo "Error: node or python3 is required to derive FA_PROVIDER_TYPE/FA_PROVIDER_CONFIG from FA_PROVIDERS_QUEUE" >&2
     return 1
   fi
 
-  if [ -z "${FA_PROVIDER_CONFIG:-}" ]; then
-    echo "Error: FA_PROVIDER_CONFIG is required for fa provider — a JSON object with at least {\"baseUrl\", \"model\"} (fa never guesses catalog defaults), e.g." >&2
-    echo "  FA_PROVIDER_CONFIG='{\"baseUrl\":\"https://ai-proxy.lab.epam.com\",\"model\":\"gpt-4o\",\"apiKeyEnvVar\":\"DIAL_API_KEY\"}'" >&2
+  if [ -n "${derived}" ]; then
+    local d_type d_cfg
+    d_type="$(printf '%s\n' "${derived}" | sed -n '1p')"
+    d_cfg="$(printf '%s\n' "${derived}" | sed -n '2p')"
+    if [ -n "${d_type}" ] && [ -n "${d_cfg}" ]; then
+      [ -z "${FA_PROVIDER_TYPE:-}" ] && export FA_PROVIDER_TYPE="${d_type}"
+      [ -z "${FA_PROVIDER_CONFIG:-}" ] && export FA_PROVIDER_CONFIG="${d_cfg}"
+    fi
+  fi
+}
+
+_fa_resolve_env() {
+  if [ -z "${FA_PROVIDER_TYPE:-}" ] && [ -z "${FA_PROVIDERS_QUEUE:-}" ]; then
+    echo "Error: FA_PROVIDERS_QUEUE or FA_PROVIDER_TYPE + FA_PROVIDER_CONFIG environment variable is required for fa provider" >&2
     return 1
+  fi
+
+  if [ -n "${FA_PROVIDERS_QUEUE:-}" ]; then
+    if [[ "${FA_PROVIDERS_QUEUE}" =~ ^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$ ]]; then
+      local var_name="${BASH_REMATCH[1]}"
+      local resolved_val="${!var_name:-}"
+      if [ -z "${resolved_val}" ]; then
+        echo "Error: FA_PROVIDERS_QUEUE references unset environment variable ${FA_PROVIDERS_QUEUE}" >&2
+        return 1
+      fi
+      export FA_PROVIDERS_QUEUE="${resolved_val}"
+    fi
+
+    if [ -z "${FA_PROVIDER_TYPE:-}" ] || [ -z "${FA_PROVIDER_CONFIG:-}" ]; then
+      _fa_derive_from_queue || return 1
+    fi
+    if [ -z "${FA_PROVIDER_TYPE:-}" ] || [ -z "${FA_PROVIDER_CONFIG:-}" ]; then
+      echo "Error: failed to derive FA_PROVIDER_TYPE/FA_PROVIDER_CONFIG from FA_PROVIDERS_QUEUE (invalid JSON, empty queue, unknown provider_type without baseUrl, or unreadable @path?)" >&2
+      return 1
+    fi
+  else
+    if [ -z "${FA_PROVIDER_CONFIG:-}" ]; then
+      echo "Error: FA_PROVIDER_CONFIG is required for fa provider — a JSON object with at least {\"baseUrl\", \"model\"} (fa never guesses catalog defaults), e.g." >&2
+      echo "  FA_PROVIDER_CONFIG='{\"baseUrl\":\"https://ai-proxy.lab.epam.com\",\"model\":\"gpt-4o\",\"apiKeyEnvVar\":\"DIAL_API_KEY\"}'" >&2
+      return 1
+    fi
   fi
 
   # Surface the config's key env var name so the runner can map
   # FA_PROVIDER_API_KEY into it for the subprocess when the var itself
   # is unset.
-  FA_KEY_ENV_VAR="$(printf '%s' "${FA_PROVIDER_CONFIG}" | sed -n 's/.*"apiKeyEnvVar"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  FA_KEY_ENV_VAR=""
+  if [ -n "${FA_PROVIDER_CONFIG:-}" ]; then
+    local extracted_key
+    extracted_key="$(printf '%s' "${FA_PROVIDER_CONFIG}" | sed -n 's/.*"apiKeyEnvVar"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    if [[ "${extracted_key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      FA_KEY_ENV_VAR="${extracted_key}"
+    fi
+  fi
 }
 
 run_fa() {
@@ -45,9 +158,10 @@ run_fa() {
   _fa_configure_session
 
   echo "Fa Configuration:"
-  echo "  Provider Type: ${FA_PROVIDER_TYPE}"
+  [ -n "${FA_PROVIDERS_QUEUE:-}" ] && echo "  Provider Queue: ${FA_PROVIDERS_QUEUE}"
+  [ -n "${FA_PROVIDER_TYPE:-}" ] && echo "  Provider Type: ${FA_PROVIDER_TYPE}"
   [ -n "${FA_PROVIDER_NAME:-}" ] && echo "  Entry Name: ${FA_PROVIDER_NAME}"
-  echo "  Config: ${FA_PROVIDER_CONFIG}"
+  [ -n "${FA_PROVIDER_CONFIG:-}" ] && echo "  Config: ${FA_PROVIDER_CONFIG}"
 
   # Detect whether a prior fa session already exists on disk under
   # FA_SESSION_ROOT (excluding sidecar manifest files). When resuming an
@@ -120,7 +234,7 @@ run_fa() {
   # it directly and nothing is injected.
   set +e
   if [ -n "${FA_PROVIDER_API_KEY:-}" ] && [ -n "${FA_KEY_ENV_VAR:-}" ] \
-     && [ -z "$(eval "echo \${${FA_KEY_ENV_VAR}:-}")" ]; then
+     && [ -z "${!FA_KEY_ENV_VAR:-}" ]; then
     env "${FA_KEY_ENV_VAR}=${FA_PROVIDER_API_KEY}" "${cmd[@]}" 2>&1 | tee "$agent_log"
   else
     "${cmd[@]}" 2>&1 | tee "$agent_log"
