@@ -11,7 +11,7 @@ function makeFileMapReader(fileMap) {
             return fileMap[p];
         }
         try {
-            return file_read(readOpts);
+            return file_read({ path: String(p).replace(/^agents\//, '') });
         } catch (e) {}
         return null;
     };
