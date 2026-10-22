@@ -170,16 +170,22 @@ function buildConfluenceMarkdownSection(sorted) {
 // Tracker detection
 // ---------------------------------------------------------------------------
 
+function resolveProjectConfig(params) {
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
+}
+
+function _providerOfTracker(tracker) {
+    if (!tracker || typeof tracker.provider !== 'function') return null;
+    var p = tracker.provider();
+    return p ? String(p).toLowerCase().trim() : null;
+}
+
 function detectTrackerType(tracker) {
     try {
         var t = java.lang.System.getenv('DEFAULT_TRACKER');
         if (t) return t.toLowerCase().trim();
     } catch (e) { /* not in Java context (tests) */ }
-    if (tracker && typeof tracker.provider === 'function') {
-        var p = tracker.provider();
-        if (p) return String(p).toLowerCase().trim();
-    }
-    return 'jira';
+    return _providerOfTracker(tracker) || 'jira';
 }
 
 // ---------------------------------------------------------------------------
@@ -202,9 +208,7 @@ function action(params) {
             var raw = JSON.parse(reposJson);
             if (Array.isArray(raw) && raw.length > 0) {
                 var sorted = topologicalSort(raw);
-                var projectConfig = null;
-                try { projectConfig = configLoader ? configLoader.loadProjectConfig(params.jobParams || params) : null; } catch (e) {}
-                var tracker = trackersModule.createTracker(projectConfig, customParams);
+                var tracker = trackersModule.createTracker(resolveProjectConfig(params), customParams);
                 var trackerType = detectTrackerType(tracker);
                 var section = (trackerType === 'ado')
                     ? buildMarkdownSection(sorted)

@@ -283,13 +283,15 @@ function logSkipLabelReuse(plan) {
     console.log('Story plan label "' + plan.config.skipIfLabel + '" is present on ' + plan.sourceTicketKey + ', continuing in reuse mode');
 }
 
+function resolveProjectConfig(params) {
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
+}
+
 function prepareStoryPlan(params) {
     var jobParams = firstObject(params.jobParams, {});
     var customParams = firstOf3(params.customParams, jobParams.customParams, {});
     var config = firstObject(customParams.storyPlanCreation, {});
-    var projectConfig = null;
-    try { projectConfig = configLoader ? configLoader.loadProjectConfig(params.jobParams || params) : null; } catch (e) {}
-    tracker = trackersModule.createTracker(projectConfig, customParams);
+    tracker = trackersModule.createTracker(resolveProjectConfig(params), customParams);
     var sourceTicketKey = params.ticket && params.ticket.key;
     var sourceLabels = getSourceLabels(params);
     var plan = {

@@ -11,6 +11,10 @@ var trackersModule = require('./common/trackers.js');
 var configLoader = null;
 try { configLoader = require('./configLoader.js'); } catch (e) {}
 
+function resolveProjectConfig(params) {
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
+}
+
 function transitionTicket(tracker, key, statusName) {
     try {
         tracker.moveToStatus(key, statusName);
@@ -31,8 +35,7 @@ function action(params) {
 
         var customParams = actualParams.customParams || {};
         var statuses = resolveStatuses(customParams);
-        var projectConfig = null;
-        try { projectConfig = configLoader ? configLoader.loadProjectConfig(actualParams) : null; } catch (e) {}
+        var projectConfig = resolveProjectConfig(actualParams);
         var tracker = trackersModule.createTracker(projectConfig, customParams);
 
         var bugs = batchContext.findBugsInEpic(epicKey, tracker, projectConfig);

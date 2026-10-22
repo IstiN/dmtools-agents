@@ -36,6 +36,9 @@ function getTracker() {
     if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
     return _trackerInst;
 }
+function resolveProjectConfig(params) {
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
+}
 
 // ── pure parse/build helpers (CRAP gate: each ≤ 8) ──────────────────────────
 
@@ -99,9 +102,7 @@ function buildRunCommand(agent, ticketKey, ciRunUrl) {
 
 function action(params) {
     var scope = resolveRunScope(params);
-    var projectConfig = null;
-    try { projectConfig = configLoader ? configLoader.loadProjectConfig(params.jobParams || scope.actualParams) : null; } catch (e) {}
-    initTracker(projectConfig, scope.customParams);
+    initTracker(resolveProjectConfig(params), scope.customParams);
 
     var ticket = params.ticket || scope.actualParams.ticket;
     if (!ticket || !ticket.fields) {

@@ -17,6 +17,10 @@
 var trackersModule = require('./common/trackers.js');
 var configLoader = null;
 try { configLoader = require('./configLoader.js'); } catch (e) {}
+
+function resolveProjectConfig(params) {
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
+}
 // Shared pure query/parse/markdown helpers (gh-1038) — no tracker/file side effects.
 var linkedIssuesReport = require('./common/linkedIssuesReport.js');
 var _trackerCtx = { config: null, customParams: {} };
@@ -89,9 +93,7 @@ function writeLinkedTestsFile(folder, ticketKey, linkedTests) {
 function action(params) {
     try {
         var ctx = linkedIssuesReport.resolveInputContext(params);
-        var projectConfig = null;
-        try { projectConfig = configLoader ? configLoader.loadProjectConfig(params.jobParams || ctx.actualParams) : null; } catch (e) {}
-        initTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || ctx.actualParams.customParams || {});
+        initTracker(resolveProjectConfig(params), (params.jobParams && params.jobParams.customParams) || ctx.actualParams.customParams || {});
 
         console.log('Fetching linked test cases for', ctx.ticketKey, '...');
         var linkedTests = fetchLinkedTests(ctx.ticketKey);

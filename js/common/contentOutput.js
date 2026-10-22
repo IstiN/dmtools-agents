@@ -109,10 +109,12 @@ function isJiraFieldTarget(cfg) {
 
 // ── Jira field write ─────────────────────────────────────────────────────────
 
+function _loadOutputConfig() {
+    return configLoader ? configLoader.loadProjectConfig({}) : null;
+}
+
 function resolveTrackerConfig(config) {
-    if (config && typeof config === 'object') return config;
-    if (!configLoader || typeof configLoader.loadProjectConfig !== 'function') return null;
-    try { return configLoader.loadProjectConfig({}); } catch (e) { return null; }
+    return config || _loadOutputConfig();
 }
 
 /**

@@ -112,7 +112,7 @@ function wipLabelGate(ticket, wipLabel) {
 
 function loadConfigBestEffort(params) {
     try {
-        return configLoader.loadProjectConfig(params.jobParams || params);
+        return configLoader.loadProjectConfig(params);
     } catch (e) {
         return null;
     }
@@ -121,13 +121,13 @@ function loadConfigBestEffort(params) {
 // Optional: verify an open PR exists for review/rework agents. Returns the
 // gate's decision ({skip: boolean}) when it applied, null when the guard is
 // disabled or failed non-fatally (fail-open).
-function openPrGuardResult(params, ticketKey, config) {
+function openPrGuardResult(params, ticketKey) {
     var customParams = resolveCustomParams(params);
     if (!customParams.checkOpenPR) {
         return null;
     }
     try {
-        config = config || configLoader.loadProjectConfig(params.jobParams || params);
+        var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = configLoader.createScm(config);
         var prSearchOptions = config.prSearchFn ? { prSearchFn: config.prSearchFn } : {};
         var pr = gh.findPRForTicket(scm, ticketKey, prSearchOptions);
@@ -160,14 +160,13 @@ function action(params) {
 
         // Dynamically generate WIP label from contextId
         const wipLabel = wipLabelFor(metadata.contextId);
-        var config = loadConfigBestEffort(params);
-        initTracker(config, resolveCustomParams(params));
+        initTracker(loadConfigBestEffort(params), resolveCustomParams(params));
 
         if (wipLabelGate(ticket, wipLabel)) {
             return false; // Stop processing
         }
 
-        var guard = openPrGuardResult(params, ticket.key, config);
+        var guard = openPrGuardResult(params, ticket.key);
         if (guard) {
             return !guard.skip;
         }

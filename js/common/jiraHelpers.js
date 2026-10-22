@@ -14,10 +14,12 @@ const trackersModule = require('./trackers.js');
 var configLoader = null;
 try { configLoader = require('../configLoader.js'); } catch (e) {}
 
+function _loadHelperConfig() {
+    return configLoader ? configLoader.loadProjectConfig({}) : null;
+}
+
 function resolveDefaultConfig(config) {
-    if (config && typeof config === 'object') return config;
-    if (!configLoader || typeof configLoader.loadProjectConfig !== 'function') return null;
-    try { return configLoader.loadProjectConfig({}); } catch (e) { return null; }
+    return config || _loadHelperConfig();
 }
 
 /**

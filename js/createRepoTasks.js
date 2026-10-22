@@ -24,6 +24,10 @@ try { configLoader = require('./configLoader.js'); } catch (e) {}
 var truncateSummary = configModule.truncateSummary;
 var JIRA_SUMMARY_MAX_LENGTH = configModule.JIRA_SUMMARY_MAX_LENGTH;
 
+function resolveProjectConfig(params) {
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
+}
+
 function getJiraBaseUrl() {
     try {
         var url = java.lang.System.getenv('JIRA_BASE_PATH');
@@ -232,9 +236,7 @@ function action(params) {
 
         // Customisable via customParams (or .dmtools/config.js jobParamPatches.createRepoTasks.customParams)
         var customParams = params.customParams || (params.jobParams && params.jobParams.customParams) || {};
-        var projectConfig = null;
-        try { projectConfig = configLoader ? configLoader.loadProjectConfig(params.jobParams || params) : null; } catch (e) {}
-        var tracker = trackersModule.createTracker(projectConfig, customParams);
+        var tracker = trackersModule.createTracker(resolveProjectConfig(params), customParams);
         var blocksRelationship = customParams.blocksRelationship || 'Blocks';
         var blockedStatus      = customParams.blockedStatus      || 'Blocked';
         var ticketLabels       = customParams.labels             || ['development'];

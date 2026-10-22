@@ -42,21 +42,29 @@ function findDevSummaryComment(comments) {
     return found.length > 0 ? found[found.length - 1].body : '';
 }
 
+function resolveProjectConfig(params) {
+    return loadProjectConfig(params && params.jobParams ? params.jobParams : params);
+}
+
+function _configuredBugSolutionField(fields) {
+    if (!fields) return 'Solution';
+    return fields.bugSolution || fields.solution || 'Solution';
+}
+
 /**
  * Use AI to generate a Solution field value from the bug description + dev summary.
  * Writes the result to the Jira "Solution" field so the TestCasesGenerator
  * has RCA context when generating regression and prevention test cases.
  */
-function resolveBugSolutionField(params, projectConfig) {
-    const config = projectConfig || loadProjectConfig(params && params.jobParams ? params.jobParams : params);
-    const fields = config && config.jira && config.jira.fields ? config.jira.fields : {};
-    return fields.bugSolution || fields.solution || 'Solution';
+function resolveBugSolutionField(params) {
+    const config = resolveProjectConfig(params);
+    return _configuredBugSolutionField(config && config.jira && config.jira.fields);
 }
 
-function updateSolutionField(ticketKey, ticketDescription, comments, params, projectConfig) {
+function updateSolutionField(ticketKey, ticketDescription, comments, params) {
     try {
         const devSummary = findDevSummaryComment(comments);
-        const solutionField = resolveBugSolutionField(params, projectConfig);
+        const solutionField = resolveBugSolutionField(params);
         if (!solutionField) {
             console.warn('Bug Solution field is not configured — skipping Solution field update');
             return;
@@ -93,7 +101,7 @@ function updateSolutionField(ticketKey, ticketDescription, comments, params, pro
 function action(params) {
     try {
         const ticketKey = params.ticket.key;
-        const projectConfig = loadProjectConfig(params && params.jobParams ? params.jobParams : params);
+        const projectConfig = resolveProjectConfig(params);
         initTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         const ticketDescription = params.ticket.fields && params.ticket.fields.description
             ? params.ticket.fields.description : '';
@@ -109,7 +117,7 @@ function action(params) {
         }
 
         // Step 2: Update Solution field with AI-generated RCA + prevention
-        updateSolutionField(ticketKey, ticketDescription, comments, params, projectConfig);
+        updateSolutionField(ticketKey, ticketDescription, comments, params);
 
         // Step 3: Post merge notification
         try {

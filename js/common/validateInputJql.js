@@ -25,8 +25,7 @@ var configLoader = null;
 try { configLoader = require('../configLoader.js'); } catch (e) {}
 
 function loadTrackerConfig(params) {
-    if (!configLoader || typeof configLoader.loadProjectConfig !== 'function') return null;
-    try { return configLoader.loadProjectConfig(params || {}); } catch (e) { return null; }
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
 }
 
 // Jira-speak alternation first (uppercase normalization applies), then the

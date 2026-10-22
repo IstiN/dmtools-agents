@@ -33,6 +33,9 @@ function getTracker() {
     if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
     return _trackerInst;
 }
+function resolveProjectConfig(params) {
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
+}
 
 // ─── Pure helpers (extracted from action — gh-1007) ──────────────────────────
 
@@ -222,9 +225,7 @@ function action(params) {
     var repository  = custom.repository;
     var workflowId  = custom.workflowId || null;   // optional — null means all workflows
     var jiraProject = custom.jiraProject;
-    var projectConfig = null;
-    try { projectConfig = configLoader ? configLoader.loadProjectConfig(params.jobParams || params) : null; } catch (e) {}
-    initTracker(projectConfig, custom);
+    initTracker(resolveProjectConfig(params), custom);
 
     if (!workspace || !repository || !jiraProject) {
         console.error('❌ customParams must include workspace, repository, jiraProject');

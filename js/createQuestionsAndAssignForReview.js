@@ -273,14 +273,15 @@ function createQuestion(entry, parentKey, projectKey, jiraConfig, priorityMap) {
     }
 }
 
+function loadConfigSafe(params) {
+    try { return configLoader.loadProjectConfig(params); } catch (e) { return null; }
+}
+
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
         var projectKey = ticketKey.split('-')[0];
-        var projectConfig = null;
-        try { projectConfig = configLoader.loadProjectConfig(params.jobParams || params); } catch (e) {}
-        var customParams = resolveActionCustomParams(params);
-        initTracker(projectConfig, customParams);
+        initTracker(loadConfigSafe(params), (params.jobParams && params.jobParams.customParams) || {});
         var initiatorId = params.initiator;
         var wipLabel = buildWipLabel(params.metadata);
 
@@ -305,9 +306,10 @@ function action(params) {
             return buildCliFailureResult(cliErrorMessage);
         }
 
-        projectConfig = projectConfig || configLoader.loadProjectConfig(params.jobParams || params);
+        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         var jiraConfig = projectConfig.jira;
         var labels = projectConfig.labels;
+        var customParams = resolveActionCustomParams(params);
         initTracker(projectConfig, customParams);
         var agentId = resolveAgentId(params.metadata);
         var priorityMap = resolvePriorityMap(customParams, projectConfig, agentId);

@@ -1778,28 +1778,20 @@ suite('trackers.js — tracker-agnostic status transitions & stageFallback (gh-9
 });
 
 suite('trackers.js — gh-1163 config resolution & no createTracker(null / initTracker(null guard', function () {
+    function listJsEntries(dir) {
+        return JSON.parse(file_list({ path: dir })).entries.filter(function (p) {
+            return /\.js$/.test(String(p));
+        });
+    }
+
+    function hasNullTrackerCall(path) {
+        return /createTracker\s*\(\s*null|initTracker\s*\(\s*null/.test(file_read({ path: path }));
+    }
+
     test('lint guard: zero non-test js/ files call createTracker(null or initTracker(null', function () {
-        function scanDir(dir) {
-            var res = file_list({ path: dir });
-            if (!res) return [];
-            var entries = (JSON.parse(res) || {}).entries || [];
-            var violations = [];
-            for (var i = 0; i < entries.length; i++) {
-                var p = String(entries[i]);
-                if (p.indexOf('unit-tests') !== -1) continue;
-                if (/\.js$/.test(p)) {
-                    var content = file_read({ path: p });
-                    if (/createTracker\s*\(\s*null|initTracker\s*\(\s*null/.test(content)) {
-                        violations.push(p);
-                    }
-                } else if (p.indexOf('.') === -1 || /\/js\/[a-zA-Z0-9_-]+$/.test(p)) {
-                    violations = violations.concat(scanDir(p));
-                }
-            }
-            return violations;
-        }
-        var found = scanDir('js');
-        assert.deepEqual(found, [], 'Production js/ files must not pass literal null config to createTracker/initTracker');
+        var files = listJsEntries('js').concat(listJsEntries('js/common'));
+        var violations = files.filter(hasNullTrackerCall);
+        assert.deepEqual(violations, [], 'Production js/ files must not pass literal null config to createTracker/initTracker');
     });
 
     test('createTracker(null, customParams) auto-loads project config via configLoader when omitted', function () {
@@ -1807,9 +1799,6 @@ suite('trackers.js — gh-1163 config resolution & no createTracker(null / initT
         var cl = {
             loadProjectConfig: function (params) {
                 return { tracker: { provider: 'ado' }, customParams: (params && params.customParams) || {} };
-            },
-            paramsForConfigLoad: function (params) {
-                return (params && params.jobParams) || params || {};
             }
         };
         var mod = loadModule(
@@ -1833,6 +1822,11 @@ suite('trackers.js — gh-1163 config resolution & no createTracker(null / initT
 
         var t2 = mod.createTrackerFromParams({ jobParams: { customParams: {} }, ticket: { key: '2174969' } });
         assert.equal(t2.provider(), 'ado');
+
+        var t3 = mod.createTrackerFromParams({ customParams: { trackerProvider: 'ado' } });
+        assert.equal(t3.provider(), 'ado');
+
+        assert.equal(mod.resolveProjectConfig({ jobParams: {} }).tracker.provider, 'ado');
     });
 
     test('createTracker(null, customParams) falls back cleanly when configLoader throws', function () {

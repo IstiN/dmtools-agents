@@ -1055,6 +1055,11 @@ function resolveCliPromptOverride(agentName, config) {
     return null;
 }
 
+function _configuredTrackerProvider(config) {
+    if (!config) return null;
+    return (config.tracker && config.tracker.provider) || config.defaultTracker || null;
+}
+
 /**
  * Tracker type driving cliPromptsByTracker selection: DEFAULT_TRACKER env var,
  * then config.tracker.provider, then config.defaultTracker, then 'jira'.
@@ -1062,23 +1067,16 @@ function resolveCliPromptOverride(agentName, config) {
  * authored in Markdown, not in the tracker's markup) wins over all of them.
  */
 function resolveTrackerType(config, options) {
+    if (options && options.trackerOverride) {
+        return options.trackerOverride;
+    }
     var trackerType = null;
     try {
         trackerType = java.lang.System.getenv('DEFAULT_TRACKER');
     } catch (e) {
         // Not running in GraalJS environment
     }
-    var cfgProvider = config && config.tracker && config.tracker.provider;
-    if (!trackerType && (cfgProvider || (config && config.defaultTracker))) {
-        trackerType = cfgProvider || config.defaultTracker;
-    }
-    if (!trackerType) {
-        trackerType = 'jira';
-    }
-    if (options && options.trackerOverride) {
-        trackerType = options.trackerOverride;
-    }
-    return trackerType;
+    return trackerType || _configuredTrackerProvider(config) || 'jira';
 }
 
 /**

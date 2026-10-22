@@ -18,6 +18,10 @@ var linkedIssuesReport = require('./common/linkedIssuesReport.js');
 var configLoader = null;
 try { configLoader = require('./configLoader.js'); } catch (e) {}
 
+function resolveProjectConfig(params) {
+    return configLoader ? configLoader.loadProjectConfig(params) : null;
+}
+
 function fetchLinkedBugs(tracker, ticketKey) {
     try {
         var query = linkedIssuesReport.buildLinkedQuery(ticketKey, 'issuetype = Bug AND status not in (Done)', tracker.provider(), { issueType: 'Bug', statusNotIn: ['Done'] });
@@ -83,9 +87,7 @@ function writeLinkedBugsFile(tracker, folder, ticketKey, linkedBugs) {
 function action(params) {
     try {
         var ctx = linkedIssuesReport.resolveInputContext(params);
-        var projectConfig = null;
-        try { projectConfig = configLoader ? configLoader.loadProjectConfig(params.jobParams || ctx.actualParams) : null; } catch (e) {}
-        var tracker = trackersModule.createTracker(projectConfig, ctx.actualParams.customParams || (params.jobParams && params.jobParams.customParams) || {});
+        var tracker = trackersModule.createTracker(resolveProjectConfig(params), ctx.actualParams.customParams || (params.jobParams && params.jobParams.customParams) || {});
 
         console.log('Fetching linked bugs for', ctx.ticketKey, '...');
         var linkedBugs = fetchLinkedBugs(tracker, ctx.ticketKey);

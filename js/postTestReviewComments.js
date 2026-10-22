@@ -466,15 +466,20 @@ function postFailureErrorComment(tracker, ticketKey, error) {
     } catch (e) {}
 }
 
+function loadFailureConfig(params) {
+    try { return configLoader.loadProjectConfig(params); } catch (e) { return null; }
+}
+
+function resolveFailureTicketKey(params) {
+    if (params.ticket) return params.ticket.key;
+    return params.inputFolderPath ? params.inputFolderPath.split('/').pop() : null;
+}
+
 function handleActionFailure(params, error, tracker) {
     console.error('❌ Error in postTestReviewComments:', error);
-    if (!tracker) {
-        var cfg = null;
-        try { cfg = configLoader.loadProjectConfig((params && params.jobParams) || params); } catch (e) {}
-        tracker = trackersModule.createTracker(cfg, failureCustomParamsOf(params));
-    }
+    if (!tracker) tracker = trackersModule.createTracker(loadFailureConfig(params), failureCustomParamsOf(params));
     try {
-        const ticketKey = params.ticket ? params.ticket.key : (params.inputFolderPath ? params.inputFolderPath.split('/').pop() : null);
+        const ticketKey = resolveFailureTicketKey(params);
         if (ticketKey) {
             postFailureErrorComment(tracker, ticketKey, error);
         }
