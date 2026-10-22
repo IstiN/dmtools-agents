@@ -4,6 +4,8 @@
 [![CRAP max](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FIstiN%2Fdmtools-agents%2Fbadges%2Fcrap-max.json)](https://github.com/IstiN/dmtools-agents/blob/main/.github/workflows/quality.yml)
 [![CRAP over threshold](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FIstiN%2Fdmtools-agents%2Fbadges%2Fcrap-over.json)](https://github.com/IstiN/dmtools-agents/blob/main/.github/workflows/quality.yml)
 [![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FIstiN%2Fdmtools-agents%2Fbadges%2Fcoverage.json)](https://github.com/IstiN/dmtools-agents/blob/main/.github/workflows/quality.yml)
+[![Agent Docs](https://github.com/IstiN/dmtools-agents/actions/workflows/agent-docs.yml/badge.svg)](https://github.com/IstiN/dmtools-agents/actions/workflows/agent-docs.yml)
+[![md similarity](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FIstiN%2Fdmtools-agents%2Fbadges%2Fmd-similarity.json)](https://github.com/IstiN/dmtools-agents/blob/main/crap4dart.yaml)
 
 This directory contains the configuration and JavaScript logic for the **AI-powered Scrum Master (SM) agent system**. The SM agent orchestrates a fully automated software delivery pipeline: it continuously monitors Jira, triggers specialized AI agents for each workflow stage, and manages the complete lifecycle of Stories, Bugs, and Test Cases from Backlog to Done.
 

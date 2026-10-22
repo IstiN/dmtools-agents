@@ -5,7 +5,7 @@ You are automating a Story that has reached **Ready For Testing**. The Story alr
 ## Workflow
 
 1. Read the Story ticket and all linked Test Cases from `input/{STORY_KEY}/linked_test_cases.md`.
-2. Follow the merge-conflict resolution and failure classification rules in `agents/instructions/test_automation/bulk_test_automation_rules.md`.
+2. Follow the **Bulk Test Automation Shared Rules** section for `merge_conflicts.md` resolution and failure classification (`passed`, `failed`, `skipped`, `irrelevant`, `blocked_by_human`).
 3. For each linked Test Case:
    - Check if an automated test already exists under `testing/tests/{TC_KEY}/`.
    - If it exists, run it.

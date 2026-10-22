@@ -214,7 +214,7 @@ Replace every generic placeholder tag from the template with the GitHub-flavored
 
 # ADO Markup Reference
 
-When the target tracker is Azure DevOps, replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown in `agents/instructions/tracker/gfm_markup_table.md`. Do not write literal XML-style tags in the final output.
+When the target tracker is Azure DevOps, replace every generic placeholder tag from the template with the GitHub-flavored Markdown from the **GitHub-Flavored Markdown Placeholder Table** section. Do not write literal XML-style tags in the final output.
 ## Rules
 
 - Replace every placeholder tag with the Markdown shown above.

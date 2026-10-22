@@ -228,7 +228,7 @@ flowchart TD
 
 The structural template is an **example only**. Tags such as `<bold>`, `<bullet>`, `<code>`, `<heading2>`, and `<link>` are placeholders that show the required shape of the document.
 
-**CRITICAL: Never write the final `outputs/response.md` using these literal metatags.** Use the tracker-specific transformation table (for example `agents/instructions/tracker/jira_markup_transform.md` when the tracker is Jira) to convert every placeholder into the correct tracker markup.
+**CRITICAL: Never write the final `outputs/response.md` using these literal metatags.** Use the tracker-specific transformation table in this prompt (e.g., **Jira Markup Reference**, **ADO Markup Reference**, or **GitHub-Flavored Markdown Placeholder Table**) to convert every placeholder into the correct tracker markup.
 
 ## Placeholder Transformation Rules
 
@@ -244,7 +244,7 @@ The structural template is an **example only**. Tags such as `<bold>`, `<bullet>
 
 # Enhanced Story Template Guidelines
 
-Follow `agents/instructions/common/markup_placeholder_rules.md` to transform every template placeholder tag into the target tracker markup.
+Transform every generic template placeholder tag (`<bold>`, `<bullet>`, `<code>`, `<link>`, etc.) into the target tracker markup using the **Generic Template Placeholders** and tracker-specific markup sections in this prompt.
 
 ```mermaid
 flowchart TD
@@ -352,7 +352,7 @@ When the target tracker is Jira, replace every generic placeholder tag from the 
 
 The structural template is an **example only**. Tags such as `<bold>`, `<bullet>`, `<code>`, `<heading2>`, and `<link>` are placeholders that show the required shape of the document.
 
-**CRITICAL: Never write the final `outputs/response.md` using these literal metatags.** Use the tracker-specific transformation table (for example `agents/instructions/tracker/jira_markup_transform.md` when the tracker is Jira) to convert every placeholder into the correct tracker markup.
+**CRITICAL: Never write the final `outputs/response.md` using these literal metatags.** Use the tracker-specific transformation table in this prompt (e.g., **Jira Markup Reference**, **ADO Markup Reference**, or **GitHub-Flavored Markdown Placeholder Table**) to convert every placeholder into the correct tracker markup.
 
 ## Placeholder Transformation Rules
 
@@ -368,7 +368,7 @@ The structural template is an **example only**. Tags such as `<bold>`, `<bullet>
 
 # Enhanced Story Template Guidelines
 
-Follow `agents/instructions/common/markup_placeholder_rules.md` to transform every template placeholder tag into the target tracker markup.
+Transform every generic template placeholder tag (`<bold>`, `<bullet>`, `<code>`, `<link>`, etc.) into the target tracker markup using the **Generic Template Placeholders** and tracker-specific markup sections in this prompt.
 
 ```mermaid
 flowchart TD
@@ -433,7 +433,7 @@ Replace every generic placeholder tag from the template with the GitHub-flavored
 
 # ADO Markup Reference
 
-When the target tracker is Azure DevOps, replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown in `agents/instructions/tracker/gfm_markup_table.md`. Do not write literal XML-style tags in the final output.
+When the target tracker is Azure DevOps, replace every generic placeholder tag from the template with the GitHub-flavored Markdown from the **GitHub-Flavored Markdown Placeholder Table** section. Do not write literal XML-style tags in the final output.
 ## Rules
 
 - Replace every placeholder tag with the Markdown shown above.
@@ -480,7 +480,7 @@ Replace every generic placeholder tag from the template with the GitHub-flavored
 
 # Confluence Markup Reference
 
-When the generated content is published to Confluence (contentOutput target `confluence`), the body is synced as **Markdown** and converted to Confluence storage format automatically. Replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown in `agents/instructions/tracker/gfm_markup_table.md`. Do not write literal XML-style tags in the final output.
+When the generated content is published to Confluence (contentOutput target `confluence`), the body is synced as **Markdown** and converted to Confluence storage format automatically. Replace every generic placeholder tag from the template with the GitHub-flavored Markdown from the **GitHub-Flavored Markdown Placeholder Table** section. Do not write literal XML-style tags in the final output.
 ## Rules
 
 - Replace every placeholder tag with the Markdown shown above.

@@ -2,7 +2,7 @@
 
 Write the enhanced SD CORE technical description to `outputs/response.md` and a valid Mermaid diagram to `outputs/diagram.md`.
 
-Follow `agents/instructions/common/markup_placeholder_rules.md` to transform every template placeholder tag into the target tracker markup.
+Transform every generic template placeholder tag (`<bold>`, `<bullet>`, `<code>`, `<link>`, etc.) into the target tracker markup using the **Generic Template Placeholders** and tracker-specific markup sections in this prompt.
 
 ```
 <bold>Purpose:</bold>
@@ -48,5 +48,5 @@ The Acceptance Criteria are defined in the BA ticket (<link>BA-TICKET|https://ji
 
 ## Rules
 
-- Apply the placeholder transformation rules from `agents/instructions/common/markup_placeholder_rules.md`.
+- Replace every `<bold>`, `<bullet>`, `<code>`, `<link>` tag with the target tracker's markup (never leave literal XML-style tags).
 - Write the Mermaid diagram to `outputs/diagram.md` following `common/diagram_output_contract.md` exactly (plain Mermaid syntax, no fences, no markup tags).

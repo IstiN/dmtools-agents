@@ -2,7 +2,7 @@
 
 The structural template is an **example only**. Tags such as `<bold>`, `<bullet>`, `<code>`, `<heading2>`, and `<link>` are placeholders that show the required shape of the document.
 
-**CRITICAL: Never write the final `outputs/response.md` using these literal metatags.** Use the tracker-specific transformation table (for example `agents/instructions/tracker/jira_markup_transform.md` when the tracker is Jira) to convert every placeholder into the correct tracker markup.
+**CRITICAL: Never write the final `outputs/response.md` using these literal metatags.** Use the tracker-specific transformation table in this prompt (e.g., **Jira Markup Reference**, **ADO Markup Reference**, or **GitHub-Flavored Markdown Placeholder Table**) to convert every placeholder into the correct tracker markup.
 
 ## Placeholder Transformation Rules
 

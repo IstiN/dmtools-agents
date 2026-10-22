@@ -1,4 +1,4 @@
-Precondition (including any `"no changes needed"` conclusion): run `git log origin/main..HEAD --oneline` per `instructions/common/git_completion_guard.md`.
+Precondition (including any `"no changes needed"` conclusion): run `git log origin/main..HEAD --oneline` per the **Git Completion Guard & Closing-Keyword Rules** section.
 
 ```mermaid
 flowchart TD
