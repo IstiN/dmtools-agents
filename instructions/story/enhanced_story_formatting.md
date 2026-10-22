@@ -1,6 +1,6 @@
 # Enhanced Story Template Guidelines
 
-Follow `agents/instructions/common/markup_placeholder_rules.md` to transform every template placeholder tag into the target tracker markup.
+Transform every generic template placeholder tag (`<bold>`, `<bullet>`, `<code>`, `<link>`, etc.) into the target tracker markup using the **Generic Template Placeholders** and tracker-specific markup sections in this prompt.
 
 ```mermaid
 flowchart TD

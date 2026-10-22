@@ -10,11 +10,11 @@ If `merge_conflicts.md` is present in the input folder, the test branch could no
 
 ## Your task
 
-0. Follow `agents/instructions/common/codegraph_first.md` to query CodeGraph before inspecting `testing/` or source files.
+0. Follow the **CodeGraph-First Investigation** section to query CodeGraph before inspecting `testing/` or source files.
 1. Analyze the Test Case: understand what needs to be verified, what type it is (web, mobile, API), and which framework fits best.
 2. Check `testing/` for existing components (pages, screens, services) and core utilities you can reuse.
 3. **Check if test already exists** in `testing/tests/{TICKET-KEY}/`. If it does, reuse and update it rather than rewriting from scratch. Only modify what is necessary.
-4. Write the automated test in `testing/tests/{TICKET-KEY}/` following the architecture rules in `agents/instructions/test_automation/test_automation_architecture.md`.
+4. Write the automated test in `testing/tests/{TICKET-KEY}/` following the **Test Automation Architecture** section.
 5. **Run the test** and capture the result.
 6. Perform a real human-style verification of the scenario from the user's perspective.
 7. Write output files.

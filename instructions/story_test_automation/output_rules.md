@@ -2,7 +2,7 @@
 
 ## Mandatory JSON output
 
-Write `outputs/story_test_automation_result.json` using the shared contract defined in `agents/instructions/test_automation/bulk_test_automation_rules.md`.
+Write `outputs/story_test_automation_result.json` using the shared JSON schema from the **Bulk Test Automation Shared Rules** section.
 
 - `overall`:
   - `passed` — no `failed` results (combination of `passed`, `skipped`, and/or `irrelevant` is OK).

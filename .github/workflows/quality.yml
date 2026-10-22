@@ -207,6 +207,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
+          curl -fsSL https://github.com/IstiN/crap4dart/releases/download/v0.15.0/crap4dart-linux-x64 \
+            -o "$RUNNER_TEMP/crap4dart-linux-x64" && chmod +x "$RUNNER_TEMP/crap4dart-linux-x64"
+          "$RUNNER_TEMP/crap4dart-linux-x64" check --only similarity --format json > "$RUNNER_TEMP/md-similarity.json" 2>/dev/null || true
           node - <<'JS'
           const fs = require('fs'), path = require('path');
           const tmp = process.env.RUNNER_TEMP, thr = Number(process.env.CRAP_THRESHOLD);
@@ -230,6 +233,15 @@ jobs:
           w('crap-max.json', 'CRAP max', String(Math.round(max * 10) / 10), colorMax);
           w('crap-over.json', `CRAP > ${thr}`, `${over} fns`, colorOver);
           w('coverage.json', 'coverage', `${pct}%`, colorCov);
+          let mdPairs = 0, mdSummary = '0 similar';
+          try {
+            const sim = JSON.parse(fs.readFileSync(path.join(tmp, 'md-similarity.json'), 'utf8'));
+            const gate = (sim.gates || []).find((g) => g.id === 'similarity') || {};
+            mdPairs = Array.isArray(gate.violations) ? gate.violations.length : 0;
+            const m = String(gate.summary || '').match(/(\d+)\s+files\s+scanned/);
+            mdSummary = mdPairs === 0 ? (m ? `0 / ${m[1]} files` : '0 similar') : `${mdPairs} similar`;
+          } catch (_) {}
+          w('md-similarity.json', 'md similarity', mdSummary, mdPairs === 0 ? 'brightgreen' : mdPairs <= 5 ? 'yellow' : 'red');
           console.log(`badges: max=${max} over=${over} coverage=${pct}%`);
           JS
           cd "$RUNNER_TEMP/badges"

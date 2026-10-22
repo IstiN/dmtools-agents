@@ -161,7 +161,7 @@ You are automating a Story that has reached **Ready For Testing**. The Story alr
 ## Workflow
 
 1. Read the Story ticket and all linked Test Cases from `input/{STORY_KEY}/linked_test_cases.md`.
-2. Follow the merge-conflict resolution and failure classification rules in `agents/instructions/test_automation/bulk_test_automation_rules.md`.
+2. Follow the **Bulk Test Automation Shared Rules** section for `merge_conflicts.md` resolution and failure classification (`passed`, `failed`, `skipped`, `irrelevant`, `blocked_by_human`).
 3. For each linked Test Case:
    - Check if an automated test already exists under `testing/tests/{TC_KEY}/`.
    - If it exists, run it.
@@ -205,7 +205,7 @@ You are automating a Story that has reached **Ready For Testing**. The Story alr
 
 ## Mandatory JSON output
 
-Write `outputs/story_test_automation_result.json` using the shared contract defined in `agents/instructions/test_automation/bulk_test_automation_rules.md`.
+Write `outputs/story_test_automation_result.json` using the shared JSON schema from the **Bulk Test Automation Shared Rules** section.
 
 - `overall`:
   - `passed` — no `failed` results (combination of `passed`, `skipped`, and/or `irrelevant` is OK).
@@ -699,7 +699,7 @@ Use tracker-specific format:
 
 ## Task steps
 
-1. Resolve any `merge_conflicts.md` first per `agents/instructions/test_automation/bulk_test_automation_rules.md` and investigate existing helpers via `agents/instructions/common/codegraph_first.md`.
+1. Resolve any `merge_conflicts.md` first per the **Bulk Test Automation Shared Rules** section and investigate existing helpers via the **CodeGraph-First Investigation** section.
 2. For each linked Test Case `{TC_KEY}`:
    - Check `testing/tests/{TC_KEY}/`.
    - If the Test Case is **legacy, obsolete, or no longer applicable** (e.g., the product behavior or external contract it verified has been removed/changed), record `status: "irrelevant"` and do NOT write or keep test code for it.
