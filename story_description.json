@@ -28,7 +28,6 @@
       "./agents/instructions/common/preserve_references.md",
       "./agents/instructions/common/media_handling.md",
       "./agents/prompts/story_description_prompt.md",
-      "./agents/instructions/common/confluence_comments.md",
       "./agents/prompts/bash_tools.md"
     ],
     "cliPromptsByTracker": {
@@ -41,7 +40,8 @@
       ],
       "confluence": [
         "./agents/instructions/tracker/gfm_markup_table.md",
-        "./agents/instructions/tracker/confluence_markup_transform.md"
+        "./agents/instructions/tracker/confluence_markup_transform.md",
+        "./agents/instructions/common/confluence_comments.md"
       ]
     },
     "metadata": {

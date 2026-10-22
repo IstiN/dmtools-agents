@@ -9181,7 +9181,9 @@ suite('smAgent: additionalInstructions in encoded_config', function() {
         var storyDevRaw = file_read({ path: 'agents/story_development.json' }) ||
                           file_read({ path: 'story_development.json' });
         var storyDevJson = JSON.parse(storyDevRaw);
-        var defaultCliPrompts = storyDevJson.params.cliPrompts;
+        var defaultCliPrompts = storyDevJson.params.cliPrompts.concat(
+            (storyDevJson.params.cliPromptsByTracker && storyDevJson.params.cliPromptsByTracker.jira) || []
+        );
         assert.ok(Array.isArray(decoded.params.cliPrompts) && decoded.params.cliPrompts.length > 0,
             'default cliPrompts preserved');
         assert.deepEqual(decoded.params.cliPrompts, defaultCliPrompts,
@@ -9227,7 +9229,9 @@ suite('smAgent: additionalInstructions in encoded_config', function() {
         var expectedCliPrompts = storyDevJson.params.cliPrompts.concat([
             './.dmtools/prompts/role.md',
             './.dmtools/prompts/focus.md'
-        ]);
+        ]).concat(
+            (storyDevJson.params.cliPromptsByTracker && storyDevJson.params.cliPromptsByTracker.jira) || []
+        );
         assert.deepEqual(decoded.params.cliPrompts, expectedCliPrompts);
         assert.equal(decoded.params.agentParams.aiRole, 'Senior Engineer');
         assert.equal(decoded.params.agentParams.customFlag, true);

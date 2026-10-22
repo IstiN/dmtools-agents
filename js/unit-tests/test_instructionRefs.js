@@ -251,4 +251,45 @@ suite('instructionRefs — pack reference integrity', function () {
             '#605 regression: review_verdict_rules.md is no longer reachable ' +
             '— the pr_review pack would ship without it (live crash pr-320)');
     });
+
+    test('R5 (gh-1160): no tracker- or Confluence-specific prompt remains in base cliPrompts', function () {
+        var forbiddenInBase = /(?:\/tracker\/|\/(?:jira_|ado_|github_comment_format\.md|confluence_comments\.md$))/;
+        var violators = [];
+        listNames('.').forEach(function (name) {
+            if (name.slice(-5) !== '.json' || name === 'versions.json' || name[0] === '.') return;
+            var raw = readText(name);
+            if (!raw) return;
+            var cfg;
+            try { cfg = JSON.parse(raw); } catch (e) { return; }
+            var base = (cfg.params && Array.isArray(cfg.params.cliPrompts)) ? cfg.params.cliPrompts : [];
+            base.forEach(function (entry) {
+                if (typeof entry === 'string' && forbiddenInBase.test(entry)) {
+                    violators.push(name + ': ' + entry);
+                }
+            });
+        });
+        assert.deepEqual(violators, [],
+            'tracker- or Confluence-specific prompts must live in cliPromptsByTracker, not base cliPrompts: ' +
+            violators.join(' | '));
+    });
+
+    test('R6 (gh-1160): dev, review, and rework configs declare cliPromptsByTracker for jira, ado, and github', function () {
+        var requiredConfigs = [
+            'story_development.json',
+            'bug_development.json',
+            'bug_fix_batch_development.json',
+            'pr_review.json',
+            'pr_rework.json'
+        ];
+        requiredConfigs.forEach(function (name) {
+            var cfg = JSON.parse(readText(name));
+            var byTracker = (cfg.params && cfg.params.cliPromptsByTracker) || {};
+            assert.ok(Array.isArray(byTracker.jira) && byTracker.jira.indexOf('./agents/instructions/tracker/jira_comment_format.md') !== -1,
+                name + ' must wire jira_comment_format.md in cliPromptsByTracker.jira');
+            assert.ok(Array.isArray(byTracker.ado) && byTracker.ado.indexOf('./agents/instructions/tracker/ado_comment_format.md') !== -1,
+                name + ' must wire ado_comment_format.md in cliPromptsByTracker.ado');
+            assert.ok(Array.isArray(byTracker.github) && byTracker.github.indexOf('./agents/instructions/common/github_comment_format.md') !== -1,
+                name + ' must wire github_comment_format.md in cliPromptsByTracker.github');
+        });
+    });
 });

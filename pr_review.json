@@ -140,9 +140,19 @@
       "./agents/instructions/pr_review/formatting_rules.md",
       "./agents/instructions/pr_review/few_shots.md",
       "./agents/instructions/pr_review/review_verdict_rules.md",
-      "./agents/instructions/common/github_comment_format.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
-]
+    ],
+    "cliPromptsByTracker": {
+      "jira": [
+        "./agents/instructions/tracker/jira_comment_format.md"
+      ],
+      "ado": [
+        "./agents/instructions/tracker/ado_comment_format.md"
+      ],
+      "github": [
+        "./agents/instructions/common/github_comment_format.md"
+      ]
+    }
   }
 }

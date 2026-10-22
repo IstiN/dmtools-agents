@@ -16,14 +16,6 @@
     "preCliJSAction": "agents/js/prepareDiscoveryContext.js",
     "postJSAction": "agents/js/publishDiscoveryToConfluence.js",
     "inputJql": "key = JD-82",
-    "customParams": {
-      "feedbackLoop": {
-        "postAction": {
-          "enabled": true,
-          "maxAttempts": 1
-        }
-      }
-    },
     "cliPrompts": [
       "Experienced Product Discovery Lead / Business Analyst",
       "./agents/instructions/common/agent_task_preamble.md",
@@ -35,10 +27,25 @@
       "./agents/instructions/discovery/modes.md",
       "./agents/instructions/discovery/output_rules.md",
       "./agents/instructions/discovery/formatting_rules.md",
-      "./agents/instructions/discovery/confluence_comments.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
     ],
+    "cliPromptsByTracker": {
+      "confluence": [
+        "./agents/instructions/discovery/confluence_comments.md"
+      ]
+    },
+    "customParams": {
+      "feedbackLoop": {
+        "postAction": {
+          "enabled": true,
+          "maxAttempts": 1
+        }
+      },
+      "contentOutput": {
+        "target": "confluence"
+      }
+    },
     "metadata": {
       "descriptionPath": "agents/docs/agents/discovery.md"
     }

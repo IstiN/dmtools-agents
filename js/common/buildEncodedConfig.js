@@ -125,6 +125,14 @@ function readContentOutputTarget(customParams) {
     return null;
 }
 
+function isWikiOutputTarget(target) {
+    return target === 'confluence' || target === 'wiki';
+}
+
+function hasConfluencePrompts(source) {
+    return Boolean(source && source.cliPromptsByTracker && source.cliPromptsByTracker.confluence);
+}
+
 /**
  * Resolve the 'confluence' tracker-prompt override for an agent.
  *
@@ -137,24 +145,13 @@ function readContentOutputTarget(customParams) {
  * default tracker, matching the runtime fallback in CliCommandBuilder.
  */
 function resolveConfluenceTrackerOverride(agentParamsRoot, effectiveConfig, agentName) {
-    var target = readContentOutputTarget(agentParamsRoot && agentParamsRoot.customParams);
-    var patchCustomParams = effectiveConfig && effectiveConfig.jobParamPatches &&
-        effectiveConfig.jobParamPatches[agentName] &&
-        effectiveConfig.jobParamPatches[agentName].customParams;
-    var patchedTarget = readContentOutputTarget(patchCustomParams);
-    if (patchedTarget) {
-        target = patchedTarget;
-    }
-    if (target !== 'confluence') {
+    var patches = effectiveConfig && effectiveConfig.jobParamPatches && effectiveConfig.jobParamPatches[agentName];
+    var target = readContentOutputTarget(patches && patches.customParams) ||
+        readContentOutputTarget(agentParamsRoot && agentParamsRoot.customParams);
+    if (!isWikiOutputTarget(target)) {
         return null;
     }
-    var agentByTracker = agentParamsRoot && agentParamsRoot.cliPromptsByTracker;
-    var configByTracker = effectiveConfig && effectiveConfig.cliPromptsByTracker;
-    if ((agentByTracker && agentByTracker.confluence) ||
-            (configByTracker && configByTracker.confluence)) {
-        return 'confluence';
-    }
-    return null;
+    return (hasConfluencePrompts(agentParamsRoot) || hasConfluencePrompts(effectiveConfig)) ? 'confluence' : null;
 }
 
 /**

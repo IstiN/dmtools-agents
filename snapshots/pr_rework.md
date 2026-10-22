@@ -265,36 +265,7 @@ otherwise.
 
 ---
 
-### [11] `./agents/instructions/common/github_comment_format.md`
-
-# GitHub tracker comment
-
-Use GitHub-flavored Markdown in `outputs/response.md` for GitHub issue
-comments and descriptions. Your output is posted to the issue as-is — every
-construct must render natively on GitHub.
-
-- Headings: `##`, `###`
-- Bullets: `- item`
-- Numbered lists: `1. item`
-- Bold: `**text**`
-- Inline code: `` `code` ``
-- Code block: ` ```lang ... ``` ` with a language tag (`dart`, `bash`, `json`)
-- Link: `[text](url)`
-- Tables: standard GFM table syntax (`|---|` separator row)
-
-Do not use Jira wiki markup in GitHub fields: no `{code}...{code}` blocks,
-no `{panel}` macros, no `h1.`/`h2.`/`h3.` heading prefixes, no
-`{{monospace}}` inline code, no `[title|url]` links. None of it renders on
-GitHub — a comment full of `{code}` fences and `h3.` headers is unreadable.
-
-**IMPORTANT** When the issue references a parent story or related issues,
-get them for full context using: `dmtools github_get_issue OWNER/REPO#NUMBER`
-(the composite key form works directly).
-
-
----
-
-### [12] `./agents/instructions/common/dmtools_cli.md`
+### [11] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -332,7 +303,7 @@ flowchart TD
 
 ---
 
-### [13] `./agents/prompts/bash_tools.md`
+### [12] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -373,6 +344,89 @@ flowchart TD
     SHELLSTATE --> CWD
     CWD --> BGJOBS
 ```
+
+
+---
+
+## cliPromptsByTracker
+
+### Tracker: `jira`
+
+#### [1] `./agents/instructions/tracker/jira_comment_format.md`
+
+# Jira tracker comment
+
+Use Jira wiki markup in `outputs/response.md`.
+
+- Headings: `h1.`, `h2.`, `h3.`
+- Bullets: `* item`
+- Numbered lists: `# item`
+- Bold: `*text*`
+- Inline code: `{{code}}`
+- Code block: `{code}...{code}`
+- Link: `[title|url]`
+
+Do not use Markdown headings, fenced code blocks, or backtick inline code.
+
+**IMPORTANT** When answering a clarification question about a user story, get the parent story for full context using: `dmtools jira_get_ticket PARENT-KEY` (the parent key is visible in the ticket's parent field).
+
+
+
+---
+
+### Tracker: `ado`
+
+#### [1] `./agents/instructions/tracker/ado_comment_format.md`
+
+# ADO tracker comment
+
+Use GitHub-flavored Markdown in `outputs/response.md` for Azure DevOps work item comments and descriptions.
+
+- Headings: `#`, `##`, `###`
+- Bullets: `- item` or `* item`
+- Numbered lists: `1. item`
+- Bold: `**text**`
+- Inline code: `` `code` ``
+- Code block: ` ```lang ... ``` `
+- Link: `[title](url)`
+- Tables: standard GFM table syntax
+
+Do not use Jira wiki markup (`h1.`, `*text*`, `{code}`, `[title|url]`) in ADO fields.
+
+**IMPORTANT** When answering a clarification question about a user story, get the parent story for full context using: `dmtools ado_get_work_item PARENT-KEY` (the parent key is visible in the ticket's parent field).
+
+**IMPORTANT** When enhancing story descriptions, check child tickets and parent story for better context using: `dmtools ado_search_by_wiql`.
+
+
+---
+
+### Tracker: `github`
+
+#### [1] `./agents/instructions/common/github_comment_format.md`
+
+# GitHub tracker comment
+
+Use GitHub-flavored Markdown in `outputs/response.md` for GitHub issue
+comments and descriptions. Your output is posted to the issue as-is — every
+construct must render natively on GitHub.
+
+- Headings: `##`, `###`
+- Bullets: `- item`
+- Numbered lists: `1. item`
+- Bold: `**text**`
+- Inline code: `` `code` ``
+- Code block: ` ```lang ... ``` ` with a language tag (`dart`, `bash`, `json`)
+- Link: `[text](url)`
+- Tables: standard GFM table syntax (`|---|` separator row)
+
+Do not use Jira wiki markup in GitHub fields: no `{code}...{code}` blocks,
+no `{panel}` macros, no `h1.`/`h2.`/`h3.` heading prefixes, no
+`{{monospace}}` inline code, no `[title|url]` links. None of it renders on
+GitHub — a comment full of `{code}` fences and `h3.` headers is unreadable.
+
+**IMPORTANT** When the issue references a parent story or related issues,
+get them for full context using: `dmtools github_get_issue OWNER/REPO#NUMBER`
+(the composite key form works directly).
 
 
 ---
