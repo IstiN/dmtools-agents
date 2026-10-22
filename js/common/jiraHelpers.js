@@ -11,6 +11,14 @@ const { STATUSES, LABELS } = require('../config.js');
 // to require module: ./trackers.js"). Load-time requires resolve
 // file-relative and dmtools compile discovers them for the pack closure.
 const trackersModule = require('./trackers.js');
+var configLoader = null;
+try { configLoader = require('../configLoader.js'); } catch (e) {}
+
+function resolveDefaultConfig(config) {
+    if (config && typeof config === 'object') return config;
+    if (!configLoader || typeof configLoader.loadProjectConfig !== 'function') return null;
+    try { return configLoader.loadProjectConfig({}); } catch (e) { return null; }
+}
 
 /**
  * Assign ticket to initiator and move to "In Review" status with AI-generated label
@@ -21,10 +29,10 @@ const trackersModule = require('./trackers.js');
  * @param {string} wipLabel - Optional WIP label to remove after processing
  * @returns {Object} Result object with success status and message
  */
-function assignForReview(ticketKey, initiatorId, wipLabel, targetStatus, tracker) {
+function assignForReview(ticketKey, initiatorId, wipLabel, targetStatus, tracker, config) {
     const statusName = targetStatus || STATUSES.IN_REVIEW;
     try {
-        const t = tracker || trackersModule.createTracker(null, {});
+        const t = tracker || trackersModule.createTracker(resolveDefaultConfig(config), {});
         return t.assignForReview(ticketKey, initiatorId, wipLabel, statusName);
     } catch (error) {
         console.error("❌ Error in assignForReview:", error);
@@ -66,13 +74,13 @@ function extractTicketKey(result) {
  * @param {string} priority - Priority name (e.g., 'Low', 'Medium', 'High')
  * @returns {boolean} True if successful, false otherwise
  */
-function setTicketPriority(ticketKey, priority, tracker) {
+function setTicketPriority(ticketKey, priority, tracker, config) {
     if (!ticketKey || !priority) {
         return false;
     }
     
     try {
-        const t = tracker || trackersModule.createTracker(null, {});
+        const t = tracker || trackersModule.createTracker(resolveDefaultConfig(config), {});
         t.setPriority(ticketKey, priority);
         console.log('Set priority ' + priority + ' on ticket ' + ticketKey);
         return true;

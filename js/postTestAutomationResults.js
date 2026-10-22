@@ -658,12 +658,14 @@ function handleActionError(trackerRef, params, error) {
 function action(params) {
     var jobParams = postHelpers.resolveJobParams(params);
     var customParams = jobParams.customParams || {};
+    var initialConfig = null;
+    try { initialConfig = configLoader.loadProjectConfig(jobParams); } catch (e) {}
     // Early tracker so the catch-path can still comment if config loading fails
-    tracker = trackersModule.createTracker(null, customParams);
+    tracker = trackersModule.createTracker(initialConfig, customParams);
     try {
         var identity = postHelpers.resolveTicketIdentity(params);
         const ticketKey = identity.ticketKey;
-        var config = configLoader.loadProjectConfig(jobParams);
+        var config = initialConfig || configLoader.loadProjectConfig(jobParams);
         tracker = trackersModule.createTracker(config, customParams);
         var jiraConfig = config.jira;
         var scm = configLoader.createScm(config);

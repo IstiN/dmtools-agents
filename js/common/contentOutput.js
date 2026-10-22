@@ -109,14 +109,20 @@ function isJiraFieldTarget(cfg) {
 
 // ── Jira field write ─────────────────────────────────────────────────────────
 
+function resolveTrackerConfig(config) {
+    if (config && typeof config === 'object') return config;
+    if (!configLoader || typeof configLoader.loadProjectConfig !== 'function') return null;
+    try { return configLoader.loadProjectConfig({}); } catch (e) { return null; }
+}
+
 /**
  * Write content to a tracker field. Supports replace (default) and append
  * modes. Append reads the current field value; ADF values (Jira v3) cannot be
  * merged with wiki markup and fall back to replace.
  */
-function writeToTrackerField(ticketKey, field, content, operationType, tracker) {
+function writeToTrackerField(ticketKey, field, content, operationType, tracker, config) {
     var valueToWrite = content;
-    if (!tracker) tracker = trackersModule.createTracker(null, {});
+    if (!tracker) tracker = trackersModule.createTracker(resolveTrackerConfig(config), {});
     if (operationType === 'append') {
         var existing = '';
         try {

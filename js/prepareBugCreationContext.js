@@ -17,7 +17,7 @@ function sanitizeFilename(str) {
 }
 
 function fetchHistoricalDoneBugs(ticketKey, tracker, queryConfig) {
-    tracker = tracker || trackersModule.createTracker(null, {});
+    tracker = tracker || trackersModule.createTracker(queryConfig, {});
     try {
         // JQL text: provider-specific query (WIQL on ado). The Done status follows jira.statuses.DONE when
         // the project opted in (agents#855); otherwise it is the literal Done, as before.

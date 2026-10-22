@@ -24,6 +24,8 @@
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
+var configLoader = null;
+try { configLoader = require('./configLoader.js'); } catch (e) {}
 var _trackerCtx = { config: null, customParams: {} };
 var _trackerInst = null;
 function initTracker(config, customParams) {
@@ -97,7 +99,9 @@ function buildRunCommand(agent, ticketKey, ciRunUrl) {
 
 function action(params) {
     var scope = resolveRunScope(params);
-    initTracker(null, scope.customParams);
+    var projectConfig = null;
+    try { projectConfig = configLoader ? configLoader.loadProjectConfig(params.jobParams || scope.actualParams) : null; } catch (e) {}
+    initTracker(projectConfig, scope.customParams);
 
     var ticket = params.ticket || scope.actualParams.ticket;
     if (!ticket || !ticket.fields) {

@@ -43,9 +43,16 @@ _Create Repository Development Sub-tasks_
   - `adoTextFormat`
   - `blockedStatus`
   - `blocksRelationship`
+  - `branchCreateFnPath`
+  - `branchNamingFnPath`
+  - `configPath`
   - `customStatuses`
+  - `featureBranchEnabled`
   - `labels`
+  - `prSearchFnPath`
+  - `scmProvider`
   - `stageFallback`
+  - `targetRepository`
   - `trackerProvider`
 
 
@@ -59,9 +66,16 @@ _Create Repository Development Sub-tasks_
 - `adoTextFormat` _(used by JS action)_
 - `blockedStatus` _(used by JS action)_
 - `blocksRelationship` _(used by JS action)_
+- `branchCreateFnPath` _(used by JS action)_
+- `branchNamingFnPath` _(used by JS action)_
+- `configPath` _(used by JS action)_
 - `customStatuses` _(used by JS action)_
+- `featureBranchEnabled` _(used by JS action)_
 - `labels` _(used by JS action)_
+- `prSearchFnPath` _(used by JS action)_
+- `scmProvider` _(used by JS action)_
 - `stageFallback` _(used by JS action)_
+- `targetRepository` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_
 
 ---

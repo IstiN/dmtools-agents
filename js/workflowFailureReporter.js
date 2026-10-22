@@ -18,6 +18,8 @@
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 var scmModule = require('./common/scm.js');
+var configLoader = null;
+try { configLoader = require('./configLoader.js'); } catch (e) {}
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
@@ -220,7 +222,9 @@ function action(params) {
     var repository  = custom.repository;
     var workflowId  = custom.workflowId || null;   // optional — null means all workflows
     var jiraProject = custom.jiraProject;
-    initTracker(null, custom);
+    var projectConfig = null;
+    try { projectConfig = configLoader ? configLoader.loadProjectConfig(params.jobParams || params) : null; } catch (e) {}
+    initTracker(projectConfig, custom);
 
     if (!workspace || !repository || !jiraProject) {
         console.error('❌ customParams must include workspace, repository, jiraProject');

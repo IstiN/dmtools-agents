@@ -15,6 +15,8 @@
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
+var configLoader = null;
+try { configLoader = require('./configLoader.js'); } catch (e) {}
 // Shared pure query/parse/markdown helpers (gh-1038) — no tracker/file side effects.
 var linkedIssuesReport = require('./common/linkedIssuesReport.js');
 var _trackerCtx = { config: null, customParams: {} };
@@ -87,7 +89,9 @@ function writeLinkedTestsFile(folder, ticketKey, linkedTests) {
 function action(params) {
     try {
         var ctx = linkedIssuesReport.resolveInputContext(params);
-        initTracker(null, (params.jobParams && params.jobParams.customParams) || ctx.actualParams.customParams || {});
+        var projectConfig = null;
+        try { projectConfig = configLoader ? configLoader.loadProjectConfig(params.jobParams || ctx.actualParams) : null; } catch (e) {}
+        initTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || ctx.actualParams.customParams || {});
 
         console.log('Fetching linked test cases for', ctx.ticketKey, '...');
         var linkedTests = fetchLinkedTests(ctx.ticketKey);

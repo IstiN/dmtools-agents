@@ -244,7 +244,9 @@ function parseErrorTicketKey(params) {
 /** The tracker for the error comment: the action's own, or a fallback factory. */
 function createErrorTracker(params, tracker) {
     if (tracker) return tracker;
-    return trackersModule.createTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+    var cfg = null;
+    try { cfg = configLoader.loadProjectConfig((params && params.jobParams) || params); } catch (e) {}
+    return trackersModule.createTracker(cfg, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 }
 
 /** Outer-catch reporter: best-effort error comment via a fallback tracker. */

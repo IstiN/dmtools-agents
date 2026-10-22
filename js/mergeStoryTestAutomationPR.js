@@ -462,7 +462,8 @@ function attemptMerge(params) {
 function action(params) {
     const storyKey = params.ticket && params.ticket.key;
     var customParams = resolveCustomParams(params);
-    initTracker(null, customParams);
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    initTracker(config, customParams);
 
     // Some callers (e.g. checkBugTestsPassed.js) only need the merge attempt
     // without the surrounding finalize/retry logic. The GraalJS loader may return
@@ -480,8 +481,6 @@ function action(params) {
     var issueType = params.ticket && params.ticket.fields &&
         params.ticket.fields.issuetype && params.ticket.fields.issuetype.name;
 
-    var config = configLoader.loadProjectConfig(params.jobParams || params);
-    initTracker(config, customParams);
     var jiraConfig = config.jira;
     var scm = scmModule.createScm(config);
 

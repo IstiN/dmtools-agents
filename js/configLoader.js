@@ -1057,9 +1057,9 @@ function resolveCliPromptOverride(agentName, config) {
 
 /**
  * Tracker type driving cliPromptsByTracker selection: DEFAULT_TRACKER env var,
- * then config.defaultTracker, then 'jira'. options.trackerOverride (content
- * routed exclusively to Confluence must be authored in Markdown, not in the
- * tracker's markup) wins over all of them.
+ * then config.tracker.provider, then config.defaultTracker, then 'jira'.
+ * options.trackerOverride (content routed exclusively to Confluence must be
+ * authored in Markdown, not in the tracker's markup) wins over all of them.
  */
 function resolveTrackerType(config, options) {
     var trackerType = null;
@@ -1068,8 +1068,9 @@ function resolveTrackerType(config, options) {
     } catch (e) {
         // Not running in GraalJS environment
     }
-    if (!trackerType && config.defaultTracker) {
-        trackerType = config.defaultTracker;
+    var cfgProvider = config && config.tracker && config.tracker.provider;
+    if (!trackerType && (cfgProvider || (config && config.defaultTracker))) {
+        trackerType = cfgProvider || config.defaultTracker;
     }
     if (!trackerType) {
         trackerType = 'jira';

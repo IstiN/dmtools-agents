@@ -349,7 +349,8 @@ function reportFatalError(tracker, params, error) {
 function action(params) {
     var tracker;
     try {
-        tracker = trackersModule.createTracker(null, resolveInitialTrackerCustomParams(params));
+        var initialConfig = null;
+        tracker = trackersModule.createTracker(initialConfig, resolveInitialTrackerCustomParams(params));
         // JSRunner mode: no ticket context — fetch it from inputJql in jobParams
         var resolved = resolveTicketParams(params, tracker);
         if (resolved.error) return { success: false, error: resolved.error };

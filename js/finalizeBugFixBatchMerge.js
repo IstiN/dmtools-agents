@@ -8,6 +8,8 @@
 var batchContext = require('./prepareBugFixBatchContext.js');
 const { STATUSES, resolveStatuses } = require('./config.js');
 var trackersModule = require('./common/trackers.js');
+var configLoader = null;
+try { configLoader = require('./configLoader.js'); } catch (e) {}
 
 function transitionTicket(tracker, key, statusName) {
     try {
@@ -29,9 +31,11 @@ function action(params) {
 
         var customParams = actualParams.customParams || {};
         var statuses = resolveStatuses(customParams);
-        var tracker = trackersModule.createTracker(null, customParams);
+        var projectConfig = null;
+        try { projectConfig = configLoader ? configLoader.loadProjectConfig(actualParams) : null; } catch (e) {}
+        var tracker = trackersModule.createTracker(projectConfig, customParams);
 
-        var bugs = batchContext.findBugsInEpic(epicKey);
+        var bugs = batchContext.findBugsInEpic(epicKey, tracker, projectConfig);
         console.log('Finalizing batch merge for', epicKey, '(' + bugs.length + ' linked bug(s))');
 
         var movedBugs = [];

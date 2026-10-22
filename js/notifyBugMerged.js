@@ -47,16 +47,16 @@ function findDevSummaryComment(comments) {
  * Writes the result to the Jira "Solution" field so the TestCasesGenerator
  * has RCA context when generating regression and prevention test cases.
  */
-function resolveBugSolutionField(params) {
-    const config = loadProjectConfig(params && params.jobParams ? params.jobParams : params);
+function resolveBugSolutionField(params, projectConfig) {
+    const config = projectConfig || loadProjectConfig(params && params.jobParams ? params.jobParams : params);
     const fields = config && config.jira && config.jira.fields ? config.jira.fields : {};
     return fields.bugSolution || fields.solution || 'Solution';
 }
 
-function updateSolutionField(ticketKey, ticketDescription, comments, params) {
+function updateSolutionField(ticketKey, ticketDescription, comments, params, projectConfig) {
     try {
         const devSummary = findDevSummaryComment(comments);
-        const solutionField = resolveBugSolutionField(params);
+        const solutionField = resolveBugSolutionField(params, projectConfig);
         if (!solutionField) {
             console.warn('Bug Solution field is not configured — skipping Solution field update');
             return;
@@ -93,7 +93,8 @@ function updateSolutionField(ticketKey, ticketDescription, comments, params) {
 function action(params) {
     try {
         const ticketKey = params.ticket.key;
-        initTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+        const projectConfig = loadProjectConfig(params && params.jobParams ? params.jobParams : params);
+        initTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         const ticketDescription = params.ticket.fields && params.ticket.fields.description
             ? params.ticket.fields.description : '';
         console.log('=== Bug merged notification for', ticketKey, '===');
@@ -108,7 +109,7 @@ function action(params) {
         }
 
         // Step 2: Update Solution field with AI-generated RCA + prevention
-        updateSolutionField(ticketKey, ticketDescription, comments, params);
+        updateSolutionField(ticketKey, ticketDescription, comments, params, projectConfig);
 
         // Step 3: Post merge notification
         try {
@@ -138,7 +139,7 @@ function action(params) {
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, config: projectConfig, customParams: tokenUsageComment.customParamsOf(params) });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }

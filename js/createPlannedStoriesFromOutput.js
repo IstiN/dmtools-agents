@@ -10,6 +10,8 @@ const trackersModule = require('./common/trackers.js');
 const { setTicketPriority } = require('./common/jiraHelpers.js');
 const { buildSummary } = require('./common/aiResponseParser.js');
 const linkedIssuesReport = require('./common/linkedIssuesReport.js');
+var configLoader = null;
+try { configLoader = require('./configLoader.js'); } catch (e) {}
 
 // Tracker for the current action() run (built inside action(), never at module load).
 var tracker = null;
@@ -285,7 +287,9 @@ function prepareStoryPlan(params) {
     var jobParams = firstObject(params.jobParams, {});
     var customParams = firstOf3(params.customParams, jobParams.customParams, {});
     var config = firstObject(customParams.storyPlanCreation, {});
-    tracker = trackersModule.createTracker(null, customParams);
+    var projectConfig = null;
+    try { projectConfig = configLoader ? configLoader.loadProjectConfig(params.jobParams || params) : null; } catch (e) {}
+    tracker = trackersModule.createTracker(projectConfig, customParams);
     var sourceTicketKey = params.ticket && params.ticket.key;
     var sourceLabels = getSourceLabels(params);
     var plan = {

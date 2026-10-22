@@ -468,7 +468,11 @@ function postFailureErrorComment(tracker, ticketKey, error) {
 
 function handleActionFailure(params, error, tracker) {
     console.error('❌ Error in postTestReviewComments:', error);
-    if (!tracker) tracker = trackersModule.createTracker(null, failureCustomParamsOf(params));
+    if (!tracker) {
+        var cfg = null;
+        try { cfg = configLoader.loadProjectConfig((params && params.jobParams) || params); } catch (e) {}
+        tracker = trackersModule.createTracker(cfg, failureCustomParamsOf(params));
+    }
     try {
         const ticketKey = params.ticket ? params.ticket.key : (params.inputFolderPath ? params.inputFolderPath.split('/').pop() : null);
         if (ticketKey) {

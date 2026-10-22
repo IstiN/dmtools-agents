@@ -21,6 +21,13 @@ var ticketKeyShapes = require('./ticketKeyShapes.js');
 // ./trackers.js"); load-time requires resolve file-relative and dmtools
 // compile discovers them for the pack closure.
 var trackersModule = require('./trackers.js');
+var configLoader = null;
+try { configLoader = require('../configLoader.js'); } catch (e) {}
+
+function loadTrackerConfig(params) {
+    if (!configLoader || typeof configLoader.loadProjectConfig !== 'function') return null;
+    try { return configLoader.loadProjectConfig(params || {}); } catch (e) { return null; }
+}
 
 // Jira-speak alternation first (uppercase normalization applies), then the
 // GitHub shapes so gh-N keys keep their original case — uppercasing would
@@ -97,12 +104,13 @@ function inputJqlForKey(key, provider) {
  * Fetch the ticket via the tracker layer and throw if it does not exist.
  * @param {string} key  Validated ticket key
  * @param {Object} [tracker] optional tracker (defaults to env/jira)
+ * @param {Object} [config] optional project config
  * @returns {Object}    The ticket object
  */
-function requireTicketExists(key, tracker) {
+function requireTicketExists(key, tracker, config) {
     var ticket;
     try {
-        if (!tracker) tracker = trackersModule.createTracker(null, {});
+        if (!tracker) tracker = trackersModule.createTracker(config || loadTrackerConfig({}), {});
         ticket = tracker.getIssue(key);
     } catch (e) {
         throw new Error('Ticket not found: ' + key + ' — ' + (e.message || e));
@@ -126,7 +134,7 @@ function validateAndRequireTicket(params, tracker) {
     validateTicketKeyFormat(key);
     if (!tracker) {
         var cp = (jobParams && jobParams.customParams) || (params && params.customParams) || {};
-        tracker = trackersModule.createTracker(null, cp);
+        tracker = trackersModule.createTracker(loadTrackerConfig(jobParams), cp);
     }
     return requireTicketExists(key, tracker);
 }

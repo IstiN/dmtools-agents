@@ -271,6 +271,15 @@ function makeDefaultConfigLoaderMock(extraConfig) {
             if (cfg.repository) {
                 result.repository = cfg.repository;
             }
+            if (cfg.tracker) {
+                result.tracker = cfg.tracker;
+            }
+            if (cfg.defaultTracker) {
+                result.defaultTracker = cfg.defaultTracker;
+            }
+            if (cfg.labels) {
+                result.labels = cfg.labels;
+            }
             if (cfg.jobParamPatches) {
                 result.jobParamPatches = cfg.jobParamPatches;
             }

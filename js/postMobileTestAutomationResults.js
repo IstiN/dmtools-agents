@@ -628,12 +628,14 @@ function finalizeTicketStatus(params, ticketKey, passed, jiraConfig) {
 
 function action(params) {
     // Early tracker so the catch-path can still comment if config loading fails
-    tracker = trackersModule.createTracker(null, (params.jobParams || params).customParams || {});
+    var initialConfig = null;
+    try { initialConfig = configLoader.loadProjectConfig(params.jobParams || params); } catch (e) {}
+    tracker = trackersModule.createTracker(initialConfig, (params.jobParams || params).customParams || {});
     try {
         var ticketKey = params.ticket.key;
         var ticketSummary = params.ticket.fields ? params.ticket.fields.summary : ticketKey;
         var jiraComment = params.response || '';
-        var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var config = initialConfig || configLoader.loadProjectConfig(params.jobParams || params);
         tracker = trackersModule.createTracker(config, (params.jobParams || params).customParams || {});
         var jiraConfig = config.jira;
         var automationScm = createAutomationScm(config);

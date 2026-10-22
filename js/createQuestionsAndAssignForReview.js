@@ -277,7 +277,10 @@ function action(params) {
     try {
         var ticketKey = params.ticket.key;
         var projectKey = ticketKey.split('-')[0];
-        initTracker(null, (params.jobParams && params.jobParams.customParams) || {});
+        var projectConfig = null;
+        try { projectConfig = configLoader.loadProjectConfig(params.jobParams || params); } catch (e) {}
+        var customParams = resolveActionCustomParams(params);
+        initTracker(projectConfig, customParams);
         var initiatorId = params.initiator;
         var wipLabel = buildWipLabel(params.metadata);
 
@@ -302,10 +305,9 @@ function action(params) {
             return buildCliFailureResult(cliErrorMessage);
         }
 
-        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+        projectConfig = projectConfig || configLoader.loadProjectConfig(params.jobParams || params);
         var jiraConfig = projectConfig.jira;
         var labels = projectConfig.labels;
-        var customParams = resolveActionCustomParams(params);
         initTracker(projectConfig, customParams);
         var agentId = resolveAgentId(params.metadata);
         var priorityMap = resolvePriorityMap(customParams, projectConfig, agentId);

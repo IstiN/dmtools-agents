@@ -1776,3 +1776,82 @@ suite('trackers.js — tracker-agnostic status transitions & stageFallback (gh-9
         assert.equal(m.jira_post_comment.calls.length, 0);
     });
 });
+
+suite('trackers.js — gh-1163 config resolution & no createTracker(null / initTracker(null guard', function () {
+    test('lint guard: zero non-test js/ files call createTracker(null or initTracker(null', function () {
+        function scanDir(dir) {
+            var res = file_list({ path: dir });
+            if (!res) return [];
+            var entries = (JSON.parse(res) || {}).entries || [];
+            var violations = [];
+            for (var i = 0; i < entries.length; i++) {
+                var p = String(entries[i]);
+                if (p.indexOf('unit-tests') !== -1) continue;
+                if (/\.js$/.test(p)) {
+                    var content = file_read({ path: p });
+                    if (/createTracker\s*\(\s*null|initTracker\s*\(\s*null/.test(content)) {
+                        violations.push(p);
+                    }
+                } else if (p.indexOf('.') === -1 || /\/js\/[a-zA-Z0-9_-]+$/.test(p)) {
+                    violations = violations.concat(scanDir(p));
+                }
+            }
+            return violations;
+        }
+        var found = scanDir('js');
+        assert.deepEqual(found, [], 'Production js/ files must not pass literal null config to createTracker/initTracker');
+    });
+
+    test('createTracker(null, customParams) auto-loads project config via configLoader when omitted', function () {
+        var adoComments = [];
+        var cl = {
+            loadProjectConfig: function (params) {
+                return { tracker: { provider: 'ado' }, customParams: (params && params.customParams) || {} };
+            },
+            paramsForConfigLoad: function (params) {
+                return (params && params.jobParams) || params || {};
+            }
+        };
+        var mod = loadModule(
+            'js/common/trackers.js',
+            makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
+                '../configLoader.js': cl
+            }),
+            {
+                ado_add_work_item_comment: function (a) { adoComments.push(a); return '{}'; },
+                jira_post_comment: function () { throw new Error('jira_post_comment must not be called on ado'); }
+            }
+        );
+
+        var t1 = mod.createTracker(null, {});
+        assert.equal(t1.provider(), 'ado');
+        t1.postComment('2174969', 'hello from ado');
+        assert.equal(adoComments.length, 1);
+        assert.equal(adoComments[0].id, '2174969');
+
+        var t2 = mod.createTrackerFromParams({ jobParams: { customParams: {} }, ticket: { key: '2174969' } });
+        assert.equal(t2.provider(), 'ado');
+    });
+
+    test('createTracker(null, customParams) falls back cleanly when configLoader throws', function () {
+        var cl = {
+            loadProjectConfig: function () { throw new Error('disk error'); }
+        };
+        var mod = loadModule(
+            'js/common/trackers.js',
+            makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js'),
+                '../configLoader.js': cl
+            }),
+            jiraMocks()
+        );
+        var t = mod.createTracker(null, {});
+        assert.equal(t.provider(), 'jira');
+        var tFromParams = mod.createTrackerFromParams(null);
+        assert.equal(tFromParams.provider(), 'jira');
+    });
+});
+
