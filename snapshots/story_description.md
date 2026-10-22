@@ -23,15 +23,24 @@ You must write response to the request to outputs/response.md according to forma
 Don't write Enhanced Story Description of TICKET-XXX, just start from the content.
 Content from the response.md file will replace description fully from the ticket, don't include any intro, current ticket reference.
 if you did not understand the task, or you can't finish it with right quality or you can't read something and understand **IMPORTANT** you must mention that in updated description keeping initial content. You must not delete important content then from description. For example: [initial content] Opened issues... Help is needed...
-**IMPORTANT** You must keep exact syntax and references to attachments if there are any in description of the ticket. Especially if we need it in future. If you remove reference from description we lose attachments. For instance, if initial description has !image-20250923-195553.png|width=763,alt="image-20250923-195553.png"!, it must be presented in new description as well.
-**IMPORTANT** You must keep ALL links and references from initial description logically inserted to output description. Otherwise you lose it. You can add section like: References [Link]
-**IMPORTANT** if current description looks fully correct look any mentions of tagging account like [~accountid:712020:39ae9870-8a56-44be-945e-a8ad26273932], which means user asked extra improvements. That can be in comments or in the texts.
 **IMPORTANT** Read 'input/existing_questions.json' to see existing question subtasks for this story (fields: key, summary, description, status, priority). Use these questions and their answers as context when writing the description.
 
 
 ---
 
-### [4] `./agents/instructions/common/media_handling.md`
+### [4] `./agents/instructions/common/preserve_references.md`
+
+**IMPORTANT** You must keep exact syntax and references to attachments if there are any in description of the ticket. Especially if we need it in future. If you remove reference from description we lose attachments. For instance, if initial description has !image-20250923-195553.png|width=763,alt="image-20250923-195553.png"!, it must be presented in new description as well.
+
+**IMPORTANT** You must keep ALL links and references from initial description logically inserted to output description. Otherwise you lose it. You can add section like: References [Link]
+
+**IMPORTANT** if current description looks fully correct look any mentions of tagging account like [~accountid:712020:39ae9870-8a56-44be-945e-a8ad26273932], which means user asked extra improvements. That can be in comments or in the texts.
+
+
+
+---
+
+### [5] `./agents/instructions/common/media_handling.md`
 
 Images and attachments are pre-downloaded to the input folder. Read them directly — no extra API call is needed.
 
@@ -45,7 +54,7 @@ EOF
 
 ---
 
-### [5] `./agents/prompts/story_description_prompt.md`
+### [6] `./agents/prompts/story_description_prompt.md`
 
 Your task is to write a story description. Write your output to `outputs/response.md`. Read all files in the 'input' folder.
 
@@ -71,7 +80,7 @@ List the input folder with `ls -la input/*/` and read every file found:
 
 ---
 
-### [6] `./agents/instructions/common/confluence_comments.md`
+### [7] `./agents/instructions/common/confluence_comments.md`
 
 # Confluence output
 
@@ -129,7 +138,7 @@ Rules:
 
 ---
 
-### [7] `./agents/prompts/bash_tools.md`
+### [8] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -202,50 +211,11 @@ Do not use Markdown headings, fenced code blocks, or backtick inline code.
 
 ### Tracker: `ado`
 
-#### [1] `./agents/instructions/tracker/ado_markup_transform.md`
+#### [1] `./agents/instructions/tracker/gfm_markup_table.md`
 
-# ADO Markup Reference
+# GitHub-Flavored Markdown Placeholder Table
 
-When the target tracker is Azure DevOps, replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown below. Do not write literal XML-style tags in the final output.
-
-| Generic placeholder | Markdown | Example |
-|---------------------|----------|---------|
-| `<bold>X</bold>` | `**X**` | `**Background:**` |
-| `<italic>X</italic>` | `*X*` | `*hint*` |
-| `<strike>X</strike>` | `~~X~~` | `~~deprecated~~` |
-| `<underline>X</underline>` | `<u>X</u>` | `<u>important</u>` |
-| `<code>X</code>` | `` `X` `` | `` `main.dart` `` |
-| `<codeblock>X</codeblock>` | ` ```\nX\n``` ` | ` ```\nvoid main() {}\n``` ` |
-| `<codeblock:lang>X</codeblock:lang>` | ` ```lang\nX\n``` ` | ` ```dart\nvoid main() {}\n``` ` |
-| `<bullet> text` | `- text` | `- Option A` |
-| `<numbered> text` | `1. text` | `1. Step one` |
-| `<heading1>X</heading1>` | `# X` | `# Title` |
-| `<heading2>X</heading2>` | `## X` | `## Section` |
-| `<heading3>X</heading3>` | `### X` | `### Subsection` |
-| `<link>text\|url</link>` | `[text](url)` | `[TS-24](https://dev.azure.com/.../12345)` |
-| `<image>url</image>` | `![image](url)` | `![diagram](https://.../diagram.png)` |
-| `<quote>X</quote>` | `> X` | `> cited text` |
-| `<panel>X</panel>` | `> X` | `> note` |
-| `<color color="red">X</color>` | `<span style="color:red">X</span>` | `<span style="color:red">alert</span>` |
-| `<hr>` | `---` | `---` |
-
-## Rules
-
-- Replace every placeholder tag with the Markdown shown above.
-- Do NOT use Jira wiki markup in ADO output: no `*bold*`, no `* item` bullets, no `h2.` headings, no `{code}...{code}` blocks.
-- Use `- item` for bullets and `1. item` for numbered lists.
-- For Mermaid diagrams in ADO fields that support them, wrap the diagram in ` ```mermaid\n...\n``` `.
-
-
----
-
-### Tracker: `confluence`
-
-#### [1] `./agents/instructions/tracker/confluence_markup_transform.md`
-
-# Confluence Markup Reference
-
-When the generated content is published to Confluence (contentOutput target `confluence`), the body is synced as **Markdown** and converted to Confluence storage format automatically. Replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown below. Do not write literal XML-style tags in the final output.
+Replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown below. Do not write literal XML-style tags in the final output.
 
 | Generic placeholder | Markdown | Example |
 |---------------------|----------|---------|
@@ -268,6 +238,61 @@ When the generated content is published to Confluence (contentOutput target `con
 | `<color color="red">X</color>` | `<span style="color:red">X</span>` | `<span style="color:red">alert</span>` |
 | `<hr>` | `---` | `---` |
 
+
+---
+
+#### [2] `./agents/instructions/tracker/ado_markup_transform.md`
+
+# ADO Markup Reference
+
+When the target tracker is Azure DevOps, replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown in `agents/instructions/tracker/gfm_markup_table.md`. Do not write literal XML-style tags in the final output.
+## Rules
+
+- Replace every placeholder tag with the Markdown shown above.
+- Do NOT use Jira wiki markup in ADO output: no `*bold*`, no `* item` bullets, no `h2.` headings, no `{code}...{code}` blocks.
+- Use `- item` for bullets and `1. item` for numbered lists.
+- For Mermaid diagrams in ADO fields that support them, wrap the diagram in ` ```mermaid\n...\n``` `.
+
+
+---
+
+### Tracker: `confluence`
+
+#### [1] `./agents/instructions/tracker/gfm_markup_table.md`
+
+# GitHub-Flavored Markdown Placeholder Table
+
+Replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown below. Do not write literal XML-style tags in the final output.
+
+| Generic placeholder | Markdown | Example |
+|---------------------|----------|---------|
+| `<bold>X</bold>` | `**X**` | `**Background:**` |
+| `<italic>X</italic>` | `*X*` | `*hint*` |
+| `<strike>X</strike>` | `~~X~~` | `~~deprecated~~` |
+| `<underline>X</underline>` | `<u>X</u>` | `<u>important</u>` |
+| `<code>X</code>` | `` `X` `` | `` `main.dart` `` |
+| `<codeblock>X</codeblock>` | ` ```\nX\n``` ` | ` ```\nvoid main() {}\n``` ` |
+| `<codeblock:lang>X</codeblock:lang>` | ` ```lang\nX\n``` ` | ` ```dart\nvoid main() {}\n``` ` |
+| `<bullet> text` | `- text` | `- Option A` |
+| `<numbered> text` | `1. text` | `1. Step one` |
+| `<heading1>X</heading1>` | `# X` | `# Title` |
+| `<heading2>X</heading2>` | `## X` | `## Section` |
+| `<heading3>X</heading3>` | `### X` | `### Subsection` |
+| `<link>text\|url</link>` | `[text](url)` | `[TS-24](https://tracker.example.com/browse/TS-24)` |
+| `<image>url</image>` | `![image](url)` | `![diagram](https://.../diagram.png)` |
+| `<quote>X</quote>` | `> X` | `> cited text` |
+| `<panel>X</panel>` | `> X` | `> note` |
+| `<color color="red">X</color>` | `<span style="color:red">X</span>` | `<span style="color:red">alert</span>` |
+| `<hr>` | `---` | `---` |
+
+
+---
+
+#### [2] `./agents/instructions/tracker/confluence_markup_transform.md`
+
+# Confluence Markup Reference
+
+When the generated content is published to Confluence (contentOutput target `confluence`), the body is synced as **Markdown** and converted to Confluence storage format automatically. Replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown in `agents/instructions/tracker/gfm_markup_table.md`. Do not write literal XML-style tags in the final output.
 ## Rules
 
 - Replace every placeholder tag with the Markdown shown above.

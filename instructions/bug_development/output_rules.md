@@ -21,9 +21,5 @@ flowchart TD
         A1["{<br/>commit: short hash,<br/>rca: one-sentence root cause,<br/>description: which commit/PR fixed it,<br/>verification_test: path/to/test::test name<br/>}"]
     end
 
-    subgraph BLOCKED["blocked.json format"]
-        B1["{<br/>reason: specific blocker,<br/>tried: [what was attempted],<br/>needs: what a human must provide<br/>}"]
-    end
-
-    OUTPUTS --> RCA --> ALREADY --> BLOCKED
+    OUTPUTS --> RCA --> ALREADY
 ```

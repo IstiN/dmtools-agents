@@ -1,15 +1,12 @@
 # Pr Test Automation Rework
 
-Reworks a test-automation PR after review: applies review feedback to the test code and pushes the fixes.
+Applies PR review feedback and CI fixes for a single-Test-Case automation pull request (`In Rework`), updating `outputs/test_automation_result.json` and pushing changes to the test branch.
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
-
-- `autoStartReview` — when `true`, automatically trigger the PR review workflow after this agent finishes.
-- `autoStartReviewConfigFile` — agent config file used for the auto-started review workflow.
-- `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
-- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
+- `removeLabel` — clears `sm_test_rework_triggered` after pushing rework commits.
+- `checkOpenPR` — requires an open test PR before running rework.
+- `autoStartReview` / `autoStartReviewConfigFile` — re-runs the test PR review workflow after rework is pushed.
 
 _Human doc: [`agents/docs/agents/pr_test_automation_rework.md`](agents/docs/agents/pr_test_automation_rework.md)_
 

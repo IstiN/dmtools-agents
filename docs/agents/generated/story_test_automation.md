@@ -1,17 +1,14 @@
 # Story Test Automation
 
-Writes automated tests for a story: generates test code from the acceptance criteria, runs it, and opens a PR with the new tests.
+Bulk-automates all Test Cases linked to a Story in `Ready For Testing` on branch `test/{STORY_KEY}`, records per-case results (`passed`, `failed`, `skipped`, `irrelevant`) in `outputs/story_test_automation_result.json`, and opens one PR for the story.
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
-
-- `autoStartReview` — when `true`, automatically trigger the PR review workflow after this agent finishes.
-- `autoStartReviewConfigFile` — agent config file used for the auto-started review workflow.
-- `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
-- `customStatuses` — status name overrides for this workflow (maps logical statuses to project-specific names).
-- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
-- `testFilesGlob` — glob that selects which test files belong to this automation scope.
+- `removeLabel` — removes `sm_story_test_automation_triggered` upon completion.
+- `testFilesGlob` — glob pattern selecting story test artifacts under `testing/`.
+- `checkOpenPR` — guards against duplicate story test PRs.
+- `customStatuses` — maps logical story/test statuses to project-specific tracker statuses.
+- `autoStartReview` / `autoStartReviewConfigFile` — chains the story test review agent after PR creation.
 
 _Human doc: [`agents/docs/agents/story_test_automation.md`](agents/docs/agents/story_test_automation.md)_
 

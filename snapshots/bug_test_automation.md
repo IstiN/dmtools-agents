@@ -76,7 +76,83 @@ flowchart TD
 
 ---
 
-### [5] `./agents/instructions/bug_test_automation/general_guidelines.md`
+### [5] `./agents/instructions/common/codegraph_first.md`
+
+# CodeGraph-First Investigation Rule
+
+Before inspecting `testing/` or any source file with `grep`, `find`, `cat`, or `sed`, run a targeted CodeGraph command such as `codegraph context "<ticket key> test automation existing tests and reusable helpers"`. Use CodeGraph as the primary index for discovering existing tests, reusable helpers, and component call flows before opening files directly.
+
+
+---
+
+### [6] `./agents/instructions/test_automation/bulk_test_automation_rules.md`
+
+# Bulk Test Automation Shared Rules
+
+## Pre-flight merge conflict resolution
+
+If `merge_conflicts.md` exists in the ticket input folder, the test branch could not be cleanly synced with `origin/main`:
+1. Resolve every `<<<<<<<` / `=======` / `>>>>>>>` conflict marker in the listed files, using `pr_diff.txt` for context.
+2. Stage each resolved file with `git add <file>`.
+3. Do NOT `git commit` or `git merge --abort`. Only proceed to test automation after the working directory is clean of conflicts.
+
+## Failure classification
+
+- **Product failure**: the test ran and found a real defect or regression in the product → record status as `failed` and write `outputs/failed_description_{TC_KEY}.md`.
+- **Access / credential / permission / infrastructure failure**: the test account cannot reach a required service, repository, secret, or token → mark that Test Case as `skipped`, explain the blocker in `failureSummary`, and keep `overall` as `passed` if all other Test Cases passed. Do **not** mark it `failed`.
+- **All Test Cases blocked by missing setup**: set `overall` to `blocked_by_human` and produce `outputs/blocked.json`.
+
+## Shared `outputs/story_test_automation_result.json` contract
+
+Write `outputs/story_test_automation_result.json` in a single `Write` call (do NOT use `Edit` on this file; rewrite it completely if corrections are needed):
+
+```json
+{
+  "storyKey": "TS-123",
+  "overall": "passed|failed|blocked_by_human",
+  "summary": "Short human-readable summary of what was done.",
+  "results": [
+    {
+      "testCaseKey": "TS-124",
+      "status": "passed|failed|skipped|irrelevant",
+      "testPath": "testing/tests/TS-124/...",
+      "failedDescriptionFile": "outputs/failed_description_TS-124.md",
+      "failureSummary": "One-line failure summary when status is failed."
+    }
+  ],
+  "blockedReason": "Explanation when overall is blocked_by_human."
+}
+```
+
+- `results` must list every linked Test Case from `linked_test_cases.json`.
+- `failedDescriptionFile` and `failureSummary` are required for every `failed` entry.
+- `testPath` is required for every `passed` entry and omitted for `skipped` or `irrelevant`.
+- Also write `outputs/tracker_comment.md` summarizing the run and `outputs/failed_description_{TC_KEY}.md` for each failed Test Case.
+
+
+---
+
+### [7] `./agents/instructions/common/blocked_output_contract.md`
+
+# Blocked Output Contract (`outputs/blocked.json`)
+
+When work cannot proceed because required credentials, secrets, permissions, test data, or external human decisions are missing:
+
+1. Do **not** guess, hardcode, or fake a passing result.
+2. Write `outputs/blocked.json` at the repository root with the exact blocker details:
+   ```json
+   {
+     "reason": "Specific external blocker preventing completion",
+     "tried": ["What was checked or attempted"],
+     "needs": "Exact secret, permission, data, or decision a human must provide"
+   }
+   ```
+3. Also write `outputs/response.md` summarizing the blocker so the human sees the explanation in the ticket/PR comment.
+
+
+---
+
+### [8] `./agents/instructions/bug_test_automation/general_guidelines.md`
 
 # Bug-level Test Automation Guidelines
 
@@ -85,7 +161,7 @@ You are automating tests for a Bug that has reached **Ready For Testing**. The B
 ## Workflow
 
 1. Read the Bug ticket and all linked Test Cases from `input/{BUG_KEY}/linked_test_cases.md`.
-2. If `input/{BUG_KEY}/merge_conflicts.md` is present, the test branch could not be cleanly synced with `origin/main`. Resolve every `<<<<<<<` / `=======` / `>>>>>>>` conflict marker in the listed files, using `input/{BUG_KEY}/pr_diff.txt` for context. Stage each resolved file with `git add <file>`. Do NOT `git commit` or `git merge --abort`.
+2. Follow the merge-conflict resolution and failure classification rules in `agents/instructions/test_automation/bulk_test_automation_rules.md`.
 3. For each linked Test Case:
    - Check if an automated test already exists under `testing/tests/{TC_KEY}/`.
    - If it exists, run it.
@@ -93,12 +169,6 @@ You are automating tests for a Bug that has reached **Ready For Testing**. The B
 4. Produce `outputs/story_test_automation_result.json` (shared schema).
 5. For every failed Test Case, produce `outputs/failed_description_{TC_KEY}.md`.
 6. If environment/credentials are missing, produce `outputs/blocked.json`.
-
-## Failure classification
-
-- A **product failure** — the bug is not fixed or the automated test reveals a regression — must be recorded as `failed`. The Test Case goes to `Failed` and the Bug must go back to `Ready For Development` / `To Do`.
-- An **access / credential / permission / infrastructure failure** — the test account cannot reach a required service, repository, secret, or token — is **NOT a product failure**. Mark that Test Case as `skipped`, explain the blocker in `failureSummary`, and keep the overall result as `passed` if all other Test Cases passed. Do **not** mark it `failed` and do **not** send the Bug to rework.
-- If **every** linked Test Case is blocked by missing setup, set `overall` to `blocked_by_human` and produce `outputs/blocked.json`.
 
 ## Focus for Bug tests
 
@@ -118,45 +188,16 @@ You are automating tests for a Bug that has reached **Ready For Testing**. The B
 
 ---
 
-### [6] `./agents/instructions/bug_test_automation/output_rules.md`
+### [9] `./agents/instructions/bug_test_automation/output_rules.md`
 
 # Bug Test Automation Output Rules
 
-Use the same output schema as Story test automation. Write `outputs/story_test_automation_result.json` in a single `Write` call. Do NOT use `Edit` on this file; rewrite it entirely if corrections are needed.
-
-```json
-{
-  "storyKey": "TS-123",
-  "overall": "passed|failed|blocked_by_human",
-  "summary": "...",
-  "results": [
-    {
-      "testCaseKey": "TS-124",
-      "status": "passed|failed|skipped|irrelevant",
-      "testPath": "testing/tests/TS-124/...",
-      "failedDescriptionFile": "outputs/failed_description_TS-124.md",
-      "failureSummary": "..."
-    }
-  ],
-  "blockedReason": "..."
-}
-```
-
-The `storyKey` field is reused for backward compatibility; put the Bug key here.
-
-- `overall`:
-  - `passed` — no `failed` results (combination of `passed`, `skipped`, and/or `irrelevant` is OK).
-  - `failed` — at least one result is `failed`.
-  - `blocked_by_human` — missing credentials/data.
-- `results` must contain every linked Test Case.
-- `failedDescriptionFile` is required for every `failed` result.
-
-Write `outputs/tracker_comment.md` in Jira wiki format and attach `outputs/failed_description_{TC_KEY}.md` for failed Test Cases.
+Write `outputs/story_test_automation_result.json` using the shared contract defined in `agents/instructions/test_automation/bulk_test_automation_rules.md` (place the Bug key in `storyKey` for backward compatibility). Write `outputs/tracker_comment.md` and `outputs/failed_description_{TC_KEY}.md` for any failed Test Cases.
 
 
 ---
 
-### [7] `./agents/instructions/test_automation/test_automation_architecture.md`
+### [10] `./agents/instructions/test_automation/test_automation_architecture.md`
 
 # Test Automation Architecture
 
@@ -296,7 +337,7 @@ flowchart TD
 
 ---
 
-### [8] `./agents/instructions/test_automation/test_automation_instructions.md`
+### [11] `./agents/instructions/test_automation/test_automation_instructions.md`
 
 # Test Automation Instructions
 
@@ -414,7 +455,7 @@ If test **failed**, also write `outputs/bug_description.md` with reproduction st
 
 ---
 
-### [9] `./agents/instructions/test_automation/test_automation_output_files.md`
+### [12] `./agents/instructions/test_automation/test_automation_output_files.md`
 
 # Test Automation Output Files
 
@@ -500,7 +541,7 @@ Write the structured status JSON exactly as described in `agents/instructions/te
 
 ---
 
-### [10] `./agents/instructions/test_automation/test_automation_json_output.md`
+### [13] `./agents/instructions/test_automation/test_automation_json_output.md`
 
 # Test Automation JSON Output Format
 
@@ -598,7 +639,7 @@ Use tracker-specific format:
 
 ---
 
-### [11] `./agents/prompts/bug_test_automation_prompt.md`
+### [14] `./agents/prompts/bug_test_automation_prompt.md`
 
 > Role: Senior QA Automation Engineer
 > Task: Bulk automate/run all Test Cases linked to a Bug that is Ready For Testing.
@@ -614,8 +655,7 @@ Use tracker-specific format:
 
 ## Task steps
 
-1. **If `input/{BUG_KEY}/merge_conflicts.md` exists**, resolve all `<<<<<<<` / `=======` / `>>>>>>>` conflict markers in the listed files first, using `input/{BUG_KEY}/pr_diff.txt` for context. Stage each resolved file with `git add <file>`. Do NOT `git commit` or `git merge --abort`. Only proceed to test automation after the working directory is clean of conflicts.
-2. Run `codegraph context "{BUG_KEY} test automation existing tests and reusable helpers"` before grepping.
+1. Resolve any `merge_conflicts.md` first per `agents/instructions/test_automation/bulk_test_automation_rules.md` and investigate existing helpers via `agents/instructions/common/codegraph_first.md`.
 2. For each linked Test Case `{TC_KEY}`:
    - Check `testing/tests/{TC_KEY}/`.
    - If it exists, run it.
@@ -636,7 +676,7 @@ Use tracker-specific format:
 
 ---
 
-### [12] `./agents/prompts/bash_tools.md`
+### [15] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -681,7 +721,7 @@ flowchart TD
 
 ---
 
-### [13] `./agents/instructions/common/dmtools_cli.md`
+### [16] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 

@@ -1,14 +1,10 @@
 # pr story test automation review
 
-Reviews a story-test-automation pull request: checks test quality against the story acceptance criteria and posts review comments.
+Reviews a Story bulk test automation PR (`test/{STORY_KEY}`) against the Story's Acceptance Criteria and linked Test Cases, posting diff-anchored review threads (`outputs/pr_review.json`) and an approval or rework verdict.
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
-
-- `autoStartMerge` — when `true`, automatically trigger the merge workflow after an approving review.
-- `autoStartMergeConfigFile` — agent config file used for the auto-started merge workflow.
-- `autoStartRework` — when `true`, automatically trigger the rework workflow when the review asks for changes.
-- `autoStartReworkConfigFile` — agent config file used for the auto-started rework workflow.
-- `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
-- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
+- `removeLabel` — removes `sm_story_test_review_triggered` once the review completes.
+- `checkOpenPR` — verifies an open story test PR exists.
+- `autoStartMerge` / `autoStartMergeConfigFile` — triggers `story_test_automation_merge` when approved.
+- `autoStartRework` / `autoStartReworkConfigFile` — triggers `story_test_automation_rework` when changes are requested.

@@ -17,7 +17,7 @@ You are an agent triggered to perform a specific task. All required context — 
 
 ---
 
-### [3] `./agents/instructions/story_acceptance_criterias/workflow.md`
+### [3] `./agents/instructions/story_acceptance_criteria/workflow.md`
 
 You must write response to the request to outputs/response.md according to formatting rules
 Don't write Acceptance Criteria for TICKET-XXX, just start from the content.
@@ -222,13 +222,29 @@ flowchart TD
 
 ### Tracker: `jira`
 
-#### [1] `./agents/instructions/story/enhanced_story_formatting.md`
+#### [1] `./agents/instructions/common/markup_placeholder_rules.md`
+
+# Markup Placeholder Rules
+
+The structural template is an **example only**. Tags such as `<bold>`, `<bullet>`, `<code>`, `<heading2>`, and `<link>` are placeholders that show the required shape of the document.
+
+**CRITICAL: Never write the final `outputs/response.md` using these literal metatags.** Use the tracker-specific transformation table (for example `agents/instructions/tracker/jira_markup_transform.md` when the tracker is Jira) to convert every placeholder into the correct tracker markup.
+
+## Placeholder Transformation Rules
+
+- Replace every `<bold>`, `<italic>`, `<strike>`, `<underline>`, `<code>`, `<codeblock>`, `<bullet>`, `<numbered>`, `<heading1>`, `<heading2>`, `<heading3>`, `<link>`, `<image>`, `<quote>`, `<panel>`, `<color>`, and `<hr>` placeholder with the equivalent markup defined in the tracker-specific transformation table.
+- Do NOT leave literal XML-style tags such as `<bold>` or `<code>` in the final `outputs/response.md`.
+- Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
+- Use the tracker-specific link format when referencing tickets or URLs.
+
+
+---
+
+#### [2] `./agents/instructions/story/enhanced_story_formatting.md`
 
 # Enhanced Story Template Guidelines
 
-The block below is a **structural template / example only**. The tags such as `<bold>`, `<bullet>`, and `<heading2>` are placeholders that show the required shape of the document.
-
-**CRITICAL: Never write the final `outputs/response.md` using these literal metatags.** Use the tracker-specific transformation table (for example `agents/instructions/tracker/jira_markup_transform.md` when the tracker is Jira) to convert every placeholder into the correct tracker markup.
+Follow `agents/instructions/common/markup_placeholder_rules.md` to transform every template placeholder tag into the target tracker markup.
 
 ```mermaid
 flowchart TD
@@ -252,13 +268,6 @@ flowchart TD
     SECTIONS --> RULES
 ```
 
-## Rules
-
-- The template above is a structural example. Replace every `<bold>`, `<italic>`, `<strike>`, `<underline>`, `<code>`, `<codeblock>`, `<bullet>`, `<numbered>`, `<heading1>`, `<heading2>`, `<heading3>`, `<link>`, `<image>`, `<quote>`, `<panel>`, `<color>`, and `<hr>` placeholder with the equivalent markup defined in the tracker-specific transformation table.
-- Do NOT leave literal XML-style tags such as `<bold>` or `<code>` in the final `outputs/response.md`.
-- Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
-- Use the tracker-specific link format when referencing tickets or URLs.
-
 **IMPORTANT**: Read `input/existing_questions.json` for answered questions as context. Use `dmtools` CLI commands for full ticket details.
 
 **IMPORTANT**: Check child tickets and parent story for better context using the appropriate `dmtools` search command.
@@ -266,7 +275,7 @@ flowchart TD
 
 ---
 
-#### [2] `./agents/instructions/tracker/jira_markup_transform.md`
+#### [3] `./agents/instructions/tracker/jira_markup_transform.md`
 
 # Jira Markup Reference
 
@@ -337,13 +346,29 @@ When the target tracker is Jira, replace every generic placeholder tag from the 
 
 ### Tracker: `ado`
 
-#### [1] `./agents/instructions/story/enhanced_story_formatting.md`
+#### [1] `./agents/instructions/common/markup_placeholder_rules.md`
+
+# Markup Placeholder Rules
+
+The structural template is an **example only**. Tags such as `<bold>`, `<bullet>`, `<code>`, `<heading2>`, and `<link>` are placeholders that show the required shape of the document.
+
+**CRITICAL: Never write the final `outputs/response.md` using these literal metatags.** Use the tracker-specific transformation table (for example `agents/instructions/tracker/jira_markup_transform.md` when the tracker is Jira) to convert every placeholder into the correct tracker markup.
+
+## Placeholder Transformation Rules
+
+- Replace every `<bold>`, `<italic>`, `<strike>`, `<underline>`, `<code>`, `<codeblock>`, `<bullet>`, `<numbered>`, `<heading1>`, `<heading2>`, `<heading3>`, `<link>`, `<image>`, `<quote>`, `<panel>`, `<color>`, and `<hr>` placeholder with the equivalent markup defined in the tracker-specific transformation table.
+- Do NOT leave literal XML-style tags such as `<bold>` or `<code>` in the final `outputs/response.md`.
+- Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
+- Use the tracker-specific link format when referencing tickets or URLs.
+
+
+---
+
+#### [2] `./agents/instructions/story/enhanced_story_formatting.md`
 
 # Enhanced Story Template Guidelines
 
-The block below is a **structural template / example only**. The tags such as `<bold>`, `<bullet>`, and `<heading2>` are placeholders that show the required shape of the document.
-
-**CRITICAL: Never write the final `outputs/response.md` using these literal metatags.** Use the tracker-specific transformation table (for example `agents/instructions/tracker/jira_markup_transform.md` when the tracker is Jira) to convert every placeholder into the correct tracker markup.
+Follow `agents/instructions/common/markup_placeholder_rules.md` to transform every template placeholder tag into the target tracker markup.
 
 ```mermaid
 flowchart TD
@@ -367,13 +392,6 @@ flowchart TD
     SECTIONS --> RULES
 ```
 
-## Rules
-
-- The template above is a structural example. Replace every `<bold>`, `<italic>`, `<strike>`, `<underline>`, `<code>`, `<codeblock>`, `<bullet>`, `<numbered>`, `<heading1>`, `<heading2>`, `<heading3>`, `<link>`, `<image>`, `<quote>`, `<panel>`, `<color>`, and `<hr>` placeholder with the equivalent markup defined in the tracker-specific transformation table.
-- Do NOT leave literal XML-style tags such as `<bold>` or `<code>` in the final `outputs/response.md`.
-- Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
-- Use the tracker-specific link format when referencing tickets or URLs.
-
 **IMPORTANT**: Read `input/existing_questions.json` for answered questions as context. Use `dmtools` CLI commands for full ticket details.
 
 **IMPORTANT**: Check child tickets and parent story for better context using the appropriate `dmtools` search command.
@@ -381,50 +399,11 @@ flowchart TD
 
 ---
 
-#### [2] `./agents/instructions/tracker/ado_markup_transform.md`
+#### [3] `./agents/instructions/tracker/gfm_markup_table.md`
 
-# ADO Markup Reference
+# GitHub-Flavored Markdown Placeholder Table
 
-When the target tracker is Azure DevOps, replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown below. Do not write literal XML-style tags in the final output.
-
-| Generic placeholder | Markdown | Example |
-|---------------------|----------|---------|
-| `<bold>X</bold>` | `**X**` | `**Background:**` |
-| `<italic>X</italic>` | `*X*` | `*hint*` |
-| `<strike>X</strike>` | `~~X~~` | `~~deprecated~~` |
-| `<underline>X</underline>` | `<u>X</u>` | `<u>important</u>` |
-| `<code>X</code>` | `` `X` `` | `` `main.dart` `` |
-| `<codeblock>X</codeblock>` | ` ```\nX\n``` ` | ` ```\nvoid main() {}\n``` ` |
-| `<codeblock:lang>X</codeblock:lang>` | ` ```lang\nX\n``` ` | ` ```dart\nvoid main() {}\n``` ` |
-| `<bullet> text` | `- text` | `- Option A` |
-| `<numbered> text` | `1. text` | `1. Step one` |
-| `<heading1>X</heading1>` | `# X` | `# Title` |
-| `<heading2>X</heading2>` | `## X` | `## Section` |
-| `<heading3>X</heading3>` | `### X` | `### Subsection` |
-| `<link>text\|url</link>` | `[text](url)` | `[TS-24](https://dev.azure.com/.../12345)` |
-| `<image>url</image>` | `![image](url)` | `![diagram](https://.../diagram.png)` |
-| `<quote>X</quote>` | `> X` | `> cited text` |
-| `<panel>X</panel>` | `> X` | `> note` |
-| `<color color="red">X</color>` | `<span style="color:red">X</span>` | `<span style="color:red">alert</span>` |
-| `<hr>` | `---` | `---` |
-
-## Rules
-
-- Replace every placeholder tag with the Markdown shown above.
-- Do NOT use Jira wiki markup in ADO output: no `*bold*`, no `* item` bullets, no `h2.` headings, no `{code}...{code}` blocks.
-- Use `- item` for bullets and `1. item` for numbered lists.
-- For Mermaid diagrams in ADO fields that support them, wrap the diagram in ` ```mermaid\n...\n``` `.
-
-
----
-
-### Tracker: `confluence`
-
-#### [1] `./agents/instructions/tracker/confluence_markup_transform.md`
-
-# Confluence Markup Reference
-
-When the generated content is published to Confluence (contentOutput target `confluence`), the body is synced as **Markdown** and converted to Confluence storage format automatically. Replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown below. Do not write literal XML-style tags in the final output.
+Replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown below. Do not write literal XML-style tags in the final output.
 
 | Generic placeholder | Markdown | Example |
 |---------------------|----------|---------|
@@ -447,6 +426,61 @@ When the generated content is published to Confluence (contentOutput target `con
 | `<color color="red">X</color>` | `<span style="color:red">X</span>` | `<span style="color:red">alert</span>` |
 | `<hr>` | `---` | `---` |
 
+
+---
+
+#### [4] `./agents/instructions/tracker/ado_markup_transform.md`
+
+# ADO Markup Reference
+
+When the target tracker is Azure DevOps, replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown in `agents/instructions/tracker/gfm_markup_table.md`. Do not write literal XML-style tags in the final output.
+## Rules
+
+- Replace every placeholder tag with the Markdown shown above.
+- Do NOT use Jira wiki markup in ADO output: no `*bold*`, no `* item` bullets, no `h2.` headings, no `{code}...{code}` blocks.
+- Use `- item` for bullets and `1. item` for numbered lists.
+- For Mermaid diagrams in ADO fields that support them, wrap the diagram in ` ```mermaid\n...\n``` `.
+
+
+---
+
+### Tracker: `confluence`
+
+#### [1] `./agents/instructions/tracker/gfm_markup_table.md`
+
+# GitHub-Flavored Markdown Placeholder Table
+
+Replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown below. Do not write literal XML-style tags in the final output.
+
+| Generic placeholder | Markdown | Example |
+|---------------------|----------|---------|
+| `<bold>X</bold>` | `**X**` | `**Background:**` |
+| `<italic>X</italic>` | `*X*` | `*hint*` |
+| `<strike>X</strike>` | `~~X~~` | `~~deprecated~~` |
+| `<underline>X</underline>` | `<u>X</u>` | `<u>important</u>` |
+| `<code>X</code>` | `` `X` `` | `` `main.dart` `` |
+| `<codeblock>X</codeblock>` | ` ```\nX\n``` ` | ` ```\nvoid main() {}\n``` ` |
+| `<codeblock:lang>X</codeblock:lang>` | ` ```lang\nX\n``` ` | ` ```dart\nvoid main() {}\n``` ` |
+| `<bullet> text` | `- text` | `- Option A` |
+| `<numbered> text` | `1. text` | `1. Step one` |
+| `<heading1>X</heading1>` | `# X` | `# Title` |
+| `<heading2>X</heading2>` | `## X` | `## Section` |
+| `<heading3>X</heading3>` | `### X` | `### Subsection` |
+| `<link>text\|url</link>` | `[text](url)` | `[TS-24](https://tracker.example.com/browse/TS-24)` |
+| `<image>url</image>` | `![image](url)` | `![diagram](https://.../diagram.png)` |
+| `<quote>X</quote>` | `> X` | `> cited text` |
+| `<panel>X</panel>` | `> X` | `> note` |
+| `<color color="red">X</color>` | `<span style="color:red">X</span>` | `<span style="color:red">alert</span>` |
+| `<hr>` | `---` | `---` |
+
+
+---
+
+#### [2] `./agents/instructions/tracker/confluence_markup_transform.md`
+
+# Confluence Markup Reference
+
+When the generated content is published to Confluence (contentOutput target `confluence`), the body is synced as **Markdown** and converted to Confluence storage format automatically. Replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown in `agents/instructions/tracker/gfm_markup_table.md`. Do not write literal XML-style tags in the final output.
 ## Rules
 
 - Replace every placeholder tag with the Markdown shown above.

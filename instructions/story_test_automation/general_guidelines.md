@@ -5,7 +5,7 @@ You are automating a Story that has reached **Ready For Testing**. The Story alr
 ## Workflow
 
 1. Read the Story ticket and all linked Test Cases from `input/{STORY_KEY}/linked_test_cases.md`.
-2. If `input/{STORY_KEY}/merge_conflicts.md` is present, the test branch could not be cleanly synced with `origin/main`. Resolve every `<<<<<<<` / `=======` / `>>>>>>>` conflict marker in the listed files, using `input/{STORY_KEY}/pr_diff.txt` for context. Stage each resolved file with `git add <file>`. Do NOT `git commit` or `git merge --abort`.
+2. Follow the merge-conflict resolution and failure classification rules in `agents/instructions/test_automation/bulk_test_automation_rules.md`.
 3. For each linked Test Case:
    - Check if an automated test already exists under `testing/tests/{TC_KEY}/`.
    - If it exists, run it.
@@ -13,12 +13,6 @@ You are automating a Story that has reached **Ready For Testing**. The Story alr
 4. Produce a single result JSON: `outputs/story_test_automation_result.json`.
 5. For every failed Test Case, produce `outputs/failed_description_{TC_KEY}.md`.
 6. If environment/credentials are missing, produce `outputs/blocked.json` instead of running tests.
-
-## Failure classification
-
-- A **product failure** — the test ran and found a real bug in the product — must be recorded as `failed`. The Story and the failing Test Case follow the normal review flow.
-- An **access / credential / permission / infrastructure failure** — the test account cannot reach a required service, repository, secret, or token — is **NOT a product failure**. Mark that Test Case as `skipped`, explain the blocker in `failureSummary`, and keep the overall result as `passed` if all other Test Cases passed. Do **not** mark it `failed`.
-- If **every** linked Test Case is blocked by missing setup, set `overall` to `blocked_by_human` and produce `outputs/blocked.json`.
 
 ## Scope rules
 

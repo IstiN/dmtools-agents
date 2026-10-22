@@ -1,17 +1,13 @@
 # Pr Bug Test Automation Review
 
-Reviews a bug-test-automation pull request: checks test quality and coverage, then posts review comments on the PR.
+Reviews the bulk test automation PR for a Bug (`test/{BUG_KEY}`), checking that every linked Test Case reproduces the bug and respects the layered `testing/` architecture, then posts inline diff comments and a review verdict.
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
-
-- `autoStartMerge` — when `true`, automatically trigger the merge workflow after an approving review.
-- `autoStartMergeConfigFile` — agent config file used for the auto-started merge workflow.
-- `autoStartRework` — when `true`, automatically trigger the rework workflow when the review asks for changes.
-- `autoStartReworkConfigFile` — agent config file used for the auto-started rework workflow.
-- `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
-- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
+- `removeLabel` — clears `sm_bug_test_review_triggered` after posting the review.
+- `checkOpenPR` — requires an open bug test PR.
+- `autoStartMerge` / `autoStartMergeConfigFile` — dispatches `bug_test_automation_merge` on `APPROVE`.
+- `autoStartRework` / `autoStartReworkConfigFile` — dispatches `bug_test_automation_rework` on `REQUEST_CHANGES`.
 
 _Human doc: [`agents/docs/agents/pr_bug_test_automation_review.md`](agents/docs/agents/pr_bug_test_automation_review.md)_
 

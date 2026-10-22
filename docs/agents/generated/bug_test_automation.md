@@ -1,17 +1,14 @@
 # Bug Test Automation
 
-Writes automated tests for a bug: generates test code from the bug context, runs it locally, and opens a PR with the new tests.
+Automates and executes all linked Test Case tickets for a Bug in `Ready For Testing` on a single `test/{BUG_KEY}` branch, verifying the regression scenario and opening a bulk test PR.
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
-
-- `autoStartReview` — when `true`, automatically trigger the PR review workflow after this agent finishes.
-- `autoStartReviewConfigFile` — agent config file used for the auto-started review workflow.
-- `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
-- `customStatuses` — status name overrides for this workflow (maps logical statuses to project-specific names).
-- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
-- `testFilesGlob` — glob that selects which test files belong to this automation scope.
+- `removeLabel` — clears `sm_bug_test_automation_triggered` after the run.
+- `testFilesGlob` — glob pattern limiting which files under `testing/` are staged for the bug test PR.
+- `checkOpenPR` — skips the run if an open test PR already exists for the bug.
+- `customStatuses` — overrides default tracker status names for bug/test transitions.
+- `autoStartReview` / `autoStartReviewConfigFile` — dispatches the bug test PR review config once the PR is opened.
 
 _Human doc: [`agents/docs/agents/bug_test_automation.md`](agents/docs/agents/bug_test_automation.md)_
 

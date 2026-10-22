@@ -135,29 +135,61 @@ flowchart TD
     TDD --> RULES
 ```
 
-## Where to write TDD tests
 
-Write failing unit / widget tests in the project's standard unit-test tree **only**:
+---
+
+### [7] `./agents/instructions/common/tdd_test_directory.md`
+
+# TDD Test Directory Rules
+
+Write failing unit or widget tests in the project's standard unit-test tree **only**:
 
 - Flutter / Dart projects → `test/`
 - Node projects → `__tests__/` or `test/` according to the repo convention
 - Python projects → `tests/` or project-specific unit-test directory
 
 ❌ **Never** place development TDD tests under `testing/`.
-`testing/` is owned by test-automation agents (regression probes, workflow
-observation tests, accessibility gates, etc.). If your production changes break
-existing tests there, leave them untouched and mention the breakage in
-`outputs/response.md` so the test-automation agent can update them.
+`testing/` is owned by test-automation agents (regression probes, workflow observation tests, accessibility gates, etc.). If your production changes break existing tests there, leave them untouched and mention the breakage in `outputs/response.md` so the test-automation agent can update them.
 
 
 ---
 
-### [7] `./agents/instructions/story_development/output_rules.md`
+### [8] `./agents/instructions/common/git_completion_guard.md`
+
+# Git Completion & Closing-Keyword Guard
+
+- **Completion guard**: Before writing `outputs/response.md`, run `git fetch origin main && git log origin/main..HEAD --oneline`. An empty result means your commits did not land — re-do or resume the work before declaring completion.
+- **No closing keywords in commits or PR bodies**: Do NOT include `Fixes #...`, `Closes #...`, or `Resolves #...` against tracker tickets unless explicitly instructed; ticket lifecycle transitions are managed by the post-action workflow.
+
+
+---
+
+### [9] `./agents/instructions/common/blocked_output_contract.md`
+
+# Blocked Output Contract (`outputs/blocked.json`)
+
+When work cannot proceed because required credentials, secrets, permissions, test data, or external human decisions are missing:
+
+1. Do **not** guess, hardcode, or fake a passing result.
+2. Write `outputs/blocked.json` at the repository root with the exact blocker details:
+   ```json
+   {
+     "reason": "Specific external blocker preventing completion",
+     "tried": ["What was checked or attempted"],
+     "needs": "Exact secret, permission, data, or decision a human must provide"
+   }
+   ```
+3. Also write `outputs/response.md` summarizing the blocker so the human sees the explanation in the ticket/PR comment.
+
+
+---
+
+### [10] `./agents/instructions/story_development/output_rules.md`
+
+Precondition (including any `"no changes needed"` conclusion): run `git log origin/main..HEAD --oneline` per `instructions/common/git_completion_guard.md`.
 
 ```mermaid
 flowchart TD
-    O0["⚠️ COMPLETION GUARD — run BEFORE writing the PR description:<br/>git fetch origin main &amp;&amp; git log origin/main..HEAD --oneline<br/>— EMPTY result = your work did NOT land: re-do or resume it,<br/>do NOT write response.md and do NOT declare completion<br/>— Same guard before any 'no changes needed' conclusion:<br/>claimed changes MUST exist in the branch diff vs main,<br/>otherwise the claim is a session-memory hallucination"]
-    O0 --> O1
     O1["Write outputs/response.md — concise PR description"]
     O2["Target length: under 20 lines. A reviewer should understand the change in under 30 seconds"]
     O3["Required sections:<br/>### What changed<br/>1-2 sentences describing the implementation"]
@@ -171,7 +203,7 @@ flowchart TD
 
 ---
 
-### [8] `./agents/instructions/story_development/formatting_rules.md`
+### [11] `./agents/instructions/story_development/formatting_rules.md`
 
 ```mermaid
 flowchart TD
@@ -184,7 +216,7 @@ flowchart TD
 
 ---
 
-### [9] `./agents/instructions/story_development/few_shots.md`
+### [12] `./agents/instructions/story_development/few_shots.md`
 
 Example PR descriptions — follow this structure and brevity:
 
@@ -199,7 +231,7 @@ flowchart TD
 
 ---
 
-### [10] `./agents/instructions/common/github_comment_format.md`
+### [13] `./agents/instructions/common/github_comment_format.md`
 
 # GitHub tracker comment
 
@@ -228,7 +260,7 @@ get them for full context using: `dmtools github_get_issue OWNER/REPO#NUMBER`
 
 ---
 
-### [11] `./agents/instructions/common/dmtools_cli.md`
+### [14] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -266,7 +298,7 @@ flowchart TD
 
 ---
 
-### [12] `./agents/instructions/common/session_ephemerality.md`
+### [15] `./agents/instructions/common/session_ephemerality.md`
 
 ```mermaid
 flowchart LR
@@ -285,7 +317,7 @@ dev runs on a completed implementation.
 
 ---
 
-### [13] `./agents/prompts/bash_tools.md`
+### [16] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD

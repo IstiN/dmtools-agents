@@ -19,7 +19,7 @@
     "cliPrompts": [
       "Experienced Business Analyst",
       "./agents/instructions/common/agent_task_preamble.md",
-      "./agents/instructions/story_acceptance_criterias/workflow.md",
+      "./agents/instructions/story_acceptance_criteria/workflow.md",
       "./agents/instructions/common/media_handling.md",
       "./agents/instructions/story/enhanced_story_content_guidelines.md",
       "./agents/prompts/acceptance_criteria_prompt.md",
@@ -28,14 +28,18 @@
     ],
     "cliPromptsByTracker": {
       "jira": [
+        "./agents/instructions/common/markup_placeholder_rules.md",
         "./agents/instructions/story/enhanced_story_formatting.md",
         "./agents/instructions/tracker/jira_markup_transform.md"
       ],
       "ado": [
+        "./agents/instructions/common/markup_placeholder_rules.md",
         "./agents/instructions/story/enhanced_story_formatting.md",
+        "./agents/instructions/tracker/gfm_markup_table.md",
         "./agents/instructions/tracker/ado_markup_transform.md"
       ],
       "confluence": [
+        "./agents/instructions/tracker/gfm_markup_table.md",
         "./agents/instructions/tracker/confluence_markup_transform.md"
       ]
     },
