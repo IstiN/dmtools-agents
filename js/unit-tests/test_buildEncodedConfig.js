@@ -443,6 +443,113 @@ suite('buildEncodedConfig payload', function() {
             { customParams: { contentOutput: { target: 'confluence' } } },
             { cliPromptsByTracker: { confluence: ['./c.md'] } }, 'test'), 'confluence');
     });
+
+    test('gh-1160: real dev/review/rework configs inject only the active tracker comment format prompt and inline exact sections', function() {
+        var builder = loadBuilder({});
+        function assemblePrompt(cliPrompts) {
+            return cliPrompts.map(function(entry) {
+                if (entry.indexOf('./agents/') === 0) {
+                    return file_read({ path: entry.replace(/^\.\/agents\//, '') }) || file_read({ path: entry });
+                }
+                return entry;
+            }).filter(Boolean).join('\n\n');
+        }
+        var configs = [
+            'agents/story_development.json',
+            'agents/bug_development.json',
+            'agents/bug_fix_batch_development.json',
+            'agents/pr_review.json',
+            'agents/pr_rework.json'
+        ];
+        configs.forEach(function(cfgFile) {
+            var jiraPrompts = decode(builder.buildEncodedConfig('PROJ-1', { configFile: cfgFile }, { tracker: { provider: 'jira' } })).params.cliPrompts;
+            assert.ok(jiraPrompts.indexOf('./agents/instructions/tracker/jira_comment_format.md') !== -1, cfgFile + ' jira: has jira_comment_format.md');
+            assert.equal(jiraPrompts.indexOf('./agents/instructions/tracker/ado_comment_format.md'), -1, cfgFile + ' jira: excludes ado_comment_format.md');
+            assert.equal(jiraPrompts.indexOf('./agents/instructions/common/github_comment_format.md'), -1, cfgFile + ' jira: excludes github_comment_format.md');
+            var jiraText = assemblePrompt(jiraPrompts);
+            assert.ok(jiraText.indexOf('# Jira tracker comment') !== -1, cfgFile + ' jira assembled: inlines # Jira tracker comment');
+            assert.equal(jiraText.indexOf('# ADO tracker comment'), -1, cfgFile + ' jira assembled: excludes # ADO tracker comment');
+            assert.equal(jiraText.indexOf('# GitHub tracker comment'), -1, cfgFile + ' jira assembled: excludes # GitHub tracker comment');
+
+            var adoPrompts = decode(builder.buildEncodedConfig('101', { configFile: cfgFile }, { tracker: { provider: 'ado' } })).params.cliPrompts;
+            assert.ok(adoPrompts.indexOf('./agents/instructions/tracker/ado_comment_format.md') !== -1, cfgFile + ' ado: has ado_comment_format.md');
+            assert.equal(adoPrompts.indexOf('./agents/instructions/tracker/jira_comment_format.md'), -1, cfgFile + ' ado: excludes jira_comment_format.md');
+            assert.equal(adoPrompts.indexOf('./agents/instructions/common/github_comment_format.md'), -1, cfgFile + ' ado: excludes github_comment_format.md');
+            var adoText = assemblePrompt(adoPrompts);
+            assert.ok(adoText.indexOf('# ADO tracker comment') !== -1, cfgFile + ' ado assembled: inlines # ADO tracker comment');
+            assert.equal(adoText.indexOf('# Jira tracker comment'), -1, cfgFile + ' ado assembled: excludes # Jira tracker comment');
+            assert.equal(adoText.indexOf('# GitHub tracker comment'), -1, cfgFile + ' ado assembled: excludes # GitHub tracker comment');
+
+            var ghPrompts = decode(builder.buildEncodedConfig('42', { configFile: cfgFile }, { tracker: { provider: 'github' } })).params.cliPrompts;
+            assert.ok(ghPrompts.indexOf('./agents/instructions/common/github_comment_format.md') !== -1, cfgFile + ' github: has github_comment_format.md');
+            assert.equal(ghPrompts.indexOf('./agents/instructions/tracker/jira_comment_format.md'), -1, cfgFile + ' github: excludes jira_comment_format.md');
+            assert.equal(ghPrompts.indexOf('./agents/instructions/tracker/ado_comment_format.md'), -1, cfgFile + ' github: excludes ado_comment_format.md');
+            var ghText = assemblePrompt(ghPrompts);
+            assert.ok(ghText.indexOf('# GitHub tracker comment') !== -1, cfgFile + ' github assembled: inlines # GitHub tracker comment');
+            assert.equal(ghText.indexOf('# Jira tracker comment'), -1, cfgFile + ' github assembled: excludes # Jira tracker comment');
+            assert.equal(ghText.indexOf('# ADO tracker comment'), -1, cfgFile + ' github assembled: excludes # ADO tracker comment');
+        });
+    });
+
+    test('gh-1160: real story_solution/description/acceptance_criteria/wiki_publisher/discovery load confluence_comments.md only for confluence/wiki targets and assemble exact prompt sections', function() {
+        var builder = loadBuilder({});
+        function assemblePrompt(cliPrompts) {
+            return cliPrompts.map(function(entry) {
+                if (entry.indexOf('./agents/') === 0) {
+                    return file_read({ path: entry.replace(/^\.\/agents\//, '') }) || file_read({ path: entry });
+                }
+                return entry;
+            }).filter(Boolean).join('\n\n');
+        }
+        var contentConfigs = [
+            { file: 'agents/story_solution.json', name: 'story_solution', jiraPrompt: './agents/instructions/tracker/jira_markup_transform.md' },
+            { file: 'agents/story_description.json', name: 'story_description', jiraPrompt: './agents/instructions/tracker/jira_comment_format.md' },
+            { file: 'agents/story_acceptance_criteria.json', name: 'story_acceptance_criteria', jiraPrompt: './agents/instructions/tracker/jira_markup_transform.md' },
+            { file: 'agents/story_acceptance_criterias.json', name: 'story_acceptance_criterias', jiraPrompt: './agents/instructions/tracker/jira_markup_transform.md' }
+        ];
+        contentConfigs.forEach(function(item) {
+            // Default jira_field target on jira tracker -> jira prompt, NO confluence_comments.md
+            var jiraFieldPrompts = decode(builder.buildEncodedConfig('PROJ-1', { configFile: item.file }, { tracker: { provider: 'jira' } })).params.cliPrompts;
+            assert.ok(jiraFieldPrompts.indexOf(item.jiraPrompt) !== -1, item.name + ' jira_field: has ' + item.jiraPrompt);
+            assert.equal(jiraFieldPrompts.indexOf('./agents/instructions/common/confluence_comments.md'), -1, item.name + ' jira_field: excludes confluence_comments.md');
+            var jiraText = assemblePrompt(jiraFieldPrompts);
+            assert.equal(jiraText.indexOf('# Confluence output'), -1, item.name + ' jira_field assembled prompt: no # Confluence output section');
+
+            // Default jira_field target on ado tracker -> ado markup + GFM table inlined, NO confluence_comments.md
+            var adoFieldPrompts = decode(builder.buildEncodedConfig('101', { configFile: item.file }, { tracker: { provider: 'ado' } })).params.cliPrompts;
+            assert.ok(adoFieldPrompts.indexOf('./agents/instructions/tracker/ado_markup_transform.md') !== -1, item.name + ' ado_field: has ado_markup_transform.md');
+            assert.equal(adoFieldPrompts.indexOf('./agents/instructions/common/confluence_comments.md'), -1, item.name + ' ado_field: excludes confluence_comments.md');
+            var adoText = assemblePrompt(adoFieldPrompts);
+            assert.ok(adoText.indexOf('**GitHub-Flavored Markdown Placeholder Table**') !== -1, item.name + ' ado_field assembled prompt: inlines GFM placeholder table heading');
+            assert.ok(adoText.indexOf('When the target tracker is Azure DevOps, replace every generic placeholder tag from the template with the GitHub-flavored Markdown from the **GitHub-Flavored Markdown Placeholder Table** section.') !== -1, item.name + ' ado_field assembled prompt: inlines ADO transform rules');
+            assert.equal(adoText.indexOf('# Confluence output'), -1, item.name + ' ado_field assembled prompt: no # Confluence output section');
+
+            // Patched to confluence target -> confluence markup + confluence_comments.md, NO jira/ado markup
+            var patch = {};
+            patch[item.name] = { customParams: { contentOutput: { target: 'confluence' } } };
+            var cfPrompts = decode(builder.buildEncodedConfig('PROJ-1', { configFile: item.file }, { tracker: { provider: 'jira' }, jobParamPatches: patch })).params.cliPrompts;
+            assert.ok(cfPrompts.indexOf('./agents/instructions/tracker/confluence_markup_transform.md') !== -1, item.name + ' confluence: has confluence_markup_transform.md');
+            assert.ok(cfPrompts.indexOf('./agents/instructions/common/confluence_comments.md') !== -1, item.name + ' confluence: has confluence_comments.md');
+            assert.equal(cfPrompts.indexOf(item.jiraPrompt), -1, item.name + ' confluence: excludes ' + item.jiraPrompt);
+            var cfText = assemblePrompt(cfPrompts);
+            assert.ok(cfText.indexOf('**GitHub-Flavored Markdown Placeholder Table**') !== -1, item.name + ' confluence assembled prompt: inlines GFM placeholder table heading');
+            assert.ok(cfText.indexOf('# Confluence output') !== -1, item.name + ' confluence assembled prompt: inlines # Confluence output section');
+        });
+
+        // wiki_publisher defaults to target: 'wiki' -> selects confluence prompts including confluence_comments.md
+        var wikiPrompts = decode(builder.buildEncodedConfig('PROJ-1', { configFile: 'agents/wiki_publisher.json' }, { tracker: { provider: 'jira' } })).params.cliPrompts;
+        assert.ok(wikiPrompts.indexOf('./agents/instructions/tracker/confluence_markup_transform.md') !== -1, 'wiki_publisher: has confluence_markup_transform.md');
+        assert.ok(wikiPrompts.indexOf('./agents/instructions/common/confluence_comments.md') !== -1, 'wiki_publisher: has confluence_comments.md');
+        assert.equal(wikiPrompts.indexOf('./agents/instructions/tracker/jira_markup_transform.md'), -1, 'wiki_publisher: excludes jira_markup_transform.md');
+        var wikiText = assemblePrompt(wikiPrompts);
+        assert.ok(wikiText.indexOf('# Confluence output') !== -1, 'wiki_publisher assembled prompt: inlines # Confluence output');
+
+        // discovery defaults to target: 'confluence' -> selects discovery/confluence_comments.md
+        var discPrompts = decode(builder.buildEncodedConfig('PROJ-1', { configFile: 'agents/discovery.json' }, { tracker: { provider: 'jira' } })).params.cliPrompts;
+        assert.ok(discPrompts.indexOf('./agents/instructions/discovery/confluence_comments.md') !== -1, 'discovery: has discovery/confluence_comments.md');
+        var discText = assemblePrompt(discPrompts);
+        assert.ok(discText.indexOf('# Confluence inline comments (discovery page tree)') !== -1, 'discovery assembled prompt: inlines discovery Confluence inline comments');
+    });
 });
 
 suite('resolveParentMerge — parent inheritance', function() {
