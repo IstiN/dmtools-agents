@@ -67,12 +67,12 @@ module.exports = {
         story_development: [
             './.dmtools/prompts/project_context.md',
             './.dmtools/prompts/development_focus.md',
-            './agents/instructions/platform/backend_architecture.md'
+            './agents/instructions/story_development/general_guidelines.md'
         ],
         pr_review: [
             './.dmtools/prompts/reviewer_role.md',
             './.dmtools/prompts/review_focus.md',
-            './agents/instructions/review/core.md',
+            './agents/instructions/pr_review/general_guidelines.md',
             './agents/instructions/scm/github_pr_review_format.md'
         ]
     },
@@ -125,14 +125,15 @@ Minimal pattern:
     "agentParams": {
       "aiRole": "Senior Software Engineer",
       "instructions": [
-        "./agents/instructions/development/implementation_instructions.md"
+        "./agents/instructions/story_development/general_guidelines.md"
       ],
       "knownInfo": "",
       "formattingRules": "",
       "fewShots": ""
     },
-    "cliPrompt": "./agents/prompts/story_development_prompt.md",
     "cliPrompts": [
+      "./agents/instructions/story_development/context_loading.md",
+      "./agents/instructions/story_development/workflow.md",
       "./agents/prompts/bash_tools.md"
     ],
     "cliCommands": [

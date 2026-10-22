@@ -110,11 +110,11 @@ module.exports = {
     story_development: [
       './.dmtools/prompts/project_goal.md',
       './.dmtools/prompts/architecture.md',
-      './agents/instructions/development/implementation_instructions.md'
+      './agents/instructions/story_development/general_guidelines.md'
     ],
     pr_review: [
       './.dmtools/prompts/review_focus.md',
-      './agents/instructions/review/core.md',
+      './agents/instructions/pr_review/general_guidelines.md',
       './agents/instructions/scm/github_pr_review_format.md'
     ]
   }

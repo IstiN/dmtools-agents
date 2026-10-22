@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "violations": [
+    {
+      "gate": "similarity",
+      "file": "docs/agents/bug_test_automation_rework.md",
+      "line": null,
+      "message": "similar to docs/agents/pr_test_automation_rework.md, docs/agents/story_test_automation_rework.md (+1 more) — near-duplicate content (jaccard 0.67, containment 0.81); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "docs/agents/pr_test_automation_rework.md",
+      "line": null,
+      "message": "similar to docs/agents/bug_test_automation_rework.md, docs/agents/story_test_automation_rework.md (+1 more) — near-duplicate content (jaccard 0.53, containment 0.74); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "docs/agents/story_test_automation_rework.md",
+      "line": null,
+      "message": "similar to docs/agents/bug_test_automation_rework.md, docs/agents/pr_test_automation_rework.md (+1 more) — near-duplicate content (jaccard 0.67, containment 0.81); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "docs/agents/test_case_automation.md",
+      "line": null,
+      "message": "similar to docs/agents/bug_test_automation_rework.md, docs/agents/pr_test_automation_rework.md (+1 more) — near-duplicate content (jaccard 0.63, containment 0.78); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "docs/agents/story_acceptance_criteria.md",
+      "line": null,
+      "message": "similar to docs/agents/story_acceptance_criterias.md, docs/agents/story_description.md — near-duplicate content (jaccard 1.00, containment 1.00); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "docs/agents/story_acceptance_criterias.md",
+      "line": null,
+      "message": "similar to docs/agents/story_acceptance_criteria.md, docs/agents/story_description.md — near-duplicate content (jaccard 1.00, containment 1.00); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "docs/agents/story_description.md",
+      "line": null,
+      "message": "similar to docs/agents/story_acceptance_criteria.md, docs/agents/story_acceptance_criterias.md — near-duplicate content (jaccard 0.57, containment 0.73); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "docs/agents/bug_test_automation.md",
+      "line": null,
+      "message": "similar to docs/agents/story_test_automation.md — near-duplicate content (jaccard 0.73, containment 0.85); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "docs/agents/story_test_automation.md",
+      "line": null,
+      "message": "similar to docs/agents/bug_test_automation.md — near-duplicate content (jaccard 0.73, containment 0.85); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "docs/agents/bug_test_automation_merge.md",
+      "line": null,
+      "message": "similar to docs/agents/story_test_automation_merge.md — near-duplicate content (jaccard 0.63, containment 0.77); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "docs/agents/story_test_automation_merge.md",
+      "line": null,
+      "message": "similar to docs/agents/bug_test_automation_merge.md — near-duplicate content (jaccard 0.63, containment 0.77); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "docs/agents/pr_bug_test_automation_review.md",
+      "line": null,
+      "message": "similar to docs/agents/pr_story_test_automation_review.md — near-duplicate content (jaccard 0.64, containment 0.78); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "docs/agents/pr_story_test_automation_review.md",
+      "line": null,
+      "message": "similar to docs/agents/pr_bug_test_automation_review.md — near-duplicate content (jaccard 0.64, containment 0.78); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "docs/agents/retry_merge.md",
+      "line": null,
+      "message": "similar to docs/agents/retry_merge_test.md — near-duplicate content (jaccard 0.66, containment 0.82); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "docs/agents/retry_merge_test.md",
+      "line": null,
+      "message": "similar to docs/agents/retry_merge.md — near-duplicate content (jaccard 0.66, containment 0.82); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "instructions/common/preserve_references.md",
+      "line": null,
+      "message": "similar to instructions/story_description/workflow.md — near-duplicate content (jaccard 0.47, containment 1.00); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "instructions/story_description/workflow.md",
+      "line": null,
+      "message": "similar to instructions/common/preserve_references.md — near-duplicate content (jaccard 0.47, containment 1.00); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "instructions/enhancement/solution_design_formatting_rules.md",
+      "line": null,
+      "message": "similar to instructions/story/enhanced_story_formatting.md — near-duplicate content (jaccard 0.57, containment 0.74); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "instructions/story/enhanced_story_formatting.md",
+      "line": null,
+      "message": "similar to instructions/enhancement/solution_design_formatting_rules.md — near-duplicate content (jaccard 0.57, containment 0.74); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "instructions/story_acceptance_criteria/workflow.md",
+      "line": null,
+      "message": "similar to instructions/story_acceptance_criterias/workflow.md — near-duplicate content (jaccard 1.00, containment 1.00); reuse the shared source, generate one of them, or delete the stale copy"
+    },
+    {
+      "gate": "similarity",
+      "file": "instructions/story_acceptance_criterias/workflow.md",
+      "line": null,
+      "message": "similar to instructions/story_acceptance_criteria/workflow.md — near-duplicate content (jaccard 1.00, containment 1.00); reuse the shared source, generate one of them, or delete the stale copy"
+    }
+  ]
+}

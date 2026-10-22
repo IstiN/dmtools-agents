@@ -1,10 +1,11 @@
 name: Agent Docs
 
 # Mandatory check for PRs that touch agent configs, JS actions, instructions,
-# prompts or human docs:
-#   1. Regenerates docs/agents/generated/* and fails when the committed docs
-#      are stale (git diff non-empty).
-#   2. Runs the docs unit tests (agentDocGenerator + docs coverage) via dmtools.
+# prompts, snapshots or human docs:
+#   1. Regenerates docs/agents/generated/* and snapshots/* and fails when the
+#      committed files are stale (git diff non-empty).
+#   2. Runs crap4dart similarity gate (v0.15.0) against .crap-baseline.json.
+#   3. Runs the docs unit tests (agentDocGenerator + docs coverage) via dmtools.
 
 on:
   pull_request:
@@ -14,6 +15,9 @@ on:
       - 'instructions/**'
       - 'prompts/**'
       - 'docs/agents/**'
+      - 'snapshots/**'
+      - 'crap4dart.yaml'
+      - '.crap-baseline.json'
       - '.github/workflows/agent-docs.yml'
   push:
     branches: [main]
@@ -23,6 +27,9 @@ on:
       - 'instructions/**'
       - 'prompts/**'
       - 'docs/agents/**'
+      - 'snapshots/**'
+      - 'crap4dart.yaml'
+      - '.crap-baseline.json'
 
 permissions:
   contents: read
@@ -37,15 +44,24 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Regenerate agent docs
-        run: node js/agentDocGenerator.js
-
-      - name: Fail when generated docs are stale
+      - name: Regenerate agent docs and prompt snapshots
         run: |
-          if ! git diff --exit-code -- docs/agents/generated; then
-            echo "::error::docs/agents/generated is stale. Run 'node js/agentDocGenerator.js' and commit the result."
+          node js/agentDocGenerator.js
+          node generate_agent_snapshots.js
+
+      - name: Fail when generated docs or snapshots are stale
+        run: |
+          if ! git diff --exit-code -- docs/agents/generated snapshots; then
+            echo "::error::docs/agents/generated or snapshots is stale. Run 'node js/agentDocGenerator.js && node generate_agent_snapshots.js' and commit the result."
             exit 1
           fi
+
+      - name: Run crap4dart similarity gate
+        run: |
+          curl -fsSL https://github.com/IstiN/crap4dart/releases/download/v0.15.0/crap4dart-linux-x64 \
+            -o "$RUNNER_TEMP/crap4dart-linux-x64"
+          chmod +x "$RUNNER_TEMP/crap4dart-linux-x64"
+          "$RUNNER_TEMP/crap4dart-linux-x64" check --only similarity --baseline
 
   docs-coverage-tests:
     runs-on: ubuntu-24.04

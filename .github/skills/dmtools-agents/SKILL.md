@@ -260,7 +260,7 @@ module.exports = {
   instructionOverrides: {
     story_development: [
       'https://my-wiki/pages/dev-guide',
-      './agents/instructions/development/implementation_instructions.md'
+      './agents/instructions/story_development/general_guidelines.md'
     ]
   }
 };

@@ -71,9 +71,11 @@ suite('pack release guard: file classification', function () {
             '"versions" — a phantom pack in every release and a bogus ledger key');
     });
 
-    test('npm metadata and nested files are not agent configs', function () {
+    test('npm metadata, dot-files and nested files are not agent configs', function () {
         assert.equal(guard().isAgentConfigFile('package.json'), false);
         assert.equal(guard().isAgentConfigFile('package-lock.json'), false);
+        assert.equal(guard().isAgentConfigFile('.crap-baseline.json'), false,
+            'dot-files at root (.crap-baseline.json) are not agent configs');
         assert.equal(guard().isAgentConfigFile('js/sm.json'), false,
             'agent entry configs live at the repo root only');
         assert.equal(guard().isAgentConfigFile('instructions/x.json'), false);
