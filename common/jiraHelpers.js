@@ -3,45 +3,27 @@
  * Shared utilities for Jira ticket operations
  */
 
+var configModule = require('../js/config.js');
+var trackersModule = require('../js/common/trackers.js');
+
 /**
  * Assign ticket to initiator and move to "In Review" status with AI-generated label
  * This is the common post-processing logic used by multiple agents
  * 
- * @param {string} ticketKey - The Jira ticket key
+ * @param {string} ticketKey - The ticket key
  * @param {string} initiatorId - Account ID of the person to assign the ticket to
+ * @param {string} [wipLabel] - Optional WIP label to remove after processing
+ * @param {string} [targetStatus] - Optional status name (defaults to "In Review")
+ * @param {Object} [tracker] - Optional tracker instance from js/common/trackers.js
  * @returns {Object} Result object with success status and message
  */
-function assignForReview(ticketKey, initiatorId) {
+function assignForReview(ticketKey, initiatorId, wipLabel, targetStatus, tracker) {
+    var statusName = targetStatus || configModule.STATUSES.IN_REVIEW;
     try {
-        console.log("Processing ticket:", ticketKey);
-        
-        // Assign to initiator
-        jira_assign_ticket_to({
-            key: ticketKey,
-            accountId: initiatorId
-        });
-        
-        // Move to In Review status
-        jira_move_to_status({
-            key: ticketKey,
-            statusName: "In Review"
-        });
-
-        // Add AI-generated label
-        jira_add_label({
-            key: ticketKey,
-            label: 'ai_generated'
-        });
-        
-        console.log("✅ Assigned to initiator and moved to In Review");
-        
-        return {
-            success: true,
-            message: `Ticket ${ticketKey} assigned and moved to In Review`
-        };
-        
+        var t = tracker || trackersModule.createTracker(null, {});
+        return t.assignForReview(ticketKey, initiatorId, wipLabel, statusName);
     } catch (error) {
-        console.error("❌ Error in assignForReview:", error);
+        console.error('❌ Error in assignForReview:', error);
         return {
             success: false,
             error: error.toString()
@@ -50,9 +32,9 @@ function assignForReview(ticketKey, initiatorId) {
 }
 
 /**
- * Extract ticket key from Jira API response
+ * Extract ticket key from tracker API response
  * 
- * @param {string|Object} result - Jira API response
+ * @param {string|Object} result - Tracker API response
  * @returns {string|null} Extracted ticket key or null if not found
  */
 function extractTicketKey(result) {
@@ -61,7 +43,7 @@ function extractTicketKey(result) {
     }
     if (typeof result === 'string') {
         try {
-            const parsed = JSON.parse(result);
+            var parsed = JSON.parse(result);
             return parsed && parsed.key ? parsed.key : null;
         } catch (error) {
             return null;
@@ -74,22 +56,21 @@ function extractTicketKey(result) {
 }
 
 /**
- * Set priority on a Jira ticket using the appropriate API
+ * Set priority on a ticket using the appropriate tracker API
  * 
- * @param {string} ticketKey - The Jira ticket key
+ * @param {string} ticketKey - The ticket key
  * @param {string} priority - Priority name (e.g., 'Low', 'Medium', 'High')
+ * @param {Object} [tracker] - Optional tracker instance from js/common/trackers.js
  * @returns {boolean} True if successful, false otherwise
  */
-function setTicketPriority(ticketKey, priority) {
+function setTicketPriority(ticketKey, priority, tracker) {
     if (!ticketKey || !priority) {
         return false;
     }
-    
+
     try {
-        jira_set_priority({
-            key: ticketKey,
-            priority: priority
-        });
+        var t = tracker || trackersModule.createTracker(null, {});
+        t.setPriority(ticketKey, priority);
         console.log('Set priority ' + priority + ' on ticket ' + ticketKey);
         return true;
     } catch (priorityError) {
@@ -98,9 +79,10 @@ function setTicketPriority(ticketKey, priority) {
     }
 }
 
-// Export functions for use by other modules
-module.exports = {
-    assignForReview,
-    extractTicketKey,
-    setTicketPriority
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        assignForReview: assignForReview,
+        extractTicketKey: extractTicketKey,
+        setTicketPriority: setTicketPriority
+    };
+}
