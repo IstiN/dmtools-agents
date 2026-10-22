@@ -23,17 +23,11 @@
 # runs): --session "$FA_SESSION_NAME" --session-root "$FA_SESSION_ROOT"
 # resume-or-create the deterministic named session for repo:ticket:group.
 
-_fa_default_base_url() {
-  case "${1:-}" in
-    zai) echo "https://api.z.ai/api/coding/paas/v4" ;;
-    copilot) echo "https://api.enterprise.githubcopilot.com" ;;
-    anthropic) echo "https://api.anthropic.com" ;;
-    openai) echo "https://api.openai.com/v1" ;;
-    openrouter) echo "https://openrouter.ai/api/v1" ;;
-    google) echo "https://generativelanguage.googleapis.com/v1beta" ;;
-    *) echo "" ;;
-  esac
-}
+# Single source of truth for catalog default base URLs and allowed legacy
+# FA_PROVIDER_CONFIG keys (stripped of queue-only connectTimeoutMs /
+# streamIdleTimeoutMs so pre-flutter_agent_harness#1781 binaries never reject).
+_FA_DEFAULT_URLS_JSON='{"zai":"https://api.z.ai/api/coding/paas/v4","copilot":"https://api.enterprise.githubcopilot.com","anthropic":"https://api.anthropic.com","openai":"https://api.openai.com/v1","openrouter":"https://openrouter.ai/api/v1","google":"https://generativelanguage.googleapis.com/v1beta"}'
+_FA_ALLOWED_CFG_KEYS_JSON='["baseUrl","model","input","thinkingLevel","contextWindow","maxTokens","wire"]'
 
 _fa_derive_from_queue() {
   local queue_raw="${FA_PROVIDERS_QUEUE:-}"
@@ -43,23 +37,15 @@ _fa_derive_from_queue() {
 
   local derived=""
   if command -v node >/dev/null 2>&1; then
-    derived="$(node -e '
+    derived="$(FA_DEFAULT_URLS_JSON="${_FA_DEFAULT_URLS_JSON}" FA_ALLOWED_CFG_KEYS_JSON="${_FA_ALLOWED_CFG_KEYS_JSON}" node -e '
       const fs = require("fs");
       let raw = process.env.FA_PROVIDERS_QUEUE || "";
-      if (raw.startsWith("@")) {
-        raw = fs.readFileSync(raw.slice(1), "utf8");
-      }
+      if (raw.startsWith("@")) raw = fs.readFileSync(raw.slice(1), "utf8");
       const arr = JSON.parse(raw);
       if (!Array.isArray(arr) || arr.length === 0) process.exit(0);
-      const defaults = {
-        zai: "https://api.z.ai/api/coding/paas/v4",
-        copilot: "https://api.enterprise.githubcopilot.com",
-        anthropic: "https://api.anthropic.com",
-        openai: "https://api.openai.com/v1",
-        openrouter: "https://openrouter.ai/api/v1",
-        google: "https://generativelanguage.googleapis.com/v1beta"
-      };
-      let entry = arr.find(e => {
+      const defaults = JSON.parse(process.env.FA_DEFAULT_URLS_JSON);
+      const allowed = JSON.parse(process.env.FA_ALLOWED_CFG_KEYS_JSON);
+      const entry = arr.find(e => {
         const k = e && e.provider_config && (e.provider_config.apiKeyEnv || e.provider_config.apiKeyEnvVar);
         return k && (process.env[k] || process.env[k + "_BASE64"]);
       }) || arr[0];
@@ -68,7 +54,6 @@ _fa_derive_from_queue() {
       const src = entry.provider_config;
       const baseUrl = src.baseUrl || defaults[ptype] || "";
       if (!baseUrl) process.exit(0);
-      const allowed = ["baseUrl", "model", "input", "thinkingLevel", "contextWindow", "maxTokens", "wire"];
       const cfg = { baseUrl };
       for (const k of allowed) {
         if (k !== "baseUrl" && src[k] !== undefined) cfg[k] = src[k];
@@ -77,38 +62,8 @@ _fa_derive_from_queue() {
       if (keyEnv) cfg.apiKeyEnvVar = keyEnv;
       process.stdout.write(ptype + "\n" + JSON.stringify(cfg));
     ' 2>/dev/null || true)"
-  elif command -v jq >/dev/null 2>&1; then
-    local queue_json="${queue_raw}"
-    if [[ "${queue_raw}" == @* ]] && [ -f "${queue_raw#@}" ]; then
-      queue_json="$(cat "${queue_raw#@}")"
-    fi
-    derived="$(printf '%s' "${queue_json}" | jq -r '
-      if type == "array" and length > 0 then
-        (map(select(
-          (.provider_config.apiKeyEnv // .provider_config.apiKeyEnvVar // "") as $k |
-          ($k != "" and ((env[$k] // "") != "" or (env[$k + "_BASE64"] // "") != ""))
-        ))[0] // .[0]) as $e |
-        ($e.provider_type // "") as $pt |
-        ({
-          zai: "https://api.z.ai/api/coding/paas/v4",
-          copilot: "https://api.enterprise.githubcopilot.com",
-          anthropic: "https://api.anthropic.com",
-          openai: "https://api.openai.com/v1",
-          openrouter: "https://openrouter.ai/api/v1",
-          google: "https://generativelanguage.googleapis.com/v1beta"
-        }[$pt] // "") as $defUrl |
-        ($e.provider_config.baseUrl // $defUrl) as $url |
-        if $pt != "" and $url != "" then
-          $pt,
-          (($e.provider_config | with_entries(select(.key | IN("baseUrl", "model", "input", "thinkingLevel", "contextWindow", "maxTokens", "wire"))))
-            + {baseUrl: $url}
-            + (if ($e.provider_config.apiKeyEnv // $e.provider_config.apiKeyEnvVar) then {apiKeyEnvVar: ($e.provider_config.apiKeyEnv // $e.provider_config.apiKeyEnvVar)} else {} end)
-            | tojson)
-        else empty end
-      else empty end
-    ' 2>/dev/null || true)"
   elif command -v python3 >/dev/null 2>&1; then
-    derived="$(python3 -c '
+    derived="$(FA_DEFAULT_URLS_JSON="${_FA_DEFAULT_URLS_JSON}" FA_ALLOWED_CFG_KEYS_JSON="${_FA_ALLOWED_CFG_KEYS_JSON}" python3 -c '
 import json, os, sys
 raw = os.environ.get("FA_PROVIDERS_QUEUE", "")
 if raw.startswith("@"):
@@ -117,29 +72,16 @@ if raw.startswith("@"):
 arr = json.loads(raw)
 if not isinstance(arr, list) or not arr:
     sys.exit(0)
-defaults = {
-    "zai": "https://api.z.ai/api/coding/paas/v4",
-    "copilot": "https://api.enterprise.githubcopilot.com",
-    "anthropic": "https://api.anthropic.com",
-    "openai": "https://api.openai.com/v1",
-    "openrouter": "https://openrouter.ai/api/v1",
-    "google": "https://generativelanguage.googleapis.com/v1beta",
-}
-entry = None
-for e in arr:
-    pc = (e or {}).get("provider_config") or {}
-    k = pc.get("apiKeyEnv") or pc.get("apiKeyEnvVar")
-    if k and (os.environ.get(k) or os.environ.get(k + "_BASE64")):
-        entry = e
-        break
-if entry is None:
-    entry = arr[0]
-pt = (entry or {}).get("provider_type") or ""
-src = (entry or {}).get("provider_config") or {}
+defaults = json.loads(os.environ["FA_DEFAULT_URLS_JSON"])
+allowed = json.loads(os.environ["FA_ALLOWED_CFG_KEYS_JSON"])
+entry = next((e for e in arr if isinstance(e, dict) and isinstance(e.get("provider_config"), dict) and (lambda k: bool(k and (os.environ.get(k) or os.environ.get(k + "_BASE64"))))(e["provider_config"].get("apiKeyEnv") or e["provider_config"].get("apiKeyEnvVar"))), arr[0])
+if not isinstance(entry, dict) or not entry.get("provider_type") or not isinstance(entry.get("provider_config"), dict):
+    sys.exit(0)
+pt = str(entry["provider_type"])
+src = entry["provider_config"]
 url = src.get("baseUrl") or defaults.get(pt, "")
 if not pt or not url:
     sys.exit(0)
-allowed = ("baseUrl", "model", "input", "thinkingLevel", "contextWindow", "maxTokens", "wire")
 cfg = {"baseUrl": url}
 for k in allowed:
     if k != "baseUrl" and k in src:
@@ -149,33 +91,9 @@ if ke:
     cfg["apiKeyEnvVar"] = ke
 sys.stdout.write(pt + "\n" + json.dumps(cfg, separators=(",", ":")))
 ' 2>/dev/null || true)"
-  fi
-
-  if [ -z "${derived}" ]; then
-    # POSIX/sed fallback on entry 0
-    local queue_json="${queue_raw}"
-    if [[ "${queue_raw}" == @* ]] && [ -f "${queue_raw#@}" ]; then
-      queue_json="$(cat "${queue_raw#@}")"
-    fi
-    local ptype
-    ptype="$(printf '%s' "${queue_json}" | sed -n 's/.*"provider_type"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-    local pcfg
-    pcfg="$(printf '%s' "${queue_json}" | sed -n 's/.*"provider_config"[[:space:]]*:[[:space:]]*\({[^}]*}\).*/\1/p' | head -n 1)"
-    if [ -n "${ptype}" ] && [ -n "${pcfg}" ]; then
-      pcfg="$(printf '%s' "${pcfg}" | sed 's/"apiKeyEnv"/"apiKeyEnvVar"/g')"
-      if ! printf '%s' "${pcfg}" | grep -q '"baseUrl"'; then
-        local def_url
-        def_url="$(_fa_default_base_url "${ptype}")"
-        if [ -n "${def_url}" ]; then
-          pcfg="$(printf '%s' "${pcfg}" | sed "s|^{|{\"baseUrl\":\"${def_url}\",|")"
-        else
-          pcfg=""
-        fi
-      fi
-      if [ -n "${pcfg}" ]; then
-        derived="$(printf '%s\n%s' "${ptype}" "${pcfg}")"
-      fi
-    fi
+  else
+    echo "Error: node or python3 is required to derive FA_PROVIDER_TYPE/FA_PROVIDER_CONFIG from FA_PROVIDERS_QUEUE" >&2
+    return 1
   fi
 
   if [ -n "${derived}" ]; then
@@ -207,7 +125,11 @@ _fa_resolve_env() {
     fi
 
     if [ -z "${FA_PROVIDER_TYPE:-}" ] || [ -z "${FA_PROVIDER_CONFIG:-}" ]; then
-      _fa_derive_from_queue
+      _fa_derive_from_queue || return 1
+    fi
+    if [ -z "${FA_PROVIDER_TYPE:-}" ] || [ -z "${FA_PROVIDER_CONFIG:-}" ]; then
+      echo "Error: failed to derive FA_PROVIDER_TYPE/FA_PROVIDER_CONFIG from FA_PROVIDERS_QUEUE (invalid JSON, empty queue, unknown provider_type without baseUrl, or unreadable @path?)" >&2
+      return 1
     fi
   else
     if [ -z "${FA_PROVIDER_CONFIG:-}" ]; then
@@ -222,7 +144,11 @@ _fa_resolve_env() {
   # is unset.
   FA_KEY_ENV_VAR=""
   if [ -n "${FA_PROVIDER_CONFIG:-}" ]; then
-    FA_KEY_ENV_VAR="$(printf '%s' "${FA_PROVIDER_CONFIG}" | sed -n 's/.*"apiKeyEnvVar"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    local extracted_key
+    extracted_key="$(printf '%s' "${FA_PROVIDER_CONFIG}" | sed -n 's/.*"apiKeyEnvVar"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    if [[ "${extracted_key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      FA_KEY_ENV_VAR="${extracted_key}"
+    fi
   fi
 }
 
@@ -308,7 +234,7 @@ run_fa() {
   # it directly and nothing is injected.
   set +e
   if [ -n "${FA_PROVIDER_API_KEY:-}" ] && [ -n "${FA_KEY_ENV_VAR:-}" ] \
-     && [ -z "$(eval "echo \${${FA_KEY_ENV_VAR}:-}")" ]; then
+     && [ -z "${!FA_KEY_ENV_VAR:-}" ]; then
     env "${FA_KEY_ENV_VAR}=${FA_PROVIDER_API_KEY}" "${cmd[@]}" 2>&1 | tee "$agent_log"
   else
     "${cmd[@]}" 2>&1 | tee "$agent_log"
