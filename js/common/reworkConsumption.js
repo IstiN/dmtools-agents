@@ -138,35 +138,67 @@ function trustedLogin(login) {
  * chronological) and gain atMs (Date.parse of the embedded `at`, NaN when
  * unparsable — consumers must fail closed on NaN).
  */
-function parseMarkers(comments, prefix, opts) {
-    var list = Array.isArray(comments) ? comments : [];
-    var allow = (opts && Array.isArray(opts.authorLogins) && opts.authorLogins.length)
+// ── gh-1195 CRAP split: named parse/order helpers ────────────────────────────
+// Extracted from parseMarkers without changing what is matched, trusted or
+// returned. Each helper is unit-tested in js/unit-tests/test_reworkConsumption.js.
+
+/**
+ * The trust allowlist from the sweep opts: a non-empty authorLogins array
+ * restricts markers to machine identities; anything else disables the filter.
+ */
+function trustedAuthorLogins(opts) {
+    return (opts && Array.isArray(opts.authorLogins) && opts.authorLogins.length)
         ? opts.authorLogins : null;
+}
+
+/**
+ * True when the comment may carry a marker: no allowlist, or the author
+ * login (one trailing '[bot]' normalized on both sides) is on it.
+ */
+function isTrustedMarkerAuthor(item, allow) {
+    if (!allow) return true;
+    var who = trustedLogin(commentAuthorLogin(item));
+    for (var a = 0; a < allow.length; a++) {
+        if (who && who === trustedLogin(allow[a])) { return true; }
+    }
+    return false;
+}
+
+/**
+ * One pass over the comment stream: every trusted, parsable marker record,
+ * in payload order, stamped with atMs (NaN when unparsable) and the payload
+ * index (the sort's tiebreak).
+ */
+function collectMarkerRecords(comments, prefix, allow) {
     var out = [];
-    for (var i = 0; i < list.length; i++) {
-        if (allow) {
-            var who = trustedLogin(commentAuthorLogin(list[i]));
-            var trusted = false;
-            for (var a = 0; a < allow.length; a++) {
-                if (who && who === trustedLogin(allow[a])) { trusted = true; break; }
-            }
-            if (!trusted) continue;
-        }
-        var rec = extractMarker(list[i] && list[i].body, prefix);
+    for (var i = 0; i < comments.length; i++) {
+        if (!isTrustedMarkerAuthor(comments[i], allow)) continue;
+        var rec = extractMarker(comments[i] && comments[i].body, prefix);
         if (!rec) continue;
         rec.atMs = Date.parse(rec.at || '');
         rec.order = i;
         out.push(rec);
     }
-    // Timestamp order, payload order as tiebreak (reviewVerdicts parity):
-    // callers ask for the NEWEST marker — payload order alone is arbitrary
-    // when several markers carry the same clock tick.
-    out.sort(function (a, b) {
-        var aTime = isNaN(a.atMs) ? -1 : a.atMs;
-        var bTime = isNaN(b.atMs) ? -1 : b.atMs;
-        if (aTime !== bTime) return aTime < bTime ? -1 : 1;
-        return (a.order || 0) - (b.order || 0);
-    });
+    return out;
+}
+
+/**
+ * Timestamp order, payload order as tiebreak (reviewVerdicts parity):
+ * callers ask for the NEWEST marker — payload order alone is arbitrary
+ * when several markers carry the same clock tick. Unparsable timestamps
+ * (NaN → -1) sink to the front.
+ */
+function compareMarkerRecords(a, b) {
+    var aTime = isNaN(a.atMs) ? -1 : a.atMs;
+    var bTime = isNaN(b.atMs) ? -1 : b.atMs;
+    if (aTime !== bTime) return aTime < bTime ? -1 : 1;
+    return (a.order || 0) - (b.order || 0);
+}
+
+function parseMarkers(comments, prefix, opts) {
+    var list = Array.isArray(comments) ? comments : [];
+    var out = collectMarkerRecords(list, prefix, trustedAuthorLogins(opts));
+    out.sort(compareMarkerRecords);
     return out;
 }
 
@@ -210,27 +242,56 @@ function parseRestoreMarkers(comments, opts) {
  * position is still consulted by the caller for the gh-806 latch, the
  * in-flight leg gate and the marker bookkeeping — never as a close proof.
  */
+// ── gh-1195 CRAP split: named decision helpers for shouldRestoreArm ─────────
+// Each guard keeps its historical order and reason string; the helpers only
+// carry the numeric/quiet-window sub-decisions.
+
+/** A marker-timestamp field as a number, null when missing/unparsable. */
+function msOrNull(value) {
+    return (typeof value === 'number' && !isNaN(value)) ? value : null;
+}
+
+/**
+ * The newest evidence timestamp the quiet window is measured from: the
+ * restore marker when there is no consume marker, the consume marker when
+ * there is no restore marker, else the later of the two.
+ */
+function quietSinceOf(consumed, restored) {
+    return consumed === null ? restored
+        : (restored === null ? consumed : Math.max(consumed, restored));
+}
+
+/** The quiet bound: the sweep's staleMs knob, else the gh-840 default. */
+function restoreStaleMs(s) {
+    return (typeof s.staleMs === 'number' && s.staleMs > 0)
+        ? s.staleMs : DEFAULT_RESTORE_STALE_MS;
+}
+
+/**
+ * The arm-state guards evaluated before any evidence check: the reason the
+ * sweep must not run, or null when the state admits the evidence gate.
+ */
+function restoreBlockReason(s) {
+    if (s.hasReworkLabel) return 'arm-present';
+    if (s.reworkInFlight) return 'rework-in-flight';
+    if (!(Number(s.unresolvedMachineThreads) > 0)) return 'no-unresolved-threads';
+    return null;
+}
+
 function shouldRestoreArm(state) {
     var s = state || {};
-    if (s.hasReworkLabel) return { restore: false, reason: 'arm-present' };
-    if (s.reworkInFlight) return { restore: false, reason: 'rework-in-flight' };
-    if (!(Number(s.unresolvedMachineThreads) > 0)) {
-        return { restore: false, reason: 'no-unresolved-threads' };
-    }
-    var consumed = (typeof s.consumedAtMs === 'number' && !isNaN(s.consumedAtMs))
-        ? s.consumedAtMs : null;
-    var restored = (typeof s.restoredAtMs === 'number' && !isNaN(s.restoredAtMs))
-        ? s.restoredAtMs : null;
+    var blocked = restoreBlockReason(s);
+    if (blocked) return { restore: false, reason: blocked };
+    var consumed = msOrNull(s.consumedAtMs);
+    var restored = msOrNull(s.restoredAtMs);
     if (consumed === null && restored === null) {
         return { restore: false, reason: 'no-consumption-evidence' };
     }
-    var quietSince = consumed === null ? restored
-        : (restored === null ? consumed : Math.max(consumed, restored));
-    var nowMs = (typeof s.nowMs === 'number' && !isNaN(s.nowMs)) ? s.nowMs : null;
+    var nowMs = msOrNull(s.nowMs);
     if (nowMs === null) return { restore: false, reason: 'bad-clock' };
-    var staleMs = (typeof s.staleMs === 'number' && s.staleMs > 0)
-        ? s.staleMs : DEFAULT_RESTORE_STALE_MS;
-    if (nowMs - quietSince < staleMs) return { restore: false, reason: 'within-grace' };
+    if (nowMs - quietSinceOf(consumed, restored) < restoreStaleMs(s)) {
+        return { restore: false, reason: 'within-grace' };
+    }
     return { restore: true, reason: 'restore' };
 }
 
@@ -243,5 +304,14 @@ module.exports = {
     buildRestoreMarkerComment: buildRestoreMarkerComment,
     parseConsumeMarkers: parseConsumeMarkers,
     parseRestoreMarkers: parseRestoreMarkers,
+    parseMarkers: parseMarkers,
+    trustedAuthorLogins: trustedAuthorLogins,
+    isTrustedMarkerAuthor: isTrustedMarkerAuthor,
+    collectMarkerRecords: collectMarkerRecords,
+    compareMarkerRecords: compareMarkerRecords,
+    msOrNull: msOrNull,
+    quietSinceOf: quietSinceOf,
+    restoreStaleMs: restoreStaleMs,
+    restoreBlockReason: restoreBlockReason,
     shouldRestoreArm: shouldRestoreArm
 };

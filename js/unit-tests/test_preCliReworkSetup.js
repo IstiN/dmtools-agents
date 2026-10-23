@@ -1523,3 +1523,75 @@ suite('preCliReworkSetup.buildReviewStateMd — probe degradation + verdict warn
         assert.notContains(md, 'PRRT_bot');
     });
 });
+
+// ── gh-1195 CRAP split: review-state helper contracts ────────────────────────
+suite('preCliReworkSetup — review-state markdown helpers (gh-1195)', function() {
+
+    function harness() {
+        return makeContractHarness().mod;
+    }
+
+    suite('fetchReviewsForContext', function() {
+        test('returns the review list (stringified prNumber), [] normalized from a falsy probe', function() {
+            var mod = harness();
+            var seen = [];
+            var scm = { listReviews: function(prNumber) { seen.push(prNumber); return null; } };
+            assert.deepEqual(mod.fetchReviewsForContext(scm, '7'), []);
+            assert.deepEqual(seen, ['7'], 'the prNumber is stringified before the probe');
+        });
+
+        test('a missing probe or a throwing probe degrade to null (never fatal)', function() {
+            var mod = harness();
+            assert.equal(mod.fetchReviewsForContext({ /* no listReviews */ }, 7), null);
+            assert.equal(mod.fetchReviewsForContext(null, 7), null);
+            assert.equal(mod.fetchReviewsForContext({
+                listReviews: function() { throw new Error('boom'); }
+            }, 7), null);
+        });
+    });
+
+    suite('discussionThreadsAndCensus', function() {
+        test('defaults both halves of a missing payload, keeping them independent', function() {
+            var mod = harness();
+            assert.deepEqual(mod.discussionThreadsAndCensus(null), { threads: [], census: null });
+            assert.deepEqual(mod.discussionThreadsAndCensus({}), { threads: [], census: null });
+            assert.deepEqual(mod.discussionThreadsAndCensus({ rawThreads: {} }), { threads: [], census: null });
+            var full = mod.discussionThreadsAndCensus({
+                rawThreads: { threads: [{ threadId: 'PRRT_a' }], census: { total: 1 } }
+            });
+            assert.equal(full.threads.length, 1);
+            assert.deepEqual(full.census, { total: 1 });
+        });
+    });
+
+    suite('openThreadsOf', function() {
+        test('drops resolved, bot-authored and null entries', function() {
+            var mod = harness();
+            var open = mod.openThreadsOf([
+                { threadId: 'a', resolved: false },
+                { threadId: 'b', resolved: true },
+                { threadId: 'c', resolved: false, bot: true },
+                null,
+                { threadId: 'd' }
+            ]);
+            assert.deepEqual(open.map(function(t) { return t.threadId; }), ['a', 'd']);
+            assert.deepEqual(mod.openThreadsOf(null), [], 'a missing list defaults to empty');
+        });
+    });
+
+    suite('reviewRequiresChanges', function() {
+        test('true only for a concluded CHANGES_REQUESTED verdict', function() {
+            var mod = harness();
+            assert.equal(mod.reviewRequiresChanges([
+                { state: 'APPROVED', submitted_at: '2026-10-01T10:00:00Z' },
+                { state: 'CHANGES_REQUESTED', submitted_at: '2026-10-08T10:00:00Z' }
+            ]), true, 'the latest concluded review decides');
+            assert.equal(mod.reviewRequiresChanges([
+                { state: 'CHANGES_REQUESTED', submitted_at: '2026-10-01T10:00:00Z' },
+                { state: 'APPROVED', submitted_at: '2026-10-08T10:00:00Z' }
+            ]), false);
+            assert.equal(mod.reviewRequiresChanges([]), false);
+            assert.equal(mod.reviewRequiresChanges(null), false, 'no probe → no warning');
+        });
+    });
+});

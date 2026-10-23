@@ -264,6 +264,59 @@ function renderOpenThreadLines(openThreads) {
     return lines;
 }
 
+// ── gh-1195 CRAP split: named review-state markdown helpers ──────────────────
+// Extracted from buildReviewStateMd without changing what is fetched, written
+// or rendered — the probe order, the note wording and the line order are
+// byte-identical to the inline code they replace.
+
+/**
+ * The concluded-review probe for the context file: [] when the provider
+ * exposes listReviews, null when it does not or the probe fails (the same
+ * degrade-to-honest-note contract, now named).
+ */
+function fetchReviewsForContext(scm, prNumber) {
+    if (scm && typeof scm.listReviews === 'function') {
+        try {
+            return scm.listReviews(String(prNumber)) || [];
+        } catch (e) {
+            console.warn('review_state: listReviews probe failed (non-fatal):', e.message || e);
+            return null;
+        }
+    }
+    return null;
+}
+
+/**
+ * The raw thread list + census from the discussion payload, defaulted to the
+ * empty shapes the markdown builder renders.
+ */
+function discussionThreadsAndCensus(discussionData) {
+    var raw = (discussionData && discussionData.rawThreads) || null;
+    return {
+        threads: (raw && raw.threads) || [],
+        census: (raw && raw.census) || null
+    };
+}
+
+/**
+ * The actionable open threads: not resolved, not bot-authored. Null entries
+ * are dropped.
+ */
+function openThreadsOf(threads) {
+    return (threads || []).filter(function(t) {
+        return !!t && t.resolved !== true && t.bot !== true;
+    });
+}
+
+/**
+ * True when the review probe concluded CHANGES_REQUESTED — the blocking
+ * warning's trigger.
+ */
+function reviewRequiresChanges(reviews) {
+    var latest = latestConcludedReview(reviews);
+    return reviews !== null && !!latest && latest.state === 'CHANGES_REQUESTED';
+}
+
 /**
  * Builds review_state.md — the reviewer-verdict context for the rework agent:
  * the latest concluded review decision, who asked for what, and the open
@@ -279,25 +332,14 @@ function buildReviewStateMd(scm, prNumber, discussionData) {
     lines.push('Decision values: `CHANGES_REQUESTED` (blocking — reviewer asked for changes), `APPROVED`, or `NONE` (no concluded review yet).');
     lines.push('');
 
-    var reviews = null;
-    if (scm && typeof scm.listReviews === 'function') {
-        try {
-            reviews = scm.listReviews(String(prNumber)) || [];
-        } catch (e) {
-            console.warn('review_state: listReviews probe failed (non-fatal):', e.message || e);
-            reviews = null;
-        }
-    }
+    var reviews = fetchReviewsForContext(scm, prNumber);
 
     renderVerdictLines(reviews).forEach(function(l) { lines.push(l); });
 
-    var rawThreads = (discussionData && discussionData.rawThreads && discussionData.rawThreads.threads) || [];
-    var census = (discussionData && discussionData.rawThreads && discussionData.rawThreads.census) || null;
-    var openThreads = rawThreads.filter(function(t) {
-        return !!t && t.resolved !== true && t.bot !== true;
-    });
+    var discussion = discussionThreadsAndCensus(discussionData);
+    var openThreads = openThreadsOf(discussion.threads);
     lines.push('**Open review threads at rework start: ' + openThreads.length + '**');
-    var censusNote = buildCensusNote(census, openThreads.length);
+    var censusNote = buildCensusNote(discussion.census, openThreads.length);
     if (censusNote) {
         lines.push('');
         lines.push(censusNote);
@@ -307,8 +349,7 @@ function buildReviewStateMd(scm, prNumber, discussionData) {
     if (openThreads.length > 0) {
         renderOpenThreadLines(openThreads).forEach(function(l) { lines.push(l); });
     }
-    if (reviews !== null && latestConcludedReview(reviews) &&
-        latestConcludedReview(reviews).state === 'CHANGES_REQUESTED') {
+    if (reviewRequiresChanges(reviews)) {
         lines.push('⚠️ The reviewer **requires changes** before this PR can merge — treat every open thread as blocking.');
         lines.push('');
     }
@@ -844,6 +885,12 @@ if (typeof module !== 'undefined' && module.exports) {
         truncateForComment,
         buildReworkStartedComment,
         buildReviewStateMd,
+        // gh-1195: helpers extracted from buildReviewStateMd — exported for
+        // direct unit testing (per-function CRAP ratchet).
+        fetchReviewsForContext,
+        discussionThreadsAndCensus,
+        openThreadsOf,
+        reviewRequiresChanges,
         ensureInputContextContract,
         // gh-1002: helpers extracted from action() to bring its CRAP under the
         // quality-gate threshold — exported for direct unit testing.
