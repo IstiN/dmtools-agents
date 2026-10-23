@@ -802,3 +802,284 @@ suite('postMobileTestAutomationResults — updateFeaturePRLabel (github globals)
     });
 
 });
+
+// ── Suite: gh-1189 characterization (pinned before the CRAP split) ───────────
+// Pins the observable behavior of action(), getResultCounts,
+// performGitOperations and updateFeaturePRBody — the functions named by the
+// gh-1189 CRAP ticket — including the branches the existing suites do not
+// reach. These tests must keep passing unchanged through the helper extraction.
+
+suite('postMobileTestAutomationResults — gh-1189 characterization: result counts', function() {
+
+    function loadWithCounts(resultJson, summaryContent) {
+        var prComments = [];
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') return resultJson;
+                if (opts.path === 'outputs/pr_feature_update.md') return summaryContent;
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            github_list_prs: function() {
+                return JSON.stringify({ data: [{ number: 963, title: 'PROJ-6618', head: { ref: 'story/PROJ-6618' } }] });
+            },
+            github_add_pr_label: function() {},
+            github_remove_pr_label: function() {},
+            github_add_pr_comment: function(opts) { prComments.push(opts); },
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
+        });
+        return { m: m, prComments: prComments };
+    }
+
+    test('derives counts from per-entry statuses when top-level numbers are absent', function() {
+        var resultJson = JSON.stringify({
+            summary: 'mixed',
+            results: [
+                { ticket: 'TC-1', status: 'passed' },
+                { ticket: 'TC-2', status: 'error' },
+                { ticket: 'TC-3', status: 'failed' },
+                { ticket: 'TC-4', status: 'skipped' },
+                { ticket: 'TC-5', status: 'passed' }
+            ]
+        });
+        var loaded = loadWithCounts(resultJson, '## Automated Test Coverage Added\n\nMaestro flows');
+        loaded.m.action(makeParams('PROJ-6618'));
+
+        assert.equal(loaded.prComments.length, 1, 'feature PR comment posted');
+        assert.ok(loaded.prComments[0].text.indexOf('| 2 | 2 | 1 |') !== -1,
+            'error must count as failed: ' + loaded.prComments[0].text);
+    });
+
+    test('fills only the missing count keys from per-entry statuses', function() {
+        var resultJson = JSON.stringify({
+            passed: 2,
+            summary: 'partial top-level',
+            results: [
+                { ticket: 'TC-1', status: 'passed' },
+                { ticket: 'TC-2', status: 'failed' },
+                { ticket: 'TC-3', status: 'skipped' }
+            ]
+        });
+        var loaded = loadWithCounts(resultJson, '## Automated Test Coverage Added\n\nMaestro flows');
+        loaded.m.action(makeParams('PROJ-6618'));
+
+        assert.ok(loaded.prComments[0].text.indexOf('| 2 | 1 | 1 |') !== -1,
+            'top-level passed wins; failed/skipped derived: ' + loaded.prComments[0].text);
+    });
+
+    test('accepts alternate count key spellings', function() {
+        var resultJson = JSON.stringify({
+            passed_count: 3,
+            failedTests: 1,
+            skippedCount: 2
+        });
+        var loaded = loadWithCounts(resultJson, '## Automated Test Coverage Added\n\nMaestro flows');
+        loaded.m.action(makeParams('PROJ-6618'));
+
+        assert.ok(loaded.prComments[0].text.indexOf('| 3 | 1 | 2 |') !== -1,
+            'alternate keys must be honored: ' + loaded.prComments[0].text);
+    });
+
+    test('reports zero counts when neither numbers nor entries exist', function() {
+        var resultJson = JSON.stringify({ status: 'passed', summary: 'all good' });
+        var loaded = loadWithCounts(resultJson, '## Automated Test Coverage Added\n\nMaestro flows');
+        loaded.m.action(makeParams('PROJ-6618'));
+
+        assert.ok(loaded.prComments[0].text.indexOf('| 0 | 0 | 0 |') !== -1,
+            'defaults must be zeroes: ' + loaded.prComments[0].text);
+    });
+
+});
+
+suite('postMobileTestAutomationResults — gh-1189 characterization: git operations', function() {
+
+    function loadWithGit(cliHandler, resultJson) {
+        var gitCommands = [];
+        var jiraComments = [];
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') {
+                    return resultJson || PASSED_RESULT;
+                }
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            github_list_prs: function() { return JSON.stringify({ data: [] }); },
+            jira_post_comment: function(opts) { jiraComments.push(opts); },
+            cli_execute_command: function(opts) {
+                var cmd = opts.command || '';
+                gitCommands.push(cmd);
+                return cliHandler(cmd, opts) || '';
+            }
+        });
+        return { m: m, gitCommands: gitCommands, jiraComments: jiraComments };
+    }
+
+    var WORK_DIR = 'dependencies/example-mobile-app-automation';
+
+    function existingBranchOutput(cmd) {
+        if (cmd.indexOf('git ls-remote --heads origin test/PROJ-6618') !== -1) {
+            return 'abc1234deadbeef\trefs/heads/test/PROJ-6618';
+        }
+        return '';
+    }
+
+    test('force-pushes an unseen branch when nothing is staged', function() {
+        var loaded = loadWithGit(function(cmd) {
+            if (cmd.indexOf('branch --show-current') !== -1) return 'test/PROJ-6618';
+            if (cmd.indexOf('git diff --cached --stat') !== -1) return '';
+            return ''; // ls-remote: branch absent on the remote
+        });
+        loaded.m.action(makeParams('PROJ-6618', { targetRepository: { workingDir: WORK_DIR } }));
+
+        var pushes = loaded.gitCommands.filter(function(c) { return c.indexOf('git push') !== -1; });
+        assert.equal(pushes.length, 1, 'exactly one push expected: ' + pushes.join(' | '));
+        assert.ok(pushes[0].indexOf('git push -u origin test/PROJ-6618 --force') === 0,
+            'unseen branch must be force-pushed: ' + pushes[0]);
+        assert.equal(loaded.gitCommands.some(function(c) { return c.indexOf('git commit') !== -1; }), false,
+            'no commit without staged changes');
+    });
+
+    test('does not push when nothing is staged and the branch exists on the remote', function() {
+        var loaded = loadWithGit(function(cmd) {
+            if (cmd.indexOf('branch --show-current') !== -1) return 'test/PROJ-6618';
+            if (cmd.indexOf('git diff --cached --stat') !== -1) return '';
+            return existingBranchOutput(cmd);
+        });
+        loaded.m.action(makeParams('PROJ-6618', { targetRepository: { workingDir: WORK_DIR } }));
+
+        var pushes = loaded.gitCommands.filter(function(c) { return c.indexOf('git push') !== -1; });
+        assert.equal(pushes.length, 0, 'remote branch must suppress the push');
+    });
+
+    test('falls back to a forced push when the regular push fails', function() {
+        var loaded = loadWithGit(function(cmd) {
+            if (cmd.indexOf('branch --show-current') !== -1) return 'test/PROJ-6618';
+            if (cmd.indexOf('git diff --cached --stat') !== -1) return '2 files changed, 10 insertions(+)';
+            if (cmd.indexOf('git push -u origin test/PROJ-6618 --force') !== -1) return '';
+            if (cmd.indexOf('git push -u origin test/PROJ-6618') !== -1) throw new Error('non-fast-forward');
+            return '';
+        });
+        loaded.m.action(makeParams('PROJ-6618', { targetRepository: { workingDir: WORK_DIR } }));
+
+        var commitIdx = loaded.gitCommands.findIndex(function(c) { return c.indexOf('git commit') !== -1; });
+        var pushIdx = loaded.gitCommands.findIndex(function(c) {
+            return c.indexOf('git push -u origin test/PROJ-6618 --force') !== -1;
+        });
+        assert.ok(commitIdx !== -1, 'commit must run with staged changes');
+        assert.ok(pushIdx !== -1, 'forced fallback push must run');
+        assert.ok(pushIdx > commitIdx, 'forced push must follow the failed regular push');
+    });
+
+    test('keeps the result flow alive when git add throws', function() {
+        var loaded = loadWithGit(function(cmd) {
+            if (cmd.indexOf('branch --show-current') !== -1) return 'test/PROJ-6618';
+            if (cmd.indexOf('git add') !== -1) throw new Error('git add failed');
+            return '';
+        });
+        var result = loaded.m.action(makeParams('PROJ-6618', { targetRepository: { workingDir: WORK_DIR } }));
+
+        assert.equal(result.success, true, 'action must still succeed');
+        assert.equal(result.status, 'passed', 'test result still processed');
+        assert.equal(loaded.gitCommands.some(function(c) { return c.indexOf('git commit') !== -1; }), false,
+            'no commit after a failed add');
+        assert.ok(loaded.jiraComments.length > 0, 'Jira comment still posted');
+    });
+
+});
+
+suite('postMobileTestAutomationResults — updateFeaturePRBody (github globals)', function() {
+
+    var PASSED_PARSED = {
+        status: 'passed',
+        summary: '3 flows written, all passed',
+        results: [{ ticket: 'TC-1', status: 'passed' }]
+    };
+
+    function loadForBody(fileMap, hooks) {
+        var prComments = [];
+        hooks = hooks || {};
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return fileMap[opts.path] || null;
+            },
+            github_add_pr_comment: hooks.onAddComment || function(opts) { prComments.push(opts); },
+            github_list_prs: function() { return JSON.stringify({ data: [] }); }
+        });
+        return { m: m, prComments: prComments };
+    }
+
+    test('posts pr_feature_update.md as a PR comment with stringified PR id', function() {
+        var loaded = loadForBody({
+            'outputs/pr_feature_update.md': '## Test Results\n\nAll passed ✅'
+        });
+
+        loaded.m.updateFeaturePRBody('ExampleOrg', 'example-mobile-app', 963, null, PASSED_PARSED, 'PROJ-6618');
+
+        assert.equal(loaded.prComments.length, 1, 'exactly one comment');
+        assert.equal(loaded.prComments[0].pullRequestId, '963', 'PR id stringified');
+        assert.equal(loaded.prComments[0].workspace, 'ExampleOrg');
+        assert.equal(loaded.prComments[0].repository, 'example-mobile-app');
+        assert.equal(loaded.prComments[0].text, '## Test Results\n\nAll passed ✅',
+            'verdict-bearing content must post verbatim');
+    });
+
+    test('skips the comment when neither summary file exists', function() {
+        var loaded = loadForBody({});
+
+        loaded.m.updateFeaturePRBody('ExampleOrg', 'example-mobile-app', 9, null, PASSED_PARSED, 'PROJ-6618');
+
+        assert.equal(loaded.prComments.length, 0, 'no comment without summary files');
+    });
+
+    test('falls back to pr_body.md when pr_feature_update.md is missing', function() {
+        var loaded = loadForBody({
+            'outputs/pr_body.md': '## Test Results (from pr_body)\n\nAll passed ✅'
+        });
+
+        loaded.m.updateFeaturePRBody('ExampleOrg', 'example-mobile-app', 9, null, PASSED_PARSED, 'PROJ-6618');
+
+        assert.equal(loaded.prComments.length, 1, 'fallback content posted');
+        assert.ok(loaded.prComments[0].text.indexOf('from pr_body') !== -1);
+    });
+
+    test('prepends the verdict table when the summary lacks a verdict', function() {
+        var loaded = loadForBody({
+            'outputs/pr_feature_update.md': '## Automated Test Coverage Added\n\n27 Maestro flows'
+        });
+
+        loaded.m.updateFeaturePRBody('ExampleOrg', 'example-mobile-app', 9, null, PASSED_PARSED, 'PROJ-6618');
+
+        var text = loaded.prComments[0].text;
+        assert.ok(text.indexOf('FIX VERIFIED') !== -1, 'verdict prepended: ' + text);
+        assert.ok(text.indexOf('| 1 | 0 | 0 |') !== -1, 'counts table present');
+        assert.ok(text.indexOf('27 Maestro flows') !== -1, 'original content preserved');
+    });
+
+    test('reads summary files from the automation repo workingDir', function() {
+        var loaded = loadForBody({
+            'dependencies/automation/outputs/pr_feature_update.md': '## Test Results\n\nOK'
+        });
+
+        loaded.m.updateFeaturePRBody('ExampleOrg', 'example-mobile-app', 9, 'dependencies/automation', PASSED_PARSED, 'PROJ-6618');
+
+        assert.equal(loaded.prComments.length, 1, 'workingDir variant read');
+        assert.equal(loaded.prComments[0].text, '## Test Results\n\nOK');
+    });
+
+    test('swallows comment failures', function() {
+        var loaded = loadForBody({
+            'outputs/pr_feature_update.md': '## Test Results\n\nOK'
+        }, { onAddComment: function() { throw new Error('comment failed'); } });
+
+        var threw = null;
+        try {
+            loaded.m.updateFeaturePRBody('ExampleOrg', 'example-mobile-app', 9, null, PASSED_PARSED, 'PROJ-6618');
+        } catch (e) {
+            threw = e;
+        }
+        assert.notOk(threw, 'comment failure must not escape: ' + threw);
+    });
+
+});

@@ -280,3 +280,80 @@ suite('postMobileTestAutomationResultsHelpers: decideFeaturePrLabels', function(
     });
 
 });
+
+// ── Suite: gh-1189 result-count derivation ───────────────────────────────────
+
+suite('postMobileTestAutomationResultsHelpers: result-count derivation', function() {
+
+    test('parseMcpPrList accepts plain arrays and {data} wrappers', function() {
+        var h = loadMobileHelpers();
+        assert.deepEqual(h.parseMcpPrList([{ number: 1 }]), [{ number: 1 }]);
+        assert.deepEqual(h.parseMcpPrList({ data: [{ number: 2 }] }), [{ number: 2 }]);
+        assert.deepEqual(h.parseMcpPrList({}), []);
+        assert.deepEqual(h.parseMcpPrList(null), []);
+    });
+
+    test('classifyResultStatus maps error to failed', function() {
+        var h = loadMobileHelpers();
+        assert.equal(h.classifyResultStatus('passed'), 'passed');
+        assert.equal(h.classifyResultStatus('PASSED'), 'passed');
+        assert.equal(h.classifyResultStatus('skipped'), 'skipped');
+        assert.equal(h.classifyResultStatus('failed'), 'failed');
+        assert.equal(h.classifyResultStatus('error'), 'failed');
+        assert.equal(h.classifyResultStatus('written'), null);
+        assert.equal(h.classifyResultStatus(''), null);
+        assert.equal(h.classifyResultStatus(null), null);
+    });
+
+    test('countResultStatuses tallies multi-item result sets', function() {
+        var h = loadMobileHelpers();
+        var counts = h.countResultStatuses([
+            { status: 'passed' },
+            { status: 'error' },
+            { status: 'failed' },
+            { status: 'skipped' },
+            { status: 'passed' },
+            { status: 'written' }
+        ]);
+        assert.deepEqual(counts, { passed: 2, failed: 2, skipped: 1 });
+    });
+
+    test('countResultStatuses returns zeroes for empty input', function() {
+        var h = loadMobileHelpers();
+        assert.deepEqual(h.countResultStatuses([]), { passed: 0, failed: 0, skipped: 0 });
+    });
+
+    test('mergeFallbackCounts fills only the null keys', function() {
+        var h = loadMobileHelpers();
+        var merged = h.mergeFallbackCounts(
+            { passed: 2, failed: null, skipped: null },
+            { passed: 9, failed: 1, skipped: 3 });
+        assert.deepEqual(merged, { passed: 2, failed: 1, skipped: 3 });
+    });
+
+    test('mergeFallbackCounts keeps all top-level numbers when present', function() {
+        var h = loadMobileHelpers();
+        var merged = h.mergeFallbackCounts(
+            { passed: 1, failed: 2, skipped: 3 },
+            { passed: 9, failed: 9, skipped: 9 });
+        assert.deepEqual(merged, { passed: 1, failed: 2, skipped: 3 });
+    });
+
+    test('finalizeCounts turns nulls into zeroes', function() {
+        var h = loadMobileHelpers();
+        assert.deepEqual(h.finalizeCounts({ passed: 1, failed: null, skipped: null }),
+            { passed: 1, failed: 0, skipped: 0 });
+        assert.deepEqual(h.finalizeCounts({ passed: null, failed: null, skipped: null }),
+            { passed: 0, failed: 0, skipped: 0 });
+    });
+
+    test('decideNoStagedChanges treats empty captures as no changes', function() {
+        var h = loadMobileHelpers();
+        assert.equal(h.decideNoStagedChanges(''), true);
+        assert.equal(h.decideNoStagedChanges('   \n'), true);
+        assert.equal(h.decideNoStagedChanges(null), true);
+        assert.equal(h.decideNoStagedChanges(undefined), true);
+        assert.equal(h.decideNoStagedChanges('2 files changed'), false);
+    });
+
+});

@@ -17,89 +17,133 @@ const ACCEPTANCE_CRITERIA_TRIGGER_LABELS = [
     'sm_story_acceptance_criterias_triggered'
 ];
 
+// ── Extracted step helpers (gh-1187 CRAP split): same tracker calls, same
+// order, same log lines. Quiet steps warn and continue; only the status move
+// is fatal (trigger labels must not be removed on a failed move).
+
+function resolveWipLabel(params) {
+    return params.metadata && params.metadata.contextId
+        ? params.metadata.contextId + '_wip'
+        : null;
+}
+
+function resolveCustomParams(params) {
+    return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+}
+
+function assignToInitiatorQuietly(tracker, ticketKey, initiatorId) {
+    if (!initiatorId) {
+        return;
+    }
+    try {
+        tracker.assignTo(ticketKey, initiatorId);
+    } catch (e) {
+        console.warn('Failed to assign ticket, continuing:', e);
+    }
+}
+
+// Fatal on failure (rethrows): the trigger labels are only removed on success.
+function moveToSolutionArchitecture(tracker, ticketKey, statusName) {
+    try {
+        tracker.moveToStatus(ticketKey, statusName);
+    } catch (statusError) {
+        console.error('Failed to move ' + ticketKey + ' to Solution Architecture — trigger labels NOT removed:', statusError);
+        throw statusError;
+    }
+    console.log('Moved ' + ticketKey + ' to Solution Architecture');
+}
+
+function addAiGeneratedLabelQuietly(tracker, ticketKey) {
+    try {
+        tracker.addLabel(ticketKey, LABELS.AI_GENERATED);
+    } catch (e) {
+        console.warn('Failed to add ai_generated label:', e);
+    }
+}
+
+function removeWipLabelQuietly(tracker, ticketKey, wipLabel) {
+    if (!wipLabel) {
+        return;
+    }
+    try {
+        tracker.removeLabel(ticketKey, wipLabel);
+        console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
+    } catch (e) {
+        console.warn('Failed to remove WIP label:', e);
+    }
+}
+
+function removeTriggerLabelsQuietly(tracker, ticketKey) {
+    ACCEPTANCE_CRITERIA_TRIGGER_LABELS.forEach(function(label) {
+        try {
+            tracker.removeLabel(ticketKey, label);
+            console.log('Removed trigger label "' + label + '" from ' + ticketKey);
+        } catch (e) {
+            console.warn('Failed to remove trigger label "' + label + '":', e);
+        }
+    });
+}
+
+function postTokenUsageQuietly(tracker, ticketKey, params) {
+    try {
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
+function triggerSolutionAutoStartQuietly(customParams, projectConfig, ticketKey) {
+    var autoStartSolution = customParams.autoStartSolution === true ||
+        customParams.autoStartSolution === 'true';
+    var solutionConfigFile = customParams.autoStartSolutionConfigFile;
+    if (!autoStartSolution || !solutionConfigFile) {
+        return;
+    }
+    try {
+        autoStart.triggerConfiguredWorkflowForTicket({
+            scm: scmModule.createScm(projectConfig),
+            config: projectConfig,
+            ticketKey: ticketKey,
+            customParams: customParams,
+            configFile: solutionConfigFile,
+            label: 'solution',
+            stripKeys: ['autoStartSolution', 'autoStartSolutionConfigFile']
+        });
+    } catch (e) {
+        console.warn('⚠️ autoStartSolution trigger failed:', e.message || e);
+    }
+}
+
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
         var initiatorId = params.initiator;
-        var wipLabel = params.metadata && params.metadata.contextId
-            ? params.metadata.contextId + '_wip'
-            : null;
+        var wipLabel = resolveWipLabel(params);
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         var jiraConfig = projectConfig.jira;
-        var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+        var customParams = resolveCustomParams(params);
 
         var tracker = trackersModule.createTracker(projectConfig, customParams);
 
         // Assign to initiator (skip if accountId is not available)
-        if (initiatorId) {
-            try {
-                tracker.assignTo(ticketKey, initiatorId);
-            } catch (e) {
-                console.warn('Failed to assign ticket, continuing:', e);
-            }
-        }
+        assignToInitiatorQuietly(tracker, ticketKey, initiatorId);
 
         // Move to Solution Architecture — trigger labels are only removed on success
-        try {
-            tracker.moveToStatus(ticketKey, jiraConfig.statuses.SOLUTION_ARCHITECTURE);
-        } catch (statusError) {
-            console.error('Failed to move ' + ticketKey + ' to Solution Architecture — trigger labels NOT removed:', statusError);
-            throw statusError;
-        }
-        console.log('Moved ' + ticketKey + ' to Solution Architecture');
+        moveToSolutionArchitecture(tracker, ticketKey, jiraConfig.statuses.SOLUTION_ARCHITECTURE);
 
         // Add ai_generated label
-        try {
-            tracker.addLabel(ticketKey, LABELS.AI_GENERATED);
-        } catch (e) {
-            console.warn('Failed to add ai_generated label:', e);
-        }
+        addAiGeneratedLabelQuietly(tracker, ticketKey);
 
         // Remove WIP label if present
-        if (wipLabel) {
-            try {
-                tracker.removeLabel(ticketKey, wipLabel);
-                console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
-            } catch (e) {
-                console.warn('Failed to remove WIP label:', e);
-            }
-        }
+        removeWipLabelQuietly(tracker, ticketKey, wipLabel);
 
-        ACCEPTANCE_CRITERIA_TRIGGER_LABELS.forEach(function(label) {
-            try {
-                tracker.removeLabel(ticketKey, label);
-                console.log('Removed trigger label "' + label + '" from ' + ticketKey);
-            } catch (e) {
-                console.warn('Failed to remove trigger label "' + label + '":', e);
-            }
-        });
+        removeTriggerLabelsQuietly(tracker, ticketKey);
 
         // Post token usage summary comments (e.g. [kimi_usage]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
+        postTokenUsageQuietly(tracker, ticketKey, params);
 
-        var autoStartSolution = customParams.autoStartSolution === true ||
-            customParams.autoStartSolution === 'true';
-        var solutionConfigFile = customParams.autoStartSolutionConfigFile;
-        if (autoStartSolution && solutionConfigFile) {
-            try {
-                autoStart.triggerConfiguredWorkflowForTicket({
-                    scm: scmModule.createScm(projectConfig),
-                    config: projectConfig,
-                    ticketKey: ticketKey,
-                    customParams: customParams,
-                    configFile: solutionConfigFile,
-                    label: 'solution',
-                    stripKeys: ['autoStartSolution', 'autoStartSolutionConfigFile']
-                });
-            } catch (e) {
-                console.warn('⚠️ autoStartSolution trigger failed:', e.message || e);
-            }
-        }
+        triggerSolutionAutoStartQuietly(customParams, projectConfig, ticketKey);
 
         return {
             success: true,
@@ -116,5 +160,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action: action };
+    module.exports = { action, resolveWipLabel, resolveCustomParams };
 }

@@ -10,16 +10,32 @@
 // ── Loader helper ─────────────────────────────────────────────────────────────
 
 function loadFetchParentContext(mocks) {
+    return loadFetchParentContextWithConfigLoader(null, mocks);
+}
+
+function loadFetchParentContextWithConfigLoader(configLoaderMock, mocks) {
+    var requireMap = {
+        './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }), mocks || {})
+    };
+    if (configLoaderMock) requireMap['./configLoader.js'] = configLoaderMock;
     return loadModule(
         'js/fetchParentContextToInput.js',
-        makeRequire({
-            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
-                '../config.js': configModule,
-                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
-            }), mocks || {})
-        }),
+        makeRequire(requireMap),
         mocks || {}
     );
+}
+
+function makeProjectConfig(parentContextFetch, extraJira) {
+    var jira = Object.assign({ issueTypes: {}, statuses: {} }, extraJira || {});
+    if (parentContextFetch !== undefined) jira.parentContextFetch = parentContextFetch;
+    return { jira: jira };
+}
+
+function makeEnabledOverride(extra) {
+    return Object.assign({ enabled: true, fields: ['key', 'summary'] }, extra || {});
 }
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -1041,6 +1057,346 @@ suite('fetchParentContextToInput — remaining branches', function() {
         }
         assert.ok(!threw, 'empty parent fields are non-fatal');
         assert.deepEqual(written, [INPUT_FOLDER + '/ba.md'], 'sibling file written without parent story');
+    });
+
+});
+
+// ── Suite: resolveParentContextConfig — pure config resolution ───────────────
+
+suite('fetchParentContextToInput — resolveParentContextConfig helpers', function() {
+
+    test('returns null when neither project config nor overrides are present', function() {
+        var m = loadFetchParentContext({});
+        assert.equal(m.resolveParentContextConfig(null, {}), null, 'no project config, no overrides');
+        assert.equal(m.resolveParentContextConfig(undefined, undefined), null, 'both undefined');
+    });
+
+    test('returns null for a project config without a jira section', function() {
+        var m = loadFetchParentContext({});
+        assert.equal(m.resolveParentContextConfig({ repository: {} }, {}), null, 'no jira → no projectCfg');
+    });
+
+    test('returns null when the project config is not explicitly enabled', function() {
+        var m = loadFetchParentContext({});
+        assert.equal(m.resolveParentContextConfig(makeProjectConfig({ enabled: false }), {}), null, 'enabled:false project-only');
+        assert.equal(m.resolveParentContextConfig(makeProjectConfig({}), {}), null, 'enabled missing project-only');
+    });
+
+    test('returns the project config as-is when project-only and enabled', function() {
+        var m = loadFetchParentContext({});
+        var pc = makeProjectConfig(makeEnabledOverride());
+        var resolved = m.resolveParentContextConfig(pc, {});
+        assert.equal(resolved, pc.jira.parentContextFetch, 'same object returned');
+    });
+
+    test('merges a parentContextFetch override over the project config', function() {
+        var m = loadFetchParentContext({});
+        var pc = makeProjectConfig(makeEnabledOverride({ jql: 'project = X' }));
+        var resolved = m.resolveParentContextConfig(pc, {
+            parentContextFetch: makeEnabledOverride({ contexts: [{ prefix: '[BA]', file: 'ba.md' }] })
+        });
+        assert.equal(resolved.jql, 'project = X', 'project fields survive the merge');
+        assert.ok(resolved.contexts && resolved.contexts.length === 1, 'override fields win');
+        assert.equal(resolved.enabled, true, 'override presence forces enable');
+    });
+
+    test('a parentContextFetch override alone (no project config) resolves to a merged copy', function() {
+        var m = loadFetchParentContext({});
+        var override = makeEnabledOverride({ enabled: undefined });
+        var resolved = m.resolveParentContextConfig(null, { parentContextFetch: override });
+        assert.ok(resolved, 'override resolved');
+        assert.notEqual(resolved, override, 'merged copy, not the override itself');
+        assert.deepEqual(resolved.fields, ['key', 'summary'], 'override fields preserved');
+        assert.equal(resolved.enabled, undefined, 'enabled left untouched when not explicitly false');
+    });
+
+    test('an override with enabled:false is a no-op even with an enabled project config', function() {
+        var m = loadFetchParentContext({});
+        var pc = makeProjectConfig(makeEnabledOverride());
+        assert.equal(m.resolveParentContextConfig(pc, { parentContextFetch: { enabled: false } }), null, 'explicit disable wins');
+    });
+
+    test('a merged enabled:false is forced to true (disabled project cfg, silent override)', function() {
+        var m = loadFetchParentContext({});
+        var pc = makeProjectConfig({ enabled: false });
+        var resolved = m.resolveParentContextConfig(pc, { parentContextFetch: { fields: ['key'] } });
+        assert.ok(resolved, 'merged config resolved');
+        assert.equal(resolved.enabled, true, 'merged enabled:false forced to true');
+    });
+
+    test('legacy direct customParams keys act as an override', function() {
+        var m = loadFetchParentContext({});
+        var legacy = { jql: 'parent = {parentKey}', fields: ['key'] };
+        var resolved = m.resolveParentContextConfig(null, legacy);
+        assert.deepEqual(resolved, legacy, 'jql/fields direct config resolved as the override');
+        assert.notEqual(resolved, legacy, 'resolved as a merged copy');
+        assert.ok(m.resolveParentContextConfig(null, { childQuestions: { jql: 'x' } }), 'childQuestions alone counts');
+        assert.ok(m.resolveParentContextConfig(null, { contexts: [] }), 'contexts alone counts');
+    });
+
+    test('unrelated customParams keys do not enable the feature', function() {
+        var m = loadFetchParentContext({});
+        assert.equal(m.resolveParentContextConfig(null, { enabled: true, foo: 'bar' }), null, 'no legacy key, no projectCfg');
+    });
+
+    test('a falsy parentContextFetch override falls back to the legacy direct shape', function() {
+        var m = loadFetchParentContext({});
+        var resolved = m.resolveParentContextConfig(null, { parentContextFetch: null, fields: ['key', 'summary'] });
+        assert.ok(resolved, 'legacy customParams used as the override config');
+        assert.deepEqual(resolved.fields, ['key', 'summary'], 'legacy fields preserved through the merge');
+        assert.equal(resolved.enabled, undefined, 'enabled left untouched when not explicitly false');
+    });
+
+});
+
+// ── Suite: buildDefaultFields — field-list helpers ────────────────────────────
+
+suite('fetchParentContextToInput — buildDefaultFields helpers', function() {
+
+    var DEFAULTS = ['key', 'summary', 'description', 'status', 'comment'];
+
+    test('returns the default field list when no project config is given', function() {
+        var m = loadFetchParentContext({});
+        assert.deepEqual(m.buildDefaultFields(null), DEFAULTS, 'null project config');
+        assert.deepEqual(m.buildDefaultFields(undefined), DEFAULTS, 'undefined project config');
+        assert.deepEqual(m.buildDefaultFields({}), DEFAULTS, 'no jira section');
+        assert.deepEqual(m.buildDefaultFields(makeProjectConfig(undefined, { fields: null })), DEFAULTS, 'null jira.fields');
+    });
+
+    test('appends human-readable jira.fields names not already present', function() {
+        var m = loadFetchParentContext({});
+        var pc = makeProjectConfig(undefined, { fields: { bugSolution: 'Bug Solution' } });
+        assert.deepEqual(m.buildDefaultFields(pc),
+            DEFAULTS.concat(['Bug Solution']), 'readable custom field appended');
+    });
+
+    test('skips raw customfield_* ids and non-string values', function() {
+        var m = loadFetchParentContext({});
+        var pc = makeProjectConfig(undefined, {
+            fields: { tech: 'customfield_10400', numeric: 42, label: 'Team Label' }
+        });
+        assert.deepEqual(m.buildDefaultFields(pc),
+            DEFAULTS.concat(['Team Label']), 'only readable names appended');
+    });
+
+    test('does not duplicate a name already in the defaults', function() {
+        var m = loadFetchParentContext({});
+        var pc = makeProjectConfig(undefined, {
+            fields: { summary: 'summary', acceptanceCriteria: 'Acceptance Criteria' }
+        });
+        assert.deepEqual(m.buildDefaultFields(pc),
+            DEFAULTS.concat(['Acceptance Criteria']), 'duplicate skipped, new name appended');
+    });
+
+});
+
+// ── Suite: action decomposition — remaining branches ──────────────────────────
+
+suite('fetchParentContextToInput — action decomposition (gh-1184)', function() {
+
+    test('is non-fatal when the input folder path is not a string (outer catch)', function() {
+        var m = loadFetchParentContext({
+            jira_search_by_jql: function() { throw new Error('should not be called'); },
+            file_write: function() { throw new Error('should not be called'); }
+        });
+        var params = makeParams(MINIMAL_PARENT_CONTEXT_FETCH);
+        params.inputFolderPath = 42; // folder.split would throw — must be swallowed by action's catch
+        var threw = false;
+        try {
+            m.action(params);
+        } catch (e) {
+            threw = true;
+        }
+        assert.ok(!threw, 'outer catch swallowed the failure');
+    });
+
+    test('accepts flat params without jobParams (params double as jobParams)', function() {
+        var written = [];
+        var m = loadFetchParentContext({
+            jira_search_by_jql: function() { return [makeSearchResult('PROJ-200', '[BA]')]; },
+            file_write: function(p, c) { written.push(p); }
+        });
+        m.action({
+            inputFolderPath: INPUT_FOLDER,
+            customParams: MINIMAL_PARENT_CONTEXT_FETCH,
+            ticket: { key: TICKET_KEY, fields: { parent: { key: PARENT_KEY } } }
+        });
+        assert.deepEqual(written, [INPUT_FOLDER + '/ba.md'], 'sibling file written from flat params');
+    });
+
+    test('falls back to jobParams for ticket and folder when inputFolderPath is absent', function() {
+        var fetchedKeys = [];
+        var m = loadFetchParentContext({
+            jira_get_ticket: function(args) {
+                fetchedKeys.push(args.key);
+                return { key: TICKET_KEY, fields: { parent: { key: PARENT_KEY }, summary: '[SA] x', status: { name: 'Open' } } };
+            },
+            jira_search_by_jql: function() { return []; },
+            file_write: function() {}
+        });
+        m.action({
+            jobParams: {
+                customParams: MINIMAL_PARENT_CONTEXT_FETCH,
+                ticket: { key: TICKET_KEY }
+            }
+        });
+        assert.deepEqual(fetchedKeys, [TICKET_KEY, PARENT_KEY], 'ticket then parent fetched by key');
+    });
+
+    test('project config alone enables the feature via the config loader', function() {
+        var written = [];
+        var m = loadFetchParentContextWithConfigLoader({
+            loadProjectConfig: function() {
+                return makeProjectConfig(Object.assign({ enabled: true }, MINIMAL_PARENT_CONTEXT_FETCH));
+            }
+        }, {
+            jira_search_by_jql: function() { return [makeSearchResult('PROJ-200', '[BA]')]; },
+            file_write: function(p, c) { written.push(p); }
+        });
+        m.action(makeParams({}));
+        assert.deepEqual(written, [INPUT_FOLDER + '/ba.md'], 'feature ran from project config alone');
+    });
+
+    test('loadProjectConfig receives the resolved jobParams', function() {
+        var seenJobParams = null;
+        var m = loadFetchParentContextWithConfigLoader({
+            loadProjectConfig: function(jobParams) {
+                seenJobParams = jobParams;
+                return makeProjectConfig({ enabled: false });
+            }
+        }, {
+            jira_search_by_jql: function() { throw new Error('should not be called'); },
+            file_write: function() { throw new Error('should not be called'); }
+        });
+        m.action(makeParams({}));
+        assert.ok(seenJobParams && seenJobParams.customParams !== undefined, 'jobParams passed to loadProjectConfig');
+    });
+
+    test('a disabled project config stays a no-op even when customParams carry unrelated keys', function() {
+        var written = [];
+        var m = loadFetchParentContextWithConfigLoader({
+            loadProjectConfig: function() { return makeProjectConfig({ enabled: false }); }
+        }, {
+            jira_search_by_jql: function() { return [makeSearchResult('PROJ-200', '[BA]')]; },
+            file_write: function(p, c) { written.push(p); }
+        });
+        m.action(makeParams({ someUnrelatedParam: 1 }));
+        assert.deepEqual(written, [], 'nothing written when the project config is disabled');
+    });
+
+    test('a configLoader without loadProjectConfig is treated as absent', function() {
+        var written = [];
+        var m = loadFetchParentContextWithConfigLoader({}, {
+            jira_search_by_jql: function() { return [makeSearchResult('PROJ-200', '[BA]')]; },
+            file_write: function(p, c) { written.push(p); }
+        });
+        m.action(makeParams({}));
+        assert.deepEqual(written, [], 'feature not enabled without overrides or project config');
+    });
+
+    test('honours cfg.parentFields for the parent story fetch', function() {
+        var capturedFields = null;
+        var m = loadFetchParentContext({
+            jira_get_ticket: function(args) {
+                if (args.key === PARENT_KEY && args.fields) capturedFields = args.fields;
+                return { key: PARENT_KEY, fields: { summary: 'parent', status: { name: 'Done' } } };
+            },
+            jira_search_by_jql: function() { return []; },
+            file_write: function() {}
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, { parentFields: ['Acceptance Criteria'] });
+        m.action(makeParams(cfg));
+        assert.ok(capturedFields !== null, 'parent fetch requested explicit fields');
+        assert.ok(capturedFields.indexOf('Acceptance Criteria') !== -1, 'parentFields requested');
+        assert.ok(capturedFields.indexOf('description') === -1, 'cfg.fields not used when parentFields set');
+    });
+
+    test('uses the default field list for the parent story when no fields are configured', function() {
+        var capturedFields = null;
+        var m = loadFetchParentContext({
+            jira_get_ticket: function(args) {
+                if (args.key === PARENT_KEY && args.fields) capturedFields = args.fields;
+                return { key: PARENT_KEY, fields: { summary: 'parent', status: { name: 'Done' } } };
+            },
+            jira_search_by_jql: function() { return []; },
+            file_write: function() {}
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH);
+        delete cfg.fields;
+        m.action(makeParams(cfg));
+        assert.ok(capturedFields !== null, 'parent fetch requested fields');
+        assert.ok(capturedFields.indexOf('description') !== -1, 'default fields used');
+        assert.ok(capturedFields.indexOf('comment') !== -1, 'default comment field included');
+    });
+
+    test('parentAsContext without a file is a no-op', function() {
+        var written = [];
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() { return { key: PARENT_KEY, fields: { summary: 'parent', status: { name: 'Done' } } }; },
+            jira_search_by_jql: function() { return []; },
+            file_write: function(p, c) { written.push(p); }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, { parentAsContext: { label: 'No File' } });
+        m.action(makeParams(cfg));
+        assert.deepEqual(written, [INPUT_FOLDER + '/parent-' + PARENT_KEY + '.md'], 'only the parent story file written');
+    });
+
+    test('parent story fetch that throws a message-less error is non-fatal', function() {
+        var written = [];
+        var m = loadFetchParentContext({
+            jira_get_ticket: function(args) {
+                if (args.key === PARENT_KEY) throw 'plain string failure';
+                return { key: TICKET_KEY, fields: { parent: { key: PARENT_KEY } } };
+            },
+            jira_search_by_jql: function() { return []; },
+            file_write: function(p, c) { written.push(p); }
+        });
+        var params = makeParams(MINIMAL_PARENT_CONTEXT_FETCH);
+        params.ticket = null; // force the ticket fields fetch through the tracker
+        var threw = false;
+        try {
+            m.action(params);
+        } catch (e) {
+            threw = true;
+        }
+        assert.ok(!threw, 'message-less error swallowed by the parent story catch');
+        assert.deepEqual(written, [], 'no parent story file written');
+    });
+
+    test('parent story with no renderable fields shows the no-content placeholder', function() {
+        var written = {};
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() { return { key: PARENT_KEY, fields: { summary: 'parent', status: { name: 'Done' } } }; },
+            jira_search_by_jql: function() { return []; },
+            file_write: function(p, c) { written[p] = c; }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, { fields: ['key', 'summary', 'status'] });
+        m.action(makeParams(cfg));
+        assert.ok(written[INPUT_FOLDER + '/parent-' + PARENT_KEY + '.md'].indexOf('_No content available._') !== -1,
+            'placeholder rendered when every field is skipped');
+    });
+
+    test('parentAsContext write failure is non-fatal', function() {
+        var firstWriteDone = false;
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() { return { key: PARENT_KEY, fields: { summary: 'parent', status: { name: 'Done' } } }; },
+            jira_search_by_jql: function() { return []; },
+            file_write: function(p, c) {
+                if (p.indexOf('parent_context_ba.md') !== -1) throw new Error('context write failed');
+                firstWriteDone = true;
+            }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, {
+            parentAsContext: { file: 'parent_context_ba.md', label: 'BA', description: 'blurb' }
+        });
+        var threw = false;
+        try {
+            m.action(makeParams(cfg));
+        } catch (e) {
+            threw = true;
+        }
+        assert.ok(firstWriteDone, 'parent story file written before the context write');
+        assert.ok(!threw, 'context write failure swallowed inside the parent story try');
     });
 
 });
