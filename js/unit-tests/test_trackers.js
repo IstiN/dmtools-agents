@@ -1510,10 +1510,10 @@ suite('trackers.js — moveToStatusOrMark / stageFallback (agents#856)', functio
                 expected: 'Could not move this ticket to "In Review" (the status "In Review" is not available for this ticket). The stage is recorded with the label `stage_in_review` instead.'
             },
             {
-            {
                 err: '   ',
                 expected: 'Could not move this ticket to "In Review" (the status "In Review" is not available for this ticket). The stage is recorded with the label `stage_in_review` instead.'
             }
+        ];
         cases.forEach(function (c) {
             var m = {
                 ado_move_to_state: recorder('ado_move_to_state', { __throw__: new Error(c.err) }),
