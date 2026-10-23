@@ -4094,15 +4094,19 @@ suite('pushReworkChanges.buildReworkCompletionComment — prCommentPosted suffix
 suite('pushReworkChanges — extracted pure helpers (gh-1195)', function() {
 
     suite('parseGitHubRemoteUrl', function() {
-        var parse = null;
-        suiteSetup(function() {
-            parse = loadPushReworkChangesForAction({}).mod.parseGitHubRemoteUrl;
-        });
+        var parse = loadPushReworkChangesForAction({}).mod.parseGitHubRemoteUrl;
 
-        test('ssh, https, port and no-suffix forms all parse; .git stripped', function() {
+        test('ssh, https and no-suffix forms all parse; .git stripped', function() {
             assert.deepEqual(parse('git@github.com:acme/widgets.git'), { owner: 'acme', repo: 'widgets' });
             assert.deepEqual(parse('https://github.com/acme/widgets'), { owner: 'acme', repo: 'widgets' });
-            assert.deepEqual(parse('ssh://git@github.com:2222/acme/widgets.git'), { owner: 'acme', repo: 'widgets' });
+        });
+
+        test('a port-form scp-ish remote parses exactly as the historical regex always did', function() {
+            // Characterization (gh-1195): the regex is unchanged — the first
+            // segment after github.com[:/] becomes the owner even when it is a
+            // port number. Pinned so a future fix is a deliberate decision.
+            assert.deepEqual(parse('ssh://git@github.com:2222/acme/widgets.git'),
+                { owner: '2222', repo: 'acme' });
         });
 
         test('query strings, fragments and whitespace do not leak into the repo name', function() {
@@ -4118,10 +4122,7 @@ suite('pushReworkChanges — extracted pure helpers (gh-1195)', function() {
     });
 
     suite('completionPrCommentSuffix', function() {
-        var suffix = null;
-        suiteSetup(function() {
-            suffix = loadPushReworkChangesForAction({}).mod.completionPrCommentSuffix;
-        });
+        var suffix = loadPushReworkChangesForAction({}).mod.completionPrCommentSuffix;
 
         test('the clean wording flows straight on; every other wording leads with a newline', function() {
             assert.equal(suffix('clean'), 'A fix summary has been posted as a comment on the Pull Request.');

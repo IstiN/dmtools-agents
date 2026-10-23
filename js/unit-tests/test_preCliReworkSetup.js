@@ -1505,6 +1505,18 @@ suite('preCliReworkSetup.buildReviewStateMd — probe degradation + verdict warn
         assert.notContains(md, 'requires changes');
     });
 
+    test('a census that disagrees with the actionable list renders the exclusion note', function() {
+        var loaded = reviewsHarness(function() { return []; });
+        var md = loaded.mod.buildReviewStateMd(loaded.scm, 7, {
+            rawThreads: {
+                threads: [{ threadId: 'PRRT_open', resolved: false }],
+                census: { graphqlUnresolved: 3 }
+            }
+        });
+        assert.contains(md, '**Open review threads at rework start: 1**');
+        assert.contains(md, '3', 'the census delta is stated, never silently dropped');
+    });
+
     test('resolved and bot threads are excluded from the open inventory', function() {
         var loaded = reviewsHarness(function() { return []; });
         var md = loaded.mod.buildReviewStateMd(loaded.scm, 7, {
