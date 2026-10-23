@@ -136,6 +136,226 @@ function findTicketPage(children, ticketKey) {
     return null;
 }
 
+// ── Extracted step helpers (gh-1187 CRAP split): same tracker/Confluence
+// calls in the same order, same log lines; posted strings byte-identical.
+
+function ticketSummaryOf(params) {
+    return (params.ticket.fields && params.ticket.fields.summary) || '';
+}
+
+// Config + tracker of one publish run (createTracker runs before the
+// space/parentPageId check, exactly like the original inline flow).
+function loadDiscoveryContext(params) {
+    var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    var discoveryConfig = projectConfig.discovery || {};
+    return {
+        tracker: trackersModule.createTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {}),
+        space: discoveryConfig.space,
+        parentPageId: discoveryConfig.parentPageId,
+        deleteOrphans: !!discoveryConfig.deleteOrphans
+    };
+}
+
+function isUnconfiguredDiscovery(ctx) {
+    return !ctx.space || !ctx.parentPageId;
+}
+
+function warnNotConfigured(ctx, ticketKey) {
+    var msg = buildNotConfiguredMessage();
+    console.warn(msg);
+    try {
+        ctx.tracker.postComment(ticketKey, 'h3. ⚠️ Discovery drafted, not published\n\n' + msg);
+    } catch (commentError) {
+        console.warn('Failed to post not-configured comment:', commentError);
+    }
+}
+
+function fetchParentChildren(parentPageId) {
+    try {
+        return { children: confluence_get_children_by_id({ contentId: parentPageId, format: 'md' }) };
+    } catch (e) {
+        console.error('Failed to list children of parentPageId', parentPageId, ':', e);
+        return { error: e.toString() };
+    }
+}
+
+// Find-or-create the ticket's own page, renaming when the summary changed.
+function ensureTicketPage(ctx, children, ticketKey, pageTitle) {
+    var page = findTicketPage(children, ticketKey);
+    if (!page) {
+        console.log('No existing discovery page for ' + ticketKey + ' — creating one titled "' + pageTitle + '"');
+        return confluence_create_page({
+            title: pageTitle,
+            parentId: ctx.parentPageId,
+            body: '<p>Discovery in progress — content is synced from ' + DISCOVERY_OUTPUT_DIR + '.</p>',
+            space: ctx.space
+        });
+    }
+    if (page.title !== pageTitle) {
+        console.log('Ticket summary changed — updating page title from "' + page.title + '" to "' + pageTitle + '"');
+        return confluence_update_page({
+            contentId: page.id,
+            title: pageTitle,
+            parentId: ctx.parentPageId,
+            body: buildRenameBody(page),
+            space: ctx.space
+        });
+    }
+    return page;
+}
+
+function syncDiscoveryDirectory(ctx, page) {
+    return parseSyncSummary(confluence_sync_markdown_directory({
+        directory: DISCOVERY_OUTPUT_DIR,
+        parentId: page.id,
+        space: ctx.space,
+        deleteOrphans: ctx.deleteOrphans
+    }));
+}
+
+function collectReplyResult() {
+    var replyResult = { posted: 0, failed: 0 };
+    try {
+        replyResult = contentOutput.publishCommentReplies();
+    } catch (replyError) {
+        console.warn('Failed to publish inline comment replies:', replyError);
+    }
+    return replyResult;
+}
+
+function syncedCountOf(syncSummary) {
+    return (syncSummary.syncedPages && syncSummary.syncedPages.length) || 0;
+}
+
+// Missing final-output resume check. Returns true when the CLI session was
+// resumed — the caller then re-runs the whole post-action (recursive retry).
+function resumeIfFinalOutputMissing(params, ticketKey) {
+    if (!isResponseFileMissing()) {
+        return false;
+    }
+    var _customParams = (params.jobParams && params.jobParams.customParams) || params.customParams;
+    console.warn('publishDiscoveryToConfluence: ' + RESPONSE_FILE + ' is missing/empty for ' + ticketKey +
+        ' — attempting to resume the CLI session to finish the run\'s final bookkeeping steps.');
+    if (tryResumeForMissingFinalOutput(params, ticketKey, _customParams)) {
+        return true;
+    }
+    console.warn('publishDiscoveryToConfluence: resume not attempted/available (disabled, exhausted, or non-recoverable) — publishing with whatever output exists.');
+    return false;
+}
+
+function buildPublishedResult(ticketKey, page, pageUrl, syncedCount, replyResult) {
+    console.log('✅ Published discovery for ' + ticketKey + ' to Confluence page ' + page.id +
+        (replyResult.posted > 0 ? ' (' + replyResult.posted + ' comment repl(y/ies) posted)' : ''));
+    return {
+        success: true,
+        action: 'published',
+        ticketKey: ticketKey,
+        pageId: page.id,
+        pageUrl: pageUrl,
+        syncedPages: syncedCount,
+        commentRepliesPosted: replyResult.posted,
+        commentRepliesFailed: replyResult.failed
+    };
+}
+
+function postPublishedCommentQuietly(ctx, ticketKey, comment) {
+    try {
+        ctx.tracker.postComment(ticketKey, comment);
+    } catch (commentError) {
+        console.warn('Failed to post discovery-published comment:', commentError);
+    }
+}
+
+function postTokenUsageQuietly(tracker, ticketKey, params) {
+    try {
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
+function postFailureCommentQuietly(tracker, ticketKey, error) {
+    try {
+        tracker.postComment(ticketKey, 'h3. ⚠️ Discovery publish failed\n\n' + (error.message || error.toString()));
+    } catch (commentError) {
+        console.warn('Failed to post failure comment:', commentError);
+    }
+}
+
+function action(params) {
+    var ticketKey = params.ticket && params.ticket.key;
+    if (!ticketKey) {
+        console.error('No ticket key provided');
+        return { success: false, action: 'missing_ticket' };
+    }
+    var pageTitle = buildPageTitle(ticketKey, ticketSummaryOf(params));
+    var result = { success: false, action: 'not_configured', ticketKey: ticketKey };
+    var tracker = null;
+
+    try {
+        var ctx = loadDiscoveryContext(params);
+        tracker = ctx.tracker;
+
+        if (isUnconfiguredDiscovery(ctx)) {
+            warnNotConfigured(ctx, ticketKey);
+            return result;
+        }
+
+        var fetched = fetchParentChildren(ctx.parentPageId);
+        if (fetched.error) {
+            result.action = 'children_lookup_failed';
+            result.error = fetched.error;
+            return result;
+        }
+
+        var page = ensureTicketPage(ctx, fetched.children, ticketKey, pageTitle);
+        var syncSummary = syncDiscoveryDirectory(ctx, page);
+        var pageUrl = resolvePageUrl(page);
+        var syncedCount = syncedCountOf(syncSummary);
+        var replyResult = collectReplyResult();
+
+        if (resumeIfFinalOutputMissing(params, ticketKey)) {
+            // Resumed successfully — the agent should now have written the missing
+            // file(s). Re-run this whole post-action from the top so the freshly
+            // written outputs/discovery/ and outputs/confluence_replies.json get
+            // (re-)synced/posted, same recursive-retry pattern as
+            // developTicketAndCreatePR.js's resumeDevelopmentAgent() call sites.
+            return action(params);
+        }
+
+        postPublishedCommentQuietly(ctx, ticketKey, buildDiscoveryPublishedComment(pageUrl, syncedCount, replyResult));
+        postTokenUsageQuietly(tracker, ticketKey, params);
+        return buildPublishedResult(ticketKey, page, pageUrl, syncedCount, replyResult);
+    } catch (error) {
+        console.error('Error in publishDiscoveryToConfluence:', error);
+        postFailureCommentQuietly(tracker, ticketKey, error);
+        return { success: false, action: 'error', ticketKey: ticketKey, error: error.toString() };
+    }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        action: action,
+        findTicketPage: findTicketPage,
+        buildPageUrl: buildPageUrl,
+        resolvePageUrl: resolvePageUrl,
+        ticketSummaryOf: ticketSummaryOf,
+        loadDiscoveryContext: loadDiscoveryContext,
+        isUnconfiguredDiscovery: isUnconfiguredDiscovery,
+        warnNotConfigured: warnNotConfigured,
+        fetchParentChildren: fetchParentChildren,
+        ensureTicketPage: ensureTicketPage,
+        syncDiscoveryDirectory: syncDiscoveryDirectory,
+        collectReplyResult: collectReplyResult,
+        syncedCountOf: syncedCountOf,
+        resumeIfFinalOutputMissing: resumeIfFinalOutputMissing,
+        buildPublishedResult: buildPublishedResult,
+        postPublishedCommentQuietly: postPublishedCommentQuietly,
+        postTokenUsageQuietly: postTokenUsageQuietly,
+        postFailureCommentQuietly: postFailureCommentQuietly
+    };
+}
+
 function buildPageUrl(page) {
     if (!page || !page._links) return null;
     var webui = page._links.webui;
@@ -165,143 +385,3 @@ function resolvePageUrl(page) {
     }
 }
 
-function action(params) {
-    var ticketKey = params.ticket && params.ticket.key;
-    if (!ticketKey) {
-        console.error('No ticket key provided');
-        return { success: false, action: 'missing_ticket' };
-    }
-    var ticketSummary = (params.ticket.fields && params.ticket.fields.summary) || '';
-    var pageTitle = buildPageTitle(ticketKey, ticketSummary);
-
-    var result = { success: false, action: 'not_configured', ticketKey: ticketKey };
-
-    try {
-        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-        var discoveryConfig = projectConfig.discovery || {};
-        var tracker = trackersModule.createTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
-        var space = discoveryConfig.space;
-        var parentPageId = discoveryConfig.parentPageId;
-        var deleteOrphans = !!discoveryConfig.deleteOrphans;
-
-        if (!space || !parentPageId) {
-            var msg = buildNotConfiguredMessage();
-            console.warn(msg);
-            try {
-                tracker.postComment(ticketKey, 'h3. ⚠️ Discovery drafted, not published\n\n' + msg);
-            } catch (commentError) {
-                console.warn('Failed to post not-configured comment:', commentError);
-            }
-            return result;
-        }
-
-        var children;
-        try {
-            children = confluence_get_children_by_id({ contentId: parentPageId, format: 'md' });
-        } catch (e) {
-            console.error('Failed to list children of parentPageId', parentPageId, ':', e);
-            result.action = 'children_lookup_failed';
-            result.error = e.toString();
-            return result;
-        }
-
-        var page = findTicketPage(children, ticketKey);
-        if (!page) {
-            console.log('No existing discovery page for ' + ticketKey + ' — creating one titled "' + pageTitle + '"');
-            page = confluence_create_page({
-                title: pageTitle,
-                parentId: parentPageId,
-                body: '<p>Discovery in progress — content is synced from ' + DISCOVERY_OUTPUT_DIR + '.</p>',
-                space: space
-            });
-        } else if (page.title !== pageTitle) {
-            console.log('Ticket summary changed — updating page title from "' + page.title + '" to "' + pageTitle + '"');
-            page = confluence_update_page({
-                contentId: page.id,
-                title: pageTitle,
-                parentId: parentPageId,
-                body: buildRenameBody(page),
-                space: space
-            });
-        }
-
-        var syncSummaryRaw = confluence_sync_markdown_directory({
-            directory: DISCOVERY_OUTPUT_DIR,
-            parentId: page.id,
-            space: space,
-            deleteOrphans: deleteOrphans
-        });
-
-        var syncSummary = parseSyncSummary(syncSummaryRaw);
-
-        var pageUrl = resolvePageUrl(page);
-        var syncedCount = (syncSummary.syncedPages && syncSummary.syncedPages.length) || 0;
-
-        // Same principle as story_solution/story_description (contentOutput.js):
-        // the CLI agent may have written outputs/confluence_replies.json when it
-        // directly addressed one of the inline comments collected by
-        // prepareDiscoveryContext.js (discovery_comments.md/json). Post those
-        // replies now that the sync has happened, so pageId/commentId still
-        // point at pages the sync just (re)published.
-        var replyResult = { posted: 0, failed: 0 };
-        try {
-            replyResult = contentOutput.publishCommentReplies();
-        } catch (replyError) {
-            console.warn('Failed to publish inline comment replies:', replyError);
-        }
-
-        if (isResponseFileMissing()) {
-            var _customParams = (params.jobParams && params.jobParams.customParams) || params.customParams;
-            console.warn('publishDiscoveryToConfluence: ' + RESPONSE_FILE + ' is missing/empty for ' + ticketKey +
-                ' — attempting to resume the CLI session to finish the run\'s final bookkeeping steps.');
-            if (tryResumeForMissingFinalOutput(params, ticketKey, _customParams)) {
-                // Resumed successfully — the agent should now have written the missing
-                // file(s). Re-run this whole post-action from the top so the freshly
-                // written outputs/discovery/ and outputs/confluence_replies.json get
-                // (re-)synced/posted, same recursive-retry pattern as
-                // developTicketAndCreatePR.js's resumeDevelopmentAgent() call sites.
-                return action(params);
-            }
-            console.warn('publishDiscoveryToConfluence: resume not attempted/available (disabled, exhausted, or non-recoverable) — publishing with whatever output exists.');
-        }
-
-        var comment = buildDiscoveryPublishedComment(pageUrl, syncedCount, replyResult);
-        try {
-            tracker.postComment(ticketKey, comment);
-        } catch (commentError) {
-            console.warn('Failed to post discovery-published comment:', commentError);
-        }
-
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
-
-        console.log('✅ Published discovery for ' + ticketKey + ' to Confluence page ' + page.id +
-            (replyResult.posted > 0 ? ' (' + replyResult.posted + ' comment repl(y/ies) posted)' : ''));
-        return {
-            success: true,
-            action: 'published',
-            ticketKey: ticketKey,
-            pageId: page.id,
-            pageUrl: pageUrl,
-            syncedPages: syncedCount,
-            commentRepliesPosted: replyResult.posted,
-            commentRepliesFailed: replyResult.failed
-        };
-    } catch (error) {
-        console.error('Error in publishDiscoveryToConfluence:', error);
-        try {
-            tracker.postComment(ticketKey, 'h3. ⚠️ Discovery publish failed\n\n' + (error.message || error.toString())
-            );
-        } catch (commentError) {
-            console.warn('Failed to post failure comment:', commentError);
-        }
-        return { success: false, action: 'error', ticketKey: ticketKey, error: error.toString() };
-    }
-}
-
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, findTicketPage, buildPageUrl, resolvePageUrl };
-}
