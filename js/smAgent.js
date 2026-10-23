@@ -726,7 +726,7 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
     // timeline) — e.g. review/rework legs become pr-visible runs. An empty
     // expansion (no linked PR / no head) falls back to the project's default
     // workflowRef (config.workflowRef || config.sm.workflowRef || config.git.baseBranch || 'main').
-    var defaultWorkflowRef = configLoader.resolveDefaultWorkflowRef ? configLoader.resolveDefaultWorkflowRef(rule, effectiveConfig, projectConfig) : ((effectiveConfig && effectiveConfig.git && effectiveConfig.git.baseBranch) || 'main');
+    var defaultWorkflowRef = configLoader.resolveDefaultWorkflowRef(rule, effectiveConfig, projectConfig);
     var workflowRef  = rule.workflowRef  || defaultWorkflowRef;
     var it0 = item || {};
     workflowRef = String(workflowRef)
