@@ -2,6 +2,36 @@
  * Unit tests for js/dfManager.js
  */
 
+// gh-1198: module-level mock bodies keep makeDfManager's closure complexity
+// at its baseline (the CRAP ratchet covers test files too).
+function dfReadFile(opts, readOpts) {
+    var path = typeof readOpts === 'string' ? readOpts : readOpts.path;
+    if (opts.files && opts.files[path] !== undefined) return opts.files[path];
+    if (path === 'agents/sm.json') {
+        return JSON.stringify({
+            params: {
+                jobParams: {
+                    rules: [
+                        {
+                            jql: "project = {jiraProject} AND status = 'In Review'",
+                            configFile: 'agents/pr_review.json',
+                            skipIfLabel: 'sm_story_review_triggered',
+                            addLabel: 'sm_story_review_triggered'
+                        }
+                    ]
+                }
+            }
+        });
+    }
+    return null;
+}
+
+function dfExecCommand(opts, commands, args) {
+    commands.push(args.command);
+    if (opts.cliThrow) throw new Error(opts.cliThrow);
+    return '';
+}
+
 function makeDfManager(opts) {
     opts = opts || {};
     var removedLabels = [];
@@ -35,25 +65,7 @@ function makeDfManager(opts) {
     };
 
     var fileReadMock = function(readOpts) {
-        var path = typeof readOpts === 'string' ? readOpts : readOpts.path;
-        if (opts.files && opts.files[path] !== undefined) return opts.files[path];
-        if (path === 'agents/sm.json') {
-            return JSON.stringify({
-                params: {
-                    jobParams: {
-                        rules: [
-                            {
-                                jql: "project = {jiraProject} AND status = 'In Review'",
-                                configFile: 'agents/pr_review.json',
-                                skipIfLabel: 'sm_story_review_triggered',
-                                addLabel: 'sm_story_review_triggered'
-                            }
-                        ]
-                    }
-                }
-            });
-        }
-        return null;
+        return dfReadFile(opts, readOpts);
     };
 
     var dfMocks = {
@@ -73,9 +85,7 @@ function makeDfManager(opts) {
                 removedLabels.push(args);
             },
             cli_execute_command: function(args) {
-                commands.push(args.command);
-                if (opts.cliThrow) throw new Error(opts.cliThrow);
-                return '';
+                return dfExecCommand(opts, commands, args);
             }
     };
     var df = loadModule(
