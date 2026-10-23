@@ -1,8 +1,9 @@
 /**
- * Pure helpers for js/preCliMobileTestAutomationSetup.js (gh-1034).
+ * Pure helpers for js/preCliMobileTestAutomationSetup.js (gh-1034, gh-1189).
  *
- * Parse/decide/build logic extracted from action(), downloadBitriseApp()
- * and installAppOnSimulator() so all three shrink below the CRAP threshold.
+ * Parse/decide/build logic extracted from action(), downloadBitriseApp(),
+ * installAppOnSimulator(), fetchLinkedTestCases() and findFeatureBranch()
+ * so all of them shrink below the CRAP threshold.
  * Every function here is side-effect free (console/tracker/SCM/file calls
  * stay in the caller, in the original order) and every returned string or
  * decision must stay byte-identical to the original inline logic.
@@ -205,6 +206,109 @@ function buildSimulatorInfoMarkdown(udid, appId) {
     ];
 }
 
+// ── gh-1189: linked-test-case search builders ────────────────────────────────
+
+/** Primary search: Test Cases linked via "is tested by". */
+function buildPrimaryLinkedTcJql(ticketKey) {
+    return 'issue in linkedIssues("' + ticketKey + '", "is tested by") AND issuetype = "Test Case"';
+}
+
+/** Fallback search: any linked Test Cases (broader). */
+function buildFallbackLinkedTcJql(ticketKey) {
+    return 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "Test Case"';
+}
+
+/** Search fields shared by both linked-TC queries. */
+function linkedTcSearchOptions() {
+    return {
+        fields: ['key', 'summary', 'status', 'description', 'priority', 'labels', 'comment'],
+        maxResults: 30
+    };
+}
+
+/** Header lines of linked_test_cases.md — byte-identical to the inline builder. */
+function buildLinkedTestCasesHeader(ticketKey) {
+    return [
+        '# Linked Test Cases for ' + ticketKey + '\n',
+        '> Automate EVERY test case listed here.\n'
+    ];
+}
+
+/** One TC section of linked_test_cases.md — byte-identical to the inline builder. */
+function formatLinkedTcEntry(tc) {
+    var f = tc.fields || {};
+    var status = (f.status && f.status.name) || 'Unknown';
+    var priority = (f.priority && f.priority.name) || 'Unknown';
+
+    var lines = [];
+    lines.push('---\n');
+    lines.push('## ' + tc.key + ': ' + (f.summary || '(no summary)'));
+    lines.push('**Status**: ' + status + '  **Priority**: ' + priority + '\n');
+
+    if (f.description) {
+        lines.push('**Description / Test Steps**:\n\n' + f.description + '\n');
+    }
+    return lines;
+}
+
+/**
+ * "Recent Test Run Comments" block: the last five comments, newest last.
+ * Empty list when there are no comments — the caller pushes nothing then.
+ */
+function formatRecentTcComments(comments) {
+    var list = comments || [];
+    var lines = [];
+    if (list.length === 0) return lines;
+
+    var startIdx = Math.max(0, list.length - 5);
+    lines.push('**Recent Test Run Comments** (' + (list.length - startIdx) + ' of ' + list.length + '):\n');
+    for (var j = startIdx; j < list.length; j++) {
+        var c = list[j];
+        var author = (c.author && c.author.displayName) || 'Unknown';
+        var body = (c.body || '').substring(0, 2000);
+        lines.push('**[' + author + ']**:\n' + body + '\n');
+    }
+    return lines;
+}
+
+// ── gh-1189: MCP response shape helpers ──────────────────────────────────────
+
+/** data array of a parsed MCP-ish response (missing data → empty list). */
+function parseMcpDataList(result) {
+    return (result && result.data) ? result.data : [];
+}
+
+/** PR list of a parsed MCP-ish response (plain array or {data:[...] }). */
+function parseMcpPrList(parsed) {
+    if (Array.isArray(parsed)) return parsed;
+    return (parsed && parsed.data) ? parsed.data : [];
+}
+
+/** Head ref of a PR across API shapes: head.ref, branch, source_branch. */
+function prHeadRef(pr) {
+    return (pr.head && pr.head.ref) ? pr.head.ref : (pr.branch || pr.source_branch || '');
+}
+
+/**
+ * First open PR whose head ref mentions ticketKey.
+ * Returns { found, branch, prNumber } — found=false when nothing matches.
+ */
+function decideFeatureBranchFromPrs(list, ticketKey) {
+    var prs = list || [];
+    for (var i = 0; i < prs.length; i++) {
+        var head = prHeadRef(prs[i]);
+        if (head.indexOf(ticketKey) !== -1) {
+            return { found: true, branch: head, prNumber: prs[i].number };
+        }
+    }
+    return { found: false, branch: null, prNumber: null };
+}
+
+/** True when the bitriseBuild config carries appSlug AND workflowId. */
+function decideBitriseBuildConfigured(bitriseBuild) {
+    return !!(bitriseBuild && bitriseBuild.appSlug && bitriseBuild.workflowId);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         decideSuccessfulBuilds: decideSuccessfulBuilds,
@@ -219,6 +323,17 @@ if (typeof module !== 'undefined' && module.exports) {
         decideAppId: decideAppId,
         defaultAppId: defaultAppId,
         matchBootedSimulatorUdid: matchBootedSimulatorUdid,
-        buildSimulatorInfoMarkdown: buildSimulatorInfoMarkdown
+        buildSimulatorInfoMarkdown: buildSimulatorInfoMarkdown,
+        buildPrimaryLinkedTcJql: buildPrimaryLinkedTcJql,
+        buildFallbackLinkedTcJql: buildFallbackLinkedTcJql,
+        linkedTcSearchOptions: linkedTcSearchOptions,
+        buildLinkedTestCasesHeader: buildLinkedTestCasesHeader,
+        formatLinkedTcEntry: formatLinkedTcEntry,
+        formatRecentTcComments: formatRecentTcComments,
+        parseMcpDataList: parseMcpDataList,
+        parseMcpPrList: parseMcpPrList,
+        prHeadRef: prHeadRef,
+        decideFeatureBranchFromPrs: decideFeatureBranchFromPrs,
+        decideBitriseBuildConfigured: decideBitriseBuildConfigured
     };
 }
