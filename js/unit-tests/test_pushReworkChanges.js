@@ -4089,3 +4089,45 @@ suite('pushReworkChanges.buildReworkCompletionComment — prCommentPosted suffix
         assert.notContains(clean, 'A fix summary has been posted');
     });
 });
+
+// ── gh-1195 CRAP split: pure helper contracts ────────────────────────────────
+suite('pushReworkChanges — extracted pure helpers (gh-1195)', function() {
+
+    suite('parseGitHubRemoteUrl', function() {
+        var parse = null;
+        suiteSetup(function() {
+            parse = loadPushReworkChangesForAction({}).mod.parseGitHubRemoteUrl;
+        });
+
+        test('ssh, https, port and no-suffix forms all parse; .git stripped', function() {
+            assert.deepEqual(parse('git@github.com:acme/widgets.git'), { owner: 'acme', repo: 'widgets' });
+            assert.deepEqual(parse('https://github.com/acme/widgets'), { owner: 'acme', repo: 'widgets' });
+            assert.deepEqual(parse('ssh://git@github.com:2222/acme/widgets.git'), { owner: 'acme', repo: 'widgets' });
+        });
+
+        test('query strings, fragments and whitespace do not leak into the repo name', function() {
+            assert.deepEqual(parse('https://github.com/acme/widgets.git#main'), { owner: 'acme', repo: 'widgets' });
+            assert.deepEqual(parse('https://github.com/acme/widgets?token=x'), { owner: 'acme', repo: 'widgets' });
+        });
+
+        test('non-github and empty remotes yield null', function() {
+            assert.equal(parse('git@gitlab.com:acme/widgets.git'), null);
+            assert.equal(parse(''), null);
+            assert.equal(parse(null), null);
+        });
+    });
+
+    suite('completionPrCommentSuffix', function() {
+        var suffix = null;
+        suiteSetup(function() {
+            suffix = loadPushReworkChangesForAction({}).mod.completionPrCommentSuffix;
+        });
+
+        test('the clean wording flows straight on; every other wording leads with a newline', function() {
+            assert.equal(suffix('clean'), 'A fix summary has been posted as a comment on the Pull Request.');
+            assert.equal(suffix('open-threads'), '\nA fix summary has been posted as a comment on the Pull Request.');
+            assert.equal(suffix('unaddressed-replies'), '\nA fix summary has been posted as a comment on the Pull Request.');
+            assert.equal(suffix('changes-requested-verdict'), '\nA fix summary has been posted as a comment on the Pull Request.');
+        });
+    });
+});

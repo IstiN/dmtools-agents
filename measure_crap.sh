@@ -5,7 +5,8 @@ set -e
 RT=/tmp/crap-rt
 rm -rf "$RT"
 mkdir -p "$RT/cov"
-cd "$(dirname "$0")"
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$REPO_DIR"
 
 echo ">> instrumenting tree"
 /tmp/craptools/node_modules/.bin/nyc instrument --cwd . . "$RT/inst" > /dev/null
@@ -25,7 +26,7 @@ tail -3 "$RT/harness.log"
 if [ $code -ne 0 ]; then echo "!! harness FAILED ($code)"; exit $code; fi
 
 echo ">> crap4js ratchet vs released baseline (analyzer runs on the real checkout — same as CI)"
-cd "$(dirname "$0")"
+cd "$REPO_DIR"
 /tmp/craptools/node_modules/.bin/crap4js . \
   --coverage "$RT/cov/coverage-final.json" \
   --threshold 8 \
