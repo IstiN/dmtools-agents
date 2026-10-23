@@ -263,6 +263,57 @@ suite('enhanceSDAPIDescriptionAndAssess.action — happy paths', function () {
     });
 });
 
+suite('enhanceSDAPIDescriptionAndAssess — extracted pure helpers (gh-1191)', function () {
+
+    test('isResponseObject: non-null objects only', function () {
+        var mod = loadEnhanceSDAPI();
+        assert.equal(mod.isResponseObject({}), true);
+        assert.equal(mod.isResponseObject(null), false);
+        assert.equal(mod.isResponseObject(undefined), false);
+        assert.equal(mod.isResponseObject(42), false);
+        assert.equal(mod.isResponseObject('str'), false);
+        assert.equal(mod.isResponseObject(true), false);
+    });
+
+    test('hasRequiredEnhancementFields: exact types required', function () {
+        var mod = loadEnhanceSDAPI();
+        assert.equal(mod.hasRequiredEnhancementFields({ description: 'd', apiSubtaskCreation: true, diagram: 'x' }), true);
+        assert.equal(mod.hasRequiredEnhancementFields({ description: '', apiSubtaskCreation: false, diagram: '' }), true, 'empty strings are still strings');
+        assert.equal(mod.hasRequiredEnhancementFields({ apiSubtaskCreation: true, diagram: 'x' }), false, 'description missing');
+        assert.equal(mod.hasRequiredEnhancementFields({ description: 'd', diagram: 'x' }), false, 'apiSubtaskCreation missing');
+        assert.equal(mod.hasRequiredEnhancementFields({ description: 'd', apiSubtaskCreation: true }), false, 'diagram missing');
+        assert.equal(mod.hasRequiredEnhancementFields({ description: 1, apiSubtaskCreation: true, diagram: 'x' }), false);
+        assert.equal(mod.hasRequiredEnhancementFields({ description: 'd', apiSubtaskCreation: 'true', diagram: 'x' }), false);
+        assert.equal(mod.hasRequiredEnhancementFields({ description: 'd', apiSubtaskCreation: true, diagram: {} }), false);
+    });
+
+    test('resolveWipLabel: contextId suffix or null', function () {
+        var mod = loadEnhanceSDAPI();
+        assert.equal(mod.resolveWipLabel({ contextId: 'solution_e2e' }), 'solution_e2e_wip');
+        assert.equal(mod.resolveWipLabel({}), null);
+        assert.equal(mod.resolveWipLabel(undefined), null);
+        assert.equal(mod.resolveWipLabel(null), null);
+    });
+
+    test('countSuccessfulUpdates: sums the three flags (all combinations)', function () {
+        var mod = loadEnhanceSDAPI();
+        assert.equal(mod.countSuccessfulUpdates({ descriptionUpdated: false, diagramUpdated: false, labelAdded: false }), 0);
+        assert.equal(mod.countSuccessfulUpdates({ descriptionUpdated: true, diagramUpdated: false, labelAdded: false }), 1);
+        assert.equal(mod.countSuccessfulUpdates({ descriptionUpdated: true, diagramUpdated: true, labelAdded: false }), 2);
+        assert.equal(mod.countSuccessfulUpdates({ descriptionUpdated: true, diagramUpdated: false, labelAdded: true }), 2);
+        assert.equal(mod.countSuccessfulUpdates({ descriptionUpdated: true, diagramUpdated: true, labelAdded: true }), 3);
+    });
+
+    test('buildEnhancementSuccessMessage: exact wording', function () {
+        var mod = loadEnhanceSDAPI();
+        assert.equal(
+            mod.buildEnhancementSuccessMessage('BICE-1', 3),
+            'Ticket BICE-1 enhanced, assigned, moved to In Review. Updates: 3/3 successful'
+        );
+        assert.contains(mod.buildEnhancementSuccessMessage('BICE-2', 0), 'Updates: 0/3 successful');
+    });
+});
+
 suite('enhanceSDAPIDescriptionAndAssess.action — failure paths', function () {
 
     test('invalid AI response → { success: false, error } without touching the ticket', function () {

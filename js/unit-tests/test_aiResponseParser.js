@@ -166,3 +166,26 @@ suite('aiResponseParser.buildDescription', function () {
         assert.equal(mod.buildDescription({ description: null }), 'Follow template from instructions.');
     });
 });
+
+suite('aiResponseParser.tryParseJson', function () {
+
+    test('valid JSON → { ok: true, value }', function () {
+        var mod = loadAiResponseParser();
+        assert.deepEqual(mod.tryParseJson('[1,2]'), { ok: true, value: [1, 2] });
+        assert.deepEqual(mod.tryParseJson('null'), { ok: true, value: null });
+        assert.deepEqual(mod.tryParseJson('42'), { ok: true, value: 42 });
+    });
+
+    test('invalid JSON → { ok: false, value: null } with a console.error', function () {
+        var errors = [];
+        var origError = console.error;
+        console.error = function () { errors.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            var mod = loadAiResponseParser();
+            assert.deepEqual(mod.tryParseJson('{{{'), { ok: false, value: null });
+        } finally {
+            console.error = origError;
+        }
+        assert.ok(errors.some(function (e) { return e.indexOf('Invalid JSON from AI') !== -1; }));
+    });
+});

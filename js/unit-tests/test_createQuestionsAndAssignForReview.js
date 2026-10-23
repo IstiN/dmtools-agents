@@ -927,3 +927,98 @@ suite('createQuestionsAndAssignForReview — created key extraction (gh-1191 cha
         assert.equal(threw, true, 'a failed question still fails the job (failedCount > 0)');
     });
 });
+
+// ── gh-1191: the extracted question-build/decide helpers, pinned directly ────
+
+suite('createQuestionsAndAssignForReview — extracted question helpers (gh-1191)', function () {
+
+    function helpers() {
+        return loadCreateQuestionsModule({}).mod;
+    }
+
+    test('bootstrapCustomParams: jobParams.customParams or an empty object (never params.customParams)', function () {
+        var h = helpers();
+        assert.deepEqual(h.bootstrapCustomParams({ jobParams: { customParams: { a: 1 } }, customParams: { b: 2 } }), { a: 1 });
+        assert.deepEqual(h.bootstrapCustomParams({ jobParams: {}, customParams: { b: 2 } }), {}, 'falls to {} — deliberately not params.customParams');
+        assert.deepEqual(h.bootstrapCustomParams({ customParams: { b: 2 } }), {}, 'no jobParams at all');
+        assert.deepEqual(h.bootstrapCustomParams({}), {});
+    });
+
+    test('resolveQuestionPriority: mapped or original name', function () {
+        var h = helpers();
+        assert.equal(h.resolveQuestionPriority({ High: 'Critical' }, 'High'), 'Critical');
+        assert.equal(h.resolveQuestionPriority({ High: 'Critical' }, 'Medium'), 'Medium');
+        assert.equal(h.resolveQuestionPriority(null, 'Medium'), 'Medium');
+        assert.equal(h.resolveQuestionPriority(undefined, 'Low'), 'Low');
+        assert.equal(h.resolveQuestionPriority({}, 'Low'), 'Low');
+    });
+
+    test('buildQuestionFieldsJson: shape, priority mapping, answer field', function () {
+        var h = helpers();
+        var jiraConfig = {
+            issueTypes: { SUBTASK: 'Subtask' },
+            labels: { QUESTION: 'q' },
+            questions: { answerField: 'Answer' }
+        };
+        var full = h.buildQuestionFieldsJson(
+            { summary: 'Q', priority: 'High', answer: 'a' },
+            '[Q] Q', 'desc', 'BICE-1', jiraConfig, { High: 'Critical' }
+        );
+        assert.deepEqual(full, {
+            summary: '[Q] Q',
+            description: 'desc',
+            issuetype: { name: 'Subtask' },
+            parent: { key: 'BICE-1' },
+            labels: ['q'],
+            priority: { name: 'Critical' },
+            Answer: 'a'
+        });
+        var minimal = h.buildQuestionFieldsJson({}, '[Q] Q', 'desc', 'BICE-1', jiraConfig, null);
+        assert.equal(minimal.priority, undefined, 'no priority → no priority field');
+        assert.equal(minimal.Answer, undefined, 'no answer → no answer field');
+        assert.equal(minimal.labels[0], 'q');
+    });
+
+    test('buildQuestionFieldsJson: a broken config throws before any tracker call', function () {
+        var h = helpers();
+        var threw = false;
+        try {
+            // labels missing entirely → the eager jiraConfig.labels.QUESTION read throws
+            h.buildQuestionFieldsJson({}, 's', 'd', 'BICE-1', { issueTypes: { SUBTASK: 'Subtask' }, questions: { answerField: 'Answer' } }, null);
+        } catch (e) {
+            threw = true;
+        }
+        assert.equal(threw, true, 'missing labels container throws (eager config reads preserved)');
+    });
+
+    test('resolveAdoQuestionType: configured workItemType or the Task default', function () {
+        var h = helpers();
+        assert.equal(h.resolveAdoQuestionType({ questions: { workItemType: 'Question' } }), 'Question');
+        assert.equal(h.resolveAdoQuestionType({ questions: {} }), 'Task');
+        assert.equal(h.resolveAdoQuestionType({}), 'Task');
+    });
+
+    test('normalizeCreatedKey: string passthrough, extractTicketKey fallback', function () {
+        var h = helpers();
+        assert.equal(h.normalizeCreatedKey('5001'), '5001', 'a string id is the key');
+        // the string branch short-circuits BEFORE extraction — any non-empty string
+        // passes through verbatim (same as the pre-refactor ternary).
+        assert.equal(h.normalizeCreatedKey('{"key":"BICE-9"}'), '{"key":"BICE-9"}');
+        assert.equal(h.normalizeCreatedKey('{{{'), '{{{', 'even a garbage string is a string');
+        assert.equal(h.normalizeCreatedKey(null), null, 'null → extractTicketKey → null');
+        assert.equal(h.normalizeCreatedKey(''), null, 'empty string is not a key → extractTicketKey → null');
+    });
+
+    test('assertAllQuestionsCreated: silent on success, throws with the count on failure', function () {
+        var h = helpers();
+        h.assertAllQuestionsCreated([{ success: true }, { success: true }], 'BICE-1');
+        var message = '';
+        try {
+            h.assertAllQuestionsCreated([{ success: true }, { success: false }, { success: false }], 'BICE-1');
+        } catch (e) {
+            message = e.message;
+        }
+        assert.contains(message, 'Failed to create 2 of 3');
+        assert.contains(message, 'BICE-1');
+    });
+});

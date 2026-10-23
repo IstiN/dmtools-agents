@@ -735,3 +735,62 @@ suite('fetchQuestionsToInput — gh-1126 ADO comment-thread sentinel & custom WI
     });
 
 });
+
+// ── gh-1191: the extracted answer-field lookup helpers ───────────────────────
+// getAnswerValue decomposed into directAnswerValue (exact + lower-cased keys),
+// the transformed-key scan (customFieldSuffixOf / answerKeyMatches /
+// answerFromTransformedKeys) — each pinned directly so the decomposition
+// cannot drift from the original single-function semantics.
+
+suite('fetchQuestionsToInput.getAnswerValue — extracted helpers (gh-1191)', function () {
+
+    test('directAnswerValue: exact key, lower-cased key, or undefined', function () {
+        var mod = loadFetchQuestionsToInput();
+        assert.equal(mod.directAnswerValue({ Answer: 'exact' }, 'Answer'), 'exact');
+        assert.equal(mod.directAnswerValue({ answer: 'lower' }, 'Answer'), 'lower');
+        assert.equal(mod.directAnswerValue({ 'Answer (customfield_10330)': 'x' }, 'Answer'), undefined,
+            'transformed keys are NOT direct hits');
+        assert.equal(mod.directAnswerValue({ Answer: null }, 'Answer'), undefined, 'null is not a value');
+        assert.equal(mod.directAnswerValue({ Answer: '' }, 'Answer'), '', 'empty string IS a value');
+    });
+
+    test('customFieldSuffixOf: suffix only for original-case customfield_ prefixes', function () {
+        var mod = loadFetchQuestionsToInput();
+        assert.equal(mod.customFieldSuffixOf('customfield_10330', 'customfield_10330'), '(customfield_10330)');
+        assert.equal(mod.customFieldSuffixOf('Answer', 'answer'), null, 'friendly names have no suffix');
+        // The probe runs on the ORIGINAL-case field (parity with the pre-refactor code):
+        assert.equal(mod.customFieldSuffixOf('Customfield_10330', 'customfield_10330'), null);
+    });
+
+    test('answerKeyMatches: equality, customfield suffix, friendly prefix+paren', function () {
+        var mod = loadFetchQuestionsToInput();
+        assert.equal(mod.answerKeyMatches('answer', 'answer', null, 'answer ('), true, 'equality');
+        assert.equal(mod.answerKeyMatches('answer', 'answers', null, 'answers ('), false, 'not equality');
+        assert.equal(mod.answerKeyMatches('answer (customfield_1)', 'customfield_1', '(customfield_1)', 'customfield_1 ('), true, 'suffix');
+        assert.equal(mod.answerKeyMatches('answer (customfield_1)', 'customfield_1', null, 'customfield_1 ('), false,
+            'no suffix probe without a customfield answerField');
+        assert.equal(mod.answerKeyMatches('answer (customfield_1)', 'answer', null, 'answer ('), true, 'friendly prefix + closing paren');
+        assert.equal(mod.answerKeyMatches('answer (customfield_1', 'answer', null, 'answer ('), false, 'missing closing paren');
+        assert.equal(mod.answerKeyMatches('answer x', 'answer', null, 'answer ('), false, 'prefix without paren shape');
+    });
+
+    test('answerFromTransformedKeys: scan order and value guard', function () {
+        var mod = loadFetchQuestionsToInput();
+        var fields = {};
+        fields['Answer (customfield_10330)'] = 'found';
+        assert.equal(mod.answerFromTransformedKeys(fields, 'Answer'), 'found');
+        assert.equal(mod.answerFromTransformedKeys({ summary: 'x' }, 'Answer'), undefined, 'no match at all');
+        var guarded = {};
+        guarded['Answer (customfield_10330)'] = null;
+        assert.equal(mod.answerFromTransformedKeys(guarded, 'Answer'), undefined, 'shape match with null value is skipped');
+        var inherited = Object.create({ Answer: 'proto' });
+        assert.equal(mod.answerFromTransformedKeys(inherited, 'Answer'), undefined, 'inherited keys are not scanned');
+    });
+
+    test('getAnswerValue end-to-end keeps falsy-but-present values from the loop', function () {
+        var mod = loadFetchQuestionsToInput();
+        assert.equal(mod.getAnswerValue({ 'Answer (customfield_1)': '' }, 'Answer'), '');
+        assert.equal(mod.getAnswerValue({ 'Answer (customfield_1)': 0 }, 'Answer'), 0);
+        assert.equal(mod.getAnswerValue({ 'Answer (customfield_1)': false }, 'Answer'), false);
+    });
+});
