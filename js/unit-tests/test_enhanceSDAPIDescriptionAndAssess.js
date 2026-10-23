@@ -38,6 +38,11 @@ function loadEnhanceSDAPI(fileMap, extraGlobals, trackerMockOverrides) {
                 }
             },
             './config.js': configModule,
+            './common/aiResponseParser.js': loadModule(
+                'js/common/aiResponseParser.js',
+                makeRequire({ '../config.js': configModule }),
+                {}
+            ),
             './configLoader.js': {
                 loadProjectConfig: function () {
                     return {
