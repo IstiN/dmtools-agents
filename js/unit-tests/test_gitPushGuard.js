@@ -534,3 +534,69 @@ suite('gitPushGuard.parsePushArgs — argument grammar (gh-119 characterization)
         assert.equal(r.parsed.delete, true);
     });
 });
+
+suite('gitPushGuard.parsePushArgs — token classification helpers', function() {
+    var guard = loadGitPushGuard();
+
+    test('classifyPushToken covers the full grammar', function() {
+        assert.equal(guard.classifyPushToken('--mirror'), 'mirror');
+        assert.equal(guard.classifyPushToken('--all'), 'all');
+        assert.equal(guard.classifyPushToken('-d'), 'delete');
+        assert.equal(guard.classifyPushToken('--delete'), 'delete');
+        assert.equal(guard.classifyPushToken('-o'), 'valueOpt');
+        assert.equal(guard.classifyPushToken('--repo'), 'valueOpt');
+        assert.equal(guard.classifyPushToken('--force'), 'option');
+        assert.equal(guard.classifyPushToken('--repo=x'), 'option');
+        assert.equal(guard.classifyPushToken('origin'), 'positional');
+        assert.equal(guard.classifyPushToken('HEAD:main'), 'positional');
+    });
+
+    test('looksLikeRemoteSpec: known remote, URL, scp-like, and .git paths only', function() {
+        assert.equal(guard.looksLikeRemoteSpec('origin', ['origin', 'upstream']), true);
+        assert.equal(guard.looksLikeRemoteSpec('upstream', ['origin', 'upstream']), true);
+        assert.equal(guard.looksLikeRemoteSpec('https://example.com/r.git', []), true);
+        assert.equal(guard.looksLikeRemoteSpec('git@example.com:t/r.git', []), true);
+        assert.equal(guard.looksLikeRemoteSpec('./local/repo.git', []), true);
+        assert.equal(guard.looksLikeRemoteSpec('HEAD', ['origin']), false);
+        assert.equal(guard.looksLikeRemoteSpec('main', ['origin']), false);
+        assert.equal(guard.looksLikeRemoteSpec('ai/gh-123', ['origin']), false);
+    });
+
+    test('takesRemotePosition: open until a remote, a refspec, or --delete is seen', function() {
+        var fresh = { remote: null, refspecs: [], delete: false };
+        assert.equal(guard.takesRemotePosition(fresh), true);
+        assert.equal(guard.takesRemotePosition({ remote: 'origin', refspecs: [], delete: false }), false);
+        assert.equal(guard.takesRemotePosition({ remote: null, refspecs: ['main'], delete: false }), false);
+        assert.equal(guard.takesRemotePosition({ remote: null, refspecs: [], delete: true }), false);
+    });
+
+    test('applyPushToken returns the consumed-token count and mutates result', function() {
+        var result = { remote: null, refspecs: [], delete: false, all: false, mirror: false };
+
+        assert.equal(guard.applyPushToken(result, 'mirror', '--mirror', ['origin']), 1);
+        assert.equal(result.mirror, true);
+
+        assert.equal(guard.applyPushToken(result, 'all', '--all', ['origin']), 1);
+        assert.equal(result.all, true);
+
+        assert.equal(guard.applyPushToken(result, 'delete', '-d', ['origin']), 1);
+        assert.equal(result.delete, true);
+
+        assert.equal(guard.applyPushToken(result, 'valueOpt', '-o', ['origin']), 2);
+        assert.deepEqual(result.refspecs, []);
+
+        assert.equal(guard.applyPushToken(result, 'option', '--force', ['origin']), 1);
+
+        // Delete closed the remote position: a remote-like token becomes a refspec.
+        assert.equal(guard.applyPushToken(result, 'positional', 'origin', ['origin']), 1);
+        assert.deepEqual(result.refspecs, ['origin']);
+    });
+
+    test('applyPushToken assigns the remote position before it closes', function() {
+        var result = { remote: null, refspecs: [], delete: false, all: false, mirror: false };
+        assert.equal(guard.applyPushToken(result, 'positional', 'origin', ['origin']), 1);
+        assert.equal(result.remote, 'origin');
+        assert.equal(guard.applyPushToken(result, 'positional', 'main', ['origin']), 1);
+        assert.deepEqual(result.refspecs, ['main']);
+    });
+});
