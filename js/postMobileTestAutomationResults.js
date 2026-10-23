@@ -206,30 +206,17 @@ function firstNumber(obj, keys) {
 }
 
 function getResultCounts(result) {
-    var passed = firstNumber(result, ['passed', 'passedCount', 'passed_count', 'passedTests', 'passed_tests']);
-    var failed = firstNumber(result, ['failed', 'failedCount', 'failed_count', 'failedTests', 'failed_tests']);
-    var skipped = firstNumber(result, ['skipped', 'skippedCount', 'skipped_count', 'skippedTests', 'skipped_tests']);
+    var counts = {
+        passed: firstNumber(result, ['passed', 'passedCount', 'passed_count', 'passedTests', 'passed_tests']),
+        failed: firstNumber(result, ['failed', 'failedCount', 'failed_count', 'failedTests', 'failed_tests']),
+        skipped: firstNumber(result, ['skipped', 'skippedCount', 'skipped_count', 'skippedTests', 'skipped_tests'])
+    };
 
     if (result && result.results && Array.isArray(result.results)) {
-        var resultPassed = 0;
-        var resultFailed = 0;
-        var resultSkipped = 0;
-        for (var i = 0; i < result.results.length; i++) {
-            var status = String(result.results[i].status || '').toLowerCase();
-            if (status === 'passed') resultPassed += 1;
-            else if (status === 'skipped') resultSkipped += 1;
-            else if (status === 'failed' || status === 'error') resultFailed += 1;
-        }
-        if (passed === null) passed = resultPassed;
-        if (failed === null) failed = resultFailed;
-        if (skipped === null) skipped = resultSkipped;
+        counts = mobileHelpers.mergeFallbackCounts(counts, mobileHelpers.countResultStatuses(result.results));
     }
 
-    return {
-        passed: passed === null ? 0 : passed,
-        failed: failed === null ? 0 : failed,
-        skipped: skipped === null ? 0 : skipped
-    };
+    return mobileHelpers.finalizeCounts(counts);
 }
 
 function normalizeResult(result) {
@@ -264,6 +251,34 @@ function sanitizeForShell(text) {
         .trim();
 }
 
+/** Push the branch (with --force) when it does not exist on origin yet. */
+function ensureRemoteBranch(branchName, workingDir) {
+    // Ensure branch exists on remote so PR can be created/found
+    var remoteBranchExists = false;
+    try {
+        // gh-912: decide on a real refs/heads/<branch> ref line — a
+        // warning-only capture (central-mode insteadOf origin, git
+        // ≥ 2.54) must classify as "branch absent" so the push runs.
+        remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
+    } catch (lsRemoteErr) {
+        console.warn('Error checking remote branches:', lsRemoteErr);
+    }
+    if (!remoteBranchExists) {
+        runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
+    }
+}
+
+/** Commit staged changes and push; falls back to a forced push. */
+function commitAndPush(branchName, commitMessage, workingDir) {
+    runInRepo('git commit -m "' + prHelper.sanitizeCommitMessage(commitMessage) + '"', workingDir);
+
+    try {
+        runInRepo('git push -u origin ' + branchName, workingDir);
+    } catch (e) {
+        runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
+    }
+}
+
 /** Commit + push test files in the automation repo. */
 function performGitOperations(branchName, commitMessage, workingDir, testFilesPath) {
     var addPath = testFilesPath || 'src/tests/';
@@ -275,31 +290,13 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
         );
         console.log('Staged changes:', stagedOutput || '(none)');
 
-        if (!stagedOutput || !stagedOutput.trim()) {
+        if (mobileHelpers.decideNoStagedChanges(stagedOutput)) {
             console.warn('No new staged changes in', addPath);
-            // Ensure branch exists on remote so PR can be created/found
-            var remoteBranchExists = false;
-            try {
-                // gh-912: decide on a real refs/heads/<branch> ref line — a
-                // warning-only capture (central-mode insteadOf origin, git
-                // ≥ 2.54) must classify as "branch absent" so the push runs.
-                remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
-            } catch (lsRemoteErr) {
-                console.warn('Error checking remote branches:', lsRemoteErr);
-            }
-            if (!remoteBranchExists) {
-                runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
-            }
+            ensureRemoteBranch(branchName, workingDir);
             return { success: true, branchName: branchName, noNewCommit: true };
         }
 
-        runInRepo('git commit -m "' + prHelper.sanitizeCommitMessage(commitMessage) + '"', workingDir);
-
-        try {
-            runInRepo('git push -u origin ' + branchName, workingDir);
-        } catch (e) {
-            runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
-        }
+        commitAndPush(branchName, commitMessage, workingDir);
 
         console.log('✅ Git operations completed');
         return { success: true, branchName: branchName };
@@ -494,8 +491,7 @@ function removeWipLabel(params, ticketKey) {
 
 function removeSMTriggerLabel(params, ticketKey) {
     if (!ticketKey) return;
-    var customParams = (params.jobParams || params).customParams || {};
-    var smTriggerLabel = mobileHelpers.decideSmTriggerLabel(customParams);
+    var smTriggerLabel = mobileHelpers.decideSmTriggerLabel(resolveCustomParams(params));
     if (smTriggerLabel) {
         try {
             tracker.removeLabel(ticketKey, smTriggerLabel);
@@ -630,95 +626,138 @@ function loadConfigSafe(params) {
     try { return configLoader.loadProjectConfig(params.jobParams || params); } catch (e) { return null; }
 }
 
+/** customParams of the job params (or bare params) — empty object fallback. */
+function resolveCustomParams(params) {
+    return (params.jobParams || params).customParams || {};
+}
+
+/** Trigger ticket key + summary (summary falls back to the key). */
+function resolveTicketRef(params) {
+    var ticketKey = params.ticket.key;
+    return {
+        key: ticketKey,
+        summary: params.ticket.fields ? params.ticket.fields.summary : ticketKey
+    };
+}
+
+/**
+ * Resolve config, tracker, SCM clients and label decisions for one run.
+ * Keeps the original action() resolution order; assigns the module tracker
+ * so the catch-path can still comment when a later step fails.
+ */
+function resolveActionContext(params) {
+    var ticketRef = resolveTicketRef(params);
+    var jiraComment = params.response || '';
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    tracker = trackersModule.createTracker(config, resolveCustomParams(params));
+    var customParams = resolveCustomParams(params);
+
+    var featureTarget = mobileHelpers.decideFeatureTarget(customParams);
+    var featureScm = (featureTarget.owner && featureTarget.repo) ? createScmCompat(config, featureTarget.owner, featureTarget.repo) : null;
+
+    var labels = mobileHelpers.decideLabels(customParams);
+
+    return {
+        ticketKey: ticketRef.key,
+        ticketSummary: ticketRef.summary,
+        jiraComment: jiraComment,
+        config: config,
+        jiraConfig: config.jira,
+        automationScm: createAutomationScm(config),
+        workingDir: config.workingDir,
+        featureOwner: featureTarget.owner,
+        featureRepo: featureTarget.repo,
+        featureScm: featureScm,
+        labelPassed: labels.labelPassed,
+        labelFailed: labels.labelFailed,
+        testFilesPath: labels.testFilesPath
+    };
+}
+
+/** Step 4 failure path: comment on Jira, keep the git work. */
+function handleMissingResultJson(ticketKey, resumed, automationPrUrl) {
+    console.warn('No test_automation_result.json found — posting error to Jira but keeping git work');
+    try {
+        tracker.postComment(ticketKey, mobileHelpers.buildMissingResultComment(resumed, automationPrUrl));
+    } catch (e) { console.warn('Failed to post error Jira comment:', e); }
+    return { success: false, error: 'No test result JSON found', automationPrUrl: automationPrUrl };
+}
+
+/** Log a11y structural warnings — informational, never overrides status. */
+function logA11yWarningsIfPresent(result, outcome) {
+    // A11y warnings are informational; Maestro tests that pass → tests_passed label.
+    if (mobileHelpers.hasA11yWarnings(result) && outcome.passed) {
+        console.log('⚠️ Maestro tests passed with a11y structural warnings (informational — not overriding status)');
+    }
+}
+
+/** Steps 1-9: git ops, result handling, PR updates, Jira updates, labels. */
+function runMobileResultsFlow(params, ctx) {
+    // Step 1: Configure git author in automation repo
+    configureGitAuthor(ctx.config, ctx.workingDir);
+
+    // Step 2: Get current branch in automation repo
+    var branchName = resolveBranchName(ctx.workingDir);
+
+    // Step 2b: If mandatory outputs are missing, attempt one resume run before committing.
+    // This handles the case where the agent ran out of context or was interrupted
+    // before writing outputs/test_automation_result.json and friends.
+    var resumed = attemptResumeIfOutputsMissing(ctx.ticketKey, ctx.workingDir);
+    if (resumed) {
+        console.log('Resume run completed — re-checking outputs before proceeding.');
+    }
+
+    // Step 3: Commit + push + create automation PR (ALWAYS — don't lose agent's work)
+    var automationPrUrl = commitAndCreateAutomationPR(
+        ctx.ticketKey, ctx.ticketSummary, branchName, ctx.workingDir, ctx.testFilesPath, ctx.config.git.baseBranch, ctx.automationScm);
+
+    // Step 4: Read structured result (fallback: workspace root → automation repo outputs)
+    var result = readResultJson(ctx.workingDir, ctx.ticketKey);
+    if (!result) {
+        return handleMissingResultJson(ctx.ticketKey, resumed, automationPrUrl);
+    }
+
+    var outcome = mobileHelpers.parseOutcome(result);
+
+    // Check for a11y structural warnings — log but do NOT override test status.
+    logA11yWarningsIfPresent(result, outcome);
+
+    // Step 5: Find feature PR and update it
+    if (ctx.featureScm && !outcome.blockedByHuman) {
+        updateFeaturePR(ctx.featureScm, ctx.ticketKey, ctx.featureOwner, ctx.featureRepo, outcome.passed,
+            ctx.labelPassed, ctx.labelFailed, ctx.workingDir, automationPrUrl, result);
+    }
+
+    // Step 6: Post Jira comment
+    postJiraResultComment(ctx.ticketKey, ctx.jiraComment, result, automationPrUrl);
+
+    // Step 7: Handle blocked_by_human
+    if (outcome.blockedByHuman) {
+        return handleBlockedByHuman(params, ctx.ticketKey, result, ctx.jiraConfig);
+    }
+
+    // Steps 8-9: Move ticket status, add AI label, clean up labels
+    finalizeTicketStatus(params, ctx.ticketKey, outcome.passed, ctx.jiraConfig);
+
+    console.log('✅ Mobile test automation workflow complete:', outcome.passed ? 'PASSED' : 'FAILED');
+
+    return {
+        success: true,
+        status: result.status,
+        ticketKey: ctx.ticketKey,
+        automationPrUrl: automationPrUrl
+    };
+}
+
 function action(params) {
     // Early tracker so the catch-path can still comment if config loading fails
-    tracker = trackersModule.createTracker(loadConfigSafe(params), (params.jobParams || params).customParams || {});
+    tracker = trackersModule.createTracker(loadConfigSafe(params), resolveCustomParams(params));
     try {
-        var ticketKey = params.ticket.key;
-        var ticketSummary = params.ticket.fields ? params.ticket.fields.summary : ticketKey;
-        var jiraComment = params.response || '';
-        var config = configLoader.loadProjectConfig(params.jobParams || params);
-        tracker = trackersModule.createTracker(config, (params.jobParams || params).customParams || {});
-        var jiraConfig = config.jira;
-        var automationScm = createAutomationScm(config);
-        var workingDir = config.workingDir;
+        var ctx = resolveActionContext(params);
 
-        var customParams = (params.jobParams || params).customParams || {};
-        var featureTarget = mobileHelpers.decideFeatureTarget(customParams);
-        var featureOwner = featureTarget.owner;
-        var featureRepo = featureTarget.repo;
-        var featureScm = (featureOwner && featureRepo) ? createScmCompat(config, featureOwner, featureRepo) : null;
+        console.log('=== Processing mobile test automation results for', ctx.ticketKey, '===');
 
-        var labels = mobileHelpers.decideLabels(customParams);
-        var labelPassed = labels.labelPassed;
-        var labelFailed = labels.labelFailed;
-        var testFilesPath = labels.testFilesPath;
-
-        console.log('=== Processing mobile test automation results for', ticketKey, '===');
-
-        // Step 1: Configure git author in automation repo
-        configureGitAuthor(config, workingDir);
-
-        // Step 2: Get current branch in automation repo
-        var branchName = resolveBranchName(workingDir);
-
-        // Step 2b: If mandatory outputs are missing, attempt one resume run before committing.
-        // This handles the case where the agent ran out of context or was interrupted
-        // before writing outputs/test_automation_result.json and friends.
-        var resumed = attemptResumeIfOutputsMissing(ticketKey, workingDir);
-        if (resumed) {
-            console.log('Resume run completed — re-checking outputs before proceeding.');
-        }
-
-        // Step 3: Commit + push + create automation PR (ALWAYS — don't lose agent's work)
-        var automationPrUrl = commitAndCreateAutomationPR(
-            ticketKey, ticketSummary, branchName, workingDir, testFilesPath, config.git.baseBranch, automationScm);
-
-        // Step 4: Read structured result (fallback: workspace root → automation repo outputs)
-        var result = readResultJson(workingDir, ticketKey);
-        if (!result) {
-            console.warn('No test_automation_result.json found — posting error to Jira but keeping git work');
-            try {
-                tracker.postComment(ticketKey, mobileHelpers.buildMissingResultComment(resumed, automationPrUrl));
-            } catch (e) { console.warn('Failed to post error Jira comment:', e); }
-            return { success: false, error: 'No test result JSON found', automationPrUrl: automationPrUrl };
-        }
-
-        var outcome = mobileHelpers.parseOutcome(result);
-        var blockedByHuman = outcome.blockedByHuman;
-
-        // Check for a11y structural warnings — log but do NOT override test status.
-        // A11y warnings are informational; Maestro tests that pass → tests_passed label.
-        var a11yWarnings = mobileHelpers.hasA11yWarnings(result);
-        if (a11yWarnings && outcome.passed) {
-            console.log('⚠️ Maestro tests passed with a11y structural warnings (informational — not overriding status)');
-        }
-
-        // Step 5: Find feature PR and update it
-        if (featureScm && !blockedByHuman) {
-            updateFeaturePR(featureScm, ticketKey, featureOwner, featureRepo, outcome.passed,
-                labelPassed, labelFailed, workingDir, automationPrUrl, result);
-        }
-
-        // Step 6: Post Jira comment
-        postJiraResultComment(ticketKey, jiraComment, result, automationPrUrl);
-
-        // Step 7: Handle blocked_by_human
-        if (blockedByHuman) {
-            return handleBlockedByHuman(params, ticketKey, result, jiraConfig);
-        }
-
-        // Steps 8-9: Move ticket status, add AI label, clean up labels
-        finalizeTicketStatus(params, ticketKey, outcome.passed, jiraConfig);
-
-        console.log('✅ Mobile test automation workflow complete:', outcome.passed ? 'PASSED' : 'FAILED');
-
-        return {
-            success: true,
-            status: result.status,
-            ticketKey: ticketKey,
-            automationPrUrl: automationPrUrl
-        };
+        return runMobileResultsFlow(params, ctx);
 
     } catch (error) {
         console.error('❌ Error in postMobileTestAutomationResults:', error);
@@ -735,6 +774,9 @@ if (typeof module !== 'undefined' && module.exports) {
         action: action,
         // gh-1083 test surface: direct github-globals label path (kept for
         // flows without the SCM abstraction — characterization-tested).
-        updateFeaturePRLabel: updateFeaturePRLabel
+        updateFeaturePRLabel: updateFeaturePRLabel,
+        // gh-1189 test surface: direct github-globals comment path (kept for
+        // flows without the SCM abstraction — characterization-tested).
+        updateFeaturePRBody: updateFeaturePRBody
     };
 }
