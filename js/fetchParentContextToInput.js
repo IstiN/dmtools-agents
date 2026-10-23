@@ -100,49 +100,84 @@ function mergeObjects(base, override) {
     return result;
 }
 
-function buildDefaultFields(projectConfig) {
-    var fields = DEFAULT_FIELDS.slice();
-    var customFields = projectConfig && projectConfig.jira && projectConfig.jira.fields
+/** jira.fields map of the project config ({} when absent). */
+function getJiraCustomFields(projectConfig) {
+    return projectConfig && projectConfig.jira && projectConfig.jira.fields
         ? projectConfig.jira.fields
         : {};
+}
 
+/**
+ * Aggregate only human-readable field names; skip raw customfield_* IDs
+ * (e.g. bugSolution: 'customfield_10400' is technical, not for context).
+ */
+function isHumanReadableFieldName(fieldName) {
+    return typeof fieldName === 'string' && fieldName.indexOf('customfield_') !== 0;
+}
+
+function pushIfAbsent(fields, fieldName) {
+    if (fields.indexOf(fieldName) === -1) fields.push(fieldName);
+}
+
+function buildDefaultFields(projectConfig) {
+    var fields = DEFAULT_FIELDS.slice();
+    var customFields = getJiraCustomFields(projectConfig);
     for (var key in customFields) {
-        if (Object.prototype.hasOwnProperty.call(customFields, key)) {
-            var fieldName = customFields[key];
-            // Aggregate only human-readable field names; skip raw customfield_* IDs
-            // (e.g. bugSolution: 'customfield_10400' is technical, not for context)
-            if (typeof fieldName === 'string' && fieldName.indexOf('customfield_') !== 0) {
-                if (fields.indexOf(fieldName) === -1) {
-                    fields.push(fieldName);
-                }
-            }
+        if (Object.prototype.hasOwnProperty.call(customFields, key) && isHumanReadableFieldName(customFields[key])) {
+            pushIfAbsent(fields, customFields[key]);
         }
     }
     return fields;
 }
 
-function resolveParentContextConfig(projectConfig, customParams) {
-    var projectCfg = projectConfig && projectConfig.jira
+/** jira.parentContextFetch of the project config (null when absent). */
+function getProjectParentContextFetch(projectConfig) {
+    return projectConfig && projectConfig.jira
         ? projectConfig.jira.parentContextFetch
         : null;
-    var legacyDirectCfg = customParams && (customParams.jql || customParams.fields || customParams.contexts || customParams.childQuestions)
-        ? customParams
-        : null;
-    var overrideCfg = customParams && (customParams.parentContextFetch || legacyDirectCfg);
+}
 
-    if (!projectCfg && !overrideCfg) return null;
+/**
+ * Legacy customParams API: the presence of jql/fields/contexts/childQuestions
+ * directly on customParams is itself an override.
+ */
+function hasLegacyDirectOverrides(customParams) {
+    return !!(customParams && (customParams.jql || customParams.fields || customParams.contexts || customParams.childQuestions));
+}
 
-    if (overrideCfg) {
-        if (overrideCfg.enabled === false) return null;
-        var overrideMergedCfg = mergeObjects(projectCfg || {}, overrideCfg);
-        // Presence of the SM/job override is enough to enable this feature unless
-        // it explicitly sets enabled:false. This preserves the old customParams API.
-        if (overrideMergedCfg.enabled === false) overrideMergedCfg.enabled = true;
-        return overrideMergedCfg;
-    }
+/**
+ * The SM/job override object: customParams.parentContextFetch when present,
+ * else the whole customParams when it carries legacy direct keys, else null.
+ */
+function resolveOverrideCfg(customParams) {
+    if (!customParams) return null;
+    if (customParams.parentContextFetch) return customParams.parentContextFetch;
+    return hasLegacyDirectOverrides(customParams) ? customParams : null;
+}
 
+/** Merge the override over the project config; an explicit disable stays a no-op. */
+function resolveOverrideConfig(projectCfg, overrideCfg) {
+    if (overrideCfg.enabled === false) return null;
+    var overrideMergedCfg = mergeObjects(projectCfg || {}, overrideCfg);
+    // Presence of the SM/job override is enough to enable this feature unless
+    // it explicitly sets enabled:false. This preserves the old customParams API.
+    if (overrideMergedCfg.enabled === false) overrideMergedCfg.enabled = true;
+    return overrideMergedCfg;
+}
+
+/** Project-config-only mode needs an explicit enabled:true. */
+function resolveProjectOnlyConfig(projectCfg) {
     if (!projectCfg || projectCfg.enabled !== true) return null;
     return projectCfg;
+}
+
+function resolveParentContextConfig(projectConfig, customParams) {
+    var projectCfg = getProjectParentContextFetch(projectConfig);
+    var overrideCfg = resolveOverrideCfg(customParams);
+
+    if (!projectCfg && !overrideCfg) return null;
+    if (overrideCfg) return resolveOverrideConfig(projectCfg, overrideCfg);
+    return resolveProjectOnlyConfig(projectCfg);
 }
 
 function isSystemField(fieldName) {
