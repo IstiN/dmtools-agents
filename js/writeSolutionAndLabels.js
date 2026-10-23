@@ -189,6 +189,116 @@ function detectTrackerType(tracker) {
 }
 
 // ---------------------------------------------------------------------------
+// gh-1187 CRAP split — small step helpers extracted from action()
+// ---------------------------------------------------------------------------
+
+/** Parse outputs/affected_repos.json and topologically sort it; null when absent/empty/non-array. */
+function readSortedRepos() {
+    var reposJson = outputFiles.readOutputFile('affected_repos.json');
+    if (!reposJson) {
+        return null;
+    }
+    var raw = JSON.parse(reposJson);
+    if (!Array.isArray(raw) || raw.length === 0) {
+        return null;
+    }
+    return topologicalSort(raw);
+}
+
+/** Ticket key / customParams / solution field of the append step. */
+function resolveAppendContext(params) {
+    var customParams = params.customParams || (params.jobParams && params.jobParams.customParams) || {};
+    return {
+        ticketKey: params.ticket && params.ticket.key,
+        customParams: customParams,
+        solutionField: customParams.solutionField || JIRA_FIELDS.SOLUTION
+    };
+}
+
+/** Current value of the solution field, with the ADF guard. Empty string when absent/ADF. */
+function currentFieldValue(tracker, ticketKey, solutionField) {
+    var freshTicket = tracker.getIssue(ticketKey, [solutionField]);
+    var freshFields = (freshTicket && freshTicket.fields) ? freshTicket.fields : freshTicket;
+    var rawValue = freshFields ? freshFields[solutionField] : null;
+    if (rawValue && typeof rawValue === 'object') {
+        console.warn('Field "' + solutionField + '" is ADF — falling back to response.md as base');
+        return '';
+    }
+    return rawValue ? rawValue.toString().trim() : '';
+}
+
+/**
+ * Base text the repos section is appended to: the tracker field's current value
+ * when readable and non-empty, otherwise outputs/response.md (empty when even
+ * that is missing). Mirrors the historical fallback chain exactly.
+ */
+function resolveAppendBase(tracker, ticketKey, solutionField) {
+    var existingBase = '';
+    try {
+        existingBase = currentFieldValue(tracker, ticketKey, solutionField);
+    } catch (ge) {
+        console.warn('Could not read current value of "' + solutionField + '" — falling back to response.md:', ge);
+    }
+    if (existingBase) {
+        console.log('Using current Jira field as base (' + existingBase.length + ' chars)');
+        return existingBase;
+    }
+    var fallback = outputFiles.readOutputFile('response.md');
+    existingBase = fallback ? fallback.trim() : '';
+    console.log('Using response.md as fallback base (' + existingBase.length + ' chars)');
+    return existingBase;
+}
+
+/** Append base + section to the field. Non-fatal: a failed write is logged. */
+function appendReposSectionQuietly(tracker, ticketKey, solutionField, section) {
+    try {
+        var existingBase = resolveAppendBase(tracker, ticketKey, solutionField);
+        tracker.updateField(ticketKey, solutionField, existingBase + '\n\n' + section);
+        console.log('Appended affected repos section to "' + solutionField + '" for ' + ticketKey);
+    } catch (fe) {
+        console.warn('Failed to append affected repos section:', fe);
+    }
+}
+
+/** One label per repo name (trimmed); blank names skipped, failures non-fatal. */
+function addRepoLabelsQuietly(tracker, ticketKey, sorted) {
+    sorted.forEach(function(r) {
+        var label = (r.name || '').toString().trim();
+        if (!label) {
+            return;
+        }
+        try {
+            tracker.addLabel(ticketKey, label);
+            console.log('Added repo label "' + label + '" to ' + ticketKey);
+        } catch (le) {
+            console.warn('Failed to add repo label "' + label + '":', le);
+        }
+    });
+}
+
+/**
+ * Everything base.action() success adds: the Affected Repositories section on
+ * the solution field plus one label per affected repo. Invalid repos payloads
+ * throw up to the caller's non-fatal catch (same as the original inline flow).
+ */
+function applyAffectedRepos(params) {
+    var ctx = resolveAppendContext(params);
+
+    var sorted = readSortedRepos();
+    if (!sorted) {
+        return;
+    }
+    var tracker = trackersModule.createTracker(resolveProjectConfig(params), ctx.customParams);
+    var trackerType = detectTrackerType(tracker);
+    var section = (trackerType === 'ado')
+        ? buildMarkdownSection(sorted)
+        : buildJiraSection(sorted);
+
+    appendReposSectionQuietly(tracker, ctx.ticketKey, ctx.solutionField, section);
+    addRepoLabelsQuietly(tracker, ctx.ticketKey, sorted);
+}
+
+// ---------------------------------------------------------------------------
 // Main action
 // ---------------------------------------------------------------------------
 
@@ -198,68 +308,8 @@ function action(params) {
         return result;
     }
 
-    var ticketKey = params.ticket && params.ticket.key;
-    var customParams = params.customParams || (params.jobParams && params.jobParams.customParams) || {};
-    var solutionField = customParams.solutionField || JIRA_FIELDS.SOLUTION;
-
     try {
-        var reposJson = outputFiles.readOutputFile('affected_repos.json');
-        if (reposJson) {
-            var raw = JSON.parse(reposJson);
-            if (Array.isArray(raw) && raw.length > 0) {
-                var sorted = topologicalSort(raw);
-                var tracker = trackersModule.createTracker(resolveProjectConfig(params), customParams);
-                var trackerType = detectTrackerType(tracker);
-                var section = (trackerType === 'ado')
-                    ? buildMarkdownSection(sorted)
-                    : buildJiraSection(sorted);
-
-                // Append repos section to whatever base.action() just wrote (diagram + solution).
-                // Read the field fresh from Jira — with DMTOOLS_CACHE_ENABLED=false and
-                // dmtools ≥ v1.7.219 the JiraClient cache is disabled so we get the value
-                // that was written moments ago (including any prepended diagram block).
-                // Fallback to response.md if the GET fails or returns empty.
-                try {
-                    var existingBase = '';
-                    try {
-                        var freshTicket = tracker.getIssue(ticketKey, [solutionField]);
-                        var freshFields = (freshTicket && freshTicket.fields) ? freshTicket.fields : freshTicket;
-                        var rawValue = freshFields ? freshFields[solutionField] : null;
-                        if (rawValue && typeof rawValue === 'object') {
-                            console.warn('Field "' + solutionField + '" is ADF — falling back to response.md as base');
-                            rawValue = null;
-                        }
-                        existingBase = rawValue ? rawValue.toString().trim() : '';
-                    } catch (ge) {
-                        console.warn('Could not read current value of "' + solutionField + '" — falling back to response.md:', ge);
-                    }
-                    if (!existingBase) {
-                        var fallback = outputFiles.readOutputFile('response.md');
-                        existingBase = fallback ? fallback.trim() : '';
-                        console.log('Using response.md as fallback base (' + existingBase.length + ' chars)');
-                    } else {
-                        console.log('Using current Jira field as base (' + existingBase.length + ' chars)');
-                    }
-                    tracker.updateField(ticketKey, solutionField, existingBase + '\n\n' + section);
-                    console.log('Appended affected repos section to "' + solutionField + '" for ' + ticketKey);
-                } catch (fe) {
-                    console.warn('Failed to append affected repos section:', fe);
-                }
-
-                // Add repo labels
-                sorted.forEach(function(r) {
-                    var label = (r.name || '').toString().trim();
-                    if (label) {
-                        try {
-                            tracker.addLabel(ticketKey, label);
-                            console.log('Added repo label "' + label + '" to ' + ticketKey);
-                        } catch (le) {
-                            console.warn('Failed to add repo label "' + label + '":', le);
-                        }
-                    }
-                });
-            }
-        }
+        applyAffectedRepos(params);
     } catch (e) {
         console.warn('Failed to process affected_repos.json:', e);
     }
@@ -276,6 +326,13 @@ if (typeof module !== 'undefined' && module.exports) {
         buildDependencyEdges: buildDependencyEdges,
         buildJiraSection: buildJiraSection,
         buildMarkdownSection: buildMarkdownSection,
-        buildConfluenceMarkdownSection: buildConfluenceMarkdownSection
+        buildConfluenceMarkdownSection: buildConfluenceMarkdownSection,
+        readSortedRepos: readSortedRepos,
+        resolveAppendContext: resolveAppendContext,
+        currentFieldValue: currentFieldValue,
+        resolveAppendBase: resolveAppendBase,
+        appendReposSectionQuietly: appendReposSectionQuietly,
+        addRepoLabelsQuietly: addRepoLabelsQuietly,
+        applyAffectedRepos: applyAffectedRepos
     };
 }

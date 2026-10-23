@@ -129,17 +129,16 @@ function checkoutAutomationBranch(ticketKey, config) {
     console.log('✅ Automation branch ready:', branchName);
 }
 
-/** Fetch all Test Cases linked via "is tested by" and write to input folder. */
-function fetchLinkedTestCases(ticketKey, folder, tracker) {
+/** Run every linked-TC search (primary JQL, then the broader fallback). */
+function searchLinkedTestCases(ticketKey, tracker) {
     var linkedTCs = [];
 
     // Primary: "is tested by" relationship
     try {
         // JQL text: provider-specific query (WIQL on ado)
-        linkedTCs = tracker.searchIssues('issue in linkedIssues("' + ticketKey + '", "is tested by") AND issuetype = "Test Case"', {
-            fields: ['key', 'summary', 'status', 'description', 'priority', 'labels', 'comment'],
-            maxResults: 30
-        });
+        linkedTCs = tracker.searchIssues(
+            setupHelpers.buildPrimaryLinkedTcJql(ticketKey),
+            setupHelpers.linkedTcSearchOptions());
     } catch (e) {
         console.warn('Primary JQL failed, trying fallback:', e);
     }
@@ -148,14 +147,48 @@ function fetchLinkedTestCases(ticketKey, folder, tracker) {
     if (!linkedTCs || linkedTCs.length === 0) {
         try {
             // JQL text: provider-specific query (WIQL on ado)
-            linkedTCs = tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = "Test Case"', {
-                fields: ['key', 'summary', 'status', 'description', 'priority', 'labels', 'comment'],
-                maxResults: 30
-            });
+            linkedTCs = tracker.searchIssues(
+                setupHelpers.buildFallbackLinkedTcJql(ticketKey),
+                setupHelpers.linkedTcSearchOptions());
         } catch (e2) {
             console.warn('Fallback JQL also failed:', e2);
         }
     }
+
+    return linkedTCs;
+}
+
+/** Fetch one TC's full ticket and append its recent run comments to lines. */
+function appendTcRunComments(lines, tc, tracker) {
+    // Fetch full ticket for comments (run history, prior failures)
+    try {
+        var tcDetails = tracker.getIssue(tc.key);
+        var tcFields = tcDetails && tcDetails.fields || {};
+        var commentBlock = tcFields.comment;
+        var comments = commentBlock && commentBlock.comments || [];
+
+        Array.prototype.push.apply(lines, setupHelpers.formatRecentTcComments(comments));
+    } catch (ce) {
+        console.warn('Could not fetch comments for', tc.key + ':', ce);
+    }
+}
+
+/** Build the linked_test_cases.md body for non-empty search results. */
+function buildLinkedTestCasesMarkdown(ticketKey, linkedTCs, tracker) {
+    var lines = setupHelpers.buildLinkedTestCasesHeader(ticketKey);
+
+    for (var i = 0; i < linkedTCs.length; i++) {
+        var tc = linkedTCs[i];
+        Array.prototype.push.apply(lines, setupHelpers.formatLinkedTcEntry(tc));
+        appendTcRunComments(lines, tc, tracker);
+    }
+
+    return lines;
+}
+
+/** Fetch all Test Cases linked via "is tested by" and write to input folder. */
+function fetchLinkedTestCases(ticketKey, folder, tracker) {
+    var linkedTCs = searchLinkedTestCases(ticketKey, tracker);
 
     if (!linkedTCs || linkedTCs.length === 0) {
         console.log('No linked test cases found for', ticketKey);
@@ -166,47 +199,8 @@ function fetchLinkedTestCases(ticketKey, folder, tracker) {
 
     console.log('Found', linkedTCs.length, 'linked test case(s)');
 
-    var lines = [];
-    lines.push('# Linked Test Cases for ' + ticketKey + '\n');
-    lines.push('> Automate EVERY test case listed here.\n');
-
-    for (var i = 0; i < linkedTCs.length; i++) {
-        var tc = linkedTCs[i];
-        var f = tc.fields || {};
-        var status = (f.status && f.status.name) || 'Unknown';
-        var priority = (f.priority && f.priority.name) || 'Unknown';
-
-        lines.push('---\n');
-        lines.push('## ' + tc.key + ': ' + (f.summary || '(no summary)'));
-        lines.push('**Status**: ' + status + '  **Priority**: ' + priority + '\n');
-
-        if (f.description) {
-            lines.push('**Description / Test Steps**:\n\n' + f.description + '\n');
-        }
-
-        // Fetch full ticket for comments (run history, prior failures)
-        try {
-            var tcDetails = tracker.getIssue(tc.key);
-            var tcFields = tcDetails && tcDetails.fields || {};
-            var commentBlock = tcFields.comment;
-            var comments = commentBlock && commentBlock.comments || [];
-
-            if (comments.length > 0) {
-                var startIdx = Math.max(0, comments.length - 5);
-                lines.push('**Recent Test Run Comments** (' + (comments.length - startIdx) + ' of ' + comments.length + '):\n');
-                for (var j = startIdx; j < comments.length; j++) {
-                    var c = comments[j];
-                    var author = (c.author && c.author.displayName) || 'Unknown';
-                    var body = (c.body || '').substring(0, 2000);
-                    lines.push('**[' + author + ']**:\n' + body + '\n');
-                }
-            }
-        } catch (ce) {
-            console.warn('Could not fetch comments for', tc.key + ':', ce);
-        }
-    }
-
-    file_write(folder + '/linked_test_cases.md', lines.join('\n'));
+    file_write(folder + '/linked_test_cases.md',
+        buildLinkedTestCasesMarkdown(ticketKey, linkedTCs, tracker).join('\n'));
     console.log('✅ Written linked_test_cases.md (' + linkedTCs.length + ' TCs)');
     return linkedTCs.length;
 }
@@ -231,21 +225,156 @@ function findFeatureBranch(ticketKey, featurePR) {
             repository: featurePR.repo,
             state: 'open'
         });
-        var parsed = parseMcpResult(raw);
-        var list = Array.isArray(parsed) ? parsed : (parsed && parsed.data ? parsed.data : []);
-        for (var i = 0; i < list.length; i++) {
-            var pr = list[i];
-            var head = pr.head && pr.head.ref ? pr.head.ref : (pr.branch || pr.source_branch || '');
-            if (head.indexOf(ticketKey) !== -1) {
-                console.log('✅ Found feature branch:', head, '(PR #' + pr.number + ')');
-                return head;
-            }
+        var match = setupHelpers.decideFeatureBranchFromPrs(
+            setupHelpers.parseMcpPrList(parseMcpResult(raw)), ticketKey);
+        if (match.found) {
+            console.log('✅ Found feature branch:', match.branch, '(PR #' + match.prNumber + ')');
+            return match.branch;
         }
         console.log('No open PR found for', ticketKey, 'in', featurePR.owner + '/' + featurePR.repo);
     } catch (e) {
         console.warn('Could not list PRs for feature branch lookup:', e);
     }
     return null;
+}
+
+/** Log the branch-match outcome of the build listing (matched vs fallback). */
+function logBranchMatchOutcome(branch, branchDecision, successBuilds) {
+    if (branch && successBuilds.length > 0) {
+        if (branchDecision.matched) {
+            console.log('✅ Found', branchDecision.builds.length, 'build(s) matching branch', branch);
+        } else {
+            console.warn('⚠️ No builds found with commit message matching "' + branch + '".',
+                'Using latest successful build instead. Available builds:');
+            var warnLines = setupHelpers.formatBuildsWarningList(successBuilds);
+            for (var wi = 0; wi < warnLines.length; wi++) {
+                console.warn(warnLines[wi]);
+            }
+        }
+    }
+}
+
+/**
+ * List recent builds, narrow to successful/branch-matched, and return the
+ * build slug. Throws the canonical wrapped error on listing failure.
+ */
+function resolveBitriseBuildSlug(appSlug, workflowId, branch) {
+    try {
+        // Bitrise trigger branch is always "main" (for YAML source), so we
+        // cannot filter by feature branch. Instead, list recent builds for the
+        // workflow and match by commit message which contains the feature branch.
+        var buildsResult = parseMcpResult(bitrise_list_builds({
+            appSlug: appSlug,
+            workflowId: workflowId,
+            limit: 20
+        }));
+        var builds = setupHelpers.parseMcpDataList(buildsResult);
+
+        // status=1 means success in Bitrise API
+        var successBuilds = setupHelpers.decideSuccessfulBuilds(builds);
+
+        // If we have a feature branch, find the build whose commit message
+        // mentions it (e.g. "PROJ-6818 — iOS build for bug/PROJ-6818")
+        var branchDecision = setupHelpers.decideBranchBuilds(successBuilds, branch);
+        logBranchMatchOutcome(branch, branchDecision, successBuilds);
+
+        var buildDecision = setupHelpers.decideBuildSlug(branchDecision.builds, workflowId);
+        console.log('✅ Found build #' + buildDecision.buildNumber + ' slug:', buildDecision.slug);
+        return buildDecision.slug;
+    } catch (e) {
+        throw new Error('Failed to list Bitrise builds: ' + e);
+    }
+}
+
+/** Pick the app artifact of a build. Returns { slug, title } or null. */
+function resolveBitriseArtifact(appSlug, buildSlug) {
+    try {
+        var artifacts = parseMcpResult(bitrise_list_build_artifacts({ appSlug: appSlug, buildSlug: buildSlug }));
+        var artifactList = setupHelpers.parseMcpDataList(artifacts);
+        // Find .zip or .app artifact
+        var appArtifact = setupHelpers.decideAppArtifact(artifactList);
+        if (!appArtifact) {
+            console.warn('No artifacts found for build', buildSlug);
+            return null;
+        }
+        console.log('📦 Found artifact:', appArtifact.title, '(' + Math.round((appArtifact.file_size_bytes || 0) / 1024 / 1024) + ' MB)');
+        return { slug: appArtifact.slug, title: appArtifact.title };
+    } catch (e) {
+        console.warn('Failed to list artifacts:', e);
+        return null;
+    }
+}
+
+/** Get the expiring download URL of an artifact (null when unavailable). */
+function resolveArtifactDownloadUrl(appSlug, buildSlug, artifactSlug) {
+    try {
+        var artifactDetails = parseMcpResult(bitrise_get_build_artifact({
+            appSlug: appSlug,
+            buildSlug: buildSlug,
+            artifactSlug: artifactSlug
+        }));
+        var downloadUrl = artifactDetails && artifactDetails.data && artifactDetails.data.expiring_download_url;
+        if (!downloadUrl) {
+            console.warn('No download URL in artifact response');
+            return null;
+        }
+        return downloadUrl;
+    } catch (e) {
+        console.warn('Failed to get artifact download URL:', e);
+        return null;
+    }
+}
+
+/**
+ * Download the artifact zip into the input folder and unzip it there.
+ * Removes the zip after a successful unzip (non-fatal if that fails).
+ * Returns false when the download/unzip step failed.
+ */
+function downloadAndUnzipArtifact(downloadUrl, folder) {
+    var appDir = folder + '/app';
+    var zipPath = folder + '/app.zip';
+    try {
+        cli_execute_command({ command: 'bash -c "mkdir -p \'' + appDir + '\'"' });
+        console.log('⬇️  Downloading artifact to', zipPath, '...');
+        cli_execute_command({
+            command: 'curl -s -L "' + downloadUrl + '" -o "' + zipPath + '"'
+        });
+        console.log('📂 Unzipping to', appDir, '...');
+        cli_execute_command({ command: 'unzip -o "' + zipPath + '" -d "' + appDir + '"' });
+    } catch (e) {
+        console.warn('Failed to download/unzip artifact:', e);
+        return false;
+    }
+    try { cli_execute_command({ command: 'rm -f "' + zipPath + '"' }); } catch (_) {}
+    return true;
+}
+
+/** Locate the .app bundle under the unzip dir (null when not found). */
+function locateAppBundlePath(appDir) {
+    try {
+        var findResult = cleanCommandOutput(
+            cli_execute_command({ command: 'find "' + appDir + '" -name "*.app" -maxdepth 3 -type d' })
+        );
+        var appPath = setupHelpers.parseFindAppResult(findResult);
+        if (appPath) {
+            console.log('✅ iOS .app found:', appPath);
+        } else if (findResult) {
+            // Filter out .dSYM, pick first real .app
+            console.warn('Could not find .app bundle after unzip');
+        }
+        return appPath;
+    } catch (e) {
+        console.warn('Failed to locate .app bundle:', e);
+        return null;
+    }
+}
+
+/** Write app_info.md for the agent prompt. */
+function writeAppInfoFile(folder, workflowId, buildSlug, artifactTitle, branch, appPath) {
+    var infoLines = setupHelpers.buildAppInfoMarkdown(
+        workflowId, buildSlug, artifactTitle, branch, appPath, folder + '/app');
+    file_write(folder + '/app_info.md', infoLines.join('\n'));
+    console.log('✅ Written app_info.md' + (appPath ? ' → ' + appPath : ''));
 }
 
 /**
@@ -262,7 +391,7 @@ function findFeatureBranch(ticketKey, featurePR) {
  * @param {string} workingDir   - working directory for cli commands
  */
 function downloadBitriseApp(ticketKey, folder, bitriseBuild, branch, workingDir) {
-    if (!bitriseBuild || !bitriseBuild.appSlug || !bitriseBuild.workflowId) {
+    if (!setupHelpers.decideBitriseBuildConfigured(bitriseBuild)) {
         console.log('No bitriseBuild config — skipping artifact download');
         return;
     }
@@ -273,124 +402,30 @@ function downloadBitriseApp(ticketKey, folder, bitriseBuild, branch, workingDir)
         (branch ? ' on branch ' + branch : '') + ' ...');
 
     // Find latest successful build
-    var buildSlug = null;
-    try {
-        // Bitrise trigger branch is always "main" (for YAML source), so we
-        // cannot filter by feature branch. Instead, list recent builds for the
-        // workflow and match by commit message which contains the feature branch.
-        var listParams = {
-            appSlug: appSlug,
-            workflowId: workflowId,
-            limit: 20
-        };
-
-        var buildsResult = parseMcpResult(bitrise_list_builds(listParams));
-        var builds = buildsResult && buildsResult.data ? buildsResult.data : [];
-
-        // status=1 means success in Bitrise API
-        var successBuilds = setupHelpers.decideSuccessfulBuilds(builds);
-
-        // If we have a feature branch, find the build whose commit message
-        // mentions it (e.g. "PROJ-6818 — iOS build for bug/PROJ-6818")
-        var branchDecision = setupHelpers.decideBranchBuilds(successBuilds, branch);
-        if (branch && successBuilds.length > 0) {
-            if (branchDecision.matched) {
-                console.log('✅ Found', branchDecision.builds.length, 'build(s) matching branch', branch);
-            } else {
-                console.warn('⚠️ No builds found with commit message matching "' + branch + '".',
-                    'Using latest successful build instead. Available builds:');
-                var warnLines = setupHelpers.formatBuildsWarningList(successBuilds);
-                for (var wi = 0; wi < warnLines.length; wi++) {
-                    console.warn(warnLines[wi]);
-                }
-            }
-        }
-
-        var buildDecision = setupHelpers.decideBuildSlug(branchDecision.builds, workflowId);
-        buildSlug = buildDecision.slug;
-        console.log('✅ Found build #' + buildDecision.buildNumber + ' slug:', buildSlug);
-    } catch (e) {
-        throw new Error('Failed to list Bitrise builds: ' + e);
-    }
+    var buildSlug = resolveBitriseBuildSlug(appSlug, workflowId, branch);
 
     // List artifacts
-    var artifactSlug = null;
-    var artifactTitle = null;
-    try {
-        var artifacts = parseMcpResult(bitrise_list_build_artifacts({ appSlug: appSlug, buildSlug: buildSlug }));
-        var artifactList = artifacts && artifacts.data ? artifacts.data : [];
-        // Find .zip or .app artifact
-        var appArtifact = setupHelpers.decideAppArtifact(artifactList);
-        if (!appArtifact) {
-            console.warn('No artifacts found for build', buildSlug);
-            return;
-        }
-        artifactSlug = appArtifact.slug;
-        artifactTitle = appArtifact.title;
-        console.log('📦 Found artifact:', artifactTitle, '(' + Math.round((appArtifact.file_size_bytes || 0) / 1024 / 1024) + ' MB)');
-    } catch (e) {
-        console.warn('Failed to list artifacts:', e);
+    var artifact = resolveBitriseArtifact(appSlug, buildSlug);
+    if (!artifact) {
         return;
     }
 
     // Get expiring download URL
-    var downloadUrl = null;
-    try {
-        var artifactDetails = parseMcpResult(bitrise_get_build_artifact({
-            appSlug: appSlug,
-            buildSlug: buildSlug,
-            artifactSlug: artifactSlug
-        }));
-        downloadUrl = artifactDetails && artifactDetails.data && artifactDetails.data.expiring_download_url;
-        if (!downloadUrl) {
-            console.warn('No download URL in artifact response');
-            return;
-        }
-    } catch (e) {
-        console.warn('Failed to get artifact download URL:', e);
+    var downloadUrl = resolveArtifactDownloadUrl(appSlug, buildSlug, artifact.slug);
+    if (!downloadUrl) {
         return;
     }
 
     // Download and unzip to input folder
-    var appDir = folder + '/app';
-    var zipPath = folder + '/app.zip';
-    try {
-        cli_execute_command({ command: 'bash -c "mkdir -p \'' + appDir + '\'"' });
-        console.log('⬇️  Downloading artifact to', zipPath, '...');
-        cli_execute_command({
-            command: 'curl -s -L "' + downloadUrl + '" -o "' + zipPath + '"'
-        });
-        console.log('📂 Unzipping to', appDir, '...');
-        cli_execute_command({ command: 'unzip -o "' + zipPath + '" -d "' + appDir + '"' });
-    } catch (e) {
-        console.warn('Failed to download/unzip artifact:', e);
+    if (!downloadAndUnzipArtifact(downloadUrl, folder)) {
         return;
     }
-    // Remove zip after successful unzip (non-fatal if it fails)
-    try { cli_execute_command({ command: 'rm -f "' + zipPath + '"' }); } catch (_) {}
 
     // Find the .app bundle path
-    var appPath = null;
-    try {
-        var findResult = cleanCommandOutput(
-            cli_execute_command({ command: 'find "' + appDir + '" -name "*.app" -maxdepth 3 -type d' })
-        );
-        appPath = setupHelpers.parseFindAppResult(findResult);
-        if (appPath) {
-            console.log('✅ iOS .app found:', appPath);
-        } else if (findResult) {
-            // Filter out .dSYM, pick first real .app
-            console.warn('Could not find .app bundle after unzip');
-        }
-    } catch (e) {
-        console.warn('Failed to locate .app bundle:', e);
-    }
+    var appPath = locateAppBundlePath(folder + '/app');
 
     // Write app_info.md for the agent prompt
-    var infoLines = setupHelpers.buildAppInfoMarkdown(
-        workflowId, buildSlug, artifactTitle, branch, appPath, appDir);
-    file_write(folder + '/app_info.md', infoLines.join('\n'));
-    console.log('✅ Written app_info.md' + (appPath ? ' → ' + appPath : ''));
+    writeAppInfoFile(folder, workflowId, buildSlug, artifact.title, branch, appPath);
     return appPath || null;
 }
 
