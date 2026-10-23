@@ -36,6 +36,9 @@ Full prompt / instruction set: [`agents/snapshots/po_refinement.md`](agents/snap
 _Fetch Parent Context To Input_
 
 - Source: `agents/js/fetchParentContextToInput.js`
+- Writes:
+  - `input/<KEY>/`
+  - `input/<KEY>/parent-`
 - Parameters (customParams):
   - `adoTextFormat`
   - `branchCreateFnPath`
