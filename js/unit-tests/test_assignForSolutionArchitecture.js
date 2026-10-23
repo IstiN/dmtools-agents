@@ -18,7 +18,6 @@ function asaLoad(opts) {
         };
         trackerGlobals['ado_' + n] = function(a) {
             calls.push({ tool: 'ado_' + n, args: a });
-            if (opts['failAdo' + n]) { throw new Error(n + ' boom'); }
         };
     });
     var tokenUsageCalls = [];
@@ -44,9 +43,7 @@ function asaLoad(opts) {
                 tokenUsageCalls.push({ key: key, options: o });
                 if (opts.failTokenUsage) { throw new Error('tokenUsage boom'); }
             },
-            customParamsOf: function(params) {
-                return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
-            }
+            customParamsOf: function() { return {}; }
         },
         './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
             '../config.js': configModule,

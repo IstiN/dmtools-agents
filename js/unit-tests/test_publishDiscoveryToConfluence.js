@@ -452,7 +452,7 @@ suite('publishDiscoveryToConfluence', function() {
 
 // Loader variant with a fully mocked contentOutput module (the default loader
 // wires the real one; the publishCommentReplies-throws test needs a throwing one).
-function loadPublishDiscoveryWithRepliesModule(repliesModuleMock, mocks, discoveryConfig) {
+function loadPublishDiscoveryWithRepliesModule(repliesModuleMock, extraGlobals, discoveryConfig) {
     var globals = {
         confluence_get_children_by_id: function() {
             return [{ id: '456', title: 'PROJ-2 Some feature', body: { storage: { value: '' } } }];
@@ -465,11 +465,13 @@ function loadPublishDiscoveryWithRepliesModule(repliesModuleMock, mocks, discove
         },
         jira_post_comment: function() {}
     };
-    for (var k in (mocks || {})) { globals[k] = mocks[k]; }
+    for (var k in extraGlobals) {
+        globals[k] = extraGlobals[k];
+    }
     return loadModule(
         'js/publishDiscoveryToConfluence.js',
         makeRequire({
-            './configLoader.js': { loadProjectConfig: function() { return { discovery: discoveryConfig || {} }; } },
+            './configLoader.js': { loadProjectConfig: function() { return { discovery: discoveryConfig }; } },
             './common/trackers.js': loadTrackersPd(globals),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/feedbackLoop.js': { resumeAgent: function() { return { attempted: false }; } },
@@ -632,7 +634,9 @@ suite('publishDiscoveryToConfluence — gh-1187 extracted helpers', function() {
         console.warn = function(m) { warns.push(m); };
         var mod = loadPublishDiscoveryWithRepliesModule({
             publishCommentReplies: function() { throw new Error('replies boom'); }
-        }, {}, { space: 'DISC', parentPageId: '123' });
+        }, {
+            confluence_sync_markdown_directory: function() { return JSON.stringify({ syncedPages: ['index'] }); }
+        }, { space: 'DISC', parentPageId: '123' });
         try {
             var result = mod.action(makeParams());
         } finally {
