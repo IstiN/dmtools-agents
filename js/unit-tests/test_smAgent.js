@@ -45,6 +45,12 @@ function mockPrPayload(gh, cmds) {
     return gh.pr || { number: 1, body: gh.prBody || '' };
 }
 
+// gh-1200 CRAP refactor: one alias step per call site kept normalizedGithubCall
+// (4 ifs × 2 decisions) over the CRAP bar — the decision lives here instead.
+function aliasIfMissing(n, alias, source) {
+    if (n[alias] === undefined && n[source] !== undefined) n[alias] = n[source];
+}
+
 function makeSmAgent(opts) {
     opts = opts || {};
 
@@ -170,6 +176,14 @@ function makeSmAgent(opts) {
         return true;
     }
 
+    function applyExtraMocks() {
+        if (opts.extraMocks) {
+            for (var em in opts.extraMocks) {
+                if (opts.extraMocks.hasOwnProperty(em)) smMocks[em] = opts.extraMocks[em];
+            }
+        }
+    }
+
     var smMocks = {
         file_read: fileReadMock,
         jira_search_by_jql: jiraSearchMock,
@@ -192,7 +206,7 @@ function makeSmAgent(opts) {
     var capturedFileWrites = [];
     var capturedFileDeletes = [];
     smMocks.file_delete = fileDeleteMock;
-    if (opts.extraMocks) { for (var em in opts.extraMocks) { if (opts.extraMocks.hasOwnProperty(em)) smMocks[em] = opts.extraMocks[em]; } }
+    applyExtraMocks();
 
     // Console capture (owner directive 2026-10-08 priority-tier tests): the
     // 🥇 preemption line prints from inside the source query (githubSource),
@@ -206,11 +220,18 @@ function makeSmAgent(opts) {
     }
 
     // SCM mock: intercepts triggerWorkflow so capturedTriggers is populated
+    function triggerWorkflowMock(owner, repo, workflow, inputs, ref) {
+        capturedTriggers.push({ owner: owner, repo: repo, workflow: workflow, inputs: inputs, ref: ref });
+        if (opts.onTrigger) opts.onTrigger(owner, repo, workflow, inputs, ref);
+    }
+
+    function scmListWorkflowRuns(status) {
+        var byStatus = opts.workflowRuns || {};
+        return JSON.stringify({ workflow_runs: byStatus[status] || [] });
+    }
+
     var mockScmProvider = {
-        triggerWorkflow: function(owner, repo, workflow, inputs, ref) {
-            capturedTriggers.push({ owner: owner, repo: repo, workflow: workflow, inputs: inputs, ref: ref });
-            if (opts.onTrigger) opts.onTrigger(owner, repo, workflow, inputs, ref);
-        },
+        triggerWorkflow: triggerWorkflowMock,
         listPrs: function() { return '[]'; },
         getPr: function() { return '{}'; },
         getPrComments: function() { return '[]'; },
@@ -221,10 +242,7 @@ function makeSmAgent(opts) {
         addLabel: function() {},
         removeLabel: function() {},
         fetchDiscussions: function() { return { markdown: '', rawThreads: [] }; },
-        listWorkflowRuns: function(status) {
-            var byStatus = opts.workflowRuns || {};
-            return JSON.stringify({ workflow_runs: byStatus[status] || [] });
-        },
+        listWorkflowRuns: scmListWorkflowRuns,
         getRemoteRepoInfo: function() { return null; }
     };
     var mockScmModule = {
@@ -251,90 +269,114 @@ function makeSmAgent(opts) {
     // NOTE: the stub closes over jiraSearchMock (makeSmAgent's scope) —
     // the test file's own jira_search_by_jql global is the REAL bridge tool
     // (mocks only shadow globals inside loadModule'd modules).
-    var jiraSourceStub = {
-        query: function (rule, ctx) {
-            var tickets = jiraSearchMock({ jql: (ctx && ctx.jql) || rule.jql, fields: ['key', 'labels'] }) || [];
-            return (Array.isArray(tickets) ? tickets : []).map(function (t) {
-                return { key: t.key,
-                         labels: (t.fields && t.fields.labels) || t.labels || [],
-                         pr: null, issueNumber: null, prNumber: null };
-            });
-        }
-    };
+    function jiraSourceQueryStub(rule, ctx) {
+        var tickets = jiraSearchMock({ jql: (ctx && ctx.jql) || rule.jql, fields: ['key', 'labels'] }) || [];
+        return (Array.isArray(tickets) ? tickets : []).map(function (t) {
+            return { key: t.key,
+                     labels: (t.fields && t.fields.labels) || t.labels || [],
+                     pr: null, issueNumber: null, prNumber: null };
+        });
+    }
+
+    var jiraSourceStub = { query: jiraSourceQueryStub };
+
     // Optional github source stub: opts.github = { items: [...], pr: {...} } —
     // for close-on-merge (localAction) and PR-lifecycle (#687) rule tests.
-    if (opts.github) {
-        jiraSourceStub = {
-            // items may be a FUNCTION (owner directive 2026-10-04 same-tick
-            // tests): called per rule query, returning that rule's live
-            // candidate list — models the engine's re-query after a
-            // mid-tick label mutation (ioCache drop).
-            query: function (rule, ctx) {
-                return typeof opts.github.items === 'function'
-                    ? opts.github.items(rule, ctx)
-                    : opts.github.items;
-            }
-        };
-        smMocks.github_close_issue = function (closeOpts) {
-            capturedCloses.push(closeOpts);
-        };
-        // #687 PR-lifecycle localActions: capture every GitHub mutation.
-        smMocks.github_merge_pr = function (mergeOpts) {
-            capturedPrMerges.push(mergeOpts);
-            return opts.github.mergeResult !== undefined
-                ? opts.github.mergeResult
-                : JSON.stringify({ merged: true, sha: 'deadbeef', message: 'Pull Request successfully merged' });
-        };
-        // The SM now writes through the tracker wrapper (js/common/trackers.js), which sends the argument
-        // spellings every dmtools version accepts (owner/repo, text). The tool accepts both families, so the
-        // captured calls are normalised to workspace/repository/body: the assertions below are about WHAT was
-        // written and WHERE, not about which alias the wrapper picked.
-        function normalizedGithubCall(o) {
-            var n = Object.assign({}, o);
-            if (n.workspace === undefined && n.owner !== undefined) n.workspace = n.owner;
-            if (n.repository === undefined && n.repo !== undefined) n.repository = n.repo;
-            if (n.body === undefined && n.text !== undefined) n.body = n.text;
-            if (n.number === undefined && n.pullRequestId !== undefined) n.number = n.pullRequestId;
-            return n;
+    function githubItemsQueryStub(rule, ctx) {
+        // items may be a FUNCTION (owner directive 2026-10-04 same-tick
+        // tests): called per rule query, returning that rule's live
+        // candidate list — models the engine's re-query after a
+        // mid-tick label mutation (ioCache drop).
+        return typeof opts.github.items === 'function'
+            ? opts.github.items(rule, ctx)
+            : opts.github.items;
+    }
+
+    function closeIssueMock(closeOpts) {
+        capturedCloses.push(closeOpts);
+    }
+
+    function mergePrMock(mergeOpts) {
+        capturedPrMerges.push(mergeOpts);
+        return opts.github.mergeResult !== undefined
+            ? opts.github.mergeResult
+            : JSON.stringify({ merged: true, sha: 'deadbeef', message: 'Pull Request successfully merged' });
+    }
+
+    // The SM now writes through the tracker wrapper (js/common/trackers.js), which sends the argument
+    // spellings every dmtools version accepts (owner/repo, text). The tool accepts both families, so the
+    // captured calls are normalised to workspace/repository/body: the assertions below are about WHAT was
+    // written and WHERE, not about which alias the wrapper picked.
+    function normalizedGithubCall(o) {
+        var n = Object.assign({}, o);
+        aliasIfMissing(n, 'workspace', 'owner');
+        aliasIfMissing(n, 'repository', 'repo');
+        aliasIfMissing(n, 'body', 'text');
+        aliasIfMissing(n, 'number', 'pullRequestId');
+        return n;
+    }
+
+    function prLabelAddMock(labelOpts) { capturedPrLabelAdds.push(normalizedGithubCall(labelOpts)); }
+    function prLabelRemoveMock(remOpts) { capturedPrLabelRemoves.push(normalizedGithubCall(remOpts)); }
+    function prCommentMock(cOpts) { capturedPrComments.push(normalizedGithubCall(cOpts)); }
+
+    // gh-1101 follow-up: opts.github.prAfterRefresh = the PR payload once
+    // a silent-update clone ran (the fresh-sha reset's head-moved check).
+    function getPrMock() {
+        return JSON.stringify(mockPrPayload(opts.github, capturedCliCommands));
+    }
+
+    // #544: linked-issue existence probe — a scraped #N that 404s
+    // (cross-repo/dangling) must degrade to a PR-anchored dispatch.
+    // Live-bridge shape: the sync tool does NOT throw on 404 — it
+    // returns the REST error BODY; issueLookupBody simulates that.
+    // issues (owner directive 2026-10-08): map issueNumber → issue
+    // payload — the priority-tier resolution reads linked-issue
+    // LABELS through this tool (githubSource cachedIssueLabels).
+    function issuePayloadFor(n) {
+        if (opts.github.issues && opts.github.issues[n] !== undefined) {
+            return opts.github.issues[n];
         }
-        smMocks.github_add_labels = function (labelOpts) { capturedPrLabelAdds.push(normalizedGithubCall(labelOpts)); };
-        smMocks.github_remove_label = function (remOpts) { capturedPrLabelRemoves.push(normalizedGithubCall(remOpts)); };
-        smMocks.github_create_comment = function (cOpts) { capturedPrComments.push(normalizedGithubCall(cOpts)); };
-        // gh-1101 follow-up: opts.github.prAfterRefresh = the PR payload once
-        // a silent-update clone ran (the fresh-sha reset's head-moved check).
-        smMocks.github_get_pr = function () {
-            return JSON.stringify(mockPrPayload(opts.github, capturedCliCommands));
-        };
-        // #544: linked-issue existence probe — a scraped #N that 404s
-        // (cross-repo/dangling) must degrade to a PR-anchored dispatch.
-        // Live-bridge shape: the sync tool does NOT throw on 404 — it
-        // returns the REST error BODY; issueLookupBody simulates that.
-        // issues (owner directive 2026-10-08): map issueNumber → issue
-        // payload — the priority-tier resolution reads linked-issue
-        // LABELS through this tool (githubSource cachedIssueLabels).
-        smMocks.github_get_issue = function (issueOpts) {
-            if (opts.github.issueLookupError) throw new Error(opts.github.issueLookupError);
-            if (opts.github.onIssueLookup) opts.github.onIssueLookup(issueOpts && issueOpts.issueNumber);
-            if (opts.github.issueLookupBody) return opts.github.issueLookupBody;
-            var n = issueOpts && issueOpts.issueNumber;
-            if (opts.github.issues && opts.github.issues[n] !== undefined) {
-                return opts.github.issues[n];
-            }
-            return opts.github.issue || { number: n };
-        };
-        smMocks.github_get_pr_comments = function () {
-            return JSON.stringify(opts.github.prComments || []);
-        };
-        // dmtools-agents#682 (rerun_cancelled_checks): the head's check-run
-        // rollup — conclusions exactly as the REST commit check-runs tool
-        // returns them (lowercase).
-        smMocks.github_get_commit_check_runs = function () {
-            if (opts.github.commitCheckRunsError) throw new Error(opts.github.commitCheckRunsError);
-            return JSON.stringify(opts.github.commitCheckRuns || { check_runs: [] });
-        };
-        smMocks.set_env_variable = function (name, value) {
-            capturedEnvSets.push({ name: name, value: value });
-        };
+        return opts.github.issue || { number: n };
+    }
+
+    function getIssueMock(issueOpts) {
+        if (opts.github.issueLookupError) throw new Error(opts.github.issueLookupError);
+        if (opts.github.onIssueLookup) opts.github.onIssueLookup(issueOpts && issueOpts.issueNumber);
+        if (opts.github.issueLookupBody) return opts.github.issueLookupBody;
+        var n = issueOpts && issueOpts.issueNumber;
+        return issuePayloadFor(n);
+    }
+
+    function getPrCommentsMock() {
+        return JSON.stringify(opts.github.prComments || []);
+    }
+
+    // dmtools-agents#682 (rerun_cancelled_checks): the head's check-run
+    // rollup — conclusions exactly as the REST commit check-runs tool
+    // returns them (lowercase).
+    function getCommitCheckRunsMock() {
+        if (opts.github.commitCheckRunsError) throw new Error(opts.github.commitCheckRunsError);
+        return JSON.stringify(opts.github.commitCheckRuns || { check_runs: [] });
+    }
+
+    function setEnvMock(name, value) {
+        capturedEnvSets.push({ name: name, value: value });
+    }
+
+    if (opts.github) {
+        jiraSourceStub = { query: githubItemsQueryStub };
+        smMocks.github_close_issue = closeIssueMock;
+        // #687 PR-lifecycle localActions: capture every GitHub mutation.
+        smMocks.github_merge_pr = mergePrMock;
+        smMocks.github_add_labels = prLabelAddMock;
+        smMocks.github_remove_label = prLabelRemoveMock;
+        smMocks.github_create_comment = prCommentMock;
+        smMocks.github_get_pr = getPrMock;
+        smMocks.github_get_issue = getIssueMock;
+        smMocks.github_get_pr_comments = getPrCommentsMock;
+        smMocks.github_get_commit_check_runs = getCommitCheckRunsMock;
+        smMocks.set_env_variable = setEnvMock;
     }
     var machineAuthorModule = loadModule(
         'js/common/machineAuthor.js', makeRequire({}), {}
@@ -347,13 +389,24 @@ function makeSmAgent(opts) {
     // /pulls payload (served by smMocks.github_list_prs), prStatus comes
     // from the provider stub (shared object, or prStatusByPr keyed by PR
     // number), and github_get_issue serves opts.github.issues.
+    function realPrStatus(n) {
+        if (opts.github.prStatusByPr) return opts.github.prStatusByPr[n] || null;
+        return opts.github.prStatus || null;
+    }
+
+    function providerPrStatusStub() {
+        // gh-837: approvedQueueDepth / reportValidationCost read the
+        // per-tick cached open-PR list — tests drive it from the same
+        // prList as the mutex probe.
+        return (opts.github && opts.github.prStatus) || null;
+    }
+
+    function providerListOpenPrsStub() {
+        return (opts.github && opts.github.prList) || [];
+    }
+
     if (opts.github && opts.github.realSource) {
-        var realProvider = {
-            prStatus: function (n) {
-                if (opts.github.prStatusByPr) return opts.github.prStatusByPr[n] || null;
-                return opts.github.prStatus || null;
-            }
-        };
+        var realProvider = { prStatus: realPrStatus };
         var smProviderRealMod = loadModule('js/common/smProvider.js', makeRequire({
             './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
             './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
@@ -448,15 +501,8 @@ function makeSmAgent(opts) {
             './common/smProvider.js': {
                 createSmProvider: function () {
                     return {
-                        prStatus: function () {
-                            return (opts.github && opts.github.prStatus) || null;
-                        },
-                        // gh-837: approvedQueueDepth / reportValidationCost
-                        // read the per-tick cached open-PR list — tests
-                        // drive it from the same prList as the mutex probe.
-                        listOpenPrs: function () {
-                            return (opts.github && opts.github.prList) || [];
-                        }
+                        prStatus: providerPrStatusStub,
+                        listOpenPrs: providerListOpenPrsStub
                     };
                 },
                 // ioCacheDrop spy (owner directive 2026-10-04): the same-tick
