@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-23T23:36:18.548Z",
+  "ticketKey": "gh-1193",
+  "headSha": "22f87f0c42793e69c4924a2dc9a388097eea2587",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:131dd6e1d732dc26",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:bf4f0e50864784f9",
+      "size": 8003
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:74a36349682cc8c6",
+      "size": 3510
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:64c22fcbf62c6d6c",
+      "size": 3073
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:b0f2aee8151c9625",
+      "size": 859
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:312c412cc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:5e43112a2132bf8e",
+      "size": 2018
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:e84b1043d42a768f",
+      "size": 1949
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6vzXvA",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/aiTeammateTokenUsageReporter.js:31",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: `crap` CI gate is red — root cause is a stale merge base, not this PR's code. Fix: merge `origin/main` into `ai/gh-1193` (verified conflict-free and green).**\n\n**Failure** (run [40037621922](https://github.com/IstiN/dmtools-agents/actions/runs/40037621922/job/120700885664), commit `37228fe1`, step \"crap4js ratchet\", exit 2):\n\n```\nREGRESSION  js/postMobileTestAutomationResults.js::normalizeResult: 12.9 -> 14.9\nNEW > 8  js/postMobileTestAutomationResults.js::getResultCounts: 23.2\nNEW > 8  js/postMobileTestAutomationResults.js::performGitOperations: 16.8\nNEW > 8  js/postMobileTestAutomationResults.js::updateFeaturePRBody: 20\nNEW > 8  js/postMobileTestAutomationResults.js::action: 24\nNEW > 8  js/preCliMobileTestAutomationSetup.js::fetchLinkedTestCases: 25.2\nNEW > 8  js/preCliMobileTestAutomationSetup.js::findFeatureBranch: 17.1\nNEW > 8  js/preCliMobileTestAutomationSetup.js::downloadBitriseApp: 28.1\n1 regression(s), 7 new over threshold, 11 improvement(s), 0 removed\n```\n\n**Root cause — none of the flagged code is touched by this PR.** All 8 findings are in the two gh-1189 files. Timeline:\n\n1. This branch's last main-merge (`37228fe1`) picked up main up to `087ec783` (gh-1184).\n2. While the PR was open, main advanced to `855ee8ae` (gh-1189: mobile-test-automation CRAP refactor, merged 23:04:34Z), and the released `crap-baseline` asset was ratcheted down at 23:06:06Z — **pruning the pre-refactor entries** (`downloadBitriseApp`, `fetchLinkedTestCases`, `findFeatureBranch`, `getResultCounts`, `updateFeaturePRBody`; `normalizeResult` lowered 14.9→12.9).\n3. The failing run fetched that new baseline at 23:06:34, so the PR head's **old pre-refactor gh-1189 functions** count as \"NEW > 8\" plus one regression.\n4. Proof it is a race, not a defect: an earlier `crap` run on the **same head** (started 23:02:54) **passed**, because it still downloaded the old baseline.\n\n**Verified fix — merge `origin/main` (`855ee8ae`) into `ai/gh-1193`:**\n\n- Merge is conflict-free (only mobile-automation files change on main; zero overlap with this PR's 4 files).\n- Re-running the exact CI pipeline on the merged tree: unit suite **6007 passed, 0 failed**; `crap4js --threshold 8 --baseline <released crap-baseline.json>` → **exit 0, `0 regression(s), 0 new over threshold, 11 improvement(s)`** — exactly this PR's 11 named functions (collectRunsForWindow 25.6→2, calculateRunnerStats 24.7→4, asArray 24.5→5, normalizeLogPayload 24.1→4, parseTokensLine 24.1→4, groupBy 22→2, buildHtml 20→6, listCompletedRuns 19.9→6, buildRowsFromCache 18.3→1, publishTokenUsage 26→7, mergeTokenRows 17→5).\n\nNo code change is required for this finding. After the merge, the gate goes green and the PR's own claims all hold (behaviour-parity A/B byte-identical against `origin/main` for buildHtml/groupBy/parseTokensLine/normalizeLogPayload/asArray/buildRowsFromCache/calculateRunnerStats and publishTokenUsage/mergeTokenRows incl. exact gh command sequences; canonical `dmtools run js/unit-tests/run_all.json` → 5955 passed, 0 failed; \"6 remaining over CRAP 8\" in the two touched files matches the PR description exactly)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-23:d284faf3",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-23",
+      "updatedAt": "2026-10-23",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: `crap` CI gate is red — root cause is a stale merge base, not this PR's code. Fix: merge `origin/main` into `ai/gh-1193` (verified conflict-free and green).**\n\n**Failure** (run [40037621922](https://github.com/IstiN/dmtools-agents/actions/runs/40037621922/job/120700885664), commit `37228fe1`, step \"crap4js ratchet\", exit 2):\n\n```\nREGRESSION  js/postMobileTestAutomationResults.js::normalizeResult: 12.9 -> 14.9\nNEW > 8  js/postMobileTestAutomationResults.js::getResultCounts: 23.2\nNEW > 8  js/postMobileTestAutomationResults.js::performGitOperations: 16.8\nNEW > 8  js/postMobileTestAutomationResults.js::updateFeaturePRBody: 20\nNEW > 8  js/postMobileTestAutomationResults.js::action: 24\nNEW > 8  js/preCliMobileTestAutomationSetup.js::fetchLinkedTestCases: 25.2\nNEW > 8  js/preCliMobileTestAutomationSetup.js::findFeatureBranch: 17.1\nNEW > 8  js/preCliMobileTestAutomationSetup.js::downloadBitriseApp: 28.1\n1 regression(s), 7 new over threshold, 11 improvement(s), 0 removed\n```\n\n**Root cause — none of the flagged code is touched by this PR.** All 8 findings are in the two gh-1189 files. Timeline:\n\n1. This branch's last main-merge (`37228fe1`) picked up main up to `087ec783` (gh-1184).\n2. While the PR was open, main advanced to `855ee8ae` (gh-1189: mobile-test-automation CRAP refactor, merged 23:04:34Z), and the released `crap-baseline` asset was ratcheted down at 23:06:06Z — **pruning the pre-refactor entries** (`downloadBitriseApp`, `fetchLinkedTestCases`, `findFeatureBranch`, `getResultCounts`, `updateFeaturePRBody`; `normalizeResult` lowered 14.9→12.9).\n3. The failing run fetched that new baseline at 23:06:34, so the PR head's **old pre-refactor gh-1189 functions** count as \"NEW > 8\" plus one regression.\n4. Proof it is a race, not a defect: an earlier `crap` run on the **same head** (started 23:02:54) **passed**, because it still downloaded the old baseline.\n\n**Verified fix — merge `origin/main` (`855ee8ae`) into `ai/gh-1193`:**\n\n- Merge is conflict-free (only mobile-automation files change on main; zero overlap with this PR's 4 files).\n- Re-running the exact CI pipeline on the merged tree: unit suite **6007 passed, 0 failed**; `crap4js --threshold 8 --baseline <released crap-baseline.json>` → **exit 0, `0 regression(s), 0 new over threshold, 11 improvement(s)`** — exactly this PR's 11 named functions (collectRunsForWindow 25.6→2, calculateRunnerStats 24.7→4, asArray 24.5→5, normalizeLogPayload 24.1→4, parseTokensLine 24.1→4, groupBy 22→2, buildHtml 20→6, listCompletedRuns 19.9→6, buildRowsFromCache 18.3→1, publishTokenUsage 26→7, mergeTokenRows 17→5).\n\nNo code change is required for this finding. After the merge, the gate goes green and the PR's own claims all hold (behaviour-parity A/B byte-identical against `origin/main` for buildHtml/groupBy/parseTokensLine/normalizeLogPayload/asArray/buildRowsFromCache/calculateRunnerStats and publishTokenUsage/mergeTokenRows incl. exact gh command sequences; canonical `dmtools run js/unit-tests/run_all.json` → 5955 passed, 0 failed; \"6 remaining over CRAP 8\" in the two touched files matches the PR description exactly)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-23:ca3b5219",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-23",
+      "updatedAt": "2026-10-23",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The refactor itself is sound — behaviour verified byte-identical against `origin/main` (A/B on all touched pure functions incl. exact gh command sequences), canonical dmtools-java suite 5955/0, and the crap ratchet shows exactly the claimed 11 improvements with the claimed 6 remaining over-8 functions. The single 🚨 BLOCKING issue is the red `crap` CI gate: the PR head is behind main, and the baseline ratcheted at main@855ee8ae (gh-1189) makes the stale pre-refactor gh-1189 functions on this head fail the ratchet (1 regression + 7 NEW > 8 — all in files this PR never touches).\n\n**Key Issues**:\n- 🚨 `crap` job red on `37228fe1` — stale merge base vs. the re-ratcheted baseline (details + race proof in the inline thread)\n\n**Next Steps**:\n1. Merge `origin/main` into `ai/gh-1193` (verified conflict-free) and push — no code change needed; re-verified locally on the merged tree: suite 6007/0, ratchet exit 0 (0 regressions, 0 new over threshold, 11 improvements)\n2. No other action: baseline not committed ✔, ticket ACs met ✔, GraalJS constraints respected ✔, no scope creep ✔\n\nNote: a local (non-CI) run of `test_sessionDelta.js` can fail when `FA_SESSION_ROOT` is set in the harness env — that file comes from main (gh-1184), is untouched by this PR, and passes in CI."
+    }
+  ]
+}
