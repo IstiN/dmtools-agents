@@ -167,9 +167,81 @@ function snapshotPageTree(page, targetDir, allComments) {
     }
 }
 
+// ── Extracted step helpers (gh-1187 CRAP split): each helper is small, pure
+// where possible, and fully covered by js/unit-tests/test_prepareDiscoveryContext.js.
+
+/** Ticket key from params.ticket.key, falling back to the inputFolderPath tail. */
+function resolveTicketKey(params, folder) {
+    return (params.ticket && params.ticket.key) || (folder ? folder.split('/').pop() : null);
+}
+
+/** Write input/<ticket>/discovery_meta.json (same payload the postJSAction reads). */
+function writeDiscoveryMeta(folder, meta) {
+    file_write(folder + '/discovery_meta.json', JSON.stringify(meta, null, 2));
+}
+
+/** writeDiscoveryMeta for the error path — a failed write is logged, not thrown. */
+function writeDiscoveryMetaQuietly(folder, meta) {
+    try {
+        writeDiscoveryMeta(folder, meta);
+    } catch (writeError) {
+        console.error('Also failed to write discovery_meta.json:', writeError);
+    }
+}
+
+/**
+ * Merge discovery.space/parentPageId from project config into meta.
+ * Returns true when the project is NOT configured (caller should short-circuit).
+ */
+function applyDiscoveryConfig(meta, params) {
+    var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    var discoveryConfig = projectConfig.discovery || {};
+    meta.space = discoveryConfig.space || null;
+    meta.parentPageId = discoveryConfig.parentPageId || null;
+    return !meta.space || !meta.parentPageId;
+}
+
+/** List the parent page's children; an error marker replaces a thrown lookup. */
+function fetchParentChildren(parentPageId) {
+    try {
+        return { children: confluence_get_children_by_id({ contentId: parentPageId, format: 'md' }) };
+    } catch (e) {
+        console.warn('prepareDiscoveryContext: failed to list children of parentPageId', parentPageId, ':', e);
+        return { error: e.toString() };
+    }
+}
+
+/** Persist the collected inline comments (discovery_comments.md/json) when any. */
+function writeCollectedComments(folder, allComments, ticketKey, snapshotted) {
+    if (!folder || allComments.length === 0) {
+        return;
+    }
+    contentOutput.writeCommentsFiles(folder, allComments, COMMENTS_BASE_NAME);
+    console.log('Collected ' + allComments.length + ' inline comment(s) across the discovery page tree (' +
+        (snapshotted + 1) + ' page(s)) into input/' + ticketKey + '/' + COMMENTS_BASE_NAME + '.md');
+}
+
+/** Snapshot the existing page tree into outputs/discovery/ and report the result. */
+function seedExistingPageTree(folder, ticketKey, meta, existing) {
+    meta.existingPageId = existing.id;
+    console.log('Found existing discovery page for ' + ticketKey + ': ' + existing.id + ' ("' + existing.title + '") — seeding ' + DISCOVERY_OUTPUT_DIR + ' with its current content (full tree, recursively) for in-place editing.');
+    var allComments = [];
+    var snapshotted = snapshotPageTree(existing, DISCOVERY_OUTPUT_DIR, allComments);
+    writeDiscoveryMeta(folder, meta);
+    writeCollectedComments(folder, allComments, ticketKey, snapshotted);
+    return {
+        success: true,
+        action: 'iteration',
+        ticketKey: ticketKey,
+        existingPageId: existing.id,
+        snapshottedPages: snapshotted,
+        commentsCount: allComments.length
+    };
+}
+
 function action(params) {
     var folder = params.inputFolderPath;
-    var ticketKey = (params.ticket && params.ticket.key) || (folder ? folder.split('/').pop() : null);
+    var ticketKey = resolveTicketKey(params, folder);
 
     var meta = {
         ticketKey: ticketKey,
@@ -179,64 +251,33 @@ function action(params) {
     };
 
     try {
-        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-        var discoveryConfig = projectConfig.discovery || {};
-        meta.space = discoveryConfig.space || null;
-        meta.parentPageId = discoveryConfig.parentPageId || null;
-
-        if (!meta.space || !meta.parentPageId) {
+        if (applyDiscoveryConfig(meta, params)) {
             console.warn('discovery.space / discovery.parentPageId are not configured — set them in this project\'s .dmtools/config.js before discovery pages can be published to Confluence. Continuing without prior-state seeding.');
-            file_write(folder + '/discovery_meta.json', JSON.stringify(meta, null, 2));
+            writeDiscoveryMeta(folder, meta);
             return { success: true, action: 'not_configured', ticketKey: ticketKey };
         }
 
-        var children;
-        try {
-            children = confluence_get_children_by_id({ contentId: meta.parentPageId, format: 'md' });
-        } catch (e) {
-            console.warn('prepareDiscoveryContext: failed to list children of parentPageId', meta.parentPageId, ':', e);
-            file_write(folder + '/discovery_meta.json', JSON.stringify(meta, null, 2));
-            return { success: false, action: 'children_lookup_failed', ticketKey: ticketKey, error: e.toString() };
+        var fetched = fetchParentChildren(meta.parentPageId);
+        if (fetched.error) {
+            writeDiscoveryMeta(folder, meta);
+            return { success: false, action: 'children_lookup_failed', ticketKey: ticketKey, error: fetched.error };
         }
 
-        var existing = findTicketPage(children, ticketKey);
+        var existing = findTicketPage(fetched.children, ticketKey);
         if (!existing) {
             console.log('No existing discovery page found for ' + ticketKey + ' — this will be a first-time discovery run.');
-            file_write(folder + '/discovery_meta.json', JSON.stringify(meta, null, 2));
+            writeDiscoveryMeta(folder, meta);
             return { success: true, action: 'first_run', ticketKey: ticketKey };
         }
 
-        meta.existingPageId = existing.id;
-        console.log('Found existing discovery page for ' + ticketKey + ': ' + existing.id + ' ("' + existing.title + '") — seeding ' + DISCOVERY_OUTPUT_DIR + ' with its current content (full tree, recursively) for in-place editing.');
-        var allComments = [];
-        var snapshotted = snapshotPageTree(existing, DISCOVERY_OUTPUT_DIR, allComments);
-        file_write(folder + '/discovery_meta.json', JSON.stringify(meta, null, 2));
-
-        if (folder && allComments.length > 0) {
-            contentOutput.writeCommentsFiles(folder, allComments, COMMENTS_BASE_NAME);
-            console.log('Collected ' + allComments.length + ' inline comment(s) across the discovery page tree (' +
-                (snapshotted + 1) + ' page(s)) into input/' + ticketKey + '/' + COMMENTS_BASE_NAME + '.md');
-        }
-
-        return {
-            success: true,
-            action: 'iteration',
-            ticketKey: ticketKey,
-            existingPageId: existing.id,
-            snapshottedPages: snapshotted,
-            commentsCount: allComments.length
-        };
+        return seedExistingPageTree(folder, ticketKey, meta, existing);
     } catch (error) {
         console.error('Error in prepareDiscoveryContext:', error);
-        try {
-            file_write(folder + '/discovery_meta.json', JSON.stringify(meta, null, 2));
-        } catch (writeError) {
-            console.error('Also failed to write discovery_meta.json:', writeError);
-        }
+        writeDiscoveryMetaQuietly(folder, meta);
         return { success: false, action: 'error', ticketKey: ticketKey, error: error.toString() };
     }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, findTicketPage, sanitizeFileName, snapshotPageTree, injectCommentAnchors, collectPageComments, DISCOVERY_OUTPUT_DIR, COMMENTS_BASE_NAME };
+    module.exports = { action, findTicketPage, sanitizeFileName, snapshotPageTree, injectCommentAnchors, collectPageComments, resolveTicketKey, applyDiscoveryConfig, fetchParentChildren, writeCollectedComments, writeDiscoveryMeta, writeDiscoveryMetaQuietly, seedExistingPageTree, DISCOVERY_OUTPUT_DIR, COMMENTS_BASE_NAME };
 }
