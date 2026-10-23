@@ -84,7 +84,7 @@ suite('aiResponseParser.parseQuestionsResponse', function () {
         // 'null' string → JSON.parse → null → the array check fails → [] with a warn.
         var warns = [];
         var origWarn = console.warn;
-        console.warn = function () { warns.push(String(arguments[0])); };
+        console.warn = function () { warns.push(Array.prototype.slice.call(arguments).join(' ')); };
         try {
             var mod = loadAiResponseParser();
             assert.deepEqual(mod.parseQuestionsResponse('null'), []);

@@ -177,5 +177,5 @@ function action(params) {
 
 
 if (typeof module !== "undefined" && module.exports) {
-    module.exports = { action };
+    module.exports = { action: action, parseSDAPIEnhancementResponse: parseSDAPIEnhancementResponse, updateSDAPITicket: updateSDAPITicket };
 }

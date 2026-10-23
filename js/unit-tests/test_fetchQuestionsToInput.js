@@ -73,6 +73,120 @@ suite('fetchQuestionsToInput.getAnswerValue', function() {
         assert.equal(mod.getAnswerValue({ summary: 'Question' }, 'Answer'), null);
     });
 
+    test('returns null on missing fields or missing answerField (guard branch)', function() {
+        var mod = loadFetchQuestionsToInput();
+        assert.equal(mod.getAnswerValue(null, 'Answer'), null, 'null fields');
+        assert.equal(mod.getAnswerValue(undefined, 'Answer'), null, 'undefined fields');
+        assert.equal(mod.getAnswerValue({ Answer: 'x' }, null), null, 'null answerField');
+        assert.equal(mod.getAnswerValue({ Answer: 'x' }, ''), null, 'empty answerField');
+        assert.equal(mod.getAnswerValue({ Answer: 'x' }, undefined), null, 'undefined answerField');
+    });
+
+    test('exact lowercase lookup: a mixed-case answerField finds its lowercased key', function() {
+        var mod = loadFetchQuestionsToInput();
+        assert.equal(mod.getAnswerValue({ answer: 'lower hit' }, 'Answer'), 'lower hit');
+        assert.equal(mod.getAnswerValue({ answer: 'lower hit' }, 'ANSWER'), 'lower hit', 'uppercase field name too');
+    });
+
+    test('exact key beats the transformed key (direct lookups win before the loop)', function() {
+        var mod = loadFetchQuestionsToInput();
+        assert.equal(
+            mod.getAnswerValue({ Answer: 'exact', 'Answer (customfield_10330)': 'transformed' }, 'Answer'),
+            'exact',
+            'the direct Answer lookup wins over the transformed key'
+        );
+    });
+
+    test('loop: skips non-matching keys and hits on a later key (2+ items)', function() {
+        var mod = loadFetchQuestionsToInput();
+        assert.equal(
+            mod.getAnswerValue(
+                { summary: 'Q', 'Answer (customfield_10330)': 'found' },
+                'Answer'
+            ),
+            'found',
+            'the first key does not match, the transformed key does'
+        );
+        assert.equal(
+            mod.getAnswerValue(
+                { summary: 'Q', priority: 'High', 'Answer (customfield_10330)': 'found' },
+                'Answer'
+            ),
+            'found',
+            'several non-matching keys are skipped first'
+        );
+    });
+
+    test('loop exact-key branch: a differently-cased key matches by lowercase comparison', function() {
+        var mod = loadFetchQuestionsToInput();
+        // answerField 'ANSWER' fails the exact lookup ('ANSWER' absent) and the
+        // lowercase lookup ('answer' absent); the loop's keyLower === 'answer'
+        // branch then picks up the 'Answer' key.
+        assert.equal(mod.getAnswerValue({ Answer: 'case hit' }, 'ANSWER'), 'case hit');
+        // ... but a key holding null/undefined still does not match.
+        assert.equal(mod.getAnswerValue({ Answer: null }, 'ANSWER'), null);
+    });
+
+    test('customfield_ answerField matches the "(customfield_xxx)" suffix key', function() {
+        var mod = loadFetchQuestionsToInput();
+        assert.equal(
+            mod.getAnswerValue({ 'Answer (customfield_10330)': 'suffix hit' }, 'customfield_10330'),
+            'suffix hit'
+        );
+        assert.equal(
+            mod.getAnswerValue({ summary: 'Q', 'Answer (customfield_10330)': 'suffix hit' }, 'customfield_10330'),
+            'suffix hit',
+            'suffix match on a later loop key'
+        );
+        // The suffix branch is customfield_-only: 'Answer' never suffix-matches
+        // 'answer (customfield_10330)' (it uses the friendly-prefix branch instead).
+        assert.equal(
+            mod.getAnswerValue({ 'Answer (customfield_10330)': 'via friendly prefix' }, 'Answer'),
+            'via friendly prefix'
+        );
+    });
+
+    test('friendly-prefix branch requires the closing parenthesis', function() {
+        var mod = loadFetchQuestionsToInput();
+        assert.equal(mod.getAnswerValue({ 'Answer (customfield_10330': 'open' }, 'Answer'), null,
+            'a key missing the closing paren does not match');
+        assert.equal(mod.getAnswerValue({ 'Answer (customfield_10330)': 'closed' }, 'Answer'), 'closed');
+    });
+
+    test('loop: inherited (non-own) keys are skipped', function() {
+        var mod = loadFetchQuestionsToInput();
+        var fields = Object.create({ Answer: 'prototype answer' });
+        fields.summary = 'Q';
+        assert.equal(mod.getAnswerValue(fields, 'Answer'), null,
+            'an inherited Answer key must not resolve');
+        var own = Object.create({ Other: 'proto' });
+        own.Answer = 'own answer';
+        assert.equal(mod.getAnswerValue(own, 'Answer'), 'own answer',
+            'an own key resolves even with a populated prototype');
+    });
+
+    test('loop: a key matching by shape but holding null/undefined is skipped', function() {
+        var mod = loadFetchQuestionsToInput();
+        assert.equal(
+            mod.getAnswerValue({ 'Answer (customfield_10330)': null }, 'Answer'),
+            null
+        );
+        assert.equal(
+            mod.getAnswerValue({ summary: 'x', 'Answer (customfield_10330)': undefined }, 'Answer'),
+            null
+        );
+    });
+
+    test('loop: a transformed match on the FIRST key wins over an exact key later (iteration order)', function() {
+        var mod = loadFetchQuestionsToInput();
+        // No exact/lowercase direct hit ('Ans' matches nothing directly); the
+        // loop reaches 'Ans (customfield_1)' first — in object insertion order.
+        var fields = {};
+        fields['Ans (customfield_1)'] = 'first';
+        fields['ans (customfield_2)'] = 'second';
+        assert.equal(mod.getAnswerValue(fields, 'ans'), 'first');
+    });
+
 });
 
 // ── gh-770: tracker-aware query layer ────────────────────────────────────────
