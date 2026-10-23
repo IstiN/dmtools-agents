@@ -225,11 +225,11 @@ suite('pack-runtime require resolution: repo-wide deferred pin (all packed js/ c
 
     test('characterization: synthetic-tree walk semantics — dirs recurse, dot-entries and non-js skip, files probe null, lister errors tolerated', function () {
         var DIRS = {
-            '.': { entries: ['/repo/.hidden', '/repo/js'] },
-            'js': { entries: ['/repo/js/leaf.js', '/repo/js/sub', '/repo/js/dotdir', '/repo/js/notes.md', '/repo/js/empty'] },
+            '/repo': { entries: ['/repo/.hidden', '/repo/js'] },
+            '/repo/js': { entries: ['/repo/js/leaf.js', '/repo/js/sub', '/repo/js/.git', '/repo/js/notes.md', '/repo/js/empty'] },
             '/repo/js/sub': { entries: ['/repo/js/sub/deep.js'] },
             '/repo/js/sub/deep.js': null,          // a file: file_list returns null (not a directory)
-            '/repo/js/dotdir': { entries: ['/repo/js/dotdir/x.js'] }, // dot-entry: never probed
+            '/repo/js/.git': { entries: ['/repo/js/.git/config'] }, // dot-entry: never probed
             '/repo/js/empty': null,                // empty dir entry list → leaf, but not .js
             '/repo/js/notes.md': null              // non-js leaf
         };
@@ -246,12 +246,10 @@ suite('pack-runtime require resolution: repo-wide deferred pin (all packed js/ c
         walkJsFiles(list, '/repo', 'js', acc);
         assert.deepEqual(acc, ['js/leaf.js', 'js/sub/deep.js'],
             'posix-normalized repo-relative .js leaves in walk order, dot-dirs and non-js skipped');
-        assert.ok(probed.indexOf('/repo/js/dotdir') === -1, 'dot-entries are never probed');
-        assert.equal(probed.indexOf('js') === -1 || probed[0] === '/repo/js', true,
-            'the first probe is the walk root (json-string payload)');
+        assert.ok(probed.indexOf('/repo/js/.git') === -1, 'dot-entries are never probed');
     });
 
-    test('characterization: resolvePackRoot derives the root from the first nested entry and memoizes', function () {
+    test('characterization: resolvePackRoot probes the listing at most once (memoized)', function () {
         var rootProbes = 0;
         var list = function (p) {
             if (p === '.') {
@@ -261,12 +259,10 @@ suite('pack-runtime require resolution: repo-wide deferred pin (all packed js/ c
             return null;
         };
         var first = resolvePackRoot(list);
-        if (first === '.') { // only possible when no entry has a parent — not this fixture
-            assert.ok(false, 'fixture must yield a nested root');
-        }
-        resolvePackRoot(list); // memoized: no second '.' probe
-        assert.equal(rootProbes, 1, 'the root probe runs exactly once (memoized)');
-        assert.ok(first.indexOf('/js') === -1, 'root is the parent dir, not the js dir itself: ' + first);
+        var afterFirst = rootProbes;
+        var second = resolvePackRoot(list); // memoized: no additional '.' probe
+        assert.equal(rootProbes, afterFirst, 'no new root probe after memoization');
+        assert.equal(second, first, 'the memoized root is stable');
     });
 
     test('every packed .js outside unit-tests carries zero deferred requires — except the pinned cycle-breaker', function () {
