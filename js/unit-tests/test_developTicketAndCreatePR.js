@@ -29,19 +29,26 @@ var gitStagingModule = loadModule('js/common/gitStaging.js');
 // gh-1087: real quota circuit-breaker (pure module — no requires of its own).
 var quotaBreakerModule = loadModule('js/common/quotaCircuitBreaker.js');
 
+// gh-1190: shared feedbackLoop stub builder — a named helper so the override
+// merge adds no cyclomatic complexity to the loaders themselves (the CRAP
+// ratchet never lets an existing function's score grow).
+function feedbackLoopStubWith(overrides) {
+    return Object.assign({
+        runQualityGates: function () { return { success: true }; },
+        runPolicyGates: function () { return { success: true }; },
+        runPostPublishGates: function () { return { success: true }; },
+        resumeAgent: function () { return { attempted: false }; },
+        resumeOnceForMissingResponse: function () { return { attempted: false }; }
+    }, overrides || {});
+}
+
 function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
     return (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
             './common/submodules.js': {},
-            './common/feedbackLoop.js': Object.assign({
-                runQualityGates: function () { return { success: true }; },
-                runPolicyGates: function () { return { success: true }; },
-                runPostPublishGates: function () { return { success: true }; },
-                resumeAgent: function () { return { attempted: false }; },
-                resumeOnceForMissingResponse: function () { return { attempted: false }; }
-            }, feedbackLoopOverrides || {}),
+            './common/feedbackLoop.js': feedbackLoopStubWith(feedbackLoopOverrides),
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': { readOutputFile: function () { return null; } },
             './cacheToReleases.js': {},
@@ -64,7 +71,7 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
 // common/submodules.js helpers (instead of the bare stubs above) so tests can
 // drive performGitOperations() all the way to its "No changes were made" path,
 // which the bare stubs can't reach (they lack readStagedDiffStat/buildOriginFetchCommand).
-function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks) {
+function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks, feedbackLoopOverrides) {
     var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({
         './common/commentMarkup.js': commentMarkupModule,
         './mergeState.js': loadModule('js/common/mergeState.js'),
@@ -74,13 +81,7 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks) {
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': realPrHelper,
             './common/submodules.js': { pushManagedSubmodules: function () { } },
-            './common/feedbackLoop.js': {
-                runQualityGates: function () { return { success: true }; },
-                runPolicyGates: function () { return { success: true }; },
-                runPostPublishGates: function () { return { success: true }; },
-                resumeAgent: function () { return { attempted: false }; },
-                resumeOnceForMissingResponse: function () { return { attempted: false }; }
-            },
+            './common/feedbackLoop.js': feedbackLoopStubWith(feedbackLoopOverrides),
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': { readOutputFile: function () { return null; } },
             './cacheToReleases.js': {},
@@ -2528,4 +2529,331 @@ suite('developTicketAndCreatePR > performGitOperations helpers (gh-1003)', funct
         assert.deepEqual(run.movedTo, ['Ready For Development'],
             'ticket is still reset for retry before the leg fails');
     });
+});
+
+// ── gh-1190: performPushOnly/action seam split — helper characterization ─────
+
+suite('developTicketAndCreatePR > push-only seam helpers (gh-1190)', function () {
+
+    function loadWithRealPrHelper(mocks) {
+        return loadDevelopTicketAndCreatePRWithRealGitHelpers(Object.assign({
+            file_write: function () { }
+        }, mocks));
+    }
+
+    test('isHardPushRejection matches exactly the four hard markers', function () {
+        var mod = loadWithRealPrHelper({});
+        assert.equal(mod.isHardPushRejection('! [remote rejected] main -> main (protection)'), true);
+        assert.equal(mod.isHardPushRejection('gh: GH013: Push protection declined the push'), true);
+        assert.equal(mod.isHardPushRejection('error: failed to push some refs'), true);
+        assert.equal(mod.isHardPushRejection('push declined due to repository rules'), true);
+        assert.equal(mod.isHardPushRejection('Everything up-to-date'), false, 'clean output is not a rejection');
+        // Soft signals must NOT read as hard rejections — a --force retry is
+        // allowed to resolve them.
+        assert.equal(mod.isHardPushRejection('non-fast-forward update rejected by tip'), false,
+            'a soft non-fast-forward alone is not a hard rejection');
+    });
+
+    test('retryForcePushAfterRejection returns null when the force push lands', function () {
+        var calls = [];
+        var mod = loadWithRealPrHelper({
+            cli_execute_command: function (opts) {
+                calls.push(opts.command);
+                return '';
+            }
+        });
+        var outcome = mod.retryForcePushAfterRejection('ai/PROJ-1');
+        assert.equal(outcome, null, 'a clean force retry continues to the verification');
+        assert.deepEqual(calls, ['git push -u origin ai/PROJ-1 --force']);
+    });
+
+    test('retryForcePushAfterRejection returns the truncated failure result on a hard rejection', function () {
+        var mod = loadWithRealPrHelper({
+            cli_execute_command: function () {
+                throw new Error('remote rejected (x)');
+            }
+        });
+        var outcome = mod.retryForcePushAfterRejection('ai/PROJ-1');
+        assert.equal(outcome.success, false);
+        assert.equal(outcome.isPushFailure, true);
+        assert.ok(outcome.error.indexOf('Push still rejected after force:') === 0, 'error names the force retry');
+        assert.ok(outcome.error.indexOf('remote rejected') !== -1, 'the rejection text is carried');
+    });
+
+    test('performPushOnly: merge-sync failure short-circuits with isMergeSyncFailure', function () {
+        var calls = [];
+        var mod = loadWithRealPrHelper({
+            cli_execute_command: function (opts) {
+                calls.push(opts.command);
+                // MERGE_HEAD present → syncBranchWithBase refuses (gh-761).
+                if (opts.command === 'git rev-parse --quiet --verify MERGE_HEAD') return '9a7e2aec';
+                return '';
+            }
+        });
+        var result = mod.performPushOnly('ai/PROJ-1', 'main');
+        assert.equal(result.success, false);
+        assert.equal(result.isMergeSyncFailure, true);
+        assert.contains(result.error, 'MERGE_HEAD');
+        assert.equal(calls.filter(function (c) { return c.indexOf('git push') === 0; }).length, 0,
+            'no push may run after a refused merge sync');
+    });
+
+    test('performPushOnly: clean push lands, verifies on remote, returns success', function () {
+        var calls = [];
+        var mod = loadWithRealPrHelper({
+            cli_execute_command: function (opts) {
+                calls.push(opts.command);
+                if (opts.command === 'git rev-parse origin/main') return 'base-sha';
+                if (opts.command === 'git merge-base origin/main HEAD') return 'base-sha';
+                if (opts.command === 'git status --porcelain --ignore-submodules=dirty') return '';
+                if (opts.command === 'git ls-remote --heads origin ai/PROJ-1') {
+                    return '0123456789abcdef0123456789abcdef01234567\trefs/heads/ai/PROJ-1\n';
+                }
+                return '';
+            }
+        });
+        var result = mod.performPushOnly('ai/PROJ-1', 'main');
+        assert.deepEqual(result, { success: true, branchName: 'ai/PROJ-1' });
+        assert.ok(calls.indexOf('git push -u origin ai/PROJ-1') !== -1);
+        assert.ok(calls.indexOf('git push -u origin ai/PROJ-1 --force') === -1,
+            'a clean push must not escalate to force');
+    });
+
+    test('performPushOnly: soft rejection (non-fast-forward) recovers via the force retry', function () {
+        var mod = loadWithRealPrHelper({
+            cli_execute_command: function (opts) {
+                var command = opts.command;
+                if (command === 'git rev-parse origin/main') return 'base-sha';
+                if (command === 'git merge-base origin/main HEAD') return 'old-sha';
+                if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
+                if (command === 'git push -u origin ai/PROJ-1') { throw new Error('non-fast-forward'); }
+                if (command === 'git ls-remote --heads origin ai/PROJ-1') {
+                    return '0123456789abcdef0123456789abcdef01234567\trefs/heads/ai/PROJ-1\n';
+                }
+                return '';
+            }
+        });
+        var result = mod.performPushOnly('ai/PROJ-1', 'main');
+        assert.deepEqual(result, { success: true, branchName: 'ai/PROJ-1' }, 'force retry lands the branch');
+    });
+
+    test('performPushOnly: hard rejection then force rejection fails with the truncated error', function () {
+        var mod = loadWithRealPrHelper({
+            cli_execute_command: function (opts) {
+                var command = opts.command;
+                if (command === 'git rev-parse origin/main') return 'base-sha';
+                if (command === 'git merge-base origin/main HEAD') return 'old-sha';
+                if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
+                if (command === 'git push -u origin ai/PROJ-1') { throw new Error('GH013 push protection'); }
+                if (command === 'git push -u origin ai/PROJ-1 --force') { throw new Error('remote rejected again'); }
+                return '';
+            }
+        });
+        var result = mod.performPushOnly('ai/PROJ-1', 'main');
+        assert.equal(result.success, false);
+        assert.equal(result.isPushFailure, true);
+        assert.contains(result.error, 'Push still rejected after force');
+    });
+
+    test('performPushOnly: push "succeeds" but the branch is absent on remote → push failure', function () {
+        var mod = loadWithRealPrHelper({
+            cli_execute_command: function (opts) {
+                var command = opts.command;
+                if (command === 'git rev-parse origin/main') return 'base-sha';
+                if (command === 'git merge-base origin/main HEAD') return 'base-sha';
+                if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
+                return '';
+            }
+        });
+        var result = mod.performPushOnly('ai/PROJ-1', 'main');
+        assert.equal(result.success, false);
+        assert.equal(result.isPushFailure, true);
+        assert.equal(result.error, 'Branch not found on remote after push');
+    });
+
+});
+
+suite('developTicketAndCreatePR > action seam clusters (gh-1190)', function () {
+
+    function makeCtx(overrides) {
+        return Object.assign({
+            ticketKey: 'PROJ-1',
+            ticketSummary: 'Do the thing',
+            customParams: {},
+            statuses: { IN_REVIEW: 'In Review', READY_FOR_DEVELOPMENT: 'Ready For Development' },
+            metadata: { contextId: 'story_development' },
+            config: {
+                git: { authorName: 'AI Teammate', authorEmail: 'ai@example.com', baseBranch: 'main' },
+                formats: {
+                    commitMessage: { development: '{ticketKey} {ticketSummary}' },
+                    prTitle: { development: '{ticketKey} {ticketSummary}' }
+                },
+                jira: {}
+            },
+            expectedBranch: 'ai/PROJ-1'
+        }, overrides || {});
+    }
+
+    test('prepareDevelopmentGitStage returns the Git Configuration gate reset when the author config fails', function () {
+        var mod = loadDevelopTicketAndCreatePR({
+            cli_execute_command: function () { throw new Error('git config boom'); },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        });
+        var terminal = mod.prepareDevelopmentGitStage(makeCtx());
+        assert.ok(terminal, 'a failed author config is a terminal gate reset');
+        assert.equal(terminal.success, true);
+        assert.equal(terminal.path, 'development-reset-for-retry');
+        assert.contains(terminal.error, 'Failed to configure git author');
+    });
+
+    test('prepareDevelopmentGitStage returns the checkout gate reset when the branch cannot be checked out', function () {
+        var mod = loadDevelopTicketAndCreatePR({
+            cli_execute_command: function (opts) {
+                var command = opts.command;
+                if (command.indexOf('git config user.') === 0) return '';
+                if (command === 'git branch --show-current') return 'some/other-branch';
+                if (command === 'git checkout ai/PROJ-1') { throw new Error('no such branch'); }
+                if (command === 'git checkout -b ai/PROJ-1') { throw new Error('cannot create'); }
+                return '';
+            },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        });
+        var terminal = mod.prepareDevelopmentGitStage(makeCtx());
+        assert.ok(terminal);
+        assert.contains(terminal.error, 'Could not checkout expected branch "ai/PROJ-1"');
+    });
+
+    test('prepareDevelopmentGitStage returns null when author config and checkout succeed', function () {
+        var mod = loadDevelopTicketAndCreatePR({
+            cli_execute_command: function (opts) {
+                if (opts.command === 'git branch --show-current') return 'ai/PROJ-1';
+                return '';
+            },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        });
+        assert.equal(mod.prepareDevelopmentGitStage(makeCtx()), null);
+    });
+
+    test('stageOutcomeOf returns the stage result unchanged and recurses on resume', function () {
+        var mod = loadDevelopTicketAndCreatePR({
+            cli_execute_command: function () { return ''; },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        });
+        var result = { success: true, path: 'no-changes-needed' };
+        assert.equal(mod.stageOutcomeOf({}, { result: result }), result, 'non-resume outcome → the terminal result');
+    });
+
+    test('runPublishPipeline returns the Quality Gate reset when runQualityGates fails', function () {
+        var mod = loadDevelopTicketAndCreatePRWithRealGitHelpers({
+            cli_execute_command: function (opts) {
+                if (opts.command === 'git branch --show-current') return 'ai/PROJ-1';
+                if (opts.command === 'git rev-parse origin/main') return 'base-sha';
+                if (opts.command === 'git merge-base origin/main HEAD') return 'base-sha';
+                if (opts.command === 'git status --porcelain --ignore-submodules=dirty') return '';
+                if (opts.command === 'git diff --cached --stat') return '1 file changed';
+                if (opts.command === 'git ls-remote --heads origin ai/PROJ-1') {
+                    return '0123456789abcdef0123456789abcdef01234567\trefs/heads/ai/PROJ-1\n';
+                }
+                return '';
+            },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        }, {
+            runQualityGates: function () { return { success: false, failedGate: 'unit-tests', error: '3 failing' }; }
+        });
+        var ctx = makeCtx({ prTarget: 'main' });
+        var terminal = mod.runPublishPipeline({}, ctx, 'ai/PROJ-1', 'PROJ-1 Do the thing');
+        assert.ok(terminal, 'a failed quality gate is terminal');
+        assert.equal(terminal.path, 'development-reset-for-retry');
+        assert.contains(terminal.error, 'Quality gate failed before development publish: unit-tests');
+    });
+
+    test('runPublishPipeline returns the Policy Gate reset when runPolicyGates fails', function () {
+        var mod = loadDevelopTicketAndCreatePRWithRealGitHelpers({
+            cli_execute_command: function (opts) {
+                if (opts.command === 'git branch --show-current') return 'ai/PROJ-1';
+                if (opts.command === 'git rev-parse origin/main') return 'base-sha';
+                if (opts.command === 'git merge-base origin/main HEAD') return 'base-sha';
+                if (opts.command === 'git status --porcelain --ignore-submodules=dirty') return '';
+                if (opts.command === 'git diff --cached --stat') return '1 file changed';
+                if (opts.command === 'git ls-remote --heads origin ai/PROJ-1') {
+                    return '0123456789abcdef0123456789abcdef01234567\trefs/heads/ai/PROJ-1\n';
+                }
+                return '';
+            },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        }, {
+            runPolicyGates: function () { return { success: false, failedGate: 'secrets', error: 'leak' }; }
+        });
+        var terminal = mod.runPublishPipeline({}, makeCtx({ prTarget: 'main' }), 'ai/PROJ-1', 'PROJ-1 Do the thing');
+        assert.ok(terminal);
+        assert.contains(terminal.error, 'Policy gate failed before development publish: secrets');
+    });
+
+    test('runPublishPipeline returns null (continue to PR) when every stage passes', function () {
+        var pushes = 0;
+        var mod = loadDevelopTicketAndCreatePRWithRealGitHelpers({
+            cli_execute_command: function (opts) {
+                var command = opts.command;
+                if (command === 'git branch --show-current') return 'ai/PROJ-1';
+                if (command === 'git rev-parse origin/main') return 'base-sha';
+                if (command === 'git merge-base origin/main HEAD') return 'base-sha';
+                if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
+                if (command === 'git diff --cached --stat') return '1 file changed';
+                if (command === 'git ls-remote --heads origin ai/PROJ-1') {
+                    return '0123456789abcdef0123456789abcdef01234567\trefs/heads/ai/PROJ-1\n';
+                }
+                if (command === 'git push -u origin ai/PROJ-1') { pushes++; }
+                return '';
+            },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        });
+        var terminal = mod.runPublishPipeline({}, makeCtx({ prTarget: 'main' }), 'ai/PROJ-1', 'PROJ-1 Do the thing');
+        assert.equal(terminal, null, 'all stages green → continue to PR creation');
+        assert.equal(pushes, 2, 'both publish pushes ran (initial + gate-fix)');
+    });
+
+    test('concludeActionFailure rethrows marked dead-letter errors unchanged', function () {
+        var mod = loadDevelopTicketAndCreatePR({
+            cli_execute_command: function () { return ''; },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        });
+        var marked = new Error('CLI agent interrupted mid-run');
+        marked.interruptedReset = true;
+        var threw = null;
+        try { mod.concludeActionFailure({}, marked); } catch (e) { threw = e; }
+        assert.equal(threw, marked, 'the marked error propagates as-is');
+    });
+
+    test('concludeActionFailure returns the reset-for-retry result for a plain error', function () {
+        var comments = [];
+        var mod = loadDevelopTicketAndCreatePR({
+            ticket: { key: 'PROJ-1', fields: { summary: 'Do the thing' } },
+            cli_execute_command: function () { return ''; },
+            jira_post_comment: function (args) { comments.push(args.comment); },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        });
+        var result = mod.concludeActionFailure({ ticket: { key: 'PROJ-1', fields: { summary: 'Do the thing' } } }, new Error('boom'));
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'development-reset-for-retry');
+        assert.equal(result.error, 'Error: boom');
+        assert.equal(comments.length, 1, 'the error comment is posted before the reset');
+    });
+
 });

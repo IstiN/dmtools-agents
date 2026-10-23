@@ -189,17 +189,101 @@ function publishExistingBranch(branchName, workingDir) {
     }
 }
 
+// ── gh-1190: performGitOperations seam split ────────────────────────────────
+// Mirrors the gh-1083 action() split in this file: small side-effecting
+// clusters keep the orchestration function under the CRAP threshold. Same
+// probes/pushes in the same order, same log lines, same return shapes
+// (characterization tests: js/unit-tests/test_postTestAutomationResults.js).
+
+/** Diagnostic: list test files under `inspectPath` before staging (best-effort). */
+function logStagingDiagnostics(inspectPath, workingDir) {
+    try {
+        var lsOutput = runInRepo('git status --short -- ' + inspectPath, workingDir) || '';
+        console.log('Git status for ' + inspectPath + ':', cleanCommandOutput(lsOutput) || '(empty)');
+    } catch (e) {
+        console.warn('Could not list ' + inspectPath + ':', e);
+    }
+}
+
+/**
+ * Nothing-staged publish path: ensure the branch tip is on remote so a PR can
+ * still be created/found. preCliTestAutomationSetup may have rebased/merged
+ * origin/main into an existing test branch without changing test files — in
+ * that case there are no staged changes here, but the branch tip still needs
+ * to be published; otherwise the remote test/<KEY> branch stays stale.
+ */
+function publishNoStagedChanges(branchName, addPath, workingDir) {
+    console.warn('No new staged changes in ' + addPath + ' (files may already exist on branch)');
+    var remoteBranchExists = false;
+    try {
+        // gh-912: decide on a real refs/heads/<branch> ref line — a
+        // warning-only capture (central-mode insteadOf origin, git
+        // ≥ 2.54) must classify as "branch absent" so the push runs.
+        remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
+    } catch (lsRemoteErr) {
+        console.warn('Error checking remote branches:', lsRemoteErr);
+    }
+    if (!remoteBranchExists) {
+        console.log('No remote branch found, pushing current branch state...');
+        try {
+            runInRepo('git push -u origin ' + branchName, workingDir);
+        } catch (pushErr) {
+            console.warn('Failed to push branch:', pushErr);
+            return { success: false, error: 'No test files were written and could not push branch' };
+        }
+    } else {
+        var publishResult = publishExistingBranch(branchName, workingDir);
+        if (!publishResult.success) {
+            return publishResult;
+        }
+    }
+    return { success: true, branchName: branchName, noNewCommit: true };
+}
+
+/**
+ * Commit the staged test changes and push — with the force-with-lease and
+ * plain-force retry chain for repos where the branch has diverged.
+ */
+function commitAndPushTestChanges(branchName, commitMessage, workingDir) {
+    console.log('Committing...');
+    runInRepo('git commit -m "' + prHelper.sanitizeCommitMessage(commitMessage) + '"', workingDir);
+
+    console.log('Pushing to remote...');
+    fetchRemoteBranch(branchName, workingDir);
+    try {
+        runInRepo('git push -u origin ' + branchName, workingDir);
+    } catch (e) {
+        console.log('Normal push failed, retrying with --force-with-lease...');
+        try {
+            runInRepo('git push -u origin ' + branchName + ' --force-with-lease', workingDir);
+        } catch (leaseErr) {
+            console.log('Force-with-lease push failed, force pushing...');
+            runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
+        }
+    }
+}
+
+/** Post-push verification: the branch must be a real ref on origin (gh-912). */
+function verifyBranchOnRemoteAfterPush(branchName, workingDir) {
+    var remoteBranchExists = false;
+    try {
+        // gh-912: verify the push produced a real refs/heads/<branch> ref
+        // line — stderr noise never counts as the branch existing.
+        remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
+    } catch (lsRemoteErr) {
+        console.warn('Error checking remote branches:', lsRemoteErr);
+    }
+    if (!remoteBranchExists) {
+        throw new Error('Branch not found on remote after push');
+    }
+}
+
 function performGitOperations(branchName, commitMessage, workingDir, testFilesPath) {
     var addPath = testFilesPath || 'testing/';
     var inspectPath = addPath.replace(/\/$/, '') || '.';
     try {
         // Diagnostic: list test files before staging
-        try {
-            var lsOutput = runInRepo('git status --short -- ' + inspectPath, workingDir) || '';
-            console.log('Git status for ' + inspectPath + ':', cleanCommandOutput(lsOutput) || '(empty)');
-        } catch (e) {
-            console.warn('Could not list ' + inspectPath + ':', e);
-        }
+        logStagingDiagnostics(inspectPath, workingDir);
 
         // Stage the configured test path only (outputs/ is gitignored — test artifacts should not be committed)
         console.log('Staging test path:', addPath);
@@ -210,66 +294,11 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
         console.log('Staged changes:', stagedOutput || '(none)');
 
         if (!stagedOutput || !stagedOutput.trim()) {
-            console.warn('No new staged changes in ' + addPath + ' (files may already exist on branch)');
-            // Ensure the branch is pushed to remote so we can create/find a PR.
-            // preCliTestAutomationSetup may have rebased/merged origin/main into
-            // an existing test branch without changing test files. In that case
-            // there are no staged changes here, but the branch tip still needs to
-            // be published; otherwise the remote test/<KEY> branch stays stale.
-            var remoteBranchExists = false;
-            try {
-                // gh-912: decide on a real refs/heads/<branch> ref line — a
-                // warning-only capture (central-mode insteadOf origin, git
-                // ≥ 2.54) must classify as "branch absent" so the push runs.
-                remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
-            } catch (lsRemoteErr) {
-                console.warn('Error checking remote branches:', lsRemoteErr);
-            }
-            if (!remoteBranchExists) {
-                console.log('No remote branch found, pushing current branch state...');
-                try {
-                    runInRepo('git push -u origin ' + branchName, workingDir);
-                } catch (pushErr) {
-                    console.warn('Failed to push branch:', pushErr);
-                    return { success: false, error: 'No test files were written and could not push branch' };
-                }
-            } else {
-                var publishResult = publishExistingBranch(branchName, workingDir);
-                if (!publishResult.success) {
-                    return publishResult;
-                }
-            }
-            return { success: true, branchName: branchName, noNewCommit: true };
+            return publishNoStagedChanges(branchName, addPath, workingDir);
         }
 
-        console.log('Committing...');
-        runInRepo('git commit -m "' + prHelper.sanitizeCommitMessage(commitMessage) + '"', workingDir);
-
-        console.log('Pushing to remote...');
-        fetchRemoteBranch(branchName, workingDir);
-        try {
-            runInRepo('git push -u origin ' + branchName, workingDir);
-        } catch (e) {
-            console.log('Normal push failed, retrying with --force-with-lease...');
-            try {
-                runInRepo('git push -u origin ' + branchName + ' --force-with-lease', workingDir);
-            } catch (leaseErr) {
-                console.log('Force-with-lease push failed, force pushing...');
-                runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
-            }
-        }
-
-        var remoteBranchExists = false;
-        try {
-            // gh-912: verify the push produced a real refs/heads/<branch> ref
-            // line — stderr noise never counts as the branch existing.
-            remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
-        } catch (lsRemoteErr) {
-            console.warn('Error checking remote branches:', lsRemoteErr);
-        }
-        if (!remoteBranchExists) {
-            throw new Error('Branch not found on remote after push');
-        }
+        commitAndPushTestChanges(branchName, commitMessage, workingDir);
+        verifyBranchOnRemoteAfterPush(branchName, workingDir);
 
         console.log('✅ Git operations completed');
         return { success: true, branchName: branchName };
@@ -736,5 +765,15 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action: action,
+        // gh-1190: performGitOperations seam clusters exported for direct
+        // characterization tests (same calls/log lines/order as the inline
+        // original — pinned by test_postTestAutomationResults.js).
+        performGitOperations: performGitOperations,
+        logStagingDiagnostics: logStagingDiagnostics,
+        publishNoStagedChanges: publishNoStagedChanges,
+        commitAndPushTestChanges: commitAndPushTestChanges,
+        verifyBranchOnRemoteAfterPush: verifyBranchOnRemoteAfterPush
+    };
 }
