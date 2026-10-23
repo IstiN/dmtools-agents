@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-23T22:00:10.223Z",
+  "ticketKey": "pr-1205",
+  "headSha": "d13c631f82d9b4728ab1cd8954cc147859d9a802",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:800fb7b4a253651e",
+      "size": 653
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:9d7d078c7daae588",
+      "size": 199
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:339176959fe101d4",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:f5c4313afe388825",
+      "size": 838
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:e41f0cffa83e9aac",
+      "size": 818
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:535f0797ed2c4c6b",
+      "size": 2450
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:f73ca41bb4b4bbcd",
+      "size": 376
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:0f89583bc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:777bbbc6ad127149",
+      "size": 2185
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:8725021baf7396d8",
+      "size": 2106
+    }
+  },
+  "comments": [
+    {
+      "id": "thread-1",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "",
+      "resolved": false,
+      "body": "🔴 red head d13c631f82d9b4728ab1cd8954cc147859d9a802 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-23:9c9140d3",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-23",
+      "updatedAt": "2026-10-23",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head d13c631f82d9b4728ab1cd8954cc147859d9a802 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    }
+  ]
+}
