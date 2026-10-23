@@ -81,14 +81,14 @@ function forkFullOf(item, baseOwner, baseRepo) {
 // branch, headRepo). Returns { ref, checkoutRef } — checkoutRef is null
 // whenever the plan is unchanged (same-repo PR, non-head-targeted rule,
 // missing head data), so the caller adds NO new inputs on those paths.
-function dispatchPlan(expandedRef, item, baseOwner, baseRepo) {
+function dispatchPlan(expandedRef, item, baseOwner, baseRepo, baseMachineRef) {
     var plan = { ref: String(expandedRef == null ? '' : expandedRef), checkoutRef: null };
     if (!item || !item.branch || !item.prNumber) return plan;
     // Only a dispatch that TARGETED the item's head ref reroutes: a
     // 'main'-ref (or '{prNumber}') rule dispatches where it always did.
     if (plan.ref !== String(item.branch)) return plan;
     if (!forkFullOf(item, baseOwner, baseRepo)) return plan; // same-repo regression guard
-    plan.ref = BASE_MACHINE_REF;
+    plan.ref = baseMachineRef || BASE_MACHINE_REF;
     plan.checkoutRef = pullHeadRef(item.prNumber);
     return plan;
 }

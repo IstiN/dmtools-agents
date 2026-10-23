@@ -471,7 +471,7 @@ function triggerSmWorkflow(context, reason) {
         context.repoInfo.repo,
         context.params.smWorkflowFile || 'sm.yml',
         '{}',
-        context.params.workflowRef || 'main'
+        context.params.workflowRef || configLoader.resolveDefaultWorkflowRef(null, context.config, null)
     );
     context.recoveryState.smTriggered = true;
     context.actions.push({ action: 'trigger-sm', reason: reason || 'df-manager' });

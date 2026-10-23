@@ -113,6 +113,10 @@ var DEFAULTS = {
 
     smRules: null,
     smMergeRules: null,
+    workflowRef: '',
+    sm: {
+        workflowRef: ''
+    },
 
     // Base directory for agent JSON configs (e.g. "projects/alpha").
     // When set, smRules.configFile values without a "/" are resolved relative to this dir.
@@ -1000,6 +1004,41 @@ function resolvePRTargetBranch(config, ticket) {
     return config.git.baseBranch;
 }
 
+function _configuredWorkflowRefOf(cfg) {
+    var top = (cfg && cfg.workflowRef) || '';
+    var sm = (cfg && cfg.sm && cfg.sm.workflowRef) || '';
+    return top || sm;
+}
+
+function _configuredBaseBranchOf(cfg) {
+    var git = cfg && cfg.git;
+    return (git && git.baseBranch) || '';
+}
+
+function _firstWorkflowRef(a, b, c) {
+    return a || b || c || '';
+}
+
+/**
+ * Resolve the default git ref for SM workflow_dispatch when a rule omits
+ * workflowRef (or when {branch} expands to empty).
+ * Precedence: config.workflowRef -> config.sm.workflowRef -> rule.baseBranch
+ * -> config.git.baseBranch -> fallbackConfig equivalents -> 'main'.
+ */
+function resolveDefaultWorkflowRef(rule, effectiveConfig, fallbackConfig) {
+    var explicit = _firstWorkflowRef(
+        _configuredWorkflowRefOf(effectiveConfig),
+        _configuredWorkflowRefOf(fallbackConfig),
+        rule && rule.baseBranch
+    );
+    var fallback = _firstWorkflowRef(
+        _configuredBaseBranchOf(effectiveConfig),
+        _configuredBaseBranchOf(fallbackConfig),
+        DEFAULT_CONFIG.GIT_CONFIG.DEFAULT_BASE_BRANCH
+    );
+    return explicit || fallback;
+}
+
 // ── Confluence URL resolution ────────────────────────────────────────────────
 
 /**
@@ -1228,6 +1267,7 @@ module.exports = {
     formatBranchName: formatBranchName,
     resolveBranchName: resolveBranchName,
     resolvePRTargetBranch: resolvePRTargetBranch,
+    resolveDefaultWorkflowRef: resolveDefaultWorkflowRef,
     resolveConfluenceUrls: resolveConfluenceUrls,
     resolveInstructions: resolveInstructions,
     resolveBaseInstructions: resolveBaseInstructions,

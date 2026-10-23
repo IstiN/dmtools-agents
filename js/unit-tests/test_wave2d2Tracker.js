@@ -88,7 +88,7 @@ suite('wave2d2 ado — dfManager', function() {
         var scm = { listPrs: function() { return []; }, listWorkflowRuns: function() { return []; },
             triggerWorkflow: function() {}, getRemoteRepoInfo: function() { return { owner: 'o', repo: 'r' }; } };
         var df = loadModule('js/dfManager.js', makeRequire({
-            './configLoader.js': { loadProjectConfig: function() { return { repository: { owner: 'o', repo: 'r' }, jira: { project: 'TS' } }; } },
+            './configLoader.js': { loadProjectConfig: function() { return { repository: { owner: 'o', repo: 'r' }, jira: { project: 'TS' } }; }, resolveDefaultWorkflowRef: function() { return 'main'; } },
             './common/scm.js': { createScm: function() { return scm; } },
             './common/trackers.js': w2Trackers(rec.mocks)
         }), Object.assign({ file_read: function() { return null; }, file_write: function() {}, cli_execute_command: function() { return ''; } }, rec.mocks));
