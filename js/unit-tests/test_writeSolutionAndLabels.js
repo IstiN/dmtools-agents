@@ -538,3 +538,152 @@ suite('writeSolutionAndLabels — repo label flow', function() {
         assert.equal(addedLabels.length, 0, 'no labels added when base fails');
     });
 });
+
+// ── gh-1187 CRAP split: characterization tests for the extracted helpers ────
+
+suite('writeSolutionAndLabels — gh-1187 extracted helpers', function() {
+
+    test('readSortedRepos: null for a missing file, an empty array, or a non-array payload', function() {
+        var mod = makeLabelsModule({});
+        assert.equal(mod.readSortedRepos(), null, 'missing file → null');
+
+        var modEmpty = makeLabelsModule({ 'outputs/affected_repos.json': '[]' });
+        assert.equal(modEmpty.readSortedRepos(), null, 'empty array → null');
+
+        var modNotArray = makeLabelsModule({ 'outputs/affected_repos.json': '{"name":"x"}' });
+        assert.equal(modNotArray.readSortedRepos(), null, 'non-array → null');
+    });
+
+    test('readSortedRepos: topologically sorts a valid payload', function() {
+        var mod = makeLabelsModule({
+            'outputs/affected_repos.json': JSON.stringify([
+                { name: 'web-ui', depends_on: ['service-api'] },
+                { name: 'service-api' }
+            ])
+        });
+        var sorted = mod.readSortedRepos();
+        assert.deepEqual(sorted.map(function(r) { return r.name; }), ['service-api', 'web-ui']);
+    });
+
+    test('readSortedRepos: invalid JSON propagates to the caller (non-fatal outer catch)', function() {
+        var mod = makeLabelsModule({ 'outputs/affected_repos.json': '{not json' });
+        var threw = false;
+        try {
+            mod.readSortedRepos();
+        } catch (e) {
+            threw = true;
+        }
+        assert.equal(threw, true, 'JSON parse error propagates');
+    });
+
+    test('currentFieldValue: trims a plain wiki-markup value', function() {
+        var mod = makeLabelsModule({}, {
+            jira_get_ticket: function() { return { fields: { description: '  body text  ' } }; }
+        });
+        assert.equal(mod.currentFieldValue(
+            { getIssue: function(key, fields) { return { fields: { description: '  body text  ' } }; } },
+            'PROJ-1', 'description'), 'body text');
+    });
+
+    test('currentFieldValue: ADF object yields an empty base with a warning', function() {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warns.push(m); };
+        try {
+            var mod = makeLabelsModule({});
+            var value = mod.currentFieldValue(
+                { getIssue: function() { return { fields: { description: { type: 'doc' } } }; } },
+                'PROJ-1', 'description');
+            assert.equal(value, '');
+            assert.equal(warns.some(function(m) { return String(m).indexOf('is ADF') !== -1; }), true);
+        } finally {
+            console.warn = origWarn;
+        }
+    });
+
+    test('currentFieldValue: ticket without a fields wrapper and null values yield an empty base', function() {
+        var mod = makeLabelsModule({});
+        assert.equal(mod.currentFieldValue(
+            { getIssue: function() { return { description: 'raw on ticket' }; } },
+            'PROJ-1', 'description'), 'raw on ticket');
+        assert.equal(mod.currentFieldValue(
+            { getIssue: function() { return { fields: {} }; } },
+            'PROJ-1', 'description'), '');
+        assert.equal(mod.currentFieldValue(
+            { getIssue: function() { return null; } },
+            'PROJ-1', 'description'), '');
+    });
+
+    test('resolveAppendBase: current field wins; getIssue and empty-field fall back to response.md', function() {
+        var mod = makeLabelsModule({ 'outputs/response.md': 'md base' }, {
+            jira_get_ticket: function() { return { fields: { description: 'field base' } }; }
+        });
+        var tracker = { getIssue: function() { return { fields: { description: 'field base' } }; } };
+        var logs = [];
+        var origLog = console.log;
+        console.log = function(m) { logs.push(m); };
+        try {
+            assert.equal(mod.resolveAppendBase(tracker, 'PROJ-1', 'description'), 'field base');
+            assert.equal(logs.some(function(m) { return String(m).indexOf('Using current Jira field as base') !== -1; }), true);
+        } finally {
+            console.log = origLog;
+        }
+
+        var failing = { getIssue: function() { throw new Error('jira down'); } };
+        assert.equal(mod.resolveAppendBase(failing, 'PROJ-2', 'description'), 'md base', 'getIssue failure → response.md');
+
+        var empty = { getIssue: function() { return { fields: { description: '' } }; } };
+        assert.equal(mod.resolveAppendBase(empty, 'PROJ-3', 'description'), 'md base', 'empty field → response.md');
+    });
+
+    test('resolveAppendBase: missing response.md yields an empty base (0 chars log)', function() {
+        var mod = makeLabelsModule({});
+        var empty = { getIssue: function() { return { fields: { description: '' } }; } };
+        assert.equal(mod.resolveAppendBase(empty, 'PROJ-4', 'description'), '');
+    });
+
+    test('addRepoLabelsQuietly: trims names, skips blank ones, keeps going past failures', function() {
+        var added = [];
+        var tracker = {
+            addLabel: function(key, label) {
+                added.push(label);
+                if (label === 'boom') { throw new Error('label api down'); }
+            }
+        };
+        var mod = makeLabelsModule({});
+        mod.addRepoLabelsQuietly(tracker, 'PROJ-5', [
+            { name: '  spaced  ' },
+            { name: '   ' },
+            { name: 'boom' },
+            { name: 'after-boom' }
+        ]);
+        assert.deepEqual(added, ['spaced', 'boom', 'after-boom'], 'blank skipped, failures non-fatal');
+    });
+
+    test('ado tracker type renders the markdown section into the field (no jira {code} anchor)', function() {
+        var written = [];
+        var mod = makeLabelsModule(
+            {
+                'outputs/response.md': 'h2. Solution',
+                'outputs/affected_repos.json': JSON.stringify([{ name: 'core-db', reason: 'DB' }])
+            },
+            {
+                ado_update_description: function(opts) { written.push(opts.description); },
+                ado_get_work_item: function() { return { fields: {} }; }
+            }
+        );
+
+        var result = mod.action({
+            ticket: { key: 'PROJ-ADO' },
+            customParams: { solutionField: 'description', trackerProvider: 'ado' }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(written.length, 1);
+        assert.contains(written[0], '## Affected Repositories');
+        assert.contains(written[0], '```json');
+        assert.equal(written[0].indexOf('{code:json'), -1, 'ADO must not get jira wiki markup');
+    });
+
+});
+
