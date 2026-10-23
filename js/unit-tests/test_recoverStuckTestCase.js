@@ -195,3 +195,112 @@ suite('recoverStuckTestCase: stage-label fallback (gh-916)', function() {
         assert.deepEqual(added, [], 'Backlog is not a tag-only stage — no marker');
     });
 });
+
+// ── gh-1186: CRAP-reduction — extracted recovery helpers (characterization) ──
+
+suite('recoverStuckTestCase: recovery helpers (gh-1186)', function() {
+
+    test('isConflictingPrState: dirty/conflicting/mergeable-false conflict; clean does not', function() {
+        var m = loadRecoverStuckTestCase().mod;
+        assert.equal(m.isConflictingPrState(false, 'dirty'), true);
+        assert.equal(m.isConflictingPrState(true, 'dirty'), true, 'dirty state conflicts regardless of the mergeable flag');
+        assert.equal(m.isConflictingPrState(true, 'conflicting'), true);
+        assert.equal(m.isConflictingPrState(null, 'conflicting'), true);
+        assert.equal(m.isConflictingPrState(false, 'clean'), true);
+        assert.equal(m.isConflictingPrState(true, 'clean'), false);
+        assert.equal(m.isConflictingPrState(undefined, ''), false);
+    });
+
+    test('mergeableStateOf: snake_case first, camelCase fallback, empty-string default', function() {
+        var m = loadRecoverStuckTestCase().mod;
+        assert.equal(m.mergeableStateOf({ mergeable_state: 'clean' }), 'clean');
+        assert.equal(m.mergeableStateOf({ mergeableState: 'dirty' }), 'dirty');
+        assert.equal(m.mergeableStateOf({ mergeable_state: '', mergeableState: 'blocked' }), 'blocked');
+        assert.deepEqual(m.mergeableStateOf({}), '');
+        assert.equal(m.mergeableStateOf(null), null);
+    });
+
+    test('fetchPrDetailSafe: falls back to the open PR when details cannot be fetched', function() {
+        var m = loadRecoverStuckTestCase().mod;
+        var pr = { number: 7, title: 'x' };
+        assert.deepEqual(m.fetchPrDetailSafe({ getPr: function() { return { mergeable: true }; } }, pr), { mergeable: true });
+        assert.equal(m.fetchPrDetailSafe({ getPr: function() { throw new Error('boom'); } }, pr), pr);
+    });
+
+    test('action: missing ticket key → success:false with error', function() {
+        var loaded = loadRecoverStuckTestCase();
+        var result = loaded.mod.action({ ticket: {}, jobParams: {} });
+        assert.deepEqual(result, { success: false, error: 'missing ticket key' });
+    });
+
+    test('action: unfetchable PR details fall back to the open PR (clean path)', function() {
+        var loaded = loadRecoverStuckTestCase({
+            scm: {
+                listPrs: function() {
+                    return [{ number: 9, title: 'TS-9 t', head: { ref: 'test/TS-9' } }];
+                },
+                getPr: function() { throw new Error('details unavailable'); }
+            }
+        });
+        var result = loaded.mod.action({ ticket: { key: 'TS-9' }, jobParams: {} });
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_review');
+        assert.equal(result.prNumber, 9);
+    });
+
+    test('action: failed Backlog transition still removes the label and comments', function() {
+        var removedLabels = [];
+        var comments = [];
+        var loaded = loadRecoverStuckTestCase({
+            mocks: {
+                jira_move_to_status: function() { throw new Error('state machine says no'); },
+                jira_remove_label: function(args) { removedLabels.push(args); },
+                jira_post_comment: function(args) { comments.push(args.comment); }
+            }
+        });
+        var result = loaded.mod.action({ ticket: { key: 'TS-46' }, jobParams: {} });
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_backlog');
+        assert.deepEqual(removedLabels, [{ key: 'TS-46', label: 'sm_test_automation_triggered' }]);
+        assert.contains(comments[0], 'Moved back to Backlog');
+    });
+
+    test('action: failed In Rework transition still removes the stale labels and comments', function() {
+        var removedLabels = [];
+        var comments = [];
+        var loaded = loadRecoverStuckTestCase({
+            scm: {
+                listPrs: function() {
+                    return [{ number: 10, title: 'TS-47 t', head: { ref: 'test/TS-47' } }];
+                },
+                getPr: function() { return { mergeable: false, mergeable_state: 'dirty' }; }
+            },
+            mocks: {
+                jira_move_to_status: function() { throw new Error('no transition'); },
+                jira_remove_label: function(args) { removedLabels.push(args); },
+                jira_post_comment: function(args) { comments.push(args.comment); }
+            }
+        });
+        var result = loaded.mod.action({ ticket: { key: 'TS-47' }, jobParams: {} });
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_rework');
+        assert.deepEqual(removedLabels, [
+            { key: 'TS-47', label: 'sm_test_rework_triggered' },
+            { key: 'TS-47', label: 'sm_test_automation_triggered' }
+        ]);
+        assert.contains(comments[0], 'Moved to In Rework');
+    });
+
+    test("action: 'conflicting' mergeable_state alone moves to rework", function() {
+        var loaded = loadRecoverStuckTestCase({
+            scm: {
+                listPrs: function() {
+                    return [{ number: 11, title: 'TS-48 t', head: { ref: 'test/TS-48' } }];
+                },
+                getPr: function() { return { mergeable: true, mergeable_state: 'conflicting' }; }
+            }
+        });
+        var result = loaded.mod.action({ ticket: { key: 'TS-48' }, jobParams: {} });
+        assert.equal(result.action, 'moved_to_rework');
+    });
+});
