@@ -20,6 +20,185 @@ const tokenUsageComment = require('./common/tokenUsageComment.js');
 const trackersModule = require('./common/trackers.js');
 const linkedIssuesReport = require('./common/linkedIssuesReport.js');
 
+/**
+ * DMTools returns issue search results as host objects. In some runtime
+ * environments (CI/GraalJS) direct property access (obj.key) returns
+ * undefined; serialising to JSON and back gives a plain JS object we can
+ * rely on.
+ */
+function toPlain(value) {
+    if (value === null || value === undefined) return value;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+    return JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * gh-1188: release the SM idempotency label so the check re-runs next cycle.
+ * A removal failure is swallowed (non-fatal, as before).
+ */
+function releaseLock(tracker, ticketKey, removeLabel) {
+    if (ticketKey && removeLabel) {
+        try {
+            tracker.removeLabel(ticketKey, removeLabel);
+            console.log('Released SM label — will re-check next cycle');
+        } catch (e) {
+            console.warn('Failed to remove SM label:', e);
+        }
+    }
+}
+
+function findLinkedBugs(tracker, provider, entityKey) {
+    // JQL text: provider-specific query (WIQL on ado)
+    return toPlain(tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(provider, entityKey, 'issuetype = Bug', { issueType: 'Bug' }), { maxResults: 50 })) || [];
+}
+
+function findNotDoneBugs(tracker, provider, entityKey, doneStatus) {
+    // JQL text: provider-specific query (WIQL on ado)
+    return toPlain(tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(provider, entityKey, 'issuetype = Bug AND status != "' + doneStatus + '"', { issueType: 'Bug', statusNotEquals: doneStatus }), { maxResults: 50 })) || [];
+}
+
+function findLinkedTestCases(tracker, provider, ticketKey) {
+    // JQL text: provider-specific query (WIQL on ado)
+    return toPlain(tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(provider, ticketKey, 'issuetype = "Test Case"', { issueType: 'Test Case' }), { maxResults: 100 })) || [];
+}
+
+function findPendingBugsInLinkedTestCases(tracker, provider, ticketKey, doneStatus) {
+    var testCases = findLinkedTestCases(tracker, provider, ticketKey);
+    var pending = [];
+    testCases.forEach(function(tcRaw) {
+        var tc = toPlain(tcRaw);
+        var tcKey = tc.key;
+        if (!tcKey) {
+            console.warn('Skipping Test Case without key:', tc);
+            return;
+        }
+        var notDone = findNotDoneBugs(tracker, provider, tcKey, doneStatus);
+        notDone.forEach(function(bugRaw) {
+            var bug = toPlain(bugRaw);
+            pending.push({ tcKey: tcKey, bugKey: bug.key, status: bug.fields && bug.fields.status && bug.fields.status.name });
+        });
+    });
+    return pending;
+}
+
+/**
+ * gh-1188: one '* BUG (status) via Test Case TC' line per pending bug.
+ */
+function formatPendingTcBugLines(pendingTcBugs) {
+    return pendingTcBugs.map(function(item) {
+        return '* ' + item.bugKey + ' (' + item.status + ') via Test Case ' + item.tcKey;
+    }).join('\n');
+}
+
+/**
+ * gh-1188: story completion — move the Story back to Ready For Testing for a
+ * full re-test of all linked Test Cases.
+ *
+ * gh-916: READY_FOR_TESTING can be tag-only (restricted ADO workflows) —
+ * stage-label fallback via moveToStatusOrMark. When neither the move nor the
+ * mark happened, no side effects follow (as before).
+ */
+function moveStoryToReadyForTesting(tracker, ticketKey, totalBugs, statuses, removeLabel) {
+    console.log('All', totalBugs, 'linked Bug(s) are Done — moving Story', ticketKey, 'to Ready For Testing');
+
+    var rftMove = tracker.moveToStatusOrMark(ticketKey, statuses.READY_FOR_TESTING, 'READY_FOR_TESTING');
+    if (rftMove.moved || rftMove.marked) {
+        // Remove the story_done_check lock so it can re-run after the Story returns to In Testing
+        try {
+            tracker.removeLabel(ticketKey, 'sm_story_done_check_triggered');
+            console.log('Removed sm_story_done_check_triggered — story_done_check will run after re-test');
+        } catch (e) {
+            console.warn('Failed to remove sm_story_done_check_triggered label:', e);
+        }
+
+        releaseLock(tracker, ticketKey, removeLabel);
+
+        tracker.postComment(ticketKey, 'h3. 🔄 Story Ready for Re-test\n\n' +
+                'All *' + totalBugs + '* linked Bug(s) are now in *Done* status.\n\n' +
+                'The Story has been automatically moved back to *Ready For Testing* to re-run all linked Test Cases.');
+
+        console.log('✅ Story', ticketKey, 'moved to Ready For Testing');
+    }
+}
+
+/**
+ * gh-1188: Test Case completion — move the TC back to Backlog so it is
+ * re-automated against the fixed code.
+ *
+ * gh-916: on restricted ADO workflows the TC cannot carry a "Done" state at
+ * all; Backlog is a real state on PBI workflows, so this move stays a direct
+ * transition.
+ */
+function moveTestCaseToBacklog(tracker, ticketKey, totalBugs, statuses, removeLabel) {
+    console.log('All', totalBugs, 'linked Bug(s) are Done — moving', ticketKey, 'to Backlog');
+
+    tracker.moveToStatus(ticketKey, statuses.BACKLOG);
+
+    // Remove test automation label so SM can re-trigger automation
+    try {
+        tracker.removeLabel(ticketKey, 'sm_test_automation_triggered');
+        console.log('Removed sm_test_automation_triggered — TC will be re-automated next SM cycle');
+    } catch (e) {
+        console.warn('Failed to remove sm_test_automation_triggered label:', e);
+    }
+
+    releaseLock(tracker, ticketKey, removeLabel);
+
+    tracker.postComment(ticketKey, 'h3. 🔄 Test Case Ready for Re-automation\n\n' +
+            'All *' + totalBugs + '* linked Bug(s) are now in *Done* status.\n\n' +
+            'This Test Case has been automatically moved back to *Backlog* to be re-automated against the fixed code.');
+
+    console.log('✅ TC', ticketKey, 'moved to Backlog');
+}
+
+/**
+ * gh-1188: token-usage summary step — a provider failure here must never
+ * fail the ready check.
+ */
+function postTokenUsageSafely(ticketKey, params) {
+    try {
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
+/**
+ * gh-1188: story branch of the ready check — all linked Bugs are Done here.
+ * Also checks bugs linked to linked Test Cases before allowing the Story to
+ * re-test; any pending TC bug keeps the Story in Bug To Fix.
+ */
+function completeStoryReady(params, tracker, provider, ticketKey, issueType, totalBugs, jiraConfig, removeLabel) {
+    const pendingTcBugs = findPendingBugsInLinkedTestCases(tracker, provider, ticketKey, jiraConfig.statuses.DONE);
+    if (pendingTcBugs.length > 0) {
+        const details = formatPendingTcBugLines(pendingTcBugs);
+        console.log('Found', pendingTcBugs.length, 'pending Bug(s) linked to linked Test Cases — keeping Story in Bug To Fix');
+        console.log(details);
+        releaseLock(tracker, ticketKey, removeLabel);
+        return { success: true, action: 'waiting_for_tc_bugs', issueType: issueType, pendingTcBugs: pendingTcBugs, ticketKey: ticketKey };
+    }
+
+    // All linked Bugs are Done → move Story back to Ready For Testing for re-test
+    moveStoryToReadyForTesting(tracker, ticketKey, totalBugs, jiraConfig.statuses, removeLabel);
+
+    postTokenUsageSafely(ticketKey, params);
+
+    return { success: true, action: 'moved_to_ready_for_testing', totalBugs: totalBugs, ticketKey: ticketKey };
+}
+
+/**
+ * gh-1188: Test Case branch of the ready check — all linked Bugs are Done
+ * here, so the TC goes back to Backlog.
+ */
+function completeTestCaseReady(params, tracker, ticketKey, issueType, totalBugs, jiraConfig, removeLabel) {
+    // All linked Bugs are Done → move TC back to Backlog
+    moveTestCaseToBacklog(tracker, ticketKey, totalBugs, jiraConfig.statuses, removeLabel);
+
+    postTokenUsageSafely(ticketKey, params);
+
+    return { success: true, action: 'moved_to_backlog', totalBugs: totalBugs, ticketKey: ticketKey };
+}
+
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
     const ticketFields = params.ticket && params.ticket.fields;
@@ -29,165 +208,61 @@ function action(params) {
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
     const jiraConfig = projectConfig.jira;
     const tracker = trackersModule.createTracker(projectConfig, customParams || {});
-
-    /**
-     * DMTools returns issue search results as host objects. In some runtime
-     * environments (CI/GraalJS) direct property access (obj.key) returns
-     * undefined; serialising to JSON and back gives a plain JS object we can
-     * rely on.
-     */
-    function toPlain(value) {
-        if (value === null || value === undefined) return value;
-        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
-        return JSON.parse(JSON.stringify(value));
-    }
-
-    function releaseLock() {
-        if (ticketKey && removeLabel) {
-            try {
-                tracker.removeLabel(ticketKey, removeLabel);
-                console.log('Released SM label — will re-check next cycle');
-            } catch (e) {
-                console.warn('Failed to remove SM label:', e);
-            }
-        }
-    }
-
-    function findLinkedBugs(entityKey) {
-        var key = entityKey || ticketKey;
-        // JQL text: provider-specific query (WIQL on ado)
-        return toPlain(tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(tracker.provider(), key, 'issuetype = Bug', { issueType: 'Bug' }), { maxResults: 50 })) || [];
-    }
-
-    function findNotDoneBugs(entityKey) {
-        var key = entityKey || ticketKey;
-        // JQL text: provider-specific query (WIQL on ado)
-        return toPlain(tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(tracker.provider(), key, 'issuetype = Bug AND status != "' + jiraConfig.statuses.DONE + '"', { issueType: 'Bug', statusNotEquals: jiraConfig.statuses.DONE }), { maxResults: 50 })) || [];
-    }
-
-    function findLinkedTestCases() {
-        // JQL text: provider-specific query (WIQL on ado)
-        return toPlain(tracker.searchIssues(linkedIssuesReport.buildLinkedIssuesQuery(tracker.provider(), ticketKey, 'issuetype = "Test Case"', { issueType: 'Test Case' }), { maxResults: 100 })) || [];
-    }
-
-    function findPendingBugsInLinkedTestCases() {
-        var testCases = findLinkedTestCases();
-        var pending = [];
-        testCases.forEach(function(tcRaw) {
-            var tc = toPlain(tcRaw);
-            var tcKey = tc.key;
-            if (!tcKey) {
-                console.warn('Skipping Test Case without key:', tc);
-                return;
-            }
-            var notDone = findNotDoneBugs(tcKey);
-            notDone.forEach(function(bugRaw) {
-                var bug = toPlain(bugRaw);
-                pending.push({ tcKey: tcKey, bugKey: bug.key, status: bug.fields && bug.fields.status && bug.fields.status.name });
-            });
-        });
-        return pending;
-    }
+    const provider = tracker.provider();
 
     try {
         if (!ticketKey) throw new Error('params.ticket.key is missing');
         console.log('=== Bug To Fix ready check for', ticketKey, '(' + issueType + ') ===');
 
-        const linkedBugs = findLinkedBugs();
+        const linkedBugs = findLinkedBugs(tracker, provider, ticketKey);
         const totalBugs = linkedBugs.length;
         console.log('Linked Bugs:', totalBugs);
 
         if (totalBugs === 0) {
             console.log('No linked Bugs found — releasing lock, will re-check next cycle');
-            releaseLock();
-            return { success: true, action: 'no_linked_bugs', issueType, ticketKey };
+            releaseLock(tracker, ticketKey, removeLabel);
+            return { success: true, action: 'no_linked_bugs', issueType: issueType, ticketKey: ticketKey };
         }
 
-        const notDoneBugs = findNotDoneBugs();
+        const notDoneBugs = findNotDoneBugs(tracker, provider, ticketKey, jiraConfig.statuses.DONE);
         const notDoneCount = notDoneBugs.length;
         console.log('Linked Bugs not yet Done:', notDoneCount, '/', totalBugs);
 
         if (notDoneCount > 0) {
             console.log('Not all linked Bugs are Done — releasing lock, will re-check next cycle');
-            releaseLock();
-            return { success: true, action: 'waiting', issueType, total: totalBugs, notDone: notDoneCount, ticketKey };
+            releaseLock(tracker, ticketKey, removeLabel);
+            return { success: true, action: 'waiting', issueType: issueType, total: totalBugs, notDone: notDoneCount, ticketKey: ticketKey };
         }
 
         if (issueType === jiraConfig.issueTypes.STORY) {
-            // Also check bugs linked to linked Test Cases before allowing the Story to re-test.
-            const pendingTcBugs = findPendingBugsInLinkedTestCases();
-            if (pendingTcBugs.length > 0) {
-                var details = pendingTcBugs.map(function(item) {
-                    return '* ' + item.bugKey + ' (' + item.status + ') via Test Case ' + item.tcKey;
-                }).join('\n');
-                console.log('Found', pendingTcBugs.length, 'pending Bug(s) linked to linked Test Cases — keeping Story in Bug To Fix');
-                console.log(details);
-                releaseLock();
-                return { success: true, action: 'waiting_for_tc_bugs', issueType, pendingTcBugs: pendingTcBugs, ticketKey };
-            }
-
-            // All linked Bugs are Done → move Story back to Ready For Testing for re-test
-            console.log('All', totalBugs, 'linked Bug(s) are Done — moving Story', ticketKey, 'to Ready For Testing');
-
-            // gh-916: READY_FOR_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback.
-            var rftMove = tracker.moveToStatusOrMark(ticketKey, jiraConfig.statuses.READY_FOR_TESTING, 'READY_FOR_TESTING');
-            if (rftMove.moved || rftMove.marked) {
-                // Remove the story_done_check lock so it can re-run after the Story returns to In Testing
-                try {
-                    tracker.removeLabel(ticketKey, 'sm_story_done_check_triggered');
-                    console.log('Removed sm_story_done_check_triggered — story_done_check will run after re-test');
-                } catch (e) {
-                    console.warn('Failed to remove sm_story_done_check_triggered label:', e);
-                }
-
-                releaseLock();
-
-                tracker.postComment(ticketKey, 'h3. 🔄 Story Ready for Re-test\n\n' +
-                        'All *' + totalBugs + '* linked Bug(s) are now in *Done* status.\n\n' +
-                        'The Story has been automatically moved back to *Ready For Testing* to re-run all linked Test Cases.');
-
-                console.log('✅ Story', ticketKey, 'moved to Ready For Testing');
-            }
-        } else {
-            // All linked Bugs are Done → move TC back to Backlog
-            console.log('All', totalBugs, 'linked Bug(s) are Done — moving', ticketKey, 'to Backlog');
-
-            // gh-916: on restricted ADO workflows the TC cannot carry a "Done" state at all; Backlog is a
-            // real state on PBI workflows, so this move stays a direct transition.
-            tracker.moveToStatus(ticketKey, jiraConfig.statuses.BACKLOG);
-
-            // Remove test automation label so SM can re-trigger automation
-            try {
-                tracker.removeLabel(ticketKey, 'sm_test_automation_triggered');
-                console.log('Removed sm_test_automation_triggered — TC will be re-automated next SM cycle');
-            } catch (e) {
-                console.warn('Failed to remove sm_test_automation_triggered label:', e);
-            }
-
-            releaseLock();
-
-            tracker.postComment(ticketKey, 'h3. 🔄 Test Case Ready for Re-automation\n\n' +
-                    'All *' + totalBugs + '* linked Bug(s) are now in *Done* status.\n\n' +
-                    'This Test Case has been automatically moved back to *Backlog* to be re-automated against the fixed code.');
-
-            console.log('✅ TC', ticketKey, 'moved to Backlog');
+            return completeStoryReady(params, tracker, provider, ticketKey, issueType, totalBugs, jiraConfig, removeLabel);
         }
 
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
-
-        return { success: true, action: issueType === jiraConfig.issueTypes.STORY ? 'moved_to_ready_for_testing' : 'moved_to_backlog', totalBugs: totalBugs, ticketKey };
+        return completeTestCaseReady(params, tracker, ticketKey, issueType, totalBugs, jiraConfig, removeLabel);
 
     } catch (error) {
         console.error('❌ Error in checkBugToFixReady:', error);
-        releaseLock();
+        releaseLock(tracker, ticketKey, removeLabel);
         return { success: false, error: error.toString() };
     }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action,
+        // gh-1188: step helpers extracted from action — exported for direct
+        // characterization tests.
+        toPlain,
+        releaseLock,
+        findLinkedBugs,
+        findNotDoneBugs,
+        findLinkedTestCases,
+        findPendingBugsInLinkedTestCases,
+        formatPendingTcBugLines,
+        moveStoryToReadyForTesting,
+        moveTestCaseToBacklog,
+        postTokenUsageSafely,
+        completeStoryReady,
+        completeTestCaseReady
+    };
 }
