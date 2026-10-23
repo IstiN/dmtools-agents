@@ -351,87 +351,132 @@ function getTestCaseDirectory(tcKey, testFilesPath) {
     return basePath + '/tests/' + tcKey;
 }
 
+// ── gh-1192: removeIrrelevantTestCode split into a per-TC helper ────────────
+
+/**
+ * Remove the tracked test code of ONE TC whose status marks it irrelevant.
+ * Mutates `removed` (collected in list order); every failure is a warn that
+ * skips just this TC.
+ */
+function removeTestCodeForIrrelevantTc(tc, workingDir, testFilesPath, irrelevantStatus, removed) {
+    var status = tc.fields && tc.fields.status && tc.fields.status.name;
+    if (status !== irrelevantStatus) return;
+    var dir = getTestCaseDirectory(tc.key, testFilesPath);
+    try {
+        var lsOutput = cleanCommandOutput(runGit('git ls-files -- ' + dir, workingDir) || '');
+        if (!lsOutput.trim()) {
+            console.log('No tracked test code to remove for irrelevant TC:', tc.key);
+            return;
+        }
+        console.log('Removing test code for irrelevant TC:', tc.key, '—', dir);
+        runGit('git rm -r --ignore-unmatch -- ' + dir, workingDir);
+        removed.push(tc.key);
+    } catch (e) {
+        console.warn('Failed to remove test code for irrelevant TC', tc.key, ':', e);
+    }
+}
+
 function removeIrrelevantTestCode(testCases, workingDir, testFilesPath, irrelevantStatus) {
     var removed = [];
     testCases.forEach(function(tc) {
-        var status = tc.fields && tc.fields.status && tc.fields.status.name;
-        if (status !== irrelevantStatus) return;
-        var dir = getTestCaseDirectory(tc.key, testFilesPath);
-        try {
-            var lsOutput = cleanCommandOutput(runGit('git ls-files -- ' + dir, workingDir) || '');
-            if (!lsOutput.trim()) {
-                console.log('No tracked test code to remove for irrelevant TC:', tc.key);
-                return;
-            }
-            console.log('Removing test code for irrelevant TC:', tc.key, '—', dir);
-            runGit('git rm -r --ignore-unmatch -- ' + dir, workingDir);
-            removed.push(tc.key);
-        } catch (e) {
-            console.warn('Failed to remove test code for irrelevant TC', tc.key, ':', e);
-        }
+        removeTestCodeForIrrelevantTc(tc, workingDir, testFilesPath, irrelevantStatus, removed);
     });
     return removed;
 }
 
+// ── gh-1192: action() split into a context builder + per-step executors ─────
+
+/** The Test Case issue type configured for the project (default 'Test Case'). */
+function testCaseTypeOf(projectConfig) {
+    return projectConfig.jira && projectConfig.jira.issueTypes && projectConfig.jira.issueTypes.TEST_CASE
+        ? projectConfig.jira.issueTypes.TEST_CASE
+        : 'Test Case';
+}
+
+/** Everything the setup steps need, resolved once, in the original order. */
+function resolveSetupContext(params) {
+    var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
+    var folder = actualParams.inputFolderPath;
+    var storyKey = folder.split('/').pop();
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    var customParams = (params.jobParams || params).customParams || {};
+    return {
+        actualParams: actualParams,
+        folder: folder,
+        storyKey: storyKey,
+        config: config,
+        projectConfig: projectConfig,
+        testCaseType: testCaseTypeOf(projectConfig),
+        customParams: customParams,
+        tracker: trackersModule.createTracker(projectConfig, customParams),
+        statuses: resolveStatuses(customParams),
+        testFilesPath: customParams.testFilesGlob || 'testing/'
+    };
+}
+
+/** Step 1: fetch the linked Test Cases and write the input context files. */
+function stepFetchLinkedTestCases(ctx) {
+    var testCases = fetchLinkedTestCases(ctx.storyKey, ctx.testCaseType, ctx.tracker);
+    console.log('Found', testCases.length, 'linked Test Case(s)');
+
+    if (testCases.length === 0) {
+        console.warn('No linked Test Cases found for Story', ctx.storyKey);
+    }
+
+    writeLinkedTestCases(ctx.storyKey, testCases);
+    return testCases;
+}
+
+/** Step 2: checkout test/{STORY_KEY} synced with the base branch (non-fatal). */
+function stepCheckoutTestBranch(ctx) {
+    try {
+        checkoutBranch(ctx.storyKey, ctx.config, ctx.folder);
+    } catch (e) {
+        console.error('Branch checkout failed (non-fatal):', e);
+    }
+}
+
+/** Step 3: fetch PR context for rework when an open test PR exists (non-fatal). */
+function stepWriteTestPrContext(ctx) {
+    try {
+        var scm = scmModule.createScm(ctx.projectConfig);
+        var pr = findTestPr(scm, ctx.storyKey, ctx.config);
+        if (pr && pr.number) {
+            console.log('Open test PR found:', pr.number, '— fetching diff and discussions');
+            writePrContext(ctx.storyKey, scm, pr);
+        } else {
+            console.log('No open test PR found for', ctx.storyKey);
+        }
+    } catch (e) {
+        console.warn('Fetching PR context failed (non-fatal):', e);
+    }
+}
+
+/** Step 4: remove test code for linked TCs marked Irrelevant (non-fatal). */
+function stepRemoveIrrelevantTestCode(ctx, testCases) {
+    try {
+        var removed = removeIrrelevantTestCode(testCases, ctx.config.workingDir || null, ctx.testFilesPath, ctx.statuses.IRRELEVANT || 'Irrelevant');
+        if (removed.length > 0) {
+            console.log('Removed test code for irrelevant TCs:', removed.join(', '));
+        }
+    } catch (e) {
+        console.warn('Removing irrelevant test code failed (non-fatal):', e);
+    }
+}
+
 function action(params) {
     try {
-        var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
-        var folder = actualParams.inputFolderPath;
-        var storyKey = folder.split('/').pop();
-        var config = configLoader.loadProjectConfig(params.jobParams || params);
-        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-        var testCaseType = projectConfig.jira && projectConfig.jira.issueTypes && projectConfig.jira.issueTypes.TEST_CASE
-            ? projectConfig.jira.issueTypes.TEST_CASE
-            : 'Test Case';
-        var customParams = (params.jobParams || params).customParams || {};
-        var tracker = trackersModule.createTracker(projectConfig, customParams);
-        var statuses = resolveStatuses(customParams);
-        var testFilesPath = customParams.testFilesGlob || 'testing/';
+        var ctx = resolveSetupContext(params);
 
-        console.log('=== Story test automation setup for:', storyKey, '===');
+        console.log('=== Story test automation setup for:', ctx.storyKey, '===');
 
-        // Step 1: Fetch linked test cases
-        var testCases = fetchLinkedTestCases(storyKey, testCaseType, tracker);
-        console.log('Found', testCases.length, 'linked Test Case(s)');
+        var testCases = stepFetchLinkedTestCases(ctx);
+        stepCheckoutTestBranch(ctx);
+        stepWriteTestPrContext(ctx);
+        stepRemoveIrrelevantTestCode(ctx, testCases);
 
-        if (testCases.length === 0) {
-            console.warn('No linked Test Cases found for Story', storyKey);
-        }
-
-        writeLinkedTestCases(storyKey, testCases);
-
-        // Step 2: Checkout test/{STORY_KEY} branch, always synced with origin/main
-        try {
-            checkoutBranch(storyKey, config, folder);
-        } catch (e) {
-            console.error('Branch checkout failed (non-fatal):', e);
-        }
-
-        // Step 3: Fetch PR context for rework when an open test PR exists
-        try {
-            var scm = scmModule.createScm(projectConfig);
-            var pr = findTestPr(scm, storyKey, config);
-            if (pr && pr.number) {
-                console.log('Open test PR found:', pr.number, '— fetching diff and discussions');
-                writePrContext(storyKey, scm, pr);
-            } else {
-                console.log('No open test PR found for', storyKey);
-            }
-        } catch (e) {
-            console.warn('Fetching PR context failed (non-fatal):', e);
-        }
-
-        // Step 4: Remove test code for linked TCs that are marked Irrelevant
-        try {
-            var removed = removeIrrelevantTestCode(testCases, config.workingDir || null, testFilesPath, statuses.IRRELEVANT || 'Irrelevant');
-            if (removed.length > 0) {
-                console.log('Removed test code for irrelevant TCs:', removed.join(', '));
-            }
-        } catch (e) {
-            console.warn('Removing irrelevant test code failed (non-fatal):', e);
-        }
-
-        console.log('✅ Story test automation setup complete for', storyKey);
+        console.log('✅ Story test automation setup complete for', ctx.storyKey);
 
     } catch (error) {
         console.error('❌ Error in preCliStoryTestAutomationSetup:', error);
@@ -442,5 +487,12 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action: action,
+        // gh-1192: extracted setup/removal helpers (test surface)
+        removeIrrelevantTestCode: removeIrrelevantTestCode,
+        removeTestCodeForIrrelevantTc: removeTestCodeForIrrelevantTc,
+        getTestCaseDirectory: getTestCaseDirectory,
+        testCaseTypeOf: testCaseTypeOf
+    };
 }

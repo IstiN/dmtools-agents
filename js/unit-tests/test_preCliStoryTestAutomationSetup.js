@@ -473,3 +473,131 @@ suite('preCliStoryTestAutomationSetup > writePrContext fixtures (gh-930)', funct
     });
 
 });
+
+suite('preCliStoryTestAutomationSetup.removeIrrelevantTestCode (gh-1192)', function() {
+
+    test('removes tracked test code for every irrelevant TC, in order', function() {
+        var commands = [];
+        var module = loadPreCliStoryTestAutomationSetup({
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command === 'git ls-files -- testing/tests/TS-1') return 'testing/tests/TS-1/test.ts';
+                if (opts.command === 'git ls-files -- testing/tests/TS-2') return 'testing/tests/TS-2/a.ts\ntesting/tests/TS-2/b.ts';
+                return '';
+            }
+        });
+        var removed = module.removeIrrelevantTestCode([
+            { key: 'TS-1', fields: { status: { name: 'Irrelevant' } } },
+            { key: 'TS-2', fields: { status: { name: 'Irrelevant' } } }
+        ], null, 'testing/', 'Irrelevant');
+        assert.deepEqual(removed, ['TS-1', 'TS-2']);
+        assert.ok(commands.indexOf('git rm -r --ignore-unmatch -- testing/tests/TS-1') !== -1);
+        assert.ok(commands.indexOf('git rm -r --ignore-unmatch -- testing/tests/TS-2') !== -1);
+    });
+
+    test('skips TCs whose status is not the irrelevant one', function() {
+        var commands = [];
+        var module = loadPreCliStoryTestAutomationSetup({
+            cli_execute_command: function(opts) { commands.push(opts.command); return ''; }
+        });
+        var removed = module.removeIrrelevantTestCode([
+            { key: 'TS-3', fields: { status: { name: 'Ready For Development' } } },
+            { key: 'TS-4', fields: { status: { name: 'In Testing' } } }
+        ], null, 'testing/', 'Irrelevant');
+        assert.deepEqual(removed, []);
+        assert.equal(commands.length, 0, 'no git probes for relevant TCs');
+    });
+
+    test('TCs with no tracked test code are left alone', function() {
+        var commands = [];
+        var module = loadPreCliStoryTestAutomationSetup({
+            cli_execute_command: function(opts) { commands.push(opts.command); return ''; }
+        });
+        var removed = module.removeIrrelevantTestCode([
+            { key: 'TS-5', fields: { status: { name: 'Irrelevant' } } }
+        ], null, 'testing/', 'Irrelevant');
+        assert.deepEqual(removed, []);
+        assert.ok(commands.indexOf('git ls-files -- testing/tests/TS-5') !== -1);
+        assert.equal(commands.filter(function(c) { return c.indexOf('git rm') === 0; }).length, 0);
+    });
+
+    test('a failing rm warns and does not abort the remaining TCs', function() {
+        var commands = [];
+        var module = loadPreCliStoryTestAutomationSetup({
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command === 'git rm -r --ignore-unmatch -- testing/tests/TS-6') throw new Error('rm boom');
+                if (opts.command.indexOf('git ls-files') === 0) return 'testing/x.ts';
+                return '';
+            }
+        });
+        var removed = module.removeIrrelevantTestCode([
+            { key: 'TS-6', fields: { status: { name: 'Irrelevant' } } },
+            { key: 'TS-7', fields: { status: { name: 'Irrelevant' } } }
+        ], null, 'testing/', 'Irrelevant');
+        assert.deepEqual(removed, ['TS-7']);
+    });
+
+    test('a failing ls-files probe warns and skips that TC', function() {
+        var module = loadPreCliStoryTestAutomationSetup({
+            cli_execute_command: function(opts) {
+                if (opts.command.indexOf('git ls-files') === 0) throw new Error('ls boom');
+                return '';
+            }
+        });
+        var removed = module.removeIrrelevantTestCode([
+            { key: 'TS-8', fields: { status: { name: 'Irrelevant' } } }
+        ], null, 'testing/', 'Irrelevant');
+        assert.deepEqual(removed, []);
+    });
+
+    test('getTestCaseDirectory joins testFilesPath, tests and the TC key', function() {
+        var module = loadPreCliStoryTestAutomationSetup({});
+        assert.equal(module.getTestCaseDirectory('TC-9', 'testing/'), 'testing/tests/TC-9');
+        assert.equal(module.getTestCaseDirectory('TC-9', 'testing'), 'testing/tests/TC-9');
+    });
+
+    test('testCaseTypeOf honors the configured issue type, defaulting to "Test Case"', function() {
+        var module = loadPreCliStoryTestAutomationSetup({});
+        assert.equal(module.testCaseTypeOf({ jira: { issueTypes: { TEST_CASE: 'TC Custom' } } }), 'TC Custom');
+        assert.equal(module.testCaseTypeOf({ jira: {} }), 'Test Case');
+        assert.equal(module.testCaseTypeOf({}), 'Test Case');
+    });
+
+    test('action removes irrelevant TC code, reports it and still succeeds', function() {
+        var commands = [];
+        var module = loadPreCliStoryTestAutomationSetup({
+            jira_search_by_jql: function() {
+                return [{ key: 'TS-201', fields: { summary: 'S', status: { name: 'Irrelevant' } } }];
+            },
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command === 'git ls-files -- testing/tests/TS-201') return 'testing/tests/TS-201/test.ts';
+                if (opts.command === 'git branch --list "test/TS-200"') return '';
+                if (opts.command.indexOf('git ls-remote') === 0) return '';
+                return '';
+            },
+            file_write: function() {}
+        });
+        var result = module.action({ inputFolderPath: 'input/TS-200', jobParams: { customParams: {} } });
+        assert.equal(result.success, true);
+        assert.ok(commands.indexOf('git rm -r --ignore-unmatch -- testing/tests/TS-201') !== -1);
+    });
+
+    test('non-fatal step failures: a blowing-up branch checkout still ends in success', function() {
+        var module = loadPreCliStoryTestAutomationSetup({
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --list "test/TS-211"') throw new Error('git boom');
+                return '';
+            }
+        });
+        var result = module.action({ inputFolderPath: 'input/TS-211', jobParams: { customParams: {} } });
+        assert.equal(result.success, true);
+    });
+
+    test('a top-level failure (no input folder) fails the action', function() {
+        var module = loadPreCliStoryTestAutomationSetup({});
+        var result = module.action({ jobParams: { customParams: {} } });
+        assert.equal(result.success, false);
+    });
+});
