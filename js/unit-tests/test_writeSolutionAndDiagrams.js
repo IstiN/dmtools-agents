@@ -776,3 +776,143 @@ suite('writeSolutionAndDiagrams — finalization and partial-failure paths (gh-9
         assert.equal(result.success, true, 'action still succeeds: ' + JSON.stringify(result));
     });
 });
+
+// ── gh-1187 CRAP split: characterization tests for the extracted helpers ────
+
+// Minimal branchless loader for the empty-response flow (the shared loaders
+// above hardcode non-empty outputs; this one takes them explicitly).
+function gh1187LoadWithOutputs(outputs) {
+    var jiraUpdates = [];
+    var globals = {
+        jira_update_field: function(args) { jiraUpdates.push(args); },
+        jira_get_ticket: function() { return { key: 'PROJ-1', fields: { summary: 'S' } }; },
+        jira_assign_ticket_to: function() {},
+        jira_move_to_status: function() {},
+        jira_add_label: function() {},
+        jira_remove_label: function() {},
+        jira_post_comment: function() {},
+        confluence_get_children_by_id: function() { return []; },
+        confluence_create_page: function(args) { return { id: '777', title: args.title }; },
+        confluence_sync_markdown_directory: function() {},
+        file_write: function() {},
+        file_read: function(o) { throw new Error('not found: ' + (o && (o.path || o))); }
+    };
+    var module = loadModule(
+        'js/writeSolutionAndDiagrams.js',
+        makeRequire({
+            './common/trackers.js': wd3Trackers(globals),
+            './config.js': configModule,
+            './configLoader.js': { loadProjectConfig: function() { return { jira: { statuses: { READY_FOR_DEVELOPMENT: 'Ready' } } }; } },
+            './common/scm.js': { createScm: function() { return {}; } },
+            './common/autoStart.js': {
+                triggerConfiguredWorkflowForTicket: function() { return false; },
+                triggerSmIfIdle: function() {}
+            },
+            './common/outputFiles.js': { readOutputFile: function(name) { return outputs[name] === undefined ? null : outputs[name]; } },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/contentOutput.js': loadModule('js/common/contentOutput.js',
+                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock() }),
+                globals)
+        }),
+        globals
+    );
+    return { module: module, jiraUpdates: jiraUpdates };
+}
+
+suite('writeSolutionAndDiagrams — gh-1187 extracted helpers', function() {
+
+    test('readSolutionOutputs: empty response.md yields the failure result', function() {
+        var mod = wd3LoadFull().module;
+        var out = mod.readSolutionOutputs(function(name) {
+            return name === 'response.md' ? '' : 'graph';
+        }, { requireDiagram: false });
+        assert.deepEqual(out, { error: { success: false, error: 'outputs/response.md is empty' } });
+    });
+
+    test('readSolutionOutputs: requireDiagram with an empty diagram fails the action', function() {
+        var mod = wd3LoadFull().module;
+        var out = mod.readSolutionOutputs(function(name) {
+            if (name === 'response.md') { return 'Solution body'; }
+            return '';
+        }, { requireDiagram: true });
+        assert.deepEqual(out, { error: { success: false, error: 'outputs/diagram.md is required but empty' } });
+    });
+
+    test('readSolutionOutputs: solution + diagram returned when both are present', function() {
+        var mod = wd3LoadFull().module;
+        var out = mod.readSolutionOutputs(function(name) {
+            return name === 'response.md' ? 'Solution body' : 'graph TD';
+        }, { requireDiagram: true });
+        assert.deepEqual(out, { solution: 'Solution body', diagram: 'graph TD' });
+    });
+
+    test('placeDiagram: prepends a {code} block for jira targets without a diagram field', function() {
+        var mod = wd3LoadFull().module;
+        var out = mod.placeDiagram('Solution body', 'graph TD', '', false);
+        assert.equal(out.solution, '{code}\ngraph TD\n{code}\n\nSolution body');
+        assert.equal(out.diagram, '', 'diagram marked as handled');
+    });
+
+    test('placeDiagram: defers to the Confluence publish step for confluence-only targets', function() {
+        var mod = wd3LoadFull().module;
+        var out = mod.placeDiagram('Solution body', 'graph TD', '', true);
+        assert.equal(out.solution, 'Solution body', 'no jira {code} block on confluence-bound content');
+        assert.equal(out.diagram, 'graph TD');
+    });
+
+    test('placeDiagram: dedicated diagram field leaves both values untouched', function() {
+        var mod = wd3LoadFull().module;
+        var out = mod.placeDiagram('Solution body', 'graph TD', 'diagrams', false);
+        assert.equal(out.solution, 'Solution body');
+        assert.equal(out.diagram, 'graph TD');
+    });
+
+    test('placeDiagram: no diagram is a no-op', function() {
+        var mod = wd3LoadFull().module;
+        var out = mod.placeDiagram('Solution body', '', '', false);
+        assert.equal(out.solution, 'Solution body');
+        assert.equal(out.diagram, '');
+    });
+
+    test('loadActionContext: resolves ticket key, WIP label, customParams, tracker and options', function() {
+        var mod = wd3LoadFull().module;
+        var ctx = mod.loadActionContext({
+            ticket: { key: 'PROJ-9', fields: { summary: 's' } },
+            initiator: 'initiator-1',
+            metadata: { contextId: 'story_solution' },
+            customParams: { diagramField: '' }
+        });
+        assert.equal(ctx.ticketKey, 'PROJ-9');
+        assert.equal(ctx.initiatorId, 'initiator-1');
+        assert.equal(ctx.wipLabel, 'story_solution_wip');
+        assert.deepEqual(ctx.customParams, { diagramField: '' });
+        assert.equal(ctx.options.solutionField, 'Customized' === 'never' ? '' : configModule.JIRA_FIELDS.SOLUTION, 'solutionField defaults to the Jira field');
+        assert.equal(ctx.options.diagramField, '');
+        assert.equal(ctx.options.outputType, 'replace');
+        assert.deepEqual(ctx.jiraConfig, { statuses: { READY_FOR_DEVELOPMENT: 'Ready' } });
+        assert.equal(typeof ctx.tracker.updateField, 'function');
+    });
+
+    test('loadActionContext: metadata without contextId yields a null WIP label; jobParams.customParams used as fallback', function() {
+        var mod = wd3LoadFull().module;
+        var ctx = mod.loadActionContext({
+            ticket: { key: 'PROJ-9', fields: { summary: 's' } },
+            initiator: 'i',
+            jobParams: { customParams: { outputType: 'append' } }
+        });
+        assert.equal(ctx.wipLabel, null);
+        assert.deepEqual(ctx.customParams, { outputType: 'append' });
+        assert.equal(ctx.options.outputType, 'append');
+    });
+
+    test('action flow: empty response.md fails before any tracker write', function() {
+        var env = gh1187LoadWithOutputs({ 'response.md': '', 'diagram.md': 'graph TD' });
+        var result = env.module.action({
+            ticket: { key: 'PROJ-1', fields: { summary: 's' } },
+            customParams: { solutionField: 'description' }
+        });
+        assert.deepEqual(result, { success: false, error: 'outputs/response.md is empty' });
+        assert.equal(env.jiraUpdates.length, 0, 'no field writes on missing solution');
+    });
+
+});
