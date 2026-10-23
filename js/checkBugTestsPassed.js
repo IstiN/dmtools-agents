@@ -50,9 +50,6 @@ function getTicketSafely(tracker, ticketKey) {
 }
 
 /**
- * gh-1188: the issuelinks → Test Case stub collection — pure.
- */
-/**
  * gh-1188: one issuelink entry → linked Test Case stub (or null) — pure.
  */
 function directLinkedTcOf(link, testCaseType) {
@@ -64,6 +61,9 @@ function directLinkedTcOf(link, testCaseType) {
     return null;
 }
 
+/**
+ * gh-1188: the issuelinks → Test Case stub collection — pure.
+ */
 function collectDirectTcLinks(ticket, testCaseType) {
     const issueLinks = ticket && ticket.fields && ticket.fields.issuelinks;
     if (!Array.isArray(issueLinks) || issueLinks.length === 0) {
