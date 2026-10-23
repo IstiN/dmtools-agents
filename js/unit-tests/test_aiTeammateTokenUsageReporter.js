@@ -2205,3 +2205,556 @@ suite('aiTeammateTokenUsageReporter sleepMilliseconds helpers (gh-1078)', functi
         assert.equal(elapsed >= 2, true, 'expected a >=2ms busy wait fallback, got ' + elapsed + 'ms');
     });
 });
+
+// ── gh-1193: characterization tests for the CRAP-target helpers ──────────────
+// Every branch of the named CRAP-target functions (asArray, normalizeLogPayload,
+// parseTokensLine, groupBy, buildHtml, listCompletedRuns, collectRunsForWindow,
+// calculateRunnerStats, buildRowsFromCache) is pinned here before the helper
+// extraction so the refactor can be proven behaviour-identical.
+
+suite('aiTeammateTokenUsageReporter — asArray (gh-1193)', function() {
+
+    test('nullish, empty and zero values normalize to []', function() {
+        var reporter = loadReporter();
+        assert.deepEqual(reporter.asArray(null), []);
+        assert.deepEqual(reporter.asArray(undefined), []);
+        assert.deepEqual(reporter.asArray(''), []);
+        assert.deepEqual(reporter.asArray(0), []);
+        assert.deepEqual(reporter.asArray(false), []);
+    });
+
+    test('arrays pass through unchanged (2+ items)', function() {
+        var reporter = loadReporter();
+        var rows = [{ id: 1 }, { id: 2 }];
+        assert.equal(reporter.asArray(rows), rows);
+    });
+
+    test('workflow_runs / jobs wrappers unwrap (2+ items)', function() {
+        var reporter = loadReporter();
+        var runs = [{ id: 1 }, { id: 2 }];
+        var jobs = [{ id: 3 }, { id: 4 }];
+        assert.deepEqual(reporter.asArray({ workflow_runs: runs }), runs);
+        assert.deepEqual(reporter.asArray({ workflow_runs: 'nope', jobs: jobs }), jobs);
+        assert.deepEqual(reporter.asArray({ workflow_runs: 'nope', jobs: 'nope' }), []);
+    });
+
+    test('result payloads recurse through parseJson (array, json string, garbage)', function() {
+        var reporter = loadReporter();
+        assert.deepEqual(reporter.asArray({ result: [1, 2] }), [1, 2]);
+        assert.deepEqual(reporter.asArray({ result: '{"workflow_runs":[{"id":7}]}' }), [{ id: 7 }]);
+        assert.deepEqual(reporter.asArray({ result: 'not-json' }), []);
+        assert.deepEqual(reporter.asArray({ result: { jobs: [{ id: 8 }] } }), [{ id: 8 }]);
+    });
+
+    test('plain objects without wrapper fields yield []', function() {
+        var reporter = loadReporter();
+        assert.deepEqual(reporter.asArray({}), []);
+        assert.deepEqual(reporter.asArray({ other: 1 }), []);
+    });
+});
+
+suite('aiTeammateTokenUsageReporter — normalizeLogPayload (gh-1193)', function() {
+
+    test('nullish input normalizes to empty string', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.normalizeLogPayload(null), '');
+        assert.equal(reporter.normalizeLogPayload(undefined), '');
+    });
+
+    test('non-string payloads recurse through result/logs before stringify', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.normalizeLogPayload({ result: 'plain text' }), 'plain text');
+        assert.equal(reporter.normalizeLogPayload({ logs: 'log text' }), 'log text');
+        assert.equal(reporter.normalizeLogPayload({ result: { logs: 'deep logs' } }), 'deep logs');
+        assert.equal(reporter.normalizeLogPayload({ anything: 1 }), '{"anything":1}');
+        assert.equal(reporter.normalizeLogPayload(42), '42');
+    });
+
+    test('string payloads unwrap embedded result/logs JSON, else pass through', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.normalizeLogPayload('{"result":"inner"}'), 'inner');
+        assert.equal(reporter.normalizeLogPayload('{"logs":"inner logs"}'), 'inner logs');
+        assert.equal(reporter.normalizeLogPayload('{"plain":true}'), '{"plain":true}');
+        assert.equal(reporter.normalizeLogPayload('not json at all'), 'not json at all');
+    });
+});
+
+suite('aiTeammateTokenUsageReporter — parseTokensLine branches (gh-1193)', function() {
+
+    test('a Tokens line without any count matches parses to null', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.parseTokensLine('[INFO] CommandLineUtils - Tokens'), null);
+        assert.equal(reporter.parseTokensLine('[INFO] CommandLineUtils - Tokens summary follows'), null);
+    });
+
+    test('single counter kinds parse independently (read/write/cached/reasoning)', function() {
+        var reporter = loadReporter();
+        var readOnly = reporter.parseTokensLine('Tokens ↑ 1.2k');
+        assert.equal(readOnly.readTokens, 1200);
+        assert.equal(readOnly.writeTokens, 0);
+        var writeOnly = reporter.parseTokensLine('Tokens ↓ 500');
+        assert.equal(writeOnly.writeTokens, 500);
+        assert.equal(writeOnly.readTokens, 0);
+        var cachedOnly = reporter.parseTokensLine('Tokens 3.4m (cached)');
+        assert.equal(cachedOnly.cachedTokens, 3400000);
+        assert.equal(cachedOnly.readTokens, 0);
+        var reasoningOnly = reporter.parseTokensLine('Tokens 1.7k (reasoning)');
+        assert.equal(reasoningOnly.reasoningTokens, 1700);
+        assert.equal(reasoningOnly.cachedTokens, 0);
+    });
+
+    test('fa payload without token counts falls through to CommandLineUtils parsing', function() {
+        var reporter = loadReporter();
+        var parsed = reporter.parseTokensLine('fa-tokens: {"sessionId":"s1"}');
+        assert.equal(parsed, null);
+    });
+
+    test('fa payload carrying only cacheRead is an fa sample with zeroed read/write', function() {
+        var reporter = loadReporter();
+        var parsed = reporter.parseTokensLine('fa-tokens: {"sessionId":"s1","cacheRead":1234}');
+        assert.equal(parsed.cachedTokens, 1234);
+        assert.equal(parsed.readTokens, 0);
+        assert.equal(parsed.writeTokens, 0);
+        assert.equal(parsed.reasoningTokens, 0);
+        assert.equal(parsed.faSessionId, 's1');
+        assert.equal(parsed.faSegment, null);
+        assert.equal(parsed.source, '');
+    });
+
+    test('fa payload with a segment keeps the segment number and source', function() {
+        var reporter = loadReporter();
+        var parsed = reporter.parseTokensLine(
+            'fa-tokens: {"sessionId":"s1","segment":2,"input":10,"output":5,"cacheRead":3,"requests":1,"source":"reported"}');
+        assert.equal(parsed.faSegment, 2);
+        assert.equal(parsed.source, 'reported');
+        assert.equal(parsed.readTokens, 10);
+        assert.equal(parsed.requests, 1);
+        assert.equal(parsed.requestTier, '');
+    });
+});
+
+suite('aiTeammateTokenUsageReporter — collectRunsForWindow / listCompletedRuns (gh-1193)', function() {
+
+    function listMock(perCreated) {
+        var calls = [];
+        return {
+            calls: calls,
+            fn: function(workspace, repository, status, workflowId, perPage, page, created) {
+                calls.push({ status: status, perPage: perPage, page: page, created: created });
+                var spec = perCreated(created, page, status) || { total_count: 0, workflow_runs: [] };
+                return JSON.stringify(spec);
+            }
+        };
+    }
+
+    test('an over-1000 total_count window splits into midpoint sub-windows', function() {
+        var mock = listMock(function(created, page) {
+            if (page === 1 && created === '2026-06-01T00:00:00Z..2026-06-03T00:00:00Z') {
+                return { total_count: 1000, workflow_runs: [] };
+            }
+            return {
+                total_count: 1,
+                workflow_runs: [{ id: created, status: 'completed', created_at: '2026-06-02T00:00:00Z' }]
+            };
+        });
+        var reporter = loadReporter({ github_list_workflow_runs: mock.fn });
+
+        var seen = {};
+        var runs = [];
+        reporter.collectRunsForWindow(
+            { workspace: 'IstiN', repository: 'trackstate', perStatusLimit: 100 },
+            'completed', '2026-06-01T00:00:00Z', '2026-06-03T00:00:00Z', seen, runs, 0);
+
+        assert.equal(runs.length, 2);
+        var creations = mock.calls.map(function(c) { return c.created; });
+        assert.contains(creations.join('|'), '2026-06-01T00:00:00Z..2026-06-02T00:00:00Z');
+        assert.contains(creations.join('|'), '2026-06-02T00:00:01Z..2026-06-03T00:00:00Z');
+    });
+
+    test('a short window (<= 60s) never splits even with a huge total_count', function() {
+        var mock = listMock(function(created, page) {
+            if (page === 1) {
+                return { total_count: 1000, workflow_runs: [{ id: 1, status: 'completed', created_at: '2026-06-01T00:00:10Z' }] };
+            }
+            return { total_count: 0, workflow_runs: [] };
+        });
+        var reporter = loadReporter({ github_list_workflow_runs: mock.fn });
+
+        var seen = {};
+        var runs = [];
+        reporter.collectRunsForWindow(
+            { workspace: 'IstiN', repository: 'trackstate', perStatusLimit: 100 },
+            'completed', '2026-06-01T00:00:00Z', '2026-06-01T00:00:30Z', seen, runs, 0);
+
+        assert.equal(runs.length, 1);
+        assert.equal(mock.calls.length, 1);
+    });
+
+    test('repeated ids across pages dedupe; non-completed and id-less runs drop', function() {
+        var mock = listMock(function(created, page) {
+            if (page === 1) {
+                return { total_count: 0, workflow_runs: [
+                    { id: 1, status: 'completed', created_at: '2026-06-01T00:00:00Z' },
+                    { id: 2, status: 'in_progress', created_at: '2026-06-01T00:01:00Z' },
+                    { status: 'completed', created_at: '2026-06-01T00:02:00Z' }
+                ] };
+            }
+            return { total_count: 0, workflow_runs: [
+                { id: 1, status: 'completed', created_at: '2026-06-01T00:00:00Z' }
+            ] };
+        });
+        var reporter = loadReporter({ github_list_workflow_runs: mock.fn });
+        var runs = reporter.listCompletedRuns({
+            workspace: 'IstiN',
+            repository: 'trackstate',
+            statuses: ['completed'],
+            perStatusLimit: 3,
+            createdStart: '2026-06-01',
+            createdEnd: '2026-06-02'
+        });
+
+        assert.equal(runs.length, 1);
+        assert.equal(runs[0].id, 1);
+        assert.equal(mock.calls.length, 2);
+    });
+
+    test('a full page at maxRuns stops paging without fetching the next page', function() {
+        var mock = listMock(function(created, page) {
+            if (page === 1) {
+                return { total_count: 0, workflow_runs: [
+                    { id: 1, status: 'completed', created_at: '2026-06-01T00:00:00Z' },
+                    { id: 2, status: 'completed', created_at: '2026-06-01T00:01:00Z' }
+                ] };
+            }
+            return { total_count: 0, workflow_runs: [{ id: 3, status: 'completed', created_at: '2026-06-01T00:02:00Z' }] };
+        });
+        var reporter = loadReporter({ github_list_workflow_runs: mock.fn });
+        var runs = reporter.listCompletedRuns({
+            workspace: 'IstiN',
+            repository: 'trackstate',
+            statuses: ['completed'],
+            perStatusLimit: 2,
+            maxRuns: 2,
+            createdStart: '2026-06-01',
+            createdEnd: '2026-06-02'
+        });
+
+        assert.equal(runs.length, 2);
+        assert.equal(mock.calls.length, 1, 'maxRuns hit after page 1 — page 2 must never be fetched');
+    });
+
+    test('a short page stops paging without reaching perStatusLimit', function() {
+        var mock = listMock(function(created, page) {
+            if (page === 1) {
+                return { total_count: 0, workflow_runs: [{ id: 1, status: 'completed', created_at: '2026-06-01T00:00:00Z' }] };
+            }
+            return { total_count: 0, workflow_runs: [{ id: 2, status: 'completed', created_at: '2026-06-01T00:01:00Z' }] };
+        });
+        var reporter = loadReporter({ github_list_workflow_runs: mock.fn });
+        var runs = reporter.listCompletedRuns({
+            workspace: 'IstiN',
+            repository: 'trackstate',
+            statuses: ['completed'],
+            perStatusLimit: 100,
+            createdStart: '2026-06-01',
+            createdEnd: '2026-06-02'
+        });
+
+        assert.equal(runs.length, 1);
+        assert.equal(mock.calls.length, 1);
+    });
+
+    test('maxPages caps the page walk', function() {
+        var mock = listMock(function(created, page) {
+            return {
+                total_count: 0,
+                workflow_runs: [{ id: page, status: 'completed', created_at: '2026-06-01T00:0' + (page - 1) + ':00Z' }]
+            };
+        });
+        var reporter = loadReporter({ github_list_workflow_runs: mock.fn });
+        var runs = reporter.listCompletedRuns({
+            workspace: 'IstiN',
+            repository: 'trackstate',
+            statuses: ['completed'],
+            perStatusLimit: 1,
+            maxPages: 2,
+            createdStart: '2026-06-01',
+            createdEnd: '2026-06-02'
+        });
+
+        assert.equal(runs.length, 2);
+        assert.equal(mock.calls.length, 2);
+    });
+
+    test('statuses accept a comma string with blanks trimmed out', function() {
+        var mock = listMock(function() { return { total_count: 0, workflow_runs: [] }; });
+        var reporter = loadReporter({ github_list_workflow_runs: mock.fn });
+        var runs = reporter.listCompletedRuns({
+            workspace: 'IstiN',
+            repository: 'trackstate',
+            statuses: 'completed, skipped, ,',
+            createdStart: '2026-06-01',
+            createdEnd: '2026-06-05'
+        });
+
+        assert.equal(runs.length, 0);
+        assert.equal(mock.calls.length, 2);
+        assert.equal(mock.calls[0].status, 'completed');
+        assert.equal(mock.calls[1].status, 'skipped');
+        assert.equal(mock.calls[0].created, '2026-06-01T00:00:00Z..2026-06-05T23:59:59Z');
+    });
+
+    test('created=false scans from 1970 with a today end', function() {
+        var mock = listMock(function() { return { total_count: 0, workflow_runs: [] }; });
+        var reporter = loadReporter({ github_list_workflow_runs: mock.fn });
+        reporter.listCompletedRuns({
+            workspace: 'IstiN',
+            repository: 'trackstate',
+            statuses: ['completed'],
+            created: false
+        });
+
+        assert.equal(mock.calls.length, 1);
+        assert.equal(mock.calls[0].created.indexOf('1970-01-01T00:00:00Z..'), 0);
+        assert.equal(/\.\.\d{4}-\d{2}-\d{2}T23:59:59Z$/.test(mock.calls[0].created), true);
+    });
+
+    test('since/createdStart and createdEnd resolve the created window', function() {
+        var mock = listMock(function() { return { total_count: 0, workflow_runs: [] }; });
+        var reporter = loadReporter({ github_list_workflow_runs: mock.fn });
+        reporter.listCompletedRuns({
+            workspace: 'IstiN',
+            repository: 'trackstate',
+            statuses: ['completed'],
+            since: '2026-05-30',
+            createdEnd: '2026-06-05'
+        });
+
+        assert.equal(mock.calls[0].created, '2026-05-30T00:00:00Z..2026-06-05T23:59:59Z');
+    });
+
+    test('maxRuns trims the merged list after sorting newest first (2+ runs)', function() {
+        var mock = listMock(function() {
+            return { total_count: 0, workflow_runs: [
+                { id: 1, status: 'completed', created_at: '2026-06-01T00:00:00Z' },
+                { id: 2, status: 'completed', created_at: '2026-06-03T00:00:00Z' },
+                { id: 3, status: 'completed', created_at: '2026-06-02T00:00:00Z' }
+            ] };
+        });
+        var reporter = loadReporter({ github_list_workflow_runs: mock.fn });
+        var runs = reporter.listCompletedRuns({
+            workspace: 'IstiN',
+            repository: 'trackstate',
+            statuses: ['completed'],
+            perStatusLimit: 100,
+            maxRuns: 2,
+            createdStart: '2026-06-01',
+            createdEnd: '2026-06-04'
+        });
+
+        assert.equal(runs.length, 2);
+        assert.equal(runs[0].id, 2);
+        assert.equal(runs[1].id, 3);
+    });
+
+    test('custom.limit pins the perPage passed to the SCM call', function() {
+        var mock = listMock(function() { return { total_count: 0, workflow_runs: [] }; });
+        var reporter = loadReporter({ github_list_workflow_runs: mock.fn });
+        reporter.listCompletedRuns({
+            workspace: 'IstiN',
+            repository: 'trackstate',
+            statuses: ['completed'],
+            limit: 50,
+            createdStart: '2026-06-01',
+            createdEnd: '2026-06-02'
+        });
+
+        assert.equal(mock.calls[0].perPage, 50);
+    });
+});
+
+suite('aiTeammateTokenUsageReporter — calculateRunnerStats (gh-1193)', function() {
+
+    test('overlapping intervals peak at two concurrent runners', function() {
+        var reporter = loadReporter();
+        var stats = reporter.calculateRunnerStats([
+            { startedAt: '2026-06-01T00:00:00Z', updatedAt: '2026-06-01T00:10:00Z', durationSeconds: 600 },
+            { startedAt: '2026-06-01T00:05:00Z', updatedAt: '2026-06-01T00:15:00Z', durationSeconds: 600 }
+        ]);
+
+        assert.equal(stats.totalRunnerSeconds, 1200);
+        assert.equal(stats.intervalRuns, 2);
+        assert.equal(stats.maxConcurrentRuns, 2);
+        assert.equal(stats.wallSeconds, 900);
+        assert.equal(Math.round(stats.avgConcurrentRuns * 100) / 100, Math.round((1200 / 900) * 100) / 100);
+        assert.equal(stats.totalRunnerTime, '20m 0s');
+    });
+
+    test('an unparseable startedAt falls back to createdAt', function() {
+        var reporter = loadReporter();
+        var stats = reporter.calculateRunnerStats([
+            { startedAt: 'nope', createdAt: '2026-06-01T00:00:00Z', updatedAt: '2026-06-01T00:05:00Z', durationSeconds: 300 }
+        ]);
+
+        assert.equal(stats.intervalRuns, 1);
+        assert.equal(stats.wallSeconds, 300);
+    });
+
+    test('a missing updatedAt is recovered from start + durationSeconds', function() {
+        var reporter = loadReporter();
+        var stats = reporter.calculateRunnerStats([
+            { startedAt: '2026-06-01T00:00:00Z', durationSeconds: 240 }
+        ]);
+
+        assert.equal(stats.intervalRuns, 1);
+        assert.equal(stats.wallSeconds, 240);
+    });
+
+    test('an updatedAt before the start is recovered from durationSeconds', function() {
+        var reporter = loadReporter();
+        var stats = reporter.calculateRunnerStats([
+            { startedAt: '2026-06-01T00:10:00Z', updatedAt: '2026-06-01T00:05:00Z', durationSeconds: 300 }
+        ]);
+
+        assert.equal(stats.intervalRuns, 1);
+        assert.equal(stats.wallSeconds, 300);
+    });
+
+    test('rows without a usable interval drop (invalid timestamps, zero-length)', function() {
+        var reporter = loadReporter();
+        var stats = reporter.calculateRunnerStats([
+            { startedAt: 'x', updatedAt: 'y', durationSeconds: 0 },
+            { startedAt: '2026-06-01T00:00:00Z', updatedAt: '2026-06-01T00:00:00Z', durationSeconds: 0 }
+        ]);
+
+        assert.equal(stats.totalRunnerSeconds, 0);
+        assert.equal(stats.intervalRuns, 0);
+        assert.equal(stats.wallSeconds, 0);
+        assert.equal(stats.wallTime, '0s');
+        assert.equal(stats.maxConcurrentRuns, 0);
+        assert.equal(stats.avgConcurrentRuns, 0);
+    });
+
+    test('an empty row list yields zeroed stats', function() {
+        var reporter = loadReporter();
+        var stats = reporter.calculateRunnerStats([]);
+
+        assert.equal(stats.totalRunnerSeconds, 0);
+        assert.equal(stats.totalRunnerDays, 0);
+        assert.equal(stats.intervalRuns, 0);
+        assert.equal(stats.wallSeconds, 0);
+        assert.equal(stats.maxConcurrentRuns, 0);
+        assert.equal(stats.avgConcurrentRuns, 0);
+    });
+
+    test('a single zero-length-span interval yields zero wall time', function() {
+        var reporter = loadReporter();
+        var stats = reporter.calculateRunnerStats([
+            { createdAt: '2026-06-01T00:00:00Z', updatedAt: '2026-06-01T00:00:30Z', durationSeconds: 30 }
+        ]);
+
+        assert.equal(stats.intervalRuns, 1);
+        assert.equal(stats.wallSeconds, 30);
+    });
+});
+
+suite('aiTeammateTokenUsageReporter — groupBy (gh-1193)', function() {
+
+    test('two rows in one key accumulate every counter (2+ items)', function() {
+        var reporter = loadReporter();
+        var groups = reporter.groupBy([
+            { day: '2026-06-01', requests: 1, readTokens: 100, writeTokens: 10, cachedTokens: 5,
+              reasoningTokens: 2, samples: 1, resumeDetected: true, feedbackLoopCount: 1,
+              rateLimitRetryCount: 1, rateLimitDetected: true, timeoutCount: 1, durationSeconds: 60 },
+            { day: '2026-06-01', requests: 3, readTokens: 200, writeTokens: 30, cachedTokens: 15,
+              reasoningTokens: 4, samples: 2, resumeDetected: false, feedbackLoopCount: 0,
+              rateLimitRetryCount: 0, rateLimitDetected: false, timeoutCount: 0, durationSeconds: 0 }
+        ], function(row) { return row.day; });
+
+        assert.equal(groups.length, 1);
+        var g = groups[0];
+        assert.equal(g.key, '2026-06-01');
+        assert.equal(g.runs, 2);
+        assert.equal(g.requests, 4);
+        assert.equal(g.readTokens, 300);
+        assert.equal(g.samples, 3);
+        assert.equal(g.resumedRuns, 1);
+        assert.equal(g.feedbackLoopCount, 1);
+        assert.equal(g.rateLimitRetryCount, 1);
+        assert.equal(g.rateLimitRuns, 1);
+        assert.equal(g.timeoutCount, 1);
+        assert.equal(g.timeoutRuns, 1);
+        assert.equal(g.durationSeconds, 60);
+        assert.equal(g.durationRuns, 1);
+        assert.equal(g.avgReadTokens, 150);
+        assert.equal(g.avgDurationSeconds, 60);
+        assert.equal(g.avgDuration, '1m 0s');
+        assert.equal(g.totalDuration, '1m 0s');
+    });
+
+    test('keys sort ascending and falsy keys bucket as unknown', function() {
+        var reporter = loadReporter();
+        var groups = reporter.groupBy([
+            { agent: 'beta' },
+            { agent: 'alpha' },
+            { agent: '' }
+        ], function(row) { return row.agent; });
+
+        assert.equal(groups.map(function(g) { return g.key; }).join(','), 'alpha,beta,unknown');
+        assert.equal(groups[0].runs, 1);
+        assert.equal(groups[2].runs, 1);
+        assert.equal(groups[2].avgDuration, '0s');
+    });
+
+    test('rounding: averages round half up over three runs', function() {
+        var reporter = loadReporter();
+        var groups = reporter.groupBy([
+            { day: 'd', readTokens: 100 },
+            { day: 'd', readTokens: 100 },
+            { day: 'd', readTokens: 101 }
+        ], function(row) { return row.day; });
+
+        assert.equal(groups[0].avgReadTokens, 100);
+    });
+});
+
+suite('aiTeammateTokenUsageReporter — buildRowsFromCache (gh-1193)', function() {
+
+    test('row entries collect, noUsage/error/empty entries drop, sorts apply', function() {
+        var reporter = loadReporter();
+        var cache = { version: 1, entries: {
+            '1': { row: { runId: '1', createdAt: '2026-06-01T00:00:00Z' },
+                   attemptRows: [
+                       { runId: '1', createdAt: '2026-06-01T00:00:00Z', attemptIndex: 2 },
+                       { runId: '1', createdAt: '2026-06-01T00:00:00Z', attemptIndex: 1 }
+                   ] },
+            '2': { noUsage: true },
+            '3': { error: 'boom' },
+            '4': null
+        } };
+        var built = reporter.buildRowsFromCache(cache);
+
+        assert.equal(built.rows.length, 1);
+        assert.equal(built.rows[0].runId, '1');
+        assert.equal(built.attemptRows.length, 2);
+        assert.equal(built.attemptRows[0].attemptIndex, 1, 'same-day attempts sort by attemptIndex ascending');
+        assert.equal(built.attemptRows[1].attemptIndex, 2);
+    });
+
+    test('rows sort newest-first across keys (2+ runs)', function() {
+        var reporter = loadReporter();
+        var built = reporter.buildRowsFromCache({ entries: {
+            '1': { row: { runId: '1', createdAt: '2026-06-01T00:00:00Z' } },
+            '2': { row: { runId: '2', createdAt: '2026-06-03T00:00:00Z' } },
+            '3': { row: { runId: '3', createdAt: '2026-06-02T00:00:00Z' } }
+        } });
+
+        assert.equal(built.rows.map(function(r) { return r.runId; }).join(','), '2,3,1');
+    });
+
+    test('empty and entry-less caches build empty rows', function() {
+        var reporter = loadReporter();
+        assert.deepEqual(reporter.buildRowsFromCache({ entries: {} }), { rows: [], attemptRows: [] });
+        assert.deepEqual(reporter.buildRowsFromCache({}), { rows: [], attemptRows: [] });
+    });
+});
