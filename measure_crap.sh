@@ -15,14 +15,17 @@ rsync -a --exclude '*.js' --exclude '.git' ./ "$RT/inst/"
 echo ">> running node harness with coverage"
 cd "$RT/inst"
 FILES="$(node -e "console.log(require('./js/unit-tests/run_all.json').params.jobParams.testFiles.join(' '))")"
-node ci/run_with_coverage.js \
+# CI runners carry no FA_* session env — unset them so env-sensitive suites see CI conditions.
+env -u FA_SESSION_ROOT -u FA_SESSION_NAME -u FAH_SESSION_FILE -u FA_LOG_FILE -u FA_PROVIDER_CONFIG -u FA_PROVIDER_TYPE -u FA_PROVIDERS_QUEUE \
+  node ci/run_with_coverage.js \
   "$RT/inst/js/unit-tests/node_testRunner.js" \
   "$RT/cov/coverage-final.json" $FILES > "$RT/harness.log" 2>&1
 code=$?
 tail -3 "$RT/harness.log"
 if [ $code -ne 0 ]; then echo "!! harness FAILED ($code)"; exit $code; fi
 
-echo ">> crap4js ratchet vs released baseline"
+echo ">> crap4js ratchet vs released baseline (analyzer runs on the real checkout — same as CI)"
+cd "$(dirname "$0")"
 /tmp/craptools/node_modules/.bin/crap4js . \
   --coverage "$RT/cov/coverage-final.json" \
   --threshold 8 \
