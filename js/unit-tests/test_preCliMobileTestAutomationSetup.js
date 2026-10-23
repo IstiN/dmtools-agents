@@ -1011,3 +1011,401 @@ suite('preCliMobileTestAutomationSetup — branch checkout', function() {
     });
 
 });
+
+// ── Suite: gh-1189 characterization (pinned before the CRAP split) ───────────
+// Pins the observable behavior of fetchLinkedTestCases, findFeatureBranch and
+// downloadBitriseApp — the functions named by the gh-1189 CRAP ticket —
+// including the branches the existing suites do not reach. These tests must
+// keep passing unchanged through the helper extraction.
+
+suite('preCliMobileTestAutomationSetup — gh-1189 characterization: linked TC fetching', function() {
+
+    test('falls back to the broader JQL when the primary search throws', function() {
+        var jqls = [];
+        var writtenFiles = {};
+
+        var m = loadPreCli({
+            jira_search_by_jql: function(opts) {
+                jqls.push(opts.jql);
+                if (opts.jql.indexOf('"is tested by"') !== -1) throw new Error('primary query failed');
+                return [{ key: 'PROJ-TC-F', fields: { summary: 'Fallback TC', status: { name: 'Ready' }, priority: { name: 'Low' } } }];
+            },
+            jira_get_ticket: function(opts) { return { key: opts.key || opts, fields: { comment: { comments: [] } } }; },
+            file_write: function(path, content) { writtenFiles[path] = content; },
+            cli_execute_command: function() { return ''; }
+        });
+
+        m.action(makeParams('PROJ-9001', null));
+
+        assert.equal(jqls.length, 2, 'both the primary and the fallback JQL must run');
+        var md = writtenFiles['input/PROJ-9001/linked_test_cases.md'];
+        assert.ok(md.indexOf('PROJ-TC-F') !== -1, 'fallback results must land in the file');
+    });
+
+    test('writes the no-linked-TCs marker when both JQL searches throw', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli({
+            jira_search_by_jql: function() { throw new Error('tracker down'); },
+            file_write: function(path, content) { writtenFiles[path] = content; },
+            cli_execute_command: function() { return ''; }
+        });
+
+        m.action(makeParams('PROJ-9002', null));
+
+        var md = writtenFiles['input/PROJ-9002/linked_test_cases.md'];
+        assert.ok(md.indexOf('No linked Test Case tickets found for PROJ-9002') !== -1,
+            'marker file must be written when both searches fail: ' + md);
+    });
+
+    test('caps recent TC comments at the last five with an N-of-M header', function() {
+        var writtenFiles = {};
+        var comments = [];
+        for (var i = 1; i <= 7; i++) {
+            comments.push({ author: { displayName: 'QA' }, body: 'run-' + i });
+        }
+
+        var m = loadPreCli({
+            jira_search_by_jql: function(opts) {
+                if (opts.jql.indexOf('is tested by') !== -1) {
+                    return [{ key: 'PROJ-TC-C', fields: { summary: 'Modal', status: { name: 'Ready' }, priority: { name: 'High' } } }];
+                }
+                return [];
+            },
+            jira_get_ticket: function() { return { fields: { comment: { comments: comments } } }; },
+            file_write: function(path, content) { writtenFiles[path] = content; },
+            cli_execute_command: function() { return ''; }
+        });
+
+        m.action(makeParams('PROJ-9003', null));
+
+        var md = writtenFiles['input/PROJ-9003/linked_test_cases.md'];
+        assert.ok(md.indexOf('**Recent Test Run Comments** (5 of 7)') !== -1,
+            'header must report 5 of 7: ' + md);
+        assert.ok(md.indexOf('run-3') !== -1, 'first of the last five must be kept');
+        assert.ok(md.indexOf('run-7') !== -1, 'latest comment must be kept');
+        assert.equal(md.indexOf('run-1'), -1, 'oldest comment must be dropped');
+        assert.equal(md.indexOf('run-2'), -1, 'second-oldest comment must be dropped');
+    });
+
+    test('renders Unknown status/priority and (no summary) for sparse TC fields', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli({
+            jira_search_by_jql: function(opts) {
+                if (opts.jql.indexOf('is tested by') !== -1) {
+                    return [{ key: 'PROJ-TC-S', fields: {} }];
+                }
+                return [];
+            },
+            jira_get_ticket: function(opts) { return { key: opts.key || opts, fields: { comment: { comments: [] } } }; },
+            file_write: function(path, content) { writtenFiles[path] = content; },
+            cli_execute_command: function() { return ''; }
+        });
+
+        m.action(makeParams('PROJ-9004', null));
+
+        var md = writtenFiles['input/PROJ-9004/linked_test_cases.md'];
+        assert.ok(md.indexOf('## PROJ-TC-S: (no summary)') !== -1, 'sparse summary fallback: ' + md);
+        assert.ok(md.indexOf('**Status**: Unknown  **Priority**: Unknown') !== -1,
+            'sparse status/priority fallback: ' + md);
+    });
+
+    test('tolerates a TC detail fetch failure and keeps the earlier entries', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli({
+            jira_search_by_jql: function(opts) {
+                if (opts.jql.indexOf('is tested by') !== -1) {
+                    return [
+                        { key: 'PROJ-TC-1', fields: { summary: 'First', status: { name: 'Ready' }, priority: { name: 'High' } } },
+                        { key: 'PROJ-TC-2', fields: { summary: 'Second', status: { name: 'Draft' }, priority: { name: 'Low' } } }
+                    ];
+                }
+                return [];
+            },
+            jira_get_ticket: function() { throw new Error('detail fetch failed'); },
+            file_write: function(path, content) { writtenFiles[path] = content; },
+            cli_execute_command: function() { return ''; }
+        });
+
+        m.action(makeParams('PROJ-9005', null));
+
+        var md = writtenFiles['input/PROJ-9005/linked_test_cases.md'];
+        assert.ok(md, 'file must still be written');
+        assert.ok(md.indexOf('## PROJ-TC-1: First') !== -1, 'first entry kept');
+        assert.ok(md.indexOf('## PROJ-TC-2: Second') !== -1, 'second entry kept despite comment failure');
+        assert.equal(md.indexOf('Recent Test Run Comments'), -1, 'no comments section after detail failure');
+    });
+
+});
+
+suite('preCliMobileTestAutomationSetup — gh-1189 characterization: feature branch lookup', function() {
+
+    function makeLookupParams(ticketKey, withFeaturePR) {
+        var params = {
+            inputFolderPath: 'input/' + ticketKey,
+            jobParams: {
+                customParams: {
+                    bitriseBuild: { appSlug: 'app-slug', workflowId: 'build_ios_simulator' }
+                }
+            }
+        };
+        if (withFeaturePR) {
+            params.jobParams.customParams.featurePR = { owner: 'ExampleOrg', repo: 'example-mobile-app' };
+        }
+        return params;
+    }
+
+    function makeLookupMocks(opts) {
+        opts = opts || {};
+        return {
+            jira_move_to_status: function() {},
+            jira_search_by_jql: function() { return []; },
+            file_write: opts.onFileWrite || function() {},
+            cli_execute_command: opts.onCliCommand || function(o) {
+                if (o.command && o.command.indexOf('find') !== -1) return 'input/x/app/Example.app';
+                return '';
+            },
+            github_list_prs: opts.onListPrs || function() {
+                return JSON.stringify({ data: [{ number: 9, head: { ref: 'story/PROJ-X' } }] });
+            },
+            bitrise_list_builds: opts.onListBuilds || function() {
+                return JSON.stringify({ data: [
+                    { slug: 'latest-build', build_number: 7, status: 1, status_text: 'success', commit_message: 'some other ticket' }
+                ]});
+            },
+            bitrise_list_build_artifacts: function() {
+                return JSON.stringify({ data: [{ slug: 's', title: 'app.zip', file_size_bytes: 1000 }] });
+            },
+            bitrise_get_build_artifact: function() {
+                return JSON.stringify({ data: { expiring_download_url: 'https://x.com/a.zip' } });
+            }
+        };
+    }
+
+    test('skips the feature-PR lookup entirely when featurePR is not configured', function() {
+        var listPrsCalled = false;
+        var writtenFiles = {};
+
+        var m = loadPreCli(makeLookupMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onListPrs: function() { listPrsCalled = true; return JSON.stringify({ data: [] }); }
+        }));
+
+        m.action(makeLookupParams('PROJ-9006', false));
+
+        assert.equal(listPrsCalled, false, 'github_list_prs must not be called without featurePR');
+        assert.ok(writtenFiles['input/PROJ-9006/app_info.md'], 'download must still complete');
+        var md = writtenFiles['input/PROJ-9006/app_info.md'];
+        assert.ok(md.indexOf('| Build Slug | latest-build |') !== -1, 'unfiltered latest build used');
+    });
+
+    test('PR lookup failure does not abort the artifact download', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli(makeLookupMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onListPrs: function() { throw new Error('github down'); }
+        }));
+
+        m.action(makeLookupParams('PROJ-9007', true));
+
+        var md = writtenFiles['input/PROJ-9007/app_info.md'];
+        assert.ok(md, 'download must still complete when the PR listing throws');
+        assert.ok(md.indexOf('| Build Slug | latest-build |') !== -1, 'unfiltered latest build used');
+    });
+
+    test('matches the feature branch via pr.source_branch when head.ref is absent', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli(makeLookupMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onListPrs: function() {
+                return JSON.stringify({ data: [{ number: 5, source_branch: 'bug/PROJ-9008' }] });
+            },
+            onListBuilds: function() {
+                return JSON.stringify({ data: [
+                    { slug: 'other-build', build_number: 10, status: 1, status_text: 'success', commit_message: 'unrelated work' },
+                    { slug: 'matching-build', build_number: 11, status: 1, status_text: 'success', commit_message: 'iOS build for bug/PROJ-9008' }
+                ]});
+            }
+        }));
+
+        m.action(makeLookupParams('PROJ-9008', true));
+
+        var md = writtenFiles['input/PROJ-9008/app_info.md'];
+        assert.ok(md.indexOf('| Build Slug | matching-build |') !== -1,
+            'source_branch must satisfy the ticket-key match: ' + md);
+    });
+
+});
+
+suite('preCliMobileTestAutomationSetup — gh-1189 characterization: Bitrise download', function() {
+
+    function makeDownloadParams(ticketKey) {
+        return {
+            inputFolderPath: 'input/' + ticketKey,
+            jobParams: {
+                customParams: {
+                    featurePR: { owner: 'ExampleOrg', repo: 'example-mobile-app' },
+                    bitriseBuild: { appSlug: 'app-slug', workflowId: 'build_ios_simulator' }
+                }
+            }
+        };
+    }
+
+    function defaultDownloadCliHandler(o) {
+        if (o.command && o.command.indexOf('find') !== -1) return 'input/x/app/Example.app';
+        return '';
+    }
+
+    function openPrListStub() {
+        return JSON.stringify({ data: [{ number: 9, head: { ref: 'story/PROJ-X' } }] });
+    }
+
+    function successfulBuildsStub() {
+        return JSON.stringify({ data: [
+            { slug: 'build-abc', build_number: 10317, status: 1, status_text: 'success' }
+        ]});
+    }
+
+    function artifactZipStub() {
+        return JSON.stringify({ data: [
+            { slug: 'artifact-xyz', title: 'app-simulator.zip', file_size_bytes: 32000000 }
+        ]});
+    }
+
+    function expiringUrlStub() {
+        return JSON.stringify({ data: { expiring_download_url: 'https://example.com/app.zip' } });
+    }
+
+    function makeDownloadMocks(opts) {
+        opts = opts || {};
+        var mocks = {
+            jira_move_to_status: function() {},
+            jira_search_by_jql: function() { return []; },
+            file_write: function() {},
+            cli_execute_command: defaultDownloadCliHandler,
+            github_list_prs: openPrListStub,
+            bitrise_list_builds: successfulBuildsStub,
+            bitrise_list_build_artifacts: artifactZipStub,
+            bitrise_get_build_artifact: expiringUrlStub
+        };
+        if (opts.onFileWrite) mocks.file_write = opts.onFileWrite;
+        if (opts.onCliCommand) mocks.cli_execute_command = opts.onCliCommand;
+        if (opts.onListPrs) mocks.github_list_prs = opts.onListPrs;
+        if (opts.onListBuilds) mocks.bitrise_list_builds = opts.onListBuilds;
+        if (opts.onListArtifacts) mocks.bitrise_list_build_artifacts = opts.onListArtifacts;
+        if (opts.onGetArtifact) mocks.bitrise_get_build_artifact = opts.onGetArtifact;
+        return mocks;
+    }
+
+    test('throws the canonical no-successful-builds error when every build failed', function() {
+        var m = loadPreCli(makeDownloadMocks({
+            onListBuilds: function() {
+                return JSON.stringify({ data: [
+                    { slug: 'b1', build_number: 1, status: 2, status_text: 'failed' }
+                ]});
+            }
+        }));
+
+        var threw = false;
+        try {
+            m.action(makeDownloadParams('PROJ-9010'));
+        } catch (e) {
+            threw = true;
+            assert.ok(e.message.indexOf('No successful build_ios_simulator builds found') !== -1,
+                'canonical error expected: ' + e.message);
+        }
+        assert.ok(threw, 'should throw when no build succeeded');
+    });
+
+    test('treats a builds response without a data array as no builds', function() {
+        var m = loadPreCli(makeDownloadMocks({
+            onListBuilds: function() { return JSON.stringify({}); }
+        }));
+
+        var threw = false;
+        try {
+            m.action(makeDownloadParams('PROJ-9011'));
+        } catch (e) {
+            threw = true;
+            assert.ok(e.message.indexOf('No successful') !== -1, 'canonical error expected: ' + e.message);
+        }
+        assert.ok(threw, 'missing data array must behave like an empty build list');
+    });
+
+    test('wraps build-listing failures as "Failed to list Bitrise builds"', function() {
+        var m = loadPreCli(makeDownloadMocks({
+            onListBuilds: function() { throw new Error('bitrise down'); }
+        }));
+
+        var threw = false;
+        try {
+            m.action(makeDownloadParams('PROJ-9012'));
+        } catch (e) {
+            threw = true;
+            assert.ok(e.message.indexOf('Failed to list Bitrise builds') !== -1,
+                'wrapped error expected: ' + e.message);
+        }
+        assert.ok(threw, 'listing failure must surface as the wrapped error');
+    });
+
+    test('removes the zip after a successful unzip', function() {
+        var commands = [];
+
+        var m = loadPreCli(makeDownloadMocks({
+            onCliCommand: function(opts) {
+                commands.push(opts.command);
+                if (opts.command && opts.command.indexOf('find') !== -1) return 'input/PROJ-9013/app/Example.app';
+                return '';
+            }
+        }));
+
+        m.action(makeDownloadParams('PROJ-9013'));
+
+        var unzipIdx = -1, rmIdx = -1;
+        for (var i = 0; i < commands.length; i++) {
+            if (commands[i].indexOf('unzip -o') !== -1) unzipIdx = i;
+            if (commands[i].indexOf('rm -f "input/PROJ-9013/app.zip"') !== -1) rmIdx = i;
+        }
+        assert.ok(unzipIdx !== -1, 'unzip must run');
+        assert.ok(rmIdx !== -1, 'zip cleanup must run');
+        assert.ok(rmIdx > unzipIdx, 'zip cleanup must run after the unzip');
+    });
+
+    test('skips the download when the artifact listing has no data array', function() {
+        var writtenFiles = {};
+        var getArtifactCalled = false;
+
+        var m = loadPreCli(makeDownloadMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onListArtifacts: function() { return JSON.stringify({}); },
+            onGetArtifact: function() { getArtifactCalled = true; return JSON.stringify({ data: {} }); }
+        }));
+
+        m.action(makeDownloadParams('PROJ-9014'));
+
+        assert.equal(getArtifactCalled, false, 'no artifact detail call without a listing');
+        assert.equal(writtenFiles['input/PROJ-9014/app_info.md'], undefined, 'no app_info.md without an artifact');
+    });
+
+    test('skips the download when the artifact detail call throws', function() {
+        var writtenFiles = {};
+        var cliCommands = [];
+
+        var m = loadPreCli(makeDownloadMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onCliCommand: function(opts) { cliCommands.push(opts.command); return ''; },
+            onGetArtifact: function() { throw new Error('artifact detail failed'); }
+        }));
+
+        m.action(makeDownloadParams('PROJ-9015'));
+
+        assert.ok(!cliCommands.some(function(c) { return c && c.indexOf('curl') !== -1; }),
+            'must not download without an expiring URL');
+        assert.equal(writtenFiles['input/PROJ-9015/app_info.md'], undefined, 'no app_info.md without a URL');
+    });
+
+});
