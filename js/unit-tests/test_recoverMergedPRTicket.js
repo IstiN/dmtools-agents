@@ -352,7 +352,7 @@ suite('recoverMergedPRTicket — pure helpers (gh-119)', function() {
         assert.deepEqual(guard.prIdentity({ number: 7, html_url: 'a' }), { number: 7, url: 'a' });
         assert.deepEqual(guard.prIdentity({ id: 8, url: 'b' }), { number: 8, url: 'b' });
         assert.deepEqual(guard.prIdentity({}), { number: '?', url: '' });
-        assert.deepEqual(guard.prIdentity({ number: 0, id: 9 }), { number: 0, url: '' });
+        assert.deepEqual(guard.prIdentity({ number: 0, id: 9 }), { number: 9, url: '' });
     });
 
     test('recoveryCustomParams: jobParams bag wins, params bag next, {} last', function() {

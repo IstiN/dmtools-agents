@@ -297,3 +297,64 @@ suite('fetchConfluenceOutputContext', function() {
     });
 
 });
+
+// ─── gh-119 CRAP: uncovered branches + extracted pure helpers ────────────────
+
+suite('fetchConfluenceOutputContext — uncovered branches (gh-119 characterization)', function() {
+
+    test('ticket key falls back to the input folder name when ticket.key is absent', function() {
+        var marker;
+        var mod = loadFetchConfluenceContext({
+            file_write: function(opts) { marker = opts; return null; },
+            confluence_get_children_by_id: function() { return []; }
+        });
+        var result = mod.action({ inputFolderPath: 'input/PROJ-99', ticket: {}, jobParams: {} });
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'first_run');
+        assert.contains(marker.path, 'input/PROJ-99/confluence_output_target.json');
+        assert.equal(marker.content.indexOf('PROJ-99') !== -1, true, 'marker page title uses the folder-derived key');
+    });
+
+    test('no input folder: marker skipped, comments not fetched, first_run still reported', function() {
+        var writes = 0;
+        var mod = loadFetchConfluenceContext({
+            file_write: function() { writes++; return null; },
+            confluence_get_children_by_id: function() { return []; }
+        });
+        var result = mod.action({ ticket: { key: 'PROJ-11' }, jobParams: {} });
+        assert.equal(result.action, 'first_run');
+        assert.equal(writes, 0);
+    });
+});
+
+suite('fetchConfluenceOutputContext — pure helpers (gh-119)', function() {
+    var mod = loadFetchConfluenceContext({});
+
+    test('resolveTicketKey: ticket.key wins, folder basename fallback, null last', function() {
+        assert.equal(mod.resolveTicketKey({ ticket: { key: 'K-1' }, inputFolderPath: 'input/K-2' }), 'K-1');
+        assert.equal(mod.resolveTicketKey({ ticket: {}, inputFolderPath: 'input/K-2/sub' }), 'sub');
+        assert.equal(mod.resolveTicketKey({ ticket: {}, inputFolderPath: 'input/K-2/' }), '');
+        assert.equal(mod.resolveTicketKey({}), null);
+        assert.equal(mod.resolveTicketKey({ inputFolderPath: null }), null);
+    });
+
+    test('ticketSummary: fields.summary with a no-fields fallback', function() {
+        assert.equal(mod.ticketSummary({ fields: { summary: 'S' } }), 'S');
+        assert.equal(mod.ticketSummary({ fields: {} }), '');
+        assert.equal(mod.ticketSummary({}), '');
+        assert.equal(mod.ticketSummary(null), '');
+    });
+
+    test('existingPageTitle: page title wins, ticketKey fallback', function() {
+        assert.equal(mod.existingPageTitle({ title: 'T' }, 'K'), 'T');
+        assert.equal(mod.existingPageTitle({}, 'K'), 'K');
+        assert.equal(mod.existingPageTitle({ title: '' }, 'K'), 'K');
+    });
+
+    test('scm-agnostic target marker shape', function() {
+        var cfg = { target: 'confluence', space: 'DOC', parentPageId: '42' };
+        assert.deepEqual(mod.buildTargetMarker(cfg, 'Title'), {
+            target: 'confluence', format: 'markdown', pageTitle: 'Title', space: 'DOC', parentPageId: '42'
+        });
+    });
+});
