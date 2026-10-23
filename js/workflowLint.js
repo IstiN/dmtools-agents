@@ -223,7 +223,98 @@ function extractIssueTypes(text) {
  *   - list items start a fresh mapping (two steps may both use `name:`);
  *   - block-scalar content (run: |, run-name: >-) is never parsed as keys;
  *   - full-line comments and blank lines are ignored.
+ *
+ * The scan decomposes into the pure helpers below (gh-1198): the stack
+ * machine (pop/push/record), one line's structural classification, and the
+ * block-scalar bookkeeping — findDuplicateKeys itself only walks the lines.
  */
+
+// Pop every open mapping frame at or deeper than `indent` — a key at that
+// indent closes them.
+function popFramesDeeperThan(stack, indent) {
+    while (stack.length && stack[stack.length - 1].indent >= indent) {
+        stack.pop();
+    }
+}
+
+// A list-item key opens a fresh mapping frame at indent+1 (between the
+// "- " column and the item's continuation keys), popping the previous item.
+function pushListItemFrame(stack, indent) {
+    popFramesDeeperThan(stack, indent + 1);
+    stack.push({ indent: indent + 1, keys: {} });
+}
+
+// Record a plain mapping key in its parent frame; a repeated key inside the
+// same mapping is a duplicate. The key's own child frame opens after — so a
+// top-level key (no parent frame) is never flagged as a duplicate.
+function recordMappingKey(stack, key, indent, dups, lineNo) {
+    popFramesDeeperThan(stack, indent);
+    if (stack.length) {
+        var parent = stack[stack.length - 1];
+        if (parent.keys[key]) {
+            dups.push({ key: key, line: lineNo });
+        } else {
+            parent.keys[key] = true;
+        }
+    }
+    stack.push({ indent: indent, keys: {} });
+}
+
+// One structural line's stack transition: list-item keys open a fresh item
+// mapping; plain keys record in the parent frame.
+function applyKeyLine(stack, m, indent, dups, lineNo) {
+    if (m[1]) {
+        pushListItemFrame(stack, indent);
+        return;
+    }
+    recordMappingKey(stack, unquote(m[2].trim()), indent, dups, lineNo);
+}
+
+// Block scalar: every deeper line belongs to the value (a `|`/`>` payload
+// with optional chomping/indent indicators). Plain values never do.
+function opensBlockScalar(m) {
+    return !!(m[3] && BLOCK_SCALAR_RE.test(m[3].trim()));
+}
+
+// Block-scalar body classification for one raw line: a blank line never
+// ends the scalar, deeper content is scalar body (both skip), and a line
+// back at or above the scalar's indent ends it.
+function scalarLineVerdict(raw, scalarIndent) {
+    if (raw.trim() === '') return { skip: true };            // blanks never end a block scalar
+    if (indentOf(raw) > scalarIndent) return { skip: true }; // scalar content — not YAML structure
+    return { endsScalar: true };
+}
+
+// Post-scalar content classification: { reset } for document markers,
+// { indent, match } for a mapping-key line, null otherwise (full-line
+// comments, non-key scalars like "- main").
+function contentContext(content, indent) {
+    if (content.charAt(0) === '#') return null;
+    if (content === '---' || content === '...') return { reset: true };
+    var m = KEY_LINE_RE.exec(content);
+    if (!m) return null;
+    return { indent: indent, match: m };
+}
+
+// One raw line's structural context for the duplicate scan: null when the
+// line carries no mapping structure (blank, comment, scalar body), else
+// the content classification stamped with whether the line leaves an open
+// block scalar (dedent ends the scalar; the line is still processed).
+function lineContext(raw, scalarIndent) {
+    if (raw.trim() === '') return null;
+    var indent = indentOf(raw);
+    var leavesScalar = false;
+    if (scalarIndent >= 0) {
+        var scalar = scalarLineVerdict(raw, scalarIndent);
+        if (scalar.skip) return null;
+        leavesScalar = true;
+    }
+    var ctx = contentContext(raw.slice(indent), indent);
+    if (!ctx) return null;
+    ctx.leavesScalar = leavesScalar;
+    return ctx;
+}
+
 function findDuplicateKeys(text) {
     var lines = String(text).split(/\r?\n/);
     // Frames of open mappings: { indent, keys }. A key at indent I pops
@@ -233,57 +324,16 @@ function findDuplicateKeys(text) {
     var scalarIndent = -1; // >= 0 while inside a block scalar keyed at that indent
 
     for (var i = 0; i < lines.length; i++) {
-        var raw = lines[i];
-        if (raw.trim() === '') {
-            continue; // blanks never end a block scalar
-        }
-        var indent = indentOf(raw);
-        if (scalarIndent >= 0) {
-            if (indent > scalarIndent) {
-                continue; // scalar content — not YAML structure
-            }
-            scalarIndent = -1; // dedent ends the scalar
-        }
-        var content = raw.slice(indent);
-        if (content.charAt(0) === '#') {
-            continue;
-        }
-        if (content === '---' || content === '...') {
+        var ctx = lineContext(lines[i], scalarIndent);
+        if (!ctx) continue;
+        if (ctx.leavesScalar) scalarIndent = -1;
+        if (ctx.reset) {
             stack = [];
             continue;
         }
-        var m = KEY_LINE_RE.exec(content);
-        if (!m) {
-            continue; // scalar list entries like "- main" carry no keys
-        }
-        var isListItem = !!m[1];
-        var key = unquote(m[2].trim());
-        if (isListItem) {
-            // Fresh mapping per item: pop the previous item's frame.
-            // Frame indent I+1 sits between the "- " column and the
-            // item's continuation keys at I+2.
-            while (stack.length && stack[stack.length - 1].indent >= indent + 1) {
-                stack.pop();
-            }
-            stack.push({ indent: indent + 1, keys: {} });
-        } else {
-            while (stack.length && stack[stack.length - 1].indent >= indent) {
-                stack.pop();
-            }
-            if (stack.length) {
-                var parent = stack[stack.length - 1];
-                if (parent.keys[key]) {
-                    dups.push({ key: key, line: i + 1 });
-                } else {
-                    parent.keys[key] = true;
-                }
-            }
-            // Frame for this key's potential children.
-            stack.push({ indent: indent, keys: {} });
-        }
-        // Block scalar: every deeper line belongs to the value.
-        if (m[3] && BLOCK_SCALAR_RE.test(m[3].trim())) {
-            scalarIndent = indent;
+        applyKeyLine(stack, ctx.match, ctx.indent, dups, i + 1);
+        if (opensBlockScalar(ctx.match)) {
+            scalarIndent = ctx.indent;
         }
     }
     return dups;
@@ -292,5 +342,13 @@ function findDuplicateKeys(text) {
 module.exports = {
     extractTriggers: extractTriggers,
     extractIssueTypes: extractIssueTypes,
-    findDuplicateKeys: findDuplicateKeys
+    findDuplicateKeys: findDuplicateKeys,
+    lineContext: lineContext,
+    contentContext: contentContext,
+    scalarLineVerdict: scalarLineVerdict,
+    applyKeyLine: applyKeyLine,
+    popFramesDeeperThan: popFramesDeeperThan,
+    pushListItemFrame: pushListItemFrame,
+    recordMappingKey: recordMappingKey,
+    opensBlockScalar: opensBlockScalar
 };
