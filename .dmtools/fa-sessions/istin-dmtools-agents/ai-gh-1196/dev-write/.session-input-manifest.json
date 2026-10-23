@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-23T23:26:30.875Z",
+  "ticketKey": "gh-1196",
+  "headSha": "ec2d1dd10c233511c9a3e7e42a418bdcb161fc53",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:7ee71e88425f6944",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:0c92de1e6a9fdc29",
+      "size": 3792
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:046ed3b548baab2a",
+      "size": 1230
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:604452ce852c10ef",
+      "size": 3204
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:f2b11189959bb87c",
+      "size": 792
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:18a15ddec9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:96c7baf0e3745a57",
+      "size": 1849
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:1e39c6dd5c2209c9",
+      "size": 1780
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6vzLO4",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/reviewVerdicts.js:121",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: reuse the new `censusCount` helper in the remaining inline census normalizations**\n\ngh-1196 introduces `censusCount(value)` (this line) to give the `Number(x || 0) || 0` census normalization one name — but the same idiom still appears inline in five untouched spots of this same module:\n\n- `buildVerdictComment` — `js/common/reviewVerdicts.js:88` (`Number(record.blocking || 0) || 0`)\n- `reconcileDecision` — `js/common/reviewVerdicts.js:359-360` (blocking + suggestions)\n- `armReworkDecision` — `js/common/reviewVerdicts.js:396,400` (blocking + suggestions)\n\nThose functions are outside this ticket's named scope, so leaving them is acceptable. A follow-up (or this PR, if trivial) swapping them for `censusCount(...)` would leave exactly one normalization definition in the module. Purely cosmetic consolidation — no behavior difference, no CRAP impact."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-23:c681ec8d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-23",
+      "updatedAt": "2026-10-23",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: reuse the new `censusCount` helper in the remaining inline census normalizations**\n\ngh-1196 introduces `censusCount(value)` (this line) to give the `Number(x || 0) || 0` census normalization one name — but the same idiom still appears inline in five untouched spots of this same module:\n\n- `buildVerdictComment` — `js/common/reviewVerdicts.js:88` (`Number(record.blocking || 0) || 0`)\n- `reconcileDecision` — `js/common/reviewVerdicts.js:359-360` (blocking + suggestions)\n- `armReworkDecision` — `js/common/reviewVerdicts.js:396,400` (blocking + suggestions)\n\nThose functions are outside this ticket's named scope, so leaving them is acceptable. A follow-up (or this PR, if trivial) swapping them for `censusCount(...)` would leave exactly one normalization definition in the module. Purely cosmetic consolidation — no behavior difference, no CRAP impact."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-23:53dedc73",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-23",
+      "updatedAt": "2026-10-23",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The refactor itself is verified sound — the five extractions are behaviour-preserving (public-API characterization suites pass against main's code AND the head), the canonical dmtools harness is green (5911 passed / 0 failed), and the CRAP ratchet reproduces every claimed improvement exactly (resumeAgent 21→6, parseVerdictRecords 18→7, extractVerdictRecord 17→3, selectResolvableThreads 21→7, action 16.7→8) with 0 regressions. One 🚨 BLOCKING branch-level issue: the required `crap` gate deterministically fails on this head against the current released baseline — full evidence in [comment1.md](pr_review_comments/comment1.md).\n\n**Key Issues**:\n- 🚨 **BLOCKING (branch sync, not code)**: gh-1184 (PR #1205) merged to main at 22:53Z and ratcheted the released `crap-baseline` down (measured at main@087ec783); this branch last synced main at 22:40Z and still carries the pre-gh-1184 `js/fetchParentContextToInput.js` → 4 × `NEW > 8` → `CRAP ratchet failed` (exit 2), reproduced locally with the pinned CI toolchain. GitHub's current `crap: SUCCESS` is stale (pre-ratchet); `crap` is a required merge context (`factory-sm-kicker.yml:50`).\n- 💡 `censusCount` reuse in remaining inline normalizations — [comment2.md](pr_review_comments/comment2.md).\n\n**Next Steps**:\n1. Merge current `origin/main` into `ai/gh-1196` — mechanical sync; brings 087ec783's ≤ 8 `fetchParentContextToInput` versions in line with the baseline. No change to this PR's six files is needed.\n2. Re-run validation; `crap` should then report 0 regressions / 5 improvements / 0 new over threshold."
+    }
+  ]
+}
