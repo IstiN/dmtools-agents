@@ -670,6 +670,14 @@ suite('createRepoTasksMulti — extracted helpers', function() {
 
 suite('createRepoTasksMulti — action-phase helpers', function() {
 
+    function commentTracker() {
+        var calls = { comment: [] };
+        return {
+            calls: calls,
+            postComment: function(key, comment) { calls.comment.push({ key: key, comment: comment }); }
+        };
+    }
+
     test('extractSaKey reads the ticket key and reports a sentinel error without one', function() {
         var mod = makeModule();
         assert.deepEqual(mod.extractSaKey({ ticket: { key: 'PROJ-100' } }), { saKey: 'PROJ-100' }, 'key extracted');
@@ -693,18 +701,29 @@ suite('createRepoTasksMulti — action-phase helpers', function() {
         );
     });
 
+    function ticketOf(ticket) {
+        return { getIssue: function() { return ticket; } };
+    }
+
     test('resolveSaTicketContext reads description and parent from fields (or the bare ticket)', function() {
         var mod = makeModule();
-        var ctx = mod.resolveSaTicketContext({ getIssue: function() { return { fields: { description: 'desc', parent: { key: 'PROJ-50' } } }; } }, 'PROJ-100');
-        assert.equal(ctx.description, 'desc', 'description read from fields');
+        var ctx = mod.resolveSaTicketContext(ticketOf({ fields: { description: 'desc text', parent: { key: 'PROJ-50' } } }), 'PROJ-100');
+        assert.equal(ctx.description, 'desc text', 'description read from fields');
         assert.equal(ctx.parentKey, 'PROJ-50', 'parent key read from fields');
 
-        var bare = mod.resolveSaTicketContext({ getIssue: function() { return { parent: 'PLAIN-1' }; } }, 'PROJ-100');
-        assert.equal(bare.description, '', 'missing description yields empty string');
-        assert.equal(bare.parentKey, 'PLAIN-1', 'plain-string parent yields its value');
+        var bare = mod.resolveSaTicketContext(ticketOf({ description: 42, parent: 'PLAIN-1' }), 'PROJ-100');
+        assert.equal(bare.description, '42', 'non-string description is stringified');
+        assert.equal(bare.parentKey, null, 'non-object parent yields null key');
 
-        var none = mod.resolveSaTicketContext({ getIssue: function() { return { fields: { parent: null }; } }, 'PROJ-100');
+        var none = mod.resolveSaTicketContext(ticketOf({ fields: { parent: null } }), 'PROJ-100');
+        assert.equal(none.description, '', 'missing description yields empty string');
         assert.equal(none.parentKey, null, 'null parent yields null key');
+
+        var objectParent = mod.resolveSaTicketContext(ticketOf({ fields: { parent: { key: 'K-9' } } }), 'PROJ-100');
+        assert.equal(objectParent.parentKey, 'K-9', 'object parent yields key');
+
+        var noKeyParent = mod.resolveSaTicketContext(ticketOf({ fields: { parent: {} } }), 'PROJ-100');
+        assert.ok(!noKeyParent.parentKey, 'object parent without key yields no key (undefined)');
     });
 
     test('resolveParentSummary prefers the parent summary and falls back to the key', function() {
@@ -740,11 +759,11 @@ suite('createRepoTasksMulti — action-phase helpers', function() {
 
     test('postOutcomeSummaryComment posts only when something was created or skipped', function() {
         var mod = makeModule();
-        var t1 = fakeTracker();
+        var t1 = commentTracker();
         mod.postOutcomeSummaryComment(t1, 'PROJ-100', 'https://jira.example.com', { created: [], skipped: [] });
         assert.equal(t1.calls.comment.length, 0, 'nothing done — no comment');
 
-        var t2 = fakeTracker();
+        var t2 = commentTracker();
         mod.postOutcomeSummaryComment(t2, 'PROJ-100', 'https://jira.example.com', {
             created: [{ repo: 'a', key: 'PROJ-201', summary: '[a] S' }],
             skipped: ['[b] S']
