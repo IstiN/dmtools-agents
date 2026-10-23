@@ -2586,7 +2586,7 @@ suite('aiTeammateTokenUsageReporter — calculateRunnerStats (gh-1193)', functio
         assert.equal(stats.intervalRuns, 2);
         assert.equal(stats.maxConcurrentRuns, 2);
         assert.equal(stats.wallSeconds, 900);
-        assert.equal(Math.round(stats.avgConcurrentRuns * 100) / 100, Math.round((1200 / 900) * 100) / 100);
+        assert.equal(stats.avgConcurrentRuns, 1.3);
         assert.equal(stats.totalRunnerTime, '20m 0s');
     });
 

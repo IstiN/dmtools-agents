@@ -196,6 +196,36 @@ function buildRow(o) {
 
 // ── merge + retention (pure) — the jq program ────────────────────────────────
 
+// Corrupt shapes degrade to {} exactly like the `jq empty` guard.
+function objectOrEmpty(cur) {
+    return (cur && typeof cur === 'object' && !Array.isArray(cur)) ? cur : {};
+}
+
+// Existing keys in insertion order, with `key` appended when absent.
+function orderedKeysOf(src, key) {
+    var ordered = [];
+    var seen = {};
+    for (var k in src) {
+        if (Object.prototype.hasOwnProperty.call(src, k) && !seen[k]) {
+            seen[k] = true;
+            ordered.push(k);
+        }
+    }
+    if (!seen[key]) ordered.push(key);
+    return ordered;
+}
+
+// Rows at/after the cutoff (Z stamps sort as strings), tail-capped at
+// ROW_KEEP. Non-row shapes drop.
+function retainedRowsOf(rows, cutoff) {
+    var kept = [];
+    for (var j = 0; j < rows.length; j++) {
+        var r = rows[j];
+        if (r && typeof r === 'object' && String(r.at || '') >= cutoff) kept.push(r);
+    }
+    return kept.slice(-ROW_KEEP);
+}
+
 /**
  * `.[$key] = ((.[$key] // []) + [$row])
  *  | with_entries(.value |= (map(select((.at // "") >= $cutoff)) | .[-40:]))
@@ -206,27 +236,14 @@ function buildRow(o) {
  * shapes degrade to {} exactly like the `jq empty` guard.
  */
 function mergeTokenRows(cur, key, row, cutoff) {
-    var src = (cur && typeof cur === 'object' && !Array.isArray(cur)) ? cur : {};
+    var src = objectOrEmpty(cur);
     var next = {};
-    var ordered = [];
-    var seen = {};
-    for (var k in src) {
-        if (Object.prototype.hasOwnProperty.call(src, k) && !seen[k]) {
-            seen[k] = true;
-            ordered.push(k);
-        }
-    }
-    if (!seen[key]) ordered.push(key);
+    var ordered = orderedKeysOf(src, key);
     for (var i = 0; i < ordered.length; i++) {
         var kk = ordered[i];
         var rows = src[kk] || [];
         if (kk === key) rows = rows.concat([row]);
-        var kept = [];
-        for (var j = 0; j < rows.length; j++) {
-            var r = rows[j];
-            if (r && typeof r === 'object' && String(r.at || '') >= cutoff) kept.push(r);
-        }
-        kept = kept.slice(-ROW_KEEP);
+        var kept = retainedRowsOf(rows, cutoff);
         if (kept.length > 0) next[kk] = kept;
     }
     return next;

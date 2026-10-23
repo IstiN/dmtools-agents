@@ -778,15 +778,7 @@ function buildHtml(rows, summary) {
         topAgents.map(agentTotalsRowHtml).join('') +
         '</tbody></table></div></section>\n' +
         '<section class="panel"><h2>Recent Runs</h2><div class="scroll"><table id="runsTable"><thead><tr><th class="sortable" data-type="text">Created</th><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="text">Key</th><th class="sortable" data-type="text">Conclusion</th><th class="sortable" data-type="number">Duration</th><th class="sortable" data-type="number">Attempts</th><th class="sortable" data-type="text">Resume</th><th class="sortable" data-type="number">Loops</th><th class="sortable" data-type="number">Limit Retries</th><th class="sortable" data-type="number">Timeouts</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th><th class="sortable" data-type="text">Source</th><th class="sortable" data-type="number">Run</th></tr></thead><tbody>' +
-        recentRows.map(function(r) {
-            var rowClass = r.source === 'estimated' ? '<tr class="row-est">' : '<tr>';
-            var sourceBadge = '';
-            if (r.source) {
-                var srcClass = r.source === 'estimated' ? 'src-est' : (r.source === 'reported' ? 'src-rep' : 'src-unknown');
-                sourceBadge = '<span class="src-badge ' + srcClass + '">' + htmlEscape(r.source) + '</span>';
-            }
-            return rowClass + '<td' + sortAttr(r.createdAt) + '>' + htmlEscape(r.createdAt) + '</td><td' + sortAttr(r.agent) + '>' + htmlEscape(r.agent) + '</td><td' + sortAttr(r.ticketKey) + '>' + htmlEscape(r.ticketKey) + '</td><td' + sortAttr(r.conclusion) + '>' + htmlEscape(r.conclusion) + '</td><td class="num"' + sortAttr(r.durationSeconds) + '>' + htmlEscape(r.duration || '0s') + '</td><td class="num"' + sortAttr(r.samples) + '>' + htmlEscape(r.samples || 1) + '</td><td' + sortAttr(r.resumeDetected ? 'yes' : 'no') + '>' + (r.resumeDetected ? 'yes' : 'no') + '</td><td class="num"' + sortAttr(r.feedbackLoopCount) + '>' + (r.feedbackLoopCount || 0) + '</td><td class="num"' + sortAttr(r.rateLimitRetryCount) + '>' + (r.rateLimitRetryCount || 0) + '</td><td class="num"' + sortAttr(r.timeoutCount) + '>' + (r.timeoutCount || 0) + '</td><td class="num"' + sortAttr(r.readTokens) + '>' + formatShort(r.readTokens) + '</td><td class="num"' + sortAttr(r.writeTokens) + '>' + formatShort(r.writeTokens) + '</td><td class="num"' + sortAttr(r.cachedTokens) + '>' + formatShort(r.cachedTokens) + '</td><td class="num"' + sortAttr(r.reasoningTokens) + '>' + formatShort(r.reasoningTokens) + '</td><td' + sortAttr(r.source || '') + '>' + sourceBadge + '</td><td' + sortAttr(r.runNumber) + '><a href="' + htmlEscape(r.url) + '">#' + htmlEscape(r.runNumber) + '</a></td></tr>';
-        }).join('') +
+        recentRows.map(recentRunRowHtml).join('') +
         '</tbody></table></div></section>\n</main><div id="chartTooltip" class="tooltip"></div>\n<script>const DATA=JSON.parse("' + payload + '");\n' +
         'function short(v){v=v||0;if(v>=1e9)return(v/1e9).toFixed(1).replace(/\\.0$/,"")+"b";if(v>=1e6)return(v/1e6).toFixed(1).replace(/\\.0$/,"")+"m";if(v>=1e3)return(v/1e3).toFixed(1).replace(/\\.0$/,"")+"k";return String(v)}' +
         'function dur(v){v=Math.max(0,Math.round(v||0));const d=Math.floor(v/86400),h=Math.floor(v%86400/3600),m=Math.floor(v%3600/60),s=v%60;if(d)return d+"d "+h+"h";if(h)return h+"h "+m+"m";if(m)return m+"m "+s+"s";return s+"s"}' +
@@ -821,43 +813,91 @@ function fetchWorkflowRunsPage(custom, status, created, page) {
     };
 }
 
+// The window is split in two at its midpoint when the first page reports a
+// full result set (>= 1000) and the window is wider than a minute.
+function shouldSplitRunsWindow(total, startDay, endDay) {
+    var windowMs = Date.parse(endDay) - Date.parse(startDay);
+    return total != null && total >= 1000 && windowMs > 60000;
+}
+
+// Folds one page's runs into the collected list: dedupe by id, skip runs
+// that are not completed. Seen ids count even when the run is skipped.
+function mergePageRuns(pageRuns, seen, runs) {
+    pageRuns.forEach(function(run) {
+        var id = String(run.id || run.databaseId || '');
+        if (!id || seen[id]) return;
+        seen[id] = true;
+        if (run.status && run.status !== 'completed') return;
+        runs.push(run);
+    });
+}
+
+function runsPageLimitOf(custom) {
+    return custom.perStatusLimit || custom.limit || 100;
+}
+
+// Why the page walk must stop before fetching `page + 1`, or null to continue.
+function runsPageStopReason(custom, runs, pageRuns, page) {
+    if (custom.maxRuns && runs.length >= custom.maxRuns) return 'max-runs';
+    if (pageRuns.length < runsPageLimitOf(custom)) return 'last-page';
+    if (page + 1 > (custom.maxPages || 100)) return 'max-pages';
+    return null;
+}
+
+// Walks the pages of one created-range query, merging every page's runs.
+function collectRunPages(custom, status, created, pageRuns, seen, runs) {
+    var page = 1;
+    while (pageRuns.length) {
+        mergePageRuns(pageRuns, seen, runs);
+        if (runsPageStopReason(custom, runs, pageRuns, page)) return;
+        page++;
+        pageRuns = fetchWorkflowRunsPage(custom, status, created, page).runs;
+    }
+}
+
 function collectRunsForWindow(custom, status, startDay, endDay, seen, runs, depth) {
     var created = startDay + '..' + endDay;
     var firstPage = fetchWorkflowRunsPage(custom, status, created, 1);
-    var total = firstPage.total;
-    var windowMs = Date.parse(endDay) - Date.parse(startDay);
 
-    if (total != null && total >= 1000 && windowMs > 60000) {
+    if (shouldSplitRunsWindow(firstPage.total, startDay, endDay)) {
         var mid = midpointTime(startDay, endDay);
         collectRunsForWindow(custom, status, startDay, mid, seen, runs, depth + 1);
         collectRunsForWindow(custom, status, addMilliseconds(mid, 1000), endDay, seen, runs, depth + 1);
         return;
     }
 
-    var pageRuns = firstPage.runs;
-    var page = 1;
-    while (pageRuns.length) {
-        pageRuns.forEach(function(run) {
-            var id = String(run.id || run.databaseId || '');
-            if (!id || seen[id]) return;
-            seen[id] = true;
-            if (run.status && run.status !== 'completed') return;
-            runs.push(run);
-        });
-        if (custom.maxRuns && runs.length >= custom.maxRuns) return;
-        if (pageRuns.length < (custom.perStatusLimit || custom.limit || 100)) return;
-        page++;
-        if (page > (custom.maxPages || 100)) return;
-        pageRuns = fetchWorkflowRunsPage(custom, status, created, page).runs;
+    collectRunPages(custom, status, created, firstPage.runs, seen, runs);
+}
+
+// Newest-run-first ordering of the merged run list.
+function byRunCreatedDesc(a, b) {
+    return String(b.created_at || b.createdAt || '').localeCompare(String(a.created_at || a.createdAt || ''));
+}
+
+// The statuses list: the array customParams field, or a trimmed split of the
+// comma form; ['completed'] when absent.
+function statusListOf(custom) {
+    var statuses = custom.statuses || ['completed'];
+    if (typeof statuses === 'string') {
+        return statuses.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
     }
+    return statuses;
+}
+
+// The created-range window: the full-scan 1970..today span when created
+// listing is disabled, else the configured start/end (today when absent).
+function createdWindowOf(custom) {
+    if (custom.created === false || custom.created === 'false') {
+        return { start: '1970-01-01T00:00:00Z', end: toWindowEnd(todayIsoDay()) };
+    }
+    return {
+        start: toWindowStart(custom.createdStart || custom.since || '2020-01-01'),
+        end: toWindowEnd(custom.createdEnd || todayIsoDay())
+    };
 }
 
 function listCompletedRuns(custom) {
-    var workspace = custom.workspace;
-    var repository = custom.repository;
-    var workflowId = custom.workflowId || 'ai-teammate.yml';
-    var statuses = custom.statuses || ['completed'];
-    if (typeof statuses === 'string') statuses = statuses.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    var statuses = statusListOf(custom);
     var perStatusLimit = custom.perStatusLimit || custom.limit || 100;
     var maxPages = custom.maxPages || 100;
     var seen = {};
@@ -866,16 +906,11 @@ function listCompletedRuns(custom) {
     statuses.forEach(function(status) {
         custom.perStatusLimit = perStatusLimit;
         custom.maxPages = maxPages;
-        if (custom.created === false || custom.created === 'false') {
-            collectRunsForWindow(custom, status, '1970-01-01T00:00:00Z', toWindowEnd(todayIsoDay()), seen, runs, 0);
-        } else {
-            collectRunsForWindow(custom, status, toWindowStart(custom.createdStart || custom.since || '2020-01-01'), toWindowEnd(custom.createdEnd || todayIsoDay()), seen, runs, 0);
-        }
+        var created = createdWindowOf(custom);
+        collectRunsForWindow(custom, status, created.start, created.end, seen, runs, 0);
     });
 
-    runs.sort(function(a, b) {
-        return String(b.created_at || b.createdAt || '').localeCompare(String(a.created_at || a.createdAt || ''));
-    });
+    runs.sort(byRunCreatedDesc);
     if (custom.maxRuns && runs.length > custom.maxRuns) runs = runs.slice(0, custom.maxRuns);
     return runs;
 }
@@ -1014,23 +1049,37 @@ function writeUsageCache(path, cache) {
     writeOutput(path, JSON.stringify(cache, null, 2));
 }
 
+// One cache entry's contribution: its run row and attempt rows. Entries
+// without a row (noUsage / error markers, null) contribute nothing.
+function collectCacheEntryRows(entry, rows, attemptRows) {
+    if (!entry || !entry.row) return;
+    rows.push(entry.row);
+    (entry.attemptRows || []).forEach(function(attemptRow) { attemptRows.push(attemptRow); });
+}
+
+function collectCacheRows(cache, rows, attemptRows) {
+    Object.keys(cache.entries || {}).forEach(function(runId) {
+        collectCacheEntryRows(cache.entries[runId], rows, attemptRows);
+    });
+}
+
+function byCreatedAtDesc(a, b) {
+    return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+}
+
+// Attempts of one run: newest first, then by attempt index ascending.
+function byCreatedAtThenAttempt(a, b) {
+    var byDate = byCreatedAtDesc(a, b);
+    if (byDate !== 0) return byDate;
+    return (a.attemptIndex || 0) - (b.attemptIndex || 0);
+}
+
 function buildRowsFromCache(cache) {
     var rows = [];
     var attemptRows = [];
-    Object.keys(cache.entries || {}).forEach(function(runId) {
-        var entry = cache.entries[runId];
-        if (!entry || !entry.row) return;
-        rows.push(entry.row);
-        (entry.attemptRows || []).forEach(function(attemptRow) { attemptRows.push(attemptRow); });
-    });
-    rows.sort(function(a, b) {
-        return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
-    });
-    attemptRows.sort(function(a, b) {
-        var byDate = String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
-        if (byDate !== 0) return byDate;
-        return (a.attemptIndex || 0) - (b.attemptIndex || 0);
-    });
+    collectCacheRows(cache, rows, attemptRows);
+    rows.sort(byCreatedAtDesc);
+    attemptRows.sort(byCreatedAtThenAttempt);
     return { rows: rows, attemptRows: attemptRows };
 }
 
@@ -1746,6 +1795,12 @@ if (typeof module !== 'undefined' && module.exports) {
         action: action,
         parseNumberWithSuffix: parseNumberWithSuffix,
         parseTokensLine: parseTokensLine,
+        intOrZero: intOrZero,
+        isFaUsagePayload: isFaUsagePayload,
+        faTokensSampleOf: faTokensSampleOf,
+        faLedgerSampleOf: faLedgerSampleOf,
+        tokenCountMatchesOf: tokenCountMatchesOf,
+        cliTokensSampleOf: cliTokensSampleOf,
         extractTokenUsage: extractTokenUsage,
         newUsageTracking: newUsageTracking,
         parseResumeSignal: parseResumeSignal,
@@ -1762,11 +1817,36 @@ if (typeof module !== 'undefined' && module.exports) {
         extractAgentAndKey: extractAgentAndKey,
         calculateDurationSeconds: calculateDurationSeconds,
         formatDuration: formatDuration,
+        asArray: asArray,
+        asArrayRuns: asArrayRuns,
+        asArrayResult: asArrayResult,
+        normalizeLogPayload: normalizeLogPayload,
+        payloadFieldOf: payloadFieldOf,
+        normalizeObjectPayload: normalizeObjectPayload,
         listCompletedRuns: listCompletedRuns,
+        statusListOf: statusListOf,
+        createdWindowOf: createdWindowOf,
+        byRunCreatedDesc: byRunCreatedDesc,
+        shouldSplitRunsWindow: shouldSplitRunsWindow,
+        mergePageRuns: mergePageRuns,
+        runsPageLimitOf: runsPageLimitOf,
+        runsPageStopReason: runsPageStopReason,
+        collectRunPages: collectRunPages,
+        collectRunsForWindow: collectRunsForWindow,
         buildCsv: buildCsv,
         buildAttemptsCsv: buildAttemptsCsv,
         buildSummary: buildSummary,
         buildHtml: buildHtml,
+        reportPayloadOf: reportPayloadOf,
+        topAgentsOf: topAgentsOf,
+        recentRowsOf: recentRowsOf,
+        sourceBadgeClassOf: sourceBadgeClassOf,
+        sourceBadgeOf: sourceBadgeOf,
+        yesNoOf: yesNoOf,
+        numOrZero: numOrZero,
+        recentRunCellsHtml: recentRunCellsHtml,
+        recentRunRowHtml: recentRunRowHtml,
+        agentTotalsRowHtml: agentTotalsRowHtml,
         loadUsageCache: loadUsageCache,
         sortAttr: sortAttr,
         firstDefined: firstDefined,
@@ -1788,6 +1868,26 @@ if (typeof module !== 'undefined' && module.exports) {
         applyCachedRunState: applyCachedRunState,
         processRunLogs: processRunLogs,
         collectUsageRows: collectUsageRows,
+        newGroupBucket: newGroupBucket,
+        addRowTokensToGroup: addRowTokensToGroup,
+        addRowSignalsToGroup: addRowSignalsToGroup,
+        addRowToGroup: addRowToGroup,
+        groupBucketOf: groupBucketOf,
+        roundedAverageOf: roundedAverageOf,
+        finalizeGroupBucket: finalizeGroupBucket,
+        groupBy: groupBy,
+        parseRunnerStartMs: parseRunnerStartMs,
+        resolveRunnerEndMs: resolveRunnerEndMs,
+        runnerIntervalOf: runnerIntervalOf,
+        concurrencyEventsOf: concurrencyEventsOf,
+        maxConcurrentOf: maxConcurrentOf,
+        wallSpanSecondsOf: wallSpanSecondsOf,
+        calculateRunnerStats: calculateRunnerStats,
+        collectCacheEntryRows: collectCacheEntryRows,
+        collectCacheRows: collectCacheRows,
+        byCreatedAtDesc: byCreatedAtDesc,
+        byCreatedAtThenAttempt: byCreatedAtThenAttempt,
+        buildRowsFromCache: buildRowsFromCache,
         parseRunAnchor: parseRunAnchor,
         legFromAgent: legFromAgent,
         buildTokensMap: buildTokensMap,
