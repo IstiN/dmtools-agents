@@ -67,6 +67,10 @@ function isCodeGraphRequired() {
     }
 }
 
+function isBlockedClaimVerified() {
+    return hasCodeGraphUsage() || !isCodeGraphRequired();
+}
+
 /**
  * True when outputs/response.md exists with content. Thin wrapper over the
  * canonical outputFiles.hasOutputFile so the existence read shares one
@@ -582,7 +586,7 @@ function action(params) {
         const blocked = readJson('outputs/blocked.json');
         if (blocked) {
             console.log('outputs/blocked.json found — bug cannot be fixed automatically');
-            return completeBlockedPath(ticketKey, blocked, hasCodeGraphUsage() || !isCodeGraphRequired(), tracker, statuses, jiraConfig, params);
+            return completeBlockedPath(ticketKey, blocked, isBlockedClaimVerified(), tracker, statuses, jiraConfig, params);
         }
 
         // ── Path 2: Already Fixed ────────────────────────────────────────────
@@ -687,6 +691,7 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveActualParams,
         hasCodeGraphUsage,
         isCodeGraphRequired,
+        isBlockedClaimVerified,
         findOpenPrForBranch,
         buildPrAlreadyOpenComment,
         buildBlockedComment,

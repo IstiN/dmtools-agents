@@ -1970,6 +1970,35 @@ suite('configLoader.loadAgentConfig — inheritance edges (gh-1112 rework)', fun
             'child.md'
         ]);
     });
+
+    test('structured cliPrompts section objects support prepend, replace, and unseen section append', function () {
+        var parentWithSec = JSON.stringify({
+            name: 'Teammate',
+            params: {
+                cliPrompts: [
+                    { id: 'sec1', prompts: ['a.md'] },
+                    { id: 'sec2', prompt: 'b.md', mergeStrategy: 'prepend' }
+                ]
+            }
+        });
+        var child = childJson({
+            parent: { path: PARENT_PATH, merge: ['params.cliPrompts'] },
+            params: {
+                cliPrompts: [
+                    { id: 'sec1', prompt: 'override.md', mergeStrategy: 'replace' },
+                    { id: 'sec2', prompt: 'first.md' },
+                    { id: 'sec3', prompt: 'new.md' }
+                ]
+            }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentWithSec, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, [
+            { id: 'sec1', prompts: ['override.md'], mergeStrategy: 'replace' },
+            { id: 'sec2', prompts: ['first.md', 'b.md'], mergeStrategy: 'prepend' },
+            { id: 'sec3', prompt: 'new.md' }
+        ]);
+    });
 });
 // ── resolveInstructions extracted helpers (gh-1086) ──────────────────────────
 

@@ -150,53 +150,21 @@ function validateAgentJson(agentPath, options) {
         result.resolvedPrompts.base = params.cliPrompts;
 
         // Validate each prompt reference
-        function validatePromptString(promptStr, label) {
-            if (typeof promptStr !== 'string') {
-                addError(result, label + ' is not a string: ' + typeof promptStr);
-                return;
-            }
-            if (promptStr.indexOf('./') === 0 || promptStr.indexOf('agents/') === 0) {
-                if (!fileExists(promptStr)) {
-                    addError(result, label + ' file not found: ' + promptStr);
-                }
-            }
-            if (promptStr.length > 200 && promptStr.indexOf('./') !== 0 && promptStr.indexOf('agents/') !== 0) {
-                addWarning(result, label + ' contains long inline text (' + promptStr.length + ' chars). Consider moving to a .md file.');
-            }
-        }
-
         params.cliPrompts.forEach(function(prompt, idx) {
-            if (typeof prompt === 'string') {
-                validatePromptString(prompt, 'cliPrompts[' + idx + ']');
+            if (typeof prompt !== 'string') {
+                addError(result, 'cliPrompts[' + idx + '] is not a string: ' + typeof prompt);
                 return;
             }
-            if (prompt && typeof prompt === 'object' && !Array.isArray(prompt)) {
-                if (!prompt.id || typeof prompt.id !== 'string' || !prompt.id.trim()) {
-                    addError(result, 'cliPrompts[' + idx + '] section object must have a non-empty string "id"');
+            // If it's a file path, check it exists
+            if (prompt.indexOf('./') === 0 || prompt.indexOf('agents/') === 0) {
+                if (!fileExists(prompt)) {
+                    addError(result, 'cliPrompts[' + idx + '] file not found: ' + prompt);
                 }
-                var hasSingle = typeof prompt.prompt === 'string';
-                var hasList = Array.isArray(prompt.prompts) && prompt.prompts.length > 0;
-                if (!hasSingle && !hasList) {
-                    addError(result, 'cliPrompts[' + idx + '] section object must define "prompt" (string) or non-empty "prompts" (array)');
-                }
-                if (hasSingle) {
-                    validatePromptString(prompt.prompt, 'cliPrompts[' + idx + '].prompt');
-                }
-                if (hasList) {
-                    prompt.prompts.forEach(function(subPrompt, subIdx) {
-                        validatePromptString(subPrompt, 'cliPrompts[' + idx + '].prompts[' + subIdx + ']');
-                    });
-                }
-                if (prompt.condition !== undefined) {
-                    if (typeof prompt.condition !== 'string' || !prompt.condition.trim()) {
-                        addError(result, 'cliPrompts[' + idx + '].condition must be a non-empty string path');
-                    } else if (!fileExists(prompt.condition)) {
-                        addError(result, 'cliPrompts[' + idx + '].condition file not found: ' + prompt.condition);
-                    }
-                }
-                return;
             }
-            addError(result, 'cliPrompts[' + idx + '] is not a string or section object: ' + typeof prompt);
+            // Warn about inline text that looks like instructions
+            if (prompt.length > 200 && prompt.indexOf('./') !== 0 && prompt.indexOf('agents/') !== 0) {
+                addWarning(result, 'cliPrompts[' + idx + '] contains long inline text (' + prompt.length + ' chars). Consider moving to a .md file.');
+            }
         });
     }
 

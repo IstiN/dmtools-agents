@@ -1247,14 +1247,19 @@ function createTracker(config, customParams) {
         }
     }
 
+    function _pickParsedErrorMsg(p) {
+        var cp = p.customProperties;
+        var em = p.errorMessages;
+        return p.message || (cp && cp.ErrorMessage) || (em && em[0]) || '';
+    }
+
     function _extractJsonErrorMessage(text) {
         var start = text.indexOf('{');
         var end = text.lastIndexOf('}');
         if (start === -1 || end <= start) return null;
         try {
-            var p = JSON.parse(text.substring(start, end + 1)) || {};
-            var msg = p.message || (p.customProperties && p.customProperties.ErrorMessage) || (Array.isArray(p.errorMessages) && p.errorMessages[0]);
-            return typeof msg === 'string' && msg.trim() ? msg.trim() : null;
+            var msg = String(_pickParsedErrorMsg(JSON.parse(text.substring(start, end + 1)) || {})).trim();
+            return msg || null;
         } catch (e) {
             return null;
         }

@@ -422,34 +422,33 @@ function extractSectionPromptsList(sec) {
     return out;
 }
 
+function combineSectionPrompts(basePrompts, overPrompts, strategy) {
+    if (strategy === 'replace') return overPrompts;
+    if (strategy === 'prepend') return overPrompts.concat(basePrompts);
+    return basePrompts.concat(overPrompts);
+}
+
 function mergeCliPromptSections(baseSec, overSec) {
-    var basePrompts = extractSectionPromptsList(baseSec);
-    var overPrompts = extractSectionPromptsList(overSec);
-    var strategy = (typeof overSec.mergeStrategy === 'string' && overSec.mergeStrategy)
-        ? overSec.mergeStrategy.toLowerCase()
-        : ((typeof baseSec.mergeStrategy === 'string' && baseSec.mergeStrategy)
-            ? baseSec.mergeStrategy.toLowerCase()
-            : 'append');
-    var mergedPrompts;
-    if (strategy === 'replace') {
-        mergedPrompts = overPrompts;
-    } else if (strategy === 'prepend') {
-        mergedPrompts = overPrompts.concat(basePrompts);
-    } else {
-        mergedPrompts = basePrompts.concat(overPrompts);
-    }
+    var strategy = String(overSec.mergeStrategy || baseSec.mergeStrategy || 'append').toLowerCase();
     var result = {
         id: overSec.id || baseSec.id,
-        prompts: mergedPrompts,
+        prompts: combineSectionPrompts(extractSectionPromptsList(baseSec), extractSectionPromptsList(overSec), strategy),
         mergeStrategy: strategy
     };
-    var cond = (typeof overSec.condition === 'string' && overSec.condition.trim())
-        ? overSec.condition
-        : ((typeof baseSec.condition === 'string' && baseSec.condition.trim())
-            ? baseSec.condition
-            : null);
+    var cond = String(overSec.condition || baseSec.condition || '').trim();
     if (cond) result.condition = cond;
     return result;
+}
+
+function isPromptSectionObj(item) {
+    return !!(item && typeof item === 'object' && !Array.isArray(item) && item.id);
+}
+
+function findPromptSectionIndex(list, id) {
+    for (var k = 0; k < list.length; k++) {
+        if (isPromptSectionObj(list[k]) && list[k].id === id) return k;
+    }
+    return -1;
 }
 
 /** Parent-first array concat; child entries already present are not repeated, and section objects with matching id merge in-place. */
@@ -457,20 +456,10 @@ function concatUnique(parentList, childList) {
     var combined = parentList.slice();
     for (var j = 0; j < childList.length; j++) {
         var item = childList[j];
-        if (item && typeof item === 'object' && !Array.isArray(item) && typeof item.id === 'string' && item.id) {
-            var foundIdx = -1;
-            for (var k = 0; k < combined.length; k++) {
-                var existing = combined[k];
-                if (existing && typeof existing === 'object' && !Array.isArray(existing) && existing.id === item.id) {
-                    foundIdx = k;
-                    break;
-                }
-            }
-            if (foundIdx !== -1) {
-                combined[foundIdx] = mergeCliPromptSections(combined[foundIdx], item);
-            } else {
-                combined.push(item);
-            }
+        if (isPromptSectionObj(item)) {
+            var idx = findPromptSectionIndex(combined, item.id);
+            if (idx !== -1) combined[idx] = mergeCliPromptSections(combined[idx], item);
+            else combined.push(item);
         } else if (combined.indexOf(item) === -1) {
             combined.push(item);
         }
