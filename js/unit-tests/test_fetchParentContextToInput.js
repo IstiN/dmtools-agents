@@ -1100,11 +1100,14 @@ suite('fetchParentContextToInput — resolveParentContextConfig helpers', functi
         assert.equal(resolved.enabled, true, 'override presence forces enable');
     });
 
-    test('a parentContextFetch override alone (no project config) is enabled by default', function() {
+    test('a parentContextFetch override alone (no project config) resolves to a merged copy', function() {
         var m = loadFetchParentContext({});
-        var resolved = m.resolveParentContextConfig(null, { parentContextFetch: makeEnabledOverride({ enabled: undefined }) });
+        var override = makeEnabledOverride({ enabled: undefined });
+        var resolved = m.resolveParentContextConfig(null, { parentContextFetch: override });
         assert.ok(resolved, 'override resolved');
-        assert.equal(resolved.enabled, true, 'enabled forced true when absent from the override');
+        assert.notEqual(resolved, override, 'merged copy, not the override itself');
+        assert.deepEqual(resolved.fields, ['key', 'summary'], 'override fields preserved');
+        assert.equal(resolved.enabled, undefined, 'enabled left untouched when not explicitly false');
     });
 
     test('an override with enabled:false is a no-op even with an enabled project config', function() {
@@ -1124,7 +1127,9 @@ suite('fetchParentContextToInput — resolveParentContextConfig helpers', functi
     test('legacy direct customParams keys act as an override', function() {
         var m = loadFetchParentContext({});
         var legacy = { jql: 'parent = {parentKey}', fields: ['key'] };
-        assert.equal(m.resolveParentContextConfig(null, legacy), legacy, 'jql/fields direct config returned as override');
+        var resolved = m.resolveParentContextConfig(null, legacy);
+        assert.deepEqual(resolved, legacy, 'jql/fields direct config resolved as the override');
+        assert.notEqual(resolved, legacy, 'resolved as a merged copy');
         assert.ok(m.resolveParentContextConfig(null, { childQuestions: { jql: 'x' } }), 'childQuestions alone counts');
         assert.ok(m.resolveParentContextConfig(null, { contexts: [] }), 'contexts alone counts');
     });
@@ -1139,7 +1144,7 @@ suite('fetchParentContextToInput — resolveParentContextConfig helpers', functi
         var resolved = m.resolveParentContextConfig(null, { parentContextFetch: null, fields: ['key', 'summary'] });
         assert.ok(resolved, 'legacy customParams used as the override config');
         assert.deepEqual(resolved.fields, ['key', 'summary'], 'legacy fields preserved through the merge');
-        assert.equal(resolved.enabled, true, 'legacy presence forces enable');
+        assert.equal(resolved.enabled, undefined, 'enabled left untouched when not explicitly false');
     });
 
 });
