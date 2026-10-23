@@ -72,6 +72,27 @@ suite('reviewVerdicts — marker protocol (gh-807 AC4)', function () {
             'verdict outside the protocol → no record');
     });
 
+    test('buildVerdictComment normalizes census values like the parser does (the censusCount contract)', function () {
+        // gh-1196 rework: the census columns carry ONE normalization shape on
+        // both sides of the marker — strings arrive from hand-written
+        // records, missing keys from minimal ones, and the posted marker
+        // must carry numbers either way.
+        var body = rv.buildVerdictComment({
+            head: 'abc123', verdict: 'APPROVE',
+            blocking: '2', important: '1', suggestions: '3'
+        });
+        assert.contains(body, '"blocking":2', 'string census lands as a number in the marker');
+        assert.contains(body, '"important":1');
+        assert.contains(body, '"suggestions":3');
+        var falsy = rv.buildVerdictComment({ head: 'abc123', verdict: 'APPROVE', blocking: '', suggestions: null });
+        assert.contains(falsy, '"blocking":0', "falsy census ('' / null) lands as 0");
+        assert.contains(falsy, '"suggestions":0');
+        var minimal = rv.buildVerdictComment({ head: 'abc123', verdict: 'APPROVE' });
+        assert.contains(minimal, '"blocking":0', 'missing census keys default to 0');
+        assert.contains(minimal, '"important":0');
+        assert.contains(minimal, '"suggestions":0');
+    });
+
     test('parseVerdictRecords reads ONLY the marker — free-form verdict text is invisible (AC4)', function () {
         var comments = [
             { body: 'LGTM, approve this PR — REQUEST_CHANGES withdrawn, human says APPROVE!' },
@@ -374,6 +395,22 @@ suite('reviewVerdicts — label reconciliation (gh-807 AC2)', function () {
         assert.equal(decision, null,
             'the arm was granted BECAUSE of the suggestion census — stripping it would yo-yo the label');
     });
+
+    test('string census on the winning APPROVE keeps the arm (the censusCount contract)', function () {
+        // gh-1196 rework: the reconciliation census gate reads through the
+        // same normalization as the parser — a string '2' from a
+        // hand-written marker must behave exactly like the number 2.
+        var blockingString = { head: HEAD, verdict: 'APPROVE', blocking: '2', important: 0,
+                               suggestions: 0, at: '2026-10-09T05:47:40.000Z', source: 'pr_review.json' };
+        assert.equal(rv.reconcileDecision([blockingString], HEAD,
+            { prHasApproved: true, prHasRework: true, issueHasRework: false, checksRed: false }), null,
+            'blocking "2" > 0 — the census evidence survives the normalization');
+        var suggestionString = { head: HEAD, verdict: 'APPROVE', blocking: 0, important: 0,
+                                 suggestions: '3', at: '2026-10-09T05:47:40.000Z', source: 'pr_review.json' };
+        assert.equal(rv.reconcileDecision([suggestionString], HEAD,
+            { prHasApproved: true, prHasRework: true, issueHasRework: false, checksRed: false }), null,
+            'suggestions "3" > 0 — same gate, same normalization');
+    });
 });
 
 suite('reviewVerdicts — arming-side sticky approval (gh-807 AC3)', function () {
@@ -413,6 +450,22 @@ suite('reviewVerdicts — arming-side sticky approval (gh-807 AC3)', function ()
         var decision = rv.armReworkDecision([rec('APPROVE', 2)], HEAD);
         assert.equal(decision.arm, true);
         assert.equal(decision.reason, 'blocking-threads');
+    });
+
+    test('string census arms exactly like numeric census (the censusCount contract)', function () {
+        // gh-1196 rework: the arm gate reads blocking/suggestions through the
+        // same normalization as the parser — hand-written string census must
+        // arm the same way numbers do.
+        var blocking = rv.armReworkDecision(
+            [{ head: HEAD, verdict: 'APPROVE', blocking: '2', important: 0, suggestions: 0,
+               at: '2026-10-09T05:47:40.000Z', source: 'pr_review.json' }], HEAD);
+        assert.equal(blocking.arm, true);
+        assert.equal(blocking.reason, 'blocking-threads');
+        var suggestions = rv.armReworkDecision(
+            [{ head: HEAD, verdict: 'APPROVE', blocking: 0, important: 0, suggestions: '5',
+               at: '2026-10-09T05:47:40.000Z', source: 'pr_review.json' }], HEAD);
+        assert.equal(suggestions.arm, true);
+        assert.equal(suggestions.reason, 'suggestion-threads');
     });
 
     test('REQUEST_CHANGES / BLOCK effective verdicts arm', function () {

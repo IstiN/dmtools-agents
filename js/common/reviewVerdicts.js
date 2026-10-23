@@ -85,9 +85,9 @@ function buildVerdictComment(record, provider) {
     var payload = {
         head: String(record.head),
         verdict: String(record.verdict).toUpperCase(),
-        blocking: Number(record.blocking || 0) || 0,
-        important: Number(record.important || 0) || 0,
-        suggestions: Number(record.suggestions || 0) || 0,
+        blocking: censusCount(record.blocking),
+        important: censusCount(record.important),
+        suggestions: censusCount(record.suggestions),
         at: record.at || new Date().toISOString(),
         source: record.source || 'pr_review.json'
     };
@@ -356,8 +356,8 @@ function reconcileDecision(records, headSha, state) {
     var st = state || {};
     if (loser === LABEL_REWORK &&
         (st.checksRed ||
-         (Number(effective.record.blocking || 0) || 0) > 0 ||
-         (Number(effective.record.suggestions || 0) || 0) > 0)) return null;
+         censusCount(effective.record.blocking) > 0 ||
+         censusCount(effective.record.suggestions) > 0)) return null;
     var removeFromPr = loser === LABEL_REWORK ? !!st.prHasRework : !!st.prHasApproved;
     var removeFromIssue = loser === LABEL_REWORK ? !!st.issueHasRework : false;
     if (!removeFromPr && !removeFromIssue) return null;
@@ -393,11 +393,11 @@ function armReworkDecision(records, headSha) {
     }
     var rec = effective.record;
     if (rec.verdict === 'APPROVE') {
-        var blocking = Number(rec.blocking || 0) || 0;
+        var blocking = censusCount(rec.blocking);
         if (blocking > 0) {
             return { arm: true, reason: 'blocking-threads', effective: effective };
         }
-        var suggestions = Number(rec.suggestions || 0) || 0;
+        var suggestions = censusCount(rec.suggestions);
         if (suggestions > 0) {
             return { arm: true, reason: 'suggestion-threads', effective: effective };
         }
