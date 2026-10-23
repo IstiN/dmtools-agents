@@ -301,3 +301,48 @@ suite('preCliKnowledgeUpdateSetup — no usable material at all', function() {
         assert.equal(result.reason, 'no diff or discussions available');
     });
 });
+
+suite('preCliKnowledgeUpdateSetup — knowledgeRepoDir (separate memory repo checkout)', function() {
+
+    test('task marker points the agent at <knowledgeRepoDir>/<knowledgeDir>', function() {
+        var tracker = makeWriteTracker();
+        var scm = { getDiffText: function() { return 'diff --git a/x b/x'; } };
+        var gh = makeGhStub({
+            getPRDetails: function() { return { number: 42, html_url: 'https://example.com/pr/42', title: 'x', state: 'merged' }; },
+            fetchDiscussionsAndRawData: function() { return { markdown: '## Thread', rawThreads: null }; },
+            writePRContext: function() {}
+        });
+
+        var mod = loadPreCliKnowledgeUpdateSetup(gh, scm, { file_write: tracker.file_write });
+
+        var result = mod.action({
+            inputFolderPath: 'input/pr_knowledge_update',
+            customParams: {
+                knowledgeDir: 'platform-core',
+                knowledgeRepoDir: 'dependencies/acme-review-memory',
+                prNumber: '42'
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.knowledgeDir, 'platform-core');
+        assert.equal(result.knowledgeRepoDir, 'dependencies/acme-review-memory');
+        assert.equal(result.agentKnowledgePath, 'dependencies/acme-review-memory/platform-core');
+
+        var marker = tracker.find('input/pr_knowledge_update/knowledge_task.md');
+        assert.ok(marker);
+        assert.contains(marker.content, 'dependencies/acme-review-memory/platform-core');
+    });
+
+    test('agentKnowledgePath falls back to plain knowledgeDir when knowledgeRepoDir is unset', function() {
+        var mod = loadPreCliKnowledgeUpdateSetup(makeGhStub(), {}, {});
+        assert.equal(
+            mod.agentKnowledgePath({ knowledgeDir: 'platform-core' }),
+            'platform-core'
+        );
+        assert.equal(
+            mod.agentKnowledgePath({ knowledgeDir: 'platform-core', knowledgeRepoDir: 'dependencies/memory' }),
+            'dependencies/memory/platform-core'
+        );
+    });
+});

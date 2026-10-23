@@ -24,6 +24,14 @@
  * (e.g. baseBranchResolverFnPath, snapshotBranchResolverFnPath) — a project
  * that hasn't opted in must never fail or produce noise.
  *
+ * customParams.knowledgeRepoDir (also optional) names a SEPARATE
+ * knowledge-hosting repository checked out inside the workspace (e.g. a shared
+ * memory repo cloned under dependencies/ via .dmtools/repositories.json). When
+ * set, the agent-facing target path becomes <knowledgeRepoDir>/<knowledgeDir>
+ * and the pushKnowledgeUpdate post-action scopes all git commands to that
+ * repository via `git -C`, so knowledge branches are pushed to the memory
+ * repo's origin — never to the outer working repo.
+ *
  * When knowledgeDir IS configured, one of three input modes is used (checked
  * in this order):
  *
@@ -61,6 +69,18 @@ function writeNoOpMarker(inputFolder, reason) {
             '\n\nDo NOT read or modify any knowledge/ directory this run. Stop after ' +
             'confirming this file says so; do not attempt to find one yourself.\n'
     });
+}
+
+/**
+ * Path the CLI agent should read/write, relative to its working directory.
+ * When customParams.knowledgeRepoDir names a separate knowledge-hosting repo
+ * checked out inside the workspace (e.g. a shared memory repo under
+ * dependencies/ from .dmtools/repositories.json), the agent-facing path is
+ * <knowledgeRepoDir>/<knowledgeDir>; the post-action scopes git to that repo.
+ */
+function agentKnowledgePath(customParams) {
+    var repoDir = customParams.knowledgeRepoDir;
+    return repoDir ? repoDir + '/' + customParams.knowledgeDir : customParams.knowledgeDir;
 }
 
 function writeTaskMarker(inputFolder, knowledgeDir, prDetails) {
@@ -191,16 +211,19 @@ function action(params) {
         }
 
         var prDetailsForContext = resolved.prDetails || {};
+        var agentPath = agentKnowledgePath(customParams);
         gh.writePRContext(inputFolder, prDetailsForContext, resolved.diffText, resolved.discussionsMarkdown, resolved.discussionsRaw);
-        writeTaskMarker(inputFolder, knowledgeDir, resolved.prDetails);
+        writeTaskMarker(inputFolder, agentPath, resolved.prDetails);
 
-        console.log('✅ Knowledge update setup complete — target:', knowledgeDir);
+        console.log('✅ Knowledge update setup complete — target:', agentPath);
 
         return {
             success: true,
             prNumber: prDetailsForContext.number || null,
             prUrl: prDetailsForContext.html_url || null,
-            knowledgeDir: knowledgeDir
+            knowledgeDir: knowledgeDir,
+            knowledgeRepoDir: customParams.knowledgeRepoDir || null,
+            agentKnowledgePath: agentPath
         };
 
     } catch (error) {
@@ -210,5 +233,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, writeNoOpMarker, resolvePrContext };
+    module.exports = { action, writeNoOpMarker, resolvePrContext, agentKnowledgePath };
 }
