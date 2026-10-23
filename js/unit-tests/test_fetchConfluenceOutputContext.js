@@ -303,16 +303,21 @@ suite('fetchConfluenceOutputContext', function() {
 suite('fetchConfluenceOutputContext — uncovered branches (gh-119 characterization)', function() {
 
     test('ticket key falls back to the input folder name when ticket.key is absent', function() {
-        var marker;
+        var writes = {};
         var mod = loadFetchConfluenceContext({
-            file_write: function(opts) { marker = opts; return null; },
+            file_write: function(p, c) { writes[p] = c; },
             confluence_get_children_by_id: function() { return []; }
         });
-        var result = mod.action({ inputFolderPath: 'input/PROJ-99', ticket: {}, jobParams: {} });
+        var result = mod.action({
+            inputFolderPath: 'input/PROJ-99',
+            ticket: {},
+            jobParams: {},
+            customParams: { contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42' } }
+        });
         assert.equal(result.success, true);
         assert.equal(result.action, 'first_run');
-        assert.contains(marker.path, 'input/PROJ-99/confluence_output_target.json');
-        assert.equal(marker.content.indexOf('PROJ-99') !== -1, true, 'marker page title uses the folder-derived key');
+        var marker = JSON.parse(writes['input/PROJ-99/confluence_output_target.json']);
+        assert.equal(marker.pageTitle.indexOf('PROJ-99') === 0, true, 'marker page title uses the folder-derived key');
     });
 
     test('no input folder: marker skipped, comments not fetched, first_run still reported', function() {
@@ -321,7 +326,11 @@ suite('fetchConfluenceOutputContext — uncovered branches (gh-119 characterizat
             file_write: function() { writes++; return null; },
             confluence_get_children_by_id: function() { return []; }
         });
-        var result = mod.action({ ticket: { key: 'PROJ-11' }, jobParams: {} });
+        var result = mod.action({
+            ticket: { key: 'PROJ-11' },
+            jobParams: {},
+            customParams: { contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42' } }
+        });
         assert.equal(result.action, 'first_run');
         assert.equal(writes, 0);
     });

@@ -223,25 +223,46 @@ function getFailedReasonFieldName(config, customParams) {
         || 'Failed Reason';
 }
 
+/**
+ * The text a single field value carries: a plain string as-is, a { value }
+ * wrapper unwrapped, null when the shape carries no text ('' IS text).
+ */
+function fieldTextOf(raw) {
+    if (typeof raw === 'string') return raw;
+    if (raw && typeof raw.value === 'string') return raw.value;
+    return null;
+}
+
+/** The fields bag of a tracker issue, {} when the issue or its fields are missing. */
+function issueFieldMap(result) {
+    return result && result.fields ? result.fields : {};
+}
+
+/**
+ * Fallback scan for Jira custom fields: dmtools may transform
+ * customfield_12345 into "Name (customfield_12345)" — find any field whose
+ * key contains the requested name and return its text (null when the name is
+ * not a custom field or no transformed key matches).
+ */
+function customFieldFallbackValue(fields, fieldName) {
+    if (fieldName.indexOf('customfield_') === -1) return null;
+    for (var key in fields) {
+        if (fields.hasOwnProperty(key) && key.indexOf(fieldName) !== -1) {
+            var text = fieldTextOf(fields[key]);
+            if (text !== null) return text;
+        }
+    }
+    return null;
+}
+
 function getFailedReasonForTc(tcKey, fieldName) {
     if (!tcKey || !fieldName) return '';
     try {
-        var result = getTracker().getIssue(tcKey);
-        var fields = result && result.fields ? result.fields : {};
-        var raw = fields[fieldName];
-        if (typeof raw === 'string') return raw;
-        if (raw && typeof raw.value === 'string') return raw.value;
+        var fields = issueFieldMap(getTracker().getIssue(tcKey));
+        var direct = fieldTextOf(fields[fieldName]);
+        if (direct !== null) return direct;
         // Fallback: dmtools may transform customfield_12345 into "Name (customfield_12345)".
-        if (fieldName.indexOf('customfield_') !== -1) {
-            for (var key in fields) {
-                if (fields.hasOwnProperty(key) && key.indexOf(fieldName) !== -1) {
-                    var v = fields[key];
-                    if (typeof v === 'string') return v;
-                    if (v && typeof v.value === 'string') return v.value;
-                }
-            }
-        }
-        return '';
+        return customFieldFallbackValue(fields, fieldName) || '';
     } catch (e) {
         console.warn('Could not read Failed Reason for', tcKey, ':', e);
         return '';
@@ -696,5 +717,12 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action: action, extractTickets: extractTickets };
+    module.exports = {
+        action: action,
+        extractTickets: extractTickets,
+        getFailedReasonForTc: getFailedReasonForTc,
+        fieldTextOf: fieldTextOf,
+        issueFieldMap: issueFieldMap,
+        customFieldFallbackValue: customFieldFallbackValue
+    };
 }

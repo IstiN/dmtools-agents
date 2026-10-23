@@ -937,3 +937,152 @@ suite('timerAutoCommitAndSave — auto-save commit message is a template (agents
     });
 });
 
+
+// ─── gh-119 CRAP: failure branches + extracted pure helpers ──────────────────
+
+suite('timerAutoCommitAndSave — autoCommitAndPush failure branches (gh-119)', function() {
+
+    function failingTimer(failWhen) {
+        var cliCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (failWhen(args.command)) throw new Error('Command execution failed');
+                if (args.command.indexOf('git check-ignore') === 0) throw new Error('exit 1 (not ignored)');
+                if (args.command.indexOf('git status') !== -1) return 'M file.txt\n';
+                return '';
+            }
+        });
+        m._cliCalls = cliCalls;
+        return m;
+    }
+
+    function tick(m) {
+        m.action({
+            ticket: { key: 'PROJ-123' },
+            jobParams: {
+                customParams: { targetRepository: { workingDir: '/repo', baseBranch: 'main' } },
+                metadata: { contextId: 'sf_story_development' }
+            },
+            currentCliOutput: ''
+        });
+    }
+
+    function hasCommand(calls, prefix) {
+        return calls.some(function(c) { return c.indexOf(prefix) === 0; });
+    }
+
+    test('git status failure: no add/commit/push, branch probe still ran', function() {
+        var m = failingTimer(function(c) { return c.indexOf('git status') === 0; });
+        tick(m);
+        assert.ok(hasCommand(m._cliCalls, 'git rev-parse'), 'branch guard probe ran first');
+        assert.equal(hasCommand(m._cliCalls, 'git add'), false, 'no staging after status failure');
+        assert.equal(hasCommand(m._cliCalls, 'git commit'), false);
+        assert.equal(hasCommand(m._cliCalls, 'git push'), false);
+    });
+
+    test('git add failure: no commit, no push', function() {
+        var m = failingTimer(function(c) { return c.indexOf('git add') === 0; });
+        tick(m);
+        assert.ok(hasCommand(m._cliCalls, 'git add'));
+        assert.equal(hasCommand(m._cliCalls, 'git commit'), false, 'no commit after add failure');
+        assert.equal(hasCommand(m._cliCalls, 'git push'), false);
+    });
+
+    test('git commit failure ("nothing to commit"): no push', function() {
+        var m = failingTimer(function(c) { return c.indexOf('git commit') === 0; });
+        tick(m);
+        assert.ok(hasCommand(m._cliCalls, 'git commit'));
+        assert.equal(hasCommand(m._cliCalls, 'git push'), false, 'no push after commit failure');
+    });
+
+    test('git push failure: exactly one attempt, honest failure (no healing for other errors)', function() {
+        var m = failingTimer(function(c) { return c.indexOf('git push') === 0; });
+        tick(m);
+        var pushes = m._cliCalls.filter(function(c) { return c.indexOf('git push') === 0; });
+        assert.equal(pushes.length, 1, 'exactly one push attempt');
+        assert.ok(hasCommand(m._cliCalls, 'git commit'), 'the commit itself landed');
+    });
+
+    test('untrack-cleanup failure is non-fatal: add/commit/push still run', function() {
+        var m = failingTimer(function(c) { return c.indexOf('git ls-files -- ') === 0; });
+        tick(m);
+        assert.ok(hasCommand(m._cliCalls, 'git ls-files'));
+        assert.ok(hasCommand(m._cliCalls, 'git add'), 'staging still happens');
+        assert.ok(hasCommand(m._cliCalls, 'git commit'), 'commit still happens');
+        assert.ok(hasCommand(m._cliCalls, 'git push'), 'push still happens');
+    });
+});
+
+suite('timerAutoCommitAndSave — pure helpers (gh-119)', function() {
+    var mod = loadTimer({});
+
+    test('resolveTimerWorkingDir: explicit workingDir vs job-directory fallback', function() {
+        var explicit = mod.resolveTimerWorkingDir({ targetRepository: { workingDir: '/repo' } });
+        assert.equal(explicit.workingDir, '/repo');
+        assert.equal(explicit.warned, false);
+
+        var fallback = mod.resolveTimerWorkingDir({});
+        assert.equal(fallback.workingDir, '.');
+        assert.equal(fallback.warned, true);
+        assert.deepEqual(fallback.targetRepo, {});
+    });
+
+    test('baseBranchGuardSkips: false without baseBranch, true on probe failure, true on the base branch', function() {
+        // No baseBranch configured → never skips (back-compat).
+        assert.equal(mod.baseBranchGuardSkips({}, '/repo'), false);
+
+        // Probe failure → skip.
+        var probeBroke = loadTimer({
+            cli_execute_command: function() { throw new Error('git missing'); }
+        });
+        assert.equal(probeBroke.baseBranchGuardSkips({ baseBranch: 'main' }, '/repo'), true);
+
+        // On the base branch → skip.
+        var onMain = loadTimer({
+            cli_execute_command: function() { return 'main\n'; }
+        });
+        assert.equal(onMain.baseBranchGuardSkips({ baseBranch: 'main' }, '/repo'), true);
+
+        // On the ticket branch → no skip.
+        var onTicket = loadTimer({
+            cli_execute_command: function() { return 'ai/gh-1199\n'; }
+        });
+        assert.equal(onTicket.baseBranchGuardSkips({ baseBranch: 'main' }, '/repo'), false);
+    });
+
+    test('mergeInProgressSkips mirrors mergeState.isMergeInProgress', function() {
+        var merging = loadTimer({
+            cli_execute_command: function(args) {
+                // mergeState probes MERGE_HEAD via git rev-parse / ls probe
+                return args.command.indexOf('MERGE_HEAD') !== -1 ? 'MERGE_HEAD' : '';
+            }
+        });
+        assert.equal(merging.mergeInProgressSkips('/repo'), true);
+
+        var clean = loadTimer({
+            cli_execute_command: function() { throw new Error('no MERGE_HEAD'); }
+        });
+        assert.equal(clean.mergeInProgressSkips('/repo'), false);
+    });
+
+    test('hasDirtyChanges: true on porcelain output, false on clean/failed status', function() {
+        var dirty = loadTimer({ cli_execute_command: function() { return 'M f\n'; } });
+        assert.equal(dirty.hasDirtyChanges('/repo'), true);
+
+        var clean = loadTimer({ cli_execute_command: function() { return ''; } });
+        assert.equal(clean.hasDirtyChanges('/repo'), false);
+
+        var whitespace = loadTimer({ cli_execute_command: function() { return '   \n'; } });
+        assert.equal(whitespace.hasDirtyChanges('/repo'), false);
+
+        var broke = loadTimer({ cli_execute_command: function() { throw new Error('status failed'); } });
+        assert.equal(broke.hasDirtyChanges('/repo'), false);
+    });
+
+    test('autoSaveCommitMessageOverride: customParams value or null', function() {
+        assert.equal(mod.autoSaveCommitMessageOverride({ autoSaveCommitMessage: 'X {ticketKey}' }), 'X {ticketKey}');
+        assert.equal(mod.autoSaveCommitMessageOverride({}), null);
+        assert.equal(mod.autoSaveCommitMessageOverride({ autoSaveCommitMessage: '' }), null);
+    });
+});
