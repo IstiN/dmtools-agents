@@ -241,10 +241,10 @@ function parseRestoreMarkers(comments, opts) {
  * open machine threads is refresh evidence, not close evidence. Head
  * position is still consulted by the caller for the gh-806 latch, the
  * in-flight leg gate and the marker bookkeeping — never as a close proof.
+ *
+ * gh-1195 CRAP split: the numeric/quiet-window sub-decisions live in the
+ * named helpers below; each guard keeps its historical order and reason.
  */
-// ── gh-1195 CRAP split: named decision helpers for shouldRestoreArm ─────────
-// Each guard keeps its historical order and reason string; the helpers only
-// carry the numeric/quiet-window sub-decisions.
 
 /** A marker-timestamp field as a number, null when missing/unparsable. */
 function msOrNull(value) {
