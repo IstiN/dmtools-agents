@@ -13,12 +13,12 @@ function asaLoad(opts) {
     var trackerGlobals = {};
     ['assign_ticket_to', 'move_to_status', 'add_label', 'remove_label'].forEach(function(n) {
         trackerGlobals['jira_' + n] = function(a) {
-            if (opts['fail' + n]) { throw new Error(n + ' boom'); }
             calls.push({ tool: 'jira_' + n, args: a });
+            if (opts['fail' + n]) { throw new Error(n + ' boom'); }
         };
         trackerGlobals['ado_' + n] = function(a) {
-            if (opts['failAdo' + n]) { throw new Error(n + ' boom'); }
             calls.push({ tool: 'ado_' + n, args: a });
+            if (opts['failAdo' + n]) { throw new Error(n + ' boom'); }
         };
     });
     var tokenUsageCalls = [];
