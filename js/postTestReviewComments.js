@@ -122,53 +122,73 @@ function getPrDiff(repoInfo, prNumber) {
     }
 }
 
+// ── gh-1192: isLinePresentInDiff decomposed into small pure helpers ─────────
+// The scanner keeps the exact original semantics: only the NEW side of the
+// target file is scanned, `-` lines and the no-newline marker never advance
+// the counter, and empty/invalid inputs are permissive (true — the line
+// cannot be validated, so the comment is allowed).
+
+function newInlineScanState() {
+    return { currentFile: null, newLine: null };
+}
+
+/** Header bookeeping: 'diff --git ' resets the scan, '+++ b/' switches file. */
+function trackInlineHeaderLine(st, line) {
+    if (line.indexOf('diff --git ') === 0) {
+        st.currentFile = null;
+        st.newLine = null;
+        return true;
+    }
+    if (line.indexOf('+++ b/') === 0) {
+        st.currentFile = line.substring('+++ b/'.length);
+        return true;
+    }
+    return false;
+}
+
+/** The new-side start line of a hunk header, or null when the line is not one. */
+function inlineHunkStartOf(line) {
+    var hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    return hunk ? parseInt(hunk[1], 10) : null;
+}
+
+/** Content line inside the target file segment: does it land on lineNumber? */
+function inlineContentLineMatches(st, line, lineNumber) {
+    if (line.indexOf('+') === 0 || line.indexOf(' ') === 0) {
+        if (st.newLine === lineNumber) return true;
+        st.newLine++;
+        return false;
+    }
+    if (line.indexOf('-') === 0) return false;
+    if (line === '\\ No newline at end of file') return false;
+    st.newLine++;
+    return false;
+}
+
+function scanInlineLinePresence(lines, filePath, lineNumber) {
+    var st = newInlineScanState();
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (trackInlineHeaderLine(st, line)) continue;
+        if (st.currentFile !== filePath) continue;
+        var hunkStart = inlineHunkStartOf(line);
+        if (hunkStart !== null) {
+            st.newLine = hunkStart;
+            continue;
+        }
+        if (st.newLine === null) continue;
+        if (inlineContentLineMatches(st, line, lineNumber)) return true;
+    }
+    return false;
+}
+
 function isLinePresentInDiff(diffText, filePath, targetLine) {
     if (!diffText || !filePath || !targetLine) return true;
 
     var lineNumber = parseInt(targetLine, 10);
     if (!lineNumber) return true;
 
-    var currentFile = null;
-    var newLine = null;
-    var lines = String(diffText).split(/\r?\n/);
-
-    for (var i = 0; i < lines.length; i++) {
-        var line = lines[i];
-
-        if (line.indexOf('diff --git ') === 0) {
-            currentFile = null;
-            newLine = null;
-            continue;
-        }
-
-        if (line.indexOf('+++ b/') === 0) {
-            currentFile = line.substring('+++ b/'.length);
-            continue;
-        }
-
-        if (currentFile !== filePath) continue;
-
-        var hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-        if (hunk) {
-            newLine = parseInt(hunk[1], 10);
-            continue;
-        }
-
-        if (newLine === null) continue;
-
-        if (line.indexOf('+') === 0 || line.indexOf(' ') === 0) {
-            if (newLine === lineNumber) return true;
-            newLine++;
-        } else if (line.indexOf('-') === 0) {
-            continue;
-        } else if (line === '\\ No newline at end of file') {
-            continue;
-        } else {
-            newLine++;
-        }
-    }
-
-    return false;
+    return scanInlineLinePresence(String(diffText).split(/\r?\n/), filePath, lineNumber);
 }
 
 function postFallbackInlineComment(repoInfo, prNumber, filePath, line, commentText) {
@@ -556,5 +576,14 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action: action,
+        isLinePresentInDiff: isLinePresentInDiff,
+        // gh-1192: pure scanner helpers (test surface)
+        newInlineScanState: newInlineScanState,
+        trackInlineHeaderLine: trackInlineHeaderLine,
+        inlineHunkStartOf: inlineHunkStartOf,
+        inlineContentLineMatches: inlineContentLineMatches,
+        scanInlineLinePresence: scanInlineLinePresence
+    };
 }
