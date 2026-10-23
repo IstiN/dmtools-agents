@@ -128,6 +128,62 @@ var PUSH_VALUE_OPTS = {
 };
 
 /**
+ * Classifies one `git push` token for the parser loop.
+ *
+ * @param {string} a - the raw token
+ * @returns {string} 'mirror' | 'all' | 'delete' | 'valueOpt' | 'option' | 'positional'
+ */
+function classifyPushToken(a) {
+    if (a === '--mirror') return 'mirror';
+    if (a === '--all') return 'all';
+    if (a === '-d' || a === '--delete') return 'delete';
+    if (PUSH_VALUE_OPTS[a]) return 'valueOpt';
+    if (a.charAt(0) === '-') return 'option'; // boolean / joined-value option
+    return 'positional';
+}
+
+/**
+ * True when the token can name the push destination: a configured remote, a
+ * URL, an scp-like spec, or a path.
+ */
+function looksLikeRemoteSpec(a, knownRemotes) {
+    return knownRemotes.indexOf(a) !== -1 ||
+        a.indexOf('://') !== -1 || a.indexOf('@') !== -1 ||
+        a.indexOf('.git') !== -1;
+}
+
+/**
+ * True while the FIRST positional has not been seen yet: that position is the
+ * remote when the token looks like one, a refspec otherwise (remote omitted —
+ * push.default). A delete flag closes the position (its argument is a branch
+ * name, never a remote).
+ */
+function takesRemotePosition(result) {
+    return result.remote === null && result.refspecs.length === 0 && !result.delete;
+}
+
+/**
+ * Applies one classified token to the parse result.
+ *
+ * @returns {number} how many argv tokens were consumed (2 for value options)
+ */
+function applyPushToken(result, kind, a, knownRemotes) {
+    if (kind === 'mirror') { result.mirror = true; return 1; }
+    if (kind === 'all') { result.all = true; return 1; }
+    if (kind === 'delete') { result.delete = true; return 1; }
+    if (kind === 'valueOpt') return 2;
+    if (kind === 'option') return 1;
+    // Positional: remote when it is a configured remote, a URL, or a path;
+    // otherwise a refspec.
+    if (takesRemotePosition(result) && looksLikeRemoteSpec(a, knownRemotes)) {
+        result.remote = a;
+    } else {
+        result.refspecs.push(a);
+    }
+    return 1;
+}
+
+/**
  * Parses `git push` args (tokens AFTER the "push" subcommand).
  *
  * @param {string[]} args
@@ -141,22 +197,7 @@ function parsePushArgs(args, knownRemotes) {
     var i = 0;
     while (i < args.length) {
         var a = args[i];
-        if (a === '--mirror') { result.mirror = true; i += 1; continue; }
-        if (a === '--all') { result.all = true; i += 1; continue; }
-        if (a === '-d' || a === '--delete') { result.delete = true; i += 1; continue; }
-        if (PUSH_VALUE_OPTS[a]) { i += 2; continue; }
-        if (a.charAt(0) === '-') { i += 1; continue; } // boolean / joined-value option
-        // First positional: remote if it is a configured remote, a URL, or a
-        // path; otherwise it is a refspec (remote omitted — push.default).
-        if (result.remote === null && result.refspecs.length === 0 && !result.delete &&
-            (knownRemotes.indexOf(a) !== -1 ||
-             a.indexOf('://') !== -1 || a.indexOf('@') !== -1 ||
-             a.indexOf('.git') !== -1)) {
-            result.remote = a;
-        } else {
-            result.refspecs.push(a);
-        }
-        i += 1;
+        i += applyPushToken(result, classifyPushToken(a), a, knownRemotes);
     }
     return result;
 }

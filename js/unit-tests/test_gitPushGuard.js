@@ -430,3 +430,107 @@ suite('gitPushGuard.commitMessageText — arg-form matrix (gh-1082 characterizat
         assert.deepEqual(guard.commitMessagePartAt(['zzz'], 0, {}), { text: null, next: 1 });
     });
 });
+
+suite('gitPushGuard.parsePushArgs — argument grammar (gh-119 characterization)', function() {
+    var guard = loadGitPushGuard();
+
+    test('defaults: empty args parse to a no-op push', function() {
+        assert.deepEqual(
+            guard.parsePushArgs([], ['origin']),
+            { remote: null, refspecs: [], delete: false, all: false, mirror: false }
+        );
+    });
+
+    test('knownRemotes defaults to [origin] when omitted', function() {
+        var r = guard.parsePushArgs(['origin', 'main']);
+        assert.equal(r.remote, 'origin');
+        assert.deepEqual(r.refspecs, ['main']);
+    });
+
+    test('value options consume the following token (never remote/refspec)', function() {
+        var r = guard.parsePushArgs(
+            ['-o', 'runid=x', '--receive-pack', 'rp', '--repo', 'r', '--exec', 'ex', '--push-option', 'po', 'origin', 'main'],
+            ['origin']
+        );
+        assert.equal(r.remote, 'origin');
+        assert.deepEqual(r.refspecs, ['main']);
+    });
+
+    test('value option before any positional suppresses the remote position', function() {
+        // `-o x origin` — "origin" arrives after the remote position was skipped
+        // while the option consumed its value; it is still a remote candidate.
+        var r = guard.parsePushArgs(['--push-option', 'x', 'origin', 'main'], ['origin']);
+        assert.equal(r.remote, 'origin');
+        assert.deepEqual(r.refspecs, ['main']);
+    });
+
+    test('boolean and joined-value options are skipped', function() {
+        var r = guard.parsePushArgs(['--force', '-u', '-q', '--atomic', '--repo=x', 'origin', 'HEAD:ai/x'], ['origin']);
+        assert.equal(r.remote, 'origin');
+        assert.deepEqual(r.refspecs, ['HEAD:ai/x']);
+    });
+
+    test('flag grammar: --mirror, --all, -d, --delete are recognized', function() {
+        assert.deepEqual(guard.parsePushArgs(['--mirror'], []),
+            { remote: null, refspecs: [], delete: false, all: false, mirror: true });
+        assert.deepEqual(guard.parsePushArgs(['--all'], []),
+            { remote: null, refspecs: [], delete: false, all: true, mirror: false });
+        var d1 = guard.parsePushArgs(['-d', 'x'], []);
+        assert.equal(d1.delete, true);
+        assert.deepEqual(d1.refspecs, ['x']);
+        var d2 = guard.parsePushArgs(['--delete', 'x'], []);
+        assert.equal(d2.delete, true);
+        assert.deepEqual(d2.refspecs, ['x']);
+    });
+
+    test('URL-shaped first positional is a remote', function() {
+        var r = guard.parsePushArgs(['https://example.com/repo.git', 'main'], ['origin']);
+        assert.equal(r.remote, 'https://example.com/repo.git');
+        assert.deepEqual(r.refspecs, ['main']);
+    });
+
+    test('scp-like (@) and .git-path remotes are recognized without a known remote', function() {
+        assert.equal(guard.parsePushArgs(['git@example.com:team/repo.git', 'main'], ['origin']).remote,
+            'git@example.com:team/repo.git');
+        assert.equal(guard.parsePushArgs(['../sibling/repo.git', 'main'], ['origin']).remote,
+            '../sibling/repo.git');
+    });
+
+    test('non-remote first positional becomes a refspec (remote omitted)', function() {
+        var r = guard.parsePushArgs(['HEAD'], ['origin']);
+        assert.equal(r.remote, null);
+        assert.deepEqual(r.refspecs, ['HEAD']);
+    });
+
+    test('after the remote position is taken, remote-like tokens are refspecs', function() {
+        var r = guard.parsePushArgs(['origin', 'https://example.com/r.git', 'main'], ['origin']);
+        assert.equal(r.remote, 'origin');
+        assert.deepEqual(r.refspecs, ['https://example.com/r.git', 'main']);
+    });
+
+    test('after --delete the remote position is closed: branch tokens stay refspecs', function() {
+        var r = guard.parsePushArgs(['-d', 'origin', 'main'], ['origin']);
+        assert.equal(r.delete, true);
+        assert.equal(r.remote, null);
+        assert.deepEqual(r.refspecs, ['origin', 'main']);
+    });
+
+    test('remote position also closes once a refspec was seen', function() {
+        var r = guard.parsePushArgs(['HEAD', 'origin'], ['origin']);
+        assert.equal(r.remote, null);
+        assert.deepEqual(r.refspecs, ['HEAD', 'origin']);
+    });
+
+    test('flags may follow refspecs', function() {
+        var r = guard.parsePushArgs(['origin', 'main', '--force-with-lease', '-o', 'opt'], ['origin']);
+        assert.equal(r.remote, 'origin');
+        assert.deepEqual(r.refspecs, ['main']);
+    });
+
+    test('evaluatePush surfaces the grammar end-to-end (delete of protected branch)', function() {
+        var r = guard.evaluatePush(['-d', 'origin', 'main'], { knownRemotes: ['origin'], currentBranch: 'ai/x' });
+        assert.equal(r.allowed, false);
+        assert.contains(r.violations.join(' '), 'main');
+        assert.equal(r.parsed.delete, true);
+    });
+});
