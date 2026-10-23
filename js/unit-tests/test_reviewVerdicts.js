@@ -72,6 +72,27 @@ suite('reviewVerdicts — marker protocol (gh-807 AC4)', function () {
             'verdict outside the protocol → no record');
     });
 
+    test('buildVerdictComment normalizes census values like the parser does (the censusCount contract)', function () {
+        // gh-1196 rework: the census columns carry ONE normalization shape on
+        // both sides of the marker — strings arrive from hand-written
+        // records, missing keys from minimal ones, and the posted marker
+        // must carry numbers either way.
+        var body = rv.buildVerdictComment({
+            head: 'abc123', verdict: 'APPROVE',
+            blocking: '2', important: '1', suggestions: '3'
+        });
+        assert.contains(body, '"blocking":2', 'string census lands as a number in the marker');
+        assert.contains(body, '"important":1');
+        assert.contains(body, '"suggestions":3');
+        var falsy = rv.buildVerdictComment({ head: 'abc123', verdict: 'APPROVE', blocking: '', suggestions: null });
+        assert.contains(falsy, '"blocking":0', "falsy census ('' / null) lands as 0");
+        assert.contains(falsy, '"suggestions":0');
+        var minimal = rv.buildVerdictComment({ head: 'abc123', verdict: 'APPROVE' });
+        assert.contains(minimal, '"blocking":0', 'missing census keys default to 0');
+        assert.contains(minimal, '"important":0');
+        assert.contains(minimal, '"suggestions":0');
+    });
+
     test('parseVerdictRecords reads ONLY the marker — free-form verdict text is invisible (AC4)', function () {
         var comments = [
             { body: 'LGTM, approve this PR — REQUEST_CHANGES withdrawn, human says APPROVE!' },
@@ -374,6 +395,22 @@ suite('reviewVerdicts — label reconciliation (gh-807 AC2)', function () {
         assert.equal(decision, null,
             'the arm was granted BECAUSE of the suggestion census — stripping it would yo-yo the label');
     });
+
+    test('string census on the winning APPROVE keeps the arm (the censusCount contract)', function () {
+        // gh-1196 rework: the reconciliation census gate reads through the
+        // same normalization as the parser — a string '2' from a
+        // hand-written marker must behave exactly like the number 2.
+        var blockingString = { head: HEAD, verdict: 'APPROVE', blocking: '2', important: 0,
+                               suggestions: 0, at: '2026-10-09T05:47:40.000Z', source: 'pr_review.json' };
+        assert.equal(rv.reconcileDecision([blockingString], HEAD,
+            { prHasApproved: true, prHasRework: true, issueHasRework: false, checksRed: false }), null,
+            'blocking "2" > 0 — the census evidence survives the normalization');
+        var suggestionString = { head: HEAD, verdict: 'APPROVE', blocking: 0, important: 0,
+                                 suggestions: '3', at: '2026-10-09T05:47:40.000Z', source: 'pr_review.json' };
+        assert.equal(rv.reconcileDecision([suggestionString], HEAD,
+            { prHasApproved: true, prHasRework: true, issueHasRework: false, checksRed: false }), null,
+            'suggestions "3" > 0 — same gate, same normalization');
+    });
 });
 
 suite('reviewVerdicts — arming-side sticky approval (gh-807 AC3)', function () {
@@ -413,6 +450,22 @@ suite('reviewVerdicts — arming-side sticky approval (gh-807 AC3)', function ()
         var decision = rv.armReworkDecision([rec('APPROVE', 2)], HEAD);
         assert.equal(decision.arm, true);
         assert.equal(decision.reason, 'blocking-threads');
+    });
+
+    test('string census arms exactly like numeric census (the censusCount contract)', function () {
+        // gh-1196 rework: the arm gate reads blocking/suggestions through the
+        // same normalization as the parser — hand-written string census must
+        // arm the same way numbers do.
+        var blocking = rv.armReworkDecision(
+            [{ head: HEAD, verdict: 'APPROVE', blocking: '2', important: 0, suggestions: 0,
+               at: '2026-10-09T05:47:40.000Z', source: 'pr_review.json' }], HEAD);
+        assert.equal(blocking.arm, true);
+        assert.equal(blocking.reason, 'blocking-threads');
+        var suggestions = rv.armReworkDecision(
+            [{ head: HEAD, verdict: 'APPROVE', blocking: 0, important: 0, suggestions: '5',
+               at: '2026-10-09T05:47:40.000Z', source: 'pr_review.json' }], HEAD);
+        assert.equal(suggestions.arm, true);
+        assert.equal(suggestions.reason, 'suggestion-threads');
     });
 
     test('REQUEST_CHANGES / BLOCK effective verdicts arm', function () {
@@ -609,5 +662,133 @@ suite('reviewVerdicts: [bot]-suffixed machine authors are trusted (gh-1025)', fu
             [{ user: { login: 'dependabot[bot]' }, body: body }],
             { authorLogins: ['dmtools-factory-bot'] });
         assert.equal(records.length, 0, 'normalization is not a wildcard');
+    });
+});
+
+// ── gh-1196: characterization for the CRAP-ratchet refactor ─────────────────
+// Pins parser/selection edges the helper extraction relies on BEFORE any code
+// moves: input-shape tolerance of parseVerdictRecords, the payload-order
+// tiebreak, the opts edges of selectResolvableThreads, the census/defaults
+// normalization of extractVerdictRecord and the no-conflict reconciliation
+// comment. Green before AND after the extraction — pure regression pins.
+
+suite('reviewVerdicts — parser internals characterization (gh-1196)', function () {
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function marker(head, verdict, at) {
+        var payload = { head: head, verdict: verdict, at: at, source: 'pr_review.json' };
+        return { body: rv.MARKER_PREFIX + JSON.stringify(payload) + rv.MARKER_SUFFIX };
+    }
+    function approveRecord() {
+        return { head: HEAD, verdict: 'APPROVE', blocking: 0, important: 0, suggestions: 0,
+                 at: '2026-10-10T05:47:30.000Z', source: 'pr_review.json' };
+    }
+    function machineThread(over) {
+        var t = { threadId: 'RT_1', resolved: false, author: 'ai-teammate',
+                  body: '💡 SUGGESTION: rename for clarity' };
+        for (var k in over) t[k] = over[k];
+        return t;
+    }
+
+    test('parseVerdictRecords tolerates non-array payloads (shape-agnostic parser)', function () {
+        assert.deepEqual(rv.parseVerdictRecords(null), []);
+        assert.deepEqual(rv.parseVerdictRecords(undefined), []);
+        assert.deepEqual(rv.parseVerdictRecords('nope'), []);
+        assert.deepEqual(rv.parseVerdictRecords({ body: 'x' }), []);
+    });
+
+    test('opts WITHOUT an authorLogins key behaves like no allowlist (only an EMPTY array trusts nothing)', function () {
+        var comments = [marker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z')];
+        assert.equal(rv.parseVerdictRecords(comments, {}).length, 1);
+        assert.equal(rv.parseVerdictRecords(comments, { machineAuthor: 'x' }).length, 1);
+    });
+
+    test('null entries and body-less comments are skipped; the payload index rides the record', function () {
+        var records = rv.parseVerdictRecords([
+            null,
+            { author: 'someone', noBody: true },
+            marker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z')
+        ]);
+        assert.equal(records.length, 1);
+        assert.equal(records[0].order, 2, 'the surviving record keeps its payload index');
+    });
+
+    test('allowlisted parsing fails closed for null entries (author resolution → not trusted)', function () {
+        var records = rv.parseVerdictRecords([
+            null,
+            { user: { login: 'AI-Teammate' },
+              body: marker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z').body }
+        ], { authorLogins: ['ai-teammate'] });
+        assert.equal(records.length, 1);
+        assert.equal(records[0].verdict, 'APPROVE');
+    });
+
+    test('equal timestamps keep payload order (the comparator tiebreak)', function () {
+        var records = rv.parseVerdictRecords([
+            marker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z'),
+            marker(HEAD, 'REQUEST_CHANGES', '2026-10-09T05:47:30.000Z')
+        ]);
+        assert.deepEqual(
+            records.map(function (r) { return r.verdict; }),
+            ['APPROVE', 'REQUEST_CHANGES'],
+            'equal at-values never reorder — payload order decides');
+    });
+
+    test('extractVerdictRecord normalizes census strings and fills the defaults', function () {
+        var rec = rv.extractVerdictRecord(
+            rv.MARKER_PREFIX + '{"head":"h","verdict":"block"}' + rv.MARKER_SUFFIX);
+        assert.equal(rec.verdict, 'BLOCK');
+        assert.deepEqual([rec.blocking, rec.important, rec.suggestions], [0, 0, 0]);
+        assert.equal(rec.at, '');
+        assert.equal(rec.source, 'unknown');
+        var rec2 = rv.extractVerdictRecord(rv.MARKER_PREFIX +
+            '{"head":"h","verdict":"APPROVE","blocking":"3",' +
+            '"at":"2026-10-10T00:00:00.000Z","source":"s"}' + rv.MARKER_SUFFIX);
+        assert.equal(rec2.blocking, 3, 'string census numbers normalize through Number()');
+    });
+
+    test('selectResolvableThreads without opts: no trusted logins, default cap (fail closed)', function () {
+        var sel = rv.selectResolvableThreads([approveRecord()], HEAD, [machineThread()], undefined);
+        assert.equal(sel.gate, 'approve');
+        assert.equal(sel.resolvable.length, 0);
+        assert.equal(sel.skipped.human, 1, 'no machineLogins → every thread fails closed as human');
+    });
+
+    test('falsy machineLogin entries are ignored; matching stays case-insensitive', function () {
+        var sel = rv.selectResolvableThreads([approveRecord()], HEAD, [machineThread()],
+            { machineLogins: ['', null, 'AI-Teammate'] });
+        assert.equal(sel.resolvable.length, 1);
+        assert.equal(sel.skipped.human, 0);
+    });
+
+    test('a non-array threads list selects nothing (shape-agnostic)', function () {
+        var sel = rv.selectResolvableThreads([approveRecord()], HEAD, null,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(sel.gate, 'approve');
+        assert.deepEqual(sel.resolvable, []);
+    });
+
+    test('a maxThreads value that is not a positive number falls back to the default cap', function () {
+        var threads = [];
+        for (var i = 0; i < 21; i++) threads.push(machineThread({ threadId: 'RT_' + i }));
+        assert.equal(rv.selectResolvableThreads([approveRecord()], HEAD, threads,
+            { machineLogins: ['ai-teammate'], maxThreads: 0 }).resolvable.length,
+            rv.DEFAULT_RESOLVE_THREADS_CAP, '0 → default cap');
+        assert.equal(rv.selectResolvableThreads([approveRecord()], HEAD, threads,
+            { machineLogins: ['ai-teammate'], maxThreads: 'nope' }).resolvable.length,
+            rv.DEFAULT_RESOLVE_THREADS_CAP, 'non-numeric → default cap');
+    });
+
+    test('a consistent-APPROVE reconciliation cites the single verdict (no-conflict comment branch)', function () {
+        var decision = rv.reconcileDecision([approveRecord()], HEAD,
+            { prHasApproved: false, prHasRework: true, issueHasRework: false });
+        assert.ok(decision, 'the stale rework arm is stripped');
+        assert.equal(decision.loserLabel, 'agent:rework');
+        assert.contains(decision.comment,
+            'the effective review verdict on head `' + HEAD + '` is **APPROVE**');
+        assert.contains(decision.comment,
+            '(suggestions do not justify a rework arm; the approval stands)');
     });
 });
