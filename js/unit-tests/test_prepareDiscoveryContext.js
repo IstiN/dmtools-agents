@@ -267,3 +267,174 @@ suite('prepareDiscoveryContext', function() {
     });
 
 });
+
+// ── gh-1187 CRAP split: characterization tests for the extracted helpers ────
+
+// Loader variant with an injectable configLoader mock (the default loader
+// hardcodes a working one; the config-failure tests need a throwing one).
+function loadPrepareDiscoveryContextWithConfigLoader(configLoaderMock, globals) {
+    var defaults = {
+        confluence_get_children_by_id: function() { return []; },
+        confluence_content_by_id: function() { return { body: { storage: { value: '' } } }; },
+        confluence_get_page_inline_comments: function() { return '{}'; },
+        file_write: function() {}
+    };
+    var g = Object.assign({}, defaults, globals || {});
+    return loadModule(
+        'js/prepareDiscoveryContext.js',
+        makeRequire({
+            './configLoader.js': configLoaderMock,
+            './common/contentOutput.js': loadModule('js/common/contentOutput.js',
+                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock() }),
+                g)
+        }),
+        g
+    );
+}
+
+suite('prepareDiscoveryContext — gh-1187 extracted helpers', function() {
+
+    test('resolveTicketKey: params.ticket.key wins over the folder name', function() {
+        var mod = loadPrepareDiscoveryContext({});
+        assert.equal(mod.resolveTicketKey({ ticket: { key: 'PROJ-9' }, inputFolderPath: 'input/PROJ-2' }, 'input/PROJ-2'), 'PROJ-9');
+    });
+
+    test('resolveTicketKey: falls back to the trailing inputFolderPath segment', function() {
+        var mod = loadPrepareDiscoveryContext({});
+        assert.equal(mod.resolveTicketKey({ inputFolderPath: 'input/PROJ-5' }, 'input/PROJ-5'), 'PROJ-5');
+    });
+
+    test('resolveTicketKey: null when neither ticket nor folder is present', function() {
+        var mod = loadPrepareDiscoveryContext({});
+        assert.equal(mod.resolveTicketKey({}, null), null);
+    });
+
+    test('action without params.ticket derives the ticket key from inputFolderPath', function() {
+        var writes = {};
+        var mod = loadPrepareDiscoveryContext({
+            file_write: function(p, c) { writes[p] = c; }
+        }, {});
+
+        var result = mod.action({ inputFolderPath: 'input/PROJ-5', jobParams: {} });
+
+        assert.equal(result.action, 'not_configured');
+        var meta = JSON.parse(writes['input/PROJ-5/discovery_meta.json']);
+        assert.equal(meta.ticketKey, 'PROJ-5');
+    });
+
+    test('applyDiscoveryConfig: fills meta from project config and reports unconfigured state', function() {
+        var mod = loadPrepareDiscoveryContext({});
+        var meta = { ticketKey: 'PROJ-2', space: null, parentPageId: null, existingPageId: null };
+
+        assert.equal(mod.applyDiscoveryConfig(meta, { jobParams: {} }), true, 'unconfigured → true');
+        assert.equal(meta.space, null);
+
+        var meta2 = { ticketKey: 'PROJ-2', space: null, parentPageId: null, existingPageId: null };
+        var configuredMod = loadPrepareDiscoveryContext({}, { space: 'DISC', parentPageId: '123' });
+        assert.equal(configuredMod.applyDiscoveryConfig(meta2, { jobParams: {} }), false, 'configured → false');
+        assert.equal(meta2.space, 'DISC');
+        assert.equal(meta2.parentPageId, '123');
+    });
+
+    test('fetchParentChildren: returns the children payload on success', function() {
+        var mod = loadPrepareDiscoveryContext({
+            confluence_get_children_by_id: function() { return [{ id: '456', title: 'PROJ-2 x' }]; }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var fetched = mod.fetchParentChildren('123');
+        assert.equal(fetched.error, undefined);
+        assert.equal(fetched.children.length, 1);
+    });
+
+    test('fetchParentChildren: returns an error marker on failure', function() {
+        var mod = loadPrepareDiscoveryContext({
+            confluence_get_children_by_id: function() { throw new Error('confluence down'); }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var fetched = mod.fetchParentChildren('123');
+        assert.contains(fetched.error, 'confluence down');
+    });
+
+    test('writeCollectedComments: skipped when the folder is missing or there are no comments', function() {
+        var writes = {};
+        var mod = loadPrepareDiscoveryContext({
+            file_write: function(p, c) { writes[p] = c; }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        mod.writeCollectedComments(null, [{ pageId: '1' }], 'PROJ-2', 0);
+        mod.writeCollectedComments('input/PROJ-2', [], 'PROJ-2', 0);
+        assert.deepEqual(Object.keys(writes), []);
+    });
+
+    test('writeCollectedComments: writes the comments files and logs the page count', function() {
+        var writes = {};
+        var mod = loadPrepareDiscoveryContext({
+            file_write: function(p, c) { writes[p] = c; }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        mod.writeCollectedComments('input/PROJ-2', [
+            { pageId: '456', commentId: 'c1', body: 'Root comment' }
+        ], 'PROJ-2', 2);
+
+        var commentsJson = JSON.parse(writes['input/PROJ-2/discovery_comments.json']);
+        assert.equal(commentsJson.comments.length, 1);
+        assert.equal(commentsJson.comments[0].commentId, 'c1');
+    });
+
+    test('writeDiscoveryMeta / writeDiscoveryMetaQuietly: quiet variant swallows write failures', function() {
+        var mod = loadPrepareDiscoveryContext({
+            file_write: function() { throw new Error('disk full'); }
+        }, {});
+
+        var meta = { ticketKey: 'PROJ-2', space: null, parentPageId: null, existingPageId: null };
+        var errors = [];
+        var origError = console.error;
+        console.error = function(m) { errors.push(m); };
+        try {
+            mod.writeDiscoveryMetaQuietly('input/PROJ-2', meta);
+        } finally {
+            console.error = origError;
+        }
+        assert.equal(errors.length, 1);
+        assert.contains(errors[0], 'discovery_meta.json');
+    });
+
+    test('project config load failure — error result, meta still written', function() {
+        var writes = {};
+        var mod = loadPrepareDiscoveryContextWithConfigLoader({
+            loadProjectConfig: function() { throw new Error('cfg boom'); }
+        }, {
+            file_write: function(p, c) { writes[p] = c; }
+        });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.success, false);
+        assert.equal(result.action, 'error');
+        assert.contains(result.error, 'cfg boom');
+        var meta = JSON.parse(writes['input/PROJ-2/discovery_meta.json']);
+        assert.equal(meta.ticketKey, 'PROJ-2');
+        assert.equal(meta.space, null);
+    });
+
+    test('meta write failure on the error path is logged, not thrown', function() {
+        var errors = [];
+        var origError = console.error;
+        console.error = function(m) { errors.push(m); };
+        var mod = loadPrepareDiscoveryContextWithConfigLoader({
+            loadProjectConfig: function() { throw new Error('cfg boom'); }
+        }, {
+            file_write: function() { throw new Error('disk full'); }
+        });
+        try {
+            var result = mod.action(makeParams());
+        } finally {
+            console.error = origError;
+        }
+        assert.equal(result.success, false);
+        assert.equal(result.action, 'error');
+        var alsoFailed = errors.filter(function(m) { return String(m).indexOf('Also failed') !== -1; });
+        assert.equal(alsoFailed.length, 1, 'quiet meta-write failure logged once');
+    });
+
+});
