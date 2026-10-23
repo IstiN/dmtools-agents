@@ -682,18 +682,23 @@ suite('createQuestionsAndAssignForReview — description file resolution (gh-119
         var warns = [];
         var origWarn = console.warn;
         console.warn = function () { warns.push(Array.prototype.slice.call(arguments).join(' ')); };
+        var questionsJson = JSON.stringify([{ summary: 'Summary fallback', description: 'outputs/exploding.md' }]);
         try {
-            var r = runWith({
-                'outputs/questions.json': JSON.stringify([{ summary: 'Summary fallback', description: 'outputs/exploding.md' }])
-            }, {
+            var loaded = loadCreateQuestionsModule({}, {
                 file_read: function (opts) {
                     var path = opts && (opts.path || opts);
                     if (path === 'outputs/exploding.md') throw new Error('disk on fire');
+                    if (path === 'outputs/questions.json') return questionsJson;
                     return null;
                 }
             });
-            assert.equal(r.result.success, true);
-            assert.equal(r.loaded.createdTickets[0].fieldsJson.description, 'Summary fallback');
+            var result = loaded.mod.action({
+                ticket: { key: 'BICE-829' },
+                metadata: { contextId: 'story_questions' },
+                jobParams: { customParams: {} }
+            });
+            assert.equal(result.success, true);
+            assert.equal(loaded.createdTickets[0].fieldsJson.description, 'Summary fallback');
         } finally {
             console.warn = origWarn;
         }
@@ -864,22 +869,6 @@ suite('createQuestionsAndAssignForReview — non-fatal tracker failures (gh-1191
 
 suite('createQuestionsAndAssignForReview — created key extraction (gh-1191 characterization)', function () {
 
-    test('a plain-string create result is used as the key directly', function () {
-        var loaded = loadCreateQuestionsModule({
-            'outputs/questions.json': JSON.stringify([{ summary: 'Q1' }])
-        }, {
-            jira_create_ticket_with_json: function () { return 'BICE-777'; }
-        });
-        var result = loaded.mod.action({
-            ticket: { key: 'BICE-829' },
-            metadata: { contextId: 'story_questions' },
-            jobParams: { customParams: {} }
-        });
-        assert.equal(result.success, true);
-        assert.equal(result.createdQuestions[0].key, 'BICE-777', 'string result → key used as-is');
-        assert.equal(result.createdQuestions[0].success, true);
-    });
-
     test('a JSON-object create result is parsed via extractTicketKey', function () {
         var loaded = loadCreateQuestionsModule({
             'outputs/questions.json': JSON.stringify([{ summary: 'Q1' }])
@@ -894,19 +883,29 @@ suite('createQuestionsAndAssignForReview — created key extraction (gh-1191 cha
         assert.equal(result.createdQuestions[0].key, 'BICE-778');
     });
 
-    test('an unparseable create result reports success:false for that question', function () {
+    test('an unparseable create result makes the question fail and action throws', function () {
+        // The tracker layer (jiraCreateWithFields) already runs extractTicketKey on the raw
+        // result, so a non-JSON string reaches createQuestion as null → key null → success
+        // false → failedCount > 0 → action throws.
         var loaded = loadCreateQuestionsModule({
             'outputs/questions.json': JSON.stringify([{ summary: 'Q1' }])
         }, {
             jira_create_ticket_with_json: function () { return '<<<not json>>>'; }
         });
-        var result = loaded.mod.action({
-            ticket: { key: 'BICE-829' },
-            metadata: { contextId: 'story_questions' },
-            jobParams: { customParams: {} }
-        });
-        assert.equal(result.createdQuestions[0].key, null);
-        assert.equal(result.createdQuestions[0].success, false);
+        var threw = false;
+        var message = '';
+        try {
+            loaded.mod.action({
+                ticket: { key: 'BICE-829' },
+                metadata: { contextId: 'story_questions' },
+                jobParams: { customParams: {} }
+            });
+        } catch (e) {
+            threw = true;
+            message = e.message || String(e);
+        }
+        assert.equal(threw, true);
+        assert.contains(message, 'Failed to create 1 of 1');
     });
 
     test('a throwing create reports the question as failed (null key)', function () {

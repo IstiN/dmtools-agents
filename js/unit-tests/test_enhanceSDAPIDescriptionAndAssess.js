@@ -324,4 +324,18 @@ suite('enhanceSDAPIDescriptionAndAssess.action — failure paths', function () {
         assert.equal(result.updateResults.diagramUpdated, false);
         assert.ok(result.updateResults.errors[0].indexOf('Diagrams field update failed') !== -1);
     });
+
+    test('an unexpected error is caught by the action safety net → { success: false, error }', function () {
+        var orig = silenceConsole();
+        try {
+            var mod = loadEnhanceSDAPI();
+            // No params.ticket → reading params.ticket.key throws inside action.
+            var result = mod.action({ jobParams: { customParams: {} } });
+            assert.equal(result.success, false, 'the safety net reports the failure');
+            assert.ok(String(result.error).indexOf('Error') !== -1,
+                'the error is stringified into the result, got: ' + result.error);
+        } finally {
+            console.error = orig.error; console.warn = orig.warn; console.log = orig.log;
+        }
+    });
 });
