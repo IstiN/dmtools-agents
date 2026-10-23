@@ -100,49 +100,84 @@ function mergeObjects(base, override) {
     return result;
 }
 
-function buildDefaultFields(projectConfig) {
-    var fields = DEFAULT_FIELDS.slice();
-    var customFields = projectConfig && projectConfig.jira && projectConfig.jira.fields
+/** jira.fields map of the project config ({} when absent). */
+function getJiraCustomFields(projectConfig) {
+    return projectConfig && projectConfig.jira && projectConfig.jira.fields
         ? projectConfig.jira.fields
         : {};
+}
 
+/**
+ * Aggregate only human-readable field names; skip raw customfield_* IDs
+ * (e.g. bugSolution: 'customfield_10400' is technical, not for context).
+ */
+function isHumanReadableFieldName(fieldName) {
+    return typeof fieldName === 'string' && fieldName.indexOf('customfield_') !== 0;
+}
+
+function pushIfAbsent(fields, fieldName) {
+    if (fields.indexOf(fieldName) === -1) fields.push(fieldName);
+}
+
+function buildDefaultFields(projectConfig) {
+    var fields = DEFAULT_FIELDS.slice();
+    var customFields = getJiraCustomFields(projectConfig);
     for (var key in customFields) {
-        if (Object.prototype.hasOwnProperty.call(customFields, key)) {
-            var fieldName = customFields[key];
-            // Aggregate only human-readable field names; skip raw customfield_* IDs
-            // (e.g. bugSolution: 'customfield_10400' is technical, not for context)
-            if (typeof fieldName === 'string' && fieldName.indexOf('customfield_') !== 0) {
-                if (fields.indexOf(fieldName) === -1) {
-                    fields.push(fieldName);
-                }
-            }
+        if (Object.prototype.hasOwnProperty.call(customFields, key) && isHumanReadableFieldName(customFields[key])) {
+            pushIfAbsent(fields, customFields[key]);
         }
     }
     return fields;
 }
 
-function resolveParentContextConfig(projectConfig, customParams) {
-    var projectCfg = projectConfig && projectConfig.jira
+/** jira.parentContextFetch of the project config (null when absent). */
+function getProjectParentContextFetch(projectConfig) {
+    return projectConfig && projectConfig.jira
         ? projectConfig.jira.parentContextFetch
         : null;
-    var legacyDirectCfg = customParams && (customParams.jql || customParams.fields || customParams.contexts || customParams.childQuestions)
-        ? customParams
-        : null;
-    var overrideCfg = customParams && (customParams.parentContextFetch || legacyDirectCfg);
+}
 
-    if (!projectCfg && !overrideCfg) return null;
+/**
+ * Legacy customParams API: the presence of jql/fields/contexts/childQuestions
+ * directly on customParams is itself an override.
+ */
+function hasLegacyDirectOverrides(customParams) {
+    return !!(customParams && (customParams.jql || customParams.fields || customParams.contexts || customParams.childQuestions));
+}
 
-    if (overrideCfg) {
-        if (overrideCfg.enabled === false) return null;
-        var overrideMergedCfg = mergeObjects(projectCfg || {}, overrideCfg);
-        // Presence of the SM/job override is enough to enable this feature unless
-        // it explicitly sets enabled:false. This preserves the old customParams API.
-        if (overrideMergedCfg.enabled === false) overrideMergedCfg.enabled = true;
-        return overrideMergedCfg;
-    }
+/**
+ * The SM/job override object: customParams.parentContextFetch when present,
+ * else the whole customParams when it carries legacy direct keys, else null.
+ */
+function resolveOverrideCfg(customParams) {
+    if (!customParams) return null;
+    if (customParams.parentContextFetch) return customParams.parentContextFetch;
+    return hasLegacyDirectOverrides(customParams) ? customParams : null;
+}
 
+/** Merge the override over the project config; an explicit disable stays a no-op. */
+function resolveOverrideConfig(projectCfg, overrideCfg) {
+    if (overrideCfg.enabled === false) return null;
+    var overrideMergedCfg = mergeObjects(projectCfg || {}, overrideCfg);
+    // Presence of the SM/job override is enough to enable this feature unless
+    // it explicitly sets enabled:false. This preserves the old customParams API.
+    if (overrideMergedCfg.enabled === false) overrideMergedCfg.enabled = true;
+    return overrideMergedCfg;
+}
+
+/** Project-config-only mode needs an explicit enabled:true. */
+function resolveProjectOnlyConfig(projectCfg) {
     if (!projectCfg || projectCfg.enabled !== true) return null;
     return projectCfg;
+}
+
+function resolveParentContextConfig(projectConfig, customParams) {
+    var projectCfg = getProjectParentContextFetch(projectConfig);
+    var overrideCfg = resolveOverrideCfg(customParams);
+
+    if (!projectCfg && !overrideCfg) return null;
+    if (overrideCfg) return resolveOverrideConfig(projectCfg, overrideCfg);
+    return resolveProjectOnlyConfig(projectCfg);
 }
 
 function isSystemField(fieldName) {
@@ -298,14 +333,58 @@ function renderCommentsMarkdown(commentField) {
  *   description: 'Short explanation...'   // optional blurb shown to AI
  * }
  */
-function fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, fieldLabels, tracker) {
+/** Fields to fetch for the parent story: parentFields → fields → defaults. */
+function resolveParentFetchFields(cfg, projectConfig, projectKey, fieldLabels, tracker) {
     var parentFields = cfg.parentFields || cfg.fields || buildDefaultFields(projectConfig);
-    // Ensure base fields are present
-    var fetchParentFields = parentFields.slice();
-    ['key', 'summary', 'status'].forEach(function(f) {
-        if (fetchParentFields.indexOf(f) === -1) fetchParentFields.unshift(f);
-    });
-    fetchParentFields = resolveFetchFields(fetchParentFields, projectKey, fieldLabels, cfg.resolveFieldNames === true, tracker);
+    return resolveFetchFields(ensureBaseFields(parentFields), projectKey, fieldLabels, cfg.resolveFieldNames === true, tracker);
+}
+
+/** Rendered field section of a parent story ('_No content available._' when empty). */
+function renderParentFieldsContent(pf, fetchParentFields, fieldLabels) {
+    return renderFieldsMarkdown(pf, fetchParentFields, fieldLabels) || '_No content available._';
+}
+
+function buildParentStoryMarkdown(parentKey, pf, fieldsContent) {
+    var summary = pf.summary || parentKey;
+    var status = pf.status && pf.status.name || 'Unknown';
+    var md = '# Parent Story — ' + summary + '\n\n';
+    md += '**Ticket:** ' + parentKey + '\n';
+    md += '**Status:** ' + status + '\n\n';
+    md += '---\n\n';
+    md += fieldsContent;
+    md += '\n';
+    return md;
+}
+
+function buildParentAsContextMarkdown(pac, parentKey, pf, fieldsContent) {
+    var label = pac.label || 'Parent Context';
+    var summary = pf.summary || parentKey;
+    var status = pf.status && pf.status.name || 'Unknown';
+    var ctxMd = '# ' + label + ' — ' + summary + '\n\n';
+    if (pac.description) {
+        ctxMd += '> **' + label + '** (' + parentKey + '): ' + pac.description + '\n\n';
+    }
+    ctxMd += '**Ticket:** ' + parentKey + '\n';
+    ctxMd += '**Status:** ' + status + '\n\n';
+    ctxMd += '---\n\n';
+    ctxMd += fieldsContent;
+    ctxMd += '\n';
+    return ctxMd;
+}
+
+/**
+ * Optionally write the parent story also as a named context file
+ * (e.g. parent_context_ba.md) — cfg.parentAsContext = { file, label, description }.
+ */
+function writeParentAsContextFile(folder, parentKey, pac, pf, fieldsContent) {
+    if (!pac || !pac.file) return;
+    var ctxMd = buildParentAsContextMarkdown(pac, parentKey, pf, fieldsContent);
+    file_write(folder + '/' + pac.file, ctxMd);
+    console.log('✅ fetchParentContextToInput: wrote ' + pac.file + ' (parentAsContext from ' + parentKey + ')');
+}
+
+function fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, fieldLabels, tracker) {
+    var fetchParentFields = resolveParentFetchFields(cfg, projectConfig, projectKey, fieldLabels, tracker);
 
     try {
         var parentTicket = tracker.getIssue(parentKey, fetchParentFields);
@@ -315,40 +394,14 @@ function fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, fie
         }
 
         var pf = parentTicket.fields;
-        var summary = pf.summary || parentKey;
-        var status = pf.status && pf.status.name || 'Unknown';
-        var fieldsContent = renderFieldsMarkdown(pf, fetchParentFields, fieldLabels);
+        var fieldsContent = renderParentFieldsContent(pf, fetchParentFields, fieldLabels);
 
         // Always write parent-{KEY}.md
-        var md = '# Parent Story — ' + summary + '\n\n';
-        md += '**Ticket:** ' + parentKey + '\n';
-        md += '**Status:** ' + status + '\n\n';
-        md += '---\n\n';
-        md += fieldsContent || '_No content available._';
-        md += '\n';
-
-        var filePath = folder + '/parent-' + parentKey + '.md';
-        file_write(filePath, md);
+        file_write(folder + '/parent-' + parentKey + '.md', buildParentStoryMarkdown(parentKey, pf, fieldsContent));
         console.log('✅ fetchParentContextToInput: wrote parent-' + parentKey + '.md');
 
         // Optionally also write as a named context file (e.g. parent_context_ba.md)
-        var pac = cfg.parentAsContext;
-        if (pac && pac.file) {
-            var label = pac.label || 'Parent Context';
-            var ctxMd = '# ' + label + ' — ' + summary + '\n\n';
-            if (pac.description) {
-                ctxMd += '> **' + label + '** (' + parentKey + '): ' + pac.description + '\n\n';
-            }
-            ctxMd += '**Ticket:** ' + parentKey + '\n';
-            ctxMd += '**Status:** ' + status + '\n\n';
-            ctxMd += '---\n\n';
-            ctxMd += fieldsContent || '_No content available._';
-            ctxMd += '\n';
-
-            var ctxFilePath = folder + '/' + pac.file;
-            file_write(ctxFilePath, ctxMd);
-            console.log('✅ fetchParentContextToInput: wrote ' + pac.file + ' (parentAsContext from ' + parentKey + ')');
-        }
+        writeParentAsContextFile(folder, parentKey, cfg.parentAsContext, pf, fieldsContent);
     } catch (e) {
         console.warn('fetchParentContextToInput: failed to fetch parent story ' + parentKey + ' (non-fatal):', e.message || e);
     }
@@ -576,14 +629,83 @@ function appendChildQuestions(filePath, itemKey, ctxFile, childQuestionsCfg, tra
     }
 }
 
+/** jobParams win when present; flat params double as jobParams. */
+function resolveActionJobParams(params) {
+    return params.jobParams || params;
+}
+
+/** The input folder lives on the run params; jobParams are the fallback. */
+function resolveActualParams(params, jobParams) {
+    return params.inputFolderPath ? params : jobParams;
+}
+
+function resolveActionCustomParams(jobParams) {
+    return (jobParams.customParams) || {};
+}
+
+/** Project config through the (optional) configLoader; null when unavailable. */
+function loadProjectConfigForAction(jobParams) {
+    return configLoader && configLoader.loadProjectConfig
+        ? configLoader.loadProjectConfig(jobParams)
+        : null;
+}
+
+function resolveActionTicket(actualParams, jobParams) {
+    return actualParams.ticket || (jobParams.ticket);
+}
+
+/**
+ * Ticket key + parent key for the run, logging the skip reasons. Returns null
+ * when the run must stop: key unknown, ticket fetch failed, or no parent.
+ */
+function resolveContextAnchor(tracker, ticket, folder) {
+    var ticketKey = resolveTicketKey(folder, ticket);
+
+    if (!ticketKey) {
+        console.warn('fetchParentContextToInput: cannot determine ticketKey — skipping');
+        return null;
+    }
+
+    // 1. Get parent key
+    var ticketFields = resolveTicketFields(tracker, ticket, ticketKey);
+    if (ticketFields === null) return null; // fetch failed — warning already logged
+
+    var parentKey = ticketFields && ticketFields.parent && ticketFields.parent.key;
+    if (!parentKey) {
+        console.log('fetchParentContextToInput: ' + ticketKey + ' has no parent — skipping');
+        return null;
+    }
+
+    return { ticketKey: ticketKey, parentKey: parentKey };
+}
+
+/** Sibling search fields: always base fields, resolved to tracker codes when asked. */
+function resolveSiblingFetchFields(cfg, opts, projectKey, tracker) {
+    // Always ensure base fields are present for sibling search
+    return resolveFetchFields(ensureBaseFields(opts.siblingFields), projectKey, opts.fieldLabels, cfg.resolveFieldNames === true, tracker);
+}
+
+/**
+ * Run the sibling JQL ({parentKey} replaced) and write one file per matched
+ * context. An empty or failed search is a silent no-op.
+ */
+function writeSiblingContextFiles(tracker, opts, fetchFields, parentKey, folder) {
+    // 3. Run JQL with {parentKey} replaced and match each result to a context
+    var results = searchSiblingTickets(tracker, opts.jqlTemplate, parentKey, fetchFields);
+    if (!results || results.length === 0) return;
+
+    // 4. Write one file per matched context
+    for (var i = 0; i < results.length; i++) {
+        processContextItem(results[i], opts, fetchFields, folder, tracker);
+    }
+}
+
 function action(params) {
     try {
-        var jobParams  = params.jobParams || params;
-        var actualParams = params.inputFolderPath ? params : jobParams;
-        var customParams = (jobParams.customParams) || {};
-        var projectConfig = configLoader && configLoader.loadProjectConfig
-            ? configLoader.loadProjectConfig(jobParams)
-            : null;
+        var jobParams = resolveActionJobParams(params);
+        var actualParams = resolveActualParams(params, jobParams);
+        var customParams = resolveActionCustomParams(jobParams);
+        var projectConfig = loadProjectConfigForAction(jobParams);
         var cfg = resolveParentContextConfig(projectConfig, customParams);
         var tracker = trackersModule.createTracker(projectConfig, customParams);
 
@@ -592,47 +714,22 @@ function action(params) {
             return;
         }
 
-        var folder = actualParams.inputFolderPath;
-        var ticket = actualParams.ticket || (jobParams.ticket);
-        var ticketKey = resolveTicketKey(folder, ticket);
-
-        if (!ticketKey) {
-            console.warn('fetchParentContextToInput: cannot determine ticketKey — skipping');
-            return;
-        }
-
-        // 1. Get parent key
-        var ticketFields = resolveTicketFields(tracker, ticket, ticketKey);
-        if (ticketFields === null) return; // fetch failed — warning already logged
-
-        var parentKey = ticketFields && ticketFields.parent && ticketFields.parent.key;
-        if (!parentKey) {
-            console.log('fetchParentContextToInput: ' + ticketKey + ' has no parent — skipping');
-            return;
-        }
+        var ticket = resolveActionTicket(actualParams, jobParams);
+        var anchor = resolveContextAnchor(tracker, ticket, actualParams.inputFolderPath);
+        if (!anchor) return;
 
         // Resolve configured options with defaults after parent is known so human-readable
         // custom fields can be resolved by project key when Jira requires customfield_* IDs.
         var opts = resolveFetchOptions(cfg, projectConfig);
-        var projectKey = resolveProjectKey(projectConfig, parentKey, ticketKey);
+        var projectKey = resolveProjectKey(projectConfig, anchor.parentKey, anchor.ticketKey);
 
         // 2. Fetch parent story itself (unless explicitly disabled)
         if (cfg.includeParentStory !== false) {
-            fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, opts.fieldLabels, tracker);
+            fetchParentStory(actualParams.inputFolderPath, anchor.parentKey, cfg, projectConfig, projectKey, opts.fieldLabels, tracker);
         }
 
-        // Always ensure base fields are present for sibling search
-        var fetchFields = ensureBaseFields(opts.siblingFields);
-        fetchFields = resolveFetchFields(fetchFields, projectKey, opts.fieldLabels, cfg.resolveFieldNames === true, tracker);
-
-        // 3. Run JQL with {parentKey} replaced and match each result to a context
-        var results = searchSiblingTickets(tracker, opts.jqlTemplate, parentKey, fetchFields);
-        if (!results || results.length === 0) return;
-
-        // 4. Write one file per matched context
-        for (var i = 0; i < results.length; i++) {
-            processContextItem(results[i], opts, fetchFields, folder, tracker);
-        }
+        var fetchFields = resolveSiblingFetchFields(cfg, opts, projectKey, tracker);
+        writeSiblingContextFiles(tracker, opts, fetchFields, anchor.parentKey, actualParams.inputFolderPath);
 
     } catch (error) {
         console.warn('fetchParentContextToInput: unexpected error (non-fatal):', error);
@@ -669,5 +766,10 @@ function processContextItem(item, opts, fetchFields, folder, tracker) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action: action };
+    module.exports = {
+        action: action,
+        // Pure helpers, exported for direct unit testing:
+        resolveParentContextConfig: resolveParentContextConfig,
+        buildDefaultFields: buildDefaultFields
+    };
 }
