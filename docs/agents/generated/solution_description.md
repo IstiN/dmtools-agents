@@ -55,6 +55,9 @@ _Check WIP Label Pre-Action_
 _Fetch Parent Context To Input_
 
 - Source: `agents/js/fetchParentContextToInput.js`
+- Writes:
+  - `input/<KEY>/`
+  - `input/<KEY>/parent-`
 - Parameters (customParams):
   - `adoTextFormat`
   - `branchCreateFnPath`
