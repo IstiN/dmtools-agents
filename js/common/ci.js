@@ -73,94 +73,126 @@ function _failedConclusions() {
     };
 }
 
-function stampRequiredChecks(options) {
-    var opts = options || {};
-    var workspace = opts.workspace;
-    var repository = opts.repository;
-    var headSha = opts.headSha;
-    var runId = opts.runId;
-    var required = opts.requiredChecks || [];
-
-    if (!workspace) throw new Error('stampRequiredChecks: workspace is required');
-    if (!repository) throw new Error('stampRequiredChecks: repository is required');
-    if (!headSha) throw new Error('stampRequiredChecks: headSha is required');
-    if (runId === undefined || runId === null || String(runId).trim() === '') {
+function validateStampOptions(opts) {
+    if (!opts.workspace) throw new Error('stampRequiredChecks: workspace is required');
+    if (!opts.repository) throw new Error('stampRequiredChecks: repository is required');
+    if (!opts.headSha) throw new Error('stampRequiredChecks: headSha is required');
+    if (opts.runId === undefined || opts.runId === null || String(opts.runId).trim() === '') {
         throw new Error('stampRequiredChecks: runId is required');
     }
+}
+
+function findLastJobNamed(jobs, jobName) {
+    // Last match wins: later entries in the run's job list are the
+    // most recent attempt (re-runs, requeue).
+    var job = null;
+    for (var j = 0; j < jobs.length; j++) {
+        if (jobs[j] && jobs[j].name === jobName) job = jobs[j];
+    }
+    return job;
+}
+
+function classifyJobOutcome(job) {
+    if (!job) return 'missing';
+    if (job.status !== 'completed' || !job.conclusion) return 'not-completed';
+    if (job.conclusion === 'skipped') return 'skipped';
+    return 'stamp';
+}
+
+function recordUnstampedCheck(summary, outcome, checkName, jobName, job) {
+    if (outcome === 'missing') {
+        summary.missing.push({ name: checkName, jobName: jobName });
+        return;
+    }
+    if (outcome === 'not-completed') {
+        summary.skipped.push({ name: checkName, jobName: jobName, reason: 'not-completed', jobStatus: job.status });
+        return;
+    }
+    summary.skipped.push({ name: checkName, jobName: jobName, reason: 'skipped' });
+}
+
+function resolveCheckRunId(created) {
+    return created && (created.id !== undefined && created.id !== null ? created.id : (created.checkRunId));
+}
+
+function buildCheckRunUpdatePayload(checkName, jobName, job, runId) {
+    return {
+        status: 'completed',
+        conclusion: job.conclusion,
+        title: checkName + ' — ' + job.conclusion + ' (mirrored from run ' + runId + ')',
+        summary: 'Mirrored from [workflow run ' + runId + '](' +
+            (job.html_url || '') + '): job `' + jobName + '` concluded `' +
+            job.conclusion + '`.'
+    };
+}
+
+function stampOneRequiredCheck(opts, entry, jobs, failed, summary) {
+    var checkName = entry.name;
+    var jobName = entry.jobName || entry.name;
+    if (!checkName) {
+        summary.skipped.push({ name: null, reason: 'no-name' });
+        return;
+    }
+
+    var job = findLastJobNamed(jobs, jobName);
+    var outcome = classifyJobOutcome(job);
+    if (outcome !== 'stamp') {
+        recordUnstampedCheck(summary, outcome, checkName, jobName, job);
+        return;
+    }
+
+    var created = _parseJson(github_create_check_run({
+        workspace: opts.workspace,
+        repository: opts.repository,
+        name: checkName,
+        headSha: opts.headSha,
+        status: 'in_progress'
+    }));
+    var checkRunId = resolveCheckRunId(created);
+    var update = buildCheckRunUpdatePayload(checkName, jobName, job, opts.runId);
+    github_update_check_run({
+        workspace: opts.workspace,
+        repository: opts.repository,
+        checkRunId: checkRunId,
+        status: update.status,
+        conclusion: update.conclusion,
+        title: update.title,
+        summary: update.summary
+    });
+    summary.stamped.push({ name: checkName, conclusion: job.conclusion, checkRunId: checkRunId });
+
+    if (opts.commitStatusFallback === true) {
+        var state = failed[job.conclusion] ? 'failure' : 'success';
+        github_create_commit_status({
+            workspace: opts.workspace,
+            repository: opts.repository,
+            sha: opts.headSha,
+            state: state,
+            context: checkName,
+            description: job.conclusion + ' (mirrored from run ' + opts.runId + ')',
+            targetUrl: job.html_url
+        });
+        summary.stamped[summary.stamped.length - 1].commitStatus = state;
+    }
+}
+
+function stampRequiredChecks(options) {
+    var opts = options || {};
+    validateStampOptions(opts);
+    var required = opts.requiredChecks || [];
 
     var summary = { stamped: [], skipped: [], missing: [] };
     if (!required.length) return summary;
 
     var jobs = _jobsOf(github_get_workflow_run_jobs({
-        workspace: workspace,
-        repository: repository,
-        runId: runId
+        workspace: opts.workspace,
+        repository: opts.repository,
+        runId: opts.runId
     }));
     var failed = _failedConclusions();
 
     for (var i = 0; i < required.length; i++) {
-        var entry = required[i] || {};
-        var checkName = entry.name;
-        var jobName = entry.jobName || entry.name;
-        if (!checkName) {
-            summary.skipped.push({ name: null, reason: 'no-name' });
-            continue;
-        }
-
-        // Last match wins: later entries in the run's job list are the
-        // most recent attempt (re-runs, requeue).
-        var job = null;
-        for (var j = 0; j < jobs.length; j++) {
-            if (jobs[j] && jobs[j].name === jobName) job = jobs[j];
-        }
-
-        if (!job) {
-            summary.missing.push({ name: checkName, jobName: jobName });
-            continue;
-        }
-        if (job.status !== 'completed' || !job.conclusion) {
-            summary.skipped.push({ name: checkName, jobName: jobName, reason: 'not-completed', jobStatus: job.status });
-            continue;
-        }
-        if (job.conclusion === 'skipped') {
-            summary.skipped.push({ name: checkName, jobName: jobName, reason: 'skipped' });
-            continue;
-        }
-
-        var created = _parseJson(github_create_check_run({
-            workspace: workspace,
-            repository: repository,
-            name: checkName,
-            headSha: headSha,
-            status: 'in_progress'
-        }));
-        var checkRunId = created && (created.id !== undefined && created.id !== null ? created.id : (created.checkRunId));
-        github_update_check_run({
-            workspace: workspace,
-            repository: repository,
-            checkRunId: checkRunId,
-            status: 'completed',
-            conclusion: job.conclusion,
-            title: checkName + ' — ' + job.conclusion + ' (mirrored from run ' + runId + ')',
-            summary: 'Mirrored from [workflow run ' + runId + '](' +
-                (job.html_url || '') + '): job `' + jobName + '` concluded `' +
-                job.conclusion + '`.'
-        });
-        summary.stamped.push({ name: checkName, conclusion: job.conclusion, checkRunId: checkRunId });
-
-        if (opts.commitStatusFallback === true) {
-            var state = failed[job.conclusion] ? 'failure' : 'success';
-            github_create_commit_status({
-                workspace: workspace,
-                repository: repository,
-                sha: headSha,
-                state: state,
-                context: checkName,
-                description: job.conclusion + ' (mirrored from run ' + runId + ')',
-                targetUrl: job.html_url
-            });
-            summary.stamped[summary.stamped.length - 1].commitStatus = state;
-        }
+        stampOneRequiredCheck(opts, required[i] || {}, jobs, failed, summary);
     }
 
     return summary;
@@ -171,5 +203,11 @@ module.exports = {
     // Exported (gh-992) so githubHelpers.detectFailedChecks can reuse the
     // single envelope-tolerant workflow-run-jobs parser instead of
     // maintaining a second copy.
-    _jobsOf: _jobsOf
+    _jobsOf: _jobsOf,
+    // gh-1183: extracted validation/decision helpers, exported for unit tests.
+    validateStampOptions: validateStampOptions,
+    findLastJobNamed: findLastJobNamed,
+    classifyJobOutcome: classifyJobOutcome,
+    resolveCheckRunId: resolveCheckRunId,
+    buildCheckRunUpdatePayload: buildCheckRunUpdatePayload
 };
