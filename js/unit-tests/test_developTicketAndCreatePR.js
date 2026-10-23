@@ -2804,12 +2804,16 @@ suite('developTicketAndCreatePR > action seam clusters (gh-1190)', function () {
     test('runPublishPipeline returns null (continue to PR) when every stage passes', function () {
         var pushes = 0;
         var mod = loadDevelopTicketAndCreatePRWithRealGitHelpers({
+            // gh-1190 rework: only commands the publish pipeline actually issues
+            // (Istanbul showed `git branch --show-current` and the porcelain
+            // status never fire on this path — the two uncovered branches they
+            // carried pushed this anonymous mock to CRAP 8.1, over the
+            // new-function threshold; routing strictly through real commands
+            // keeps it fully covered at CRAP 6).
             cli_execute_command: function (opts) {
                 var command = opts.command;
-                if (command === 'git branch --show-current') return 'ai/PROJ-1';
                 if (command === 'git rev-parse origin/main') return 'base-sha';
                 if (command === 'git merge-base origin/main HEAD') return 'base-sha';
-                if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
                 if (command === 'git diff --cached --stat') return '1 file changed';
                 if (command === 'git ls-remote --heads origin ai/PROJ-1') {
                     return '0123456789abcdef0123456789abcdef01234567\trefs/heads/ai/PROJ-1\n';
