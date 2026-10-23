@@ -674,3 +674,110 @@ suite('createRepoTasks — extracted helpers', function() {
         mod.postSummaryComment(t2, 'PROJ-100', 'body');
     });
 });
+
+// ---------------------------------------------------------------------------
+// action-phase helpers (gh-1197)
+// ---------------------------------------------------------------------------
+
+suite('createRepoTasks — action-phase helpers', function() {
+
+    test('extractSaKey reads the ticket key and reports a sentinel error without one', function() {
+        var mod = makeModule();
+        assert.deepEqual(mod.extractSaKey({ ticket: { key: 'PROJ-100' } }), { saKey: 'PROJ-100' }, 'key extracted');
+        assert.deepEqual(mod.extractSaKey({ ticket: {} }), { error: 'No ticket key in params' }, 'missing key');
+        assert.deepEqual(mod.extractSaKey({}), { error: 'No ticket key in params' }, 'missing ticket');
+        assert.deepEqual(mod.extractSaKey({ ticket: { key: '' } }), { error: 'No ticket key in params' }, 'empty key');
+    });
+
+    test('resolveTaskOptions defaults relationship/status/labels and honours customParams at both levels', function() {
+        var mod = makeModule();
+        var defaults = mod.resolveTaskOptions({});
+        assert.deepEqual(
+            [defaults.blocksRelationship, defaults.blockedStatus, defaults.ticketLabels],
+            ['Blocks', 'Blocked', ['development']],
+            'defaults'
+        );
+        var top = mod.resolveTaskOptions({ customParams: { blocksRelationship: 'Depends', blockedStatus: 'Hold', labels: ['x'] } });
+        assert.deepEqual(
+            [top.blocksRelationship, top.blockedStatus, top.ticketLabels],
+            ['Depends', 'Hold', ['x']],
+            'top-level customParams win'
+        );
+        var nested = mod.resolveTaskOptions({ jobParams: { customParams: { blocksRelationship: 'rel', labels: ['y'] } } });
+        assert.deepEqual(
+            [nested.blocksRelationship, nested.blockedStatus, nested.ticketLabels],
+            ['rel', 'Blocked', ['y']],
+            'jobParams-nested customParams are read, per-key defaults fill the gaps'
+        );
+        assert.equal(nested.customParams, nested.customParams && nested.customParams, 'customParams carried for createTracker');
+    });
+
+    test('resolveSaTicketContext reads description and parent from fields (or the bare ticket)', function() {
+        var mod = makeModule();
+        var t = fakeTracker();
+        var ctx = mod.resolveSaTicketContext({ getIssue: function() { return { fields: { description: 'desc text', parent: { key: 'PROJ-50' } } }; } }, 'PROJ-100');
+        assert.equal(ctx.description, 'desc text', 'description read from fields');
+        assert.equal(ctx.parentKey, 'PROJ-50', 'parent key read from fields');
+
+        var bare = mod.resolveSaTicketContext({ getIssue: function() { return { description: 42, parent: 'PLAIN-1' }; } }, 'PROJ-100');
+        assert.equal(bare.description, '42', 'non-string description is stringified');
+        assert.equal(bare.parentKey, 'PLAIN-1', 'plain-string parent yields its value');
+
+        var none = mod.resolveSaTicketContext({ getIssue: function() { return { fields: { parent: null }; } }, 'PROJ-100');
+        assert.equal(none.description, '', 'missing description yields empty string');
+        assert.equal(none.parentKey, null, 'null parent yields null key');
+
+        var objectParent = mod.resolveSaTicketContext({ getIssue: function() { return { fields: { parent: { key: 'K-9' }; } }, 'PROJ-100');
+        assert.equal(objectParent.parentKey, 'K-9', 'object parent yields key');
+
+        var noKeyParent = mod.resolveSaTicketContext({ getIssue: function() { return { fields: { parent: {} } } }; }, 'PROJ-100');
+        assert.equal(noKeyParent.parentKey, null, 'object parent without key yields null');
+    });
+
+    test('resolveParentSummary prefers the parent summary and falls back to the key', function() {
+        var mod = makeModule();
+        assert.equal(
+            mod.resolveParentSummary({ getIssue: function() { return { fields: { summary: 'Story' } } } }, 'PROJ-50'),
+            'Story', 'summary from fields'
+        );
+        assert.equal(
+            mod.resolveParentSummary({ getIssue: function() { return { summary: 'Bare' } } }, 'PROJ-50'),
+            'Bare', 'summary from a bare ticket object'
+        );
+        assert.equal(
+            mod.resolveParentSummary({ getIssue: function() { return { fields: {} } } }, 'PROJ-50'),
+            'PROJ-50', 'missing summary falls back to the parent key'
+        );
+    });
+
+    test('requireAffectedRepos separates the repos payload from the no-repos error', function() {
+        var mod = makeModule();
+        var ok = mod.requireAffectedRepos('prefix {code:json|title=affected_repos}\n["repo-a"]\n{code}', 'PROJ-100');
+        assert.deepEqual(ok.repos, ['repo-a'], 'repos parsed');
+        assert.equal(ok.error, undefined, 'no error on success');
+        var bad = mod.requireAffectedRepos('no repos here', 'PROJ-100');
+        assert.equal(bad.repos, undefined, 'no repos on failure');
+        assert.equal(bad.error, 'No affected repos found in PROJ-100 — ensure writeSolutionAndLabels ran first', 'error message preserved');
+    });
+
+    test('repoNamesCsv handles string and object entries in one list', function() {
+        var mod = makeModule();
+        assert.equal(mod.repoNamesCsv(['a', { name: 'b' }, 'c']), 'a, b, c', 'mixed entry shapes');
+        assert.equal(mod.repoNamesCsv([]), '', 'empty list');
+    });
+
+    test('postOutcomeSummaryComment posts only when something was created or skipped', function() {
+        var mod = makeModule();
+        var t1 = fakeTracker();
+        mod.postOutcomeSummaryComment(t1, 'PROJ-100', 'https://jira.example.com', { created: [], skipped: [] });
+        assert.equal(t1.calls.comment.length, 0, 'nothing done — no comment');
+
+        var t2 = fakeTracker();
+        mod.postOutcomeSummaryComment(t2, 'PROJ-100', 'https://jira.example.com', {
+            created: [{ repo: 'a', key: 'PROJ-201' }],
+            skipped: ['b']
+        });
+        assert.equal(t2.calls.comment.length, 1, 'comment posted');
+        assert.contains(t2.calls.comment[0].comment, '_Skipped (already exist): b_');
+    });
+});

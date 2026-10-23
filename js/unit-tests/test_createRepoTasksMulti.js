@@ -663,3 +663,93 @@ suite('createRepoTasksMulti — extracted helpers', function() {
         mod.postSummaryComment(t2, 'PROJ-100', 'body');
     });
 });
+
+// ---------------------------------------------------------------------------
+// action-phase helpers (gh-1197)
+// ---------------------------------------------------------------------------
+
+suite('createRepoTasksMulti — action-phase helpers', function() {
+
+    test('extractSaKey reads the ticket key and reports a sentinel error without one', function() {
+        var mod = makeModule();
+        assert.deepEqual(mod.extractSaKey({ ticket: { key: 'PROJ-100' } }), { saKey: 'PROJ-100' }, 'key extracted');
+        assert.deepEqual(mod.extractSaKey({ ticket: {} }), { error: 'No ticket key in params' }, 'missing key');
+        assert.deepEqual(mod.extractSaKey({}), { error: 'No ticket key in params' }, 'missing ticket');
+    });
+
+    test('resolveTaskOptions defaults relationship/status/labels and honours customParams at both levels', function() {
+        var mod = makeModule();
+        var defaults = mod.resolveTaskOptions({});
+        assert.deepEqual(
+            [defaults.blocksRelationship, defaults.blockedStatus, defaults.ticketLabels],
+            ['Blocks', 'Blocked', ['development']],
+            'defaults'
+        );
+        var nested = mod.resolveTaskOptions({ jobParams: { customParams: { blocksRelationship: 'rel', blockedStatus: 'Hold', labels: ['y'] } } });
+        assert.deepEqual(
+            [nested.blocksRelationship, nested.blockedStatus, nested.ticketLabels],
+            ['rel', 'Hold', ['y']],
+            'jobParams-nested customParams are read'
+        );
+    });
+
+    test('resolveSaTicketContext reads description and parent from fields (or the bare ticket)', function() {
+        var mod = makeModule();
+        var ctx = mod.resolveSaTicketContext({ getIssue: function() { return { fields: { description: 'desc', parent: { key: 'PROJ-50' } } }; } }, 'PROJ-100');
+        assert.equal(ctx.description, 'desc', 'description read from fields');
+        assert.equal(ctx.parentKey, 'PROJ-50', 'parent key read from fields');
+
+        var bare = mod.resolveSaTicketContext({ getIssue: function() { return { parent: 'PLAIN-1' }; } }, 'PROJ-100');
+        assert.equal(bare.description, '', 'missing description yields empty string');
+        assert.equal(bare.parentKey, 'PLAIN-1', 'plain-string parent yields its value');
+
+        var none = mod.resolveSaTicketContext({ getIssue: function() { return { fields: { parent: null }; } }, 'PROJ-100');
+        assert.equal(none.parentKey, null, 'null parent yields null key');
+    });
+
+    test('resolveParentSummary prefers the parent summary and falls back to the key', function() {
+        var mod = makeModule();
+        assert.equal(
+            mod.resolveParentSummary({ getIssue: function() { return { fields: { summary: 'Story' } } } }, 'PROJ-50'),
+            'Story', 'summary from fields'
+        );
+        assert.equal(
+            mod.resolveParentSummary({ getIssue: function() { return { fields: {} } } }, 'PROJ-50'),
+            'PROJ-50', 'missing summary falls back to the parent key'
+        );
+    });
+
+    test('requireAffectedRepos separates the repos payload from the no-repos error', function() {
+        var mod = makeModule();
+        var ok = mod.requireAffectedRepos('prefix {code:json|title=affected_repos}\n[{"name":"a"}]\n{code}', 'PROJ-100');
+        assert.deepEqual(ok.repos, [{ name: 'a' }], 'repos parsed');
+        var bad = mod.requireAffectedRepos('no repos here', 'PROJ-100');
+        assert.equal(bad.error, 'No affected repos found in PROJ-100 — ensure writeSolutionAndLabels ran first', 'error message preserved');
+    });
+
+    test('describeTaskPlan summarises the flattened task count across repo names', function() {
+        var mod = makeModule();
+        var repos = [{ name: 'core-db', tasks: [{ id: '1' }, { id: '2' }] }, 'plain-repo'];
+        var tasks = mod.buildTaskPlan(repos);
+        assert.equal(
+            mod.describeTaskPlan(repos, tasks),
+            'Flattened into 3 task(s) across core-db, plain-repo',
+            'plan summary text'
+        );
+    });
+
+    test('postOutcomeSummaryComment posts only when something was created or skipped', function() {
+        var mod = makeModule();
+        var t1 = fakeTracker();
+        mod.postOutcomeSummaryComment(t1, 'PROJ-100', 'https://jira.example.com', { created: [], skipped: [] });
+        assert.equal(t1.calls.comment.length, 0, 'nothing done — no comment');
+
+        var t2 = fakeTracker();
+        mod.postOutcomeSummaryComment(t2, 'PROJ-100', 'https://jira.example.com', {
+            created: [{ repo: 'a', key: 'PROJ-201', summary: '[a] S' }],
+            skipped: ['[b] S']
+        });
+        assert.equal(t2.calls.comment.length, 1, 'comment posted');
+        assert.contains(t2.calls.comment[0].comment, '_Skipped (already exist): [b] S_');
+    });
+});
