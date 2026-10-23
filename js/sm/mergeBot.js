@@ -597,6 +597,188 @@ function squashMerge(owner, repo, number) {
     return { merged: false, error: last };
 }
 
+/**
+ * gh-766 dead-head predicate support (gh-1185 hoist): the once-per-run
+ * red-holder diagnostic, moved out of action() verbatim — the closed-over
+ * list/job/owner/name/say travel in `run` instead. Consulted when an
+ * approved PR is deferred as FIFO-queued: if the ai_validating+pr_approved
+ * holder's validation CONCLUDED RED, say so (diagnostic only — the bot
+ * never acts on it, the SM's fail-validation owns the slot).
+ */
+function slotHolderNumber(hp) {
+    return (hp && (hp.number || hp.prNumber)) || 0;
+}
+
+/**
+ * The merge-window slot holder among the open PRs: armed (ai_validating)
+ * AND approved (mutexAmong parity — a dev-lane arm does not hold the
+ * slot), not the freshly-queued PR itself, with a usable head sha to
+ * probe. One holder possible — the first match wins.
+ */
+function isMergeSlotHolder(hp, hLabels, queuedNumber) {
+    var hNum = slotHolderNumber(hp);
+    if (!hNum || hNum === queuedNumber) return false;
+    if (!hasLabel(hLabels, 'ai_validating')) return false;
+    if (!hasLabel(hLabels, 'pr_approved')) return false;
+    return !!hp.head && !!(hp.head.sha || hp.head);
+}
+
+function findSlotHoldingPr(list, queuedNumber) {
+    for (var h = 0; h < list.length; h++) {
+        var hp = list[h];
+        if (isMergeSlotHolder(hp, labelNames(hp || {}), queuedNumber)) return hp;
+    }
+    return null;
+}
+
+function noteRedSlotHolder(run, queuedNumber) {
+    if (run.redSlotProbed) return;
+    run.redSlotProbed = true;
+    try {
+        var hp = findSlotHoldingPr(run.list, queuedNumber);
+        if (!hp) return;
+        if (checksRollup(String(headShaOf(hp)), hp, run.job, run.owner, run.name) === 'red') {
+            run.say('🚨 pr-' + slotHolderNumber(hp) + ' holds slot with concluded-red validation — fail path should free it');
+        }
+    } catch (eRed) { /* diagnostic only — never fails the run */ }
+}
+
+/**
+ * The advance-past-a-skipped-dead-head turn (gh-766): dead heads skipped
+ * above (blocked / stale-pending) VACATED the head position — the first
+ * approved PR behind them that already carries validation evidence (the
+ * ai_validated latch) takes the turn on the SAME evidence gates as the
+ * armed path: green rollup on the current head + CLEAN. Returns the acted
+ * credit (0 when the candidate keeps deferring); one advance per
+ * skip-chain — consuming the slot resets deadHeadPassed, so FIFO holds
+ * for everyone behind.
+ */
+function advancePastDeadHead(run, pr, labels, headSha) {
+    if (!run.deadHeadPassed || !hasLabel(labels, 'ai_validated')) return 0;
+    run.deadHeadPassed = false;
+    var upRollup = checksRollup(String(headSha), pr, run.job, run.owner, run.name);
+    if (upRollup !== 'green' || mergeStateOf(pr) !== 'CLEAN') return 0;
+    return mergeApprovedHead(run.owner, run.name, pr,
+        '🧲 pr-' + pr.number + ' squash-merged (approved + validated + green + CLEAN — advanced past a skipped dead head)',
+        run.say);
+}
+
+/**
+ * gh-766: the approved-but-unarmed PR is FIFO-queued behind the current
+ * validation (validate-armed mutex, one CI at a time) unless it can take
+ * the vacated-head turn above. The deferral is said aloud — a silent skip
+ * is indistinguishable from a stuck pipeline for the operator (live: fa
+ * 2026-09-25, pr-948/pr-963 sat silent for hours while the queue was
+ * healthy) — and arms the end-of-run self-tick.
+ */
+function deferUnarmedApproved(run, pr, labels, headSha) {
+    var gained = advancePastDeadHead(run, pr, labels, headSha);
+    if (gained) {
+        run.acted += gained;
+        return;
+    }
+    run.say('⏳ pr-' + pr.number + ' approved — FIFO-queued (awaiting validate-armed turn)');
+    run.deferredApproved = true;
+    noteRedSlotHolder(run, pr.number);
+}
+
+/**
+ * The unarmed arm of the FIFO entry (gh-1185 extraction, verbatim): only
+ * an approved PR without the review label defers; everything else
+ * (never-validated, mid-review) stays silent — the SM owns it.
+ */
+function handleUnarmedPr(run, pr, labels, headSha) {
+    var approved = hasLabel(labels, 'pr_approved');
+    if (approved && !hasLabel(labels, 'agent:review')) {
+        deferUnarmedApproved(run, pr, labels, headSha);
+    }
+}
+
+/**
+ * The armed PR's evidence gates (gh-1185 extraction, call order verbatim):
+ * non-green rollups wait or unarm (stale-pending gh-766), non-CLEAN states
+ * unarm (BEHIND/DIRTY) or wait (BLOCKED gh-1101), and a green CLEAN head
+ * merges when approved or latches ai_validated for the review leg.
+ */
+function handleArmedPr(run, pr, approved, headSha) {
+    var detail = rollupDetail(String(headSha), pr, run.job, run.owner, run.name);
+    var rollup = detail.state;
+    if (rollup !== 'green') {
+        if (isStalePending(rollup, approved, detail.pendingSince, run.staleHeadMinutes, Date.now())) {
+            // gh-766 dead head: the armed validation has been motionless
+            // past the threshold and will never conclude. Unarm — it
+            // frees the SM's validate-armed mutex so the next approved
+            // PR gets its turn (same remedy shape as the BEHIND/DIRTY
+            // unarm below) — and let the queue advance. Unapproved
+            // (dev-lane) arms don't hold the merge window (mutexAmong
+            // parity) and keep waiting untouched: re-dispatching a
+            // slow-CI dev lane every 2h would only lose its queue spot.
+            run.acted += unarmStaleHead(run.owner, run.name, pr, detail.pendingSince, run.staleHeadMinutes, run.say);
+            run.skippedHeads++;
+            run.deadHeadPassed = true;
+            return;
+        }
+        run.say('⏳ pr-' + pr.number + ' checks=' + rollup + ' — waiting');
+        return;
+    }
+    var ms = mergeStateOf(pr);
+    if (ms !== 'CLEAN') {
+        if (shouldUnarmStaleHead(ms, approved)) {
+            run.acted += unarmStaleHeadState(run.owner, run.name, pr, ms, run.say);
+        } else {
+            run.say(blockedWaitLine(pr.number, ms, approved));
+        }
+        return;
+    }
+
+    if (approved) {
+        run.acted += mergeApprovedHead(run.owner, run.name, pr,
+            '🧲 pr-' + pr.number + ' squash-merged (approved + green + CLEAN)', run.say);
+    } else {
+        // Green head, no approval yet: latch for the review leg.
+        if (latchValidated(run.owner, run.name, pr, run.say)) run.acted++;
+    }
+}
+
+/**
+ * Silent-skip chain of the FIFO loop (gh-1185 extraction, verbatim): a
+ * stale list entry (not live-open, draft, no head sha) vanishes quietly;
+ * a blocked PR skips WITH an explicit line (gh-766: the old bare
+ * `continue` made a blocked head invisible to the run log and a poison
+ * pill for everyone queued behind it) and VACATES the head position.
+ * Returns true when the entry must not be processed further.
+ */
+function skipFifoEntry(run, pr, labels, headSha) {
+    if (!isLiveOpenPr(pr)) return true;
+    if (pr.draft) return true;
+    if (!headSha) return true;
+    if (hasLabel(labels, 'blocked')) {
+        run.say('⏭️ pr-' + pr.number + ' skipped: blocked');
+        run.skippedHeads++;
+        run.deadHeadPassed = true;
+        return true;
+    }
+    return false;
+}
+
+/**
+ * One FIFO entry through the bot's stage decisions (gh-1185 extraction):
+ * the unarmed arm defers to the SM, the armed arm runs the evidence
+ * gates. An armed PR is a LIVE head by default: it owns the FIFO position
+ * and nobody advances past it — unless the stale-pending check below
+ * declares it dead (gh-766).
+ */
+function processFifoEntry(run, pr, labels, headSha) {
+    var validating = hasLabel(labels, 'ai_validating');
+    if (!validating || hasLabel(labels, 'agent:review')) {
+        handleUnarmedPr(run, pr, labels, headSha);
+        return; // mid-review: SM owns it
+    }
+    run.deadHeadPassed = false;
+    if (pr.mergeable === false) return; // conflicts: conflict-rework (SM) owns it
+    handleArmedPr(run, pr, hasLabel(labels, 'pr_approved'), headSha);
+}
+
 function action(params) {
     var job = (params && params.jobParams) || {};
     var target = resolveRepoTarget(job);
@@ -607,19 +789,28 @@ function action(params) {
 
     var prs = parseMcp(github_list_prs({ workspace: owner, repository: name, state: 'open' }));
     var list = listArray(prs);
-    var acted = 0;
-    var deferredApproved = false;
-    // gh-766 dead-head skip: the FIFO head position is checked for liveness
-    // every tick. An owner-'blocked' PR, or an armed APPROVED PR whose
-    // checks have been motionless past staleHeadMinutes (default 120 = 2h),
-    // is skipped WITH AN EXPLICIT LOG LINE and the queue advances past it
-    // to the first live (validated + green + CLEAN) approved PR. A silent
-    // vanish here starved the whole queue behind the head — acted: 0 for
-    // over an hour while 4 approved+validated PRs waited (live fa
-    // 2026-10-06: pr-1231 checks=pending over pr-1309/1311/1313/1317).
-    var staleHeadMinutes = staleHeadMinutesOr(job);
-    var skippedHeads = 0;
-    var deadHeadPassed = false;
+    var run = {
+        job: job,
+        owner: owner,
+        name: name,
+        say: say,
+        list: list,
+        acted: 0,
+        skippedHeads: 0,
+        // gh-766 dead-head skip: the FIFO head position is checked for
+        // liveness every tick. An owner-'blocked' PR, or an armed APPROVED
+        // PR whose checks have been motionless past staleHeadMinutes
+        // (default 120 = 2h), is skipped WITH AN EXPLICIT LOG LINE and the
+        // queue advances past it to the first live (validated + green +
+        // CLEAN) approved PR. A silent vanish here starved the whole queue
+        // behind the head — acted: 0 for over an hour while 4
+        // approved+validated PRs waited (live fa 2026-10-06: pr-1231
+        // checks=pending over pr-1309/1311/1313/1317).
+        staleHeadMinutes: staleHeadMinutesOr(job),
+        deadHeadPassed: false,
+        deferredApproved: false,
+        redSlotProbed: false
+    };
     // gh-952 slot release: the holder the open list can no longer see. An
     // externally-merged (owner bypass) armed PR is invisible to the scan
     // below — labels outlive the merge, the PR does not — so the FIFO
@@ -631,41 +822,9 @@ function action(params) {
     // evidence; the SM still owns arming the fresh head).
     var releasedHolder = findReleasedSlotHolder(list, owner, name);
     if (releasedHolder) {
-        deadHeadPassed = true;
+        run.deadHeadPassed = true;
         say('🔓 pr-' + releasedHolder.number + ' held the merge-window slot but is MERGED — ' +
             'slot released (the armed stamps belonged to a merged PR, gh-952)');
-    }
-
-    // Owner directive 2026-10-04 ("red yields the slot") — diagnostic only:
-    // once per run, when the first approved PR is deferred as FIFO-queued,
-    // probe whether the ai_validating holder's validation has CONCLUDED RED
-    // (an in-flight run reads 'pending' and stays silent). A red holder
-    // means the SM's fail-validation should have freed the slot — the line
-    // makes the starvation visible in the bot log (live fa 11:0x: #1194
-    // held a concluded-red arm while #1215..#1223 queued 40+ min). The bot
-    // itself NEVER acts on it (no unarm, no dispatch — SM-owned).
-    var redSlotProbed = false;
-    function noteRedSlotHolder(queuedNumber) {
-        if (redSlotProbed) return;
-        redSlotProbed = true;
-        try {
-            for (var h = 0; h < list.length; h++) {
-                var hp = list[h];
-                var hNum = (hp && (hp.number || hp.prNumber)) || 0;
-                var hLabels = labelNames(hp || {});
-                if (!hNum || hNum === queuedNumber) continue;
-                if (hLabels.indexOf('ai_validating') === -1) continue;
-                // mutexAmong parity: only APPROVED arms serialize this
-                // queue — a dev-lane arm does not hold the merge-window slot.
-                if (hLabels.indexOf('pr_approved') === -1) continue;
-                var hHead = hp.head && (hp.head.sha || hp.head);
-                if (!hHead) continue;
-                if (checksRollup(String(hHead), hp, job, owner, name) === 'red') {
-                    say('🚨 pr-' + hNum + ' holds slot with concluded-red validation — fail path should free it');
-                }
-                return; // one holder possible — probed, said or not
-            }
-        } catch (eRed) { /* diagnostic only — never fails the run */ }
     }
 
     // Oldest first — FIFO, same fairness as the SM's merge rule (#687).
@@ -675,118 +834,20 @@ function action(params) {
         var pr = parseMcp(github_get_pr({
             workspace: owner, repository: name, pullRequestId: list[i].number
         }));
-        if (!isLiveOpenPr(pr)) continue;
-        if (pr.draft) continue;
         var labels = labelNames(pr);
         var headSha = headShaOf(pr);
-        if (!headSha) continue;
-        if (hasLabel(labels, 'blocked')) {
-            // gh-766: owner-parked (#939 semantics unchanged — the bot still
-            // never acts on a blocked PR), but the skip is now EXPLICIT and
-            // the head position is dead: the queue may advance past it. The
-            // old bare `continue` made a blocked head invisible to the run
-            // log and a poison pill for everyone queued behind it.
-            say('⏭️ pr-' + pr.number + ' skipped: blocked');
-            skippedHeads++;
-            deadHeadPassed = true;
-            continue;
-        }
-
-        var approved = hasLabel(labels, 'pr_approved');
-        var validating = hasLabel(labels, 'ai_validating');
-        if (!validating || hasLabel(labels, 'agent:review')) {
-            // Approved-but-unarmed PRs are FIFO-queued behind the current
-            // validation (validate-armed mutex, one CI at a time). Say so —
-            // a silent skip is indistinguishable from a stuck pipeline for
-            // the operator (live: fa 2026-09-25, pr-948/pr-963 sat silent
-            // for hours while the queue was healthy).
-            //
-            // gh-766: dead heads skipped above (blocked / stale-pending)
-            // VACATED the head position — the first approved PR behind them
-            // that already carries validation evidence (the ai_validated
-            // latch) takes the turn on the SAME evidence gates as the armed
-            // path: green rollup on the current head + CLEAN. One advance
-            // per skip-chain — the first candidate consumes it, so FIFO
-            // holds for everyone behind; never-validated, mid-review,
-            // draft, conflicted and not-ready candidates keep deferring.
-            if (approved && !hasLabel(labels, 'agent:review')) {
-                var advanced = false;
-                if (deadHeadPassed && hasLabel(labels, 'ai_validated')) {
-                    // consumed by the first live candidate — one advance
-                    // per skip-chain, so FIFO holds for everyone behind.
-                    deadHeadPassed = false;
-                    var upRollup = checksRollup(String(headSha), pr, job, owner, name);
-                    if (upRollup === 'green' && mergeStateOf(pr) === 'CLEAN') {
-                        var gained = mergeApprovedHead(owner, name, pr,
-                            '🧲 pr-' + pr.number + ' squash-merged (approved + validated + green + CLEAN — advanced past a skipped dead head)',
-                            say);
-                        if (gained) {
-                            acted += gained;
-                            advanced = true;
-                        }
-                    }
-                }
-                if (!advanced) {
-                    say('⏳ pr-' + pr.number + ' approved — FIFO-queued (awaiting validate-armed turn)');
-                    deferredApproved = true;
-                    noteRedSlotHolder(pr.number);
-                }
-            }
-            continue; // mid-review: SM owns it
-        }
-        // An armed PR is a LIVE head by default: it owns the FIFO position
-        // and nobody advances past it — unless the stale-pending check
-        // below declares it dead (gh-766).
-        deadHeadPassed = false;
-        if (pr.mergeable === false) continue; // conflicts: conflict-rework (SM) owns it
-
-        var detail = rollupDetail(String(headSha), pr, job, owner, name);
-        var rollup = detail.state;
-        if (rollup !== 'green') {
-            if (isStalePending(rollup, approved, detail.pendingSince, staleHeadMinutes, Date.now())) {
-                // gh-766 dead head: the armed validation has been motionless
-                // past the threshold and will never conclude. Unarm — it
-                // frees the SM's validate-armed mutex so the next approved
-                // PR gets its turn (same remedy shape as the BEHIND/DIRTY
-                // unarm below) — and let the queue advance. Unapproved
-                // (dev-lane) arms don't hold the merge window (mutexAmong
-                // parity) and keep waiting untouched: re-dispatching a
-                // slow-CI dev lane every 2h would only lose its queue spot.
-                acted += unarmStaleHead(owner, name, pr, detail.pendingSince, staleHeadMinutes, say);
-                skippedHeads++;
-                deadHeadPassed = true;
-                continue;
-            }
-            say('⏳ pr-' + pr.number + ' checks=' + rollup + ' — waiting');
-            continue;
-        }
-        var ms = mergeStateOf(pr);
-        if (ms !== 'CLEAN') {
-            if (shouldUnarmStaleHead(ms, approved)) {
-                acted += unarmStaleHeadState(owner, name, pr, ms, say);
-            } else {
-                say(blockedWaitLine(pr.number, ms, approved));
-            }
-            continue;
-        }
-
-        if (approved) {
-            acted += mergeApprovedHead(owner, name, pr,
-                '🧲 pr-' + pr.number + ' squash-merged (approved + green + CLEAN)', say);
-        } else {
-            // Green head, no approval yet: latch for the review leg.
-            if (latchValidated(owner, name, pr, say)) acted++;
-        }
+        if (skipFifoEntry(run, pr, labels, headSha)) continue;
+        processFifoEntry(run, pr, labels, headSha);
     }
 
     // END-OF-RUN SELF-TICK — extracted verbatim into selfTickToSm()
     // (gh-952: the merged-slot-holder release joined action()'s loop and
     // the CRAP ratchet forbids growing action; the self-tick block moved
     // to the helper above, behavior unchanged).
-    selfTickToSm(owner, name, job, deferredApproved, acted, say);
+    selfTickToSm(owner, name, job, run.deferredApproved, run.acted, say);
 
-    say('mergeBot complete — acted: ' + acted + ', heads skipped: ' + skippedHeads);
-    return { success: true, acted: acted, skipped: skippedHeads, log: log };
+    say('mergeBot complete — acted: ' + run.acted + ', heads skipped: ' + run.skippedHeads);
+    return { success: true, acted: run.acted, skipped: run.skippedHeads, log: log };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
