@@ -285,6 +285,73 @@ suite('guestValidationPath: dead-zone scan shape (gh-113 AC3)', function () {
         assert.equal(mod.blockedGuestEntry(item(8, undefined), pr('CLEAN', 'none'), isGuest), null,
             'no labels at all — unapproved and unarmed');
     });
+
+    test('isArmedGuestItem pre-filters machine and unlabelled guest PRs before prStatus (gh-1181)', function () {
+        var mixed = [
+            { item: item(101, ['pr_approved', 'ai_validating'], 'ai-teammate'), isGuest: false, status: pr('CLEAN', 'pending') },
+            { item: item(102, ['agent:review'], 'yury-by'), isGuest: true, status: pr('CLEAN', 'pending') },
+            { item: item(103, [], 'yury-by'), isGuest: true, status: pr('CLEAN', 'none') },
+            { item: item(104, ['pr_approved'], 'yury-by'), isGuest: true, status: pr('CLEAN', 'pending') },
+            { item: item(105, ['ai_validating'], 'yury-by'), isGuest: true, status: pr('CLEAN', 'green') }
+        ];
+        var probedPrNumbers = [];
+        var filteredBlocked = [];
+        var unfilteredBlocked = [];
+
+        for (var i = 0; i < mixed.length; i++) {
+            var m = mixed[i];
+            var unfilt = mod.blockedGuestEntry(m.item, m.status, m.isGuest);
+            if (unfilt) unfilteredBlocked.push(unfilt);
+
+            if (mod.isArmedGuestItem(m.item, m.isGuest)) {
+                probedPrNumbers.push(m.item.prNumber);
+                var filt = mod.blockedGuestEntry(m.item, m.status, m.isGuest);
+                if (filt) filteredBlocked.push(filt);
+            }
+        }
+
+        assert.deepEqual(probedPrNumbers, [104, 105],
+            'prStatus is called ONLY for guest-armed PRs (pr_approved or ai_validating)');
+        assert.deepEqual(filteredBlocked, unfilteredBlocked,
+            'guest_prs_blocked_no_validation_path gives identical results before and after pre-filtering');
+        assert.equal(filteredBlocked.length, 1);
+        assert.equal(filteredBlocked[0].prNumber, 104);
+    });
+
+    test('scanRepoGuestDeadZone calls prStatus only for armed guest PRs and tolerates degraded inputs (gh-1181)', function () {
+        var probed = [];
+        var blocked = [];
+        var provider = {
+            listOpenPrs: function () {
+                return [
+                    null,
+                    { number: 201, labels: [{ name: 'pr_approved' }], user: { login: 'ai-teammate' } },
+                    { number: 202, labels: ['agent:review'], author: 'yury-by' },
+                    { prNumber: 203, labels: [{ name: 'pr_approved' }], user: { login: 'yury-by' } },
+                    { number: 204, labels: [{ name: 'ai_validating' }], user: { login: 'yury-by' } },
+                    { number: 205 }
+                ];
+            },
+            prStatus: function (n) {
+                probed.push(n);
+                if (n === 204) throw new Error('rate limit');
+                return pr('CLEAN', 'pending');
+            }
+        };
+        var stats = mod.scanRepoGuestDeadZone(provider, { owner: 'isti', repo: 'harness' }, 'ai-teammate', blocked);
+        assert.equal(stats.totalOpen, 6);
+        assert.equal(stats.probedCount, 2);
+        assert.deepEqual(probed, [203, 204], 'prStatus called only for the 2 armed guest PRs');
+        assert.equal(blocked.length, 1);
+        assert.equal(blocked[0].prNumber, 203);
+
+        // Also tolerate non-array listOpenPrs return
+        var emptyStats = mod.scanRepoGuestDeadZone(
+            { listOpenPrs: function () { return null; }, prStatus: function () { return null; } },
+            { owner: 'isti', repo: 'harness' }, 'ai-teammate', []);
+        assert.equal(emptyStats.totalOpen, 0);
+        assert.equal(emptyStats.probedCount, 0);
+    });
 });
 
 suite('guestValidationPath: cross-tick carry (gh-113 AC3)', function () {

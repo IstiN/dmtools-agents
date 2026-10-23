@@ -17298,4 +17298,80 @@ suite('smAgent: guest validation path (gh-113)', function () {
         assert.equal(res.guestPrsBlocked, 0,
             'machine PRs have the auto path; green heads have merge-validated');
     });
+
+    test('gh-1181: dead-zone scan skips prStatus for machine PRs and guest PRs without armed labels, and logs progress', function () {
+        var sm = makeSmAgent(Object.assign(config('isti', 'harness'), {
+            captureConsole: true,
+            github: {
+                items: [],
+                prList: [
+                    { number: 1001, state: 'open', labels: [{ name: 'pr_approved' }], user: { login: 'ai-teammate' }, draft: false },
+                    { number: 1002, state: 'open', labels: [{ name: 'agent:review' }], user: { login: 'yury-by' }, draft: false },
+                    { number: 1003, state: 'open', labels: [], user: { login: 'yury-by' }, draft: false },
+                    { number: 1004, state: 'open', labels: [{ name: 'pr_approved' }], user: { login: 'yury-by' }, draft: false }
+                ],
+                prStatus: { state: 'OPEN', checkConclusion: 'pending', mergeState: 'CLEAN',
+                            mergeable: true, headSha: 'abc123def' }
+            }
+        }));
+        var res = sm.action({ jobParams: { owner: 'isti', repo: 'harness',
+            machineAuthor: 'ai-teammate', rules: [PARK_RESET] } });
+
+        assert.equal(res.guestPrsBlocked, 1, 'only the armed guest PR is blocked');
+        var logs = sm.capturedLogs.join('\n');
+        assert.ok(logs.indexOf('dead-zone scan (isti/harness): 4 open PR(s), 1 prStatus probe(s) in ') !== -1,
+            'scan logs open PR count, prStatus probe count (1 of 4), and duration');
+    });
+});
+
+suite('smAgent: global workflowRef resolution (epam/dm.ai#765)', function () {
+
+    test('dispatches workflow on config.git.baseBranch (e.g. master) when rule.workflowRef is omitted', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" }, git: { baseBranch: "master" } };' },
+            tickets: [{ key: 'T-10', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule('project = {jiraProject}', { configFile: 'agents/story_description.json' })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        assert.equal(sm.capturedTriggers[0].ref, 'master',
+            'omitted rule.workflowRef must fall back to config.git.baseBranch instead of hardcoded main');
+    });
+
+    test('config.workflowRef and config.sm.workflowRef take precedence over config.git.baseBranch', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" }, workflowRef: "ci-ref", git: { baseBranch: "master" } };' },
+            tickets: [{ key: 'T-11', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule('project = {jiraProject}', { configFile: 'agents/story_description.json' })
+        ]));
+
+        assert.equal(sm.capturedTriggers[0].ref, 'ci-ref');
+    });
+
+    test('workflowRef {branch} falls back to config.git.baseBranch when item has no branch', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" }, git: { baseBranch: "master" } };' },
+            github: { items: [{ key: 'pr-44', labels: ['pr_approved'], issueNumber: null,
+                                prNumber: 44, draft: false }] }
+        });
+
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [
+            makeRule('project = X', { source: 'github', id: 'review-after-dev-test',
+              query: { type: 'pr', labels: ['pr_approved'], draft: false },
+              inputs: { pr: '{prNumber}', leg: 'review' },
+              workflowRef: '{branch}' })
+        ] } });
+
+        assert.equal(sm.capturedTriggers[0].ref, 'master',
+            'empty {branch} expansion must fall back to configured baseBranch');
+    });
 });

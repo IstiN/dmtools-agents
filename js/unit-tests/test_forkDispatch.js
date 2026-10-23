@@ -96,6 +96,13 @@ suite('forkDispatch (gh-1075)', function () {
         test('an expanded empty ref (no branch to expand) passes through — the caller falls back to main', function () {
             assert.deepEqual(mod.dispatchPlan('', forkItem(), BASE_OWNER, BASE_REPO),
                 { ref: '', checkoutRef: null });
+            assert.deepEqual(mod.dispatchPlan(null, forkItem(), BASE_OWNER, BASE_REPO),
+                { ref: '', checkoutRef: null });
+        });
+
+        test('a custom baseMachineRef (e.g. master) is used when rerouting a fork PR (epam/dm.ai#765)', function () {
+            assert.deepEqual(mod.dispatchPlan(BRANCH, forkItem(), BASE_OWNER, BASE_REPO, 'master'),
+                { ref: 'master', checkoutRef: 'refs/pull/1591/head' });
         });
     });
 

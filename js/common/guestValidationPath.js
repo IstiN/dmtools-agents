@@ -219,6 +219,21 @@ function _knownGuestItem(item, isGuest) {
     return (item.labels || []);
 }
 
+/**
+ * Cheap pre-filter before calling prStatus in the dead-zone scan (gh-1181):
+ * returns the normalized labels array iff the item is a known guest PR
+ * carrying pr_approved or ai_validating, else null.
+ */
+function _armedGuestLabels(item, isGuest) {
+    var labels = _knownGuestItem(item, isGuest);
+    if (!labels || !_armedLabels(labels)) return null;
+    return labels;
+}
+
+function isArmedGuestItem(item, isGuest) {
+    return !!_armedGuestLabels(item, isGuest);
+}
+
 // A verdict-less CLEAN head (the dead-zone rollup: none | pending) — or
 // null. A failed/absent status probe (pr === null) is NEVER counted
 // (fail closed).
@@ -242,8 +257,8 @@ function _deadZoneRollup(pr) {
  * @returns {Object|null} {prNumber, labels, checkConclusion, mergeState}
  */
 function blockedGuestEntry(item, pr, isGuest) {
-    var labels = _knownGuestItem(item, isGuest);
-    if (!labels || !_armedLabels(labels) || !_deadZoneRollup(pr)) return null;
+    var labels = _armedGuestLabels(item, isGuest);
+    if (!labels || !_deadZoneRollup(pr)) return null;
     return {
         prNumber: item.prNumber,
         labels: labels,
@@ -289,13 +304,75 @@ function mergeDeadZoneCary(prev, current) {
     return cary;
 }
 
+function _rawPrLabelName(l) {
+    return (l && l.name) || l;
+}
+
+function _rawPrNumber(p) {
+    return p.number || p.prNumber;
+}
+
+function _rawPrLabels(p) {
+    return (p.labels || []).map(_rawPrLabelName);
+}
+
+function _rawPrAuthor(p) {
+    var user = p.user;
+    return (user && user.login) || p.author || '';
+}
+
+function _rawPrItem(p) {
+    if (!p) return { prNumber: undefined, labels: [], author: '' };
+    return {
+        prNumber: _rawPrNumber(p),
+        labels: _rawPrLabels(p),
+        author: _rawPrAuthor(p)
+    };
+}
+
+function _probePrStatusSafe(provider, prNumber) {
+    try { return provider.prStatus(prNumber); } catch (e) { return null; }
+}
+
+function _asOpenPrArray(dzPrs) {
+    return Array.isArray(dzPrs) ? dzPrs : [];
+}
+
+/**
+ * Scan one repository's open PR list for guest PRs stuck in the validation
+ * dead zone (gh-113 AC3, gh-1181 pre-filter). Pre-filters by machine
+ * authorship and armed labels BEFORE calling provider.prStatus(prNumber).
+ *
+ * @param {Object} provider     smProvider instance ({listOpenPrs, prStatus})
+ * @param {Object} repoInfo     {owner, repo}
+ * @param {string} machineAuthor deployment machineAuthor setting
+ * @param {Array}  blockedOut   accumulator array for blocked guest entries
+ * @returns {Object} {totalOpen, probedCount}
+ */
+function scanRepoGuestDeadZone(provider, repoInfo, machineAuthor, blockedOut) {
+    var dzList = _asOpenPrArray(provider.listOpenPrs());
+    var probedCount = 0;
+    for (var i = 0; i < dzList.length; i++) {
+        var item = _rawPrItem(dzList[i]);
+        var isGuest = !machineAuthorModule.isMachineAuthored(item, machineAuthor, repoInfo.owner);
+        if (!isArmedGuestItem(item, isGuest)) continue;
+        probedCount++;
+        var entry = blockedGuestEntry(
+            item, _probePrStatusSafe(provider, item.prNumber), isGuest);
+        if (entry) blockedOut.push(entry);
+    }
+    return { totalOpen: dzList.length, probedCount: probedCount };
+}
+
 module.exports = {
     realCheckTally: realCheckTally,
     mergeableZeroFailing: mergeableZeroFailing,
     recoverableZeroRed: recoverableZeroRed,
     newestArmEvent: newestArmEvent,
     isManualArm: isManualArm,
+    isArmedGuestItem: isArmedGuestItem,
     blockedGuestEntry: blockedGuestEntry,
+    scanRepoGuestDeadZone: scanRepoGuestDeadZone,
     mergeDeadZoneCary: mergeDeadZoneCary,
     DEFAULT_BOOKEEPING_PREFIXES: DEFAULT_BOOKEEPING_PREFIXES
 };

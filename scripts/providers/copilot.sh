@@ -41,7 +41,7 @@ run_copilot() {
   fi
 
   local copilot_default_model copilot_model_value script_dir
-  copilot_default_model="${COPILOT_DEFAULT_MODEL:-gpt-5-mini}"
+  copilot_default_model="${COPILOT_DEFAULT_MODEL:-gpt-5.3-codex}"
   copilot_model_value="${COPILOT_MODEL:-$copilot_default_model}"
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   if [ "${COPILOT_SESSION_ENABLED:-true}" != "false" ] && [ -f "${script_dir}/../../setup/copilot-session.sh" ]; then

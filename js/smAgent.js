@@ -724,13 +724,15 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
     // workflowRef may reference the matched item: '{branch}' dispatches the
     // leg ON the PR head so GitHub links the run to the PR (checks + PR
     // timeline) — e.g. review/rework legs become pr-visible runs. An empty
-    // expansion (no linked PR / no head) falls back to 'main'.
-    var workflowRef  = rule.workflowRef  || 'main';
+    // expansion (no linked PR / no head) falls back to the project's default
+    // workflowRef (config.workflowRef || config.sm.workflowRef || config.git.baseBranch || 'main').
+    var defaultWorkflowRef = configLoader.resolveDefaultWorkflowRef(rule, effectiveConfig, projectConfig);
+    var workflowRef  = rule.workflowRef  || defaultWorkflowRef;
     var it0 = item || {};
     workflowRef = String(workflowRef)
         .replace(/\{branch\}/g, String(it0.branch || ''))
         .replace(/\{prNumber\}/g, String(it0.prNumber || ''));
-    if (!workflowRef) workflowRef = 'main';
+    if (!workflowRef) workflowRef = defaultWorkflowRef;
     // gh-1075 AC1 (fork PR dispatch): a HEAD-TARGETED dispatch for a
     // CROSS-REPO PR reroutes onto the base repo's standard machine ref —
     // the fork branch never exists in the base repo, so ref:<branch>
@@ -743,7 +745,7 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
     // branch-leg guard below keeps its exact pre-gh-1075 semantics.
     var headRefDispatch = !!(it0.branch && workflowRef === String(it0.branch));
     var forkPlan = forkDispatchModule.dispatchPlan(workflowRef, it0,
-        repoInfo.owner, repoInfo.repo);
+        repoInfo.owner, repoInfo.repo, defaultWorkflowRef);
     workflowRef = forkPlan.ref;
     var resolvedCf   = buildEncodedConfigModule.resolveConfigFile(rule, effectiveConfig);
     var concurrencyKey = rule.concurrencyKey || ticketKey;
@@ -923,7 +925,8 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
         // durable record: WHICH candidate failed, WHY, and when the
         // retries must stop (the dead-head park).
         var failClass = triggerFailuresModule.classifyTriggerError(e && e.message);
-        console.warn('  ⚠️  Workflow trigger failed for ' + ticketKey + ' (' + failClass + '): ' + (e.message || e));
+        console.warn('  ⚠️  Workflow trigger failed for ' + ticketKey + ' (' + failClass +
+            ', ref=' + workflowRef + '): ' + (e.message || e));
         recordDispatchFailure(repoInfo, ticketKey, item, e, workflowRef, failClass);
         return false;
     }
@@ -9258,28 +9261,16 @@ function scanGuestDeadZoneTick(machineAuthor) {
     Object.keys(tickReposSeen).forEach(function (repoKey) {
         var dzRepoInfo = tickReposSeen[repoKey];
         if (!dzRepoInfo || !dzRepoInfo.owner || !dzRepoInfo.repo) return;
+        var t0 = Date.now();
         try {
             var dzProvider = smProviderModule.createSmProvider({
                 scm: { provider: 'github' },
                 repository: dzRepoInfo
             });
-            var dzPrs = dzProvider.listOpenPrs() || [];
-            var dzList = Array.isArray(dzPrs) ? dzPrs : [];
-            dzList.forEach(function (p) {
-                var item = {
-                    prNumber: p && (p.number || p.prNumber),
-                    labels: ((p && p.labels) || []).map(function (l) {
-                        return (l && l.name) || l;
-                    }),
-                    author: (p && ((p.user && p.user.login) || p.author)) || ''
-                };
-                var prStatus = null;
-                try { prStatus = dzProvider.prStatus(item.prNumber); } catch (eDzPr) { prStatus = null; }
-                var isGuest = !machineAuthorModule.isMachineAuthored(
-                    item, machineAuthor, dzRepoInfo.owner);
-                var entry = guestValidationPathModule.blockedGuestEntry(item, prStatus, isGuest);
-                if (entry) blocked.push(entry);
-            });
+            var stats = guestValidationPathModule.scanRepoGuestDeadZone(
+                dzProvider, dzRepoInfo, machineAuthor, blocked);
+            console.log('  🔎 dead-zone scan (' + repoKey + '): ' + stats.totalOpen +
+                ' open PR(s), ' + stats.probedCount + ' prStatus probe(s) in ' + (Date.now() - t0) + 'ms');
         } catch (eDzRepo) {
             console.warn('  ⚠️ dead-zone scan failed for ' + repoKey +
                 ' (fail-open visibility): ' + (eDzRepo.message || eDzRepo));

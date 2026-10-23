@@ -26,10 +26,16 @@ function makeDfManager(opts) {
     };
     var configLoader = {
         loadProjectConfig: function() {
-            return {
+            return opts.projectConfig || {
                 repository: { owner: 'test-org', repo: 'test-repo' },
                 jira: { project: 'TS' }
             };
+        },
+        resolveDefaultWorkflowRef: function(rule, cfg) {
+            return (cfg && cfg.workflowRef) ||
+                (cfg && cfg.sm && cfg.sm.workflowRef) ||
+                (cfg && cfg.git && cfg.git.baseBranch) ||
+                'main';
         }
     };
 
@@ -324,6 +330,39 @@ suite('dfManager', function() {
         assert.equal(report.anomalies.length, 1);
         assert.equal(report.anomalies[0].type, 'approved-pr-not-merged');
         assert.equal(report.anomalies[0].prNumber, 42);
+    });
+
+    test('triggers SM workflow on configured git.baseBranch when params.workflowRef is omitted (epam/dm.ai#765)', function() {
+        var df = makeDfManager({
+            projectConfig: {
+                repository: { owner: 'test-org', repo: 'test-repo' },
+                jira: { project: 'TS' },
+                git: { baseBranch: 'master' }
+            },
+            tickets: [
+                {
+                    key: 'TS-86',
+                    fields: {
+                        status: { name: 'In Rework' },
+                        labels: ['sm_story_rework_triggered'],
+                        updated: '2026-05-09T15:00:00.000Z'
+                    }
+                }
+            ]
+        });
+
+        df.action({
+            jobParams: {
+                customParams: {
+                    autoRecover: true,
+                    nowMs: Date.parse('2026-05-09T17:00:00.000Z'),
+                    staleMinutes: 45
+                }
+            }
+        });
+
+        assert.equal(df.triggered.length, 1);
+        assert.equal(df.triggered[0].ref, 'master');
     });
 });
 

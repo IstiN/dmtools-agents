@@ -2176,3 +2176,45 @@ suite('configLoader & config.resolveStatuses — tracker-neutral config (gh-932)
         assert.equal(configLoaderModule.interpolateJql("status = '{status.DONE:Done}'", cfg), "status = 'Done'");
     });
 });
+
+// ── Global workflowRef resolution (epam/dm.ai#765) ───────────────────────────
+
+suite('configLoader.resolveDefaultWorkflowRef (epam/dm.ai#765)', function() {
+
+    test('defaults to main when nothing is configured', function() {
+        assert.equal(configLoaderModule.resolveDefaultWorkflowRef(null, {}, null), 'main');
+        assert.equal(configLoaderModule.resolveDefaultWorkflowRef({}, { git: {} }, null), 'main');
+    });
+
+    test('resolves git.baseBranch when workflowRef is not set', function() {
+        var cfg = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
+            git: { baseBranch: 'master' }
+        });
+        assert.equal(configLoaderModule.resolveDefaultWorkflowRef({}, cfg, null), 'master');
+    });
+
+    test('resolves top-level workflowRef and sm.workflowRef ahead of git.baseBranch', function() {
+        var cfgTop = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
+            workflowRef: 'ci-dispatch',
+            git: { baseBranch: 'master' }
+        });
+        assert.equal(configLoaderModule.resolveDefaultWorkflowRef({}, cfgTop, null), 'ci-dispatch');
+
+        var cfgSm = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
+            sm: { workflowRef: 'sm-branch' },
+            git: { baseBranch: 'master' }
+        });
+        assert.equal(configLoaderModule.resolveDefaultWorkflowRef({}, cfgSm, null), 'sm-branch');
+    });
+
+    test('falls back to fallbackConfig when effectiveConfig has no override', function() {
+        assert.equal(
+            configLoaderModule.resolveDefaultWorkflowRef({}, {}, { git: { baseBranch: 'master' } }),
+            'master'
+        );
+        assert.equal(
+            configLoaderModule.resolveDefaultWorkflowRef({ baseBranch: 'release' }, {}, { git: { baseBranch: 'master' } }),
+            'release'
+        );
+    });
+});

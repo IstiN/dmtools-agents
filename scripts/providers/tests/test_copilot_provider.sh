@@ -148,7 +148,7 @@ PYEOF
   )
 }
 
-FOOTER=$'Changes    +2 -2\nAI Credits 2 (12s)\nTokens     \u2191 1.5k (0 cached) \u2022 \u2193 50 (0 reasoning)\nResume     copilot --resume='"${SESSION_ID}"
+FOOTER="$(printf 'Changes    +2 -2\nAI Credits 2 (12s)\nTokens     \342\206\221 1.5k (0 cached) \342\200\242 \342\206\223 50 (0 reasoning)\nResume     copilot --resume=%s' "${SESSION_ID}")"
 
 # Usage must be reported even when the agent itself fails, and stale rows from a
 # restored session-store cache must not be counted.
@@ -313,5 +313,48 @@ BINEOF
   )
 }
 run_byok_no_token_case
+
+# Issue #1180: Default model must be gpt-5.3-codex (not the retired gpt-5-mini)
+# when neither COPILOT_MODEL nor COPILOT_DEFAULT_MODEL is set.
+run_default_model_case() {
+  local case_name="default-model-is-gpt-5.3-codex"
+  local case_dir="${TEST_ROOT}/${case_name}"
+  local fake_bin="${case_dir}/bin"
+  mkdir -p "${fake_bin}" "${case_dir}/outputs"
+
+  cat > "${fake_bin}/copilot" << 'BINEOF'
+#!/bin/bash
+if [ "${1:-}" = "--help" ]; then
+  echo "  --session-id"
+  exit 0
+fi
+printf '%s\n' "$*" > "${CAPTURED_ARGS_FILE}"
+printf 'Changes    +0 -0\nAI Credits 0 (1s)\nTokens     ↑ 0 (0 cached) • ↓ 0 (0 reasoning)\n'
+exit 0
+BINEOF
+  chmod +x "${fake_bin}/copilot"
+
+  (
+    cd "${case_dir}"
+    export HOME="${case_dir}"
+    export PATH="${fake_bin}:${PATH}"
+    export COPILOT_HOME="${case_dir}/copilot-home"
+    export COPILOT_GITHUB_TOKEN="test-token"
+    export COPILOT_SESSION_ENABLED="false"
+    export AI_AGENT_USAGE_NAME="story_development"
+    export DMTOOLS_CLI_LOG_DIR="${case_dir}/logs"
+    export CAPTURED_ARGS_FILE="${case_dir}/captured_args.txt"
+    unset COPILOT_MODEL COPILOT_DEFAULT_MODEL COPILOT_SESSION_ID COPILOT_USD_PER_CREDIT
+    PROMPT_ARG="test prompt"
+    PROMPT="test prompt"
+    PROMPT_BYTES=11
+    PASS_ARGS=()
+
+    run_copilot >/dev/null 2>&1
+    grep -q -- "--model gpt-5.3-codex" "${CAPTURED_ARGS_FILE}" \
+      || { echo "[${case_name}] expected --model gpt-5.3-codex in args: $(cat "${CAPTURED_ARGS_FILE}")" >&2; exit 1; }
+  )
+}
+run_default_model_case
 
 echo "Copilot provider integration tests passed"
