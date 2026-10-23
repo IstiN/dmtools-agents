@@ -31,7 +31,7 @@ function makeDfManager(opts) {
                 jira: { project: 'TS' }
             };
         },
-        resolveDefaultWorkflowRef: loadModule('js/configLoader.js', makeRequire({})).resolveDefaultWorkflowRef
+        resolveDefaultWorkflowRef: configLoaderModule.resolveDefaultWorkflowRef
     };
 
     var fileReadMock = function(readOpts) {
