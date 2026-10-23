@@ -1243,3 +1243,209 @@ suite('feedbackLoop > gate-runner helper contracts (gh-1079)', function() {
     });
 
 });
+
+// ── gh-1196: resumeAgent characterization ────────────────────────────────────
+// Pins the enablement/maxAttempts/non-recoverable gates, the marker-file
+// attempt lifecycle, the wrapper command shape (resumeArgs, timeout) and the
+// prompt override BEFORE the gate-helper extraction — these must stay green
+// across the refactor verbatim.
+suite('feedbackLoop > resumeAgent characterization (gh-1196)', function() {
+
+    function resumeOpts(over) {
+        over = over || {};
+        return {
+            ticketKey: over.ticketKey !== undefined ? over.ticketKey : 'TS-1196',
+            section: over.section !== undefined ? over.section : 'postAction',
+            stage: over.stage !== undefined ? over.stage : 'git_operations',
+            error: over.error !== undefined ? over.error : 'git failed',
+            timeoutSeconds: over.timeoutSeconds,
+            promptOverride: over.promptOverride,
+            customParams: over.customParams !== undefined ? over.customParams
+                : { feedbackLoop: { postAction: { enabled: true } } }
+        };
+    }
+    function wrapperCalls(commands) {
+        return commands.filter(function(c) { return c.indexOf('run-agent.sh') !== -1; });
+    }
+
+    test('default maxAttempts is DEFAULT_MAX_ATTEMPTS=2 — the third call is attempts-exhausted', function() {
+        var loaded = loadFeedbackLoop();
+        var opts = resumeOpts();
+        var first = loaded.mod.resumeAgent(opts);
+        var second = loaded.mod.resumeAgent(opts);
+        var third = loaded.mod.resumeAgent(opts);
+
+        assert.equal(first.attempted, true);
+        assert.equal(second.attempted, true);
+        assert.equal(third.attempted, false);
+        assert.equal(third.reason, 'attempts-exhausted');
+        assert.equal(third.attempts, 2);
+        assert.equal(loaded.files['outputs/feedback/TS-1196_git_operations.attempt'], '2');
+        assert.equal(wrapperCalls(loaded.commands).length, 2);
+    });
+
+    test('maxAttempts=null rides the default; non-numeric, 0 and negative disable the resume', function() {
+        var nulled = loadFeedbackLoop();
+        var out = nulled.mod.resumeAgent(resumeOpts({
+            customParams: { feedbackLoop: { postAction: { enabled: true, maxAttempts: null } } }
+        }));
+        assert.equal(out.attempted, true, 'explicit null → DEFAULT_MAX_ATTEMPTS');
+        assert.equal(nulled.files['outputs/feedback/TS-1196_git_operations.attempt'], '1');
+
+        ['garbage', 0, -1].forEach(function(bad) {
+            var loaded = loadFeedbackLoop();
+            var result = loaded.mod.resumeAgent(resumeOpts({
+                customParams: { feedbackLoop: { postAction: { enabled: true, maxAttempts: bad } } }
+            }));
+            assert.equal(result.attempted, false, 'maxAttempts=' + bad);
+            assert.equal(result.reason, 'maxAttempts=0', 'maxAttempts=' + bad);
+            assert.deepEqual(loaded.commands, [], 'maxAttempts=' + bad + ' — nothing runs');
+        });
+    });
+
+    test('resumeArgs replaces --continue; promptOverride replaces the built prompt', function() {
+        var loaded = loadFeedbackLoop();
+        var result = loaded.mod.resumeAgent(resumeOpts({
+            promptOverride: 'OVERRIDE PROMPT',
+            customParams: { feedbackLoop: {
+                postAction: { enabled: true, maxAttempts: 1, resumeArgs: '-r sess-42' } } }
+        }));
+
+        assert.equal(result.attempted, true);
+        assert.deepEqual(wrapperCalls(loaded.commands), [
+            'bash agents/scripts/run-agent.sh -r sess-42 outputs/feedback/TS-1196_git_operations.md'
+        ]);
+        assert.equal(loaded.files['outputs/feedback/TS-1196_git_operations.md'], 'OVERRIDE PROMPT');
+    });
+
+    test('a direct timeoutSeconds wraps the wrapper command (the bounded resume contract)', function() {
+        var loaded = loadFeedbackLoop();
+        var result = loaded.mod.resumeAgent(resumeOpts({
+            timeoutSeconds: '30',
+            customParams: { feedbackLoop: { postAction: { enabled: true, maxAttempts: 1 } } }
+        }));
+
+        assert.equal(result.attempted, true);
+        assert.deepEqual(wrapperCalls(loaded.commands), [
+            'bash -c "timeout -k 60 30 bash agents/scripts/run-agent.sh --continue outputs/feedback/TS-1196_git_operations.md"'
+        ]);
+    });
+
+    test('missing stage/ticketKey default the marker key to unknown_feedback; config patterns replace the builtin non-recoverable list', function() {
+        var loaded = loadFeedbackLoop();
+        var result = loaded.mod.resumeAgent({
+            error: 'transient hiccup',
+            customParams: { feedbackLoop: {
+                postAction: { enabled: true, maxAttempts: 1, nonRecoverablePatterns: ['PLAN QUOTA'] } } }
+        });
+        assert.equal(result.attempted, true,
+            'the override replaces the builtin pattern list — transient text is no longer misclassified');
+        assert.equal(loaded.files['outputs/feedback/unknown_feedback.attempt'], '1');
+        assert.contains(loaded.files['outputs/feedback/unknown_feedback.md'], 'Ticket: unknown');
+
+        var blocked = loadFeedbackLoop();
+        var out = blocked.mod.resumeAgent({
+            error: 'PLAN QUOTA exhausted',
+            customParams: { feedbackLoop: {
+                postAction: { enabled: true, maxAttempts: 1, nonRecoverablePatterns: ['PLAN QUOTA'] } } }
+        });
+        assert.equal(out.attempted, false);
+        assert.equal(out.reason, 'non-recoverable');
+        assert.deepEqual(blocked.commands, []);
+    });
+});
+
+// ── gh-1196: resumeAgent helper contracts ────────────────────────────────────
+// Direct pins for the extracted pure helpers (the gh-1079 decomposition
+// pattern): each helper's decision table, independent of resumeAgent's
+// orchestration.
+suite('feedbackLoop > resumeAgent helper contracts (gh-1196)', function() {
+    var mod = loadFeedbackLoop().mod;
+
+    test('feedbackSection defaults to postAction', function() {
+        assert.equal(mod.feedbackSection({}), 'postAction');
+        assert.equal(mod.feedbackSection({ section: 'qualityGates' }), 'qualityGates');
+    });
+
+    test('resumeEnabled: root/section switch on, explicit enabled:false wins', function() {
+        var cp = { feedbackLoop: { postAction: { enabled: true } } };
+        assert.equal(mod.resumeEnabled(cp, 'postAction', mod.normalizeConfig(cp, 'postAction')), true);
+
+        var off = { feedbackLoop: { enabled: true, postAction: { enabled: false } } };
+        assert.equal(mod.resumeEnabled(off, 'postAction', mod.normalizeConfig(off, 'postAction')), false);
+
+        var none = {};
+        assert.equal(mod.resumeEnabled(none, 'postAction', mod.normalizeConfig(none, 'postAction')), false);
+    });
+
+    test('maxAttemptsFrom: null rides the default, garbage parses to 0', function() {
+        assert.equal(mod.maxAttemptsFrom({}), mod.DEFAULT_MAX_ATTEMPTS);
+        assert.equal(mod.maxAttemptsFrom({ maxAttempts: null }), mod.DEFAULT_MAX_ATTEMPTS);
+        assert.equal(mod.maxAttemptsFrom({ maxAttempts: '3' }), 3);
+        assert.equal(mod.maxAttemptsFrom({ maxAttempts: 'garbage' }), 0);
+        assert.equal(mod.maxAttemptsFrom({ maxAttempts: 0 }), 0);
+        assert.equal(mod.maxAttemptsFrom({ maxAttempts: -2 }), 0);
+    });
+
+    test('resumeBlocker: the three early exits in contract order, null = proceed', function() {
+        var enabled = { feedbackLoop: { postAction: { enabled: true, maxAttempts: 1 } } };
+        var cfg = mod.normalizeConfig(enabled, 'postAction');
+        assert.equal(mod.resumeBlocker({}, enabled, cfg, 'postAction'), null);
+        assert.deepEqual(
+            mod.resumeBlocker({ error: 'refusing to merge unrelated histories' }, enabled, cfg, 'postAction'),
+            { attempted: false, reason: 'non-recoverable' });
+
+        var disabled = {};
+        assert.deepEqual(
+            mod.resumeBlocker({}, disabled, mod.normalizeConfig(disabled, 'postAction'), 'postAction'),
+            { attempted: false, reason: 'disabled' });
+
+        var zero = { feedbackLoop: { postAction: { enabled: true, maxAttempts: 0 } } };
+        assert.deepEqual(
+            mod.resumeBlocker({}, zero, mod.normalizeConfig(zero, 'postAction'), 'postAction'),
+            { attempted: false, reason: 'maxAttempts=0' });
+    });
+
+    test('resumeKey + feedbackMarkerPaths: the sanitized <ticket>_<stage> marker pair', function() {
+        var paths = mod.feedbackMarkerPaths(mod.resumeKey({ ticketKey: 'TS 1/x', stage: 'git ops' }));
+        assert.deepEqual(paths, {
+            marker: 'outputs/feedback/TS_1_x_git_ops.attempt',
+            prompt: 'outputs/feedback/TS_1_x_git_ops.md'
+        });
+        assert.deepEqual(mod.feedbackMarkerPaths(mod.resumeKey({})), {
+            marker: 'outputs/feedback/unknown_feedback.attempt',
+            prompt: 'outputs/feedback/unknown_feedback.md'
+        });
+    });
+
+    test('resumePromptFor: override wins, buildFeedbackPrompt stamps the attempt', function() {
+        assert.equal(mod.resumePromptFor({ promptOverride: 'OVR' }, 'err', 2), 'OVR');
+        var built = mod.resumePromptFor({ ticketKey: 'TS-1', stage: 'git_operations' }, 'err', 3);
+        assert.contains(built, 'Ticket: TS-1');
+        assert.contains(built, 'Stage: git_operations');
+        assert.contains(built, 'Attempt: 3');
+        assert.contains(built, 'err');
+    });
+
+    test('buildResumeCommand: --continue default, resumeArgs override, hard timeout wrap', function() {
+        assert.equal(
+            mod.buildResumeCommand({}, 'outputs/feedback/k.md', undefined),
+            'bash agents/scripts/run-agent.sh --continue outputs/feedback/k.md');
+        assert.equal(
+            mod.buildResumeCommand({ resumeArgs: '-r sess-9' }, 'outputs/feedback/k.md', '30'),
+            'bash -c "timeout -k 60 30 bash agents/scripts/run-agent.sh -r sess-9 outputs/feedback/k.md"');
+        assert.equal(
+            mod.buildResumeCommand({}, 'k.md', 'nope'),
+            'bash agents/scripts/run-agent.sh --continue k.md', 'unparseable timeout → no wrap');
+        assert.equal(
+            mod.buildResumeCommand({}, 'k.md', 0),
+            'bash agents/scripts/run-agent.sh --continue k.md', 'zero timeout → no wrap');
+    });
+
+    test('resumeLogLine: the attempt progress line, stage default failure', function() {
+        assert.equal(mod.resumeLogLine('git_operations', 1, 2),
+            'Feedback loop: resuming agent for git_operations attempt 1/2');
+        assert.equal(mod.resumeLogLine(undefined, 2, 2),
+            'Feedback loop: resuming agent for failure attempt 2/2');
+    });
+});
