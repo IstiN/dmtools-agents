@@ -146,107 +146,164 @@ function postReworkFeedback(storyKey, reviewData, inlineComments) {
     }
 }
 
+// ── gh-1192: action() decomposed into a context builder + per-step helpers ──
+// Same tracker/SCM/git/file calls in the same order; only the control flow
+// moved into named units so every branch is unit-testable.
+
+/** Whether the review recommendation is an approval (APPROVED normalizes). */
+function reviewRecommendationIsApprove(recommendation) {
+    return (recommendation || '').replace(/^APPROVED$/, 'APPROVE') === 'APPROVE';
+}
+
+/** The shared per-run context: config, tracker, SCM and workingDir. */
+function buildReviewActionContext(params) {
+    const storyKey = params.ticket.key;
+    const config = configLoader.loadProjectConfig(params.jobParams || params);
+    const customParams = resolveCustomParams(params, config);
+    initTracker(config, customParams);
+    const workingDir = config.workingDir || null;
+    const scm = scmModule.createScm(config);
+
+    console.log('=== Processing story test automation review for', storyKey, '===');
+
+    return {
+        storyKey: storyKey,
+        config: config,
+        customParams: customParams,
+        workingDir: workingDir,
+        scm: scm
+    };
+}
+
+/** Missing/unreadable review data: tell the tracker, clean the labels, fail. */
+function handleMissingReviewData(ctx, params) {
+    getTracker().postComment(ctx.storyKey, 'h3. ⚠️ Story Test Review Error\n\nCould not read pr_review.json. Removed SM trigger label so SM can retry.');
+    removeAutomationLabels(ctx.storyKey, params, ctx.customParams);
+    return { success: false, error: 'No review data found' };
+}
+
+/** Posts the filtered inline comments to the PR, numbered, in order. */
+function postInlineReviewComments(ctx, prNumber, inlineComments) {
+    if (inlineComments && inlineComments.length > 0) {
+        console.log('Posting ' + inlineComments.length + ' inline comment(s)');
+        inlineComments.forEach(function(ic, index) {
+            console.log('Processing inline comment ' + (index + 1) + '/' + inlineComments.length);
+            reviewHelpers.postInlineComment(ctx.scm, prNumber, ic, ctx.storyKey, readFile, prReviewComments);
+        });
+    }
+}
+
+/** PR-side publish step: threads, inline + general comments, verdict labels. */
+function publishReviewCommentsToPr(ctx, prNumber, repoInfo, reviewData, inlineComments, isApproved) {
+    if (!prNumber) {
+        console.warn('No PR number found — skipping GitHub comments');
+        return;
+    }
+
+    reviewHelpers.resolveExistingAgentReviewThreads(ctx.scm, prNumber, repoInfo, ghHelpers.fetchDiscussionsAndRawData);
+
+    postInlineReviewComments(ctx, prNumber, inlineComments);
+
+    // Post the general comment AFTER inline comments.
+    if (reviewData.generalComment) {
+        reviewHelpers.postGeneralComment(ctx.scm, prNumber, reviewData.generalComment, ctx.storyKey, ctx.workingDir, outputFiles);
+    }
+    prReviewComments.resolveApprovedThreads(ctx.scm, prNumber, reviewData.resolvedThreadIds);
+
+    reviewHelpers.applyVerdictLabels(ctx.scm, prNumber, ctx.storyKey, isApproved, getTracker, LABELS);
+}
+
+/** The agent's own review summary (params.response) goes to the tracker. */
+function postReviewResponseComment(storyKey, params) {
+    if (!params.response) return;
+    try {
+        getTracker().postComment(storyKey, params.response);
+    } catch (e) {
+        console.warn('Failed to post Jira review comment:', e);
+    }
+}
+
+/** After the verdict: merge or rework continuation, falling back to the SM. */
+function triggerOutcomeFollowUp(storyKey, config, customParams, isApproved) {
+    var triggered;
+    if (isApproved) {
+        console.log('✅ Story PR approved — triggering merge agent');
+        triggered = triggerMerge(storyKey, config, customParams);
+    } else {
+        console.log('📝 Changes requested on test-automation PR — keeping ticket in In Testing for rework');
+        triggered = triggerRework(storyKey, config, customParams);
+    }
+    if (!triggered) {
+        autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
+    }
+}
+
+/** Best-effort token-usage summary; failures must not fail the step. */
+function postTokenUsageSafely(storyKey, params) {
+    try {
+        tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
+/** Outer-catch: report the failure to the tracker and fail the action. */
+function handleReviewActionError(params, error) {
+    console.error('❌ Error in postStoryTestAutomationReview:', error);
+    try {
+        const storyKey = params.ticket ? params.ticket.key : null;
+        if (storyKey) {
+            getTracker().removeLabel(storyKey, 'sm_story_test_review_triggered');
+            getTracker().postComment(storyKey, 'h3. ❌ Story Test Review Error\n\n{code}' + error.toString() + '{code}');
+        }
+    } catch (e) {}
+    return { success: false, error: error.toString() };
+}
+
 function action(params) {
     try {
-        const storyKey = params.ticket.key;
-        const config = configLoader.loadProjectConfig(params.jobParams || params);
-        const customParams = resolveCustomParams(params, config);
-        initTracker(config, customParams);
-        const workingDir = config.workingDir || null;
-        const scm = scmModule.createScm(config);
+        const ctx = buildReviewActionContext(params);
 
-        console.log('=== Processing story test automation review for', storyKey, '===');
-
-        const reviewData = readReviewJson(storyKey, workingDir);
+        const reviewData = readReviewJson(ctx.storyKey, ctx.workingDir);
         if (!reviewData) {
-            getTracker().postComment(storyKey, 'h3. ⚠️ Story Test Review Error\n\nCould not read pr_review.json. Removed SM trigger label so SM can retry.');
-            removeAutomationLabels(storyKey, params, customParams);
-            return { success: false, error: 'No review data found' };
+            return handleMissingReviewData(ctx, params);
         }
 
-        const isApproved = (reviewData.recommendation || '').replace(/^APPROVED$/, 'APPROVE') === 'APPROVE';
+        const isApproved = reviewRecommendationIsApprove(reviewData.recommendation);
         console.log('Review recommendation:', reviewData.recommendation);
 
-        const { prNumber, prUrl } = reviewHelpers.getPRNumber(params, storyKey, scm, readFile);
-        const repoInfo = getRepoInfo(config);
+        const prInfo = reviewHelpers.getPRNumber(params, ctx.storyKey, ctx.scm, readFile);
+        const repoInfo = getRepoInfo(ctx.config);
 
-        var inlineComments = reviewHelpers.filterInlineCommentsByDiff(scm, prNumber, reviewData.inlineComments, prReviewComments);
+        var inlineComments = reviewHelpers.filterInlineCommentsByDiff(ctx.scm, prInfo.prNumber, reviewData.inlineComments, prReviewComments);
 
-        if (prNumber) {
-            reviewHelpers.resolveExistingAgentReviewThreads(scm, prNumber, repoInfo, ghHelpers.fetchDiscussionsAndRawData);
+        publishReviewCommentsToPr(ctx, prInfo.prNumber, repoInfo, reviewData, inlineComments, isApproved);
 
-            if (inlineComments && inlineComments.length > 0) {
-                console.log('Posting ' + inlineComments.length + ' inline comment(s)');
-                inlineComments.forEach(function(ic, index) {
-                    console.log('Processing inline comment ' + (index + 1) + '/' + inlineComments.length);
-                    reviewHelpers.postInlineComment(scm, prNumber, ic, storyKey, readFile, prReviewComments);
-                });
-            }
-
-            // Post the general comment AFTER inline comments.
-            if (reviewData.generalComment) {
-                reviewHelpers.postGeneralComment(scm, prNumber, reviewData.generalComment, storyKey, workingDir, outputFiles);
-            }
-            prReviewComments.resolveApprovedThreads(scm, prNumber, reviewData.resolvedThreadIds);
-
-            reviewHelpers.applyVerdictLabels(scm, prNumber, storyKey, isApproved, getTracker, LABELS);
-        } else {
-            console.warn('No PR number found — skipping GitHub comments');
-        }
-
-        if (params.response) {
-            try {
-                getTracker().postComment(storyKey, params.response);
-            } catch (e) {
-                console.warn('Failed to post Jira review comment:', e);
-            }
-        }
+        postReviewResponseComment(ctx.storyKey, params);
 
         if (!isApproved) {
-            postReworkFeedback(storyKey, reviewData, inlineComments);
+            postReworkFeedback(ctx.storyKey, reviewData, inlineComments);
         }
 
-        if (isApproved) {
-            console.log('✅ Story PR approved — triggering merge agent');
-            if (!triggerMerge(storyKey, config, customParams)) {
-                autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
-            }
-        } else {
-            console.log('📝 Changes requested on test-automation PR — keeping ticket in In Testing for rework');
-            if (!triggerRework(storyKey, config, customParams)) {
-                autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
-            }
-        }
+        triggerOutcomeFollowUp(ctx.storyKey, ctx.config, ctx.customParams, isApproved);
 
         try {
-            getTracker().addLabel(storyKey, LABELS.AI_PR_REVIEWED);
+            getTracker().addLabel(ctx.storyKey, LABELS.AI_PR_REVIEWED);
         } catch (e) {}
 
-        removeAutomationLabels(storyKey, params, customParams);
+        removeAutomationLabels(ctx.storyKey, params, ctx.customParams);
 
-        try {
-            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
+        postTokenUsageSafely(ctx.storyKey, params);
 
         return {
             success: true,
             recommendation: reviewData.recommendation,
-            storyKey: storyKey,
-            prUrl: prUrl
+            storyKey: ctx.storyKey,
+            prUrl: prInfo.prUrl
         };
 
     } catch (error) {
-        console.error('❌ Error in postStoryTestAutomationReview:', error);
-        try {
-            const storyKey = params.ticket ? params.ticket.key : null;
-            if (storyKey) {
-                getTracker().removeLabel(storyKey, 'sm_story_test_review_triggered');
-                getTracker().postComment(storyKey, 'h3. ❌ Story Test Review Error\n\n{code}' + error.toString() + '{code}');
-            }
-        } catch (e) {}
-        return { success: false, error: error.toString() };
+        return handleReviewActionError(params, error);
     }
 }
 
