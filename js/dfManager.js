@@ -235,13 +235,29 @@ function isLabelActiveForStatus(labelStatusRule, status) {
     return true;
 }
 
-function loadSmRules(params) {
+// Pure: embedded rule overrides win in declaration order (customParams).
+function embeddedSmRules(params) {
     if (params.rules && Array.isArray(params.rules)) return params.rules;
     if (params.smRules && Array.isArray(params.smRules)) return params.smRules;
+    return null;
+}
+
+// Pure: the rules array of a parsed sm config — [] on any missing link.
+function rulesOfParsedSmConfig(parsed) {
+    return (parsed && parsed.params && parsed.params.jobParams &&
+            parsed.params.jobParams.rules) || [];
+}
+
+// Pure: the sm config path override, defaulting to the agents pack.
+function smConfigPathOf(params) {
+    return params.smConfigPath || 'agents/sm.json';
+}
+
+function loadSmRules(params) {
+    var embedded = embeddedSmRules(params);
+    if (embedded) return embedded;
     try {
-        var raw = file_read({ path: params.smConfigPath || 'agents/sm.json' });
-        var parsed = JSON.parse(raw);
-        return parsed && parsed.params && parsed.params.jobParams && parsed.params.jobParams.rules || [];
+        return rulesOfParsedSmConfig(JSON.parse(file_read({ path: smConfigPathOf(params) })));
     } catch (e) {
         console.warn('DF Manager: could not read sm rules:', e.message || e);
         return [];
@@ -477,33 +493,51 @@ function triggerSmWorkflow(context, reason) {
     context.actions.push({ action: 'trigger-sm', reason: reason || 'df-manager' });
 }
 
+// Release every SM trigger label carried by a stale/obsolete anomaly
+// (tracker call order: one removeLabel per label, in payload order).
+function releaseAnomalyLabels(context, anomaly) {
+    (anomaly.labels || []).forEach(function(label) {
+        context.tracker.removeLabel(anomaly.ticketKey, label);
+        context.actions.push({ action: 'remove-label', ticketKey: anomaly.ticketKey, label: label });
+    });
+}
+
+// gh api branch update for an approved-but-stale PR (transport failures
+// land in the actions log, never fatal).
+function requestPrBranchUpdate(context, anomaly) {
+    try {
+        cli_execute_command({
+            command: 'gh api repos/' + context.repoInfo.owner + '/' + context.repoInfo.repo +
+                '/pulls/' + anomaly.prNumber + '/update-branch -X PUT'
+        });
+        context.actions.push({ action: 'request-branch-update', prNumber: anomaly.prNumber });
+    } catch (e) {
+        context.actions.push({
+            action: 'request-branch-update-failed',
+            prNumber: anomaly.prNumber,
+            error: e.message || String(e)
+        });
+    }
+}
+
+// One anomaly's safe recovery, anomaly-type dispatched (same tracker/SCM/
+// git call order as the former inline forEach body).
+function recoverAnomaly(context, anomaly) {
+    if (anomaly.type === 'stale-sm-label' || anomaly.type === 'obsolete-sm-label') {
+        releaseAnomalyLabels(context, anomaly);
+        if (anomaly.type === 'obsolete-sm-label') return;
+        triggerSmWorkflow(context, 'released stale SM label for ' + anomaly.ticketKey);
+    } else if (anomaly.type === 'approved-pr-not-merged') {
+        triggerSmWorkflow(context, 'retry merge for approved PR #' + anomaly.prNumber);
+    } else if (anomaly.type === 'approved-pr-not-mergeable' && anomaly.safeAction === 'request-branch-update') {
+        requestPrBranchUpdate(context, anomaly);
+    }
+}
+
 function applySafeRecovery(context) {
     if (!context.autoRecover) return;
     context.anomalies.forEach(function(anomaly) {
-        if (anomaly.type === 'stale-sm-label' || anomaly.type === 'obsolete-sm-label') {
-            (anomaly.labels || []).forEach(function(label) {
-                context.tracker.removeLabel(anomaly.ticketKey, label);
-                context.actions.push({ action: 'remove-label', ticketKey: anomaly.ticketKey, label: label });
-            });
-            if (anomaly.type === 'obsolete-sm-label') return;
-            triggerSmWorkflow(context, 'released stale SM label for ' + anomaly.ticketKey);
-        } else if (anomaly.type === 'approved-pr-not-merged') {
-            triggerSmWorkflow(context, 'retry merge for approved PR #' + anomaly.prNumber);
-        } else if (anomaly.type === 'approved-pr-not-mergeable' && anomaly.safeAction === 'request-branch-update') {
-            try {
-                cli_execute_command({
-                    command: 'gh api repos/' + context.repoInfo.owner + '/' + context.repoInfo.repo +
-                        '/pulls/' + anomaly.prNumber + '/update-branch -X PUT'
-                });
-                context.actions.push({ action: 'request-branch-update', prNumber: anomaly.prNumber });
-            } catch (e) {
-                context.actions.push({
-                    action: 'request-branch-update-failed',
-                    prNumber: anomaly.prNumber,
-                    error: e.message || String(e)
-                });
-            }
-        }
+        recoverAnomaly(context, anomaly);
     });
 }
 
