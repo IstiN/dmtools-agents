@@ -1,8 +1,9 @@
 /**
- * Pure helpers for js/postMobileTestAutomationResults.js (gh-979).
+ * Pure helpers for js/postMobileTestAutomationResults.js (gh-979, gh-1189).
  *
- * Decision and string-building logic extracted from action() and
- * updateFeaturePRBody() so both shrink below the CRAP threshold.
+ * Decision and string-building logic extracted from action(),
+ * updateFeaturePRBody(), getResultCounts() and performGitOperations() so
+ * all of them shrink below the CRAP threshold.
  * Every function here is side-effect free (console/tracker/SCM calls stay
  * in the caller) and strings must stay byte-identical to the originals —
  * they are posted verbatim to the tracker / PR.
@@ -153,6 +154,58 @@ function buildErrorComment(error) {
     return 'h3. ❌ Test Automation Error\n\n{code}' + error.toString() + '{code}';
 }
 
+// ── gh-1189: result-count derivation ─────────────────────────────────────────
+
+/** PR list of a parsed MCP-ish response (plain array or {data:[...] }). */
+function parseMcpPrList(parsed) {
+    if (Array.isArray(parsed)) return parsed;
+    return (parsed && parsed.data) ? parsed.data : [];
+}
+
+/** Classify a per-entry result status ('error' counts as failed). */
+function classifyResultStatus(status) {
+    var s = String(status || '').toLowerCase();
+    if (s === 'passed') return 'passed';
+    if (s === 'skipped') return 'skipped';
+    if (s === 'failed' || s === 'error') return 'failed';
+    return null;
+}
+
+/** Passed/failed/skipped tallies over per-entry results. */
+function countResultStatuses(results) {
+    var counts = { passed: 0, failed: 0, skipped: 0 };
+    for (var i = 0; i < results.length; i++) {
+        var status = classifyResultStatus(results[i].status);
+        if (status === 'passed') counts.passed += 1;
+        else if (status === 'skipped') counts.skipped += 1;
+        else if (status === 'failed') counts.failed += 1;
+    }
+    return counts;
+}
+
+/** Fill the null top-level counts from the per-entry tallies. */
+function mergeFallbackCounts(primary, derived) {
+    return {
+        passed: primary.passed === null ? derived.passed : primary.passed,
+        failed: primary.failed === null ? derived.failed : primary.failed,
+        skipped: primary.skipped === null ? derived.skipped : primary.skipped
+    };
+}
+
+/** Finalize null counts to 0. */
+function finalizeCounts(counts) {
+    return {
+        passed: counts.passed === null ? 0 : counts.passed,
+        failed: counts.failed === null ? 0 : counts.failed,
+        skipped: counts.skipped === null ? 0 : counts.skipped
+    };
+}
+
+/** No staged changes in a `git diff --cached --stat` capture. */
+function decideNoStagedChanges(stagedOutput) {
+    return !stagedOutput || !stagedOutput.trim();
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         parseOutcome: parseOutcome,
@@ -167,6 +220,12 @@ if (typeof module !== 'undefined' && module.exports) {
         prependVerdictIfNeeded: prependVerdictIfNeeded,
         buildBlockedComment: buildBlockedComment,
         buildMissingResultComment: buildMissingResultComment,
-        buildErrorComment: buildErrorComment
+        buildErrorComment: buildErrorComment,
+        parseMcpPrList: parseMcpPrList,
+        classifyResultStatus: classifyResultStatus,
+        countResultStatuses: countResultStatuses,
+        mergeFallbackCounts: mergeFallbackCounts,
+        finalizeCounts: finalizeCounts,
+        decideNoStagedChanges: decideNoStagedChanges
     };
 }
