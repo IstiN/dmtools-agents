@@ -404,123 +404,166 @@ function postTokenUsageSummary(tracker, ticketKey, initiatorId) {
     }
 }
 
+// ── Extracted step helpers (gh-1187 CRAP split): same calls, same order,
+// same log lines. action() stays a thin sequencer over these.
+
+// Ticket/initiator/config/tracker context of one action run (same resolution
+// order as the original inline block: metadata → customParams → projectConfig
+// → tracker → output options).
+function loadActionContext(params) {
+    var ticketKey = params.ticket.key;
+    var initiatorId = params.initiator;
+    var wipLabel = params.metadata && params.metadata.contextId
+        ? params.metadata.contextId + '_wip'
+        : null;
+    var customParams = (params.customParams) || (params.jobParams && params.jobParams.customParams) || {};
+    var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    var jiraConfig = projectConfig.jira;
+    var tracker = trackersModule.createTracker(projectConfig, customParams);
+    return {
+        ticketKey: ticketKey,
+        initiatorId: initiatorId,
+        wipLabel: wipLabel,
+        customParams: customParams,
+        projectConfig: projectConfig,
+        jiraConfig: jiraConfig,
+        tracker: tracker,
+        ticketFields: params.ticket.fields,
+        options: resolveOutputOptions(customParams)
+    };
+}
+
+// outputs/response.md + outputs/diagram.md reader (root or ticket subdir), trimmed.
+function makeReadOutput(ctx) {
+    return function(filename) {
+        var content = outputFiles.readOutputFile(filename, {
+            ticketKey: ctx.ticketKey,
+            workingDir: ctx.projectConfig.workingDir || null
+        });
+        return content ? content.trim() : '';
+    };
+}
+
+// Steps 1–2: read the solution (required) and the diagram (optionally required).
+// Returns { error } with the failure result, or { solution, diagram }.
+function readSolutionOutputs(readOutput, options) {
+    var solution = readOutput('response.md');
+    if (!solution) {
+        console.error('outputs/response.md not found at root or ticket subdir');
+        return { error: { success: false, error: 'outputs/response.md is empty' } };
+    }
+    var diagram = readOutput('diagram.md');
+    if (!diagram) {
+        console.warn('No diagram.md found, skipping diagram update');
+        if (options.requireDiagram) {
+            return { error: { success: false, error: 'outputs/diagram.md is required but empty' } };
+        }
+    }
+    return { solution: solution, diagram: diagram };
+}
+
+// Step 3: route the diagram — prepend as a jira {code} block, defer to the
+// Confluence publish step, or leave it for the dedicated field. Returns the
+// (possibly rewritten) solution and the (possibly consumed) diagram.
+function placeDiagram(solution, diagram, diagramField, confluenceOnlyTarget) {
+    var placement = decideDiagramPlacement(diagram, diagramField, confluenceOnlyTarget);
+    if (placement.prependToSolution) {
+        solution = '{code}\n' + diagram + '\n{code}\n\n' + solution;
+        console.log('No diagram field configured — diagram prepended to solution as {code} block');
+        diagram = ''; // mark as handled
+    } else if (placement.deferToConfluence) {
+        console.log('No diagram field configured, Confluence-only target — diagram will be appended as Markdown "## Diagram" section at publish');
+    }
+    return { solution: solution, diagram: diagram };
+}
+
+// Steps 4/5b: write the solution/diagram to the tracker field and/or publish to
+// Confluence, per the resolved output config. Returns a failure result or null.
+function writeToConfiguredOutputs(ctx, outputCfg, solution, diagram, readOutput) {
+    if (contentOutput.isJiraFieldTarget(outputCfg)) {
+        var fieldFailure = writeSolutionToTrackerField({
+            tracker: ctx.tracker,
+            ticketKey: ctx.ticketKey,
+            solutionField: ctx.options.solutionField,
+            diagramField: ctx.options.diagramField,
+            diagram: diagram,
+            solution: solution,
+            outputType: ctx.options.outputType
+        });
+        if (fieldFailure) {
+            return fieldFailure;
+        }
+    }
+
+    if (contentOutput.isConfluenceTarget(outputCfg)) {
+        var confFailure = publishSolutionToConfluence({
+            outputCfg: outputCfg,
+            tracker: ctx.tracker,
+            ticketKey: ctx.ticketKey,
+            ticketFields: ctx.ticketFields,
+            solutionField: ctx.options.solutionField,
+            solution: solution,
+            diagram: diagram,
+            readOutput: readOutput
+        });
+        if (confFailure) {
+            return confFailure;
+        }
+    }
+    return null;
+}
+
 function action(params) {
     try {
-        var ticketKey = params.ticket.key;
-        var initiatorId = params.initiator;
-        var wipLabel = params.metadata && params.metadata.contextId
-            ? params.metadata.contextId + '_wip'
-            : null;
+        var ctx = loadActionContext(params);
 
-        // Resolve field names from customParams if provided
-        var customParams = (params.customParams) || (params.jobParams && params.jobParams.customParams) || {};
-        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-        var jiraConfig = projectConfig.jira;
-        var tracker = trackersModule.createTracker(projectConfig, customParams);
-        var options = resolveOutputOptions(customParams);
-        var solutionField = options.solutionField;
-        var diagramField = options.diagramField;
-        var outputType = options.outputType;
+        console.log('Processing solution and diagrams for:', ctx.ticketKey);
+        console.log('Solution field: ' + ctx.options.solutionField + ', Diagram field: ' + (ctx.options.diagramField || '(none — will prepend to solution)') + ', outputType: ' + ctx.options.outputType);
 
-        console.log('Processing solution and diagrams for:', ticketKey);
-        console.log('Solution field: ' + solutionField + ', Diagram field: ' + (diagramField || '(none — will prepend to solution)') + ', outputType: ' + outputType);
+        var readOutput = makeReadOutput(ctx);
 
-        function readOutput(filename) {
-            var content = outputFiles.readOutputFile(filename, {
-                ticketKey: ticketKey,
-                workingDir: projectConfig.workingDir || null
-            });
-            return content ? content.trim() : '';
-        }
-
-        // 1. Read solution from outputs/response.md (or outputs/{ticketKey}/response.md)
-        var solution = readOutput('response.md');
-        if (!solution) {
-            console.error('outputs/response.md not found at root or ticket subdir');
-            return { success: false, error: 'outputs/response.md is empty' };
-        }
-
-        // 2. Read diagram from outputs/diagram.md (or outputs/{ticketKey}/diagram.md)
-        var diagram = readOutput('diagram.md');
-        if (!diagram) {
-            console.warn('No diagram.md found, skipping diagram update');
-            if (options.requireDiagram) {
-                return { success: false, error: 'outputs/diagram.md is required but empty' };
-            }
+        var outputs = readSolutionOutputs(readOutput, ctx.options);
+        if (outputs.error) {
+            return outputs.error;
         }
 
         // 3. If no dedicated diagram field — prepend diagram to solution.
         //    Confluence-only targets get a Markdown "## Diagram" section appended at the
         //    publish step (below); the Jira wiki {code} block must not leak into
         //    Confluence-bound content.
-        var placement = decideDiagramPlacement(diagram, diagramField, decideConfluenceOnlyTarget(params));
-        if (placement.prependToSolution) {
-            solution = '{code}\n' + diagram + '\n{code}\n\n' + solution;
-            console.log('No diagram field configured — diagram prepended to solution as {code} block');
-            diagram = ''; // mark as handled
-        } else if (placement.deferToConfluence) {
-            console.log('No diagram field configured, Confluence-only target — diagram will be appended as Markdown "## Diagram" section at publish');
-        }
+        var placed = placeDiagram(outputs.solution, outputs.diagram, ctx.options.diagramField, decideConfluenceOnlyTarget(params));
 
         var outputCfg = contentOutput.resolveConfig(params, {
             target: 'jira_field',
-            field: solutionField,
-            operationType: outputType,
+            field: ctx.options.solutionField,
+            operationType: ctx.options.outputType,
             pageTitleSuffix: 'Solution Design'
         });
 
-        // 4/5. Write to solution field (replace or append) and diagram field — for jira_field/both targets
-        if (contentOutput.isJiraFieldTarget(outputCfg)) {
-            var fieldFailure = writeSolutionToTrackerField({
-                tracker: tracker,
-                ticketKey: ticketKey,
-                solutionField: solutionField,
-                diagramField: diagramField,
-                diagram: diagram,
-                solution: solution,
-                outputType: outputType
-            });
-            if (fieldFailure) {
-                return fieldFailure;
-            }
-        }
-
-        // 5b. Publish to Confluence — for confluence/both targets
-        if (contentOutput.isConfluenceTarget(outputCfg)) {
-            var confFailure = publishSolutionToConfluence({
-                outputCfg: outputCfg,
-                tracker: tracker,
-                ticketKey: ticketKey,
-                ticketFields: params.ticket.fields,
-                solutionField: solutionField,
-                solution: solution,
-                diagram: diagram,
-                readOutput: readOutput
-            });
-            if (confFailure) {
-                return confFailure;
-            }
+        var writeFailure = writeToConfiguredOutputs(ctx, outputCfg, placed.solution, placed.diagram, readOutput);
+        if (writeFailure) {
+            return writeFailure;
         }
 
         // 6–10. Assign, move, labels
         finalizeTicketState({
-            tracker: tracker,
-            ticketKey: ticketKey,
-            initiatorId: initiatorId,
-            jiraConfig: jiraConfig,
-            wipLabel: wipLabel,
-            smTriggerLabel: customParams.removeLabel
+            tracker: ctx.tracker,
+            ticketKey: ctx.ticketKey,
+            initiatorId: ctx.initiatorId,
+            jiraConfig: ctx.jiraConfig,
+            wipLabel: ctx.wipLabel,
+            smTriggerLabel: ctx.customParams.removeLabel
         });
 
         triggerDevelopmentAutoStart({
-            projectConfig: projectConfig,
-            customParams: customParams,
-            ticketKey: ticketKey
+            projectConfig: ctx.projectConfig,
+            customParams: ctx.customParams,
+            ticketKey: ctx.ticketKey
         });
 
-        postTokenUsageSummary(tracker, ticketKey, initiatorId);
+        postTokenUsageSummary(ctx.tracker, ctx.ticketKey, ctx.initiatorId);
 
-        return { success: true, message: ticketKey + ' solution written, moved to Ready For Development' };
+        return { success: true, message: ctx.ticketKey + ' solution written, moved to Ready For Development' };
 
     } catch (error) {
         console.error('Error in writeSolutionAndDiagrams:', error);
@@ -557,6 +600,11 @@ if (typeof module !== 'undefined' && module.exports) {
         removeLabelQuietly: removeLabelQuietly,
         finalizeTicketState: finalizeTicketState,
         triggerDevelopmentAutoStart: triggerDevelopmentAutoStart,
-        postTokenUsageSummary: postTokenUsageSummary
+        postTokenUsageSummary: postTokenUsageSummary,
+        loadActionContext: loadActionContext,
+        makeReadOutput: makeReadOutput,
+        readSolutionOutputs: readSolutionOutputs,
+        placeDiagram: placeDiagram,
+        writeToConfiguredOutputs: writeToConfiguredOutputs
     };
 }
