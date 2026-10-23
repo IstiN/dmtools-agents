@@ -4530,6 +4530,15 @@
       "total": 288404,
       "cacheRead": 13605952,
       "model": "glm-5.3-flash"
+    },
+    {
+      "leg": "review",
+      "at": "2026-10-23T23:58:51Z",
+      "prompt": 79910,
+      "completion": 22699,
+      "total": 102609,
+      "cacheRead": 3803136,
+      "model": "glm-5.3-flash"
     }
   ],
   "issue-1191": [
