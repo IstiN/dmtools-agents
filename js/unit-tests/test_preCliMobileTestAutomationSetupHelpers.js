@@ -351,3 +351,162 @@ suite('preCliMobileTestAutomationSetupHelpers: buildSimulatorInfoMarkdown', func
     });
 
 });
+
+// ── Suite: gh-1189 linked-TC search builders ─────────────────────────────────
+
+suite('preCliMobileTestAutomationSetupHelpers: linked-TC search builders', function() {
+
+    test('primary JQL narrows to the is-tested-by relationship', function() {
+        var h = loadSetupHelpers();
+        var jql = h.buildPrimaryLinkedTcJql('PROJ-1');
+        assert.equal(jql, 'issue in linkedIssues("PROJ-1", "is tested by") AND issuetype = "Test Case"');
+    });
+
+    test('fallback JQL matches any linked test case', function() {
+        var h = loadSetupHelpers();
+        var jql = h.buildFallbackLinkedTcJql('PROJ-1');
+        assert.equal(jql, 'issue in linkedIssues("PROJ-1") AND issuetype = "Test Case"');
+    });
+
+    test('search options share fields and cap results at 30', function() {
+        var h = loadSetupHelpers();
+        var opts = h.linkedTcSearchOptions();
+        assert.deepEqual(opts.fields, ['key', 'summary', 'status', 'description', 'priority', 'labels', 'comment']);
+        assert.equal(opts.maxResults, 30);
+    });
+
+});
+
+// ── Suite: gh-1189 linked-TC markdown builders ───────────────────────────────
+
+suite('preCliMobileTestAutomationSetupHelpers: linked-TC markdown builders', function() {
+
+    test('header carries the ticket key and the automation mandate', function() {
+        var h = loadSetupHelpers();
+        var lines = h.buildLinkedTestCasesHeader('PROJ-1');
+        assert.equal(lines[0], '# Linked Test Cases for PROJ-1\n');
+        assert.equal(lines[1], '> Automate EVERY test case listed here.\n');
+    });
+
+    test('entry renders summary, status, priority and description', function() {
+        var h = loadSetupHelpers();
+        var lines = h.formatLinkedTcEntry({
+            key: 'PROJ-TC-1',
+            fields: {
+                summary: 'VoiceOver on modal',
+                status: { name: 'Ready' },
+                priority: { name: 'High' },
+                description: 'Step 1: Open modal'
+            }
+        });
+        var md = lines.join('\n');
+        assert.ok(md.indexOf('---\n') !== -1);
+        assert.ok(md.indexOf('## PROJ-TC-1: VoiceOver on modal') !== -1);
+        assert.ok(md.indexOf('**Status**: Ready  **Priority**: High') !== -1);
+        assert.ok(md.indexOf('**Description / Test Steps**:\n\nStep 1: Open modal') !== -1);
+    });
+
+    test('entry falls back to Unknown/(no summary) and omits empty description', function() {
+        var h = loadSetupHelpers();
+        var lines = h.formatLinkedTcEntry({ key: 'PROJ-TC-2', fields: {} });
+        var md = lines.join('\n');
+        assert.ok(md.indexOf('## PROJ-TC-2: (no summary)') !== -1);
+        assert.ok(md.indexOf('**Status**: Unknown  **Priority**: Unknown') !== -1);
+        assert.equal(md.indexOf('Description / Test Steps'), -1);
+    });
+
+    test('comments block caps at the last five with an N-of-M header', function() {
+        var h = loadSetupHelpers();
+        var comments = [];
+        for (var i = 1; i <= 7; i++) {
+            comments.push({ author: { displayName: 'QA' }, body: 'run-' + i });
+        }
+        var md = h.formatRecentTcComments(comments).join('\n');
+        assert.ok(md.indexOf('**Recent Test Run Comments** (5 of 7)') !== -1);
+        assert.ok(md.indexOf('**[QA]**:\nrun-3') !== -1, 'first of the last five');
+        assert.ok(md.indexOf('run-7') !== -1, 'newest last');
+        assert.equal(md.indexOf('run-1'), -1, 'oldest dropped');
+        assert.equal(md.indexOf('run-2'), -1, 'second-oldest dropped');
+    });
+
+    test('comments block is empty for null or empty input', function() {
+        var h = loadSetupHelpers();
+        assert.deepEqual(h.formatRecentTcComments(null), []);
+        assert.deepEqual(h.formatRecentTcComments([]), []);
+    });
+
+    test('comments block tolerates missing author and body', function() {
+        var h = loadSetupHelpers();
+        var md = h.formatRecentTcComments([{}, { body: 'text only' }]).join('\n');
+        assert.ok(md.indexOf('**Recent Test Run Comments** (2 of 2)') !== -1);
+        assert.ok(md.indexOf('**[Unknown]**:\n') !== -1, 'missing author falls back');
+        assert.ok(md.indexOf('text only') !== -1);
+    });
+
+    test('truncates comment bodies at 2000 characters', function() {
+        var h = loadSetupHelpers();
+        var longBody = new Array(2500).join('x');
+        var md = h.formatRecentTcComments([{ author: { displayName: 'QA' }, body: longBody }]).join('\n');
+        assert.ok(md.length < longBody.length, 'body truncated');
+    });
+
+});
+
+// ── Suite: gh-1189 MCP response helpers ──────────────────────────────────────
+
+suite('preCliMobileTestAutomationSetupHelpers: MCP response helpers', function() {
+
+    test('parseMcpDataList unwraps data and defaults to empty', function() {
+        var h = loadSetupHelpers();
+        assert.deepEqual(h.parseMcpDataList({ data: [1, 2] }), [1, 2]);
+        assert.deepEqual(h.parseMcpDataList({}), []);
+        assert.deepEqual(h.parseMcpDataList(null), []);
+    });
+
+    test('parseMcpPrList accepts plain arrays and {data} wrappers', function() {
+        var h = loadSetupHelpers();
+        assert.deepEqual(h.parseMcpPrList([{ number: 1 }]), [{ number: 1 }]);
+        assert.deepEqual(h.parseMcpPrList({ data: [{ number: 2 }] }), [{ number: 2 }]);
+        assert.deepEqual(h.parseMcpPrList({}), []);
+        assert.deepEqual(h.parseMcpPrList(null), []);
+    });
+
+    test('prHeadRef prefers head.ref, then branch, then source_branch', function() {
+        var h = loadSetupHelpers();
+        assert.equal(h.prHeadRef({ head: { ref: 'story/PROJ-1' } }), 'story/PROJ-1');
+        assert.equal(h.prHeadRef({ head: {}, branch: 'bug/PROJ-1' }), 'bug/PROJ-1');
+        assert.equal(h.prHeadRef({ source_branch: 'feature/PROJ-1' }), 'feature/PROJ-1');
+        assert.equal(h.prHeadRef({}), '');
+        assert.equal(h.prHeadRef({ head: { ref: '' }, branch: 'x' }), 'x');
+    });
+
+    test('decideFeatureBranchFromPrs finds the first PR mentioning the key', function() {
+        var h = loadSetupHelpers();
+        var d = h.decideFeatureBranchFromPrs([
+            { number: 1, head: { ref: 'unrelated' } },
+            { number: 2, head: { ref: 'story/PROJ-9' } },
+            { number: 3, head: { ref: 'story/PROJ-9-later' } }
+        ], 'PROJ-9');
+        assert.equal(d.found, true);
+        assert.equal(d.branch, 'story/PROJ-9');
+        assert.equal(d.prNumber, 2);
+    });
+
+    test('decideFeatureBranchFromPrs reports not-found and tolerates null lists', function() {
+        var h = loadSetupHelpers();
+        var d = h.decideFeatureBranchFromPrs([{ number: 1, head: { ref: 'main' } }], 'PROJ-9');
+        assert.equal(d.found, false);
+        assert.equal(d.branch, null);
+        assert.equal(d.prNumber, null);
+        assert.equal(h.decideFeatureBranchFromPrs(null, 'PROJ-9').found, false);
+    });
+
+    test('decideBitriseBuildConfigured requires appSlug and workflowId', function() {
+        var h = loadSetupHelpers();
+        assert.equal(h.decideBitriseBuildConfigured({ appSlug: 's', workflowId: 'w' }), true);
+        assert.equal(h.decideBitriseBuildConfigured({ appSlug: 's' }), false);
+        assert.equal(h.decideBitriseBuildConfigured({ workflowId: 'w' }), false);
+        assert.equal(h.decideBitriseBuildConfigured(null), false);
+    });
+
+});
