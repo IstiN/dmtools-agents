@@ -50,7 +50,7 @@ function loadCreateQuestionsModule(fileMap, extraGlobals, requireOverrides) {
             return JSON.stringify({ key: 'BICE-' + (900 + createdTickets.length) });
         }
     };
-    for (var k in (extraGlobals || {})) { globals[k] = extraGlobals[k]; }
+    Object.assign(globals, extraGlobals || {});
 
     var requireMap = {
         './common/jiraHelpers.js': {
@@ -71,7 +71,7 @@ function loadCreateQuestionsModule(fileMap, extraGlobals, requireOverrides) {
         './common/outputFiles.js': outputFiles,
         './common/trackers.js': d2Trackers(globals)
     };
-    for (var r in (requireOverrides || {})) { requireMap[r] = requireOverrides[r]; }
+    Object.assign(requireMap, requireOverrides || {});
 
     var mod = loadModule(
         'js/createQuestionsAndAssignForReview.js',
