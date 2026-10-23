@@ -448,3 +448,201 @@ suite('publishDiscoveryToConfluence', function() {
 
 });
 
+// ── gh-1187 CRAP split: characterization tests for the extracted helpers ────
+
+// Loader variant with a fully mocked contentOutput module (the default loader
+// wires the real one; the publishCommentReplies-throws test needs a throwing one).
+function loadPublishDiscoveryWithRepliesModule(repliesModuleMock, mocks, discoveryConfig) {
+    var globals = {
+        confluence_get_children_by_id: function() {
+            return [{ id: '456', title: 'PROJ-2 Some feature', body: { storage: { value: '' } } }];
+        },
+        confluence_sync_markdown_directory: function() { return JSON.stringify({ syncedPages: ['index'] }); },
+        file_read: function(opts) {
+            var path = opts && (opts.path || opts);
+            if (path === 'outputs/response.md') { return 'Discovery run summary.'; }
+            throw new Error('not found: ' + path);
+        },
+        jira_post_comment: function() {}
+    };
+    for (var k in (mocks || {})) { globals[k] = mocks[k]; }
+    return loadModule(
+        'js/publishDiscoveryToConfluence.js',
+        makeRequire({
+            './configLoader.js': { loadProjectConfig: function() { return { discovery: discoveryConfig || {} }; } },
+            './common/trackers.js': loadTrackersPd(globals),
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/feedbackLoop.js': { resumeAgent: function() { return { attempted: false }; } },
+            './common/contentOutput.js': repliesModuleMock
+        }),
+        globals
+    );
+}
+
+suite('publishDiscoveryToConfluence — gh-1187 extracted helpers', function() {
+
+    test('ticketSummaryOf: summary or empty string', function() {
+        var mod = loadPublishDiscovery({});
+        assert.equal(mod.ticketSummaryOf({ ticket: { key: 'P-1', fields: { summary: 'Sum' } } }), 'Sum');
+        assert.equal(mod.ticketSummaryOf({ ticket: { key: 'P-1' } }), '');
+        assert.equal(mod.ticketSummaryOf({ ticket: { key: 'P-1', fields: {} } }), '');
+    });
+
+    test('syncedCountOf: array length, with a 0 fallback', function() {
+        var mod = loadPublishDiscovery({});
+        assert.equal(mod.syncedCountOf({ syncedPages: ['a', 'b'] }), 2);
+        assert.equal(mod.syncedCountOf({}), 0);
+        assert.equal(mod.syncedCountOf({ syncedPages: [] }), 0);
+    });
+
+    test('isUnconfiguredDiscovery: missing space or parentPageId', function() {
+        var mod = loadPublishDiscovery({});
+        assert.equal(mod.isUnconfiguredDiscovery({ space: 'S', parentPageId: '1' }), false);
+        assert.equal(mod.isUnconfiguredDiscovery({ space: null, parentPageId: '1' }), true);
+        assert.equal(mod.isUnconfiguredDiscovery({ space: 'S', parentPageId: null }), true);
+    });
+
+    test('buildPublishedResult: success payload mirrors the original shape, with and without replies', function() {
+        var mod = loadPublishDiscovery({});
+        var page = { id: 'p1' };
+        var r = mod.buildPublishedResult('PROJ-2', page, 'https://x', 3, { posted: 2, failed: 1 });
+        assert.deepEqual(r, {
+            success: true, action: 'published', ticketKey: 'PROJ-2', pageId: 'p1',
+            pageUrl: 'https://x', syncedPages: 3, commentRepliesPosted: 2, commentRepliesFailed: 1
+        });
+        var r0 = mod.buildPublishedResult('PROJ-2', page, null, 0, { posted: 0, failed: 0 });
+        assert.equal(r0.pageUrl, null);
+        assert.equal(r0.commentRepliesPosted, 0);
+    });
+
+    test('fetchParentChildren: children payload on success, error marker on failure', function() {
+        var mod = loadPublishDiscovery({
+            confluence_get_children_by_id: function() { return [{ id: 'c1' }]; }
+        }, { space: 'DISC', parentPageId: '123' });
+        var ok = mod.fetchParentChildren('123');
+        assert.equal(ok.children.length, 1);
+
+        var failing = loadPublishDiscovery({
+            confluence_get_children_by_id: function() { throw new Error('boom'); }
+        }, { space: 'DISC', parentPageId: '123' });
+        assert.contains(failing.fetchParentChildren('123').error, 'boom');
+    });
+
+    test('ensureTicketPage: create / rename / reuse branches', function() {
+        var mod = loadPublishDiscovery({
+            confluence_create_page: function(args) { return { id: 'created', title: args.title }; },
+            confluence_update_page: function(args) { return { id: args.contentId, title: args.title }; }
+        }, { space: 'DISC', parentPageId: '123' });
+        var ctx = { space: 'DISC', parentPageId: '123' };
+
+        var created = mod.ensureTicketPage(ctx, [], 'PROJ-2', 'PROJ-2 Title');
+        assert.equal(created.id, 'created');
+
+        var renamed = mod.ensureTicketPage(ctx, [{ id: '456', title: 'PROJ-2 Old', body: { storage: { value: '<p>x</p>' } } }], 'PROJ-2', 'PROJ-2 New');
+        assert.equal(renamed.id, '456');
+        assert.equal(renamed.title, 'PROJ-2 New');
+
+        var reused = mod.ensureTicketPage(ctx, [{ id: '456', title: 'PROJ-2 Same', body: { storage: { value: '' } } }], 'PROJ-2', 'PROJ-2 Same');
+        assert.equal(reused.id, '456');
+        assert.equal(reused.title, 'PROJ-2 Same');
+    });
+
+    test('resumeIfFinalOutputMissing: false when response.md exists; true only when the resume is attempted', function() {
+        var mod = loadPublishDiscovery({});
+        assert.equal(mod.resumeIfFinalOutputMissing(makeParams(), 'PROJ-2'), false, 'response.md present → no resume');
+
+        var resuming = loadPublishDiscovery({
+            file_read: function() { throw new Error('not found'); },
+            __feedbackLoop: { resumeAgent: function() { return { attempted: true }; } }
+        }, { space: 'DISC', parentPageId: '123' });
+        assert.equal(resuming.resumeIfFinalOutputMissing(makeParams(), 'PROJ-2'), true);
+
+        var declining = loadPublishDiscovery({
+            file_read: function() { throw new Error('not found'); },
+            __feedbackLoop: { resumeAgent: function() { return { attempted: false }; } }
+        }, { space: 'DISC', parentPageId: '123' });
+        assert.equal(declining.resumeIfFinalOutputMissing(makeParams(), 'PROJ-2'), false);
+    });
+
+    test('action without jobParams (root-level customParams) publishes normally', function() {
+        var mod = loadPublishDiscovery({}, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action({
+            ticket: { key: 'PROJ-7', fields: { summary: 'No jobParams' } },
+            customParams: { anything: true }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'published');
+    });
+
+    test('response.md missing without jobParams — customParams fallback reached, resume declined, publish continues', function() {
+        var mod = loadPublishDiscovery({
+            file_read: function(opts) { throw new Error('not found: ' + (opts && (opts.path || opts))); },
+            __feedbackLoop: { resumeAgent: function() { return { attempted: false, reason: 'disabled' }; } }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action({
+            ticket: { key: 'PROJ-8', fields: { summary: 'S' } },
+            customParams: { trackerProvider: 'jira' }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.commentRepliesPosted, 0);
+    });
+
+    test('published-comment postComment failure is non-fatal — publish result returned', function() {
+        var mod = loadPublishDiscovery({
+            jira_post_comment: function() { throw new Error('jira comment api down'); }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'published');
+    });
+
+    test('sync failure with a failing failure-comment post — still returns the error result', function() {
+        var mod = loadPublishDiscovery({
+            confluence_sync_markdown_directory: function() { throw new Error('sync boom'); },
+            jira_post_comment: function() { throw new Error('comment boom'); }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.success, false);
+        assert.equal(result.action, 'error');
+        assert.contains(result.error, 'sync boom');
+    });
+
+    test('not-configured comment failure is non-fatal — not_configured result returned', function() {
+        var mod = loadPublishDiscovery({
+            jira_post_comment: function() { throw new Error('comment boom'); }
+        }, {});
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.action, 'not_configured');
+        assert.equal(result.success, false);
+    });
+
+    test('collectReplyResult: a throwing publishCommentReplies is contained (posted 0)', function() {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warns.push(m); };
+        var mod = loadPublishDiscoveryWithRepliesModule({
+            publishCommentReplies: function() { throw new Error('replies boom'); }
+        }, {}, { space: 'DISC', parentPageId: '123' });
+        try {
+            var result = mod.action(makeParams());
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(result.success, true);
+        assert.equal(result.commentRepliesPosted, 0);
+        assert.equal(warns.some(function(m) { return String(m).indexOf('Failed to publish inline comment replies') !== -1; }), true);
+    });
+
+});
+
+
