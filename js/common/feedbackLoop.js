@@ -127,50 +127,85 @@ function buildMissingResponsePrompt(options) {
     ].join('\n');
 }
 
-function resumeAgent(options) {
-    options = options || {};
-    var customParams = options.customParams || {};
-    var config = normalizeConfig(customParams, options.section || 'postAction');
-    if (!isFeedbackEnabled(customParams, options.section || 'postAction') || config.enabled === false) {
-        return { attempted: false, reason: 'disabled' };
-    }
+// ── gh-1196: resumeAgent decomposed into pure single-purpose helpers ────────
+// Behavior contract is unchanged (the characterization suites in
+// test_feedbackLoop.js pin every branch); this section only splits the
+// former monolith the same way gh-1079 split runConfiguredGates:
+//   feedbackSection      — the section default ('postAction')
+//   resumeEnabled        — the enablement gate (root/section switch + explicit false)
+//   maxAttemptsFrom      — default → parse → validity (0 = unusable)
+//   resumeBlocker        — the three early exits in contract order
+//   resumeKey            — the sanitized <ticket>_<stage> marker key
+//   feedbackMarkerPaths  — the attempt-marker + prompt-file paths
+//   resumePromptFor      — override or the built feedback prompt
+//   buildResumeCommand   — the run-agent.sh wrapper (+ the hard timeout wrap)
+// Every exec/console/file call keeps its original position in the sequence.
 
+function feedbackSection(options) {
+    return options.section || 'postAction';
+}
+
+function resumeEnabled(customParams, section, config) {
+    return isFeedbackEnabled(customParams, section) && config.enabled !== false;
+}
+
+function maxAttemptsFrom(config) {
     var maxAttempts = config.maxAttempts;
     if (maxAttempts === undefined || maxAttempts === null) maxAttempts = DEFAULT_MAX_ATTEMPTS;
     maxAttempts = parseInt(maxAttempts, 10);
-    if (!maxAttempts || maxAttempts < 1) return { attempted: false, reason: 'maxAttempts=0' };
+    if (!maxAttempts || maxAttempts < 1) return 0;
+    return maxAttempts;
+}
 
-    var errorText = String(options.error || '');
-    if (isNonRecoverable(errorText, config)) {
+// The early exits in contract order: disabled → maxAttempts unusable →
+// non-recoverable error. Null = the resume may proceed.
+function resumeBlocker(options, customParams, config, section) {
+    if (!resumeEnabled(customParams, section, config)) {
+        return { attempted: false, reason: 'disabled' };
+    }
+    if (!maxAttemptsFrom(config)) {
+        return { attempted: false, reason: 'maxAttempts=0' };
+    }
+    if (isNonRecoverable(String(options.error || ''), config)) {
         return { attempted: false, reason: 'non-recoverable' };
     }
+    return null;
+}
 
-    ensureFeedbackDir();
-    var key = sanitizeId((options.ticketKey || 'unknown') + '_' + (options.stage || 'feedback'));
-    var markerPath = 'outputs/feedback/' + key + '.attempt';
-    var attempt = getAttempt(markerPath);
-    if (attempt >= maxAttempts) {
-        return { attempted: false, reason: 'attempts-exhausted', attempts: attempt };
-    }
+function resumeKey(options) {
+    return sanitizeId((options.ticketKey || 'unknown') + '_' + (options.stage || 'feedback'));
+}
 
-    attempt += 1;
-    setAttempt(markerPath, attempt);
+function feedbackMarkerPaths(key) {
+    return {
+        marker: 'outputs/feedback/' + key + '.attempt',
+        prompt: 'outputs/feedback/' + key + '.md'
+    };
+}
 
-    // `buildFeedbackPrompt()` bakes in dev-flow assumptions ("do not push; the
-    // post-action will commit and push after you finish") that don't apply to
-    // every caller (e.g. a publish-only post-action that never pushes code).
-    // Callers with a different resume flow can pass `promptOverride` with the
-    // full prompt text instead — attempt tracking / non-recoverable-error
-    // detection / the `--continue` resume mechanics stay identical either way.
-    var prompt = options.promptOverride || buildFeedbackPrompt({
+// `buildFeedbackPrompt()` bakes in dev-flow assumptions ("do not push; the
+// post-action will commit and push after you finish") that don't apply to
+// every caller (e.g. a publish-only post-action that never pushes code).
+// Callers with a different resume flow can pass `promptOverride` with the
+// full prompt text instead — attempt tracking / non-recoverable-error
+// detection / the `--continue` resume mechanics stay identical either way.
+function resumePromptFor(options, errorText, attempt) {
+    return options.promptOverride || buildFeedbackPrompt({
         ticketKey: options.ticketKey,
         stage: options.stage,
         attempt: attempt,
         error: errorText
     });
-    var promptPath = 'outputs/feedback/' + key + '.md';
-    writeFile(promptPath, prompt);
+}
 
+// gh-775: bounded resume — a hard wall-clock cap on the wrapper invocation so a
+// hung provider session cannot hold the post-action (and the job's remaining
+// timeout budget) hostage. `timeout -k 60 <N>` TERM-inates the wrapper after <N>
+// seconds and KILLs it 60s later if TERM is ignored. The wrapper is entered
+// through `bash` (cli_execute_command whitelists the command's FIRST token only;
+// dev runners carry it via envVariables.CLI_ALLOWED_COMMANDS), so no new
+// whitelist entry is needed.
+function buildResumeCommand(config, promptPath, timeoutSeconds) {
     // Copilot CLI's `--continue` already means "resume the most recent session in this
     // directory" (no value needed); its own `-r, --resume[=value]` flag is a second,
     // mutually exclusive way to resume (by explicit id or an interactive picker when bare).
@@ -179,20 +214,40 @@ function resumeAgent(options) {
     // deterministically before the agent ever got a chance to act on the new prompt.
     var resumeArgs = config.resumeArgs || '--continue';
     var command = 'bash agents/scripts/run-agent.sh ' + resumeArgs + ' ' + promptPath;
-    // gh-775: bounded resume — a hard wall-clock cap on the wrapper invocation so a
-    // hung provider session cannot hold the post-action (and the job's remaining
-    // timeout budget) hostage. `timeout -k 60 <N>` TERM-inates the wrapper after <N>
-    // seconds and KILLs it 60s later if TERM is ignored. The wrapper is entered
-    // through `bash` (cli_execute_command whitelists the command's FIRST token only;
-    // dev runners carry it via envVariables.CLI_ALLOWED_COMMANDS), so no new
-    // whitelist entry is needed.
-    var timeoutSeconds = parseInt(options.timeoutSeconds, 10);
-    if (timeoutSeconds && timeoutSeconds > 0) {
-        command = 'bash -c "timeout -k 60 ' + timeoutSeconds + ' ' + command + '"';
+    var timeout = parseInt(timeoutSeconds, 10);
+    if (timeout && timeout > 0) {
+        command = 'bash -c "timeout -k 60 ' + timeout + ' ' + command + '"';
     }
-    console.log('Feedback loop: resuming agent for ' + (options.stage || 'failure') + ' attempt ' + attempt + '/' + maxAttempts);
-    runCommand(command);
-    return { attempted: true, attempts: attempt, promptPath: promptPath };
+    return command;
+}
+
+function resumeLogLine(stage, attempt, maxAttempts) {
+    return 'Feedback loop: resuming agent for ' + (stage || 'failure') +
+        ' attempt ' + attempt + '/' + maxAttempts;
+}
+
+function resumeAgent(options) {
+    options = options || {};
+    var customParams = options.customParams || {};
+    var section = feedbackSection(options);
+    var config = normalizeConfig(customParams, section);
+    var blocker = resumeBlocker(options, customParams, config, section);
+    if (blocker) return blocker;
+
+    var maxAttempts = maxAttemptsFrom(config);
+    ensureFeedbackDir();
+    var paths = feedbackMarkerPaths(resumeKey(options));
+    var attempt = getAttempt(paths.marker);
+    if (attempt >= maxAttempts) {
+        return { attempted: false, reason: 'attempts-exhausted', attempts: attempt };
+    }
+
+    attempt += 1;
+    setAttempt(paths.marker, attempt);
+    writeFile(paths.prompt, resumePromptFor(options, String(options.error || ''), attempt));
+    console.log(resumeLogLine(options.stage, attempt, maxAttempts));
+    runCommand(buildResumeCommand(config, paths.prompt, options.timeoutSeconds));
+    return { attempted: true, attempts: attempt, promptPath: paths.prompt };
 }
 
 // ── gh-775: ONE bounded resume for a missing deliverable ────────────────────
@@ -564,6 +619,15 @@ module.exports = {
     isFeedbackEnabled: isFeedbackEnabled,
     sanitizeId: sanitizeId,
     getConfiguredGates: getConfiguredGates,
+    feedbackSection: feedbackSection,
+    resumeEnabled: resumeEnabled,
+    maxAttemptsFrom: maxAttemptsFrom,
+    resumeBlocker: resumeBlocker,
+    resumeKey: resumeKey,
+    feedbackMarkerPaths: feedbackMarkerPaths,
+    resumePromptFor: resumePromptFor,
+    buildResumeCommand: buildResumeCommand,
+    resumeLogLine: resumeLogLine,
     errorTextOf: errorTextOf,
     gateRunnable: gateRunnable,
     gateCommand: gateCommand,
