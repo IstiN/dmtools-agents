@@ -275,6 +275,11 @@ suite('retryMergePR: getGitHubRepoInfo (gh-1185 characterization)', function () 
         assert.deepEqual(loaded.mod.getGitHubRepoInfo(), { owner: 'acme', repo: 'path' });
     });
 
+    test('path/query/fragment characters terminate the repo match (regex semantics pinned)', function () {
+        var loaded = loadWithCli(function () { return '\thttps://github.com/acme/widgets.git#main  \n'; });
+        assert.deepEqual(loaded.mod.getGitHubRepoInfo(), { owner: 'acme', repo: 'widgets' });
+    });
+
     test('no github.com remote line → null', function () {
         var loaded = loadWithCli(function () { return 'git@gitlab.internal:acme/widgets.git\n'; });
         assert.equal(loaded.mod.getGitHubRepoInfo(), null);
@@ -365,7 +370,10 @@ suite('retryMergePR: action branch characterization (gh-980)', function() {
                     triggerConfiguredWorkflowForTicket: function() { return true; }
                 },
                 './common/tokenUsageComment.js': {
-                    postTokenUsageComments: function(ticketKey, o) { tokenCalls.push({ ticketKey: ticketKey, opts: o }); },
+                    postTokenUsageComments: function(ticketKey, o) {
+                        if (opts.tokenUsageThrows) { throw opts.tokenUsageThrows; }
+                        tokenCalls.push({ ticketKey: ticketKey, opts: o });
+                    },
                     customParamsOf: function(params) {
                         return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
                     }
@@ -525,6 +533,18 @@ suite('retryMergePR: action branch characterization (gh-980)', function() {
             { key: 'TS-125', statusName: configModule.STATUSES.IN_REWORK });
         assert.equal(loaded.tokenCalls.length, 1, 'token usage summary posts once on the failing path');
         assert.equal(loaded.tokenCalls[0].ticketKey, 'TS-125');
+    });
+
+    test('a failing token-usage post never fails the action (gh-1185 branch coverage)', function() {
+        var loaded = load({
+            prDetail: { mergeable: true, mergeable_state: 'clean' },
+            mergeError: new Error('validation failed'),
+            tokenUsageThrows: new Error('comment API down')
+        });
+        var out = loaded.mod.action(runParams({ removeLabel: 'sm_pr_merge_triggered' }));
+        assert.equal(out, true, 'the escalation result survives the token-usage failure');
+        assert.deepEqual(toolsOf(loaded.calls, 'jira_move_to_status')[0].args,
+            { key: 'TS-125', statusName: configModule.STATUSES.IN_REWORK });
     });
 });
 
