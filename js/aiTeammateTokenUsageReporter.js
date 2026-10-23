@@ -495,6 +495,14 @@ function addRowTokensToGroup(bucket, row) {
     bucket.samples += row.samples || 0;
 }
 
+// Folds the timeout/duration run-shaped tallies into the bucket.
+function addRowTimeoutsToGroup(bucket, row) {
+    bucket.timeoutCount += row.timeoutCount || 0;
+    if (row.timeoutCount) bucket.timeoutRuns += 1;
+    bucket.durationSeconds += row.durationSeconds || 0;
+    if (row.durationSeconds) bucket.durationRuns += 1;
+}
+
 // Folds the per-row signal counters (resume / rate limit / timeout / duration)
 // into the bucket's run-shaped tallies.
 function addRowSignalsToGroup(bucket, row) {
@@ -502,10 +510,7 @@ function addRowSignalsToGroup(bucket, row) {
     bucket.feedbackLoopCount += row.feedbackLoopCount || 0;
     bucket.rateLimitRetryCount += row.rateLimitRetryCount || 0;
     if (row.rateLimitDetected) bucket.rateLimitRuns += 1;
-    bucket.timeoutCount += row.timeoutCount || 0;
-    if (row.timeoutCount) bucket.timeoutRuns += 1;
-    bucket.durationSeconds += row.durationSeconds || 0;
-    if (row.durationSeconds) bucket.durationRuns += 1;
+    addRowTimeoutsToGroup(bucket, row);
 }
 
 function addRowToGroup(bucket, row) {
@@ -1807,6 +1812,7 @@ if (typeof module !== 'undefined' && module.exports) {
         faTokensSampleOf: faTokensSampleOf,
         faLedgerSampleOf: faLedgerSampleOf,
         tokenCountMatchesOf: tokenCountMatchesOf,
+        matchedGroupOf: matchedGroupOf,
         cliTokensSampleOf: cliTokensSampleOf,
         extractTokenUsage: extractTokenUsage,
         newUsageTracking: newUsageTracking,
@@ -1878,6 +1884,7 @@ if (typeof module !== 'undefined' && module.exports) {
         newGroupBucket: newGroupBucket,
         addRowTokensToGroup: addRowTokensToGroup,
         addRowSignalsToGroup: addRowSignalsToGroup,
+        addRowTimeoutsToGroup: addRowTimeoutsToGroup,
         addRowToGroup: addRowToGroup,
         groupBucketOf: groupBucketOf,
         roundedAverageOf: roundedAverageOf,
