@@ -58,6 +58,19 @@ function hasCodeGraphUsage() {
     }
 }
 
+function isCodeGraphRequired() {
+    try {
+        cli_execute_command({ command: 'bash -c "test -d .codegraph && command -v codegraph"' });
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function isBlockedClaimVerified() {
+    return hasCodeGraphUsage() || !isCodeGraphRequired();
+}
+
 /**
  * True when outputs/response.md exists with content. Thin wrapper over the
  * canonical outputFiles.hasOutputFile so the existence read shares one
@@ -573,7 +586,7 @@ function action(params) {
         const blocked = readJson('outputs/blocked.json');
         if (blocked) {
             console.log('outputs/blocked.json found — bug cannot be fixed automatically');
-            return completeBlockedPath(ticketKey, blocked, hasCodeGraphUsage(), tracker, statuses, jiraConfig, params);
+            return completeBlockedPath(ticketKey, blocked, isBlockedClaimVerified(), tracker, statuses, jiraConfig, params);
         }
 
         // ── Path 2: Already Fixed ────────────────────────────────────────────
@@ -676,6 +689,9 @@ if (typeof module !== 'undefined' && module.exports) {
         // gh-1003: pure helpers extracted from action — exported for direct
         // characterization tests.
         resolveActualParams,
+        hasCodeGraphUsage,
+        isCodeGraphRequired,
+        isBlockedClaimVerified,
         findOpenPrForBranch,
         buildPrAlreadyOpenComment,
         buildBlockedComment,

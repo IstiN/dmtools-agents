@@ -411,11 +411,58 @@ function copyTopLevelKeys(target, source) {
     return target;
 }
 
-/** Parent-first array concat; child entries already present are not repeated. */
+function extractSectionPromptsList(sec) {
+    var out = [];
+    if (typeof sec.prompt === 'string') out.push(sec.prompt);
+    if (Array.isArray(sec.prompts)) {
+        for (var i = 0; i < sec.prompts.length; i++) {
+            if (typeof sec.prompts[i] === 'string') out.push(sec.prompts[i]);
+        }
+    }
+    return out;
+}
+
+function combineSectionPrompts(basePrompts, overPrompts, strategy) {
+    if (strategy === 'replace') return overPrompts;
+    if (strategy === 'prepend') return overPrompts.concat(basePrompts);
+    return basePrompts.concat(overPrompts);
+}
+
+function mergeCliPromptSections(baseSec, overSec) {
+    var strategy = String(overSec.mergeStrategy || baseSec.mergeStrategy || 'append').toLowerCase();
+    var result = {
+        id: overSec.id || baseSec.id,
+        prompts: combineSectionPrompts(extractSectionPromptsList(baseSec), extractSectionPromptsList(overSec), strategy),
+        mergeStrategy: strategy
+    };
+    var cond = String(overSec.condition || baseSec.condition || '').trim();
+    if (cond) result.condition = cond;
+    return result;
+}
+
+function isPromptSectionObj(item) {
+    return !!(item && typeof item === 'object' && !Array.isArray(item) && item.id);
+}
+
+function findPromptSectionIndex(list, id) {
+    for (var k = 0; k < list.length; k++) {
+        if (isPromptSectionObj(list[k]) && list[k].id === id) return k;
+    }
+    return -1;
+}
+
+/** Parent-first array concat; child entries already present are not repeated, and section objects with matching id merge in-place. */
 function concatUnique(parentList, childList) {
     var combined = parentList.slice();
     for (var j = 0; j < childList.length; j++) {
-        if (combined.indexOf(childList[j]) === -1) combined.push(childList[j]);
+        var item = childList[j];
+        if (isPromptSectionObj(item)) {
+            var idx = findPromptSectionIndex(combined, item.id);
+            if (idx !== -1) combined[idx] = mergeCliPromptSections(combined[idx], item);
+            else combined.push(item);
+        } else if (combined.indexOf(item) === -1) {
+            combined.push(item);
+        }
     }
     return combined;
 }

@@ -33,6 +33,11 @@
       "./agents/instructions/test_automation/test_automation_json_output.md",
       "./agents/prompts/story_test_automation_rework_prompt.md",
       "./agents/prompts/bash_tools.md",
+      {
+        "id": "codegraph",
+        "prompt": "./agents/prompts/codegraph_tools.md",
+        "condition": "agents/js/conditions/isCodeGraphAvailable.js"
+      },
       "./agents/instructions/common/dmtools_cli.md"
     ],
     "cliPromptsByTracker": {

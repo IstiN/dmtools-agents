@@ -27,7 +27,12 @@
       "./agents/instructions/intake/json_validation.md",
       "./agents/instructions/common/no_development.md",
       "./agents/instructions/common/error_handling.md",
-      "./agents/prompts/bash_tools.md"
+      "./agents/prompts/bash_tools.md",
+      {
+        "id": "codegraph",
+        "prompt": "./agents/prompts/codegraph_tools.md",
+        "condition": "agents/js/conditions/isCodeGraphAvailable.js"
+      }
     ],
     "cliPromptsByTracker": {
       "jira": [

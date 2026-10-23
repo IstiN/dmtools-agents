@@ -59,20 +59,45 @@ function generateSnapshot(agentJsonPath) {
     if (basePrompts.length > 0) {
         lines.push('## Base cliPrompts');
         lines.push('');
-        basePrompts.forEach((entry, idx) => {
-            const resolved = resolvePromptEntry(entry);
-            if (entry.endsWith('.md')) {
-                lines.push(`### [${idx + 1}] \`${entry}\``);
-                lines.push('');
-                lines.push(resolved);
-            } else {
-                lines.push(`### [${idx + 1}] Role / Plain Text`);
-                lines.push('');
-                lines.push(resolved);
+        let promptIdx = 0;
+        basePrompts.forEach((entry) => {
+            const items = [];
+            let sectionMeta = null;
+            if (typeof entry === 'string') {
+                items.push(entry);
+            } else if (entry && typeof entry === 'object') {
+                sectionMeta = {
+                    id: entry.id || null,
+                    condition: entry.condition || null
+                };
+                if (typeof entry.prompt === 'string') {
+                    items.push(entry.prompt);
+                }
+                if (Array.isArray(entry.prompts)) {
+                    entry.prompts.forEach((p) => {
+                        if (typeof p === 'string') items.push(p);
+                    });
+                }
             }
-            lines.push('');
-            lines.push('---');
-            lines.push('');
+            items.forEach((promptStr) => {
+                promptIdx += 1;
+                const resolved = resolvePromptEntry(promptStr);
+                const condSuffix = sectionMeta && sectionMeta.condition
+                    ? ` _(conditional: \`${sectionMeta.condition}\`)_`
+                    : '';
+                if (promptStr.endsWith('.md')) {
+                    lines.push(`### [${promptIdx}] \`${promptStr}\`${condSuffix}`);
+                    lines.push('');
+                    lines.push(resolved);
+                } else {
+                    lines.push(`### [${promptIdx}] Role / Plain Text${condSuffix}`);
+                    lines.push('');
+                    lines.push(resolved);
+                }
+                lines.push('');
+                lines.push('---');
+                lines.push('');
+            });
         });
     }
 

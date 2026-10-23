@@ -250,6 +250,10 @@ suite('instructionRefs — pack reference integrity', function () {
         assert.ok(c.reachable['instructions/pr_review/review_verdict_rules.md'],
             '#605 regression: review_verdict_rules.md is no longer reachable ' +
             '— the pr_review pack would ship without it (live crash pr-320)');
+        assert.ok(c.reachable['prompts/codegraph_tools.md'],
+            '#941 regression: prompts/codegraph_tools.md must be reachable from agent configs');
+        assert.ok(c.reachable['js/conditions/isCodeGraphAvailable.js'],
+            '#941 regression: js/conditions/isCodeGraphAvailable.js must be reachable from agent configs');
     });
 
     test('R5 (gh-1160): no tracker- or Confluence-specific prompt remains in base cliPrompts', function () {

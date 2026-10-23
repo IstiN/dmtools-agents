@@ -447,12 +447,10 @@ suite('buildEncodedConfig payload', function() {
     test('gh-1160: real dev/review/rework configs inject only the active tracker comment format prompt and inline exact sections', function() {
         var builder = loadBuilder({});
         function assemblePrompt(cliPrompts) {
-            return cliPrompts.map(function(entry) {
-                if (entry.indexOf('./agents/') === 0) {
-                    return file_read({ path: entry.replace(/^\.\/agents\//, '') }) || file_read({ path: entry });
-                }
-                return entry;
-            }).filter(Boolean).join('\n\n');
+            return cliPrompts.map(function(item) {
+                var entry = typeof item === 'string' ? item : item.prompt;
+                return entry.indexOf('./agents/') === 0 ? file_read({ path: entry.replace(/^\.\/agents\//, '') }) : entry;
+            }).join('\n\n');
         }
         var configs = [
             'agents/story_development.json',
@@ -494,12 +492,10 @@ suite('buildEncodedConfig payload', function() {
     test('gh-1160: real story_solution/description/acceptance_criteria/wiki_publisher/discovery load confluence_comments.md only for confluence/wiki targets and assemble exact prompt sections', function() {
         var builder = loadBuilder({});
         function assemblePrompt(cliPrompts) {
-            return cliPrompts.map(function(entry) {
-                if (entry.indexOf('./agents/') === 0) {
-                    return file_read({ path: entry.replace(/^\.\/agents\//, '') }) || file_read({ path: entry });
-                }
-                return entry;
-            }).filter(Boolean).join('\n\n');
+            return cliPrompts.map(function(item) {
+                var entry = typeof item === 'string' ? item : item.prompt;
+                return entry.indexOf('./agents/') === 0 ? file_read({ path: entry.replace(/^\.\/agents\//, '') }) : entry;
+            }).join('\n\n');
         }
         var contentConfigs = [
             { file: 'agents/story_solution.json', name: 'story_solution', jiraPrompt: './agents/instructions/tracker/jira_markup_transform.md' },

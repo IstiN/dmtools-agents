@@ -372,6 +372,48 @@ suite('developBugAndCreatePR', function() {
         assert.contains(loaded.comments[0].comment, 'Blocked Claim Needs CodeGraph Verification');
     });
 
+    test('accepts blocked output when CodeGraph is not installed/initialized in workspace', function() {
+        var loaded = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/blocked.json') {
+                    return JSON.stringify({
+                        reason: 'Self-hosted macOS runner is offline',
+                        tried: ['Inspected GitHub Actions run logs'],
+                        needs: 'Runner restart on host'
+                    });
+                }
+                if (args.path === '.dmtools/codegraph-usage.log') {
+                    throw new Error('missing codegraph usage log');
+                }
+                throw new Error('missing ' + args.path);
+            },
+            cli_execute_command: function(args) {
+                if (args.command.indexOf('test -d .codegraph') !== -1) {
+                    throw new Error('Command execution failed (exit code 1)');
+                }
+                return '';
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: {
+                key: 'TS-1735',
+                fields: { summary: 'Blocked claim without CodeGraph installed', description: '', labels: [] }
+            },
+            metadata: { contextId: 'bug_development' },
+            jobParams: {
+                customParams: { removeLabel: 'sm_bug_development_triggered' }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'blocked');
+        assert.deepEqual(loaded.moves, [
+            { key: 'TS-1735', statusName: 'Blocked' }
+        ]);
+        assert.contains(loaded.comments[0].comment, 'Bug Cannot Be Fixed Automatically');
+    });
+
     test('accepts blocked output when CodeGraph usage was recorded → moves bug to Blocked (gh-1003)', function () {
         // gh-1003: the accepted-blocked branch of completeBlockedPath had no
         // characterization test (only the CodeGraph-rejection side was

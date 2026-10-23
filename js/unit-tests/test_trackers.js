@@ -1483,6 +1483,51 @@ suite('trackers.js — moveToStatusOrMark / stageFallback (agents#856)', functio
         assert.equal(m.ado_add_work_item_label.calls[0].label, 'stage_po_review');
         assert.equal(m.ado_add_work_item_label.calls[0].id, '2023979');
     });
+
+    test('agents#1178: formats a user-friendly fallback comment when the tracker returns a raw HTTP/JSON error payload', function () {
+        var rawAdoError = 'Tool execution failed: printAndCreateException error: https://dev.azure.com/org/Proj/_apis/wit/workitems/2010283?api-version=7.0 \n' +
+            '{"$id":"1","customProperties":{"FieldReferenceName":null,"FieldStatusFlags":"none","ErrorMessage":"The field \'State\' contains the value \'In Review\' that is not in the list of supported values","FieldStatusCode":0,"RuleValidationErrors":[{"fieldReferenceName":"System.State","fieldStatusFlags":"required, hasValues, limitedToValues, invalidListValue","errorMessage":"The field \'State\' contains the value \'In Review\' that is not in the list of supported values","fieldStatusCode":4194317,"ruleValidationErrors":null}]},"innerException":null,"message":"The field \'State\' contains the value \'In Review\' that is not in the list of supported values","typeName":"Microsoft.TeamFoundation.WorkItemTracking.Server.RuleValidationException, Microsoft.TeamFoundation.WorkItemTracking.Server","typeKey":"RuleValidationException","errorCode":0,"eventId":3200}\n' +
+            'Bad Request\n400';
+        var cases = [
+            {
+                err: rawAdoError,
+                expected: 'Could not move this ticket to "In Review" (The field \'State\' contains the value \'In Review\' that is not in the list of supported values). The stage is recorded with the label `stage_in_review` instead.'
+            },
+            {
+                err: 'Tool execution failed: {"customProperties":{"ErrorMessage":"Custom ADO error"}}',
+                expected: 'Could not move this ticket to "In Review" (Custom ADO error). The stage is recorded with the label `stage_in_review` instead.'
+            },
+            {
+                err: 'Tool execution failed: {"errorMessages":["Jira transition blocked"]}',
+                expected: 'Could not move this ticket to "In Review" (Jira transition blocked). The stage is recorded with the label `stage_in_review` instead.'
+            },
+            {
+                err: 'Tool execution failed: {not valid json} Bad Request 400',
+                expected: 'Could not move this ticket to "In Review" ({not valid json}). The stage is recorded with the label `stage_in_review` instead.'
+            },
+            {
+                err: 'Tool execution failed: printAndCreateException error: https://example.com/api Bad Request 400',
+                expected: 'Could not move this ticket to "In Review" (the status "In Review" is not available for this ticket). The stage is recorded with the label `stage_in_review` instead.'
+            },
+            {
+                err: '   ',
+                expected: 'Could not move this ticket to "In Review" (the status "In Review" is not available for this ticket). The stage is recorded with the label `stage_in_review` instead.'
+            }
+        ];
+        cases.forEach(function (c) {
+            var m = {
+                ado_move_to_state: recorder('ado_move_to_state', { __throw__: new Error(c.err) }),
+                ado_add_work_item_label: recorder('ado_add_work_item_label', '{}'),
+                ado_add_work_item_comment: recorder('ado_add_work_item_comment', '{}')
+            };
+            var t = loadTrackers(m).createTracker({}, { trackerProvider: 'ado', stageFallback: 'label' });
+            var r = t.moveToStatusOrMark('2010283', 'In Review', 'IN_REVIEW');
+            assert.equal(r.marked, true);
+            assert.equal(m.ado_add_work_item_comment.calls[0].comment, c.expected);
+            assert.equal(m.ado_add_work_item_comment.calls[0].comment.indexOf('printAndCreateException'), -1);
+            assert.equal(m.ado_add_work_item_comment.calls[0].comment.indexOf('RuleValidationException'), -1);
+        });
+    });
 });
 
 suite('trackers.js — stage label cleanup on a successful move (agents#855/#856)', function () {
@@ -1828,7 +1873,9 @@ suite('trackers.js — tracker-agnostic status transitions & stageFallback (gh-9
 
 suite('trackers.js — gh-1163 config resolution & no createTracker(null / initTracker(null guard', function () {
     function listJsEntries(dir) {
-        return JSON.parse(file_list({ path: dir })).entries.filter(function (p) {
+        var out = file_list({ path: dir });
+        if (typeof out === 'string') out = JSON.parse(out);
+        return ((out && out.entries) || []).filter(function (p) {
             return /\.js$/.test(String(p));
         });
     }

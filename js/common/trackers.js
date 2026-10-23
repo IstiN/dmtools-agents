@@ -1247,9 +1247,42 @@ function createTracker(config, customParams) {
         }
     }
 
-    function _postFallbackComment(ticketKey, statusName, label, reason) {
+    function _pickParsedErrorMsg(p) {
+        var cp = p.customProperties;
+        var em = p.errorMessages;
+        return p.message || (cp && cp.ErrorMessage) || (em && em[0]) || '';
+    }
+
+    function _extractJsonErrorMessage(text) {
+        var start = text.indexOf('{');
+        var end = text.lastIndexOf('}');
+        if (start === -1 || end <= start) return null;
         try {
-            impl.postComment(ticketKey, 'Could not move this ticket to "' + statusName + '" (' + reason +
+            var msg = String(_pickParsedErrorMsg(JSON.parse(text.substring(start, end + 1)) || {})).trim();
+            return msg || null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function _friendlyTransitionReason(rawReason, statusName) {
+        var text = String(rawReason || '').trim();
+        if (!text) return 'the status "' + statusName + '" is not available for this ticket';
+        var extracted = _extractJsonErrorMessage(text);
+        if (extracted) return extracted;
+        var cleaned = text
+            .replace(/^(?:Tool execution failed:\s*)+/i, '')
+            .replace(/^printAndCreateException error:\s*\S+\s*/i, '')
+            .replace(/\s*(?:Bad Request\s*)?\b[45]\d{2}\s*$/i, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        return cleaned || ('the status "' + statusName + '" is not available for this ticket');
+    }
+
+    function _postFallbackComment(ticketKey, statusName, label, reason) {
+        var friendlyReason = _friendlyTransitionReason(reason, statusName);
+        try {
+            impl.postComment(ticketKey, 'Could not move this ticket to "' + statusName + '" (' + friendlyReason +
                 '). The stage is recorded with the label `' + label + '` instead.');
         } catch (commentError) {
             console.warn('Could not post the stage-fallback comment on ' + ticketKey + ':', commentError);
