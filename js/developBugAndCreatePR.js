@@ -555,16 +555,122 @@ function resetTicketForRetry(ticketKey, hasGitChanges, tracker, statuses, outage
     }
 }
 
+/**
+ * gh-1188: the working-tree log line extracted from action.
+ */
+function logWorkingTreeCheck(hasGitChanges, hasResponseMd) {
+    console.log('Working tree check: git changes present = ' + hasGitChanges +
+        '; outputs/response.md = ' + (hasResponseMd ? 'present' : 'MISSING') +
+        (hasGitChanges || hasResponseMd ? '' : ' — neither work nor a response; the agent produced nothing'));
+}
+
+/**
+ * gh-1188: run-context resolution extracted from action — config, jira
+ * section, scm, custom params, statuses and tracker (same construction
+ * order as before).
+ */
+function resolveRunContext(params, actualParams) {
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var jiraConfig = config.jira;
+    var scm = configLoader.createScm(config);
+    var customParams = resolveCustomParams(params, actualParams);
+    var statuses = resolveStatuses(customParams, jiraConfig && jiraConfig.statuses);
+    var tracker = trackersModule.createTracker(config, customParams || {});
+    return {
+        config: config,
+        jiraConfig: jiraConfig,
+        scm: scm,
+        customParams: customParams,
+        statuses: statuses,
+        tracker: tracker
+    };
+}
+
+/**
+ * gh-1188: Path 0 scan extracted from action — returns the
+ * pr_already_open outcome when a PR exists for the branch, null otherwise.
+ * A listing failure stays non-fatal (as before).
+ */
+function resolvePrAlreadyOpenOutcome(ticketKey, scm, expectedBranch, tracker, statuses, params) {
+    try {
+        const existingPr = findOpenPrForBranch(scm.listPrs('open'), expectedBranch);
+        if (existingPr) {
+            return handlePrAlreadyOpen(ticketKey, existingPr, tracker, statuses, params);
+        }
+    } catch (prCheckErr) {
+        console.warn('Could not check existing PRs (non-fatal):', prCheckErr);
+    }
+    return null;
+}
+
+/**
+ * gh-1188: Paths 1+2 (blocked / already-fixed outputs) extracted from
+ * action — returns the handled outcome, or null when neither file exists.
+ */
+function resolveSpecialOutputPath(ticketKey, tracker, statuses, jiraConfig, params) {
+    const blocked = readJson('outputs/blocked.json');
+    if (blocked) {
+        console.log('outputs/blocked.json found — bug cannot be fixed automatically');
+        return completeBlockedPath(ticketKey, blocked, isBlockedClaimVerified(), tracker, statuses, jiraConfig, params);
+    }
+
+    const alreadyFixed = readJson('outputs/already_fixed.json');
+    if (alreadyFixed) {
+        console.log('outputs/already_fixed.json found — bug already resolved in codebase');
+        return completeAlreadyFixedPath(ticketKey, alreadyFixed, hasCodeGraphUsage(), tracker, jiraConfig, params);
+    }
+
+    return null;
+}
+
+/**
+ * gh-1188: the gh-775 shared recovery gate extracted from action — returns
+ * whether a response.md is present after (at most) ONE bounded resume.
+ */
+function recoverResponseMd(ticketKey, actualParams, params, customParams, expectedBranch) {
+    const recovered = developTicket.recoverMissingResponse(
+        ticketKey,
+        customParams,
+        actualParams.response || '',
+        actualParams.currentCliHasFatalError === true,
+        actualParams.currentCliErrorMessage || null,
+        // gh-1087: context for the delegated quota gate — the park
+        // labels the open PR and resolves jobParams (park label /
+        // probe cadence config).
+        quotaGateContextOf(actualParams, params, ticketKey, customParams, expectedBranch));
+    return !!(recovered && recovered.trim());
+}
+
+/**
+ * gh-1188: the action catch block extracted — marked failures
+ * (fatal CLI environment, git-operations gh-683, PR-creation gh-729,
+ * interrupted-reset gh-742, quota-park gh-1087) keep propagating so the RUN
+ * is RED; everything else posts the error comment (best effort) and returns
+ * the failure result.
+ */
+function handleActionError(error, params, tracker) {
+    console.error('❌ Error in developBugAndCreatePR:', error);
+    if (isPropagatingFailure(error)) {
+        throw error;
+    }
+    try {
+        const key = (params.ticket || (params.jobParams && params.jobParams.ticket) || {}).key;
+        if (key) {
+            tracker.postComment(key, commentMarkup.forTicket(key).h(3, '❌ Bug Development Error') + '\n\n' + commentMarkup.forTicket(key).code(error.toString())
+            );
+        }
+    } catch (e) {}
+    return { success: false, error: error.toString() };
+}
+
 function action(params) {
+    var tracker = null;
     try {
         const actualParams = resolveActualParams(params);
         const ticketKey = actualParams.ticket.key;
-        var config = configLoader.loadProjectConfig(params.jobParams || params);
-        var jiraConfig = config.jira;
-        var scm = configLoader.createScm(config);
-        const _customParams = resolveCustomParams(params, actualParams);
-        const statuses = resolveStatuses(_customParams, jiraConfig && jiraConfig.statuses);
-        var tracker = trackersModule.createTracker(config, _customParams || {});
+        const ctx = resolveRunContext(params, actualParams);
+        var config = ctx.config;
+        tracker = ctx.tracker;
 
         console.log('=== Bug development post-action for', ticketKey, '===');
 
@@ -573,27 +679,15 @@ function action(params) {
         // it but failed to move the ticket to In Review (e.g. was interrupted).
         // Move to In Review now and skip development entirely.
         const expectedBranch = configLoader.resolveBranchName(config, actualParams.ticket, 'development');
-        try {
-            const existingPr = findOpenPrForBranch(scm.listPrs('open'), expectedBranch);
-            if (existingPr) {
-                return handlePrAlreadyOpen(ticketKey, existingPr, tracker, statuses, params);
-            }
-        } catch (prCheckErr) {
-            console.warn('Could not check existing PRs (non-fatal):', prCheckErr);
+        const prOpenResult = resolvePrAlreadyOpenOutcome(ticketKey, ctx.scm, expectedBranch, tracker, ctx.statuses, params);
+        if (prOpenResult) {
+            return prOpenResult;
         }
 
-        // ── Path 1: Blocked ──────────────────────────────────────────────────
-        const blocked = readJson('outputs/blocked.json');
-        if (blocked) {
-            console.log('outputs/blocked.json found — bug cannot be fixed automatically');
-            return completeBlockedPath(ticketKey, blocked, isBlockedClaimVerified(), tracker, statuses, jiraConfig, params);
-        }
-
-        // ── Path 2: Already Fixed ────────────────────────────────────────────
-        const alreadyFixed = readJson('outputs/already_fixed.json');
-        if (alreadyFixed) {
-            console.log('outputs/already_fixed.json found — bug already resolved in codebase');
-            return completeAlreadyFixedPath(ticketKey, alreadyFixed, hasCodeGraphUsage(), tracker, jiraConfig, params);
+        // ── Path 1: Blocked / Path 2: Already Fixed ─────────────────────────
+        const specialResult = resolveSpecialOutputPath(ticketKey, tracker, ctx.statuses, ctx.jiraConfig, params);
+        if (specialResult) {
+            return specialResult;
         }
 
         // ── Path 3: Normal Fix — code changes present ────────────────────────
@@ -615,9 +709,7 @@ function action(params) {
 
         let hasResponseMd = readHasResponseMd(ticketKey);
 
-        console.log('Working tree check: git changes present = ' + hasGitChanges +
-            '; outputs/response.md = ' + (hasResponseMd ? 'present' : 'MISSING') +
-            (hasGitChanges || hasResponseMd ? '' : ' — neither work nor a response; the agent produced nothing'));
+        logWorkingTreeCheck(hasGitChanges, hasResponseMd);
 
         // gh-775: ONE shared gate (developTicketAndCreatePR.recoverMissingResponse)
         // for every response.md-missing cold-reset site — the gating order (fatal
@@ -627,17 +719,7 @@ function action(params) {
         // broken environment (missing binary, unknown provider, exit 127) skips
         // the doomed attempt exactly like the story leg.
         if (!hasResponseMd) {
-            const recovered = developTicket.recoverMissingResponse(
-                ticketKey,
-                _customParams,
-                actualParams.response || '',
-                actualParams.currentCliHasFatalError === true,
-                actualParams.currentCliErrorMessage || null,
-                // gh-1087: context for the delegated quota gate — the park
-                // labels the open PR and resolves jobParams (park label /
-                // probe cadence config).
-                quotaGateContextOf(actualParams, params, ticketKey, _customParams, expectedBranch));
-            hasResponseMd = !!(recovered && recovered.trim());
+            hasResponseMd = recoverResponseMd(ticketKey, actualParams, params, ctx.customParams, expectedBranch);
         }
 
         // gh-1087 AC1: classify the leg's failure text BEFORE the interrupted
@@ -651,7 +733,7 @@ function action(params) {
             // gh-1003: the partial-work push + comment + reset sequence lives
             // in completeInterruptedPath (planned by decidePartialPush).
             console.log('outputs/response.md missing — CLI agent was interrupted. Resetting ticket for retry.');
-            return completeInterruptedPath(ticketKey, hasGitChanges, cli_execute_command, config, actualParams.ticket, tracker, statuses, params, scm, quotaCls);
+            return completeInterruptedPath(ticketKey, hasGitChanges, cli_execute_command, config, actualParams.ticket, tracker, ctx.statuses, params, ctx.scm, quotaCls);
         }
 
         const result = developTicket.action(params);
@@ -663,23 +745,7 @@ function action(params) {
         return result;
 
     } catch (error) {
-        console.error('❌ Error in developBugAndCreatePR:', error);
-        // Marked failures from the delegated developTicketAndCreatePR (fatal
-        // CLI environment, git-operations gh-683, PR-creation gh-729,
-        // interrupted-reset gh-742) must keep propagating so the RUN is RED —
-        // swallowing them here would turn a deliberate loud failure back into
-        // a returned result.
-        if (isPropagatingFailure(error)) {
-            throw error;
-        }
-        try {
-            const key = (params.ticket || (params.jobParams && params.jobParams.ticket) || {}).key;
-            if (key) {
-                tracker.postComment(key, commentMarkup.forTicket(key).h(3, '❌ Bug Development Error') + '\n\n' + commentMarkup.forTicket(key).code(error.toString())
-                );
-            }
-        } catch (e) {}
-        return { success: false, error: error.toString() };
+        return handleActionError(error, params, tracker);
     }
 }
 
@@ -710,6 +776,20 @@ if (typeof module !== 'undefined' && module.exports) {
         completeAlreadyFixedPath,
         completeInterruptedPath,
         // gh-1087: quota park path — exported for direct characterization tests.
-        parkQuotaPath
+        parkQuotaPath,
+        // gh-1188: the PR park-label helper — exported for direct
+        // characterization tests.
+        parkLabelOpenPr,
+        // gh-1188: step helpers extracted from action — exported for direct
+        // characterization tests.
+        readJson,
+        logWorkingTreeCheck,
+        resolveRunContext,
+        resolvePrAlreadyOpenOutcome,
+        resolveSpecialOutputPath,
+        recoverResponseMd,
+        handleActionError,
+        pushPreservedAnalysisWork,
+        executePartialPushPlan
     };
 }

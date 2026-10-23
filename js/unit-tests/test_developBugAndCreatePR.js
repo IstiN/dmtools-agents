@@ -28,7 +28,7 @@ function trackersWith(mocks) {
     );
 }
 
-function loadDevelopBugAndCreatePR(mocks) {
+function loadDevelopBugAndCreatePR(mocks, requireOverrides) {
     mocks = mocks || {};
     var comments = [];
     var moves = [];
@@ -96,35 +96,42 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         './common/commentMarkup.js': commentMarkupModule
     }, { './common/trackers.js': trackersWith(_m) })), _m); })({});
 
+    var requireMap = {
+        './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
+        './config.js': configModule,
+        './common/gitStaging.js': gitStagingModule,
+        './common/quotaCircuitBreaker.js': quotaBreakerModule,
+        './configLoader.js': configLoaderModule,
+        './common/outputFiles.js': outputFiles,
+        './common/trackers.js': loadTrackersDev(allMocks),
+        './developTicketAndCreatePR.js': {
+            action: function() { return { success: true, path: 'delegated' }; },
+            throwInterruptedReset: developTicketRealModule.throwInterruptedReset,
+            // gh-1087: real shared helpers (single source of truth for
+            // the classification concat + the quotaPark marker contract).
+            classifyInterruptedText: developTicketRealModule.classifyInterruptedText,
+            throwQuotaPark: developTicketRealModule.throwQuotaPark,
+            recoverMissingResponse: function () { return null; }
+        }
+    ,
+        './common/feedbackLoop.js': {
+            runQualityGates: function () { return { success: true }; },
+            runPolicyGates: function () { return { success: true }; },
+            runPostPublishGates: function () { return { success: true }; },
+            resumeAgent: function () { return { attempted: false }; },
+            resumeOnceForMissingResponse: function () { return { attempted: false }; }
+        },
+        './common/commentMarkup.js': commentMarkupModule,
+    };
+    if (requireOverrides) {
+        for (var rk in requireOverrides) {
+            if (requireOverrides.hasOwnProperty(rk)) requireMap[rk] = requireOverrides[rk];
+        }
+    }
+
     var mod = loadModule(
         'js/developBugAndCreatePR.js',
-        makeRequire({
-            './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
-            './config.js': configModule,
-            './common/gitStaging.js': gitStagingModule,
-            './common/quotaCircuitBreaker.js': quotaBreakerModule,
-            './configLoader.js': configLoaderModule,
-            './common/outputFiles.js': outputFiles,
-            './common/trackers.js': loadTrackersDev(allMocks),
-            './developTicketAndCreatePR.js': {
-                action: function() { return { success: true, path: 'delegated' }; },
-                throwInterruptedReset: developTicketRealModule.throwInterruptedReset,
-                // gh-1087: real shared helpers (single source of truth for
-                // the classification concat + the quotaPark marker contract).
-                classifyInterruptedText: developTicketRealModule.classifyInterruptedText,
-                throwQuotaPark: developTicketRealModule.throwQuotaPark,
-                recoverMissingResponse: function () { return null; }
-            }
-        ,
-            './common/feedbackLoop.js': {
-                runQualityGates: function () { return { success: true }; },
-                runPolicyGates: function () { return { success: true }; },
-                runPostPublishGates: function () { return { success: true }; },
-                resumeAgent: function () { return { attempted: false }; },
-                resumeOnceForMissingResponse: function () { return { attempted: false }; }
-            },
-            './common/commentMarkup.js': commentMarkupModule,
-        }),
+        makeRequire(requireMap),
         allMocks
     );
 
@@ -1351,5 +1358,347 @@ suite('developBugAndCreatePR > pr-already-open and partial-push paths (gh-1003)'
         assert.notOk(commands.some(function (c) { return c.indexOf('--force-with-lease') !== -1; }),
             'no force push when the current branch is not base/main/master');
         assert.deepEqual(loaded.moves, [{ key: 'TS-1401', statusName: 'Ready For Development' }]);
+    });
+});
+
+// ── gh-1188: action decomposition — characterization tests for the extracted
+// step helpers and the previously uncovered catch branches. ──
+
+suite('developBugAndCreatePR — gh-1188 extracted step helpers', function() {
+    test('readJson: blank output file → null (no special outputs)', function() {
+        var harness = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/blocked.json') return '   ';
+                if (args.path === 'outputs/already_fixed.json') return '';
+                throw new Error('missing ' + args.path);
+            },
+            file_exists: function() { return false; }
+        });
+        assert.equal(harness.mod.readJson('outputs/blocked.json'), null);
+        assert.equal(harness.mod.readJson('outputs/already_fixed.json'), null);
+    });
+
+    test('hasCodeGraphUsage: unreadable usage log → false', function() {
+        var harness = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === '.dmtools/codegraph-usage.log') throw new Error('missing');
+                throw new Error('missing ' + args.path);
+            }
+        });
+        assert.equal(harness.mod.hasCodeGraphUsage(), false);
+    });
+
+    test('logWorkingTreeCheck: wording for all four combinations', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var lines = [];
+        var orig = console.log;
+        console.log = function(msg) { lines.push(msg); };
+        try {
+            harness.mod.logWorkingTreeCheck(true, true);
+            harness.mod.logWorkingTreeCheck(false, true);
+            harness.mod.logWorkingTreeCheck(true, false);
+            harness.mod.logWorkingTreeCheck(false, false);
+        } finally {
+            console.log = orig;
+        }
+        assert.equal(lines.length, 4);
+        assert.contains(lines[0], 'git changes present = true');
+        assert.contains(lines[0], 'outputs/response.md = present');
+        assert.notContains(lines[1], 'neither work nor a response');
+        assert.contains(lines[2], 'outputs/response.md = MISSING');
+        assert.contains(lines[3], 'neither work nor a response; the agent produced nothing');
+    });
+
+    test('resolveRunContext: config, scm, statuses and tracker resolved in one place', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var params = { jobParams: { customParams: { trackerProvider: 'jira' } } };
+        var actualParams = harness.mod.resolveActualParams(params);
+        var ctx = harness.mod.resolveRunContext(params, actualParams);
+        assert.ok(ctx.config, 'config resolved');
+        assert.ok(ctx.jiraConfig, 'jiraConfig resolved');
+        assert.ok(typeof ctx.scm.listPrs === 'function', 'scm resolved');
+        assert.deepEqual(ctx.customParams, { trackerProvider: 'jira' });
+        assert.ok(ctx.statuses, 'statuses resolved');
+        assert.ok(typeof ctx.tracker.postComment === 'function', 'tracker resolved');
+    });
+
+    test('resolvePrAlreadyOpenOutcome: matching PR handled; no match or list failure → null', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var params = { ticket: { key: 'TS-1' }, jobParams: { customParams: {} } };
+        var actualParams = harness.mod.resolveActualParams(params);
+        var ctx = harness.mod.resolveRunContext(params, actualParams);
+
+        var pr = { number: 7, head: { ref: 'ai/ts-1' }, html_url: 'u' };
+        var scmWithPr = { listPrs: function() { return [pr]; } };
+        var handled = harness.mod.resolvePrAlreadyOpenOutcome('TS-1', scmWithPr, 'ai/ts-1', ctx.tracker, ctx.statuses, params);
+        assert.equal(handled.path, 'pr_already_open');
+
+        var scmEmpty = { listPrs: function() { return []; } };
+        assert.equal(harness.mod.resolvePrAlreadyOpenOutcome('TS-1', scmEmpty, 'ai/ts-1', ctx.tracker, ctx.statuses, params), null);
+
+        var scmBroken = { listPrs: function() { throw new Error('gh down'); } };
+        assert.equal(harness.mod.resolvePrAlreadyOpenOutcome('TS-1', scmBroken, 'ai/ts-1', ctx.tracker, ctx.statuses, params), null);
+    });
+
+    test('resolveSpecialOutputPath: blocked wins over already_fixed; neither → null', function() {
+        var harness = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/blocked.json') return '{"reason":"r"}';
+                if (args.path === 'outputs/already_fixed.json') return '{"commit":"c"}';
+                if (args.path === '.dmtools/codegraph-usage.log') return 'used';
+                throw new Error('missing ' + args.path);
+            }
+        });
+        var params = { ticket: { key: 'TS-1' }, jobParams: { customParams: {} } };
+        var actualParams = harness.mod.resolveActualParams(params);
+        var ctx = harness.mod.resolveRunContext(params, actualParams);
+        var result = harness.mod.resolveSpecialOutputPath('TS-1', ctx.tracker, ctx.statuses, ctx.jiraConfig, params);
+        assert.equal(result.path, 'blocked');
+
+        var harness2 = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/already_fixed.json') return '{"commit":"c"}';
+                if (args.path === '.dmtools/codegraph-usage.log') return 'used';
+                throw new Error('missing ' + args.path);
+            }
+        });
+        var ctx2 = harness2.mod.resolveRunContext(params, harness2.mod.resolveActualParams(params));
+        assert.equal(harness2.mod.resolveSpecialOutputPath('TS-1', ctx2.tracker, ctx2.statuses, ctx2.jiraConfig, params).path, 'already_fixed');
+
+        var harness3 = loadDevelopBugAndCreatePR({});
+        var ctx3 = harness3.mod.resolveRunContext(params, harness3.mod.resolveActualParams(params));
+        assert.equal(harness3.mod.resolveSpecialOutputPath('TS-1', ctx3.tracker, ctx3.statuses, ctx3.jiraConfig, params), null);
+    });
+
+    test('recoverResponseMd: delegates to the shared gate and reports whether a response landed', function() {
+        var calls = [];
+        var harness = loadDevelopBugAndCreatePR({}, {
+            './developTicketAndCreatePR.js': {
+                action: function() { return { success: true }; },
+                throwInterruptedReset: function() {},
+                classifyInterruptedText: function(t) { return t; },
+                throwQuotaPark: function() {},
+                recoverMissingResponse: function(ticketKey, customParams, responseText, fatal, errorMsg, gateCtx) {
+                    calls.push([ticketKey, responseText, fatal, gateCtx && gateCtx.expectedBranch]);
+                    return 'recovered response';
+                }
+            }
+        });
+        var params = { ticket: { key: 'TS-1' }, jobParams: { customParams: {} }, response: 'leg text' };
+        var actualParams = harness.mod.resolveActualParams(params);
+        var ok = harness.mod.recoverResponseMd('TS-1', actualParams, params, actualParams.customParams || {}, 'ai/ts-1');
+        assert.equal(ok, true, 'recovered response counts as present');
+        assert.equal(calls.length, 1);
+        assert.deepEqual(calls[0], ['TS-1', 'leg text', false, 'ai/ts-1']);
+
+        var harness2 = loadDevelopBugAndCreatePR({}, {
+            './developTicketAndCreatePR.js': {
+                action: function() { return { success: true }; },
+                throwInterruptedReset: function() {},
+                classifyInterruptedText: function(t) { return t; },
+                throwQuotaPark: function() {},
+                recoverMissingResponse: function() { return null; }
+            }
+        });
+        var ok2 = harness2.mod.recoverResponseMd('TS-1', actualParams, params, {}, 'ai/ts-1');
+        assert.equal(ok2, false, 'no recovery → still missing');
+    });
+
+    test('handleActionError: plain error → comment posted and failure returned', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var params = { ticket: { key: 'TS-1' }, jobParams: { customParams: {} } };
+        var actualParams = harness.mod.resolveActualParams(params);
+        var ctx = harness.mod.resolveRunContext(params, actualParams);
+        var comments = [];
+        ctx.tracker.postComment = function(key, comment) { comments.push([key, comment]); };
+        var result = harness.mod.handleActionError(new Error('plain boom'), params, ctx.tracker);
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'plain boom');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0][1], 'Bug Development Error');
+    });
+
+    test('handleActionError: no ticket anywhere → failure without a comment attempt', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var result = harness.mod.handleActionError(new Error('early boom'), {}, null);
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'early boom');
+    });
+
+    test('handleActionError: marked failures rethrow', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var marked = new Error('dead letter');
+        marked.interruptedReset = true;
+        assert.throws(function() {
+            harness.mod.handleActionError(marked, { ticket: { key: 'TS-1' } }, null);
+        });
+    });
+
+    test('handleActionError: tracker comment failure is swallowed', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var params = { ticket: { key: 'TS-1' }, jobParams: { customParams: {} } };
+        var tracker = { postComment: function() { throw new Error('tracker down'); } };
+        var result = harness.mod.handleActionError(new Error('plain boom'), params, tracker);
+        assert.equal(result.success, false);
+    });
+
+    test('handlePrAlreadyOpen: move failure still removes labels and returns the outcome', function() {
+        var removed = [];
+        var harness = loadDevelopBugAndCreatePR({});
+        var tracker = {
+            postComment: function() {},
+            moveToStatus: function() { throw new Error('cannot move'); },
+            removeLabel: function(key, label) { removed.push(label); }
+        };
+        var params = { ticket: { key: 'TS-1' }, metadata: { contextId: 'bug_development' }, jobParams: { customParams: { removeLabel: 'sm_l' } } };
+        var result = harness.mod.handlePrAlreadyOpen('TS-1', { number: 3, html_url: 'u' }, tracker, { IN_REVIEW: 'In Review' }, params);
+        assert.equal(result.path, 'pr_already_open');
+        assert.deepEqual(removed, ['bug_development_wip', 'sm_l']);
+    });
+
+    test('completeBlockedPath: Blocked-move failure still returns the blocked outcome', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var tracker = {
+            postComment: function() {},
+            moveToStatus: function(key, status) {
+                if (status === 'Blocked') throw new Error('cannot move');
+            },
+            removeLabel: function() {}
+        };
+        var result = harness.mod.completeBlockedPath('TS-1', { reason: 'r', tried: ['t'], needs: 'n' }, true, tracker, { READY_FOR_DEVELOPMENT: 'Ready For Development' }, { statuses: { BLOCKED: 'Blocked' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.path, 'blocked');
+    });
+
+    test('completeBlockedPath: CodeGraph-retry move failure still returns the reset outcome', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var tracker = {
+            postComment: function() {},
+            moveToStatus: function() { throw new Error('cannot move'); },
+            removeLabel: function() {}
+        };
+        var result = harness.mod.completeBlockedPath('TS-1', { reason: 'r' }, false, tracker, { READY_FOR_DEVELOPMENT: 'Ready For Development' }, { statuses: { BLOCKED: 'Blocked' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.path, 'blocked_without_codegraph');
+    });
+
+    test('completeAlreadyFixedPath: Done-move failure still returns the outcome', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var tracker = {
+            postComment: function() {},
+            moveToStatus: function() { throw new Error('cannot move'); },
+            addLabel: function() {},
+            removeLabel: function() {}
+        };
+        var result = harness.mod.completeAlreadyFixedPath('TS-1', { commit: 'abc' }, true, tracker, { statuses: { DONE: 'Done' } }, { ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.path, 'already_fixed');
+    });
+
+    test('parkLabelOpenPr: labels the open PR for the development branch; failures swallowed', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var labeled = [];
+        var scm = {
+            listPrs: function() { return [{ number: 11, head: { ref: 'ai/gh-1' } }, { number: 12, head: { ref: 'other' } }]; },
+            addLabel: function(number, label) { labeled.push([number, label]); }
+        };
+        var config = { git: { branchNamingFn: function() { return 'ai/gh-1'; } } };
+        harness.mod.parkLabelOpenPr('sm_quota_parked', config, { key: 'TS-1' }, scm);
+        assert.deepEqual(labeled, [[11, 'sm_quota_parked']]);
+
+        var scmBroken = { listPrs: function() { throw new Error('down'); } };
+        harness.mod.parkLabelOpenPr('sm_quota_parked', config, { key: 'TS-1' }, scmBroken);
+        assert.deepEqual(labeled, [[11, 'sm_quota_parked']], 'listing failure is non-fatal');
+    });
+
+    test('parkQuotaPath: park-label failure is swallowed and the PR is still labeled', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var prLabeled = [];
+        var tracker = {
+            postComment: function() {},
+            addLabel: function(key, label) { throw new Error('cannot label'); },
+            removeLabel: function() {}
+        };
+        var scm = { listPrs: function() { return []; }, addLabel: function(n, l) { prLabeled.push([n, l]); } };
+        var params = { jobParams: { customParams: {} } };
+        harness.mod.parkQuotaPath('TS-1', { git: { branchNamingFn: function() { return 'ai/gh-1'; } } }, { key: 'TS-1' }, tracker, params, scm, { kind: 'quota_exhausted', provider: 'p', window: 'w', reset: 'r' });
+        assert.deepEqual(prLabeled, [], 'no PR → no PR label');
+    });
+
+    test('pushPreservedAnalysisWork: branch probe failure is swallowed', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        harness.mod.pushPreservedAnalysisWork(true, function(args) {
+            if (args.command === 'git branch --show-current') throw new Error('git down');
+            return '';
+        }, { git: { baseBranch: 'main', authorName: 'n', authorEmail: 'e' }, formats: { commitMessage: { wip: 'wip {ticketKey}' } } }, { key: 'TS-1' }, 'TS-1');
+    });
+
+    test('executePartialPushPlan: no plan → no commands', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var commands = [];
+        harness.mod.executePartialPushPlan(function(a) { commands.push(a.command); return ''; }, { git: {} }, 'TS-1', null, 'main');
+        assert.deepEqual(commands, []);
+    });
+
+    test('resetTicketForRetry: move failure is swallowed after the comment', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var comments = [];
+        var tracker = {
+            postComment: function(key, c) { comments.push(c); },
+            moveToStatus: function() { throw new Error('cannot move'); }
+        };
+        harness.mod.resetTicketForRetry('TS-1', false, tracker, { READY_FOR_DEVELOPMENT: 'Ready For Development' }, null);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0], 'Development Interrupted');
+    });
+
+    test('action: delegated non-marked failure → error comment + failure result', function() {
+        var harness = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/response.md') return '# response';
+                throw new Error('missing ' + args.path);
+            }
+        }, {
+            './developTicketAndCreatePR.js': {
+                action: function() { throw new Error('delegate boom'); },
+                throwInterruptedReset: function() { throw new Error('interrupted'); },
+                classifyInterruptedText: function(t) { return t; },
+                throwQuotaPark: function() {},
+                recoverMissingResponse: function() { return null; }
+            }
+        });
+        var result = harness.mod.action({
+            ticket: { key: 'TS-1', fields: {} },
+            jobParams: { customParams: {} }
+        });
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'delegate boom');
+        var errorComments = harness.comments.filter(function(c) { return c.comment.indexOf('Bug Development Error') !== -1; });
+        assert.equal(errorComments.length, 1, 'error comment posted for the ticket');
+    });
+
+    test('action: early failure without any ticket → failure result, no comment', function() {
+        var harness = loadDevelopBugAndCreatePR({});
+        var result = harness.mod.action({ jobParams: {} });
+        assert.equal(result.success, false);
+        assert.equal(harness.comments.length, 0);
+    });
+
+    test('action: untrack-cleanup failure does not hide meaningful git changes (gh-628 path)', function() {
+        var harness = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/response.md') return '# response';
+                throw new Error('missing ' + args.path);
+            }
+        }, {
+            './common/gitStaging.js': {
+                untrackRuntimeArtifacts: function() { throw new Error('cleanup boom'); },
+                buildStagingPathspecs: function() { return ':(exclude).dmtools/x.log'; },
+                isRuntimeArtifactStatusLine: function() { return false; }
+            }
+        });
+        var result = harness.mod.action({
+            ticket: { key: 'TS-1', fields: {} },
+            jobParams: { customParams: {} }
+        });
+        assert.equal(result.success, true, 'leg proceeds to the delegated development');
+        assert.deepEqual(result.path, 'delegated');
     });
 });
