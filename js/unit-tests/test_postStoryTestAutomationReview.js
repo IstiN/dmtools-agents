@@ -2,7 +2,18 @@
  * Unit tests for js/postStoryTestAutomationReview.js
  */
 
-function loadPostStoryTestAutomationReview(mocks) {
+/** gh-1192: optional moduleMocks.autoStart.triggerSmIfIdle override, else the default. */
+function smIdleMockOf(moduleMocks) {
+    return (moduleMocks && moduleMocks.autoStart && moduleMocks.autoStart.triggerSmIfIdle)
+        || function() { return { success: true }; };
+}
+
+/** gh-1192: optional moduleMocks.configLoader override, else the loader's own. */
+function configLoaderMockOf(moduleMocks, fallback) {
+    return (moduleMocks && moduleMocks.configLoader) || fallback;
+}
+
+function loadPostStoryTestAutomationReview(mocks, moduleMocks) {
     var defaults = {
         jira_post_comment: function() {},
         jira_move_to_status: function() {},
@@ -108,7 +119,7 @@ var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({
         'js/postStoryTestAutomationReview.js',
         makeRequire({
             './config.js': configModule,
-            './configLoader.js': freshConfigLoader,
+            './configLoader.js': configLoaderMockOf(moduleMocks, freshConfigLoader),
             './common/scm.js': { createScm: function() { return scmMock; } },
             './common/autoStart.js': {
                 triggerConfiguredWorkflowForTicket: function(opts) {
@@ -116,7 +127,7 @@ var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({
                         ? mocks.triggerConfiguredWorkflowForTicket(opts)
                         : false;
                 },
-                triggerSmIfIdle: function() { return { success: true }; }
+                triggerSmIfIdle: smIdleMockOf(moduleMocks)
             },
             './common/outputFiles.js': outputFiles,
             './common/githubHelpers.js': {
@@ -401,4 +412,157 @@ suite('postStoryTestAutomationReview', function() {
         assert.ok(calls.some(function(c) { return c[0] === 'rm' && c[1].label === 'sm_story_test_review_triggered'; }));
     });
 
+});
+
+suite('postStoryTestAutomationReview — review-data and verdict branches (gh-1192)', function() {
+
+    test('missing pr_review.json posts the error comment and fails after label cleanup', function() {
+        var comments = [];
+        var removedLabels = [];
+        var module = loadPostStoryTestAutomationReview({
+            file_read: function() { return null; },
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            jira_remove_label: function(args) { removedLabels.push(args.label); }
+        });
+        var result = module.action({
+            ticket: { key: 'TS-400' },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_review_triggered' } }
+        });
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'No review data found');
+        assert.ok(comments.some(function(c) { return c.indexOf('Could not read pr_review.json') !== -1; }));
+        assert.ok(removedLabels.indexOf('sm_story_test_review_triggered') !== -1, 'SM trigger label removed');
+        assert.ok(removedLabels.indexOf('pr_story_test_automation_review_wip') !== -1, 'default WIP label removed');
+    });
+
+    test('unparseable pr_review.json fails like a missing file', function() {
+        var comments = [];
+        var module = loadPostStoryTestAutomationReview({
+            file_read: function(opts) {
+                return opts.path === 'outputs/pr_review.json' ? '{ not json' : null;
+            },
+            jira_post_comment: function(args) { comments.push(args.comment); }
+        });
+        var result = module.action({
+            ticket: { key: 'TS-401' },
+            jobParams: { customParams: {} }
+        });
+        assert.equal(result.success, false);
+        assert.ok(comments.some(function(c) { return c.indexOf('Could not read pr_review.json') !== -1; }));
+    });
+
+    test('an unconfigured merge trigger falls back to the SM idle trigger', function() {
+        var smIdleCalls = 0;
+        var module = loadPostStoryTestAutomationReview({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/pr_review.json') return JSON.stringify({ recommendation: 'APPROVE' });
+                return null;
+            }
+        }, {
+            autoStart: {
+                triggerSmIfIdle: function() { smIdleCalls++; return { success: true }; }
+            }
+        });
+        var result = module.action({
+            ticket: { key: 'TS-402' },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_review_triggered' } }
+        });
+        assert.equal(result.success, true);
+        assert.equal(smIdleCalls, 1, 'SM idle trigger fired as the fallback');
+    });
+
+    test('the changes-requested path also falls back to the SM idle trigger', function() {
+        var smIdleCalls = 0;
+        var module = loadPostStoryTestAutomationReview({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/pr_review.json') return JSON.stringify({ recommendation: 'REQUEST_CHANGES' });
+                return null;
+            }
+        }, {
+            autoStart: {
+                triggerSmIfIdle: function() { smIdleCalls++; return { success: true }; }
+            }
+        });
+        var result = module.action({
+            ticket: { key: 'TS-406' },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_review_triggered' } }
+        });
+        assert.equal(result.success, true);
+        assert.equal(smIdleCalls, 1, 'SM idle trigger fired as the fallback');
+    });
+
+    test('params.response is posted to the tracker as the review comment', function() {
+        var comments = [];
+        var module = loadPostStoryTestAutomationReview({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/pr_review.json') return JSON.stringify({ recommendation: 'APPROVE' });
+                return null;
+            },
+            jira_post_comment: function(args) { comments.push(args.comment); }
+        });
+        var result = module.action({
+            ticket: { key: 'TS-403' },
+            response: 'AI review summary line',
+            jobParams: { customParams: { removeLabel: 'sm_story_test_review_triggered' } }
+        });
+        assert.equal(result.success, true);
+        assert.ok(comments.indexOf('AI review summary line') !== -1, 'response posted verbatim');
+    });
+
+    test('a failing rework-feedback post is a warn; the flow continues to the trigger', function() {
+        var smIdleCalls = 0;
+        var module = loadPostStoryTestAutomationReview({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify({
+                        recommendation: 'REQUEST_CHANGES',
+                        inlineComments: [{ path: 'testing/tests/TS-404/test.ts', line: 2, body: 'Fix this' }]
+                    });
+                }
+                return null;
+            },
+            prDiff: 'diff --git a/testing/tests/TS-404/test.ts b/testing/tests/TS-404/test.ts\n' +
+                '--- a/testing/tests/TS-404/test.ts\n' +
+                '+++ b/testing/tests/TS-404/test.ts\n' +
+                '@@ -1,3 +1,3 @@\n' +
+                ' line 1\n' +
+                '-line 2\n' +
+                '+line 2 changed\n' +
+                ' line 3\n',
+            jira_post_comment: function(args) {
+                if (args.comment.indexOf('Rework Feedback') !== -1) throw new Error('feedback boom');
+            }
+        }, {
+            autoStart: { triggerSmIfIdle: function() { smIdleCalls++; return { success: true }; } }
+        });
+        var result = module.action({
+            ticket: { key: 'TS-404' },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_review_triggered' } }
+        });
+        assert.equal(result.success, true);
+        assert.equal(smIdleCalls, 1);
+    });
+
+    test('a top-level error is reported to the tracker and fails the action', function() {
+        var comments = [];
+        var removedLabels = [];
+        var module = loadPostStoryTestAutomationReview({
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            jira_remove_label: function(args) { removedLabels.push(args.label); }
+        }, {
+            configLoader: {
+                loadProjectConfig: function() { throw new Error('config boom'); }
+            }
+        });
+        var result = module.action({
+            ticket: { key: 'TS-405' },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_review_triggered' } }
+        });
+        assert.equal(result.success, false);
+        assert.ok(result.error.indexOf('config boom') !== -1);
+        assert.ok(removedLabels.indexOf('sm_story_test_review_triggered') !== -1);
+        assert.ok(comments.some(function(c) {
+            return c.indexOf('❌ Story Test Review Error') !== -1 && c.indexOf('config boom') !== -1;
+        }));
+    });
 });
