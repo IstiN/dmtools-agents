@@ -52,6 +52,18 @@ function getTicketSafely(tracker, ticketKey) {
 /**
  * gh-1188: the issuelinks → Test Case stub collection — pure.
  */
+/**
+ * gh-1188: one issuelink entry → linked Test Case stub (or null) — pure.
+ */
+function directLinkedTcOf(link, testCaseType) {
+    var other = link.outwardIssue || link.inwardIssue;
+    if (!other || !other.fields || !other.fields.issuetype) return null;
+    if (other.fields.issuetype.name === testCaseType) {
+        return other;
+    }
+    return null;
+}
+
 function collectDirectTcLinks(ticket, testCaseType) {
     const issueLinks = ticket && ticket.fields && ticket.fields.issuelinks;
     if (!Array.isArray(issueLinks) || issueLinks.length === 0) {
@@ -59,11 +71,8 @@ function collectDirectTcLinks(ticket, testCaseType) {
     }
     const tcs = [];
     issueLinks.forEach(function(link) {
-        var other = link.outwardIssue || link.inwardIssue;
-        if (!other || !other.fields || !other.fields.issuetype) return;
-        if (other.fields.issuetype.name === testCaseType) {
-            tcs.push(other);
-        }
+        var tc = directLinkedTcOf(link, testCaseType);
+        if (tc) tcs.push(tc);
     });
     return tcs;
 }
@@ -286,6 +295,19 @@ function completeBugDone(tracker, ticketKey, totalTCs, jiraConfig, params, remov
     return { success: true, action: 'moved_to_done', totalTCs: totalTCs, ticketKey: ticketKey };
 }
 
+/**
+ * gh-1188: Step 1 — direct Test Cases first, linkedIssues query as fallback.
+ * Returns { tcs, source } so the caller keeps its log line unchanged.
+ */
+function resolveLinkedTestCasesWithFallback(ticket, ticketKey, testCaseType, tracker, provider) {
+    var direct = directLinkedTestCases(ticket, ticketKey, testCaseType, tracker);
+    if (direct.length > 0) {
+        return { tcs: direct, source: 'direct' };
+    }
+    console.log('No direct Test Case links found — falling back to linkedIssues query');
+    return { tcs: allLinkedTestCases(tracker, provider, ticketKey, testCaseType), source: 'linkedIssues' };
+}
+
 function action(params) {
     const ticketKey = resolveTicketKey(params);
     const labelOptions = resolveSmLabelOptions(params);
@@ -309,17 +331,11 @@ function action(params) {
 
         // Step 1: Prefer directly linked Test Cases so a bug is only held up by
         // its own acceptance tests, not by every Test Case connected to a parent Story.
-        var allTCs = directLinkedTestCases(ticket, ticketKey, testCaseType, tracker);
-        var linkSource = 'direct';
-
-        if (allTCs.length === 0) {
-            console.log('No direct Test Case links found — falling back to linkedIssues query');
-            allTCs = allLinkedTestCases(tracker, provider, ticketKey, testCaseType);
-            linkSource = 'linkedIssues';
-        }
+        var linked = resolveLinkedTestCasesWithFallback(ticket, ticketKey, testCaseType, tracker, provider);
+        var allTCs = linked.tcs;
 
         const totalTCs = allTCs.length;
-        console.log('Linked Test Cases (' + linkSource + '):', totalTCs);
+        console.log('Linked Test Cases (' + linked.source + '):', totalTCs);
 
         if (totalTCs === 0) {
             console.log('No linked Test Cases found — releasing lock, will re-check next cycle');
@@ -381,6 +397,9 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveSmLabelOptions,
         resolveTrackedIssueTypes,
         resolveTicketLabels,
+        resolveLinkedTestCasesWithFallback,
+        directLinkedTcOf,
+        collectDirectTcLinks,
         filterBlockingTestCases,
         openTestPrWaitResult,
         completeBugDone

@@ -28,6 +28,21 @@ function trackersWith(mocks) {
     );
 }
 
+// gh-1188: recorded CLI stub — hoisted out of the loader so the loader keeps
+// its baseline complexity; responses keyed by command prefix.
+function recordCliCommand1188(commands, args) {
+    commands.push(args.command);
+    if (args.command.indexOf('gh pr list --head ') === 0) return '';
+    if (args.command.indexOf('git check-ignore') === 0) {
+        // gh-683 probe: not-ignored repo — check-ignore exits 1,
+        // the exclusion pathspecs must stay in the staging add.
+        throw new Error('Command execution failed (exit code 1)');
+    }
+    if (args.command === 'git status --porcelain') return 'A  outputs/rca.md\n';
+    if (args.command === 'git branch --show-current') return 'main\n';
+    return '';
+}
+
 function loadDevelopBugAndCreatePR(mocks, requireOverrides) {
     mocks = mocks || {};
     var comments = [];
@@ -41,16 +56,7 @@ function loadDevelopBugAndCreatePR(mocks, requireOverrides) {
             throw new Error('missing ' + args.path);
         },
         cli_execute_command: function(args) {
-            commands.push(args.command);
-            if (args.command.indexOf('gh pr list --head ') === 0) return '';
-            if (args.command.indexOf('git check-ignore') === 0) {
-                // gh-683 probe: not-ignored repo — check-ignore exits 1,
-                // the exclusion pathspecs must stay in the staging add.
-                throw new Error('Command execution failed (exit code 1)');
-            }
-            if (args.command === 'git status --porcelain') return 'A  outputs/rca.md\n';
-            if (args.command === 'git branch --show-current') return 'main\n';
-            return '';
+            return recordCliCommand1188(commands, args);
         },
         jira_post_comment: function(args) { comments.push(args); },
         jira_move_to_status: function(args) { moves.push(args); },

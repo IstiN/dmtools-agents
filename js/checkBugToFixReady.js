@@ -199,12 +199,33 @@ function completeTestCaseReady(params, tracker, ticketKey, issueType, totalBugs,
     return { success: true, action: 'moved_to_backlog', totalBugs: totalBugs, ticketKey: ticketKey };
 }
 
-function action(params) {
-    const ticketKey = params.ticket && params.ticket.key;
-    const ticketFields = params.ticket && params.ticket.fields;
-    const issueType = (ticketFields && ticketFields.issuetype && ticketFields.issuetype.name) || 'Test Case';
+/**
+ * gh-1188: issue type of the ready-check ticket — defaults to Test Case.
+ */
+function issueTypeOf(ticketFields) {
+    return (ticketFields && ticketFields.issuetype && ticketFields.issuetype.name) || 'Test Case';
+}
+
+/**
+ * gh-1188: plain field resolution hoisted out of action — pure reads only,
+ * so the config/tracker call order below is unchanged.
+ */
+function resolveReadyCheckInputs(params) {
     const customParams = params.jobParams && params.jobParams.customParams;
-    const removeLabel = customParams && customParams.removeLabel;
+    return {
+        ticketKey: params.ticket && params.ticket.key,
+        issueType: issueTypeOf(params.ticket && params.ticket.fields),
+        customParams: customParams,
+        removeLabel: customParams && customParams.removeLabel
+    };
+}
+
+function action(params) {
+    const inputs = resolveReadyCheckInputs(params);
+    const ticketKey = inputs.ticketKey;
+    const issueType = inputs.issueType;
+    const customParams = inputs.customParams;
+    const removeLabel = inputs.removeLabel;
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
     const jiraConfig = projectConfig.jira;
     const tracker = trackersModule.createTracker(projectConfig, customParams || {});
@@ -263,6 +284,8 @@ if (typeof module !== 'undefined' && module.exports) {
         moveTestCaseToBacklog,
         postTokenUsageSafely,
         completeStoryReady,
-        completeTestCaseReady
+        completeTestCaseReady,
+        issueTypeOf,
+        resolveReadyCheckInputs
     };
 }

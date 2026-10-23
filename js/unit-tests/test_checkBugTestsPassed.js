@@ -776,14 +776,18 @@ suite('checkBugTestsPassed: uncovered paths (gh-1043)', function() {
 // ── gh-1188: action decomposition — characterization tests for the extracted
 // step helpers and the previously uncovered catch branches. ──
 
+// gh-1188: status-name comparison hoisted out of the stub literal — keeps
+// the stub builder itself at plain-closure complexity.
+function stubHasStage1188(tc, stage, statusName) {
+    var name = tc.fields && tc.fields.status && tc.fields.status.name;
+    return name !== undefined && name !== null && name === statusName;
+}
+
 function makeTrackerStub1188(overrides) {
     var stub = {
         provider: function() { return 'jira'; },
         stageFallback: function() { return 'none'; },
-        hasStage: function(tc, stage, statusName) {
-            var name = tc.fields && tc.fields.status && tc.fields.status.name;
-            return name !== undefined && name !== null && name === statusName;
-        },
+        hasStage: stubHasStage1188,
         getIssue: function() { return null; },
         searchIssues: function() { return []; },
         removeLabel: function() {},
