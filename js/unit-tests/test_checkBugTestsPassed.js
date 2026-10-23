@@ -906,7 +906,7 @@ suite('checkBugTestsPassed — gh-1188 extracted step helpers', function() {
         });
         var jiraConfig = { statuses: { BLOCKED: 'Blocked', IN_REWORK: 'In Rework' } };
         var result = loadCheckBugTestsPassed({}).resolveBlockingRoute(
-            tracker, 'TS-1', ['sm_test_pr_finalized', 'sm_bug_rework_attempted'], 2,
+            tracker, 'TS-1', ['test_pr_finalized', 'sm_bug_rework_attempted'], 2,
             [makeTc('TC-1', 'In Testing'), makeTc('TC-2', 'Failed')],
             jiraConfig, 'sm_l'
         );
@@ -930,7 +930,7 @@ suite('checkBugTestsPassed — gh-1188 extracted step helpers', function() {
         });
         var jiraConfig = { statuses: { BLOCKED: 'Blocked', IN_REWORK: 'In Rework' } };
         var result = loadCheckBugTestsPassed({}).resolveBlockingRoute(
-            tracker, 'TS-1', ['sm_test_pr_finalized'], 1, [makeTc('TC-1', 'Failed')],
+            tracker, 'TS-1', ['test_pr_finalized'], 1, [makeTc('TC-1', 'Failed')],
             jiraConfig, 'sm_l'
         );
         assert.equal(result.action, 'moved_to_rework');

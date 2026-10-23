@@ -116,9 +116,9 @@ function isBlockingTestCase(tracker, tc, ticketKey, bugType, provider, jiraConfi
     var status = tc.fields && tc.fields.status && tc.fields.status.name;
 
     // Passed / intentionally skipped / no longer applicable are always non-blocking.
-    if (tracker.hasStage(tc, 'PASED', jiraConfig.statuses.PASED) ||
+    if (tracker.hasStage(tc, 'PASSED', jiraConfig.statuses.PASSED) ||
         tracker.hasStage(tc, 'SKIPPED', jiraConfig.statuses.SKIPPED) ||
-        tracker.hasStage(tc, 'IRELEVANT', jiraConfig.statuses.IRELEVANT)) {
+        tracker.hasStage(tc, 'IRRELEVANT', jiraConfig.statuses.IRRELEVANT)) {
         return false;
     }
 
