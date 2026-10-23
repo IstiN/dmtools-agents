@@ -142,18 +142,25 @@ function faLedgerSampleOf(text) {
     return faTokensSampleOf(payload, text);
 }
 
+// The captured count group of one regex match, or null-ish when absent.
+function matchedGroupOf(match) {
+    return match && match[1];
+}
+
 // The four CommandLineUtils count matches, or null when none matched.
 function tokenCountMatchesOf(text) {
-    var readMatch = text.match(/(?:↑|\^|read(?:\s+tokens?)?)\s*([0-9][0-9.,]*\s*[kmb]?)/i);
-    var writeMatch = text.match(/(?:↓|v|write(?:\s+tokens?)?)\s*([0-9][0-9.,]*\s*[kmb]?)/i);
-    var cachedMatch = text.match(/([0-9][0-9.,]*\s*[kmb]?)\s*\(cached\)/i);
-    var reasoningMatch = text.match(/([0-9][0-9.,]*\s*[kmb]?)\s*\(reasoning\)/i);
-    if (!readMatch && !writeMatch && !cachedMatch && !reasoningMatch) return null;
+    var matches = {
+        read: text.match(/(?:↑|\^|read(?:\s+tokens?)?)\s*([0-9][0-9.,]*\s*[kmb]?)/i),
+        write: text.match(/(?:↓|v|write(?:\s+tokens?)?)\s*([0-9][0-9.,]*\s*[kmb]?)/i),
+        cached: text.match(/([0-9][0-9.,]*\s*[kmb]?)\s*\(cached\)/i),
+        reasoning: text.match(/([0-9][0-9.,]*\s*[kmb]?)\s*\(reasoning\)/i)
+    };
+    if (!matches.read && !matches.write && !matches.cached && !matches.reasoning) return null;
     return {
-        read: readMatch && readMatch[1],
-        write: writeMatch && writeMatch[1],
-        cached: cachedMatch && cachedMatch[1],
-        reasoning: reasoningMatch && reasoningMatch[1]
+        read: matchedGroupOf(matches.read),
+        write: matchedGroupOf(matches.write),
+        cached: matchedGroupOf(matches.cached),
+        reasoning: matchedGroupOf(matches.reasoning)
     };
 }
 
