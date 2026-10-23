@@ -26,10 +26,10 @@ function makeDfManager(opts) {
     };
     var configLoader = {
         loadProjectConfig: function() {
-            return opts.projectConfig || {
+            return Object.assign({
                 repository: { owner: 'test-org', repo: 'test-repo' },
                 jira: { project: 'TS' }
-            };
+            }, opts.projectConfig);
         },
         resolveDefaultWorkflowRef: configLoaderModule.resolveDefaultWorkflowRef
     };
