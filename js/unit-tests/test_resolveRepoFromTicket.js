@@ -266,3 +266,61 @@ suite('resolveRepoFromTicket — module.exports guard', function() {
         assert.equal(typeof mod.findRepoEntry, 'function', 'findRepoEntry exported');
     });
 });
+
+// ─── gh-119 CRAP extraction: pure helpers ────────────────────────────────────
+
+suite('resolveRepoFromTicket — pure helpers (gh-119)', function() {
+    test('resolveCustomParams: params.customParams wins, jobParams fallback, {} default', function() {
+        var mod = makeModule({});
+        assert.deepEqual(mod.resolveCustomParams({ customParams: { a: 1 }, jobParams: { customParams: { b: 2 } } }), { a: 1 });
+        assert.deepEqual(mod.resolveCustomParams({ jobParams: { customParams: { b: 2 } } }), { b: 2 });
+        assert.deepEqual(mod.resolveCustomParams({}), {});
+        assert.deepEqual(mod.resolveCustomParams({ jobParams: {} }), {});
+    });
+
+    test('buildTargetRepository: full entry maps branch/owner/workingDir', function() {
+        var mod = makeModule({});
+        var t = mod.buildTargetRepository('payments-api', { branch: 'develop', gitlabGroup: 'acme', workingDir: '/custom' }, {});
+        assert.deepEqual(t, { repo: 'payments-api', baseBranch: 'develop', owner: 'acme', workingDir: '/custom' });
+    });
+
+    test('buildTargetRepository: derived workingDir honors customParams.dependenciesDir', function() {
+        var mod = makeModule({});
+        var derived = mod.buildTargetRepository('payments-api', { branch: 'develop' }, { dependenciesDir: './deps' });
+        assert.equal(derived.workingDir, './deps/payments-api');
+        var plain = mod.buildTargetRepository('payments-api', {}, {});
+        assert.equal(plain.workingDir, './dependencies/payments-api');
+        assert.equal(plain.baseBranch, undefined);
+        assert.equal(plain.owner, undefined);
+    });
+
+    test('buildTargetRepository: missing entry forwards the repo name only', function() {
+        var mod = makeModule({});
+        assert.deepEqual(mod.buildTargetRepository('payments-api', null, {}), { repo: 'payments-api' });
+    });
+
+    test('publishTargetRepository writes both call-path locations, creating containers', function() {
+        var mod = makeModule({});
+        var params = { ticket: { key: 'P-1' }, jobParams: {} };
+        mod.publishTargetRepository(params, { repo: 'r' });
+        assert.deepEqual(params.customParams.targetRepository, { repo: 'r' });
+        assert.deepEqual(params.jobParams.customParams.targetRepository, { repo: 'r' });
+    });
+
+    test('publishTargetRepository leaves an absent jobParams absent (original behavior)', function() {
+        var mod = makeModule({});
+        var params = { ticket: { key: 'P-1' } };
+        mod.publishTargetRepository(params, { repo: 'r' });
+        assert.deepEqual(params.customParams.targetRepository, { repo: 'r' });
+        assert.equal(params.jobParams, undefined);
+    });
+
+    test('publishTargetRepository preserves existing containers and shares one object', function() {
+        var mod = makeModule({});
+        var params = { customParams: { keep: 1 }, jobParams: { customParams: { keep: 2 } } };
+        mod.publishTargetRepository(params, { repo: 'r' });
+        assert.equal(params.customParams.keep, 1);
+        assert.equal(params.jobParams.customParams.keep, 2);
+        assert.equal(params.customParams.targetRepository, params.jobParams.customParams.targetRepository);
+    });
+});
