@@ -26,13 +26,26 @@ function parseJson(raw, fallback) {
     try { return JSON.parse(raw); } catch (e) { return fallback; }
 }
 
+// The workflow_runs / jobs wrapper shapes the list-run responses carry.
+// Returns the wrapped array, or null when neither wrapper is present.
+function asArrayRuns(value) {
+    if (value.workflow_runs && Array.isArray(value.workflow_runs)) return value.workflow_runs;
+    if (value.jobs && Array.isArray(value.jobs)) return value.jobs;
+    return null;
+}
+
+// The `result` field may itself hold an array or a JSON string of one of the
+// wrapper shapes — recurse through parseJson so both unwrap identically.
+function asArrayResult(value) {
+    return value.result ? asArray(parseJson(value.result, value.result)) : null;
+}
+
 function asArray(value) {
     if (!value) return [];
     if (Array.isArray(value)) return value;
-    if (value.workflow_runs && Array.isArray(value.workflow_runs)) return value.workflow_runs;
-    if (value.jobs && Array.isArray(value.jobs)) return value.jobs;
-    if (value.result) return asArray(parseJson(value.result, value.result));
-    return [];
+    var wrapped = asArrayRuns(value);
+    if (wrapped) return wrapped;
+    return asArrayResult(value) || [];
 }
 
 function parseNumberWithSuffix(raw) {
@@ -88,51 +101,85 @@ function extractFaPayload(text) {
     return null;
 }
 
+// parseInt-or-zero for the ledger's numeric fields.
+function intOrZero(value) {
+    return parseInt(value, 10) || 0;
+}
+
+// The fa ledger entry counts as consumable only when the payload parsed to an
+// object carrying at least one token count; anything else falls through to
+// the CommandLineUtils parsing so the line is not silently dropped.
+function isFaUsagePayload(payload) {
+    return !!payload && typeof payload === 'object' &&
+        (payload.input != null || payload.output != null || payload.cacheRead != null);
+}
+
+// The fa ledger sample shape (resume-aware: session + segment ride along).
+function faTokensSampleOf(payload, text) {
+    var faSegment = parseInt(payload.segment, 10);
+    return {
+        readTokens: intOrZero(payload.input),
+        writeTokens: intOrZero(payload.output),
+        cachedTokens: intOrZero(payload.cacheRead),
+        reasoningTokens: 0,
+        requests: intOrZero(payload.requests),
+        requestTier: '',
+        requestDuration: '',
+        source: String(payload.source || ''),
+        faSessionId: String(payload.sessionId || ''),
+        faSegment: isNaN(faSegment) ? null : faSegment,
+        rawTokensLine: text.trim()
+    };
+}
+
+// The fa-ledger branch of parseTokensLine: null when the line carries no
+// consumable fa payload (fall through), else the fa sample.
+function faLedgerSampleOf(text) {
+    var faPayload = extractFaPayload(text);
+    if (faPayload == null) return null;
+    var payload = parseJson(faPayload, null);
+    if (!isFaUsagePayload(payload)) return null;
+    return faTokensSampleOf(payload, text);
+}
+
+// The four CommandLineUtils count matches, or null when none matched.
+function tokenCountMatchesOf(text) {
+    var readMatch = text.match(/(?:↑|\^|read(?:\s+tokens?)?)\s*([0-9][0-9.,]*\s*[kmb]?)/i);
+    var writeMatch = text.match(/(?:↓|v|write(?:\s+tokens?)?)\s*([0-9][0-9.,]*\s*[kmb]?)/i);
+    var cachedMatch = text.match(/([0-9][0-9.,]*\s*[kmb]?)\s*\(cached\)/i);
+    var reasoningMatch = text.match(/([0-9][0-9.,]*\s*[kmb]?)\s*\(reasoning\)/i);
+    if (!readMatch && !writeMatch && !cachedMatch && !reasoningMatch) return null;
+    return {
+        read: readMatch && readMatch[1],
+        write: writeMatch && writeMatch[1],
+        cached: cachedMatch && cachedMatch[1],
+        reasoning: reasoningMatch && reasoningMatch[1]
+    };
+}
+
+// The CommandLineUtils sample built from matched counts (missing ones are 0).
+function cliTokensSampleOf(text) {
+    var matches = tokenCountMatchesOf(text);
+    if (!matches) return null;
+    return {
+        readTokens: parseNumberWithSuffix(matches.read),
+        writeTokens: parseNumberWithSuffix(matches.write),
+        cachedTokens: parseNumberWithSuffix(matches.cached),
+        reasoningTokens: parseNumberWithSuffix(matches.reasoning),
+        rawTokensLine: text.trim()
+    };
+}
+
 function parseTokensLine(line) {
     var text = String(line || '');
 
     // fa ledger log line (resume-aware): fa-tokens: {"sessionId":...,"segment":N,
     // "input":...,"output":...,"cacheRead":...,"requests":...,"source":"reported"|"estimated"}
-    var faPayload = extractFaPayload(text);
-    if (faPayload != null) {
-        var payload = parseJson(faPayload, null);
-        // Only consume the line as an fa ledger entry when the payload is a
-        // valid object carrying token counts; otherwise fall through to the
-        // CommandLineUtils parsing below so the line is not silently dropped.
-        if (payload && typeof payload === 'object' &&
-            (payload.input != null || payload.output != null || payload.cacheRead != null)) {
-            var faSegment = parseInt(payload.segment, 10);
-            return {
-                readTokens: parseInt(payload.input, 10) || 0,
-                writeTokens: parseInt(payload.output, 10) || 0,
-                cachedTokens: parseInt(payload.cacheRead, 10) || 0,
-                reasoningTokens: 0,
-                requests: parseInt(payload.requests, 10) || 0,
-                requestTier: '',
-                requestDuration: '',
-                source: String(payload.source || ''),
-                faSessionId: String(payload.sessionId || ''),
-                faSegment: isNaN(faSegment) ? null : faSegment,
-                rawTokensLine: text.trim()
-            };
-        }
-    }
+    var faSample = faLedgerSampleOf(text);
+    if (faSample) return faSample;
 
     if (text.indexOf('Tokens') === -1) return null;
-
-    var readMatch = text.match(/(?:↑|\^|read(?:\s+tokens?)?)\s*([0-9][0-9.,]*\s*[kmb]?)/i);
-    var writeMatch = text.match(/(?:↓|v|write(?:\s+tokens?)?)\s*([0-9][0-9.,]*\s*[kmb]?)/i);
-    var cachedMatch = text.match(/([0-9][0-9.,]*\s*[kmb]?)\s*\(cached\)/i);
-    var reasoningMatch = text.match(/([0-9][0-9.,]*\s*[kmb]?)\s*\(reasoning\)/i);
-
-    if (!readMatch && !writeMatch && !cachedMatch && !reasoningMatch) return null;
-    return {
-        readTokens: parseNumberWithSuffix(readMatch && readMatch[1]),
-        writeTokens: parseNumberWithSuffix(writeMatch && writeMatch[1]),
-        cachedTokens: parseNumberWithSuffix(cachedMatch && cachedMatch[1]),
-        reasoningTokens: parseNumberWithSuffix(reasoningMatch && reasoningMatch[1]),
-        rawTokensLine: text.trim()
-    };
+    return cliTokensSampleOf(text);
 }
 
 function newUsageTracking() {
@@ -297,16 +344,26 @@ function extractTokenUsage(logs) {
     return buildUsageAggregate(tracking);
 }
 
+// The result/logs payload field of an object-ish log payload, or null.
+function payloadFieldOf(raw) {
+    if (raw && raw.result) return raw.result;
+    if (raw && raw.logs) return raw.logs;
+    return null;
+}
+
+// Non-string payloads recurse through result/logs before stringifying.
+function normalizeObjectPayload(raw) {
+    var field = payloadFieldOf(raw);
+    if (field != null) return normalizeLogPayload(field);
+    return JSON.stringify(raw);
+}
+
 function normalizeLogPayload(raw) {
     if (raw == null) return '';
-    if (typeof raw !== 'string') {
-        if (raw.result) return normalizeLogPayload(raw.result);
-        if (raw.logs) return normalizeLogPayload(raw.logs);
-        return JSON.stringify(raw);
-    }
+    if (typeof raw !== 'string') return normalizeObjectPayload(raw);
     var parsed = parseJson(raw, null);
-    if (parsed && parsed.result) return normalizeLogPayload(parsed.result);
-    if (parsed && parsed.logs) return normalizeLogPayload(parsed.logs);
+    var field = payloadFieldOf(parsed);
+    if (field != null) return normalizeLogPayload(field);
     return raw;
 }
 
@@ -400,57 +457,85 @@ function buildAttemptsCsv(attemptRows) {
     return out.join('\n') + '\n';
 }
 
+function newGroupBucket(key) {
+    return {
+        key: key,
+        runs: 0,
+        requests: 0,
+        readTokens: 0,
+        writeTokens: 0,
+        cachedTokens: 0,
+        reasoningTokens: 0,
+        samples: 0,
+        resumedRuns: 0,
+        feedbackLoopCount: 0,
+        rateLimitRetryCount: 0,
+        rateLimitRuns: 0,
+        timeoutCount: 0,
+        timeoutRuns: 0,
+        durationSeconds: 0,
+        durationRuns: 0
+    };
+}
+
+// Sums the per-row token/request counters into the bucket.
+function addRowTokensToGroup(bucket, row) {
+    bucket.requests += row.requests || 0;
+    bucket.readTokens += row.readTokens || 0;
+    bucket.writeTokens += row.writeTokens || 0;
+    bucket.cachedTokens += row.cachedTokens || 0;
+    bucket.reasoningTokens += row.reasoningTokens || 0;
+    bucket.samples += row.samples || 0;
+}
+
+// Folds the per-row signal counters (resume / rate limit / timeout / duration)
+// into the bucket's run-shaped tallies.
+function addRowSignalsToGroup(bucket, row) {
+    if (row.resumeDetected) bucket.resumedRuns += 1;
+    bucket.feedbackLoopCount += row.feedbackLoopCount || 0;
+    bucket.rateLimitRetryCount += row.rateLimitRetryCount || 0;
+    if (row.rateLimitDetected) bucket.rateLimitRuns += 1;
+    bucket.timeoutCount += row.timeoutCount || 0;
+    if (row.timeoutCount) bucket.timeoutRuns += 1;
+    bucket.durationSeconds += row.durationSeconds || 0;
+    if (row.durationSeconds) bucket.durationRuns += 1;
+}
+
+function addRowToGroup(bucket, row) {
+    bucket.runs += 1;
+    addRowTokensToGroup(bucket, row);
+    addRowSignalsToGroup(bucket, row);
+}
+
+function groupBucketOf(map, key) {
+    if (!map[key]) map[key] = newGroupBucket(key);
+    return map[key];
+}
+
+// Math.round(total/count) with a zero guard for empty denominators.
+function roundedAverageOf(total, count) {
+    return count ? Math.round(total / count) : 0;
+}
+
+// Derives the averages and duration labels on a finished bucket.
+function finalizeGroupBucket(item) {
+    item.avgReadTokens = roundedAverageOf(item.readTokens, item.runs);
+    item.avgWriteTokens = roundedAverageOf(item.writeTokens, item.runs);
+    item.avgCachedTokens = roundedAverageOf(item.cachedTokens, item.runs);
+    item.avgReasoningTokens = roundedAverageOf(item.reasoningTokens, item.runs);
+    item.avgDurationSeconds = roundedAverageOf(item.durationSeconds, item.durationRuns);
+    item.avgDuration = formatDuration(item.avgDurationSeconds);
+    item.totalDuration = formatDuration(item.durationSeconds);
+    return item;
+}
+
 function groupBy(rows, keyFn) {
     var map = {};
     rows.forEach(function(row) {
-        var key = keyFn(row) || 'unknown';
-        if (!map[key]) {
-            map[key] = {
-                key: key,
-                runs: 0,
-                requests: 0,
-                readTokens: 0,
-                writeTokens: 0,
-                cachedTokens: 0,
-                reasoningTokens: 0,
-                samples: 0,
-                resumedRuns: 0,
-                feedbackLoopCount: 0,
-                rateLimitRetryCount: 0,
-                rateLimitRuns: 0,
-                timeoutCount: 0,
-                timeoutRuns: 0,
-                durationSeconds: 0,
-                durationRuns: 0
-            };
-        }
-        var bucket = map[key];
-        bucket.runs += 1;
-        bucket.requests += row.requests || 0;
-        bucket.readTokens += row.readTokens || 0;
-        bucket.writeTokens += row.writeTokens || 0;
-        bucket.cachedTokens += row.cachedTokens || 0;
-        bucket.reasoningTokens += row.reasoningTokens || 0;
-        bucket.samples += row.samples || 0;
-        if (row.resumeDetected) bucket.resumedRuns += 1;
-        bucket.feedbackLoopCount += row.feedbackLoopCount || 0;
-        bucket.rateLimitRetryCount += row.rateLimitRetryCount || 0;
-        if (row.rateLimitDetected) bucket.rateLimitRuns += 1;
-        bucket.timeoutCount += row.timeoutCount || 0;
-        if (row.timeoutCount) bucket.timeoutRuns += 1;
-        bucket.durationSeconds += row.durationSeconds || 0;
-        if (row.durationSeconds) bucket.durationRuns += 1;
+        addRowToGroup(groupBucketOf(map, keyFn(row) || 'unknown'), row);
     });
     return Object.keys(map).sort().map(function(key) {
-        var item = map[key];
-        item.avgReadTokens = item.runs ? Math.round(item.readTokens / item.runs) : 0;
-        item.avgWriteTokens = item.runs ? Math.round(item.writeTokens / item.runs) : 0;
-        item.avgCachedTokens = item.runs ? Math.round(item.cachedTokens / item.runs) : 0;
-        item.avgReasoningTokens = item.runs ? Math.round(item.reasoningTokens / item.runs) : 0;
-        item.avgDurationSeconds = item.durationRuns ? Math.round(item.durationSeconds / item.durationRuns) : 0;
-        item.avgDuration = formatDuration(item.avgDurationSeconds);
-        item.totalDuration = formatDuration(item.durationSeconds);
-        return item;
+        return finalizeGroupBucket(map[key]);
     });
 }
 
@@ -482,22 +567,37 @@ function calculateDurationSeconds(run) {
     return Math.round((endMs - startMs) / 1000);
 }
 
-function calculateRunnerStats(rows) {
-    var intervals = [];
-    var totalSeconds = 0;
-    rows.forEach(function(row) {
-        var durationSeconds = row.durationSeconds || 0;
-        totalSeconds += durationSeconds;
-        var startMs = Date.parse(row.startedAt || row.createdAt || '');
-        var endMs = Date.parse(row.updatedAt || '');
-        if (isNaN(startMs) && !isNaN(Date.parse(row.createdAt || ''))) startMs = Date.parse(row.createdAt);
-        if ((isNaN(endMs) || endMs < startMs) && !isNaN(startMs) && durationSeconds > 0) {
-            endMs = startMs + durationSeconds * 1000;
-        }
-        if (isNaN(startMs) || isNaN(endMs) || endMs <= startMs) return;
-        intervals.push({ start: startMs, end: endMs });
-    });
+// Run start in ms: startedAt (or createdAt), with the createdAt fallback when
+// startedAt is present but unparseable.
+function parseRunnerStartMs(row) {
+    var startMs = Date.parse(row.startedAt || row.createdAt || '');
+    if (isNaN(startMs) && !isNaN(Date.parse(row.createdAt || ''))) {
+        startMs = Date.parse(row.createdAt);
+    }
+    return startMs;
+}
 
+// Run end in ms: updatedAt, recovered from start + durationSeconds when it is
+// missing, unparseable, or earlier than the start.
+function resolveRunnerEndMs(row, startMs, durationSeconds) {
+    var endMs = Date.parse(row.updatedAt || '');
+    if ((isNaN(endMs) || endMs < startMs) && !isNaN(startMs) && durationSeconds > 0) {
+        endMs = startMs + durationSeconds * 1000;
+    }
+    return endMs;
+}
+
+// The runner-busy interval of one row, or null when no usable span exists.
+function runnerIntervalOf(row) {
+    var durationSeconds = row.durationSeconds || 0;
+    var startMs = parseRunnerStartMs(row);
+    var endMs = resolveRunnerEndMs(row, startMs, durationSeconds);
+    if (isNaN(startMs) || isNaN(endMs) || endMs <= startMs) return null;
+    return { start: startMs, end: endMs };
+}
+
+// Start/end events in scan order (start before end at the same instant).
+function concurrencyEventsOf(intervals) {
     var events = [];
     intervals.forEach(function(interval) {
         events.push({ time: interval.start, delta: 1 });
@@ -507,23 +607,43 @@ function calculateRunnerStats(rows) {
         if (a.time !== b.time) return a.time - b.time;
         return a.delta - b.delta;
     });
+    return events;
+}
 
+// Peak concurrent-runner count over the sorted start/end events.
+function maxConcurrentOf(events) {
     var concurrent = 0;
     var maxConcurrent = 0;
     events.forEach(function(event) {
         concurrent += event.delta;
         if (concurrent > maxConcurrent) maxConcurrent = concurrent;
     });
+    return maxConcurrent;
+}
 
-    var minStart = intervals.length ? intervals[0].start : 0;
-    var maxEnd = intervals.length ? intervals[0].end : 0;
+// Rounded seconds between the earliest start and the latest end (0 when the
+// intervals span no time).
+function wallSpanSecondsOf(intervals) {
+    if (!intervals.length) return 0;
+    var minStart = intervals[0].start;
+    var maxEnd = intervals[0].end;
     intervals.forEach(function(interval) {
         if (interval.start < minStart) minStart = interval.start;
         if (interval.end > maxEnd) maxEnd = interval.end;
     });
-    var wallSeconds = intervals.length && maxEnd > minStart ? Math.round((maxEnd - minStart) / 1000) : 0;
-    var avgConcurrent = wallSeconds ? totalSeconds / wallSeconds : 0;
+    return maxEnd > minStart ? Math.round((maxEnd - minStart) / 1000) : 0;
+}
 
+function calculateRunnerStats(rows) {
+    var intervals = [];
+    var totalSeconds = 0;
+    rows.forEach(function(row) {
+        totalSeconds += row.durationSeconds || 0;
+        var interval = runnerIntervalOf(row);
+        if (interval) intervals.push(interval);
+    });
+    var wallSeconds = wallSpanSecondsOf(intervals);
+    var avgConcurrent = wallSeconds ? totalSeconds / wallSeconds : 0;
     return {
         totalRunnerSeconds: totalSeconds,
         totalRunnerTime: formatDuration(totalSeconds),
@@ -531,7 +651,7 @@ function calculateRunnerStats(rows) {
         intervalRuns: intervals.length,
         wallSeconds: wallSeconds,
         wallTime: formatDuration(wallSeconds),
-        maxConcurrentRuns: maxConcurrent,
+        maxConcurrentRuns: maxConcurrentOf(concurrencyEventsOf(intervals)),
         avgConcurrentRuns: Math.round(avgConcurrent * 10) / 10
     };
 }
@@ -548,20 +668,73 @@ function sortAttr(value) {
     return ' data-sort="' + htmlEscape(value == null ? '' : value) + '"';
 }
 
-function buildHtml(rows, summary) {
-    var payload = JSON.stringify({ rows: rows, summary: summary })
+// Script-safe embedded JSON payload (<, >, ', U+2028/9 escaped).
+function reportPayloadOf(rows, summary) {
+    return JSON.stringify({ rows: rows, summary: summary })
         .replace(/</g, '\\u003c')
         .replace(/>/g, '\\u003e')
         .replace(/'/g, '\\u0027')
         .replace(/\u2028/g, '\\u2028')
         .replace(/\u2029/g, '\\u2029');
-    var topAgents = summary.byAgent.slice().sort(function(a, b) {
+}
+
+// The 20 highest-token agents, by read+write+cached+reasoning total.
+function topAgentsOf(summary) {
+    return summary.byAgent.slice().sort(function(a, b) {
         return (b.readTokens + b.writeTokens + b.cachedTokens + b.reasoningTokens) -
                (a.readTokens + a.writeTokens + a.cachedTokens + a.reasoningTokens);
     }).slice(0, 20);
-    var recentRows = rows.slice().sort(function(a, b) {
+}
+
+// The 200 most recent rows, by createdAt descending.
+function recentRowsOf(rows) {
+    return rows.slice().sort(function(a, b) {
         return String(b.createdAt).localeCompare(String(a.createdAt));
     }).slice(0, 200);
+}
+
+// Badge CSS class for a run's token source family.
+function sourceBadgeClassOf(source) {
+    return source === 'estimated' ? 'src-est' : (source === 'reported' ? 'src-rep' : 'src-unknown');
+}
+
+// The source badge span, or '' when the run carries no source label.
+function sourceBadgeOf(row) {
+    if (!row.source) return '';
+    return '<span class="src-badge ' + sourceBadgeClassOf(row.source) + '">' + htmlEscape(row.source) + '</span>';
+}
+
+function yesNoOf(flag) {
+    return flag ? 'yes' : 'no';
+}
+
+function numOrZero(value) {
+    return value || 0;
+}
+
+// One Recent Runs table body row (cells up to the source/run columns).
+function recentRunCellsHtml(r) {
+    return '<td' + sortAttr(r.createdAt) + '>' + htmlEscape(r.createdAt) + '</td><td' + sortAttr(r.agent) + '>' + htmlEscape(r.agent) + '</td><td' + sortAttr(r.ticketKey) + '>' + htmlEscape(r.ticketKey) + '</td><td' + sortAttr(r.conclusion) + '>' + htmlEscape(r.conclusion) + '</td><td class="num"' + sortAttr(r.durationSeconds) + '>' + htmlEscape(r.duration || '0s') + '</td><td class="num"' + sortAttr(r.samples) + '>' + htmlEscape(r.samples || 1) + '</td><td' + sortAttr(r.resumeDetected ? 'yes' : 'no') + '>' + yesNoOf(r.resumeDetected) + '</td><td class="num"' + sortAttr(r.feedbackLoopCount) + '>' + numOrZero(r.feedbackLoopCount) + '</td><td class="num"' + sortAttr(r.rateLimitRetryCount) + '>' + numOrZero(r.rateLimitRetryCount) + '</td><td class="num"' + sortAttr(r.timeoutCount) + '>' + numOrZero(r.timeoutCount) + '</td><td class="num"' + sortAttr(r.readTokens) + '>' + formatShort(r.readTokens) + '</td><td class="num"' + sortAttr(r.writeTokens) + '>' + formatShort(r.writeTokens) + '</td><td class="num"' + sortAttr(r.cachedTokens) + '>' + formatShort(r.cachedTokens) + '</td><td class="num"' + sortAttr(r.reasoningTokens) + '>' + formatShort(r.reasoningTokens) + '</td>';
+}
+
+// One Recent Runs table body row, with the estimated-row class and the
+// source badge + run link cells appended.
+function recentRunRowHtml(r) {
+    var rowClass = r.source === 'estimated' ? '<tr class="row-est">' : '<tr>';
+    return rowClass + recentRunCellsHtml(r) +
+        '<td' + sortAttr(r.source || '') + '>' + sourceBadgeOf(r) + '</td>' +
+        '<td' + sortAttr(r.runNumber) + '><a href="' + htmlEscape(r.url) + '">#' + htmlEscape(r.runNumber) + '</a></td></tr>';
+}
+
+// One Agent Totals And Averages table body row.
+function agentTotalsRowHtml(a) {
+    return '<tr><td' + sortAttr(a.key) + '>' + htmlEscape(a.key) + '</td><td class="num"' + sortAttr(a.runs) + '>' + a.runs + '</td><td class="num"' + sortAttr(a.samples) + '>' + a.samples + '</td><td class="num"' + sortAttr(a.resumedRuns) + '>' + a.resumedRuns + '</td><td class="num"' + sortAttr(a.feedbackLoopCount) + '>' + a.feedbackLoopCount + '</td><td class="num"' + sortAttr(a.rateLimitRetryCount) + '>' + a.rateLimitRetryCount + '</td><td class="num"' + sortAttr(a.timeoutCount) + '>' + a.timeoutCount + '</td><td class="num"' + sortAttr(a.durationSeconds) + '>' + htmlEscape(a.totalDuration || '0s') + '</td><td class="num"' + sortAttr(a.avgDurationSeconds) + '>' + htmlEscape(a.avgDuration || '0s') + '</td><td class="num"' + sortAttr(a.readTokens) + '>' + formatShort(a.readTokens) + '</td><td class="num"' + sortAttr(a.avgReadTokens) + '>' + formatShort(a.avgReadTokens) + '</td><td class="num"' + sortAttr(a.writeTokens) + '>' + formatShort(a.writeTokens) + '</td><td class="num"' + sortAttr(a.avgWriteTokens) + '>' + formatShort(a.avgWriteTokens) + '</td><td class="num"' + sortAttr(a.cachedTokens) + '>' + formatShort(a.cachedTokens) + '</td><td class="num"' + sortAttr(a.reasoningTokens) + '>' + formatShort(a.reasoningTokens) + '</td></tr>';
+}
+
+function buildHtml(rows, summary) {
+    var payload = reportPayloadOf(rows, summary);
+    var topAgents = topAgentsOf(summary);
+    var recentRows = recentRowsOf(rows);
 
     return '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n' +
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
@@ -602,9 +775,7 @@ function buildHtml(rows, summary) {
         '<section class="grid"><div class="panel"><h2>Agent Token Share</h2><canvas id="agentPie" class="chart pie"></canvas><div id="agentPieLegend" class="legend"></div></div>' +
         '<div class="panel"><h2>Token Type Share</h2><canvas id="tokenPie" class="chart pie"></canvas><div id="tokenPieLegend" class="legend"></div></div></section>\n' +
         '<section class="panel"><h2>Agent Totals And Averages</h2><div class="scroll"><table id="agentTable"><thead><tr><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="number">Runs</th><th class="sortable" data-type="number">Attempts</th><th class="sortable" data-type="number">Resume Runs</th><th class="sortable" data-type="number">Loops</th><th class="sortable" data-type="number">Limit Retries</th><th class="sortable" data-type="number">Timeouts</th><th class="sortable" data-type="number">Runner Time</th><th class="sortable" data-type="number">Avg Duration</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Avg Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Avg Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th></tr></thead><tbody>' +
-        topAgents.map(function(a) {
-            return '<tr><td' + sortAttr(a.key) + '>' + htmlEscape(a.key) + '</td><td class="num"' + sortAttr(a.runs) + '>' + a.runs + '</td><td class="num"' + sortAttr(a.samples) + '>' + a.samples + '</td><td class="num"' + sortAttr(a.resumedRuns) + '>' + a.resumedRuns + '</td><td class="num"' + sortAttr(a.feedbackLoopCount) + '>' + a.feedbackLoopCount + '</td><td class="num"' + sortAttr(a.rateLimitRetryCount) + '>' + a.rateLimitRetryCount + '</td><td class="num"' + sortAttr(a.timeoutCount) + '>' + a.timeoutCount + '</td><td class="num"' + sortAttr(a.durationSeconds) + '>' + htmlEscape(a.totalDuration || '0s') + '</td><td class="num"' + sortAttr(a.avgDurationSeconds) + '>' + htmlEscape(a.avgDuration || '0s') + '</td><td class="num"' + sortAttr(a.readTokens) + '>' + formatShort(a.readTokens) + '</td><td class="num"' + sortAttr(a.avgReadTokens) + '>' + formatShort(a.avgReadTokens) + '</td><td class="num"' + sortAttr(a.writeTokens) + '>' + formatShort(a.writeTokens) + '</td><td class="num"' + sortAttr(a.avgWriteTokens) + '>' + formatShort(a.avgWriteTokens) + '</td><td class="num"' + sortAttr(a.cachedTokens) + '>' + formatShort(a.cachedTokens) + '</td><td class="num"' + sortAttr(a.reasoningTokens) + '>' + formatShort(a.reasoningTokens) + '</td></tr>';
-        }).join('') +
+        topAgents.map(agentTotalsRowHtml).join('') +
         '</tbody></table></div></section>\n' +
         '<section class="panel"><h2>Recent Runs</h2><div class="scroll"><table id="runsTable"><thead><tr><th class="sortable" data-type="text">Created</th><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="text">Key</th><th class="sortable" data-type="text">Conclusion</th><th class="sortable" data-type="number">Duration</th><th class="sortable" data-type="number">Attempts</th><th class="sortable" data-type="text">Resume</th><th class="sortable" data-type="number">Loops</th><th class="sortable" data-type="number">Limit Retries</th><th class="sortable" data-type="number">Timeouts</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th><th class="sortable" data-type="text">Source</th><th class="sortable" data-type="number">Run</th></tr></thead><tbody>' +
         recentRows.map(function(r) {
