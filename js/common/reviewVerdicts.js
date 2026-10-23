@@ -85,9 +85,9 @@ function buildVerdictComment(record, provider) {
     var payload = {
         head: String(record.head),
         verdict: String(record.verdict).toUpperCase(),
-        blocking: Number(record.blocking || 0) || 0,
-        important: Number(record.important || 0) || 0,
-        suggestions: Number(record.suggestions || 0) || 0,
+        blocking: censusCount(record.blocking),
+        important: censusCount(record.important),
+        suggestions: censusCount(record.suggestions),
         at: record.at || new Date().toISOString(),
         source: record.source || 'pr_review.json'
     };
@@ -100,29 +100,55 @@ function buildVerdictComment(record, provider) {
 
 /**
  * Extracts one record from a comment body, or null. Only the marker counts.
+ *
+ * gh-1196: decomposed into pure single-purpose pieces (behavior contract
+ * pinned by the characterization suites in test_reviewVerdicts.js):
+ *   markerPayload          — locate + trim the marker's JSON payload
+ *   censusCount            — the blocking/important/suggestions normalization
+ *   normalizedVerdict      — head/verdict presence + protocol admission
+ *   verdictRecordFromPayload — the record shape (defaults included)
  */
-function extractVerdictRecord(body) {
+function markerPayload(body) {
     var text = String(body || '');
     var start = text.indexOf(MARKER_PREFIX);
     if (start === -1) return null;
     start += MARKER_PREFIX.length;
     var end = text.indexOf(MARKER_SUFFIX, start);
     if (end === -1) return null;
-    var raw = text.substring(start, end).trim();
-    var parsed;
-    try { parsed = JSON.parse(raw); } catch (e) { return null; }
+    return text.substring(start, end).trim();
+}
+
+function censusCount(value) {
+    return Number(value || 0) || 0;
+}
+
+function normalizedVerdict(parsed) {
     if (!parsed || !parsed.head || !parsed.verdict) return null;
     var verdict = String(parsed.verdict).toUpperCase();
     if (VERDICTS.indexOf(verdict) === -1) return null;
+    return verdict;
+}
+
+function verdictRecordFromPayload(parsed) {
+    var verdict = normalizedVerdict(parsed);
+    if (!verdict) return null;
     return {
         head: String(parsed.head),
         verdict: verdict,
-        blocking: Number(parsed.blocking || 0) || 0,
-        important: Number(parsed.important || 0) || 0,
-        suggestions: Number(parsed.suggestions || 0) || 0,
+        blocking: censusCount(parsed.blocking),
+        important: censusCount(parsed.important),
+        suggestions: censusCount(parsed.suggestions),
         at: String(parsed.at || ''),
         source: String(parsed.source || 'unknown')
     };
+}
+
+function extractVerdictRecord(body) {
+    var raw = markerPayload(body);
+    if (!raw) return null;
+    var parsed;
+    try { parsed = JSON.parse(raw); } catch (e) { return null; }
+    return verdictRecordFromPayload(parsed);
 }
 
 /**
@@ -157,33 +183,45 @@ function trustedLogin(login) {
     return String(login || '').toLowerCase().replace(/\[bot\]$/i, '');
 }
 
+// gh-1196: the opts.authorLogins allowlist resolver (null = no allowlist).
+function authorAllowlist(opts) {
+    return (opts && Array.isArray(opts.authorLogins)) ? opts.authorLogins : null;
+}
+
+// gh-1196: the per-comment trust check — the marker comment's author must be
+// one of the allowlisted machine identities (case-insensitive, one trailing
+// '[bot]' normalized away on both sides).
+function authorAllowed(item, allow) {
+    var who = trustedLogin(commentAuthorLogin(item));
+    for (var a = 0; a < allow.length; a++) {
+        if (who && who === trustedLogin(allow[a])) return true;
+    }
+    return false;
+}
+
+// gh-1196: the records order — oldest-first, payload order as the tiebreak.
+function verdictTimestampComparator(a, b) {
+    var ta = Date.parse(a.at), tb = Date.parse(b.at);
+    // Unparseable/absent timestamps sink to payload order — NaN
+    // comparisons are always false, so handle them explicitly.
+    var aTime = isNaN(ta) ? -1 : ta;
+    var bTime = isNaN(tb) ? -1 : tb;
+    if (aTime !== bTime) return aTime < bTime ? -1 : 1;
+    return (a.order || 0) - (b.order || 0);
+}
+
 function parseVerdictRecords(comments, opts) {
     var list = Array.isArray(comments) ? comments : [];
-    var allow = (opts && Array.isArray(opts.authorLogins)) ? opts.authorLogins : null;
+    var allow = authorAllowlist(opts);
     var records = [];
     for (var i = 0; i < list.length; i++) {
-        if (allow) {
-            var who = trustedLogin(commentAuthorLogin(list[i]));
-            var trusted = false;
-            for (var a = 0; a < allow.length; a++) {
-                if (who && who === trustedLogin(allow[a])) { trusted = true; break; }
-            }
-            if (!trusted) continue;
-        }
+        if (allow && !authorAllowed(list[i], allow)) continue;
         var rec = extractVerdictRecord(list[i] && list[i].body);
         if (!rec) continue;
         rec.order = i;
         records.push(rec);
     }
-    records.sort(function(a, b) {
-        var ta = Date.parse(a.at), tb = Date.parse(b.at);
-        // Unparseable/absent timestamps sink to payload order — NaN
-        // comparisons are always false, so handle them explicitly.
-        var aTime = isNaN(ta) ? -1 : ta;
-        var bTime = isNaN(tb) ? -1 : tb;
-        if (aTime !== bTime) return aTime < bTime ? -1 : 1;
-        return (a.order || 0) - (b.order || 0);
-    });
+    records.sort(verdictTimestampComparator);
     return records;
 }
 
@@ -318,8 +356,8 @@ function reconcileDecision(records, headSha, state) {
     var st = state || {};
     if (loser === LABEL_REWORK &&
         (st.checksRed ||
-         (Number(effective.record.blocking || 0) || 0) > 0 ||
-         (Number(effective.record.suggestions || 0) || 0) > 0)) return null;
+         censusCount(effective.record.blocking) > 0 ||
+         censusCount(effective.record.suggestions) > 0)) return null;
     var removeFromPr = loser === LABEL_REWORK ? !!st.prHasRework : !!st.prHasApproved;
     var removeFromIssue = loser === LABEL_REWORK ? !!st.issueHasRework : false;
     if (!removeFromPr && !removeFromIssue) return null;
@@ -355,11 +393,11 @@ function armReworkDecision(records, headSha) {
     }
     var rec = effective.record;
     if (rec.verdict === 'APPROVE') {
-        var blocking = Number(rec.blocking || 0) || 0;
+        var blocking = censusCount(rec.blocking);
         if (blocking > 0) {
             return { arm: true, reason: 'blocking-threads', effective: effective };
         }
-        var suggestions = Number(rec.suggestions || 0) || 0;
+        var suggestions = censusCount(rec.suggestions);
         if (suggestions > 0) {
             return { arm: true, reason: 'suggestion-threads', effective: effective };
         }
@@ -421,6 +459,47 @@ function threadSeverity(body) {
 // the live norm (#1457–#1470); 20 leaves headroom while bounding API calls.
 var DEFAULT_RESOLVE_THREADS_CAP = 20;
 
+// gh-1196: the gate decision, split from the per-thread walk — null opens
+// the gate ('approve'), anything else fails CLOSED with that reason.
+function resolutionGateReason(effective) {
+    if (!effective) return 'no-verdict-record';
+    if (effective.record.verdict !== 'APPROVE') return 'not-approve';
+    if (censusCount(effective.record.blocking) > 0) return 'blocking-census';
+    return null;
+}
+
+// gh-1196: the machine-identity allowlist for per-thread authorship —
+// case-insensitive (API logins arrive canonicalized but tests/ADOs may not
+// be), falsy entries skipped, empty/absent list fails closed for every
+// thread (the gh-744 never-resolve-humans doctrine).
+function normalizedMachineLogins(opts) {
+    var logins = [];
+    ((opts && opts.machineLogins) || []).forEach(function (l) {
+        if (l) logins.push(String(l).toLowerCase());
+    });
+    return logins;
+}
+
+// gh-1196: the per-tick selection bound — a positive opts.maxThreads wins,
+// anything else rides the default cap.
+function threadSelectionCap(opts) {
+    return (opts && Number(opts.maxThreads) > 0) ? Math.floor(Number(opts.maxThreads))
+        : DEFAULT_RESOLVE_THREADS_CAP;
+}
+
+// gh-1196: the per-thread skip decision — null = resolvable, otherwise the
+// skipped-counter key ('resolved' | 'noThreadId' | 'human' | 'blocking').
+// Order matters and is pinned: idempotency, resolve-id presence, authorship,
+// then the blocking cross-check.
+function threadSkipReason(t, logins) {
+    if (t.resolved) return 'resolved';
+    if (!t.threadId) return 'noThreadId';
+    var author = String(t.author || '').toLowerCase();
+    if (!author || logins.indexOf(author) === -1) return 'human';
+    if (threadSeverity(t.body) === 'blocking') return 'blocking';
+    return null;
+}
+
 /**
  * Selects the machine-owned non-blocking threads the tick may resolve
  * (pure — gh-828 AC1–AC3). Gate FIRST, per thread SECOND:
@@ -455,30 +534,23 @@ function selectResolvableThreads(records, headSha, threads, opts) {
         resolvable: [],
         skipped: { resolved: 0, noThreadId: 0, human: 0, blocking: 0 }
     };
-    var effective = latestVerdictForHead(records, headSha);
-    if (!effective) { out.gate = 'no-verdict-record'; return out; }
-    if (effective.record.verdict !== 'APPROVE') { out.gate = 'not-approve'; return out; }
-    if ((Number(effective.record.blocking || 0) || 0) > 0) {
-        out.gate = 'blocking-census';
+    var gate = resolutionGateReason(latestVerdictForHead(records, headSha));
+    if (gate) {
+        out.gate = gate;
         return out;
     }
     out.gate = 'approve';
-    var logins = [];
-    ((opts && opts.machineLogins) || []).forEach(function (l) {
-        if (l) logins.push(String(l).toLowerCase());
-    });
-    var max = (opts && Number(opts.maxThreads) > 0) ? Math.floor(Number(opts.maxThreads))
-        : DEFAULT_RESOLVE_THREADS_CAP;
+    var logins = normalizedMachineLogins(opts);
+    var max = threadSelectionCap(opts);
     var list = Array.isArray(threads) ? threads : [];
     for (var i = 0; i < list.length; i++) {
         if (out.resolvable.length >= max) break;
-        var t = list[i] || {};
-        if (t.resolved) { out.skipped.resolved++; continue; }
-        if (!t.threadId) { out.skipped.noThreadId++; continue; }
-        var author = String(t.author || '').toLowerCase();
-        if (!author || logins.indexOf(author) === -1) { out.skipped.human++; continue; }
-        if (threadSeverity(t.body) === 'blocking') { out.skipped.blocking++; continue; }
-        out.resolvable.push(t);
+        var skip = threadSkipReason(list[i] || {}, logins);
+        if (skip) {
+            out.skipped[skip]++;
+            continue;
+        }
+        out.resolvable.push(list[i]);
     }
     return out;
 }
