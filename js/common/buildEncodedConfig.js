@@ -329,6 +329,88 @@ function buildMetadata(agentId, contextId) {
     return metadata;
 }
 
+// ---------------------------------------------------------------------------
+// Orchestration steps (gh-1197) — each phase of buildEncodedConfig lives in
+// its own small function so the top-level builder stays a thin sequence with
+// no branching beyond input validation.
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the agent JSON for a resolved config file and copy its params into the
+ * payload (deep-merging parent inheritance). Returns the resolved config file,
+ * project key and the resolved agent params root for later phases.
+ */
+function loadAgentJsonParams(p, rule, effectiveConfig) {
+    var resolvedCf = resolveConfigFile(rule, effectiveConfig);
+    var projectKey = resolveProjectKey(rule, effectiveConfig);
+    var agentParamsRoot = {};
+
+    if (resolvedCf) {
+        var agentJsonPath = resolveAgentJsonPath(resolvedCf, projectKey);
+        var agentJson = tryReadJson(agentJsonPath);
+        if (agentJson && agentJson.params) {
+            agentParamsRoot = resolveParentMerge(agentJson, agentJsonPath);
+            copyAgentParams(p, agentParamsRoot, effectiveConfig);
+            copyNestedAgentObjects(p, agentParamsRoot);
+        }
+    }
+
+    return { resolvedCf: resolvedCf, projectKey: projectKey, agentParamsRoot: agentParamsRoot };
+}
+
+/**
+ * Apply the project config's instruction/prompt/patch resolutions for the
+ * agent (resolveInstructions) plus the per-agent Jira field-name override.
+ * Returns the (possibly replaced) params payload.
+ */
+function applyProjectConfigResolutions(p, resolvedCf, agentParamsRoot, effectiveConfig) {
+    if (!effectiveConfig || !resolvedCf) return p;
+    var agentName = extractAgentName(resolvedCf);
+    var trackerOverride = resolveConfluenceTrackerOverride(agentParamsRoot, effectiveConfig, agentName);
+    var resolved = configLoader.resolveInstructions(agentName, null, effectiveConfig, agentParamsRoot.cliPromptsByTracker,
+        trackerOverride ? { trackerOverride: trackerOverride } : undefined);
+
+    applyInstructionExtras(p, resolved);
+    applyCliPrompts(p, resolved);
+    p = applyConfigPatches(p, resolved);
+
+    var fieldName = resolveFieldNameOverride(agentName, effectiveConfig);
+    if (fieldName) {
+        p.fieldName = fieldName;
+    }
+    return p;
+}
+
+function stampConfigPath(p, effectiveConfig) {
+    if (effectiveConfig && effectiveConfig._configPath) {
+        if (!p.customParams) p.customParams = {};
+        p.customParams.configPath = effectiveConfig._configPath;
+    }
+    return p;
+}
+
+function stampLocalTeammate(p, isLocal) {
+    if (isLocal) {
+        if (!p.customParams) p.customParams = {};
+        p.customParams.localTeammate = true;
+    }
+    return p;
+}
+
+/**
+ * Attach the metadata block (agentId from the config file name, contextId from
+ * the upper-cased project key) when either is present.
+ */
+function attachMetadata(p, resolvedCf, projectKey) {
+    var agentId = resolvedCf ? extractAgentName(resolvedCf) : null;
+    var contextId = projectKey ? projectKey.toUpperCase() : null;
+    var metadata = buildMetadata(agentId, contextId);
+    if (metadata) {
+        p.metadata = metadata;
+    }
+    return p;
+}
+
 /**
  * Build the encoded config payload for a workflow dispatch.
  *
@@ -353,54 +435,15 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig, isLocal) {
     }
     var provider = trackers.createTracker(effectiveConfig, {}).provider();
     var p = { inputJql: validateInputJql.inputJqlForKey(ticketKey, provider) };
-    var resolvedCf = resolveConfigFile(rule, effectiveConfig);
-    var projectKey = resolveProjectKey(rule, effectiveConfig);
-    var agentParamsRoot = {};
 
-    if (resolvedCf) {
-        var agentJsonPath = resolveAgentJsonPath(resolvedCf, projectKey);
-        var agentJson = tryReadJson(agentJsonPath);
-        if (agentJson && agentJson.params) {
-            agentParamsRoot = resolveParentMerge(agentJson, agentJsonPath);
-            copyAgentParams(p, agentParamsRoot, effectiveConfig);
-            copyNestedAgentObjects(p, agentParamsRoot);
-        }
-    }
-
-    if (effectiveConfig && resolvedCf) {
-        var agentName = extractAgentName(resolvedCf);
-        var trackerOverride = resolveConfluenceTrackerOverride(agentParamsRoot, effectiveConfig, agentName);
-        var resolved = configLoader.resolveInstructions(agentName, null, effectiveConfig, agentParamsRoot.cliPromptsByTracker,
-            trackerOverride ? { trackerOverride: trackerOverride } : undefined);
-
-        applyInstructionExtras(p, resolved);
-        applyCliPrompts(p, resolved);
-        p = applyConfigPatches(p, resolved);
-
-        var fieldName = resolveFieldNameOverride(agentName, effectiveConfig);
-        if (fieldName) {
-            p.fieldName = fieldName;
-        }
-    }
-
-    if (effectiveConfig && effectiveConfig._configPath) {
-        if (!p.customParams) p.customParams = {};
-        p.customParams.configPath = effectiveConfig._configPath;
-    }
-
-    if (isLocal) {
-        if (!p.customParams) p.customParams = {};
-        p.customParams.localTeammate = true;
-    }
+    var agent = loadAgentJsonParams(p, rule, effectiveConfig);
+    p = applyProjectConfigResolutions(p, agent.resolvedCf, agent.agentParamsRoot, effectiveConfig);
+    p = stampConfigPath(p, effectiveConfig);
+    p = stampLocalTeammate(p, isLocal);
 
     if (!p.agentParams) p.agentParams = {};
 
-    var agentId = resolvedCf ? extractAgentName(resolvedCf) : null;
-    var contextId = projectKey ? projectKey.toUpperCase() : null;
-    var metadata = buildMetadata(agentId, contextId);
-    if (metadata) {
-        p.metadata = metadata;
-    }
+    p = attachMetadata(p, agent.resolvedCf, agent.projectKey);
 
     return encodeURIComponent(JSON.stringify({ params: p }));
 }
@@ -422,5 +465,10 @@ module.exports = {
     applyCliPrompts: applyCliPrompts,
     applyConfigPatches: applyConfigPatches,
     resolveFieldNameOverride: resolveFieldNameOverride,
-    buildMetadata: buildMetadata
+    buildMetadata: buildMetadata,
+    loadAgentJsonParams: loadAgentJsonParams,
+    applyProjectConfigResolutions: applyProjectConfigResolutions,
+    stampConfigPath: stampConfigPath,
+    stampLocalTeammate: stampLocalTeammate,
+    attachMetadata: attachMetadata
 };

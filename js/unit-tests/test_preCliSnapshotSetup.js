@@ -385,7 +385,8 @@ suite('preCliSnapshotSetup — action branches', function() {
         });
         var result = mod.action({ ticket: TICKET, customParams: {} });
         assert.equal(result, true, 'codegraph failure is non-fatal');
-        assert.ok(calls.some(function(c) { return c.indexOf('git checkout develop/3.9.0') !== -1; }), 'checkout happened');
+        assert.ok(calls.some(function(c) { return c.indexOf('git pull origin develop/3.9.0 --ff-only') !== -1; }),
+            'already on the snapshot branch — the pull ran before the failing sync');
     });
 
 });
