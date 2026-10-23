@@ -23,7 +23,12 @@
       "./agents/instructions/knowledge_update/general_guidelines.md",
       "./agents/instructions/knowledge_update/output_rules.md",
       "./agents/instructions/common/dmtools_cli.md",
-      "./agents/prompts/bash_tools.md"
+      "./agents/prompts/bash_tools.md",
+      {
+        "id": "codegraph",
+        "prompt": "./agents/prompts/codegraph_tools.md",
+        "condition": "agents/js/conditions/isCodeGraphAvailable.js"
+      }
     ]
   }
 }

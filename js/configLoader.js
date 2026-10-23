@@ -411,11 +411,69 @@ function copyTopLevelKeys(target, source) {
     return target;
 }
 
-/** Parent-first array concat; child entries already present are not repeated. */
+function extractSectionPromptsList(sec) {
+    var out = [];
+    if (typeof sec.prompt === 'string') out.push(sec.prompt);
+    if (Array.isArray(sec.prompts)) {
+        for (var i = 0; i < sec.prompts.length; i++) {
+            if (typeof sec.prompts[i] === 'string') out.push(sec.prompts[i]);
+        }
+    }
+    return out;
+}
+
+function mergeCliPromptSections(baseSec, overSec) {
+    var basePrompts = extractSectionPromptsList(baseSec);
+    var overPrompts = extractSectionPromptsList(overSec);
+    var strategy = (typeof overSec.mergeStrategy === 'string' && overSec.mergeStrategy)
+        ? overSec.mergeStrategy.toLowerCase()
+        : ((typeof baseSec.mergeStrategy === 'string' && baseSec.mergeStrategy)
+            ? baseSec.mergeStrategy.toLowerCase()
+            : 'append');
+    var mergedPrompts;
+    if (strategy === 'replace') {
+        mergedPrompts = overPrompts;
+    } else if (strategy === 'prepend') {
+        mergedPrompts = overPrompts.concat(basePrompts);
+    } else {
+        mergedPrompts = basePrompts.concat(overPrompts);
+    }
+    var result = {
+        id: overSec.id || baseSec.id,
+        prompts: mergedPrompts,
+        mergeStrategy: strategy
+    };
+    var cond = (typeof overSec.condition === 'string' && overSec.condition.trim())
+        ? overSec.condition
+        : ((typeof baseSec.condition === 'string' && baseSec.condition.trim())
+            ? baseSec.condition
+            : null);
+    if (cond) result.condition = cond;
+    return result;
+}
+
+/** Parent-first array concat; child entries already present are not repeated, and section objects with matching id merge in-place. */
 function concatUnique(parentList, childList) {
     var combined = parentList.slice();
     for (var j = 0; j < childList.length; j++) {
-        if (combined.indexOf(childList[j]) === -1) combined.push(childList[j]);
+        var item = childList[j];
+        if (item && typeof item === 'object' && !Array.isArray(item) && typeof item.id === 'string' && item.id) {
+            var foundIdx = -1;
+            for (var k = 0; k < combined.length; k++) {
+                var existing = combined[k];
+                if (existing && typeof existing === 'object' && !Array.isArray(existing) && existing.id === item.id) {
+                    foundIdx = k;
+                    break;
+                }
+            }
+            if (foundIdx !== -1) {
+                combined[foundIdx] = mergeCliPromptSections(combined[foundIdx], item);
+            } else {
+                combined.push(item);
+            }
+        } else if (combined.indexOf(item) === -1) {
+            combined.push(item);
+        }
     }
     return combined;
 }

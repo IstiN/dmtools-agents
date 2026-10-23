@@ -1925,6 +1925,51 @@ suite('configLoader.loadAgentConfig — inheritance edges (gh-1112 rework)', fun
             'the "agents/<file>" consuming-repo form resolves to the repo-root file');
     });
 
+
+    test('structured cliPrompts section objects with matching id merge in-place and preserve condition', function () {
+        var parentWithSec = JSON.stringify({
+            name: 'Teammate',
+            params: {
+                metadata: { contextId: 'wiki_publisher' },
+                cliPrompts: [
+                    'base.md',
+                    {
+                        id: 'codegraph',
+                        prompt: './agents/prompts/codegraph_tools.md',
+                        condition: 'agents/js/conditions/isCodeGraphAvailable.js'
+                    },
+                    'tail.md'
+                ]
+            }
+        });
+        var child = childJson({
+            parent: { path: PARENT_PATH, merge: ['params.cliPrompts'] },
+            params: {
+                metadata: { contextId: 'story_checklist' },
+                cliPrompts: [
+                    {
+                        id: 'codegraph',
+                        prompts: ['./agents/prompts/extra_codegraph.md'],
+                        mergeStrategy: 'append'
+                    },
+                    'child.md'
+                ]
+            }
+        });
+        var loader = loaderWithFiles({ 'wiki_publisher.json': parentWithSec, 'wiki_child.json': child });
+        var merged = loader.loadAgentConfig(CHILD_PATH);
+        assert.deepEqual(merged.params.cliPrompts, [
+            'base.md',
+            {
+                id: 'codegraph',
+                prompts: ['./agents/prompts/codegraph_tools.md', './agents/prompts/extra_codegraph.md'],
+                mergeStrategy: 'append',
+                condition: 'agents/js/conditions/isCodeGraphAvailable.js'
+            },
+            'tail.md',
+            'child.md'
+        ]);
+    });
 });
 // ── resolveInstructions extracted helpers (gh-1086) ──────────────────────────
 

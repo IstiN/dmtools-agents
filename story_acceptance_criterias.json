@@ -23,7 +23,12 @@
       "./agents/instructions/common/media_handling.md",
       "./agents/instructions/story/enhanced_story_content_guidelines.md",
       "./agents/prompts/acceptance_criteria_prompt.md",
-      "./agents/prompts/bash_tools.md"
+      "./agents/prompts/bash_tools.md",
+      {
+        "id": "codegraph",
+        "prompt": "./agents/prompts/codegraph_tools.md",
+        "condition": "agents/js/conditions/isCodeGraphAvailable.js"
+      }
     ],
     "cliPromptsByTracker": {
       "jira": [

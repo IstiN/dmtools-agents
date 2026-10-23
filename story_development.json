@@ -40,7 +40,12 @@
       "./agents/instructions/story_development/few_shots.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/instructions/common/session_ephemerality.md",
-      "./agents/prompts/bash_tools.md"
+      "./agents/prompts/bash_tools.md",
+      {
+        "id": "codegraph",
+        "prompt": "./agents/prompts/codegraph_tools.md",
+        "condition": "agents/js/conditions/isCodeGraphAvailable.js"
+      }
     ],
     "cliPromptsByTracker": {
       "jira": [

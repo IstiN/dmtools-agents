@@ -141,7 +141,12 @@
       "./agents/instructions/pr_review/few_shots.md",
       "./agents/instructions/pr_review/review_verdict_rules.md",
       "./agents/instructions/common/dmtools_cli.md",
-      "./agents/prompts/bash_tools.md"
+      "./agents/prompts/bash_tools.md",
+      {
+        "id": "codegraph",
+        "prompt": "./agents/prompts/codegraph_tools.md",
+        "condition": "agents/js/conditions/isCodeGraphAvailable.js"
+      }
     ],
     "cliPromptsByTracker": {
       "jira": [

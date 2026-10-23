@@ -28,7 +28,12 @@
       "./agents/instructions/common/preserve_references.md",
       "./agents/instructions/common/media_handling.md",
       "./agents/prompts/story_description_prompt.md",
-      "./agents/prompts/bash_tools.md"
+      "./agents/prompts/bash_tools.md",
+      {
+        "id": "codegraph",
+        "prompt": "./agents/prompts/codegraph_tools.md",
+        "condition": "agents/js/conditions/isCodeGraphAvailable.js"
+      }
     ],
     "cliPromptsByTracker": {
       "jira": [

@@ -447,11 +447,12 @@ suite('buildEncodedConfig payload', function() {
     test('gh-1160: real dev/review/rework configs inject only the active tracker comment format prompt and inline exact sections', function() {
         var builder = loadBuilder({});
         function assemblePrompt(cliPrompts) {
-            return cliPrompts.map(function(entry) {
-                if (entry.indexOf('./agents/') === 0) {
+            return cliPrompts.map(function(item) {
+                var entry = (item && typeof item === 'object') ? (item.prompt || (Array.isArray(item.prompts) ? item.prompts[0] : '')) : item;
+                if (typeof entry === 'string' && entry.indexOf('./agents/') === 0) {
                     return file_read({ path: entry.replace(/^\.\/agents\//, '') }) || file_read({ path: entry });
                 }
-                return entry;
+                return typeof entry === 'string' ? entry : '';
             }).filter(Boolean).join('\n\n');
         }
         var configs = [
@@ -494,11 +495,12 @@ suite('buildEncodedConfig payload', function() {
     test('gh-1160: real story_solution/description/acceptance_criteria/wiki_publisher/discovery load confluence_comments.md only for confluence/wiki targets and assemble exact prompt sections', function() {
         var builder = loadBuilder({});
         function assemblePrompt(cliPrompts) {
-            return cliPrompts.map(function(entry) {
-                if (entry.indexOf('./agents/') === 0) {
+            return cliPrompts.map(function(item) {
+                var entry = (item && typeof item === 'object') ? (item.prompt || (Array.isArray(item.prompts) ? item.prompts[0] : '')) : item;
+                if (typeof entry === 'string' && entry.indexOf('./agents/') === 0) {
                     return file_read({ path: entry.replace(/^\.\/agents\//, '') }) || file_read({ path: entry });
                 }
-                return entry;
+                return typeof entry === 'string' ? entry : '';
             }).filter(Boolean).join('\n\n');
         }
         var contentConfigs = [
