@@ -1455,3 +1455,71 @@ suite('preCliReworkSetup.action — diff-before-CI-detection (gh-1119 AC7)', fun
         assert.notOk(h.calls.detectArgs.jenkinsBasePath, 'no Jenkins base configured here');
     });
 });
+
+// ── gh-1195 CRAP ratchet: buildReviewStateMd branch characterization ─────────
+// Pins the review-probe degradation paths and the CHANGES_REQUESTED warning
+// (the branches that were uncovered when buildReviewStateMd sat at CRAP 19.3)
+// before the markdown helpers are extracted.
+suite('preCliReworkSetup.buildReviewStateMd — probe degradation + verdict warning (gh-1195)', function() {
+
+    function reviewsHarness(listReviews) {
+        var h = makeContractHarness();
+        var scm = (listReviews === undefined) ? { /* no listReviews at all */ } : {
+            listReviews: listReviews
+        };
+        return { mod: h.mod, scm: scm };
+    }
+
+    test('a concluded CHANGES_REQUESTED review adds the blocking warning lines', function() {
+        var loaded = reviewsHarness(function() {
+            return [{ state: 'CHANGES_REQUESTED', user: { login: 'reviewer1' },
+                submitted_at: '2026-10-08T18:00:00Z', body: 'Please fix the null deref.' }];
+        });
+        var md = loaded.mod.buildReviewStateMd(loaded.scm, 7, contractThreads(['PRRT_a']));
+        assert.contains(md, 'CHANGES_REQUESTED');
+        assert.contains(md, '⚠️ The reviewer **requires changes** before this PR can merge — treat every open thread as blocking.');
+        assert.contains(md, 'PRRT_a', 'the open thread inventory is still listed');
+    });
+
+    test('a probe failure degrades to the honest not-available note (non-fatal)', function() {
+        var loaded = reviewsHarness(function() { throw new Error('graphql down'); });
+        var md = loaded.mod.buildReviewStateMd(loaded.scm, 7, contractThreads([]));
+        assert.contains(md, 'Review verdicts are not available from this SCM provider');
+        assert.notContains(md, 'requires changes');
+    });
+
+    test('a provider without listReviews support degrades the same way', function() {
+        var loaded = reviewsHarness(undefined);
+        var md = loaded.mod.buildReviewStateMd(loaded.scm, 7, contractThreads([]));
+        assert.contains(md, 'Review verdicts are not available from this SCM provider');
+        assert.contains(md, '**Open review threads at rework start: 0**');
+    });
+
+    test('an APPROVED verdict never renders the blocking warning', function() {
+        var loaded = reviewsHarness(function() {
+            return [{ state: 'APPROVED', user: { login: 'reviewer1' },
+                submitted_at: '2026-10-08T18:00:00Z', body: 'LGTM' }];
+        });
+        var md = loaded.mod.buildReviewStateMd(loaded.scm, 7, contractThreads([]));
+        assert.contains(md, '**Review decision: `APPROVED`**');
+        assert.notContains(md, 'requires changes');
+    });
+
+    test('resolved and bot threads are excluded from the open inventory', function() {
+        var loaded = reviewsHarness(function() { return []; });
+        var md = loaded.mod.buildReviewStateMd(loaded.scm, 7, {
+            rawThreads: {
+                threads: [
+                    { threadId: 'PRRT_open', resolved: false },
+                    { threadId: 'PRRT_done', resolved: true },
+                    { threadId: 'PRRT_bot', resolved: false, bot: true },
+                    null
+                ]
+            }
+        });
+        assert.contains(md, '**Open review threads at rework start: 1**');
+        assert.contains(md, 'PRRT_open');
+        assert.notContains(md, 'PRRT_done');
+        assert.notContains(md, 'PRRT_bot');
+    });
+});

@@ -210,3 +210,45 @@ suite('reworkConsumption: [bot]-suffixed machine authors are trusted (gh-1025)',
         assert.equal(markers.length, 0);
     });
 });
+
+// ── gh-1195 CRAP ratchet: marker ordering characterization ───────────────────
+// Pins the newest-first ordering contract of parseMarkers — timestamp order
+// with payload order as the tiebreak, and NaN timestamps sinking to the front
+// (the branches that left parseMarkers at CRAP 20) — before the comparator is
+// extracted into a named helper.
+suite('reworkConsumption.parseMarkers — ordering contract (gh-1195 characterization)', function () {
+    var rc = loadModule('js/common/reworkConsumption.js', makeRequire({}), {});
+    var h = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function consumeBody(at) {
+        var payload = { path: 'dispatch', head: h, at: at };
+        return rc.CONSUME_MARKER_PREFIX + JSON.stringify(payload) + rc.MARKER_SUFFIX;
+    }
+
+    test('equal timestamps fall back to payload order (the comparator tiebreak)', function () {
+        var markers = rc.parseConsumeMarkers([
+            { body: consumeBody('2026-10-10T10:00:00.000Z'), user: { login: 'ai-teammate' } },
+            { body: consumeBody('2026-10-10T10:00:00.000Z'), user: { login: 'ai-teammate' } },
+            { body: consumeBody('2026-10-10T09:00:00.000Z'), user: { login: 'ai-teammate' } }
+        ]);
+        assert.equal(markers.length, 3);
+        assert.equal(markers[0].at, '2026-10-10T09:00:00.000Z', 'oldest timestamp first');
+        assert.equal(markers[1].order, 0, 'same tick → payload order wins (comment 0)');
+        assert.equal(markers[2].order, 1, 'same tick → payload order wins (comment 1)');
+    });
+
+    test('unparsable timestamps sort oldest (NaN sink) and never crash the comparator', function () {
+        var markers = rc.parseConsumeMarkers([
+            { body: consumeBody('not-a-date'), user: { login: 'ai-teammate' } },
+            { body: consumeBody('2026-10-10T10:00:00.000Z'), user: { login: 'ai-teammate' } }
+        ]);
+        assert.equal(markers.length, 2);
+        assert.equal(markers[0].at, 'not-a-date', 'NaN atMs sinks to the front');
+        assert.equal(markers[1].at, '2026-10-10T10:00:00.000Z');
+    });
+
+    test('a non-array comments argument yields an empty marker list', function () {
+        assert.deepEqual(rc.parseConsumeMarkers(null, {}), []);
+        assert.deepEqual(rc.parseRestoreMarkers('nope', {}), []);
+    });
+});
