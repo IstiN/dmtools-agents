@@ -644,6 +644,14 @@ if (typeof module !== 'undefined' && module.exports) {
         buildLabelStatusMap: buildLabelStatusMap,
         extractStatusesFromJql: extractStatusesFromJql,
         extractExcludedStatusesFromJql: extractExcludedStatusesFromJql,
-        isActiveRun: isActiveRun
+        isActiveRun: isActiveRun,
+        loadSmRules: loadSmRules,
+        embeddedSmRules: embeddedSmRules,
+        rulesOfParsedSmConfig: rulesOfParsedSmConfig,
+        smConfigPathOf: smConfigPathOf,
+        applySafeRecovery: applySafeRecovery,
+        recoverAnomaly: recoverAnomaly,
+        releaseAnomalyLabels: releaseAnomalyLabels,
+        requestPrBranchUpdate: requestPrBranchUpdate
     };
 }

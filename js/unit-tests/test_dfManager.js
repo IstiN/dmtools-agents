@@ -531,9 +531,10 @@ suite('dfManager.loadSmRules + helpers (gh-1198 CRAP extraction)', function() {
         });
 
         test('smConfigPath overrides the read path', function() {
-            var rules = [{ jql: 'custom' }];
-            var df = loadDf({ files: { 'cfg/other.json': JSON.stringify({ params: { jobParams: { rules: rules } } }) } });
-            assert.equal(df.loadSmRules({ smConfigPath: 'cfg/other.json' }), rules);
+            var df = loadDf({ files: { 'cfg/other.json': JSON.stringify({ params: { jobParams: { rules: [{ jql: 'custom' }] } } }) } });
+            var out = df.loadSmRules({ smConfigPath: 'cfg/other.json' });
+            assert.equal(out.length, 1);
+            assert.equal(out[0].jql, 'custom');
         });
 
         test('unreadable file degrades to [] (null read → JSON null → no rules)', function() {
@@ -694,6 +695,7 @@ suite('dfManager.applySafeRecovery branches (gh-1198 CRAP extraction)', function
         var triggered = [];
         var ctx = {
             autoRecover: true,
+            recoveryState: {},
             repoInfo: { owner: 'o', repo: 'r' },
             params: {},
             config: null,
@@ -717,19 +719,25 @@ suite('dfManager.applySafeRecovery branches (gh-1198 CRAP extraction)', function
         assert.deepEqual(removed.slice(2), [{ key: 'TS-2', label: 'l3' }]);
         assert.equal(triggered.length, 1, 'obsolete cleanup does not retrigger SM');
 
-        // approved-pr-not-merged: SM triggered
+        // approved-pr-not-merged: SM triggered (fresh recoveryState — the
+        // smTriggered latch suppresses a second trigger within one pass)
+        ctx.recoveryState = {};
         df.recoverAnomaly(ctx, { type: 'approved-pr-not-merged', prNumber: 5 });
         assert.equal(triggered.length, 2);
+
+        // the smTriggered latch holds within one recovery pass
+        df.recoverAnomaly(ctx, { type: 'approved-pr-not-merged', prNumber: 6 });
+        assert.equal(triggered.length, 2, 'second trigger in the same pass is suppressed');
 
         // approved-pr-not-mergeable without the branch-update safeAction: nothing
         df.recoverAnomaly(ctx, { type: 'approved-pr-not-mergeable', prNumber: 6, safeAction: null });
         assert.equal(triggered.length, 2, 'no trigger for the dirty shape');
-        assert.equal(actions.length, 3, 'no action pushed');
+        assert.equal(actions.length, 5, 'no action pushed (2+1 remove-label, 2 trigger-sm)');
 
         // unknown anomaly type: nothing
         df.recoverAnomaly(ctx, { type: 'failed-workflow-run' });
         assert.equal(triggered.length, 2);
-        assert.equal(actions.length, 3);
+        assert.equal(actions.length, 5);
     });
 
     test('applySafeRecovery no-ops when autoRecover is off (direct unit)', function() {
