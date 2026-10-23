@@ -1552,3 +1552,101 @@ suite('postTestReworkResults — action-input resolution (gh-1083)', function() 
     });
 
 });
+
+suite('postTestReworkResults.commitAndPush — guards and fallbacks (gh-1192)', function() {
+
+    test('an undeterminable branch fails before any staging', function() {
+        var calls = [];
+        var cli = function(args) {
+            calls.push(args.command);
+            return '';
+        };
+        cli.calls = calls;
+        var module = loadPostTestReworkResults(cli);
+        var err = null;
+        try { module.commitAndPush('PROJ-123', true, REWORK_CONFIG, false); } catch (e) { err = e; }
+        assert.ok(err, 'expected a throw');
+        assert.contains(err.message, 'Could not determine current git branch');
+        assert.ok(cli.calls.indexOf('git add testing/') === -1, 'no git mutation happened');
+    });
+
+    test('pushing directly to main or master is refused', function() {
+        var cli = makeCli({ branch: 'main' });
+        var module = loadPostTestReworkResults(cli);
+        var err = null;
+        try { module.commitAndPush('PROJ-123', true, REWORK_CONFIG, false); } catch (e) { err = e; }
+        assert.ok(err, 'expected a throw');
+        assert.contains(err.message, 'Refusing to commit rework directly to "main"');
+
+        cli = makeCli({ branch: 'master' });
+        module = loadPostTestReworkResults(cli);
+        err = null;
+        try { module.commitAndPush('PROJ-123', true, REWORK_CONFIG, false); } catch (e) { err = e; }
+        assert.ok(err, 'expected a throw');
+        assert.contains(err.message, 'Refusing to commit rework directly to "master"');
+    });
+
+    test('a failing origin fetch warns and the flow continues', function() {
+        var calls = [];
+        var cli = function(args) {
+            calls.push(args.command);
+            if (args.command === 'git fetch origin main') throw new Error('fetch boom');
+            if (args.command === 'git branch --show-current') return 'test/PROJ-123';
+            if (args.command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) throw new Error('Command execution failed (exit code 1)');
+            if (args.command.indexOf('git ls-remote --heads origin') === 0) return SHA40 + '\trefs/heads/test/PROJ-123';
+            if (args.command === 'git rev-parse HEAD') return SHA40;
+            return '';
+        };
+        cli.calls = calls;
+        var module = loadPostTestReworkResults(cli);
+        var branchName = module.commitAndPush('PROJ-123', true, REWORK_CONFIG, false);
+        assert.equal(branchName, 'test/PROJ-123');
+        assert.ok(cli.calls.some(function(c) { return c === 'git fetch origin main'; }));
+    });
+
+    test('a rejected push escalates to a forced update of the rework branch', function() {
+        var cli = makeCli({ branch: 'test/PROJ-123' });
+        var rejected = 'git push -u origin test/PROJ-123';
+        var forced = rejected + ' --force';
+        var cli2 = function(args) {
+            if (args.command === rejected) throw new Error('push rejected');
+            return cli(args);
+        };
+        cli2.calls = cli.calls;
+        var module = loadPostTestReworkResults(cli2);
+        var branchName = module.commitAndPush('PROJ-123', true, REWORK_CONFIG, false);
+        assert.equal(branchName, 'test/PROJ-123');
+        assert.ok(cli.calls.some(function(c) { return c === forced; }), 'forced push executed after rejection');
+    });
+
+    test('the extracted helpers keep the pinned messages and command shapes', function() {
+        var cli = makeCli({ branch: 'test/PROJ-123' });
+        var module = loadPostTestReworkResults(cli);
+        assert.equal(module.currentBranchName(), 'test/PROJ-123');
+
+        var err = null;
+        try { module.guardReworkBranch('', 'PROJ-123'); } catch (e) { err = e; }
+        assert.ok(err, 'empty branch throws');
+        assert.contains(err.message, 'Could not determine current git branch');
+
+        err = null;
+        try { module.guardReworkBranch('main', 'PROJ-123'); } catch (e) { err = e; }
+        assert.ok(err, 'main throws');
+        assert.contains(err.message, 'Refusing to commit rework directly to "main"');
+
+        module.pushReworkBranchToRemote('test/PROJ-123');
+        assert.ok(cli.calls.indexOf('git push -u origin test/PROJ-123') !== -1);
+
+        err = null;
+        try { module.verifyPushedBranch(SHA40, 'test/PROJ-123'); } catch (e) { err = e; }
+        assert.equal(err, null, 'matching local/remote shas verify cleanly');
+    });
+
+    test('mergeBaseWhenDirty commits pending fixes and merges the base without committing', function() {
+        var cli = makeCli({ branch: 'test/PROJ-123' });
+        var module = loadPostTestReworkResults(cli);
+        module.mergeBaseWhenDirty('PROJ-123', true, REWORK_CONFIG, 'main');
+        assert.ok(cli.calls.indexOf('git add testing/') !== -1, 'pending fixes staged first');
+        assert.ok(cli.calls.indexOf('git merge origin/main --no-commit --no-ff') !== -1, 'base merged without commit');
+    });
+});

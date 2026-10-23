@@ -614,16 +614,70 @@ function commitIfNeeded(ticketKey, passed, config) {
     return true;
 }
 
-function commitAndPush(ticketKey, passed, config, prIsDirty) {
-    const branchName = cleanCommandOutput(
+// ── gh-1192: commitAndPush decomposed into thin git executors ────────────────
+// Same commands, same order, same failure protocol — only the control flow
+// moved into named units so every branch is unit-testable.
+
+/** The current branch name (empty string when undeterminable). */
+function currentBranchName() {
+    return cleanCommandOutput(
         cli_execute_command({ command: 'git branch --show-current' }) || ''
     );
+}
+
+/** Guard: rework must never be committed straight to the base branch. */
+function guardReworkBranch(branchName, ticketKey) {
     if (!branchName) throw new Error('Could not determine current git branch');
 
-    // Guard: refuse to push directly to main — rework must be on test/ branch
     if (branchName === 'main' || branchName === 'master') {
         throw new Error('Refusing to commit rework directly to "' + branchName + '". Expected test/' + ticketKey + ' branch. preCliJSAction may have failed to checkout the correct branch.');
     }
+}
+
+/** Dirty PR: commit pending test fixes, then merge the base without committing. */
+function mergeBaseWhenDirty(ticketKey, passed, config, baseBranch) {
+    // Commit any test fixes first so the working tree/index is clean for the merge.
+    cli_execute_command({ command: 'git add testing/' });
+    commitIfNeeded(ticketKey, passed, config);
+    console.log('PR is dirty — starting merge of origin/' + baseBranch);
+    try {
+        cli_execute_command({ command: 'git merge origin/' + baseBranch + ' --no-commit --no-ff' });
+    } catch (e) {
+        // Conflicts are expected for a dirty PR.
+    }
+}
+
+/** Push the rework branch, escalating to --force when the normal push is rejected. */
+function pushReworkBranchToRemote(branchName) {
+    try {
+        cli_execute_command({ command: 'git push -u origin ' + branchName });
+    } catch (e) {
+        console.log('Normal push failed, force pushing...');
+        cli_execute_command({ command: 'git push -u origin ' + branchName + ' --force' });
+    }
+}
+
+/**
+ * gh-912: verify the push produced a real refs/heads/<branch> ref line and
+ * extract the SHA FROM THAT LINE — the old `capture.split(/\s+/)[0]` read
+ * `warning:` (git ≥ 2.54 prints a redirect warning on every network
+ * command against a central-mode insteadOf origin) and misreported a
+ * successful push as "Push rejected".
+ */
+function verifyPushedBranch(localSha, branchName) {
+    const remoteSha = prHelper.remoteBranchSha(function(command) {
+        return cli_execute_command({ command: command });
+    }, null, branchName);
+    if (!remoteSha) throw new Error('Branch not found on remote after push');
+
+    if (localSha && !remoteSha.startsWith(localSha.substring(0, 10))) {
+        throw new Error('Push rejected: local HEAD ' + localSha.substring(0, 10) + ' does not match remote ' + remoteSha.substring(0, 10) + '. Branch protection may have blocked the push.');
+    }
+}
+
+function commitAndPush(ticketKey, passed, config, prIsDirty) {
+    const branchName = currentBranchName();
+    guardReworkBranch(branchName, ticketKey);
 
     const baseBranch = (config.git && config.git.baseBranch) || 'main';
     console.log('Current branch:', branchName, '| base:', baseBranch, '| PR dirty:', !!prIsDirty);
@@ -640,15 +694,7 @@ function commitAndPush(ticketKey, passed, config, prIsDirty) {
     var mergeInProgress = isMergeInProgress();
 
     if (!mergeInProgress && prIsDirty) {
-        // Commit any test fixes first so the working tree/index is clean for the merge.
-        cli_execute_command({ command: 'git add testing/' });
-        commitIfNeeded(ticketKey, passed, config);
-        console.log('PR is dirty — starting merge of origin/' + baseBranch);
-        try {
-            cli_execute_command({ command: 'git merge origin/' + baseBranch + ' --no-commit --no-ff' });
-        } catch (e) {
-            // Conflicts are expected for a dirty PR.
-        }
+        mergeBaseWhenDirty(ticketKey, passed, config, baseBranch);
     }
 
     // Stage test fixes and any resolved conflict files.
@@ -663,26 +709,9 @@ function commitAndPush(ticketKey, passed, config, prIsDirty) {
         cli_execute_command({ command: 'git rev-parse HEAD' }) || ''
     ).substring(0, 40);
 
-    try {
-        cli_execute_command({ command: 'git push -u origin ' + branchName });
-    } catch (e) {
-        console.log('Normal push failed, force pushing...');
-        cli_execute_command({ command: 'git push -u origin ' + branchName + ' --force' });
-    }
+    pushReworkBranchToRemote(branchName);
 
-    // gh-912: verify the push produced a real refs/heads/<branch> ref line and
-    // extract the SHA FROM THAT LINE — the old `capture.split(/\s+/)[0]` read
-    // `warning:` (git ≥ 2.54 prints a redirect warning on every network
-    // command against a central-mode insteadOf origin) and misreported a
-    // successful push as "Push rejected".
-    const remoteSha = prHelper.remoteBranchSha(function(command) {
-        return cli_execute_command({ command: command });
-    }, null, branchName);
-    if (!remoteSha) throw new Error('Branch not found on remote after push');
-
-    if (localSha && !remoteSha.startsWith(localSha.substring(0, 10))) {
-        throw new Error('Push rejected: local HEAD ' + localSha.substring(0, 10) + ' does not match remote ' + remoteSha.substring(0, 10) + '. Branch protection may have blocked the push.');
-    }
+    verifyPushedBranch(localSha, branchName);
 
     console.log('✅ Pushed to remote branch:', branchName);
     return branchName;
@@ -959,6 +988,12 @@ if (typeof module !== 'undefined' && module.exports) {
         decidePrIsDirty,
         decideReworkTargetStatus,
         loadReworkProjectConfig,
-        smRemoveLabelOf
+        smRemoveLabelOf,
+        // gh-1192: commitAndPush decomposed into thin git executors (test surface):
+        currentBranchName,
+        guardReworkBranch,
+        mergeBaseWhenDirty,
+        pushReworkBranchToRemote,
+        verifyPushedBranch
     };
 }

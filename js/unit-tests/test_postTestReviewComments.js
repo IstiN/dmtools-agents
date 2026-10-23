@@ -550,3 +550,174 @@ suite('postTestReviewComments: outer-catch error comment (gh-1011)', function() 
         }), 'the error comment is posted to the ticket, got: ' + JSON.stringify(comments));
     });
 });
+
+suite('postTestReviewComments.isLinePresentInDiff — pure diff scanner (gh-1192)', function() {
+
+    function loadScanner() {
+        return loadPostTestReviewComments({});
+    }
+
+    function joined(lines) {
+        return lines.join('\n');
+    }
+
+    var SIMPLE = joined([
+        'diff --git a/foo.ts b/foo.ts',
+        '--- a/foo.ts',
+        '+++ b/foo.ts',
+        '@@ -10,5 +10,5 @@',
+        ' line 10',
+        '-line 11',
+        '+line 11 new',
+        ' line 12',
+        ' line 13',
+        ' line 14'
+    ]);
+
+    test('empty diff, file or target line are permissive (cannot validate)', function() {
+        var m = loadScanner();
+        assert.equal(m.isLinePresentInDiff('', 'foo.ts', 10), true);
+        assert.equal(m.isLinePresentInDiff(SIMPLE, '', 10), true);
+        assert.equal(m.isLinePresentInDiff(SIMPLE, 'foo.ts', ''), true);
+        assert.equal(m.isLinePresentInDiff(null, null, null), true);
+    });
+
+    test('non-numeric or zero target lines are permissive', function() {
+        var m = loadScanner();
+        assert.equal(m.isLinePresentInDiff(SIMPLE, 'foo.ts', 'abc'), true);
+        assert.equal(m.isLinePresentInDiff(SIMPLE, 'foo.ts', 0), true);
+    });
+
+    test('context lines match on the new-side numbering', function() {
+        var m = loadScanner();
+        assert.equal(m.isLinePresentInDiff(SIMPLE, 'foo.ts', 10), true);
+        assert.equal(m.isLinePresentInDiff(SIMPLE, 'foo.ts', 12), true);
+        assert.equal(m.isLinePresentInDiff(SIMPLE, 'foo.ts', 14), true);
+    });
+
+    test('added lines match; removed lines never match the new side', function() {
+        var m = loadScanner();
+        assert.equal(m.isLinePresentInDiff(SIMPLE, 'foo.ts', 11), true, 'the added replacement is present');
+        var shifted = joined([
+            'diff --git a/bar.ts b/bar.ts',
+            '--- a/bar.ts',
+            '+++ b/bar.ts',
+            '@@ -30,3 +31,2 @@',
+            ' line 31',
+            '-line 30',
+            '-line 31'
+        ]);
+        assert.equal(m.isLinePresentInDiff(shifted, 'bar.ts', 30), false, 'removed old-side number is not on the new side');
+        assert.equal(m.isLinePresentInDiff(shifted, 'bar.ts', 31), true);
+        assert.equal(m.isLinePresentInDiff(shifted, 'bar.ts', 32), false);
+    });
+
+    test('other files in the same diff are ignored', function() {
+        var m = loadScanner();
+        assert.equal(m.isLinePresentInDiff(SIMPLE, 'other.ts', 10), false);
+    });
+
+    test('a second file is found after the first is skipped', function() {
+        var m = loadScanner();
+        var multi = joined([
+            'diff --git a/first.ts b/first.ts',
+            '--- a/first.ts',
+            '+++ b/first.ts',
+            '@@ -1,2 +1,2 @@',
+            ' one',
+            ' two',
+            'diff --git a/second.ts b/second.ts',
+            '--- a/second.ts',
+            '+++ b/second.ts',
+            '@@ -5,2 +5,2 @@',
+            ' alpha',
+            ' beta'
+        ]);
+        assert.equal(m.isLinePresentInDiff(multi, 'second.ts', 5), true);
+        assert.equal(m.isLinePresentInDiff(multi, 'second.ts', 6), true);
+        assert.equal(m.isLinePresentInDiff(multi, 'second.ts', 7), false);
+        assert.equal(m.isLinePresentInDiff(multi, 'first.ts', 1), true);
+    });
+
+    test("the '\\ No newline at end of file' marker neither matches nor advances", function() {
+        var m = loadScanner();
+        var noNl = joined([
+            'diff --git a/n.ts b/n.ts',
+            '--- a/n.ts',
+            '+++ b/n.ts',
+            '@@ -1,2 +1,2 @@',
+            ' one',
+            ' two',
+            '\\ No newline at end of file',
+            ' three'
+        ]);
+        assert.equal(m.isLinePresentInDiff(noNl, 'n.ts', 2), true);
+        assert.equal(m.isLinePresentInDiff(noNl, 'n.ts', 3), true, 'the marker did not consume a line number');
+    });
+
+    test('CRLF line endings are split correctly', function() {
+        var m = loadScanner();
+        var crlf = SIMPLE.replace(/\n/g, '\r\n');
+        assert.equal(m.isLinePresentInDiff(crlf, 'foo.ts', 12), true);
+        assert.equal(m.isLinePresentInDiff(crlf, 'foo.ts', 99), false);
+    });
+
+    test('a target line inside a later hunk of the same file is found', function() {
+        var m = loadScanner();
+        var twoHunks = joined([
+            'diff --git a/h.ts b/h.ts',
+            '--- a/h.ts',
+            '+++ b/h.ts',
+            '@@ -1,2 +1,2 @@',
+            ' a',
+            ' b',
+            '@@ -50,2 +50,2 @@',
+            ' x',
+            '+y'
+        ]);
+        assert.equal(m.isLinePresentInDiff(twoHunks, 'h.ts', 50), true);
+        assert.equal(m.isLinePresentInDiff(twoHunks, 'h.ts', 51), true);
+        assert.equal(m.isLinePresentInDiff(twoHunks, 'h.ts', 52), false);
+    });
+
+    test('prefix-less junk lines inside a segment advance the counter', function() {
+        var m = loadScanner();
+        var junk = joined([
+            'diff --git a/j.ts b/j.ts',
+            '--- a/j.ts',
+            '+++ b/j.ts',
+            '@@ -1,1 +1,3 @@',
+            'keep',
+            ' junk line',
+            ' tail'
+        ]);
+        // 'keep' has no diff prefix → falls into the catch-all branch and
+        // advances newLine (1→2); ' junk line' then matches new-side line 2.
+        assert.equal(m.isLinePresentInDiff(junk, 'j.ts', 2), true);
+        assert.equal(m.isLinePresentInDiff(junk, 'j.ts', 3), true);
+    });
+
+    test('the extracted scan helpers keep the state-machine contract', function() {
+        var m = loadScanner();
+        var st = m.newInlineScanState();
+        assert.deepEqual(st, { currentFile: null, newLine: null });
+        assert.equal(m.trackInlineHeaderLine(st, 'diff --git a/x b/y'), true, 'consumed');
+        assert.deepEqual(st, { currentFile: null, newLine: null });
+        assert.equal(m.trackInlineHeaderLine(st, '+++ b/foo.ts'), true, 'consumed');
+        assert.equal(st.currentFile, 'foo.ts');
+        assert.equal(m.trackInlineHeaderLine(st, ' content'), false, 'not consumed');
+        assert.equal(m.inlineHunkStartOf('@@ -5,7 +12,3 @@ ctx'), 12);
+        assert.equal(m.inlineHunkStartOf('+++ b/foo.ts'), null);
+        st.newLine = 12;
+        assert.equal(m.inlineContentLineMatches(st, '+added', 12), true);
+        assert.equal(st.newLine, 12, 'a matching line returns immediately, without advancing');
+        assert.equal(m.inlineContentLineMatches(st, '+other', 13), false);
+        assert.equal(st.newLine, 13, 'a non-matching added line advanced');
+        assert.equal(m.inlineContentLineMatches(st, '-removed', 13), false);
+        assert.equal(st.newLine, 13, 'removed line did not advance');
+        assert.equal(m.inlineContentLineMatches(st, '\\ No newline at end of file', 13), false);
+        assert.equal(st.newLine, 13, 'marker did not advance');
+        assert.equal(m.inlineContentLineMatches(st, 'junk', 13), false);
+        assert.equal(st.newLine, 14, 'prefix-less junk advanced');
+    });
+});
