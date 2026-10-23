@@ -63,8 +63,14 @@ function makeSmAgent(opts) {
     var capturedIoCacheDrops = [];
     var capturedLogs = [];
 
+    // ── gh-1200 CRAP refactor: named builder units ──────────────────────────
+    // Every branch that used to live in an anonymous closure inside
+    // makeSmAgent now lives in a named (hoisted) inner function: identical
+    // wiring and call order, but the analyzer scores each builder as its
+    // own coverage unit instead of folding all branches into makeSmAgent.
+
     // Controlled file_read: config discovery paths from fileMap only; other paths from disk.
-    var fileReadMock = function(readOpts) {
+    function fileReadMock(readOpts) {
         var p = readOpts.path;
         var isConfigDiscovery = p.indexOf('.dmtools/config') !== -1;
 
@@ -84,73 +90,98 @@ function makeSmAgent(opts) {
             try { return file_read({ path: p.substring('agents/'.length) }); } catch (e) {}
         }
         return null;
-    };
+    }
 
-    var jiraSearchMock = function(searchOpts) {
+    function jiraSearchMock(searchOpts) {
         capturedJqls.push(searchOpts.jql);
         return opts.tickets || [];
-    };
+    }
+
+    function getTicketMock(key) {
+        return opts.fullTicket || { key: key, fields: { labels: [], summary: 'Test ticket' } };
+    }
+
+    function addLabelMock(labelOpts) {
+        capturedLabels.push(labelOpts);
+        if (opts.onAddLabel) opts.onAddLabel(labelOpts);
+    }
+
+    function moveStatusMock(moveOpts) {
+        capturedStatusMoves.push(moveOpts);
+        if (opts.onMoveStatus) opts.onMoveStatus(moveOpts);
+    }
+
+    function cliExecuteMock(cmdOpts) {
+        capturedCliCommands.push(cmdOpts);
+        if (opts.onCliExecute) return opts.onCliExecute(cmdOpts);
+        return '';
+    }
+
+    // Bridge tools used by syncValidationChecks (stamp echo of the
+    // dispatched run). Default: delegate to the host bridge when
+    // present (preserves prior behavior); tests override via
+    // opts.github.prList / opts.github.workflowApiRuns.
+    function listPrsMock(args) {
+        if (opts.github && opts.github.prList) return opts.github.prList;
+        return (typeof github_list_prs !== 'undefined') ? github_list_prs(args) : '[]';
+    }
+
+    function listWorkflowRunsApiMock(args) {
+        // Inverted guard order (CRAP budget: the same branch count as
+        // the pre-rework shape — a third flat if pushed makeSmAgent
+        // from CC 63 to 64 and redlined the released ratchet):
+        // tests that set opts.github but no workflowApiRuns get an
+        // EMPTY rollup — never the real bridge (the harness network
+        // guard replaced that global with a throwing stub, and a real
+        // api.github.com read was never a legitimate unit-test dep).
+        if (!opts.github) {
+            return (typeof github_list_workflow_runs !== 'undefined')
+                ? github_list_workflow_runs(args)
+                : '{"workflow_runs":[]}';
+        }
+        if (opts.github.workflowApiRuns) {
+            return JSON.stringify({ workflow_runs: opts.github.workflowApiRuns });
+        }
+        return '{"workflow_runs":[]}';
+    }
+
+    // Backlog source for the statePublish block (gh-769): safe default —
+    // without it the block hits the real bridge (dmtools runtime) or a
+    // ReferenceError (node harness) on every publish tick.
+    function searchIssuesMock(args) {
+        if (opts.github && opts.github.issueSearch) {
+            return JSON.stringify(opts.github.issueSearch);
+        }
+        return '{"items":[]}';
+    }
+
+    function fileWriteMock(writeOpts) {
+        capturedFileWrites.push(writeOpts);
+        if (opts.onFileWrite) opts.onFileWrite(writeOpts);
+        return true;
+    }
+
+    // gh-1107 CI note: the capture-only mock — NO opts.onFileDelete hook.
+    // An extra `if` here lands inside makeSmAgent's transitive body (the
+    // analyzer descends into anonymous closures) and pushed its CRAP over
+    // the released baseline; no test ever passed the hook.
+    function fileDeleteMock(delOpts) {
+        capturedFileDeletes.push(delOpts);
+        return true;
+    }
 
     var smMocks = {
         file_read: fileReadMock,
         jira_search_by_jql: jiraSearchMock,
-        jira_get_ticket: function(key) {
-            return opts.fullTicket || { key: key, fields: { labels: [], summary: 'Test ticket' } };
-        },
-        jira_add_label: function(labelOpts) {
-            capturedLabels.push(labelOpts);
-            if (opts.onAddLabel) opts.onAddLabel(labelOpts);
-        },
+        jira_get_ticket: getTicketMock,
+        jira_add_label: addLabelMock,
         jira_remove_label: function() {},
-        jira_move_to_status: function(moveOpts) {
-            capturedStatusMoves.push(moveOpts);
-            if (opts.onMoveStatus) opts.onMoveStatus(moveOpts);
-        },
-        cli_execute_command: function(cmdOpts) {
-            capturedCliCommands.push(cmdOpts);
-            if (opts.onCliExecute) return opts.onCliExecute(cmdOpts);
-            return '';
-        },
-        // Bridge tools used by syncValidationChecks (stamp echo of the
-        // dispatched run). Default: delegate to the host bridge when
-        // present (preserves prior behavior); tests override via
-        // opts.github.prList / opts.github.workflowApiRuns.
-        github_list_prs: function(args) {
-            if (opts.github && opts.github.prList) return opts.github.prList;
-            return (typeof github_list_prs !== 'undefined') ? github_list_prs(args) : '[]';
-        },
-        github_list_workflow_runs: function(args) {
-            // Inverted guard order (CRAP budget: the same branch count as
-            // the pre-rework shape — a third flat if pushed makeSmAgent
-            // from CC 63 to 64 and redlined the released ratchet):
-            // tests that set opts.github but no workflowApiRuns get an
-            // EMPTY rollup — never the real bridge (the harness network
-            // guard replaced that global with a throwing stub, and a real
-            // api.github.com read was never a legitimate unit-test dep).
-            if (!opts.github) {
-                return (typeof github_list_workflow_runs !== 'undefined')
-                    ? github_list_workflow_runs(args)
-                    : '{"workflow_runs":[]}';
-            }
-            if (opts.github.workflowApiRuns) {
-                return JSON.stringify({ workflow_runs: opts.github.workflowApiRuns });
-            }
-            return '{"workflow_runs":[]}';
-        },
-        // Backlog source for the statePublish block (gh-769): safe default —
-        // without it the block hits the real bridge (dmtools runtime) or a
-        // ReferenceError (node harness) on every publish tick.
-        github_search_issues: function(args) {
-            if (opts.github && opts.github.issueSearch) {
-                return JSON.stringify(opts.github.issueSearch);
-            }
-            return '{"items":[]}';
-        },
-        file_write: function(writeOpts) {
-            capturedFileWrites.push(writeOpts);
-            if (opts.onFileWrite) opts.onFileWrite(writeOpts);
-            return true;
-        },
+        jira_move_to_status: moveStatusMock,
+        cli_execute_command: cliExecuteMock,
+        github_list_prs: listPrsMock,
+        github_list_workflow_runs: listWorkflowRunsApiMock,
+        github_search_issues: searchIssuesMock,
+        file_write: fileWriteMock,
         encodeURIComponent: encodeURIComponent,
         JSON: JSON,
         eval: eval
@@ -160,14 +191,7 @@ function makeSmAgent(opts) {
     if (opts.runAsync) smMocks.runAsync = opts.runAsync;
     var capturedFileWrites = [];
     var capturedFileDeletes = [];
-    // gh-1107 CI note: the capture-only mock — NO opts.onFileDelete hook.
-    // An extra `if` here lands inside makeSmAgent's transitive body (the
-    // analyzer descends into anonymous closures) and pushed its CRAP over
-    // the released baseline; no test ever passed the hook.
-    smMocks.file_delete = function (delOpts) {
-        capturedFileDeletes.push(delOpts);
-        return true;
-    };
+    smMocks.file_delete = fileDeleteMock;
     if (opts.extraMocks) { for (var em in opts.extraMocks) { if (opts.extraMocks.hasOwnProperty(em)) smMocks[em] = opts.extraMocks[em]; } }
 
     // Console capture (owner directive 2026-10-08 priority-tier tests): the
@@ -10078,6 +10102,118 @@ suite('smAgent: manual rework is PR-anchored, no body scrape (gh-683 bug E)', fu
 // key on the run-title anchor token ('· gh-1226' vs '· pr-1227') and the
 // two carriers anchor the SAME work differently. One leg must win. ────────
 
+// ── gh-715 guard-evaluator helpers (gh-1200 CRAP refactor) ──────────────────
+// Pure label-guard matchers shared by the armedBothSource stub below. Kept
+// at file top level so the characterization suite drives every branch
+// directly; each is a tiny separate coverage unit.
+
+function hasSimLabel(arr, label) {
+    return (arr || []).indexOf(label) !== -1;
+}
+
+function simItemLabelsMatch(q, labels) {
+    if (q.labels && !q.labels.every(function (l) { return hasSimLabel(labels, l); })) return false;
+    if (q.notLabels && q.notLabels.some(function (l) { return hasSimLabel(labels, l); })) return false;
+    return true;
+}
+
+function simPrLabelsMatch(q, prLs) {
+    if (q.prLabels && !q.prLabels.some(function (l) { return hasSimLabel(prLs, l); })) return false;
+    if (q.notPrLabels && q.notPrLabels.some(function (l) { return hasSimLabel(prLs, l); })) return false;
+    return true;
+}
+
+function simCandidateMatches(q, c) {
+    var prLs = (c.pr && c.pr.labels) || [];
+    return simItemLabelsMatch(q, c.labels) && simPrLabelsMatch(q, prLs);
+}
+
+/**
+ * gh-715 armedBothSource stub internals (gh-1200 CRAP refactor): the
+ * carrier fixtures and the guard-evaluating query — extracted out of the
+ * suite closure into named file-level builders.
+ */
+function armedCarrier(state, q) {
+    var issue = { key: 'gh-1226', labels: ['agent:rework'], issueNumber: 1226,
+                  prNumber: 1227, branch: 'ai/gh-1226', author: 'ai-teammate',
+                  pr: { labels: state.prLabels } };
+    var pr = { key: 'pr-1227', labels: state.prLabels, issueNumber: 1226,
+               prNumber: 1227, branch: 'ai/gh-1226', author: 'ai-teammate' };
+    return q.type === 'issue' ? [issue] : [pr];
+}
+
+function armedBothQuery(state, rule) {
+    var q = (rule && rule.query) || {};
+    var out = [];
+    armedCarrier(state, q).forEach(function (c) {
+        if (simCandidateMatches(q, c)) out.push(c);
+    });
+    return out;
+}
+
+function armedBothSource(state) {
+    return function (rule, ctx) {
+        return armedBothQuery(state, rule);
+    };
+}
+
+suite('armedBothSource source stub (characterization, gh-1200)', function () {
+
+    var STATE = { prLabels: ['agent:rework'] };
+
+    function query(q, state) {
+        return armedBothSource(state || STATE)({ query: q });
+    }
+
+    test('PR carrier passes a plain labels guard', function () {
+        var out = query({ type: 'pr', labels: ['agent:rework'] });
+        assert.equal(out.length, 1, 'the PR carrier matches');
+        assert.equal(out[0].key, 'pr-1227', 'the matched carrier is the PR');
+    });
+
+    test('issue carrier carries the linked PR labels (defer contract)', function () {
+        var out = query({ type: 'issue', labels: ['agent:rework'] });
+        assert.equal(out.length, 1, 'the issue carrier itself matches the labels guard');
+        assert.equal(out[0].key, 'gh-1226', 'the issue carrier is returned');
+    });
+
+    test('a missing required label filters the candidate out', function () {
+        assert.equal(query({ type: 'pr', labels: ['ci_green'] }).length, 0, 'required-label miss');
+        assert.equal(query({ type: 'pr', labels: ['agent:rework', 'ci_green'] }).length, 0,
+            'every required label must be present');
+    });
+
+    test('a present excluded label filters the candidate out', function () {
+        var state = { prLabels: ['agent:rework', 'stale'] };
+        assert.equal(query({ type: 'pr', labels: ['agent:rework'], notLabels: ['stale'] }, state).length, 0,
+            'notLabels hit filters the carrier');
+        assert.equal(query({ type: 'pr', labels: ['agent:rework'], notLabels: ['quiet'] }, state).length, 1,
+            'notLabels miss passes');
+    });
+
+    test('prLabels / notPrLabels run against the linked-PR labels', function () {
+        assert.equal(query({ type: 'issue', labels: ['agent:rework'], prLabels: ['ci_green'] }).length, 0,
+            'required prLabel miss filters the issue carrier');
+        assert.equal(query({ type: 'issue', labels: ['agent:rework'], prLabels: ['agent:rework'] }).length, 1,
+            'required prLabel satisfied passes');
+        assert.equal(query({ type: 'pr', labels: ['agent:rework'], notPrLabels: ['stale'] }).length, 1,
+            'excluded prLabel miss passes (the PR carrier has no linked PR)');
+        var armed = { prLabels: ['agent:rework', 'stale'] };
+        assert.equal(query({ type: 'issue', labels: ['agent:rework'], notPrLabels: ['stale'] }, armed).length, 0,
+            'excluded prLabel present filters the issue carrier via its linked-PR labels');
+        assert.equal(query({ type: 'issue', labels: ['agent:rework'], prLabels: ['agent:rework'] }, armed).length, 1,
+            'required prLabel satisfied still passes the armed issue carrier');
+    });
+
+    test('a rule without query fields passes through on the PR carrier', function () {
+        var out = query({});
+        assert.equal(out.length, 1, 'no guards → the PR candidate (q.type undefined)');
+        assert.equal(out[0].key, 'pr-1227');
+        assert.equal(armedBothSource(STATE)({ key: 'no-query-rule' }).length, 1,
+            'a rule object without .query still queries the PR carrier');
+    });
+});
+
 suite('smAgent: duplicate rework dispatch — one leg wins (gh-715)', function () {
 
     function deployedRules(ids) {
@@ -10103,28 +10239,11 @@ suite('smAgent: duplicate rework dispatch — one leg wins (gh-715)', function (
     // (linked-PR side, against the state fixture) — the same contract the
     // real matchesGuards implements, covered directly (with the real
     // deployed query) in test_smGithubSource.js.
-    function armedBothSource(state) {
-        return function (rule, ctx) {
-            var q = (rule && rule.query) || {};
-            var out = [];
-            var has = function (arr, l) { return (arr || []).indexOf(l) !== -1; };
-            var issue = { key: 'gh-1226', labels: ['agent:rework'], issueNumber: 1226,
-                          prNumber: 1227, branch: 'ai/gh-1226', author: 'ai-teammate',
-                          pr: { labels: state.prLabels } };
-            var pr = { key: 'pr-1227', labels: state.prLabels, issueNumber: 1226,
-                       prNumber: 1227, branch: 'ai/gh-1226', author: 'ai-teammate' };
-            var candidates = q.type === 'issue' ? [issue] : [pr];
-            candidates.forEach(function (c) {
-                if (q.labels && !q.labels.every(function (l) { return has(c.labels, l); })) return;
-                if (q.notLabels && q.notLabels.some(function (l) { return has(c.labels, l); })) return;
-                var prLs = (c.pr && c.pr.labels) || [];
-                if (q.prLabels && !q.prLabels.some(function (l) { return has(prLs, l); })) return;
-                if (q.notPrLabels && q.notPrLabels.some(function (l) { return has(prLs, l); })) return;
-                out.push(c);
-            });
-            return out;
-        };
-    }
+    //
+    // gh-1200 CRAP refactor: the guard evaluation lives in the small named
+    // builders armedCarrier/armedBothQuery + the pure sim* matchers above —
+    // same guard semantics, same output shape; every branch pinned by the
+    // 'armedBothSource source stub (characterization)' suite.
 
     test('sm_github.json pins it: rework-on-red-ci defers to the armed PR (notPrLabels agent:rework)', function () {
         var rules = deployedRules(['rework-on-red-ci', 'rework-on-label']);
