@@ -73,6 +73,14 @@ var machineAuthorModule = require('./common/machineAuthor.js');
 // shape is verbatim.
 // ─────────────────────────────────────────────────────────────────────────────
 
+function issueLabelsOf(state) {
+    return (state.issue && state.issue.labels) || [];
+}
+
+function maxReworkRoundsOf(cfg) {
+    return (cfg && cfg.maxReworkRounds) || 2;
+}
+
 // 'blocked' = human hold (fa #939): the official freeze switch — the
 // reconciler skips the item ENTIRELY (no dead-letter re-fire, no branch
 // update, no merge, no close) until a human removes the label.
@@ -201,9 +209,9 @@ function decideGreenUnapprovedActions(has, pr) {
 }
 
 function decideActions(state, cfg) {
-    var labels = (state.issue && state.issue.labels) || [];
+    var labels = issueLabelsOf(state);
     var has = function (l) { return labels.indexOf(l) !== -1; };
-    var maxRounds = (cfg && cfg.maxReworkRounds) || 2;
+    var maxRounds = maxReworkRoundsOf(cfg);
 
     var skip = decideEngineSkip(has, state.activeRunForIssue);
     if (skip) return [skip];
