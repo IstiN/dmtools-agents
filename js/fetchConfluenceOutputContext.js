@@ -77,9 +77,6 @@ function shouldFetchInlineComments(cfg, folder) {
     return cfg.includeInlineComments !== false && !!folder;
 }
 
-function shouldFetchInlineComments(cfg, folder) {
-    return cfg.includeInlineComments !== false && !!folder;
-}
 
 /** Ticket key: ticket.key, else the basename of the input folder, else null. */
 function resolveTicketKey(params) {
