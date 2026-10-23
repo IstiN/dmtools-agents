@@ -23,9 +23,37 @@ function parseWorkflowRuns(raw) {
     }
 }
 
-function hasActiveTargetRun(scm, configFile, ticketKey, workflowFile, owner, repo) {
+function workflowRunDisplayName(run) {
+    return ((run && (run.display_title || run.displayTitle || run.name)) || '');
+}
+
+function workflowRunMatchesTicket(name, configFile, ticketKey) {
     var expectedName = configFile + ' : ' + ticketKey;
     var expectedNameSuffix = ' : ' + ticketKey;
+    var matchesOldName = name === expectedName;
+    var matchesDisplayName = name.indexOf(configFile + ' : ') === 0 &&
+        name.substring(name.length - expectedNameSuffix.length) === expectedNameSuffix;
+    return matchesOldName || matchesDisplayName;
+}
+
+function duplicateRunNotice(expectedName, run, fallbackStatus) {
+    return 'autoStart: skipped duplicate ' + expectedName + ' because run #' +
+        (run.run_number || run.runNumber || run.id || '?') + ' is ' + (run.status || fallbackStatus);
+}
+
+function findActiveTargetRun(runs, configFile, ticketKey, status) {
+    for (var j = 0; j < runs.length; j++) {
+        var run = runs[j] || {};
+        if (isStaleNonRunningWorkflowRun(run, status)) continue;
+        if (workflowRunMatchesTicket(workflowRunDisplayName(run), configFile, ticketKey)) {
+            console.log(duplicateRunNotice(configFile + ' : ' + ticketKey, run, status));
+            return run;
+        }
+    }
+    return null;
+}
+
+function hasActiveTargetRun(scm, configFile, ticketKey, workflowFile, owner, repo) {
     var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
 
     for (var i = 0; i < statuses.length; i++) {
@@ -37,19 +65,8 @@ function hasActiveTargetRun(scm, configFile, ticketKey, workflowFile, owner, rep
             continue;
         }
 
-        var runs = parseWorkflowRuns(runsRaw);
-        for (var j = 0; j < runs.length; j++) {
-            var run = runs[j] || {};
-            if (isStaleNonRunningWorkflowRun(run, statuses[i])) continue;
-            var name = run.display_title || run.displayTitle || run.name || '';
-            var matchesOldName = name === expectedName;
-            var matchesDisplayName = name.indexOf(configFile + ' : ') === 0 &&
-                name.substring(name.length - expectedNameSuffix.length) === expectedNameSuffix;
-            if (matchesOldName || matchesDisplayName) {
-                console.log('autoStart: skipped duplicate ' + expectedName + ' because run #' +
-                    (run.run_number || run.runNumber || run.id || '?') + ' is ' + (run.status || statuses[i]));
-                return true;
-            }
+        if (findActiveTargetRun(parseWorkflowRuns(runsRaw), configFile, ticketKey, statuses[i])) {
+            return true;
         }
     }
 
@@ -237,28 +254,70 @@ function triggerConfiguredJobLocally(options) {
     return ok;
 }
 
-function triggerConfiguredWorkflowForTicket(options) {
-    var ticketKey = options.ticketKey;
+function resolveDispatchRef(explicitRef, aiRepoCfg, config) {
+    // The dispatch targets the AI repo (customParams.aiRepository), which may differ
+    // from the target repo — then the target's baseBranch may not exist there
+    // ("No ref found for: <ref>", HTTP 422). Precedence: explicit ref →
+    // aiRepository.ref/branch → target repo's baseBranch → 'main'.
+    return explicitRef
+        || (aiRepoCfg && (aiRepoCfg.ref || aiRepoCfg.branch))
+        || (config.git && config.git.baseBranch)
+        || 'main';
+}
+
+function resolveAiOwnerRepo(customParams, config) {
+    var aiRepoCfg = customParams.aiRepository;
+    return {
+        owner: (aiRepoCfg && aiRepoCfg.owner) || (config.repository && config.repository.owner),
+        repo: (aiRepoCfg && aiRepoCfg.repo) || (config.repository && config.repository.repo)
+    };
+}
+
+function resolveAiTargetOrWarn(customParams, config, warnPrefix) {
+    var aiTarget = resolveAiOwnerRepo(customParams, config);
+    if (!aiTarget.owner || !aiTarget.repo) {
+        console.warn(warnPrefix + 'config.repository.owner/repo not set — skipping');
+        return null;
+    }
+    return aiTarget;
+}
+
+function resolveTriggerContext(options) {
     var customParams = options.customParams || {};
     var config = options.config || {};
     var configFile = options.configFile;
     var workflowFile = options.workflowFile || 'ai-teammate.yml';
-    // The dispatch targets the AI repo (customParams.aiRepository), which may differ
-    // from the target repo — then the target's baseBranch may not exist there
-    // ("No ref found for: <ref>", HTTP 422). Precedence: explicit options.ref →
-    // aiRepository.ref/branch → target repo's baseBranch → 'main'.
-    var aiRepoCfgForRef = customParams.aiRepository;
-    var ref = options.ref
-        || (aiRepoCfgForRef && (aiRepoCfgForRef.ref || aiRepoCfgForRef.branch))
-        || (config.git && config.git.baseBranch)
-        || 'main';
-    var label = options.label || configFile || workflowFile;
-    if (!ticketKey || !configFile) {
+    return {
+        ticketKey: options.ticketKey,
+        customParams: customParams,
+        config: config,
+        configFile: configFile,
+        workflowFile: workflowFile,
+        label: options.label || configFile || workflowFile
+    };
+}
+
+function buildWorkflowDispatchPayload(ticketKey, configFile, encodedCfg, projectKey) {
+    return {
+        concurrency_key: ticketKey,
+        display_key: ticketKey,
+        config_file: configFile,
+        encoded_config: encodedCfg,
+        project_key: projectKey || ''
+    };
+}
+
+function projectLogSuffix(projectKey) {
+    return projectKey ? ', project=' + projectKey : '';
+}
+
+function triggerConfiguredWorkflowForTicket(options) {
+    var ctx = resolveTriggerContext(options);
+    var projectKey = deriveProjectKey(ctx.customParams);
+    if (!ctx.ticketKey || !ctx.configFile) {
         console.warn('autoStart: missing ticketKey or configFile — skipping');
         return false;
     }
-
-    var projectKey = deriveProjectKey(customParams);
 
     // The job that's about to call this was itself started locally by smAgent's
     // runTeammateLocally() (forceLocalTeammate/localTeammate:true path), which stamps
@@ -267,63 +326,75 @@ function triggerConfiguredWorkflowForTicket(options) {
     // dispatching a GitHub Actions workflow_dispatch that can't see this checkout's
     // in-flight branch/commits and would race the still-running local process for the
     // same PR.
-    if (customParams.localTeammate === true) {
+    if (ctx.customParams.localTeammate === true) {
         return triggerConfiguredJobLocally({
-            ticketKey: ticketKey,
-            configFile: configFile,
-            config: config,
-            customParams: customParams,
+            ticketKey: ctx.ticketKey,
+            configFile: ctx.configFile,
+            config: ctx.config,
+            customParams: ctx.customParams,
             projectKey: projectKey,
-            label: label
+            label: ctx.label
         });
     }
 
-    var aiRepoCfg = customParams.aiRepository;
-    var aiOwner = (aiRepoCfg && aiRepoCfg.owner) || (config.repository && config.repository.owner);
-    var aiRepo = (aiRepoCfg && aiRepoCfg.repo) || (config.repository && config.repository.repo);
-
-    if (!aiOwner || !aiRepo) {
-        console.warn('autoStart: config.repository.owner/repo not set — skipping');
+    var aiTarget = resolveAiTargetOrWarn(ctx.customParams, ctx.config, 'autoStart: ');
+    if (!aiTarget) {
         return false;
     }
 
-    var scm = options.scm || scmModule.createScm(config);
+    var scm = options.scm || scmModule.createScm(ctx.config);
     var encodedCfg = buildEncodedConfigModule.buildEncodedConfig(
-        ticketKey,
-        { configFile: configFile, projectKey: projectKey },
-        config
+        ctx.ticketKey,
+        { configFile: ctx.configFile, projectKey: projectKey },
+        ctx.config
     );
 
-    if (isGlobalWorkflowCapReached(scm, workflowFile, {
-            config: config,
+    if (isGlobalWorkflowCapReached(scm, ctx.workflowFile, {
+            config: ctx.config,
             maxActiveWorkflows: options.maxActiveWorkflows,
-            owner: aiOwner,
-            repo: aiRepo
+            owner: aiTarget.owner,
+            repo: aiTarget.repo
         })) {
         return false;
     }
 
-    if (hasActiveTargetRun(scm, configFile, ticketKey, workflowFile, aiOwner, aiRepo)) {
+    if (hasActiveTargetRun(scm, ctx.configFile, ctx.ticketKey, ctx.workflowFile, aiTarget.owner, aiTarget.repo)) {
         return false;
     }
 
     scm.triggerWorkflow(
-        aiOwner,
-        aiRepo,
-        workflowFile,
-        JSON.stringify({
-            concurrency_key: ticketKey,
-            display_key: ticketKey,
-            config_file: configFile,
-            encoded_config: encodedCfg,
-            project_key: projectKey || ''
-        }),
-        ref
+        aiTarget.owner,
+        aiTarget.repo,
+        ctx.workflowFile,
+        JSON.stringify(buildWorkflowDispatchPayload(ctx.ticketKey, ctx.configFile, encodedCfg, projectKey)),
+        resolveDispatchRef(options.ref, ctx.customParams.aiRepository, ctx.config)
     );
 
-    console.log('✅ Auto-started ' + label + ' for ' + ticketKey +
-        ' [config=' + configFile + (projectKey ? ', project=' + projectKey : '') + ']');
+    console.log('✅ Auto-started ' + ctx.label + ' for ' + ctx.ticketKey +
+        ' [config=' + ctx.configFile + projectLogSuffix(projectKey) + ']');
     return true;
+}
+
+function resolveSmFallbackOptions(options) {
+    return {
+        config: options.config || {},
+        customParams: options.customParams || {},
+        smWorkflowFile: options.smWorkflowFile || 'sm.yml',
+        agentWorkflowFile: options.agentWorkflowFile || 'ai-teammate.yml'
+    };
+}
+
+function countListedWorkflowRuns(scm, workflowFile, owner, repo) {
+    var activeCount = 0;
+    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
+    for (var i = 0; i < statuses.length; i++) {
+        try {
+            activeCount += parseWorkflowRuns(scm.listWorkflowRuns(statuses[i], workflowFile, 50, owner, repo)).length;
+        } catch (e) {
+            console.warn('SM fallback: could not list ' + statuses[i] + ' runs:', e.message || e);
+        }
+    }
+    return activeCount;
 }
 
 /**
@@ -342,36 +413,20 @@ function triggerConfiguredWorkflowForTicket(options) {
  *   scm             — optional pre-built scm instance
  */
 function triggerSmIfIdle(options) {
-    var config = options.config || {};
-    var customParams = options.customParams || {};
-    var smWorkflowFile = options.smWorkflowFile || 'sm.yml';
-    var agentWorkflowFile = options.agentWorkflowFile || 'ai-teammate.yml';
+    var opts = resolveSmFallbackOptions(options);
 
-    if (!customParams.smFallback) {
+    if (!opts.customParams.smFallback) {
         return false;
     }
 
-    var aiRepoCfg = customParams.aiRepository;
-    var aiOwner = (aiRepoCfg && aiRepoCfg.owner) || (config.repository && config.repository.owner);
-    var aiRepo = (aiRepoCfg && aiRepoCfg.repo) || (config.repository && config.repository.repo);
-    if (!aiOwner || !aiRepo) {
-        console.warn('SM fallback: config.repository.owner/repo not set — skipping');
+    var aiTarget = resolveAiTargetOrWarn(opts.customParams, opts.config, 'SM fallback: ');
+    if (!aiTarget) {
         return false;
     }
 
-    var scm = options.scm || scmModule.createScm(config);
+    var scm = options.scm || scmModule.createScm(opts.config);
 
-    var activeCount = 0;
-    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
-    for (var i = 0; i < statuses.length; i++) {
-        try {
-            var runsRaw = scm.listWorkflowRuns(statuses[i], agentWorkflowFile, 50, aiOwner, aiRepo);
-            var runs = parseWorkflowRuns(runsRaw);
-            activeCount += runs.length;
-        } catch (e) {
-            console.warn('SM fallback: could not list ' + statuses[i] + ' runs:', e.message || e);
-        }
-    }
+    var activeCount = countListedWorkflowRuns(scm, opts.agentWorkflowFile, aiTarget.owner, aiTarget.repo);
 
     // ≤1 means only the current (finishing) run is active
     if (activeCount > 1) {
@@ -380,16 +435,12 @@ function triggerSmIfIdle(options) {
     }
 
     try {
-        // Same ref precedence as triggerConfiguredWorkflowForTicket: the dispatch goes
-        // to the AI repo, whose default branch may differ from the target repo's.
-        var ref = (aiRepoCfg && (aiRepoCfg.ref || aiRepoCfg.branch))
-            || (config.git && config.git.baseBranch)
-            || 'main';
-        scm.triggerWorkflow(aiOwner, aiRepo, smWorkflowFile, '{}', ref);
-        console.log('✅ SM fallback: system idle — triggered ' + smWorkflowFile);
+        scm.triggerWorkflow(aiTarget.owner, aiTarget.repo, opts.smWorkflowFile, '{}',
+            resolveDispatchRef(null, opts.customParams.aiRepository, opts.config));
+        console.log('✅ SM fallback: system idle — triggered ' + opts.smWorkflowFile);
         return true;
     } catch (e) {
-        console.warn('SM fallback: failed to trigger ' + smWorkflowFile + ':', e.message || e);
+        console.warn('SM fallback: failed to trigger ' + opts.smWorkflowFile + ':', e.message || e);
         return false;
     }
 }
@@ -403,5 +454,18 @@ module.exports = {
     collectActiveWorkflowRuns: collectActiveWorkflowRuns,
     isGlobalWorkflowCapReached: isGlobalWorkflowCapReached,
     isStaleNonRunningWorkflowRun: isStaleNonRunningWorkflowRun,
-    triggerSmIfIdle: triggerSmIfIdle
+    triggerSmIfIdle: triggerSmIfIdle,
+    // gh-1183: extracted pure decision/filter helpers, exported for unit tests.
+    resolveDispatchRef: resolveDispatchRef,
+    resolveAiOwnerRepo: resolveAiOwnerRepo,
+    resolveAiTargetOrWarn: resolveAiTargetOrWarn,
+    resolveTriggerContext: resolveTriggerContext,
+    workflowRunDisplayName: workflowRunDisplayName,
+    workflowRunMatchesTicket: workflowRunMatchesTicket,
+    duplicateRunNotice: duplicateRunNotice,
+    findActiveTargetRun: findActiveTargetRun,
+    buildWorkflowDispatchPayload: buildWorkflowDispatchPayload,
+    projectLogSuffix: projectLogSuffix,
+    resolveSmFallbackOptions: resolveSmFallbackOptions,
+    countListedWorkflowRuns: countListedWorkflowRuns
 };
