@@ -6,6 +6,7 @@
 
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
+var branchSetup = require('./common/branchSetup.js');
 const { GIT_CONFIG, STATUSES } = require('./config.js');
 const fetchLinkedBugsToInput = require('./fetchLinkedBugsToInput.js');
 
@@ -23,10 +24,7 @@ function getTracker() {
 }
 
 // Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
-// common/pullRequest.js once — this delegate keeps every local call site.
-function cleanCommandOutput(output) {
-    return prHelper.cleanCommandOutput(output);
-}
+// common/pullRequest.js once — branchSetup delegates straight to it.
 
 function runGit(command, workingDir) {
     var args = { command: command };
@@ -34,57 +32,22 @@ function runGit(command, workingDir) {
     return cli_execute_command(args);
 }
 
-function writeBranchConflictGuidance(ticketKey, branchName, baseBranch, details) {
-    try {
-        file_write({
-            path: 'input/' + ticketKey + '/merge_conflicts.md',
-            content: '# Branch Conflict Guidance\n\n' +
-                'Branch `' + branchName + '` has test automation work that is not already merged into `origin/' + baseBranch + '`, ' +
-                'and `origin/' + baseBranch + '` is not an ancestor of this branch.\n\n' +
-                'Before editing tests, sync the branch deliberately with `origin/' + baseBranch + '`. ' +
-                'In most cases, prefer `origin/' + baseBranch + '` for repository setup, generated workflow/config files, ' +
-                'and shared infrastructure, then re-apply only the ticket-specific test automation that is still relevant.\n\n' +
-                'Do not discard test files that are still needed for this ticket. Do not keep stale bootstrap/setup files just because they exist on the old branch.\n\n' +
-                'Details:\n\n```\n' + (details || '(not available)') + '\n```\n'
-        });
-    } catch (e) {
-        console.warn('Could not write branch conflict guidance:', e);
-    }
-}
-
 function branchHasUniquePatches(baseBranch, workingDir) {
-    try {
-        var cherry = cleanCommandOutput(runGit('git cherry origin/' + baseBranch + ' HEAD', workingDir) || '');
-        if (!cherry.trim()) return false;
-        var lines = cherry.split('\n');
-        for (var i = 0; i < lines.length; i++) {
-            if (lines[i].trim().indexOf('+') === 0) return true;
-        }
-        return false;
-    } catch (e) {
-        console.warn('Could not inspect unique test branch patches:', e);
-        return true;
-    }
+    return branchSetup.branchHasUniquePatches(prHelper, function (cmd) { return runGit(cmd, workingDir); }, baseBranch, 'Could not inspect unique test branch patches:');
 }
 
 function isAncestorRef(ancestor, descendant, workingDir) {
-    try {
-        var output = cleanCommandOutput(
-            runGit('git rev-list -1 ' + ancestor + ' --not ' + descendant, workingDir) || ''
-        );
-        return output.trim() === '';
-    } catch (e) {
-        console.warn('Could not inspect branch ancestry for ' + ancestor + ' -> ' + descendant + ':', e);
-        return false;
-    }
+    return branchSetup.isAncestorRefRevList(
+        prHelper,
+        function (cmd) { return runGit(cmd, workingDir); },
+        ancestor,
+        descendant,
+        'Could not inspect branch ancestry for'
+    );
 }
 
 function findMergeBase(left, right, workingDir) {
-    try {
-        return cleanCommandOutput(runGit('bash agents/scripts/git-merge-base-or-empty.sh ' + left + ' ' + right, workingDir) || '');
-    } catch (e) {
-        return '';
-    }
+    return branchSetup.findMergeBase(prHelper, function (cmd) { return runGit(cmd, workingDir); }, left, right);
 }
 
 function alignBranchWithBase(ticketKey, branchName, baseBranch, workingDir) {
@@ -106,44 +69,41 @@ function alignBranchWithBase(ticketKey, branchName, baseBranch, workingDir) {
     }
 
     console.warn('Test branch does not contain origin/' + baseBranch + ':', branchName);
-    var details = '';
-    try {
-        var mergeBase = findMergeBase('HEAD', 'origin/' + baseBranch, workingDir);
-        if (mergeBase) {
-            details = cleanCommandOutput(runGit('git merge-tree ' + mergeBase + ' HEAD origin/' + baseBranch, workingDir) || '');
-        } else {
-            details = 'No merge base found between HEAD and origin/' + baseBranch + '. The branch history may be unrelated to the current base or too shallow.';
-        }
-    } catch (mergeTreeError) {
-        details = mergeTreeError && mergeTreeError.toString ? mergeTreeError.toString() : String(mergeTreeError);
-    }
-    writeBranchConflictGuidance(ticketKey, branchName, baseBranch, details.substring(0, 6000));
+    var details = branchSetup.collectMergeTreeDetails(
+        prHelper,
+        function (cmd) { return runGit(cmd, workingDir); },
+        baseBranch,
+        'No merge base found between HEAD and origin/' + baseBranch + '. The branch history may be unrelated to the current base or too shallow.'
+    );
+    branchSetup.writeBranchConflictGuidance(
+        ticketKey,
+        branchName,
+        baseBranch,
+        details.substring(0, 6000),
+        'test automation work',
+        'Before editing tests, sync the branch deliberately with `origin/' + baseBranch + '`. ' +
+            'In most cases, prefer `origin/' + baseBranch + '` for repository setup, generated workflow/config files, ' +
+            'and shared infrastructure, then re-apply only the ticket-specific test automation that is still relevant.',
+        'Do not discard test files that are still needed for this ticket. Do not keep stale bootstrap/setup files just because they exist on the old branch.'
+    );
     console.warn('Keeping divergent test branch ' + branchName + '; conflict guidance written for the agent.');
 }
 
 function checkoutBranch(ticketKey, config) {
     var branchName = configLoader.formatBranchName(config.git.branchPrefix.test, ticketKey);
     var workingDir = config.workingDir || null;
+    var exec = function (cmd) { return runGit(cmd, workingDir); };
     console.log('Setting up branch:', branchName);
 
-    try {
-        runGit('git config user.name "' + config.git.authorName + '"', workingDir);
-        runGit('git config user.email "' + config.git.authorEmail + '"', workingDir);
-    } catch (e) {
-        console.warn('Failed to configure git author:', e);
-    }
-
-    try {
-        var targetedFetch = prHelper.buildTargetedOriginFetchCommand(
-            [branchName, (config.git && config.git.baseBranch) || 'main']);
-        if (targetedFetch) runGit(targetedFetch, workingDir);
-    } catch (e) {
-        console.warn('Could not fetch remote branches:', e);
-    }
-
-    var localBranches = cleanCommandOutput(
-        runGit('git branch --list "' + branchName + '"', workingDir) || ''
+    branchSetup.configureGitAuthor(exec, config, false);
+    branchSetup.fetchBranchRefs(
+        prHelper,
+        exec,
+        [branchName, (config.git && config.git.baseBranch) || 'main'],
+        'Could not fetch remote branches:'
     );
+
+    var localBranches = branchSetup.readLocalBranchList(prHelper, exec, branchName, null);
 
     if (localBranches.trim()) {
         console.log('Branch exists locally, aligning with base:', branchName);
@@ -222,10 +182,12 @@ function fetchLinkedBugsSafely(actualParams) {
 
 function action(params) {
     try {
-        var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
-        var folder = actualParams.inputFolderPath;
-        var ticketKey = folder.split('/').pop();
-        var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var resolved = branchSetup.resolveInputParams(params, function (p) {
+            return configLoader.loadProjectConfig(p);
+        });
+        var actualParams = resolved.actualParams;
+        var ticketKey = resolved.ticketKey;
+        var config = resolved.config;
         initTracker(config, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 
         console.log('=== Test automation setup for:', ticketKey, '===');
