@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-24T13:41:42.767Z",
+  "ticketKey": "pr-1231",
+  "headSha": "37724f5876787b896e4e323d844dd3a9bdc5ce85",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "merge_conflicts.md": {
+      "hash": "fnv1a64:41f98c7c5ed8b7d6",
+      "size": 490
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:39cd686daf852074",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:afb2a72b8c25f28c",
+      "size": 18929
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:74ea9c3654e868ef",
+      "size": 5417
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:454c62262cc82346",
+      "size": 2499
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:1191973cd943e86e",
+      "size": 1108
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:6bda66f7c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:4373606556b70642",
+      "size": 2236
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:40dd175ad2d1a5a2",
+      "size": 2153
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6v4mbP",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/fetchParentContextToInput.js:192",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: `needsNameResolution` is named opposite to what it returns**\n\n`js/fetchParentContextToInput.js:192`:\n\n```javascript\n/** Guard: only non-system, non-customfield names need a tracker lookup. */\nfunction needsNameResolution(fieldName) {\n    return !fieldName || isSystemField(fieldName) || fieldName.indexOf('customfield_') === 0;\n}\n```\n\nThe name and the JSDoc both state the opposite of the boolean's polarity: `needsNameResolution('summary')` returns `true`, yet `summary` needs **no** tracker lookup. The caller only reads correctly with a double mental negation:\n\n```javascript\nif (needsNameResolution(fieldName) || !shouldResolve || !tracker) {\n    return fieldName; // pass through\n}\n```\n\nEvery future reader (and the new unit test itself, whose assertions must explain \"falsy needs no lookup\" against a `true` result) will trip on this. Since the helper is now exported as module API (`module.exports` includes it) alongside the established `resolveParentContextConfig`/`buildDefaultFields` test-export pattern, please rename it to state the actual predicate — e.g. `isPassThroughField(fieldName)` or `shouldSkipResolution(fieldName)` — and flip the JSDoc (\"a falsy, system, or already-resolved `customfield_*` name is returned as-is without a tracker lookup\"). Pure rename, no behavior change; the 12 new assertions in `test_fetchParentContextToInput.js` pin the semantics either way."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v4mbz",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/enhanceSolutionDesignDescriptionAndAssess.js:152",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: same helper name, swapped parameter order across the two modules**\n\nThis PR introduces two same-named \"post token usage safely\" guards with different signatures:\n\n- `js/closeQuestionTicket.js:35` — `postTokenUsageCommentsSafely(ticketKey, params, tracker)`\n- `js/enhanceSolutionDesignDescriptionAndAssess.js:152` — `postTokenUsageCommentsSafely(params, ticketKey)`\n\nBoth are correct in isolation, but anyone grepping the helper name across modules (the PR deliberately mirrors the same extraction pattern in both files) will assume one canonical order and can swap arguments silently — `params` and `ticketKey` are both objects/strings plausible at each position, so a future copy-paste edit fails quietly instead of loudly. Cheap harmonization: pick one order (e.g. `(ticketKey, params, …)`) for both helpers. Non-blocking, style-only."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v4sZc",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/run_all.json:201",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: PR no longer merges into `main` — content conflict in `js/unit-tests/run_all.json`**\n\nVerified against current `main` (`dc1305d3`, which moved ahead with #1234/#1235/#1236 after this branch's last `main` merge at `8ec366b9`):\n\n```\ngit merge-tree --write-tree dc1305d3 37724f58\n→ CONFLICT (content): Merge conflict in js/unit-tests/run_all.json\n```\n\nMain inserted `\"js/unit-tests/test_jiraHelpers.js\"` immediately above `test_isCodeGraphAvailable.js` in the same tail block this PR appends to, so both edits overlap and git cannot auto-merge. As-is, GitHub cannot create the `refs/pull/1231/merge` ref → validation CI cannot run on this PR and the merge bot cannot merge.\n\n**Resolution** (mechanical, no behavior choice): merge `origin/main` into `ai/gh-1228` and keep **both** insertions in order:\n\n```json\n        \"js/unit-tests/test_jiraHelpers.js\",\n        \"js/unit-tests/test_isCodeGraphAvailable.js\",\n        \"js/unit-tests/test_closeQuestionTicket.js\",\n        \"js/unit-tests/test_enhanceSolutionDesignDescriptionAndAssess.js\",\n        \"js/unit-tests/test_prepareBugFixBatchContext.js\"\n```\n\nThis exact resolution was built and validated locally (merge-preview of `main` + this PR): the file is valid JSON, 199 test files, no duplicates, and all 7 PR test files are wired in.\n\n**Everything else is verified green on that merge-preview tree** — the CI-parity CRAP pipeline (nyc-instrumented tree → full suite via `ci/run_with_coverage.js` → `crap4js --threshold 8 --baseline <released crap-baseline.json>`) exits **0**: `0 regression(s), 0 new over threshold, 8 improvement(s)`, with the after-values exactly matching the PR table (`closeQuestionTicket.action` 13.9→8, `linkStory` 14.3→3, `flattenTasks` 14→4, `parseSDCoreEnhancementResponse` 12.4→7, `enhanceSolutionDesignDescriptionAndAssess.action` 14.9→7, `resolveFieldName` 14.4→6, `prepareBugFixBatchContext.action` 15.9→7, `snapshotPageTree` 15.5→4). The unit harness passes 6956/6957 on the branch head — the single failure is the pre-existing, env-only `test_sessionDelta` UT-3 (passes 24/24 with `FA_SESSION_ROOT` unset; CI does not set it), documented in the PR description and not a regression.\n\nOnce the `main` merge lands, no further review round should be needed."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:2b47d2bf",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: `needsNameResolution` is named opposite to what it returns**\n\n`js/fetchParentContextToInput.js:192`:\n\n```javascript\n/** Guard: only non-system, non-customfield names need a tracker lookup. */\nfunction needsNameResolution(fieldName) {\n    return !fieldName || isSystemField(fieldName) || fieldName.indexOf('customfield_') === 0;\n}\n```\n\nThe name and the JSDoc both state the opposite of the boolean's polarity: `needsNameResolution('summary')` returns `true`, yet `summary` needs **no** tracker lookup. The caller only reads correctly with a double mental negation:\n\n```javascript\nif (needsNameResolution(fieldName) || !shouldResolve || !tracker) {\n    return fieldName; // pass through\n}\n```\n\nEvery future reader (and the new unit test itself, whose assertions must explain \"falsy needs no lookup\" against a `true` result) will trip on this. Since the helper is now exported as module API (`module.exports` includes it) alongside the established `resolveParentContextConfig`/`buildDefaultFields` test-export pattern, please rename it to state the actual predicate — e.g. `isPassThroughField(fieldName)` or `shouldSkipResolution(fieldName)` — and flip the JSDoc (\"a falsy, system, or already-resolved `customfield_*` name is returned as-is without a tracker lookup\"). Pure rename, no behavior change; the 12 new assertions in `test_fetchParentContextToInput.js` pin the semantics either way."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:ea8624d9",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: same helper name, swapped parameter order across the two modules**\n\nThis PR introduces two same-named \"post token usage safely\" guards with different signatures:\n\n- `js/closeQuestionTicket.js:35` — `postTokenUsageCommentsSafely(ticketKey, params, tracker)`\n- `js/enhanceSolutionDesignDescriptionAndAssess.js:152` — `postTokenUsageCommentsSafely(params, ticketKey)`\n\nBoth are correct in isolation, but anyone grepping the helper name across modules (the PR deliberately mirrors the same extraction pattern in both files) will assume one canonical order and can swap arguments silently — `params` and `ticketKey` are both objects/strings plausible at each position, so a future copy-paste edit fails quietly instead of loudly. Cheap harmonization: pick one order (e.g. `(ticketKey, params, …)`) for both helpers. Non-blocking, style-only."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:b3590823",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: PR no longer merges into `main` — content conflict in `js/unit-tests/run_all.json`**\n\nVerified against current `main` (`dc1305d3`, which moved ahead with #1234/#1235/#1236 after this branch's last `main` merge at `8ec366b9`):\n\n```\ngit merge-tree --write-tree dc1305d3 37724f58\n→ CONFLICT (content): Merge conflict in js/unit-tests/run_all.json\n```\n\nMain inserted `\"js/unit-tests/test_jiraHelpers.js\"` immediately above `test_isCodeGraphAvailable.js` in the same tail block this PR appends to, so both edits overlap and git cannot auto-merge. As-is, GitHub cannot create the `refs/pull/1231/merge` ref → validation CI cannot run on this PR and the merge bot cannot merge.\n\n**Resolution** (mechanical, no behavior choice): merge `origin/main` into `ai/gh-1228` and keep **both** insertions in order:\n\n```json\n        \"js/unit-tests/test_jiraHelpers.js\",\n        \"js/unit-tests/test_isCodeGraphAvailable.js\",\n        \"js/unit-tests/test_closeQuestionTicket.js\",\n        \"js/unit-tests/test_enhanceSolutionDesignDescriptionAndAssess.js\",\n        \"js/unit-tests/test_prepareBugFixBatchContext.js\"\n```\n\nThis exact resolution was built and validated locally (merge-preview of `main` + this PR): the file is valid JSON, 199 test files, no duplicates, and all 7 PR test files are wired in.\n\n**Everything else is verified green on that merge-preview tree** — the CI-parity CRAP pipeline (nyc-instrumented tree → full suite via `ci/run_with_coverage.js` → `crap4js --threshold 8 --baseline <released crap-baseline.json>`) exits **0**: `0 regression(s), 0 new over threshold, 8 improvement(s)`, with the after-values exactly matching the PR table (`closeQuestionTicket.action` 13.9→8, `linkStory` 14.3→3, `flattenTasks` 14→4, `parseSDCoreEnhancementResponse` 12.4→7, `enhanceSolutionDesignDescriptionAndAssess.action` 14.9→7, `resolveFieldName` 14.4→6, `prepareBugFixBatchContext.action` 15.9→7, `snapshotPageTree` 15.5→4). The unit harness passes 6956/6957 on the branch head — the single failure is the pre-existing, env-only `test_sessionDelta` UT-3 (passes 24/24 with `FA_SESSION_ROOT` unset; CI does not set it), documented in the PR description and not a regression.\n\nOnce the `main` merge lands, no further review round should be needed."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:4bfa7eb1",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 94413c28e49712874fc1b9772bb7428745d7a60c — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:6155b1a7",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## 🔧 Rework Complete — pr-1231\n\nAll PR review comments have been addressed. See fix summary below."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:90acda93",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — APPROVE (with suggestions)\n\n**Summary**: Behavior-preserving CRAP refactor verified end-to-end: all 8 gh-1228 targets now measure CRAP ≤ 8.0 (independently reproduced with the CI-parity pipeline: nyc-instrumented tree → full suite → crap4js, e.g. `closeQuestionTicket.action` 13.9→8.0, `snapshotPageTree` 15.5→4.0, `linkStory` 14.3→3.0), every new helper ≤ 8.0 (max `applyStoryLink` 8.0), and every extraction hunk checked against `main` is semantics-identical. Both runners green: canonical `dmtools run js/unit-tests/run_all.json` 6957/6957 PASS; node harness 6956/6957 with the single failure being the documented env-only `test_sessionDelta` UT-3 (passes 24/24 with `FA_SESSION_ROOT` unset — pre-existing, not a PR regression). `crap-baseline.json` untouched; no scope creep; no security/packRequirePath concerns (no new requires).\n\n**Key Issues** (none blocking):\n- ⚠️ IMPORTANT: `needsNameResolution()` in `fetchParentContextToInput.js` is named opposite to its return value (returns `true` for names that need *no* lookup) — exported module API, please rename (see inline comment).\n- 💡 SUGGESTION: `postTokenUsageCommentsSafely` exists in both `closeQuestionTicket.js` and `enhanceSolutionDesignDescriptionAndAssess.js` with swapped parameter order (see inline comment).\n\n**Next Steps**:\n1. Optional (non-blocking): rename `needsNameResolution` → `isPassThroughField`/`shouldSkipResolution` and align the JSDoc polarity.\n2. Optional: harmonize the `postTokenUsageCommentsSafely` parameter order across the two modules.\n3. Merge — ticket ACs are met; remaining findings are polish only."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:4674ef8d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST CHANGES (1 blocking: merge conflict with `main`)\n\n**Summary**: The CRAP refactor itself is verified green end-to-end — on a merge-preview of current `main` + this PR, the CI-parity crap4js ratchet exits 0 (`0 regression(s), 0 new over threshold, 8 improvement(s)`, after-values exactly matching the PR table) and the node harness passes 6956/6957 (the single failure is the documented env-only `test_sessionDelta` UT-3, green with `FA_SESSION_ROOT` unset — not a regression). However, `main` moved ahead (#1234/#1235/#1236) after this branch's last `main` merge, and the PR now has a **content conflict in `js/unit-tests/run_all.json`** — GitHub cannot create the merge ref, so validation cannot run and the merge bot cannot merge.\n\n**Key Issues**:\n- 🚨 BLOCKING: `js/unit-tests/run_all.json` conflicts with `main` (both sides edit the same tail block) — merge `origin/main` into `ai/gh-1228`, keeping both insertions (see inline comment; resolution validated locally).\n- ⚠️ IMPORTANT (still open, thread `PRRT_kwDORYAuYs6v4mbP` — not addressed by the crap-gate rework): `needsNameResolution()` in `fetchParentContextToInput.js` is named opposite to its returned polarity.\n- 💡 SUGGESTION (still open, thread `PRRT_kwDORYAuYs6v4mbz`): `postTokenUsageCommentsSafely` has swapped parameter order between `closeQuestionTicket.js` and `enhanceSolutionDesignDescriptionAndAssess.js`.\n\n**Next Steps**:\n1. Merge `origin/main` into `ai/gh-1228` and resolve `run_all.json` by keeping both lists (`test_jiraHelpers.js` + the 3 new PR test files) — that exact tree was verified: valid JSON, no duplicate entries, CRAP ratchet green.\n2. Optional, non-blocking: rename `needsNameResolution` → `isPassThroughField`/`shouldSkipResolution` and align the JSDoc.\n3. Optional, non-blocking: harmonize the `postTokenUsageCommentsSafely` parameter order across the two modules."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:10328b08",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚖️ Verdict reconciliation (gh-807): two review verdicts on head `37724f5876787b896e4e323d844dd3a9bdc5ce85` —\n- APPROVE at 2026-10-24T13:15:53.077Z (source: pr_review.json)\n- REQUEST_CHANGES at 2026-10-24T13:32:22.783Z (source: pr_review.json)\n\nNewest wins: **REQUEST_CHANGES** — removing `pr_approved` until re-review (approval-gated paths blocked, gh-807)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:a2922d52",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `37724f5876787b896e4e323d844dd3a9bdc5ce85`) Rework re-queued (linked issue #1228 re-armed): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    }
+  ]
+}
