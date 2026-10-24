@@ -30,117 +30,162 @@ function cleanCommandOutput(output) {
     return prHelper.cleanCommandOutput(output);
 }
 
+// ── gh-1190: checkoutBranch seam split ──────────────────────────────────────
+// Mirrors the preCliDevelopmentSetup.js gh-1042 extraction pattern: pure
+// route decisions plus small side-effecting clusters keep action() linear;
+// the exact commands, log lines and their order are unchanged
+// (characterization tests: js/unit-tests/test_checkoutBranch.js).
+
+/** Pure: customParams resolution for both Teammate and standalone runs. */
+function resolveActionCustomParams(params) {
+    return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+}
+
+/** Best-effort git author configuration — failures are warnings only. */
+function configureGitAuthor(config) {
+    try {
+        cli_execute_command({ command: 'git config user.name "' + config.git.authorName + '"' });
+        cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
+        console.log('Configured git author');
+    } catch (e) {
+        console.warn('Failed to configure git author:', e);
+    }
+}
+
+// Fetch latest remote state — target branch only (owner 2026-10-03:
+// blanket fetches are banned; feature-branch checks use ls-remote).
+function fetchTargetBranch(config) {
+    try {
+        var baseFetch = prHelper.buildTargetedOriginFetchCommand([config.git.baseBranch]);
+        if (baseFetch) cli_execute_command({ command: baseFetch });
+        console.log('Fetched target branch:', config.git.baseBranch);
+    } catch (e) {
+        console.warn('Could not fetch remote branches:', e);
+    }
+}
+
+/**
+ * `git branch --list` capture for `branchName`, cleaned of wrapper artifacts.
+ * `warnMessage` (optional) is logged with the error when the probe fails —
+ * pass null for the silent two-branch feature probes.
+ */
+function readLocalBranchList(branchName, warnMessage) {
+    try {
+        return cleanCommandOutput(cli_execute_command({ command: 'git branch --list "' + branchName + '"' }) || '');
+    } catch (e) {
+        if (warnMessage) console.warn(warnMessage, e);
+        return '';
+    }
+}
+
+/** Strict ls-remote existence probe (gh-912) — `warnMessage` optional. */
+function probeRemoteBranch(branchName, warnMessage) {
+    try {
+        return prHelper.remoteBranchExists(runCommandForProbes, null, branchName);
+    } catch (e) {
+        if (warnMessage) console.warn(warnMessage, e);
+        return false;
+    }
+}
+
+/**
+ * Two-branch mode: make the feature branch exist — via the configured
+ * branchCreateFnPath hook (project-specific mechanism, e.g. an external CI
+ * job; the hook is responsible for making the branch exist on origin, so it
+ * is fetched and checked out like any other pre-existing remote branch) or a
+ * plain base-branch checkout + push when no hook is configured.
+ */
+function createFeatureBranch(config, customParams, ticket, featureBranchName) {
+    var branchCreateFn = customParams.branchCreateFnPath
+        ? configLoader.loadHookFn(customParams.branchCreateFnPath, 'branchCreateFnPath')
+        : null;
+    if (branchCreateFn) {
+        console.log('Two-branch mode: delegating feature branch creation to', customParams.branchCreateFnPath, '→', featureBranchName);
+        branchCreateFn({
+            branchName: featureBranchName,
+            baseBranch: config.git.baseBranch,
+            workingDir: config.workingDir,
+            ticket: ticket,
+            config: config
+        });
+        cli_execute_command({ command: prHelper.buildOriginFetchCommand() });
+        cli_execute_command({ command: 'git checkout -b ' + featureBranchName + ' origin/' + featureBranchName });
+    } else {
+        console.log('Two-branch mode: creating feature branch from', config.git.baseBranch + ':', featureBranchName);
+        cli_execute_command({ command: 'git checkout ' + config.git.baseBranch });
+        cli_execute_command({ command: 'git pull origin ' + config.git.baseBranch });
+        cli_execute_command({ command: 'git checkout -b ' + featureBranchName });
+        cli_execute_command({ command: 'git push -u origin ' + featureBranchName });
+    }
+}
+
+/**
+ * Two-branch mode: ensure the feature branch exists and check it out.
+ * Returns the feature branch name — the dev branch is created from it.
+ */
+function establishFeatureBranch(config, customParams, ticket) {
+    var featureBranchName = configLoader.resolveBranchName(config, ticket, 'feature');
+    var featureLocal = readLocalBranchList(featureBranchName, null);
+    var featureRemoteExists = probeRemoteBranch(featureBranchName, null);
+    var route = prHelper.decideFeatureBranchRoute(featureLocal.trim(), featureRemoteExists);
+    if (route === 'create') {
+        createFeatureBranch(config, customParams, ticket, featureBranchName);
+    } else if (route === 'checkout-remote') {
+        cli_execute_command({ command: 'git checkout -b ' + featureBranchName + ' origin/' + featureBranchName });
+    } else {
+        cli_execute_command({ command: 'git checkout ' + featureBranchName });
+    }
+    console.log('Two-branch mode: dev branch will be created from feature branch:', featureBranchName);
+    return featureBranchName;
+}
+
+/**
+ * Dev-branch checkout decision tree: exists locally → plain checkout;
+ * exists on remote → tracking checkout; absent → create from branchBase.
+ */
+function checkoutDevBranch(branchName, branchBase) {
+    var localBranches = readLocalBranchList(branchName, 'Error checking local branches:');
+    if (localBranches.trim()) {
+        // Branch exists locally — check it out
+        console.log('Branch exists locally, checking out:', branchName);
+        cli_execute_command({ command: 'git checkout ' + branchName });
+        return;
+    }
+
+    var remoteBranchExists = probeRemoteBranch(branchName, 'Error checking remote branches:');
+    if (remoteBranchExists) {
+        // Exists on remote — checkout tracking remote
+        console.log('Branch exists on remote, checking out with tracking:', branchName);
+        cli_execute_command({ command: 'git checkout -b ' + branchName + ' origin/' + branchName });
+        return;
+    }
+
+    // New branch — start from base branch (or feature branch in two-branch mode)
+    console.log('Creating new branch from', branchBase + ':', branchName);
+    cli_execute_command({ command: 'git checkout ' + branchBase });
+    cli_execute_command({ command: 'git pull origin ' + branchBase });
+    cli_execute_command({ command: 'git checkout -b ' + branchName });
+}
+
 function action(params) {
     try {
         var config = configLoader.loadProjectConfig(params.jobParams || params);
-        var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+        var customParams = resolveActionCustomParams(params);
         var ticketKey = params.ticket.key;
         var branchName = configLoader.resolveBranchName(config, params.ticket, 'development');
 
         console.log('Setting up branch for ticket:', ticketKey, '→', branchName);
 
-        // Configure git author
-        try {
-            cli_execute_command({ command: 'git config user.name "' + config.git.authorName + '"' });
-            cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
-            console.log('Configured git author');
-        } catch (e) {
-            console.warn('Failed to configure git author:', e);
-        }
-
-        // Fetch latest remote state — target branch only (owner 2026-10-03:
-        // blanket fetches are banned; feature-branch checks use ls-remote).
-        try {
-            var baseFetch = prHelper.buildTargetedOriginFetchCommand([config.git.baseBranch]);
-            if (baseFetch) cli_execute_command({ command: baseFetch });
-            console.log('Fetched target branch:', config.git.baseBranch);
-        } catch (e) {
-            console.warn('Could not fetch remote branches:', e);
-        }
+        configureGitAuthor(config);
+        fetchTargetBranch(config);
 
         // In two-branch mode, ensure feature branch exists before creating dev branch
         var branchBase = config.git.baseBranch;
         if (config.git.featureBranch && config.git.featureBranch.enabled) {
-            var featureBranchName = configLoader.resolveBranchName(config, params.ticket, 'feature');
-            var featureLocal = '';
-            try {
-                featureLocal = cleanCommandOutput(cli_execute_command({ command: 'git branch --list "' + featureBranchName + '"' }) || '');
-            } catch (e) {}
-            var featureRemoteExists = false;
-            try {
-                featureRemoteExists = prHelper.remoteBranchExists(runCommandForProbes, null, featureBranchName);
-            } catch (e) {}
-            if (!featureLocal.trim() && !featureRemoteExists) {
-                var branchCreateFn = customParams.branchCreateFnPath
-                    ? configLoader.loadHookFn(customParams.branchCreateFnPath, 'branchCreateFnPath')
-                    : null;
-                if (branchCreateFn) {
-                    console.log('Two-branch mode: delegating feature branch creation to', customParams.branchCreateFnPath, '→', featureBranchName);
-                    branchCreateFn({
-                        branchName: featureBranchName,
-                        baseBranch: config.git.baseBranch,
-                        workingDir: config.workingDir,
-                        ticket: params.ticket,
-                        config: config
-                    });
-                    // The hook is responsible for making featureBranchName exist on origin
-                    // (e.g. via an external CI job) — fetch it and check it out like any
-                    // other pre-existing remote branch.
-                    cli_execute_command({ command: prHelper.buildOriginFetchCommand() });
-                    cli_execute_command({ command: 'git checkout -b ' + featureBranchName + ' origin/' + featureBranchName });
-                } else {
-                    console.log('Two-branch mode: creating feature branch from', config.git.baseBranch + ':', featureBranchName);
-                    cli_execute_command({ command: 'git checkout ' + config.git.baseBranch });
-                    cli_execute_command({ command: 'git pull origin ' + config.git.baseBranch });
-                    cli_execute_command({ command: 'git checkout -b ' + featureBranchName });
-                    cli_execute_command({ command: 'git push -u origin ' + featureBranchName });
-                }
-            } else if (featureRemoteExists && !featureLocal.trim()) {
-                cli_execute_command({ command: 'git checkout -b ' + featureBranchName + ' origin/' + featureBranchName });
-            } else {
-                cli_execute_command({ command: 'git checkout ' + featureBranchName });
-            }
-            branchBase = featureBranchName;
-            console.log('Two-branch mode: dev branch will be created from feature branch:', featureBranchName);
+            branchBase = establishFeatureBranch(config, customParams, params.ticket);
         }
 
-        // Check if branch exists locally
-        var localBranches = '';
-        try {
-            var rawLocal = cli_execute_command({ command: 'git branch --list "' + branchName + '"' }) || '';
-            localBranches = cleanCommandOutput(rawLocal);
-        } catch (e) {
-            console.warn('Error checking local branches:', e);
-        }
-
-        if (localBranches.trim()) {
-            // Branch exists locally — check it out
-            console.log('Branch exists locally, checking out:', branchName);
-            cli_execute_command({ command: 'git checkout ' + branchName });
-        } else {
-            // Check if branch exists on remote
-            var remoteBranchExists = false;
-            try {
-                // gh-912: decide on a real refs/heads/<branch> ref line — a
-                // warning-only capture (central-mode insteadOf origin, git ≥
-                // 2.54) must classify as "branch absent".
-                remoteBranchExists = prHelper.remoteBranchExists(runCommandForProbes, null, branchName);
-            } catch (e) {
-                console.warn('Error checking remote branches:', e);
-            }
-
-            if (remoteBranchExists) {
-                // Exists on remote — checkout tracking remote
-                console.log('Branch exists on remote, checking out with tracking:', branchName);
-                cli_execute_command({ command: 'git checkout -b ' + branchName + ' origin/' + branchName });
-            } else {
-                // New branch — start from base branch (or feature branch in two-branch mode)
-                console.log('Creating new branch from', branchBase + ':', branchName);
-                cli_execute_command({ command: 'git checkout ' + branchBase });
-                cli_execute_command({ command: 'git pull origin ' + branchBase });
-                cli_execute_command({ command: 'git checkout -b ' + branchName });
-            }
-        }
+        checkoutDevBranch(branchName, branchBase);
 
         console.log('Branch ready:', branchName);
 
@@ -154,5 +199,16 @@ function action(params) {
 // preCliJSAction, but exposing it via module.exports also lets unit tests load this file
 // in isolation (see js/unit-tests/test_checkoutBranch.js).
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action: action,
+        // gh-1190: seam helpers exposed for direct characterization tests.
+        resolveActionCustomParams: resolveActionCustomParams,
+        configureGitAuthor: configureGitAuthor,
+        fetchTargetBranch: fetchTargetBranch,
+        readLocalBranchList: readLocalBranchList,
+        probeRemoteBranch: probeRemoteBranch,
+        createFeatureBranch: createFeatureBranch,
+        establishFeatureBranch: establishFeatureBranch,
+        checkoutDevBranch: checkoutDevBranch
+    };
 }
