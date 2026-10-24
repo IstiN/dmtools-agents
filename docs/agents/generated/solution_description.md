@@ -82,8 +82,6 @@ _Fetch Parent Context To Input_
 _Enhance SD CORE Description and Assess Action_
 
 - Source: `agents/js/enhanceSolutionDesignDescriptionAndAssess.js`
-- Side effects:
-  - post ticket comment (via tracker)
 - Parameters (customParams):
   - `adoTextFormat`
   - `branchCreateFnPath`
