@@ -2,6 +2,14 @@
  * Unit tests for js/createRepoTasksMulti.js
  */
 
+function loadRepoTaskShared(globals) {
+    return loadModule('js/common/repoTaskShared.js', makeRequire({
+        '../config.js': configModule,
+        './trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), globals),
+        './linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js')
+    }), globals);
+}
+
 function makeModule(globals) {
     var defaultGlobals = {
         java: { lang: { System: { getenv: function() { return 'https://jira.example.com'; } } } },
@@ -16,7 +24,7 @@ function makeModule(globals) {
 
     return loadModule(
         'js/createRepoTasksMulti.js',
-        makeRequire({ './config.js': configModule, './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'), './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), defaultGlobals) }),
+        makeRequire({ './config.js': configModule, './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'), './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), defaultGlobals), './common/repoTaskShared.js': loadRepoTaskShared(defaultGlobals) }),
         defaultGlobals
     );
 }
@@ -613,14 +621,14 @@ suite('createRepoTasksMulti — extracted helpers', function() {
             { key: 'r:one', repo: 'r', title: 'One', depends_on: ['r:two'] },
             { key: 'r:two', repo: 'r', title: 'Two', depends_on: [] }
         ];
-        var out = mod.createSubTasks(t, tasks, 'PROJ', 'PROJ-50', 'PROJ-100', 'https://jira.example.com', ['development'], ['[r] Two']);
+        var out = mod.createSubTasks(t, tasks, 'PROJ', 'PROJ-50', 'Story', 'PROJ-100', 'https://jira.example.com', ['development'], ['[r] Two']);
         assert.equal(t.calls.create.length, 1, 'duplicate skipped');
         assert.equal(out.created.length, 1, 'one created entry');
         assert.deepEqual(out.skipped, ['[r] Two'], 'skipped summary recorded');
         assert.deepEqual(out.taskKeyMap, { 'r:one': 'PROJ-9' }, 'key map by task key');
         assert.equal(out.created[0].depends_on.length, 1, 'deps kept for wiring');
         var failing = fakeTracker({ createError: true });
-        var out2 = mod.createSubTasks(failing, tasks, 'PROJ', 'PROJ-50', 'PROJ-100', 'https://j', ['development'], []);
+        var out2 = mod.createSubTasks(failing, tasks, 'PROJ', 'PROJ-50', 'Story', 'PROJ-100', 'https://j', ['development'], []);
         assert.equal(out2.created.length, 2, 'error entries recorded');
         assert.equal(out2.created[0].error.indexOf('create failed') !== -1, true, 'error captured');
         assert.deepEqual(out2.taskKeyMap, {}, 'no key on failure');

@@ -77,6 +77,26 @@ function readOutputFile(pathOrName, options) {
 }
 
 /**
+ * Read a description markdown file, falling back to the entry summary when the
+ * file is missing, empty or unreadable (gh-1245: shared by the intake and
+ * question-creation post-actions).
+ */
+function readDescriptionFile(filePath, fallbackSummary) {
+    if (!filePath) {
+        return fallbackSummary || '';
+    }
+    try {
+        var content = file_read(filePath);
+        if (content && content.trim() !== '') {
+            return content;
+        }
+    } catch (error) {
+        console.warn('Could not read description file ' + filePath + ':', error);
+    }
+    return fallbackSummary || '';
+}
+
+/**
  * Canonical existence/blank check over the same candidate expansion as
  * readOutputFile — callers that only need "is the deliverable present with
  * content?" use this instead of growing their own boolean read wrappers.
@@ -95,6 +115,7 @@ if (typeof module !== 'undefined' && module.exports) {
         buildOutputCandidates: buildOutputCandidates,
         readOutputFile: readOutputFile,
         hasOutputFile: hasOutputFile,
+        readDescriptionFile: readDescriptionFile,
         readOutputFileDetailed: readOutputFileDetailed
     };
 }
