@@ -279,7 +279,7 @@ function findPRForTicket(scm, ticketKey) {
     // prLookup fails closed to null (with its own 'Failed to list PRs:'
     // diagnostic) and guards non-array listPrs results — strictly safer than
     // the old unguarded openPRs.filter. This caller keeps its own
-    // 'No open PR found' warn; the loud PR-LOKUP-FAILED marker contract is
+    // 'No open PR found' warn; the loud PR-LOOKUP-FAILED marker contract is
     // owned by requirePrForTicket and fires on null either way.
     var pr = prLookup.findOpenPrForTicket(scm, ticketKey);
     if (!pr) {

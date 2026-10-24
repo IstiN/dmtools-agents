@@ -1978,7 +1978,7 @@ suite('pushReworkChanges — PR-anchored lookup & loud lookup failure (fa #1212)
 // one shared listPrs('open') + substring match, with prLookup's Array.isArray
 // guard (a null/undefined provider payload reads as no match instead of a
 // TypeError) and its fail-closed null on provider errors. The loud
-// PR-LOKUP-FAILED marker contract (requirePrForTicket) must fire unchanged.
+// PR-LOOKUP-FAILED marker contract (requirePrForTicket) must fire unchanged.
 suite('pushReworkChanges — findPRForTicket delegates to prLookup (gh-1249)', function () {
 
     function runJiraLookup(scmListPrs) {
@@ -2001,18 +2001,18 @@ suite('pushReworkChanges — findPRForTicket delegates to prLookup (gh-1249)', f
         return { result: result, ticketComments: ticketComments };
     }
 
-    test('non-array listPrs payload (null provider result) fails closed with the PR-LOKUP-FAILED marker — no TypeError', function () {
+    test('non-array listPrs payload (null provider result) fails closed with the PR-LOOKUP-FAILED marker — no TypeError', function () {
         var fx = runJiraLookup(function(state) { return null; });
         console.log('DBG typeof:', typeof fx.result.error, 'idx:', String(fx.result.error).indexOf('PR-LOOKUP-FAILED')); console.log('DBG codes:', String(fx.result.error).slice(0,40).split('').map(function(c){return c.charCodeAt(0)}).join(','));
         assert.equal(fx.result.success, false, 'lookup failure must fail the leg loudly');
-        assert.contains(String(fx.result.error), 'PR-LOKUP-FAILED');
+        assert.contains(String(fx.result.error), 'PR-LOOKUP-FAILED');
         assert.ok(
             fx.ticketComments.some(function(c) { return String(c).indexOf('PR-LOOKUP-FAILED') !== -1; }),
             'the marker reaches the tracker error comment'
         );
     });
 
-    test('listPrs throwing fails closed with the PR-LOKUP-FAILED marker (prLookup swallows + null)', function () {
+    test('listPrs throwing fails closed with the PR-LOOKUP-FAILED marker (prLookup swallows + null)', function () {
         var fx = runJiraLookup(function() { throw new Error('scm down'); });
         assert.equal(fx.result.success, false);
         assert.contains(String(fx.result.error), 'PR-LOOKUP-FAILED');
