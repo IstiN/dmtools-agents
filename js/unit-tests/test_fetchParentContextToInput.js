@@ -1525,3 +1525,49 @@ suite('fetchParentContextToInput — resolveFieldName', function() {
         assert.deepEqual(resolved, ['customfield_1', 'key'], 'deduped, first-seen order, customfield passthrough not duplicated');
     });
 });
+
+// ── resolveFieldName extracted helpers (gh-1228 CRAP split) ─────────────────
+
+suite('fetchParentContextToInput — resolveFieldName helpers', function() {
+
+    function loadHelpers() {
+        return loadModule(
+            'js/fetchParentContextToInput.js',
+            makeRequire({
+                './configLoader.js': { loadProjectConfig: function() { return {}; } },
+                './common/trackers.js': { createTracker: function() { return {}; } }
+            }),
+            { file_read: function() { return null; }, file_write: function() {} }
+        );
+    }
+
+    test('needsNameResolution flags exactly the names worth a tracker lookup', function() {
+        var mod = loadHelpers();
+        assert.equal(mod.needsNameResolution(''), true, 'falsy needs no lookup');
+        assert.equal(mod.needsNameResolution(null), true, 'null needs no lookup');
+        assert.equal(mod.needsNameResolution('summary'), true, 'system field');
+        assert.equal(mod.needsNameResolution('description'), true, 'system field');
+        assert.equal(mod.needsNameResolution('customfield_1'), true, 'already resolved');
+        assert.equal(mod.needsNameResolution('Story Points'), false, 'human name needs resolution');
+    });
+
+    test('unwrapTrackerResult unwraps exactly one {result: ...} level', function() {
+        var mod = loadHelpers();
+        assert.equal(mod.unwrapTrackerResult({ result: 'customfield_9' }), 'customfield_9', 'envelope unwrapped');
+        assert.equal(mod.unwrapTrackerResult('customfield_9'), 'customfield_9', 'plain string kept');
+        assert.equal(mod.unwrapTrackerResult(null), null, 'null kept');
+        assert.deepEqual(mod.unwrapTrackerResult({ other: 1 }), { other: 1 }, 'object without result kept');
+    });
+
+    test('resolvedCustomFieldCode records labels only for customfield_* strings', function() {
+        var mod = loadHelpers();
+        var labels = {};
+        assert.equal(mod.resolvedCustomFieldCode('customfield_5', 'Story Points', labels), 'customfield_5', 'code returned');
+        assert.equal(labels['customfield_5'], 'Story Points', 'label recorded');
+        assert.equal(mod.resolvedCustomFieldCode('Story Points', 'Story Points', labels), null, 'non-code returns null');
+        assert.equal(mod.resolvedCustomFieldCode(null, 'Story Points', labels), null, 'null returns null');
+        var untouched = false;
+        for (var k in labels) { if (k !== 'customfield_5') untouched = true; }
+        assert.equal(untouched, false, 'no stray labels');
+    });
+});

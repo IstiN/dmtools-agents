@@ -278,3 +278,47 @@ suite('prepareBugFixBatchContext — findBugsInEpic and rendering', function() {
         assert.contains(writes['input/PROJ-1/batch_bugs.md'], '_No bug-fix batch bugs found for this Epic._', 'placeholder rendered');
     });
 });
+
+// ── Extracted action-step helpers (gh-1228 CRAP split) ──────────────────────
+
+suite('prepareBugFixBatchContext — extracted step helpers', function() {
+
+    test('resolveBatchParams prefers the top-level inputFolderPath form', function() {
+        var mod = loadBugFixBatchContext({ __tracker: batchTracker() });
+        var topLevel = { inputFolderPath: 'input/PROJ-1', ticket: { key: 'PROJ-1' } };
+        assert.equal(mod.resolveBatchParams(topLevel), topLevel, 'top-level params used as-is');
+        var job = { jobParams: { inputFolderPath: 'input/PROJ-1', ticket: { key: 'PROJ-1' } } };
+        assert.equal(mod.resolveBatchParams(job), job.jobParams, 'jobParams form unwrapped');
+        var bare = { customParams: {} };
+        assert.equal(mod.resolveBatchParams(bare), bare, 'no inputFolderPath and no jobParams → params themselves');
+    });
+
+    test('resolveBatchEpic keeps an epic that already carries fields', function() {
+        var tracker = batchTracker();
+        var mod = loadBugFixBatchContext({ __tracker: tracker });
+        var epic = { key: 'PROJ-1', fields: { summary: 'already loaded' } };
+        assert.equal(mod.resolveBatchEpic(tracker, 'PROJ-1', epic), epic, 'fields present — no fetch');
+        assert.equal(tracker.calls.getIssue.length, 0, 'tracker not consulted');
+    });
+
+    test('moveEpicToInDevelopment moves and reports the target status', function() {
+        var tracker = batchTracker();
+        var mod = loadBugFixBatchContext({ __tracker: tracker });
+        mod.moveEpicToInDevelopment(tracker, 'PROJ-1', { IN_DEVELOPMENT: 'In Development' });
+        assert.deepEqual(tracker.calls.moveToStatus, [{ key: 'PROJ-1', status: 'In Development' }], 'moved');
+    });
+
+    test('fetchBatchBugContexts fetches every bug with the shared jobParams', function() {
+        var fetched = [];
+        var tracker = batchTracker();
+        var mod = loadBugFixBatchContext({
+            __tracker: tracker,
+            __fetchQuestions: { action: function(p) { fetched.push('q:' + p.ticket.key); } }
+        });
+        mod.fetchBatchBugContexts(
+            [{ key: 'PROJ-2' }, { key: 'PROJ-3' }],
+            { inputFolderPath: 'input/x', jobParams: {} }
+        );
+        assert.deepEqual(fetched.sort(), ['q:PROJ-2', 'q:PROJ-3'], 'both bugs fetched');
+    });
+});

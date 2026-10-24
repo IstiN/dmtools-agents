@@ -128,28 +128,49 @@ function updateSDCoreTicket(ticketKey, enhancementData) {
 }
 
 
+// ── Extracted step helpers (gh-1228 CRAP split) ─────────────────────────────
+
+/** Context-scoped WIP label, or null when the job carries no contextId. */
+function resolveWipLabel(params) {
+    return params.metadata && params.metadata.contextId
+        ? params.metadata.contextId + '_wip'
+        : null;
+}
+
+/** Uniform failure result shape for this action. */
+function enhancementFailureResult(error) {
+    return { success: false, error: error };
+}
+
+/** How many of the two ticket updates landed (description + diagrams field). */
+function countSuccessfulUpdates(updateResults) {
+    return (updateResults.descriptionUpdated ? 1 : 0) +
+           (updateResults.diagramUpdated ? 1 : 0);
+}
+
+/** Post token usage summary comments; a failure is logged and skipped. */
+function postTokenUsageCommentsSafely(params, ticketKey) {
+    try {
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
 function action(params) {
     try {
         const ticketKey = params.ticket.key;
         const initiatorId = params.initiator;
         initTracker(resolveProjectConfig(params), (params.jobParams && params.jobParams.customParams) || params.customParams || {});
-        // Dynamically generate WIP label from contextId
-        const wipLabel = params.metadata && params.metadata.contextId
-            ? params.metadata.contextId + '_wip'
-            : null;
+        const wipLabel = resolveWipLabel(params);
 
         console.log("Processing SD CORE enhancement for ticket:", ticketKey);
 
         // Read enhancement data from separate files
         const enhancementData = parseSDCoreEnhancementResponse(ticketKey, null);
         if (!enhancementData) {
-            const errorMsg = 'Failed to read enhancement data from output files';
-            console.error(errorMsg);
-
-            return {
-                success: false,
-                error: errorMsg
-            };
+            console.error('Failed to read enhancement data from output files');
+            return enhancementFailureResult('Failed to read enhancement data from output files');
         }
 
         // Update SD CORE ticket with enhanced content
@@ -162,16 +183,11 @@ function action(params) {
             return assignResult;
         }
 
-        const successCount = (updateResults.descriptionUpdated ? 1 : 0) +
-                           (updateResults.diagramUpdated ? 1 : 0);
+        const successCount = countSuccessfulUpdates(updateResults);
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
+        postTokenUsageCommentsSafely(params, ticketKey);
 
         return {
             success: true,
@@ -183,13 +199,19 @@ function action(params) {
     } catch (error) {
         console.error("❌ Error:", error);
 
-        return {
-            success: false,
-            error: error.toString()
-        };
+        return enhancementFailureResult(error.toString());
     }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action: action,
+        // Pure helpers, exported for direct unit testing:
+        parseSDCoreEnhancementResponse: parseSDCoreEnhancementResponse,
+        updateSDCoreTicket: updateSDCoreTicket,
+        resolveWipLabel: resolveWipLabel,
+        enhancementFailureResult: enhancementFailureResult,
+        countSuccessfulUpdates: countSuccessfulUpdates,
+        postTokenUsageCommentsSafely: postTokenUsageCommentsSafely
+    };
 }

@@ -22,7 +22,9 @@ function loadEnhanceSD(mocks) {
             './config.js': configModule,
             './configLoader.js': g.__configLoader || { loadProjectConfig: function() { return {}; } },
             './common/outputFiles.js': outputFilesMock,
-            './common/tokenUsageComment.js': g.__tokenUsage || { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': Object.assign({ customParamsOf: function(params) {
+                return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+            } }, g.__tokenUsage || { postTokenUsageComments: function() {} }),
             './common/trackers.js': { createTracker: function(config, customParams) { return g.__tracker; } }
         }),
         g
@@ -257,5 +259,63 @@ suite('enhanceSolutionDesignDescriptionAndAssess — action flow', function() {
         assert.equal(r.success, false, 'fails without a ticket key');
         assert.ok(r.error.indexOf('TypeError') !== -1 || r.error.indexOf('key') !== -1, 'underlying error surfaced');
         assert.equal(tracker.calls.updateDescription.length, 0, 'no tracker writes');
+    });
+});
+
+// ── Extracted step helpers (gh-1228 CRAP split) ─────────────────────────────
+
+suite('enhanceSolutionDesignDescriptionAndAssess — extracted helpers', function() {
+
+    test('resolveWipLabel derives the context label or null', function() {
+        var mod = loadEnhanceSD({});
+        assert.equal(mod.resolveWipLabel({ metadata: { contextId: 'enhance_sd' } }), 'enhance_sd_wip', 'context label derived');
+        assert.equal(mod.resolveWipLabel({}), null, 'no metadata → null');
+        assert.equal(mod.resolveWipLabel({ metadata: {} }), null, 'no contextId → null');
+    });
+
+    test('enhancementFailureResult keeps the uniform failure shape', function() {
+        var mod = loadEnhanceSD({});
+        assert.deepEqual(mod.enhancementFailureResult('boom'), { success: false, error: 'boom' }, 'shape pinned');
+    });
+
+    test('countSuccessfulUpdates counts landed updates', function() {
+        var mod = loadEnhanceSD({});
+        assert.equal(mod.countSuccessfulUpdates({ descriptionUpdated: true, diagramUpdated: true }), 2, 'both landed');
+        assert.equal(mod.countSuccessfulUpdates({ descriptionUpdated: true, diagramUpdated: false }), 1, 'one landed');
+        assert.equal(mod.countSuccessfulUpdates({ descriptionUpdated: false, diagramUpdated: false }), 0, 'none landed');
+    });
+
+    test('parseSDCoreEnhancementResponse returns the trimmed pair on success', function() {
+        var mod = loadEnhanceSD({
+            __files: { readOutputFile: function(name) {
+                return name === 'response.md' ? '  Desc  ' : ' graph ';
+            } }
+        });
+        assert.deepEqual(
+            mod.parseSDCoreEnhancementResponse('PROJ-20', null),
+            { description: 'Desc', diagram: 'graph' },
+            'both values trimmed'
+        );
+    });
+
+    test('parseSDCoreEnhancementResponse returns null when the description is unusable', function() {
+        var mod = loadEnhanceSD({ __files: { readOutputFile: function() { return ''; } } });
+        assert.equal(mod.parseSDCoreEnhancementResponse('PROJ-20', null), null, 'null without a description');
+    });
+
+    test('postTokenUsageCommentsSafely posts and swallows failures', function() {
+        var calls = [];
+        var ok = loadEnhanceSD({
+            __tokenUsage: { postTokenUsageComments: function(key, opts) { calls.push({ key: key, opts: opts }); } }
+        });
+        var params = { initiator: 'acc', jobParams: { customParams: { trackerProvider: 'jira' } } };
+        ok.postTokenUsageCommentsSafely(params, 'PROJ-20');
+        assert.equal(calls.length, 1, 'posted once');
+        assert.equal(calls[0].key, 'PROJ-20');
+
+        var failing = loadEnhanceSD({
+            __tokenUsage: { postTokenUsageComments: function() { throw new Error('usage down'); } }
+        });
+        assert.doesNotThrow(function() { failing.postTokenUsageCommentsSafely(params, 'PROJ-20'); }, 'failure swallowed');
     });
 });
