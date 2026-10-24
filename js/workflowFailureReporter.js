@@ -219,6 +219,69 @@ function processFailedRun(run, ctx) {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Step 1 transport: create the SCM from the custom params and list the
+ * failed runs. Returns { runs } on success or { error, result } — result is
+ * the job's failure return, and the warn/error log lines ride the same
+ * branches as before the extraction (gh-1198).
+ */
+function fetchFailedRuns(custom, workflowId) {
+    var scm = scmModule.createScm({
+        repository: { owner: custom.workspace, repo: custom.repository },
+        scm: { provider: custom.scmProvider || 'github' }
+    });
+    var runsRaw = scm.listWorkflowRuns('failure', workflowId, 50);
+    if (runsRaw == null) {
+        console.warn('⚠️  listWorkflowRuns is not supported by the configured SCM provider.');
+        return { error: 'unsupported',
+                 result: { success: false, error: 'listWorkflowRuns not supported by provider: ' + (custom.scmProvider || 'github') } };
+    }
+    var parsed = parseWorkflowRuns(runsRaw);
+    if (parsed.error) {
+        console.error('❌ Failed to parse workflow runs: ' + parsed.detail);
+        return { error: 'parse', result: { success: false, error: parsed.error } };
+    }
+    return { runs: parsed.runs };
+}
+
+/**
+ * One run's outcome tally (pure): mutates createdKeys with the created bug
+ * keys, returns the created/skipped deltas for the rollup.
+ */
+function tallyRunOutcome(outcome, createdKeys) {
+    if (outcome.status === 'skipped_existing' || outcome.status === 'skipped_open_bug') {
+        return { created: 0, skipped: 1 };
+    }
+    if (outcome.status === 'created' || outcome.status === 'created_keyless') {
+        if (outcome.key) createdKeys.push(outcome.key);
+        return { created: 1, skipped: 0 };
+    }
+    return { created: 0, skipped: 0 };
+}
+
+/** The per-run loop and the completion rollup (tracker calls in run order). */
+function processAllFailedRuns(runs, jiraProject, workflowId) {
+    var created = 0;
+    var skipped = 0;
+    var createdKeys = [];
+
+    for (var i = 0; i < runs.length; i++) {
+        var delta = tallyRunOutcome(processFailedRun(runs[i], {
+            tracker: getTracker(),
+            jiraProject: jiraProject,
+            workflowId: workflowId
+        }), createdKeys);
+        created += delta.created;
+        skipped += delta.skipped;
+    }
+
+    console.log('\n══ Workflow Failure Reporter complete — created: ' + created +
+        (createdKeys.length ? ' [' + createdKeys.join(', ') + ']' : '') +
+        ', skipped: ' + skipped + ' ══');
+
+    return { success: true, created: created, skipped: skipped, totalRuns: runs.length, createdKeys: createdKeys };
+}
+
 function action(params) {
     var custom      = params.jobParams.customParams;
     var workspace   = custom.workspace;
@@ -235,23 +298,9 @@ function action(params) {
     console.log('Workflow Failure Reporter — ' + workspace + '/' + repository +
         (workflowId ? ' [' + workflowId + ']' : ' [all workflows]'));
 
-    // 1. Get failed runs
-    var scmConfig = {
-        repository: { owner: workspace, repo: repository },
-        scm: { provider: custom.scmProvider || 'github' }
-    };
-    var scm = scmModule.createScm(scmConfig);
-    var runsRaw = scm.listWorkflowRuns('failure', workflowId, 50);
-    if (runsRaw == null) {
-        console.warn('⚠️  listWorkflowRuns is not supported by the configured SCM provider.');
-        return { success: false, error: 'listWorkflowRuns not supported by provider: ' + (custom.scmProvider || 'github') };
-    }
-    var runsResult = parseWorkflowRuns(runsRaw);
-    if (runsResult.error) {
-        console.error('❌ Failed to parse workflow runs: ' + runsResult.detail);
-        return { success: false, error: runsResult.error };
-    }
-    var runs = runsResult.runs;
+    var fetch = fetchFailedRuns(custom, workflowId);
+    if (fetch.error) return fetch.result;
+    var runs = fetch.runs;
 
     if (runs.length === 0) {
         console.log('No failed runs found.');
@@ -260,29 +309,7 @@ function action(params) {
 
     console.log('Found ' + runs.length + ' failed run(s)');
 
-    var created = 0;
-    var skipped = 0;
-    var createdKeys = [];
-
-    for (var i = 0; i < runs.length; i++) {
-        var outcome = processFailedRun(runs[i], {
-            tracker: getTracker(),
-            jiraProject: jiraProject,
-            workflowId: workflowId
-        });
-        if (outcome.status === 'skipped_existing' || outcome.status === 'skipped_open_bug') {
-            skipped++;
-        } else if (outcome.status === 'created' || outcome.status === 'created_keyless') {
-            created++;
-            if (outcome.key) createdKeys.push(outcome.key);
-        }
-    }
-
-    console.log('\n══ Workflow Failure Reporter complete — created: ' + created +
-        (createdKeys.length ? ' [' + createdKeys.join(', ') + ']' : '') +
-        ', skipped: ' + skipped + ' ══');
-
-    return { success: true, created: created, skipped: skipped, totalRuns: runs.length, createdKeys: createdKeys };
+    return processAllFailedRuns(runs, jiraProject, workflowId);
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -298,6 +325,9 @@ if (typeof module !== 'undefined' && module.exports) {
         checkRunDedup: checkRunDedup,
         createBugTicket: createBugTicket,
         processFailedRun: processFailedRun,
-        linkCreatedBug: linkCreatedBug
+        linkCreatedBug: linkCreatedBug,
+        fetchFailedRuns: fetchFailedRuns,
+        processAllFailedRuns: processAllFailedRuns,
+        tallyRunOutcome: tallyRunOutcome
     };
 }

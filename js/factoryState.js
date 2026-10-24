@@ -1352,36 +1352,73 @@ function contentsOf(repo, path, cfg, exec) {
     } catch (e) { return null; }
 }
 
+// ── updateHistory: snapshot-index helpers (gh-1198 extraction) ───────────────
+//
+// Each step of the history publish owns one small helper: the index path,
+// the sha probe, the index read, the head entry, and the carry filter.
+// updateHistory() itself only sequences the exec calls — same tracker/SCM/
+// git/file call order as before the extraction: snapshot PUT → sha probe →
+// (content probe only when the index exists) → index PUT.
+
+/** The history index path for a snapshot asset base ('data/<base>-history.json'). */
+function historyIndexPath(base) {
+    return 'data/' + base + '-history.json';
+}
+
+// Probe the existing history index's Contents sha. '' when absent — a
+// 'Not Found' string is DATA here (first publish), not a probe error, and
+// a transport throw degrades to '' the same way (first-publish shape).
+function existingHistorySha(repo, indexPath, branch, exec) {
+    try {
+        var sha = execOut(exec, 'gh api repos/' + repo + '/contents/' +
+            indexPath + '?ref=' + branch + ' --jq .sha');
+        return sha.indexOf('Not Found') !== -1 ? '' : sha;
+    } catch (e) {
+        return '';
+    }
+}
+
+// Parse the current snapshot index off the data branch. Any miss (absent,
+// empty probe, invalid JSON, snapshot-less object) degrades to [] — the
+// index is rebuilt, never fatal.
+function currentHistorySnaps(repo, indexPath, cfg, exec) {
+    try {
+        var cur = JSON.parse(
+            contentsOf(repo, indexPath, cfg, exec) || '{}');
+        return (cur && cur.snapshots) || [];
+    } catch (e) {
+        return [];
+    }
+}
+
+// Valid carried entries only (shape-drift tolerance: s && s.url).
+function validSnapshots(snaps) {
+    return (snaps || []).filter(function (s) { return s && s.url; });
+}
+
+// The new head entry for the snapshot index.
+function historyEntry(repo, branch, base, stamp, state) {
+    return {
+        ts: new Date().toISOString(),
+        tick: (state && state.tick && state.tick.at) || '',
+        stamp: stamp,
+        url: 'https://raw.githubusercontent.com/' + repo + '/' + branch +
+             '/data/' + base + '-' + stamp + '.json'
+    };
+}
+
 function updateHistory(state, cfg, exec) {
     var repo = (cfg && cfg.repo) || state.repo;
     var branch = tagOf(cfg);
     var base = assetName(state, cfg).replace(/\.json$/, '');
     var keep = (cfg && cfg.historyKeep) || HISTORY_KEEP;
     var stamp = stampOf(state);
+    var indexPath = historyIndexPath(base);
     exec({ command: snapshotPutCommand(state, cfg, stamp) });
-    var indexPath = 'data/' + base + '-history.json';
-    var snaps = [];
-    var sha = '';
-    try {
-        sha = execOut(exec, 'gh api repos/' + repo + '/contents/' +
-            indexPath + '?ref=' + branch + ' --jq .sha');
-        if (sha.indexOf('Not Found') !== -1) sha = '';
-    } catch (e) { sha = ''; }
-    if (sha) {
-        try {
-            var cur = JSON.parse(
-                contentsOf(repo, indexPath, cfg, exec) || '{}');
-            snaps = (cur && cur.snapshots) || [];
-        } catch (e2) { snaps = []; }
-    }
-    snaps = snaps.filter(function (s) { return s && s.url; });
-    snaps.unshift({
-        ts: new Date().toISOString(),
-        tick: (state && state.tick && state.tick.at) || '',
-        stamp: stamp,
-        url: 'https://raw.githubusercontent.com/' + repo + '/' + branch +
-             '/data/' + base + '-' + stamp + '.json'
-    });
+    var sha = existingHistorySha(repo, indexPath, branch, exec);
+    var snaps = sha ? currentHistorySnaps(repo, indexPath, cfg, exec) : [];
+    snaps = validSnapshots(snaps);
+    snaps.unshift(historyEntry(repo, branch, base, stamp, state));
     snaps = snaps.slice(0, keep);
     exec({ command: historyPutCommand(state, cfg,
         { schema: 1, repo: repo, asset: assetName(state, cfg), snapshots: snaps },
@@ -1426,6 +1463,11 @@ module.exports = {
     snapshotPutCommand: snapshotPutCommand,
     historyPutCommand: historyPutCommand,
     updateHistory: updateHistory,
+    historyIndexPath: historyIndexPath,
+    existingHistorySha: existingHistorySha,
+    currentHistorySnaps: currentHistorySnaps,
+    validSnapshots: validSnapshots,
+    historyEntry: historyEntry,
     assetName: assetName,
     tagOf: tagOf,
     laneOf: laneOf,
