@@ -1,0 +1,309 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-24T23:20:23.945Z",
+  "ticketKey": "gh-1250",
+  "headSha": "999a8bb221e2c5c825eb20b1a5fffa8c891c5e3a",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:b3d7bf6366421c66",
+      "size": 12304
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:f137fabb770fcf8b",
+      "size": 39912
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:acefb2bdbe69215f",
+      "size": 113
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:4b179aa638306a0f",
+      "size": 4785
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:7eed40bef4b17114",
+      "size": 517
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:0dd1cee0c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:998ac52da79206de",
+      "size": 3709
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:9f9d57b8b4ac764e",
+      "size": 3617
+    }
+  },
+  "comments": [
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:708b66e7",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: two behavior-equivalent lazy-tracker mechanisms now coexist**\n\nThis PR resolves the merge conflict by keeping `common/trackerSlot.js`, while `main` grew `trackersModule.createTrackerHolder()` (gh-124x) in parallel — same init/get semantics. The rework comment already flags unifying them as a worthwhile follow-up; just registering it here so it doesn't get lost: ideally one canonical helper lives in `common/trackers.js` (or `trackerSlot.js` re-exports the trackers.js holder) so the next dedup scan doesn't count them as a clone pair, and unit tests don't drift across two copies."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:32856b1d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Fixed — `mergeBot`'s original precedence is restored, deliberately, at both levels:\n\n- `js/common/mcpParse.js` — `payloadList(parsed, options)` now accepts `options.preferPullRequests`. When set and a payload carries **both** keys, `pullRequests` wins; the default stays `items`-first, which matches `mergeTrigger.js`'s original `asList` (this default is pinned by the pre-existing test `an explicit empty items array wins over a pullRequests key`).\n- `js/sm/mergeBot.js` — `listArray` now calls `payloadList(prs, { preferPullRequests: true })`, preserving the exact pre-PR order (`prs.pullRequests || prs.items`). The inaccurate \"the semantics are identical\" docstring was replaced with an explicit precedence note referencing gh-952 (the merged-slot release consumes this list).\n\nI did not attempt to \"confirm against the bridge's actual `github_list_prs` payload shape\" — instead the fix makes the behavior correct *regardless* of whether both keys can co-occur, so no bridge-shape assumption remains.\n\nTests (TDD: written before the fix, failed RED, now green):\n\n- `js/unit-tests/test_mcpParse.js` — new `preferPullRequests option restores mergeBot precedence when both keys co-occur` case (both-keys, items-only, pullRequests-only, and default-unchanged assertions).\n- `js/unit-tests/test_mergeBot.js` — new `a payload carrying BOTH items and pullRequests keeps mergeBot precedence: pullRequests wins` case driving the full `action()` sweep and asserting the merged PR id comes from `pullRequests`.\n\nFull affected suites pass: `test_mcpParse` + `test_mergeBot` + `test_mergeTrigger` + `test_writeSolutionAndLabels` + `test_writeSolutionAndDiagrams` → 212 passed, 0 failed."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:7b41d841",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Done — unified. `js/common/trackerSlot.js` is no longer a second implementation of the lazy-tracker holder: it is now a thin single-instance facade that delegates `initTracker`/`getTracker` to `trackersModule.createTrackerHolder()` (the canonical implementation in `common/trackers.js`, gh-124x). The module keeps its exact public contract (a shared module-level slot per engine run, load-time require per gh-823), so none of its ~10 consumer action scripts needed changes.\n\nConsequences:\n\n- One canonical implementation — the two mechanisms can no longer drift, and the next dedup scan sees a single copy.\n- Existing mocks stay valid: `js/unit-tests/node_testRunner.js` (gh-1244 compat, `withTrackerHolderCompat`) already back-fills `createTrackerHolder` on trackers mocks that predate it, so every consumer test exercises the real holder semantics.\n- Tests: added `the slot is the trackers.js createTrackerHolder instance (gh-1250 unification)` to `js/unit-tests/test_trackerSlot.js` (fails RED against the old standalone implementation, passes against the facade); the four pre-existing characterization tests (lazy create, re-init reset, null/{} defaults, independent module instances) still pass. All trackerSlot consumer suites (`test_developTicketAndCreatePR`, `test_developBugAndCreatePR`, both `test_enhance*`, `test_mergeStoryTestAutomationPR`, `test_postBulkBugsCreation`, `test_triggerBitriseIosBuild`, wave migration suites) → 376 passed, 0 failed."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:b51961b6",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: broken require path — the module cannot be loaded**\n\n`js/common/bugFixBatchContext.js:10` requires `./configLoader.js`:\n\n```javascript\nvar configLoader = require('./configLoader.js');\n```\n\nBut `configLoader.js` lives at `js/configLoader.js` — one directory **up**. From inside `js/common/`, `./configLoader.js` resolves to the nonexistent `js/common/configLoader.js`. Verified directly: `node -e \"require('./js/common/bugFixBatchContext.js')\"` fails with `Cannot find module './configLoader.js'`.\n\nThis is not cosmetic — per the gh-823 rule in AGENTS.md, top-level (load-time) requires resolve **file-relative**, and `dmtools compile` discovers the pack closure strictly file-relative. So this breaks:\n\n1. **Runtime**: `js/prepareBugFixBatchContext.js:17` and `js/developBugFixBatchAndCreatePR.js` both `require('./common/bugFixBatchContext.js')` — the bug-fix-batch pre/post actions will fail at module load (\"Failed to require module\") in the GraalJS engine.\n2. **Pack build**: `dmtools compile` will fail to close the pack over a nonexistent file.\n\nEvery sibling module in `js/common/` uses the correct `../configLoader.js` (actionTicketContext.js:15, buildEncodedConfig.js:13, contentOutput.js:32, trackers.js:57, etc.) — this one slipped through because the unit tests load the module via `loadModule(..., makeRequire({ './configLoader.js': configLoaderMock, ... }))` (`js/unit-tests/test_developBugFixBatchAndCreatePR.js:51-56`), which maps the literal spec string and never exercises real path resolution.\n\nFix: `require('../configLoader.js')`. Ideally also wire `test_bugFixBatchDevelopment.js` into `run_all.json` (see the related IMPORTANT comment) so real path resolution gets exercised."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:5a4ea069",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: the only direct coverage of the new shared module never runs in CI**\n\nThis PR extended `js/unit-tests/test_bugFixBatchDevelopment.js` with the tests for the new `js/common/bugFixBatchContext.js` helper — but that test file is **not in `js/unit-tests/run_all.json`** (checked: 216 entries, `test_bugFixBatchDevelopment.js` absent), so the full-suite gate never executes it. This is why the broken `require('./configLoader.js')` in `js/common/bugFixBatchContext.js:10` slipped through every green CI run.\n\nPre-existing, but this PR deepens the gap by adding coverage to a dead file. The stale `js/unit-tests/run_bugFixBatchDevelopment.json` doesn't help either — it references legacy `agents/js/unit-tests/...` paths (from when this repo was a submodule) and is wired into nothing.\n\nSuggested fix: add `js/unit-tests/test_bugFixBatchContext`-level coverage to a wired suite — either add `js/unit-tests/test_bugFixBatchDevelopment.js` to `run_all.json` (and fix the `agents/` paths in `run_bugFixBatchDevelopment.json`), or move the shared-module tests into the already-wired `test_developBugFixBatchAndCreatePR.js`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:0179da8b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Fixed — broken require path corrected and pinned by a real-path regression test\n\n`js/common/bugFixBatchContext.js:10` now requires `../configLoader.js` (one directory up, matching every sibling module in `js/common/`):\n\n```javascript\nvar configLoader = require('../configLoader.js');\n```\n\nVerified directly:\n\n```bash\nnode -e \"require('./js/common/bugFixBatchContext.js')\"   # loads cleanly (was: Cannot find module './configLoader.js')\n```\n\nPer the gh-823 rule, load-time requires resolve file-relative, so this also unblocks the `dmtools compile` pack closure over `js/configLoader.js`.\n\n**Why the tests missed it**: `makeRequire({...})` maps the literal spec string, so a wrong spec that happens to be in the map still loads. The new regression test in `js/unit-tests/test_bugFixBatchDevelopment.js` (`common/bugFixBatchContext require paths (gh-823) > requires ../configLoader.js — one directory up, where the file lives`) records the actual spec strings the module passes to `require` and asserts the configLoader spec is exactly `../configLoader.js`, and that `js/common/configLoader.js` does not exist while `js/configLoader.js` does. It fails RED against the old `./configLoader.js` spec and passes against the fix. The file is now wired into `run_all.json` (see the sibling thread), so this exercises real spec emission in every full-suite gate run."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:204af57d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Fixed — the shared-module tests now run in the wired full-suite gate\n\n- Added `js/unit-tests/test_bugFixBatchDevelopment.js` to `js/unit-tests/run_all.json` (216 → 217 entries), next to its sibling `test_developBugFixBatchAndCreatePR.js`. The full-suite gate (both `node js/unit-tests/node_testRunner.js <run_all files>` and `dmtools run js/unit-tests/run_all.json`) now executes the only direct coverage of `js/common/bugFixBatchContext.js` on every run.\n- Repaired the stale `js/unit-tests/run_bugFixBatchDevelopment.json`: legacy `agents/js/unit-tests/...` submodule-era paths replaced with `js/unit-tests/testRunner.js` / `js/unit-tests/test_bugFixBatchDevelopment.js`, so the per-suite runner config is usable standalone again.\n- Wiring the file in surfaced two pre-existing broken tests in it (never executed before, including on `main`), now fixed:\n  - `finalizeBugFixBatchMerge > moves linked bugs and Epic to Done` — the wave2d3 migration made the module route transitions through `require('./common/trackers.js')`, which the test's `makeRequire` map did not provide (`makeRequire: module not found`). The loader now maps it to the real `js/common/trackers.js` with the per-test `jira_*` mocks, same pattern as the other loaders in the file.\n  - `developBugFixBatchAndCreatePR > ado provider ... (wave2d3)` — the invocation passed `customParams` under `jobParams` while `inputFolderPath` was top-level; `resolveBatchParams` (unchanged from pre-PR code: `params.inputFolderPath ? params : (params.jobParams || params)`) then never sees them, so the tracker provider fell back to Jira. The test now passes `customParams` at the top level — the canonical pre-CLI action shape, consistent with `test_developBugFixBatchAndCreatePR.js` and `test_fetchEpicsToInput.js`.\n\nResult: the file passes in the wired gate — 7/7 tests green in both harnesses (node + dmtools GraalJS), including the new gh-823 require-path regression test from the blocking thread."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:026d4f20",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: merge dropped main's gh-1249 `prLookup` mock mappings — 49 tests fail, `crap` CI red**\n\nThe latest merge-conflict resolutions (heads `29e7347b` / `5919451f` / `8bcb6197`) took this branch's older test loaders and silently lost the `'./common/prLookup.js'` mappings that `main` added in gh-1249 (PR #1256, commit `317456ea`). Reproduced on the checked-out head `8bcb6197` with a plain full-suite run (env-clean): **7629 passed, 49 failed**, every failure being:\n\n```\nmakeRequire: module not found: ./common/prLookup.js\n```\n\nAttribution is exact — `grep -c prLookup` on the three failing files:\n\n| file | HEAD | origin/main |\n|---|---|---|\n| `js/unit-tests/test_checkBugTestsPassed.js` | 0 | 3 (loaders at main lines 22, 24, 554) |\n| `js/unit-tests/test_wave1bTrackers.js` | 0 | 1 (loader at main line 33) |\n| `js/unit-tests/test_wave2d1Tracker.js` | 0 | 2 |\n\nThe same three files on `origin/main` pass 64/0 in isolation, so this is the merge, not main. The production side is correct — `js/checkBugTestsPassedHelpers.js:11`, `js/recoverStuckDevelopment.js:29` et al. require `./common/prLookup.js` (identical to main); only the test mock maps are missing.\n\nFix: restore the mappings verbatim from `origin/main`, e.g. in this file add to the require-map builder(s):\n\n```javascript\n'./common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),\n```\n\n(same one-liner in the `test_wave1bTrackers.js` `loadRecoverStuck` map and both `test_wave2d1Tracker.js` loaders). Note the source under test now loads the **real** `js/common/prLookup.js`, so its own requires must also resolve — main's form `loadModule('js/common/prLookup.js', makeRequire({}), {})` already handles this; copy it verbatim.\n\nThis is the third consecutive head where a conflict resolution silently regressed the suite (after `branchSetup.js` on `380976a6`) — please run the full wired suite after every conflict-resolution merge before pushing; CI log fetches have been failing, so the red surfaces late."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:df0e4e5f",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Fixed — gh-1249 `prLookup` mock mappings restored verbatim from `origin/main`; full wired suite re-run before push\n\nAttribution confirmed and reproduced (env-clean full-suite run on the checked-out head: `makeRequire: module not found: ./common/prLookup.js`, 49 failures across the three files). The merge had taken this branch's older loaders while `main`'s gh-1249 (`317456ea`) added the `'./common/prLookup.js'` mappings. Restored verbatim from `origin/main` (real module, `loadModule('js/common/prLookup.js', makeRequire({}), {})` — the module has no requires of its own, so it loads standalone):\n\n- `js/unit-tests/test_checkBugTestsPassed.js` — 3 sites: the `checkBugTestsPassedRequireMap` builder (both the module-level `'./common/prLookup.js'` entry and the inner mapping for `checkBugTestsPassedHelpers.js`, which requires prLookup at its line 11) and the `checkBugTestsPassedHelpers` suite's `loadHelpers`.\n- `js/unit-tests/test_wave1bTrackers.js` — `loadRecoverStuck` map. This loader additionally failed on `./common/trackerSession.js` once prLookup resolved (the module requires it at line 35); restored main's mapping for it as well (`js/common/trackerSession.js` loaded with the test's trackers mock).\n- `js/unit-tests/test_wave2d1Tracker.js` — the `checkBugTestsPassed` ADO loader (module-level entry + inner helpers mapping), alongside the branch's intentional `smLock`/`tokenUsageCommentSafely` additions which were preserved.\n\nVerification: the three files pass **65/0** in isolation (main's 64 plus this branch's one additional smLock case), and — per the process note in the thread — the **full wired suite** (`node js/unit-tests/node_testRunner.js <all run_all.json files>`, session env unset) was run on the frozen post-fix tree before pushing; result in the top-level rework comment."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:e0a4d60c",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `9a658332deea055365a9e50c5bbd0f6a3307860e`) Rework re-queued (linked issue #1250 re-armed): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:5864ed65",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## 🔧 Rework Complete — gh-1250\n\nAll PR review comments have been addressed. See fix summary below."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:12d6e269",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: payload key precedence silently changed for mergeBot's list normalization**\n\n`main`'s `sm/mergeBot.js:listArray` (pre-PR, at `origin/main:js/sm/mergeBot.js:55`) resolved wrapped payloads as:\n\n```javascript\nreturn Array.isArray(prs) ? prs : (prs.pullRequests || prs.items || []);\n```\n\nThe shared `common/mcpParse.js:payloadList` prefers the opposite order — `items` first, then `pullRequests`:\n\n```javascript\nif (parsed && Array.isArray(parsed.items)) return parsed.items;\nif (parsed && Array.isArray(parsed.pullRequests)) return parsed.pullRequests;\n```\n\nFor `mergeTrigger.js`'s original `asList` the new order is identical (it also checked `items` first), but for `mergeBot.js` any `github_list_prs` payload carrying **both** keys now yields `items` where it previously yielded `pullRequests`. If the bridge never emits both keys in one payload this is a no-op — but the docstring here (\"the semantics are identical\") is not accurate, and the merged-slot release path (gh-952) consumes this list.\n\nPlease confirm against the bridge's actual `github_list_prs` payload shape. If both keys can co-occur, keep `mergeBot`'s original precedence (e.g. a `preferPullRequests` flag on `payloadList`) or make the docstring state the deliberate unification."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:af1bc3e3",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The deduplication work itself is faithful — full unit suite passes locally (`7515 passed, 0 failed`, exit 0, run via `run_all.json` list with session env unset) and the extractions preserve log lines/result shapes. One blocking regression slipped in during the refactor: the Confluence markdown Affected-Repositories table now has a 2-column delimiter under a 4-column header (was 4-column on `main`), which per GFM table rules means the table is not recognized and renders as raw pipe text on every Confluence page built by `writeSolutionAndDiagrams.js`.\n\n**Key Issues**:\n- 🚨 Malformed Confluence table separator introduced at `js/writeSolutionAndLabels.js:106` (blocking)\n- ⚠️ `common/mcpParse.payloadList` prefers `items` over `pullRequests`; `main`'s `sm/mergeBot.js:listArray` preferred the opposite — behavior changes if a bridge payload ever carries both keys\n\n**Next Steps**:\n1. Restore `|---|---|` in `buildConfluenceMarkdownSection` (or add the shared module's own separator handling) and cover it with a test asserting the Confluence section's delimiter row\n2. Confirm the `github_list_prs` payload cannot carry both `items` and `pullRequests`, or preserve `mergeBot`'s original precedence"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:ea98799f",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "📍 **`js/writeSolutionAndLabels.js:106`**\n\n🚨 **BLOCKING: malformed markdown table separator — Confluence \"Affected Repositories\" section no longer parses as a table**\n\nThe refactor of `buildConfluenceMarkdownSection` changed the delimiter row from 4 columns to 2:\n\n```javascript\nlines.push('| # | Repository | Reason | Depends On |');\nlines.push('|---|---|');   // was '|---|---|---|---|' on main\n```\n\nPer the GFM table spec, the header row must match the delimiter row in the number of cells — otherwise the table is **not recognized** and renders as raw pipe text. The other two formatters in this same file kept the correct 4-column delimiter (`buildMarkdownSection` at line 91), so this is a typo introduced by the extraction (commit `953b9130`), not an intentional format change — `origin/main:js/writeSolutionAndLabels.js:150` shows `|---|---|---|---|`.\n\nThis function is not dead code: `writeSolutionAndDiagrams.js:142` calls it (via the lazy require) to append the Affected Repositories section to every published Confluence page, so the regression is user-visible on the Confluence publish path.\n\nFix: restore `lines.push('|---|---|---|---|');` — and please add a test asserting the Confluence section's separator, since `test_writeSolutionAndLabels.js` only covers the Jira/ADO sections today."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:5aab320b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `3880301ccd1ce865610fb78546467cdb4a11d706`) Rework re-queued (linked issue #1250 re-armed): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:2f6cdf58",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 410a1e8f202a9981493d4d6b97073bd76ba0e6f6 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:e0f9636f",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The dedup extractions are faithful and the two earlier threads (Confluence table separator, `payloadList` precedence, trackerSlot unification) are verifiably fixed in this diff. But the `crap` CI check is red: its failing step is the instrumented unit-suite coverage run, which I reproduced locally on `410a1e8f` — `test_tokenUsageComment.js:242` asserts `seen > 20` direct `tokenUsageComment.postTokenUsageComments(` call sites, and this PR legitimately dropped that count from 24 (`main`) to 18 by moving callers to the shared `postTokenUsageCommentsSafely` wrapper. The assertion needs updating (e.g. count both call shapes, or `seen > 15`). A second blocking issue independent of CI: `js/common/bugFixBatchContext.js:10` requires `./configLoader.js` — a nonexistent path (`configLoader.js` is at `js/configLoader.js`; every sibling common module uses `../configLoader.js`), which breaks the bug-fix-batch actions at load time and breaks `dmtools compile` pack closure. Tests mask it because `makeRequire` maps the literal spec.\n\n**Key Issues**:\n- 🚨 Red `crap` CI — stale `seen > 20` count assertion in `test_tokenUsageComment.js` (reproduced: `expected many call sites, saw 18`; the other local failure, `test_sessionDelta`, is the pre-existing session-env leak and passes in CI's clean env)\n- 🚨 Broken require `js/common/bugFixBatchContext.js:10` (`./configLoader.js` → `../configLoader.js`)\n- ⚠️ `test_bugFixBatchDevelopment.js` (the only direct coverage of the new module) is not in `run_all.json` — CI never runs it\n- 💡 59 `duplication-baseline.json` entries are now stale (gate reports `59 cleared ... prune with the dedup PR`) — optional prune while context is fresh\n\n**Next Steps**:\n1. Fix `js/common/bugFixBatchContext.js:10` → `require('../configLoader.js')`\n2. Update the `seen > 20` assertion in `test_tokenUsageComment.js` (count `postTokenUsageComments(` + `postTokenUsageCommentsSafely(` sites, or lower the bound) so the `crap` job's coverage step passes\n3. Wire `test_bugFixBatchDevelopment.js` into `run_all.json` so the shared-module tests actually gate"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:e54d7893",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `624978abf58fc79688494129f1fdcd278a9d36ae`) Rework re-queued (linked issue #1250 re-armed): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:55a52a57",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 380976a6841b3ff553abf697736179172dddbdd9 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:bf4a0559",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `29e7347bd1f1c34fc09b1cab27fe904060e3970a`) Rework re-queued (linked issue #1250 re-armed): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:08cfa0b3",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `5919451fffbd25b0ed79db20d638ebc3671b3f4a`) Rework re-queued (linked issue #1250 re-armed): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:6b062b7e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## 🔧 Rework Complete — pr-1258\n\nAll PR review comments have been addressed. See fix summary below."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:8fc74f94",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 8bcb6197b9079af04f765cc632157e1f45472542 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:934f0f44",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The dedup extractions and all four previously resolved threads remain correctly fixed in this diff, and the downstream gates I could run locally are green (duplication ratchet: `OK — no new/regressed duplication`). But the `crap` CI check is red on head `8bcb6197` at the instrumented-suite step, reproduced locally: the latest merge-conflict resolutions dropped `main`'s gh-1249 `'./common/prLookup.js'` mock mappings from three test files, failing 49 tests with `makeRequire: module not found: ./common/prLookup.js` (main passes the same suites 64/0 — attribution is exact, see the inline thread).\n\n**Key Issues**:\n- 🚨 Red `crap` CI — missing `prLookup` mappings in `test_checkBugTestsPassed.js`, `test_wave1bTrackers.js`, `test_wave2d1Tracker.js` (merge regression)\n- 💡 32 `duplication-baseline.json` entries now below threshold (`cleared … prune with the dedup PR`) — optional prune; the gate passes regardless\n\n**Next Steps**:\n1. Restore the `'./common/prLookup.js'` mappings verbatim from `origin/main` in the three test files (inline thread has the per-file counts)\n2. Re-run the full wired suite (`node js/unit-tests/node_testRunner.js <run_all files>`, env-clean) before pushing — this is the third head in a row where a conflict resolution silently regressed it"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:8314a96e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `863f8b40bfca0c9bbc7d1a315d277769af12b68a`) Rework re-queued (linked issue #1250 re-armed): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    }
+  ]
+}
