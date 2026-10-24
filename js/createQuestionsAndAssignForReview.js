@@ -212,17 +212,19 @@ function postNoQuestionsExplanation(ticketKey) {
 }
 
 /**
- * Create a single question subtask in Jira
- * @param {Object} entry - Entry from questions.json
- * @param {string} parentKey - Parent story ticket key
- * @param {string} projectKey - Jira project key
- * @param {Object} jiraConfig - Resolved jira config (issueTypes, labels, questions)
- * @param {Object} [priorityMap] - Optional mapping of agent priority names to project-specific names
- * @returns {string|null} Created ticket key or null on failure
+ * Priority-name mapping for one question: the project-mapped name or the
+ * agent's original name when unmapped.
  */
-function createQuestion(entry, parentKey, projectKey, jiraConfig, priorityMap) {
-    var summary = ensureQPrefix(buildSummary(entry.summary, 0));
-    var description = readDescriptionFile(entry.description, entry.summary);
+function resolveQuestionPriority(priorityMap, priorityName) {
+    return (priorityMap && priorityMap[priorityName]) || priorityName;
+}
+
+/**
+ * The Jira-shaped fieldsJson for one question subtask. Reads the required
+ * config members eagerly (issuetype, label, answer field) — a broken config
+ * throws before any tracker call, exactly as before the extraction.
+ */
+function buildQuestionFieldsJson(entry, summary, description, parentKey, jiraConfig, priorityMap) {
     var questionIssueType = jiraConfig.issueTypes.SUBTASK;
     var questionLabel = jiraConfig.labels.QUESTION;
     var answerField = jiraConfig.questions.answerField;
@@ -236,35 +238,73 @@ function createQuestion(entry, parentKey, projectKey, jiraConfig, priorityMap) {
     };
 
     if (entry.priority) {
-        var resolvedPriority = (priorityMap && priorityMap[entry.priority]) || entry.priority;
-        fieldsJson.priority = { name: resolvedPriority };
+        fieldsJson.priority = { name: resolveQuestionPriority(priorityMap, entry.priority) };
     }
 
     if (entry.answer) {
         fieldsJson[answerField] = entry.answer;
     }
 
+    return fieldsJson;
+}
+
+/**
+ * The ADO work-item type for question subtasks (jira.questions.workItemType,
+ * default 'Task' — the child type of a PBI/Bug in the standard ADO processes).
+ */
+function resolveAdoQuestionType(jiraConfig) {
+    return (jiraConfig.questions && jiraConfig.questions.workItemType) || 'Task';
+}
+
+/**
+ * A string create result is the key itself; anything else goes through
+ * extractTicketKey (null when unparseable).
+ */
+function normalizeCreatedKey(result) {
+    return (typeof result === 'string' && result) ? result : extractTicketKey(result);
+}
+
+/**
+ * ADO question creation (agents#870): the Jira-shaped fieldsJson cannot be sent
+ * there — create the work item, link it to its parent, label it and set the
+ * priority (non-fatal) through the tracker instead.
+ */
+function createAdoQuestion(tracker, projectKey, entry, summary, description, parentKey, questionLabel, priorityMap, adoType) {
+    var result = tracker.createTicketWithParent(projectKey, adoType, summary, description, parentKey, { labels: [questionLabel] });
+    if (result && entry.priority) {
+        try {
+            tracker.setPriority(result, resolveQuestionPriority(priorityMap, entry.priority));
+        } catch (priorityError) {
+            console.warn('Could not set priority on question ' + result + ' (non-fatal):', priorityError);
+        }
+    }
+    return result;
+}
+
+/**
+ * Create a single question subtask in Jira
+ * @param {Object} entry - Entry from questions.json
+ * @param {string} parentKey - Parent story ticket key
+ * @param {string} projectKey - Jira project key
+ * @param {Object} jiraConfig - Resolved jira config (issueTypes, labels, questions)
+ * @param {Object} [priorityMap] - Optional mapping of agent priority names to project-specific names
+ * @returns {string|null} Created ticket key or null on failure
+ */
+function createQuestion(entry, parentKey, projectKey, jiraConfig, priorityMap) {
+    var summary = ensureQPrefix(buildSummary(entry.summary, 0));
+    var description = readDescriptionFile(entry.description, entry.summary);
+    var fieldsJson = buildQuestionFieldsJson(entry, summary, description, parentKey, jiraConfig, priorityMap);
+
     try {
         var tracker = getTracker();
         var result;
         if (tracker.provider() === 'ado') {
-            // agents#870: fieldsJson above is Jira-shaped (issuetype/parent/summary); createTicketWithFields on
-            // ADO needs ADO field names and would throw. Create the work item, link it to its parent and add
-            // the question label through the tracker instead. The work item type is jira.questions.workItemType
-            // (default 'Task' — the child type of a PBI/Bug in the standard ADO processes).
-            var adoType = (jiraConfig.questions && jiraConfig.questions.workItemType) || 'Task';
-            result = tracker.createTicketWithParent(projectKey, adoType, summary, description, parentKey, { labels: [questionLabel] });
-            if (result && entry.priority) {
-                try {
-                    tracker.setPriority(result, (priorityMap && priorityMap[entry.priority]) || entry.priority);
-                } catch (priorityError) {
-                    console.warn('Could not set priority on question ' + result + ' (non-fatal):', priorityError);
-                }
-            }
+            result = createAdoQuestion(tracker, projectKey, entry, summary, description, parentKey,
+                jiraConfig.labels.QUESTION, priorityMap, resolveAdoQuestionType(jiraConfig));
         } else {
             result = tracker.createTicketWithFields(projectKey, fieldsJson);
         }
-        var key = (typeof result === 'string' && result) ? result : extractTicketKey(result);
+        var key = normalizeCreatedKey(result);
         console.log('Created question subtask ' + (key || '(unknown key)') + ': ' + summary);
         return key;
     } catch (error) {
@@ -277,11 +317,179 @@ function loadConfigSafe(params) {
     try { return configLoader.loadProjectConfig(params); } catch (e) { return null; }
 }
 
+/**
+ * customParams bootstrap for the pre-config tracker init: jobParams.customParams
+ * or an empty object (deliberately NOT params.customParams — see action()).
+ */
+function bootstrapCustomParams(params) {
+    return (params.jobParams && params.jobParams.customParams) || {};
+}
+
+/**
+ * Fatal CLI/provider path (see action()): announce the failure on the ticket and
+ * return the failure result WITHOUT touching labels, assignee or stage.
+ */
+function handleFatalCliError(ticketKey, params) {
+    var cliErrorMessage = params.currentCliErrorMessage || 'unknown CLI/provider error';
+    console.error('Fatal CLI/provider error for ' + ticketKey + ' — leaving the ticket untouched instead of treating it as "no questions needed": ' + cliErrorMessage);
+    try {
+        getTracker().postComment(ticketKey, 'h3. \u274c AI agent run failed \u2014 ticket left unchanged\n\n' +
+                'The underlying CLI/AI provider call failed, so no clarifying questions could be generated:\n\n' +
+                '{code}' + cliErrorMessage + '{code}\n\n' +
+                'This ticket was NOT moved to PO Review and no labels were changed. Please retry the agent.');
+    } catch (commentError) {
+        console.warn('Failed to post CLI-failure comment:', commentError);
+    }
+    return buildCliFailureResult(cliErrorMessage);
+}
+
+/**
+ * Create one subtask per question entry and collect the createdQuestions report.
+ */
+function createQuestionSubtasks(questions, ticketKey, projectKey, jiraConfig, priorityMap) {
+    var createdTickets = [];
+    questions.forEach(function (entry) {
+        var key = createQuestion(entry, ticketKey, projectKey, jiraConfig, priorityMap);
+        createdTickets.push(buildCreatedTicketReport(entry, key));
+    });
+    return createdTickets;
+}
+
+/**
+ * Any failed question subtask fails the whole job (checked after the loop, so
+ * every question gets its attempt and the errors are logged above).
+ */
+function assertAllQuestionsCreated(createdTickets, ticketKey) {
+    var failedCount = createdTickets.filter(function (t) { return !t.success; }).length;
+    if (failedCount > 0) {
+        throw new Error(
+            'Failed to create ' + failedCount + ' of ' + createdTickets.length +
+            ' question subtask(s) under ' + ticketKey +
+            ' — check the errors logged above for details'
+        );
+    }
+}
+
+/**
+ * Steps 3+4: the parent labels (non-fatal individually).
+ */
+function addParentLabels(ticketKey, labels) {
+    try {
+        getTracker().addLabel(ticketKey, labels.AI_QUESTIONS_ASKED);
+    } catch (labelError) {
+        console.warn('Failed to add ' + labels.AI_QUESTIONS_ASKED + ' label:', labelError);
+    }
+
+    try {
+        getTracker().addLabel(ticketKey, labels.AI_GENERATED);
+    } catch (labelError) {
+        console.warn('Failed to add ' + labels.AI_GENERATED + ' label:', labelError);
+    }
+}
+
+/**
+ * Step 5: assign the parent to the initiator (non-fatal; the Server/DC
+ * accountId limitation is silently skipped).
+ */
+function assignToInitiator(ticketKey, initiatorId) {
+    try {
+        if (initiatorId) {
+            getTracker().assignTo(ticketKey, initiatorId);
+            console.log('Assigned ' + ticketKey + ' to initiator');
+        } else {
+            console.log('No initiator id — skipping assign');
+        }
+    } catch (assignError) {
+        if (isAccountIdUnsupportedError(assignError)) {
+            console.warn('Skipping assign — accountId not supported in this Jira instance (Server/DC uses username)');
+        } else {
+            console.warn('Failed to assign ticket:', assignError);
+        }
+    }
+}
+
+/**
+ * Step 6: move the parent story to PO Review.
+ * @returns {string} 'moved' | 'marked' | 'failed' — reported honestly in the result message
+ */
+function moveToPoReview(ticketKey, poReviewStatus) {
+    try {
+        var stageResult = getTracker().moveToStatusOrMark(ticketKey, poReviewStatus, 'PO_REVIEW');
+        if (stageResult && stageResult.marked) {
+            console.log('Marked ' + ticketKey + ' with ' + stageResult.label + ' (transition to PO Review rejected)');
+            return 'marked';
+        }
+        console.log('Moved ' + ticketKey + ' to PO Review');
+        return 'moved';
+    } catch (statusError) {
+        console.warn('Failed to move ' + ticketKey + ' to PO Review:', statusError);
+        return 'failed';
+    }
+}
+
+/**
+ * Step 7: remove the WIP label when present (non-fatal).
+ */
+function removeWipLabel(ticketKey, wipLabel) {
+    if (!wipLabel) {
+        return;
+    }
+    try {
+        getTracker().removeLabel(ticketKey, wipLabel);
+        console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
+    } catch (wipError) {
+        console.warn('Failed to remove WIP label:', wipError);
+    }
+}
+
+/**
+ * Step 8: optionally auto-start question answering for each created question.
+ * Requires BOTH autoStartQuestionAnswer and autoStartQuestionAnswerConfigFile.
+ */
+function triggerAutoStartQuestionAnswer(customParams, projectConfig, createdTickets) {
+    if (!shouldAutoStartQuestionAnswer(customParams)) {
+        return;
+    }
+    var questionAnswerConfigFile = customParams.autoStartQuestionAnswerConfigFile;
+    if (!questionAnswerConfigFile) {
+        return;
+    }
+    try {
+        var scm = scmModule.createScm(projectConfig);
+        createdTickets
+            .filter(function (ticket) { return ticket.success && ticket.key; })
+            .forEach(function (ticket) {
+                autoStart.triggerConfiguredWorkflowForTicket({
+                    scm: scm,
+                    config: projectConfig,
+                    ticketKey: ticket.key,
+                    customParams: customParams,
+                    configFile: questionAnswerConfigFile,
+                    label: 'question answer',
+                    stripKeys: ['autoStartQuestionAnswer', 'autoStartQuestionAnswerConfigFile']
+                });
+            });
+    } catch (e) {
+        console.warn('⚠️ autoStartQuestionAnswer trigger failed:', e.message || e);
+    }
+}
+
+/**
+ * Token usage comments (non-fatal).
+ */
+function postTokenUsageCommentsSafe(ticketKey, params) {
+    try {
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
         var projectKey = ticketKey.split('-')[0];
-        initTracker(loadConfigSafe(params), (params.jobParams && params.jobParams.customParams) || {});
+        initTracker(loadConfigSafe(params), bootstrapCustomParams(params));
         var initiatorId = params.initiator;
         var wipLabel = buildWipLabel(params.metadata);
 
@@ -293,17 +501,7 @@ function action(params) {
         // path unconditionally labels, assigns and moves the ticket to PO Review as if the AI
         // had genuinely reviewed the story and found it clear, which silently hides the failure.
         if (params.currentCliHasFatalError) {
-            var cliErrorMessage = params.currentCliErrorMessage || 'unknown CLI/provider error';
-            console.error('Fatal CLI/provider error for ' + ticketKey + ' — leaving the ticket untouched instead of treating it as "no questions needed": ' + cliErrorMessage);
-            try {
-                getTracker().postComment(ticketKey, 'h3. \u274c AI agent run failed \u2014 ticket left unchanged\n\n' +
-                        'The underlying CLI/AI provider call failed, so no clarifying questions could be generated:\n\n' +
-                        '{code}' + cliErrorMessage + '{code}\n\n' +
-                        'This ticket was NOT moved to PO Review and no labels were changed. Please retry the agent.');
-            } catch (commentError) {
-                console.warn('Failed to post CLI-failure comment:', commentError);
-            }
-            return buildCliFailureResult(cliErrorMessage);
+            return handleFatalCliError(ticketKey, params);
         }
 
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
@@ -327,108 +525,18 @@ function action(params) {
         }
 
         // 2. Create question subtasks
-        var createdTickets = [];
-        questions.forEach(function (entry) {
-            var key = createQuestion(entry, ticketKey, projectKey, Object.assign({}, jiraConfig, { labels: labels }), priorityMap);
-            createdTickets.push(buildCreatedTicketReport(entry, key));
-        });
+        var createdTickets = createQuestionSubtasks(questions, ticketKey, projectKey,
+            Object.assign({}, jiraConfig, { labels: labels }), priorityMap);
+        assertAllQuestionsCreated(createdTickets, ticketKey);
 
-        var failedCount = createdTickets.filter(function (t) { return !t.success; }).length;
-        if (failedCount > 0) {
-            throw new Error(
-                'Failed to create ' + failedCount + ' of ' + createdTickets.length +
-                ' question subtask(s) under ' + ticketKey +
-                ' — check the errors logged above for details'
-            );
-        }
-
-        // 3. Add ai_questions_asked label to parent ticket
-        try {
-            getTracker().addLabel(ticketKey, labels.AI_QUESTIONS_ASKED);
-        } catch (labelError) {
-            console.warn('Failed to add ' + labels.AI_QUESTIONS_ASKED + ' label:', labelError);
-        }
-
-        // 4. Add ai_generated label
-        try {
-            getTracker().addLabel(ticketKey, labels.AI_GENERATED);
-        } catch (labelError) {
-            console.warn('Failed to add ' + labels.AI_GENERATED + ' label:', labelError);
-        }
-
-        // 5. Assign to initiator
-        try {
-            if (initiatorId) {
-                getTracker().assignTo(ticketKey, initiatorId);
-                console.log('Assigned ' + ticketKey + ' to initiator');
-            } else {
-                console.log('No initiator id — skipping assign');
-            }
-        } catch (assignError) {
-            if (isAccountIdUnsupportedError(assignError)) {
-                console.warn('Skipping assign — accountId not supported in this Jira instance (Server/DC uses username)');
-            } else {
-                console.warn('Failed to assign ticket:', assignError);
-            }
-        }
-
-        // 6. Move parent story to PO Review (agents#856: with stageFallback 'label' a rejected transition
-        //    leaves a stage_po_review marker instead of losing the hand-off; default keeps the old behaviour)
-        var stageOutcome = 'failed';
-        try {
-            var stageResult = getTracker().moveToStatusOrMark(ticketKey, jiraConfig.statuses.PO_REVIEW, 'PO_REVIEW');
-            if (stageResult && stageResult.marked) {
-                stageOutcome = 'marked';
-                console.log('Marked ' + ticketKey + ' with ' + stageResult.label + ' (transition to PO Review rejected)');
-            } else {
-                stageOutcome = 'moved';
-                console.log('Moved ' + ticketKey + ' to PO Review');
-            }
-        } catch (statusError) {
-            console.warn('Failed to move ' + ticketKey + ' to PO Review:', statusError);
-        }
-
-        // 7. Remove WIP label if present
-        if (wipLabel) {
-            try {
-                getTracker().removeLabel(ticketKey, wipLabel);
-                console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
-            } catch (wipError) {
-                console.warn('Failed to remove WIP label:', wipError);
-            }
-        }
-
-        // 8. Optionally auto-start question answering for each created question
-        var autoStartQuestionAnswer = shouldAutoStartQuestionAnswer(customParams);
-        var questionAnswerConfigFile = customParams.autoStartQuestionAnswerConfigFile;
-        if (autoStartQuestionAnswer && questionAnswerConfigFile) {
-            try {
-                var scm = scmModule.createScm(projectConfig);
-                createdTickets
-                    .filter(function (ticket) { return ticket.success && ticket.key; })
-                    .forEach(function (ticket) {
-                        autoStart.triggerConfiguredWorkflowForTicket({
-                            scm: scm,
-                            config: projectConfig,
-                            ticketKey: ticket.key,
-                            customParams: customParams,
-                            configFile: questionAnswerConfigFile,
-                            label: 'question answer',
-                            stripKeys: ['autoStartQuestionAnswer', 'autoStartQuestionAnswerConfigFile']
-                        });
-                    });
-            } catch (e) {
-                console.warn('⚠️ autoStartQuestionAnswer trigger failed:', e.message || e);
-            }
-        }
-
-        // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-        // wrote outputs/*_usage.json during the agent run.
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
+        // 3-8. Parent labels, initiator assignment, PO Review stage, WIP cleanup,
+        //      optional question-answer auto-start, token usage comments.
+        addParentLabels(ticketKey, labels);
+        assignToInitiator(ticketKey, initiatorId);
+        var stageOutcome = moveToPoReview(ticketKey, jiraConfig.statuses.PO_REVIEW);
+        removeWipLabel(ticketKey, wipLabel);
+        triggerAutoStartQuestionAnswer(customParams, projectConfig, createdTickets);
+        postTokenUsageCommentsSafe(ticketKey, params);
 
         return {
             success: true,
@@ -454,6 +562,20 @@ if (typeof module !== 'undefined' && module.exports) {
         buildCliFailureResult: buildCliFailureResult,
         buildActionMessage: buildActionMessage,
         buildCreatedTicketReport: buildCreatedTicketReport,
-        isAccountIdUnsupportedError: isAccountIdUnsupportedError
+        isAccountIdUnsupportedError: isAccountIdUnsupportedError,
+        bootstrapCustomParams: bootstrapCustomParams,
+        handleFatalCliError: handleFatalCliError,
+        createQuestionSubtasks: createQuestionSubtasks,
+        assertAllQuestionsCreated: assertAllQuestionsCreated,
+        addParentLabels: addParentLabels,
+        assignToInitiator: assignToInitiator,
+        moveToPoReview: moveToPoReview,
+        removeWipLabel: removeWipLabel,
+        triggerAutoStartQuestionAnswer: triggerAutoStartQuestionAnswer,
+        resolveQuestionPriority: resolveQuestionPriority,
+        buildQuestionFieldsJson: buildQuestionFieldsJson,
+        resolveAdoQuestionType: resolveAdoQuestionType,
+        normalizeCreatedKey: normalizeCreatedKey,
+        createAdoQuestion: createAdoQuestion
     };
 }

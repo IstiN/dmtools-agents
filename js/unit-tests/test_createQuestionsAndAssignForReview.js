@@ -25,7 +25,7 @@ function makeOutputFiles(fileMap) {
     });
 }
 
-function loadCreateQuestionsModule(fileMap, extraGlobals) {
+function loadCreateQuestionsModule(fileMap, extraGlobals, requireOverrides) {
     var outputFiles = makeOutputFiles(fileMap);
     var comments = [];
     var labels = [];
@@ -50,29 +50,32 @@ function loadCreateQuestionsModule(fileMap, extraGlobals) {
             return JSON.stringify({ key: 'BICE-' + (900 + createdTickets.length) });
         }
     };
-    for (var k in (extraGlobals || {})) { globals[k] = extraGlobals[k]; }
+    Object.assign(globals, extraGlobals || {});
+
+    var requireMap = {
+        './common/jiraHelpers.js': {
+            extractTicketKey: function (result) {
+                try { return JSON.parse(result).key; } catch (e) { return null; }
+            }
+        },
+        './common/aiResponseParser.js': {
+            buildSummary: function (summary, index) {
+                return summary || ('Follow-up question #' + (index + 1));
+            }
+        },
+        './config.js': configModule,
+        './configLoader.js': configLoaderModule,
+        './common/scm.js': { createScm: function () { return {}; } },
+        './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function (opts) { autoStarts.push(opts); return false; } },
+        './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
+        './common/outputFiles.js': outputFiles,
+        './common/trackers.js': d2Trackers(globals)
+    };
+    Object.assign(requireMap, requireOverrides || {});
 
     var mod = loadModule(
         'js/createQuestionsAndAssignForReview.js',
-        makeRequire({
-            './common/jiraHelpers.js': {
-                extractTicketKey: function (result) {
-                    try { return JSON.parse(result).key; } catch (e) { return null; }
-                }
-            },
-            './common/aiResponseParser.js': {
-                buildSummary: function (summary, index) {
-                    return summary || ('Follow-up question #' + (index + 1));
-                }
-            },
-            './config.js': configModule,
-            './configLoader.js': configLoaderModule,
-            './common/scm.js': { createScm: function () { return {}; } },
-            './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function (opts) { autoStarts.push(opts); return false; } },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
-            './common/outputFiles.js': outputFiles,
-            './common/trackers.js': d2Trackers(globals)
-        }),
+        makeRequire(requireMap),
         globals
     );
 
@@ -583,5 +586,439 @@ suite('createQuestionsAndAssignForReview — extracted pure helpers (gh-1038)', 
         assert.equal(h.isAccountIdUnsupportedError(new Error('user does not exist')), false);
         assert.equal(h.isAccountIdUnsupportedError('plain accountId failure'), true);
         assert.equal(h.isAccountIdUnsupportedError(null), false);
+    });
+});
+
+// ── gh-1191: branch characterization for readQuestionsJson / readDescriptionFile /
+// the action() non-fatal warning paths — each failure mode must stay non-fatal
+// exactly as before the CRAP refactor.
+
+suite('createQuestionsAndAssignForReview — questions.json formats (gh-1191 characterization)', function () {
+
+    test('wrapped {"questions":[...]} format: the inner array is used and a warning is logged', function () {
+        var loaded = loadCreateQuestionsModule({
+            'outputs/questions.json': '{"questions":[{"summary":"Wrapped Q"},{"summary":"Wrapped Q2"}]}'
+        });
+        var result = loaded.mod.action({
+            ticket: { key: 'BICE-829' },
+            metadata: { contextId: 'story_questions' },
+            jobParams: { customParams: {} }
+        });
+        assert.equal(result.success, true);
+        assert.equal(loaded.createdTickets.length, 2, 'both wrapped questions are created');
+        assert.contains(loaded.createdTickets[0].fieldsJson.summary, '[Q] Wrapped Q');
+    });
+
+    test('a JSON string that is not an array degrades to no questions (no crash)', function () {
+        var loaded = loadCreateQuestionsModule({
+            'outputs/questions.json': '{"not":"a question array"}'
+        });
+        var result = loaded.mod.action({
+            ticket: { key: 'BICE-829' },
+            metadata: { contextId: 'story_questions' },
+            jobParams: { customParams: {} }
+        });
+        assert.equal(result.success, true);
+        assert.equal(loaded.createdTickets.length, 0);
+        assert.equal(loaded.comments.length, 1, 'the no-questions explanation path still runs');
+    });
+
+    test('invalid JSON in questions.json degrades to no questions (no crash)', function () {
+        var loaded = loadCreateQuestionsModule({
+            'outputs/questions.json': '{definitely not json'
+        });
+        var result = loaded.mod.action({
+            ticket: { key: 'BICE-829' },
+            metadata: { contextId: 'story_questions' },
+            jobParams: { customParams: {} }
+        });
+        assert.equal(result.success, true);
+        assert.equal(loaded.createdTickets.length, 0);
+    });
+
+    test('wrapped format with a non-array questions member degrades to no questions', function () {
+        var loaded = loadCreateQuestionsModule({
+            'outputs/questions.json': '{"questions":"nope"}'
+        });
+        var result = loaded.mod.action({
+            ticket: { key: 'BICE-829' },
+            metadata: { contextId: 'story_questions' },
+            jobParams: { customParams: {} }
+        });
+        assert.equal(result.success, true);
+        assert.equal(loaded.createdTickets.length, 0);
+    });
+});
+
+suite('createQuestionsAndAssignForReview — description file resolution (gh-1191 characterization)', function () {
+
+    function runWith(fileMap, extraGlobals) {
+        var loaded = loadCreateQuestionsModule(fileMap, extraGlobals);
+        var result = loaded.mod.action({
+            ticket: { key: 'BICE-829' },
+            metadata: { contextId: 'story_questions' },
+            jobParams: { customParams: {} }
+        });
+        return { result: result, loaded: loaded };
+    }
+
+    test('a missing description file falls back to the entry summary', function () {
+        var r = runWith({
+            'outputs/questions.json': JSON.stringify([{ summary: 'Summary fallback', description: 'outputs/missing.md' }])
+        });
+        assert.equal(r.result.success, true);
+        assert.equal(r.loaded.createdTickets[0].fieldsJson.description, 'Summary fallback');
+    });
+
+    test('an empty description file falls back to the entry summary', function () {
+        var r = runWith({
+            'outputs/questions.json': JSON.stringify([{ summary: 'Summary fallback', description: 'outputs/empty.md' }]),
+            'outputs/empty.md': '   '
+        });
+        assert.equal(r.loaded.createdTickets[0].fieldsJson.description, 'Summary fallback');
+    });
+
+    test('a throwing description read warns and falls back to the entry summary', function () {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function () { warns.push(Array.prototype.slice.call(arguments).join(' ')); };
+        var questionsJson = JSON.stringify([{ summary: 'Summary fallback', description: 'outputs/exploding.md' }]);
+        try {
+            var loaded = loadCreateQuestionsModule({}, {
+                file_read: function (opts) {
+                    var path = opts && (opts.path || opts);
+                    if (path === 'outputs/exploding.md') throw new Error('disk on fire');
+                    if (path === 'outputs/questions.json') return questionsJson;
+                    return null;
+                }
+            });
+            var result = loaded.mod.action({
+                ticket: { key: 'BICE-829' },
+                metadata: { contextId: 'story_questions' },
+                jobParams: { customParams: {} }
+            });
+            assert.equal(result.success, true);
+            assert.equal(loaded.createdTickets[0].fieldsJson.description, 'Summary fallback');
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.ok(warns.some(function (w) { return w.indexOf('outputs/exploding.md') !== -1; }),
+            'the read failure is announced');
+    });
+
+    test('a non-string description entry falls back to the entry summary (type guard)', function () {
+        var r = runWith({
+            'outputs/questions.json': JSON.stringify([{ summary: 'Summary fallback', description: 42 }])
+        });
+        assert.equal(r.loaded.createdTickets[0].fieldsJson.description, 'Summary fallback');
+    });
+});
+
+suite('createQuestionsAndAssignForReview — non-fatal tracker failures (gh-1191 characterization)', function () {
+
+    function runWith(fileMap, extraGlobals) {
+        var loaded = loadCreateQuestionsModule(fileMap, extraGlobals);
+        var result = loaded.mod.action({
+            ticket: { key: 'BICE-829' },
+            metadata: { contextId: 'story_questions' },
+            initiator: '712020:abc',
+            jobParams: { customParams: {} }
+        });
+        return { result: result, loaded: loaded };
+    }
+
+    test('a throwing no-questions explanation comment stays non-fatal', function () {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function () { warns.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            var r = runWith({
+                'outputs/questions.json': '[]',
+                'outputs/response.md': 'Everything is clear.'
+            }, {
+                jira_post_comment: function () { throw new Error('jira comment API down'); }
+            });
+            assert.equal(r.result.success, true, 'the explanation failure does not fail the job');
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.ok(warns.some(function (w) { return w.indexOf('no-questions explanation comment') !== -1; }));
+    });
+
+    test('a throwing fallback warning comment (no response.md) stays non-fatal', function () {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function () { warns.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            var r = runWith({
+                'outputs/questions.json': '[]'
+            }, {
+                jira_post_comment: function () { throw new Error('jira comment API down'); }
+            });
+            assert.equal(r.result.success, true, 'the fallback-warning failure does not fail the job');
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.ok(warns.some(function (w) { return w.indexOf('fallback no-questions warning comment') !== -1; }));
+    });
+
+    test('failing labels (both) stay non-fatal and the job still completes', function () {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function () { warns.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            var r = runWith({
+                'outputs/questions.json': '[]',
+                'outputs/response.md': 'Clear.'
+            }, {
+                jira_add_label: function () { throw new Error('label quota exceeded'); }
+            });
+            assert.equal(r.result.success, true);
+            assert.equal(r.loaded.moves.length, 1, 'the PO Review move still happens');
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(warns.filter(function (w) { return w.indexOf('Failed to add') !== -1; }).length, 2,
+            'both label failures are warned individually');
+    });
+
+    test('a non-accountId assign failure is warned as a plain failure', function () {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function () { warns.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            var r = runWith({
+                'outputs/questions.json': '[]',
+                'outputs/response.md': 'Clear.'
+            }, {
+                jira_assign_ticket_to: function () { throw new Error('user does not exist'); }
+            });
+            assert.equal(r.result.success, true);
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.ok(warns.some(function (w) { return w.indexOf('Failed to assign ticket') !== -1; }));
+    });
+
+    test('an accountId assign failure is silently skipped with a dedicated warning', function () {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function () { warns.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            var r = runWith({
+                'outputs/questions.json': '[]',
+                'outputs/response.md': 'Clear.'
+            }, {
+                jira_assign_ticket_to: function () { throw new Error('accountId not found on this instance'); }
+            });
+            assert.equal(r.result.success, true);
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.ok(warns.some(function (w) { return w.indexOf('accountId not supported') !== -1; }),
+            'the Server/DC accountId note is logged');
+        assert.ok(!warns.some(function (w) { return w.indexOf('Failed to assign ticket') !== -1; }),
+            'the generic failure warn is NOT used for the accountId case');
+    });
+
+    test('a failing WIP-label removal stays non-fatal', function () {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function () { warns.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            var r = runWith({
+                'outputs/questions.json': '[]',
+                'outputs/response.md': 'Clear.'
+            }, {
+                jira_remove_label: function () { throw new Error('label locked by workflow'); }
+            });
+            assert.equal(r.result.success, true);
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.ok(warns.some(function (w) { return w.indexOf('Failed to remove WIP label') !== -1; }));
+    });
+
+    test('a throwing autoStart trigger stays non-fatal and the remaining questions still trigger', function () {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function () { warns.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            var loaded = loadCreateQuestionsModule({
+                'outputs/questions.json': JSON.stringify([{ summary: 'Q1' }, { summary: 'Q2' }])
+            }, {}, {
+                './common/autoStart.js': {
+                    triggerConfiguredWorkflowForTicket: function (opts) {
+                        if (opts.ticketKey === 'BICE-901') throw new Error('workflow trigger 403');
+                        return false;
+                    }
+                }
+            });
+            var result = loaded.mod.action({
+                ticket: { key: 'BICE-829' },
+                metadata: { contextId: 'story_questions' },
+                jobParams: { customParams: { autoStartQuestionAnswer: true, autoStartQuestionAnswerConfigFile: 'story_answer.json' } }
+            });
+            assert.equal(result.success, true, 'the autoStart failure does not fail the job');
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.ok(warns.some(function (w) { return w.indexOf('autoStartQuestionAnswer trigger failed') !== -1; }));
+    });
+});
+
+suite('createQuestionsAndAssignForReview — created key extraction (gh-1191 characterization)', function () {
+
+    test('a JSON-object create result is parsed via extractTicketKey', function () {
+        var loaded = loadCreateQuestionsModule({
+            'outputs/questions.json': JSON.stringify([{ summary: 'Q1' }])
+        }, {
+            jira_create_ticket_with_json: function () { return JSON.stringify({ key: 'BICE-778', id: '1' }); }
+        });
+        var result = loaded.mod.action({
+            ticket: { key: 'BICE-829' },
+            metadata: { contextId: 'story_questions' },
+            jobParams: { customParams: {} }
+        });
+        assert.equal(result.createdQuestions[0].key, 'BICE-778');
+    });
+
+    test('an unparseable create result makes the question fail and action throws', function () {
+        // The tracker layer (jiraCreateWithFields) already runs extractTicketKey on the raw
+        // result, so a non-JSON string reaches createQuestion as null → key null → success
+        // false → failedCount > 0 → action throws.
+        var loaded = loadCreateQuestionsModule({
+            'outputs/questions.json': JSON.stringify([{ summary: 'Q1' }])
+        }, {
+            jira_create_ticket_with_json: function () { return '<<<not json>>>'; }
+        });
+        var threw = false;
+        var message = '';
+        try {
+            loaded.mod.action({
+                ticket: { key: 'BICE-829' },
+                metadata: { contextId: 'story_questions' },
+                jobParams: { customParams: {} }
+            });
+        } catch (e) {
+            threw = true;
+            message = e.message || String(e);
+        }
+        assert.equal(threw, true);
+        assert.contains(message, 'Failed to create 1 of 1');
+    });
+
+    test('a throwing create reports the question as failed (null key)', function () {
+        var loaded = loadCreateQuestionsModule({
+            'outputs/questions.json': JSON.stringify([{ summary: 'Q1' }])
+        }, {
+            jira_create_ticket_with_json: function () { throw new Error('boom'); }
+        });
+        var threw = false;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'BICE-829' },
+                metadata: { contextId: 'story_questions' },
+                jobParams: { customParams: {} }
+            });
+        } catch (e) {
+            threw = true;
+        }
+        assert.equal(threw, true, 'a failed question still fails the job (failedCount > 0)');
+    });
+});
+
+// ── gh-1191: the extracted question-build/decide helpers, pinned directly ────
+
+suite('createQuestionsAndAssignForReview — extracted question helpers (gh-1191)', function () {
+
+    function helpers() {
+        return loadCreateQuestionsModule({}).mod;
+    }
+
+    test('bootstrapCustomParams: jobParams.customParams or an empty object (never params.customParams)', function () {
+        var h = helpers();
+        assert.deepEqual(h.bootstrapCustomParams({ jobParams: { customParams: { a: 1 } }, customParams: { b: 2 } }), { a: 1 });
+        assert.deepEqual(h.bootstrapCustomParams({ jobParams: {}, customParams: { b: 2 } }), {}, 'falls to {} — deliberately not params.customParams');
+        assert.deepEqual(h.bootstrapCustomParams({ customParams: { b: 2 } }), {}, 'no jobParams at all');
+        assert.deepEqual(h.bootstrapCustomParams({}), {});
+    });
+
+    test('resolveQuestionPriority: mapped or original name', function () {
+        var h = helpers();
+        assert.equal(h.resolveQuestionPriority({ High: 'Critical' }, 'High'), 'Critical');
+        assert.equal(h.resolveQuestionPriority({ High: 'Critical' }, 'Medium'), 'Medium');
+        assert.equal(h.resolveQuestionPriority(null, 'Medium'), 'Medium');
+        assert.equal(h.resolveQuestionPriority(undefined, 'Low'), 'Low');
+        assert.equal(h.resolveQuestionPriority({}, 'Low'), 'Low');
+    });
+
+    test('buildQuestionFieldsJson: shape, priority mapping, answer field', function () {
+        var h = helpers();
+        var jiraConfig = {
+            issueTypes: { SUBTASK: 'Subtask' },
+            labels: { QUESTION: 'q' },
+            questions: { answerField: 'Answer' }
+        };
+        var full = h.buildQuestionFieldsJson(
+            { summary: 'Q', priority: 'High', answer: 'a' },
+            '[Q] Q', 'desc', 'BICE-1', jiraConfig, { High: 'Critical' }
+        );
+        assert.deepEqual(full, {
+            summary: '[Q] Q',
+            description: 'desc',
+            issuetype: { name: 'Subtask' },
+            parent: { key: 'BICE-1' },
+            labels: ['q'],
+            priority: { name: 'Critical' },
+            Answer: 'a'
+        });
+        var minimal = h.buildQuestionFieldsJson({}, '[Q] Q', 'desc', 'BICE-1', jiraConfig, null);
+        assert.equal(minimal.priority, undefined, 'no priority → no priority field');
+        assert.equal(minimal.Answer, undefined, 'no answer → no answer field');
+        assert.equal(minimal.labels[0], 'q');
+    });
+
+    test('buildQuestionFieldsJson: a broken config throws before any tracker call', function () {
+        var h = helpers();
+        var threw = false;
+        try {
+            // labels missing entirely → the eager jiraConfig.labels.QUESTION read throws
+            h.buildQuestionFieldsJson({}, 's', 'd', 'BICE-1', { issueTypes: { SUBTASK: 'Subtask' }, questions: { answerField: 'Answer' } }, null);
+        } catch (e) {
+            threw = true;
+        }
+        assert.equal(threw, true, 'missing labels container throws (eager config reads preserved)');
+    });
+
+    test('resolveAdoQuestionType: configured workItemType or the Task default', function () {
+        var h = helpers();
+        assert.equal(h.resolveAdoQuestionType({ questions: { workItemType: 'Question' } }), 'Question');
+        assert.equal(h.resolveAdoQuestionType({ questions: {} }), 'Task');
+        assert.equal(h.resolveAdoQuestionType({}), 'Task');
+    });
+
+    test('normalizeCreatedKey: string passthrough, extractTicketKey fallback', function () {
+        var h = helpers();
+        assert.equal(h.normalizeCreatedKey('5001'), '5001', 'a string id is the key');
+        // the string branch short-circuits BEFORE extraction — any non-empty string
+        // passes through verbatim (same as the pre-refactor ternary).
+        assert.equal(h.normalizeCreatedKey('{"key":"BICE-9"}'), '{"key":"BICE-9"}');
+        assert.equal(h.normalizeCreatedKey('{{{'), '{{{', 'even a garbage string is a string');
+        assert.equal(h.normalizeCreatedKey(null), null, 'null → extractTicketKey → null');
+        assert.equal(h.normalizeCreatedKey(''), null, 'empty string is not a key → extractTicketKey → null');
+    });
+
+    test('assertAllQuestionsCreated: silent on success, throws with the count on failure', function () {
+        var h = helpers();
+        h.assertAllQuestionsCreated([{ success: true }, { success: true }], 'BICE-1');
+        var message = '';
+        try {
+            h.assertAllQuestionsCreated([{ success: true }, { success: false }, { success: false }], 'BICE-1');
+        } catch (e) {
+            message = e.message;
+        }
+        assert.contains(message, 'Failed to create 2 of 3');
+        assert.contains(message, 'BICE-1');
     });
 });
