@@ -1081,6 +1081,49 @@ suite('trackers.js extended operations — ado provider', function () {
         assert.ok(msg.indexOf('workItemType') !== -1);
     });
 
+    // gh-1226 characterization: answer-shape contract of adoCreateWithFields.
+    test('createTicketWithFields returns parsed.key when the tool answers with a key field', function () {
+        var create = recorder('ado_create_work_item', '{"key":"AB-9","id":77}');
+        var id = loadTrackers({ ado_create_work_item: create }).createTracker(ado())
+            .createTicketWithFields('P', { workItemType: 'Task', title: 'T' });
+        assert.equal(id, 'AB-9', 'a string key in the answer wins over the numeric id');
+    });
+
+    test('createTicketWithFields falls back to extractTicketKey when the answer has no key/id', function () {
+        var plain = loadTrackers({ ado_create_work_item: recorder('ado_create_work_item', 'created AB-12') })
+            .createTracker(ado()).createTicketWithFields('P', { workItemType: 'Task', title: 'T' });
+        assert.equal(plain, null, 'a non-JSON answer yields null through the shared fallback');
+        var noKey = loadTrackers({ ado_create_work_item: recorder('ado_create_work_item', '{"id":null}') })
+            .createTracker(ado()).createTicketWithFields('P', { workItemType: 'Task', title: 'T' });
+        assert.equal(noKey, null, 'an id-less JSON answer yields null through the shared fallback');
+    });
+
+    test('createTicketWithFields accepts a pre-serialized fields JSON string', function () {
+        var create = recorder('ado_create_work_item', '{"id":5}');
+        var id = loadTrackers({ ado_create_work_item: create }).createTracker(ado())
+            .createTicketWithFields('P', '{"workItemType":"Task","title":"T","custom":1}');
+        assert.equal(id, '5');
+        assert.equal(create.calls[0].workItemType, 'Task');
+        assert.equal(create.calls[0].title, 'T');
+        assert.deepEqual(JSON.parse(create.calls[0].fieldsJson), { custom: 1 });
+    });
+
+    test('createTicketWithFields reads System.WorkItemType/System.Title and throws without them', function () {
+        var create = recorder('ado_create_work_item', '{"id":6}');
+        var id = loadTrackers({ ado_create_work_item: create }).createTracker(ado())
+            .createTicketWithFields('P', { 'System.WorkItemType': 'Bug', 'System.Title': 'B' });
+        assert.equal(id, '6');
+        assert.equal(create.calls[0].workItemType, 'Bug');
+        assert.equal(create.calls[0].title, 'B');
+        assert.deepEqual(JSON.parse(create.calls[0].fieldsJson), {});
+
+        [null, undefined].forEach(function (absent) {
+            var msg = '';
+            try { loadTrackers({}).createTracker(ado()).createTicketWithFields('P', absent); } catch (e) { msg = String(e.message); }
+            assert.ok(msg.indexOf('workItemType') !== -1, 'absent fields JSON must throw the contract error, got: ' + msg);
+        });
+    });
+
     test('attachFile calls ado_attach_file with {id, name, filePath, contentType}', function () {
         var at = recorder('ado_attach_file', '{}');
         loadTrackers({ ado_attach_file: at }).createTracker(ado()).attachFile('5', 'a.png', '/tmp/a.png', 'image/png');
@@ -1648,6 +1691,35 @@ suite('trackers.js — hasStage: stage-gate helper for tag-only statuses (gh-916
         var tr = t('label');
         assert.equal(tr.hasStage(null, 'PASSED', 'Passed'), false);
         assert.equal(tr.hasStage(undefined, 'PASSED', 'Passed'), false);
+    });
+
+    // gh-1226 characterization: every status-resolution path of hasStage.
+    test('a ticket with no status information at all falls through to the label check', function () {
+        var noStatus = { key: 'PS-1', labels: ['stage_passed'] };
+        assert.equal(t('label').hasStage(noStatus, 'PASSED', 'Passed'), true,
+            'label mode: a status-less ticket is judged by its stage markers');
+        assert.equal(t('none').hasStage(noStatus, 'PASSED', 'Passed'), false,
+            'none mode: a status-less ticket is never in a real stage');
+    });
+
+    test('an explicit null status defers to the Jira-shaped fields view', function () {
+        var tr = t('none');
+        assert.equal(tr.hasStage(
+            { key: 'PS-1', status: null, fields: { status: { name: 'Passed' }, labels: [] } },
+            'PASSED', 'Passed'), true);
+        assert.equal(tr.hasStage(
+            { key: 'PS-1', status: null, fields: { status: { name: 'Failed' }, labels: [] } },
+            'PASSED', 'Passed'), false);
+    });
+
+    test('a fields view whose status name is null/absent has no real status — labels decide', function () {
+        var labelMode = t('label');
+        assert.equal(labelMode.hasStage(
+            { key: 'PS-1', status: null, fields: { status: { name: null }, labels: ['stage_failed'] } },
+            'FAILED', 'Failed'), true);
+        assert.equal(labelMode.hasStage(
+            { key: 'PS-1', fields: { labels: [] } },
+            'FAILED', 'Failed'), false, 'no status and no matching marker → not in the stage');
     });
 
     test('no tool call is ever made — the ticket is inspected as given (no extra reads)', function () {

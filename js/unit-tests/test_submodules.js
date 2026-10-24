@@ -567,4 +567,98 @@ suite('submodule helper', function() {
         assert.deepEqual(modules, [{ path: 'plain-path' }], 'path-less entries are ignored, not coerced');
     });
 
+    // ── gh-1226 characterization: resolveStashPopConflicts exit paths ────────
+
+    function stashPopConflictRun(commands, responses) {
+        var base = [
+            gitmodulesRegistered('trackstate-setup'),
+            // #1 publish probe: dirty tree → branch alignment stashes and pops.
+            { match: /^git -C trackstate-setup status --porcelain$/, returnValue: ' M README.md' },
+            { match: /^git -C trackstate-setup rev-list --count/, returnValue: '0' },
+            // The pop itself conflicts (the prepareDirtySubmoduleBranch hook).
+            { match: /^git -C trackstate-setup stash pop$/, throwError: 'CONFLICT (content): Merge conflict in README.md' }
+        ];
+        return makeRun(commands, base.concat(responses || []));
+    }
+
+    test('copies targetBranch like branch onto the managed module spec', function() {
+        var helper = loadSubmoduleHelper();
+        var modules = helper.collectManagedSubmodules({}, {
+            managedSubmodules: [{ path: 'trackstate-setup', targetBranch: 'release' }]
+        });
+
+        assert.deepEqual(modules, [{ path: 'trackstate-setup', targetBranch: 'release' }],
+            'targetBranch is a first-class publish branch override');
+    });
+
+    test('a conflicted stash pop with a clean tree drops the stash and publishes nothing dirty', function() {
+        var helper = loadSubmoduleHelper();
+        var commands = [];
+        helper.pushManagedSubmodules({
+            customParams: { managedSubmodules: [{ path: 'trackstate-setup', branch: 'main' }] },
+            ticketKey: 'TS-23',
+            cleanOutput: function(output) { return output || ''; },
+            run: stashPopConflictRun(commands, [
+                // No unmerged paths and an EMPTY status after the failed pop.
+                { match: /^git -C trackstate-setup diff --name-only --diff-filter=U$/, returnValue: '' },
+                { match: /^git -C trackstate-setup stash drop$/, returnValue: '' }
+            ])
+        });
+
+        var drops = commands.filter(function(command) {
+            return command === 'git -C trackstate-setup stash drop';
+        });
+        assert.ok(drops.length >= 1, 'the consumed stash is dropped');
+        assert.ok(commands.every(function(command) {
+            return command.indexOf('checkout --theirs') === -1;
+        }), 'no conflicted files → no --theirs checkout');
+        assert.ok(commands.indexOf('git -C trackstate-setup push origin HEAD:main') !== -1,
+            'the aligned branch is still published');
+    });
+
+    test('a conflicted stash pop without conflicts but a dirty status is a loud failure', function() {
+        var helper = loadSubmoduleHelper();
+        var commands = [];
+        var err = null;
+        try {
+            helper.pushManagedSubmodules({
+                customParams: { managedSubmodules: [{ path: 'trackstate-setup', branch: 'main' }] },
+                ticketKey: 'TS-23',
+                cleanOutput: function(output) { return output || ''; },
+                run: stashPopConflictRun(commands, [
+                    { match: /^git -C trackstate-setup diff --name-only --diff-filter=U$/, returnValue: '' },
+                    // Status still dirty after the failed pop — unexplainable state.
+                    { match: /^git -C trackstate-setup status --porcelain$/, returnValue: ' M README.md' }
+                ])
+            });
+        } catch (e) { err = e; }
+
+        assert.ok(err, 'an unexplained dirty tree after a failed pop must throw');
+        assert.contains(err.message, 'Managed submodule stash pop failed without merge conflicts');
+        assert.ok(commands.indexOf('git -C trackstate-setup push origin HEAD:main') === -1,
+            'nothing is pushed when the conflict resolution cannot explain the tree');
+    });
+
+    test('an unsafe conflicted file path is rejected before any checkout', function() {
+        var helper = loadSubmoduleHelper();
+        var commands = [];
+        var err = null;
+        try {
+            helper.pushManagedSubmodules({
+                customParams: { managedSubmodules: [{ path: 'trackstate-setup', branch: 'main' }] },
+                ticketKey: 'TS-23',
+                cleanOutput: function(output) { return output || ''; },
+                run: stashPopConflictRun(commands, [
+                    { match: /^git -C trackstate-setup diff --name-only --diff-filter=U$/, returnValue: '../outside' }
+                ])
+            });
+        } catch (e) { err = e; }
+
+        assert.ok(err, 'an unsafe conflicted path must throw');
+        assert.contains(err.message, 'Unsafe conflicted managed submodule file path');
+        assert.ok(commands.every(function(command) {
+            return command.indexOf('checkout --theirs') === -1;
+        }), 'the unsafe path is never handed to git checkout');
+    });
+
 });
