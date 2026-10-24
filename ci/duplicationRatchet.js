@@ -86,6 +86,58 @@ function formatFilePercent(entry) {
     return entry.file + ' ' + entry.percent.toFixed(2) + '%';
 }
 
+// ── CLI helpers (kept tiny: the CRAP ratchet fails any NEW function > 8) ─────
+
+function toolExitIsValid(toolExit) {
+    return toolExit === '0' || toolExit === '2';
+}
+
+function readBaseline(fs, baselinePath) {
+    var baseline;
+    try {
+        baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+    } catch (e) {
+        return { error: 'cannot read baseline ' + baselinePath + ': ' + e.message };
+    }
+    if (!baseline || typeof baseline.pinned !== 'object' || baseline.pinned === null) {
+        return { error: 'baseline ' + baselinePath + ' has no "pinned" map' };
+    }
+    return { baseline: baseline };
+}
+
+function readReport(fs, reportPath) {
+    try {
+        return { text: fs.readFileSync(reportPath, 'utf8') };
+    } catch (e) {
+        return { error: 'cannot read report ' + reportPath + ': ' + e.message };
+    }
+}
+
+// Print the comparison verdict; the return value is the gate's exit code.
+function reportVerdict(violations, baseline) {
+    var result = compareWithBaseline(violations, baseline);
+    result.improved.forEach(function(i) {
+        console.log('improved ' + i.file + ': ' + i.from.toFixed(2) + '% -> ' + i.to.toFixed(2) + '%');
+    });
+    result.cleared.forEach(function(f) {
+        console.log('cleared ' + f + ' — no longer over threshold (baseline entry stale, prune with the dedup PR)');
+    });
+    if (!result.clean) {
+        result.fresh.forEach(function(f) {
+            console.error('fresh duplication: ' + formatFilePercent(f) + ' (not pinned in duplication-baseline.json)');
+        });
+        result.regressions.forEach(function(r) {
+            console.error('duplication regression: ' + r.file + ' ' + r.from.toFixed(2) + '% -> ' + r.to.toFixed(2) + '%');
+        });
+        console.error('duplication ratchet: FAIL — ' + result.fresh.length + ' fresh, ' +
+            result.regressions.length + ' regressed (' + result.pinnedCount + ' pinned debt files unchanged)');
+        return 2;
+    }
+    console.log('duplication ratchet: OK — no new/regressed duplication (' +
+        result.pinnedCount + ' pinned debt files, ' + result.cleared.length + ' cleared)');
+    return 0;
+}
+
 /**
  * CLI body. Arguments: <report-file> <baseline-json> <tool-exit-code>.
  * Returns the process exit code (0 = ratchet clean, 2 = gate failed).
@@ -96,57 +148,22 @@ function main(argv) {
     var baselinePath = argv[1];
     var toolExit = String(argv[2] || '0');
 
-    if (toolExit !== '0' && toolExit !== '2') {
+    if (!toolExitIsValid(toolExit)) {
         console.error('duplication ratchet: measurement crashed (tool exit ' + toolExit +
             ') — refusing to pass; report at ' + reportPath);
         return 2;
     }
-
-    var baseline;
-    try {
-        baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
-    } catch (e) {
-        console.error('duplication ratchet: cannot read baseline ' + baselinePath + ': ' + e.message);
+    var base = readBaseline(fs, baselinePath);
+    if (base.error) {
+        console.error('duplication ratchet: ' + base.error);
         return 2;
     }
-    if (!baseline || typeof baseline.pinned !== 'object' || baseline.pinned === null) {
-        console.error('duplication ratchet: baseline ' + baselinePath + ' has no "pinned" map');
+    var rep = readReport(fs, reportPath);
+    if (rep.error) {
+        console.error('duplication ratchet: ' + rep.error);
         return 2;
     }
-
-    var reportText = '';
-    try {
-        reportText = fs.readFileSync(reportPath, 'utf8');
-    } catch (e) {
-        console.error('duplication ratchet: cannot read report ' + reportPath + ': ' + e.message);
-        return 2;
-    }
-
-    var violations = parseViolations(reportText);
-    var result = compareWithBaseline(violations, baseline);
-
-    result.improved.forEach(function(i) {
-        console.log('improved ' + i.file + ': ' + i.from.toFixed(2) + '% -> ' + i.to.toFixed(2) + '%');
-    });
-    result.cleared.forEach(function(f) {
-        console.log('cleared ' + f + ' — no longer over threshold (baseline entry stale, prune with the dedup PR)');
-    });
-
-    if (!result.clean) {
-        result.fresh.forEach(function(f) {
-            console.error('fresh duplication: ' + formatFilePercent(f) + ' (not pinned in ' + baselinePath + ')');
-        });
-        result.regressions.forEach(function(r) {
-            console.error('duplication regression: ' + r.file + ' ' + r.from.toFixed(2) + '% -> ' + r.to.toFixed(2) + '%');
-        });
-        console.error('duplication ratchet: FAIL — ' + result.fresh.length + ' fresh, ' +
-            result.regressions.length + ' regressed (' + result.pinnedCount + ' pinned debt files unchanged)');
-        return 2;
-    }
-
-    console.log('duplication ratchet: OK — no new/regressed duplication (' +
-        result.pinnedCount + ' pinned debt files, ' + result.cleared.length + ' cleared)');
-    return 0;
+    return reportVerdict(parseViolations(rep.text), base.baseline);
 }
 
 if (typeof module !== 'undefined' && module.exports) {

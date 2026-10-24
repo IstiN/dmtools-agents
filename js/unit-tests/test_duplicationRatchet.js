@@ -206,4 +206,26 @@ suite('duplicationRatchet — main CLI', function() {
         assert.equal(ratchet.main([reportPath, baselinePath, '1']), 2);
     });
 
+    test('exits 2 when the baseline file is missing', function() {
+        setup();
+        assert.equal(ratchet.main([reportPath, path.join(tmpDir, 'nope.json'), '2']), 2);
+    });
+
+    test('exits 2 when the baseline is not valid JSON', function() {
+        setup();
+        var bad = writeTmp('bad.json', '{not json');
+        assert.equal(ratchet.main([reportPath, bad, '2']), 2);
+    });
+
+    test('exits 2 when the baseline has no pinned map', function() {
+        setup();
+        var noMap = writeTmp('nomap.json', JSON.stringify({ version: 1 }));
+        assert.equal(ratchet.main([reportPath, noMap, '2']), 2);
+    });
+
+    test('exits 2 when the report file is missing', function() {
+        setup();
+        assert.equal(ratchet.main([path.join(tmpDir, 'nope.txt'), baselinePath, '2']), 2);
+    });
+
 });
