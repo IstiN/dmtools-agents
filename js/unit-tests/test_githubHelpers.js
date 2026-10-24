@@ -2873,3 +2873,135 @@ suite('githubHelpers.fetchDiscussionsAndRawData — inventory build failure', fu
         assert.equal(result.rawThreads, null);
     });
 });
+
+// ── gh-1194 CRAP characterization: findPRForTicket split helpers ─────────────
+// Characterization of the open-PR list-scan flow + direct tests of the pure
+// stage helpers the gh-1194 extraction introduces (exported like the gh-1007
+// detectFailedChecks helpers). The anchor suites above keep pinning pr-N.
+suite('githubHelpers.findPRForTicket — gh-1194 split helpers', function() {
+
+    function matchingPr(number) {
+        return {
+            number: number,
+            title: 'PROJ-42: thing ' + number,
+            head: { ref: 'ai/proj-42-' + number },
+            changed_files: 2
+        };
+    }
+
+    function unrelatedPr(number) {
+        return { number: number, title: 'unrelated work', head: { ref: 'x' }, changed_files: 1 };
+    }
+
+    test('characterization: hook failure is non-fatal — falls through to the top candidate', function() {
+        var gh = loadGithubHelpers({});
+        var scm = scmWithOpenPrs([unrelatedPr(2), matchingPr(1)]);
+        var result = gh.findPRForTicket(scm, 'PROJ-42', { prSearchFn: function() {
+            throw new Error('hook blew up');
+        } });
+        assert.ok(result, 'the scan still selects a PR');
+        assert.equal(result.number, 1, 'the only matching PR wins');
+    });
+
+    test('characterization: falsy hook result falls through to the top candidate', function() {
+        var gh = loadGithubHelpers({});
+        var scm = scmWithOpenPrs([unrelatedPr(2), matchingPr(1)]);
+        var result = gh.findPRForTicket(scm, 'PROJ-42', { prSearchFn: function() { return null; } });
+        assert.ok(result);
+        assert.equal(result.number, 1);
+    });
+
+    test('characterization: legacy (workspace, repository, ticketKey, options) form lists open PRs', function() {
+        var calls = [];
+        var gh = loadGithubHelpers({
+            github_list_prs: function(args) { calls.push(args); return [matchingPr(3, 1)]; }
+        });
+        var result = gh.findPRForTicket('IstiN', 'fa', 'PROJ-42', {});
+        assert.deepEqual(calls, [{ workspace: 'IstiN', repository: 'fa', state: 'open' }]);
+        assert.ok(result);
+        assert.equal(result.number, 3);
+    });
+
+    test('_ticketLookupForm: both calling conventions (characterization of the arg juggling)', function() {
+        var gh = loadGithubHelpers({});
+        var scm = scmWithOpenPrs([]);
+        var form = gh._ticketLookupForm(scm, 'PROJ-42', { prSearchFn: function() {} });
+        assert.equal(form.isScmForm, true);
+        assert.equal(form.ticketKey, 'PROJ-42');
+        assert.equal(typeof form.options.prSearchFn, 'function', 'scm form: 3rd arg is options');
+        assert.deepEqual(form.options, { prSearchFn: form.options.prSearchFn });
+
+        var legacy = gh._ticketLookupForm('ws', 'repo', 'PROJ-42');
+        assert.equal(legacy.isScmForm, false);
+        assert.equal(legacy.ticketKey, 'PROJ-42', 'legacy form: 3rd arg is the ticket key');
+        assert.deepEqual(legacy.options, {}, 'legacy form: options default to {}');
+        var legacyOpts = gh._ticketLookupForm('ws', 'repo', 'PROJ-42', { prSearchFn: function() {} });
+        assert.equal(typeof legacyOpts.options.prSearchFn, 'function');
+    });
+
+    test('_anchoredPrForTicket: open PR returned, closed PR → null with warn, fetch error → null', function() {
+        var gh = loadGithubHelpers({});
+        var scm = {
+            getPr: function(id) {
+                assert.equal(String(id), '7');
+                return { number: 7, title: 't', state: 'open' };
+            }
+        };
+        var anchor = /^pr-(\d+)$/.exec('pr-7');
+        var pr = gh._anchoredPrForTicket(true, scm, null, 'pr-7', anchor);
+        assert.deepEqual(pr, { number: 7, title: 't', state: 'open' });
+
+        var closedScm = { getPr: function() { return { number: 7, state: 'merged' }; } };
+        assert.equal(gh._anchoredPrForTicket(true, closedScm, null, 'pr-7', anchor), null,
+            'closed anchor → treated as not found');
+
+        var throwingScm = { getPr: function() { throw new Error('404'); } };
+        assert.equal(gh._anchoredPrForTicket(true, throwingScm, null, 'pr-7', anchor), null,
+            'fetch error → null, never a list-scan fallback');
+
+        var legacyCalls = [];
+        var ghLegacy = loadGithubHelpers({
+            github_get_pr: function(args) { legacyCalls.push(args); return { number: 7, state: 'open' }; }
+        });
+        var legacyPr = ghLegacy._anchoredPrForTicket(false, 'ws', 'repo', 'pr-7', anchor);
+        assert.deepEqual(legacyCalls, [{ workspace: 'ws', repository: 'repo', pullRequestId: '7' }]);
+        assert.equal(legacyPr.number, 7);
+
+        // A provider that omits state → still returned (open-gate tolerates).
+        var noStateScm = { getPr: function() { return { number: 7 }; } };
+        assert.ok(gh._anchoredPrForTicket(true, noStateScm, null, 'pr-7', anchor));
+    });
+
+    test('_scoredCandidates / _rankCandidates: score>0 filter and changed_files tie-break', function() {
+        var gh = loadGithubHelpers({});
+        var prs = [
+            { number: 1, title: 'unrelated', head: { ref: 'x' }, changed_files: 9 },
+            { number: 2, title: 'fix PROJ-42', head: { ref: 'y' }, changed_files: 30 },
+            { number: 3, title: 'PROJ-42 again', head: { ref: 'z' }, changed_files: 5 }
+        ];
+        var candidates = gh._scoredCandidates(prs, 'proj-42', '42');
+        assert.deepEqual(candidates.map(function(c) { return c.pr.number; }), [2, 3],
+            'only PRs matching the key score above zero');
+        gh._rankCandidates(candidates);
+        assert.deepEqual(candidates.map(function(c) { return c.pr.number; }), [3, 2],
+            'equal scores → fewer changed files first');
+        assert.deepEqual(gh._scoredCandidates([], 'proj-42', '42'), []);
+    });
+
+    test('_applyPrSearchHook: absent hook → null; selection wins; failure → null', function() {
+        var gh = loadGithubHelpers({});
+        var candidates = [{ pr: { number: 1 }, score: 10 }, { pr: { number: 2 }, score: 5 }];
+        assert.equal(gh._applyPrSearchHook(candidates, 'PROJ-42', {}), null, 'no hook → null');
+        var chosen = gh._applyPrSearchHook(candidates, 'PROJ-42', {
+            prSearchFn: function(prs, key, opts) {
+                assert.deepEqual(prs, [{ number: 1 }, { number: 2 }]);
+                assert.equal(key, 'PROJ-42');
+                return prs[1];
+            }
+        });
+        assert.deepEqual(chosen, { number: 2 }, 'the project hook picks its PR');
+        assert.equal(gh._applyPrSearchHook(candidates, 'PROJ-42', {
+            prSearchFn: function() { throw new Error('x'); }
+        }), null, 'hook failure → null (non-fatal)');
+    });
+});
