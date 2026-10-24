@@ -11,10 +11,7 @@
 suite('scm gitlab provider', function () {
 
     function loadGitlabMod(mocks) {
-        return loadModule('js/common/scm.js',
-            makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js'),
-            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })) }),
-            mocks || {});
+        return scmReal(mocks || {});
     }
 
     function makeGitlab(mocks) {

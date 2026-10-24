@@ -488,6 +488,7 @@ suite('factoryReviewVerdict — applyReviewVerdict (orchestration)', function ()
 suite('factoryReviewVerdict — entry action (review_verdict_publish.js)', function () {
 
   var entryModule = loadModule('js/factory/review_verdict_publish.js', makeRequire({
+    './publishParams.js': publishParamsReal(),
     './review_verdict.js': rvModule,
     './token_usage.js': tokenUsageModule
   }), {});
@@ -541,6 +542,7 @@ suite('factoryReviewVerdict — entry action (review_verdict_publish.js)', funct
 suite('factoryReviewVerdict — entry production seams (round-3 rework)', function () {
 
   var entryModule = loadModule('js/factory/review_verdict_publish.js', makeRequire({
+    './publishParams.js': publishParamsReal(),
     './review_verdict.js': rvModule,
     './token_usage.js': tokenUsageModule
   }), {});
@@ -580,6 +582,7 @@ suite('factoryReviewVerdict — entry production seams (round-3 rework)', functi
   test('production sleepMs rides the Java bridge when present (the JSRunner runtime)', function () {
     var sleeps = [];
     var withJava = loadModule('js/factory/review_verdict_publish.js', makeRequire({
+    './publishParams.js': publishParamsReal(),
       './review_verdict.js': rvModule,
       './token_usage.js': tokenUsageModule
     }), { Java: { type: function (name) {
@@ -1152,6 +1155,7 @@ suite('factoryReviewVerdict — entry action seams (gh-1196)', function () {
 
   function gh1196Entry(globalMocks) {
     return loadModule('js/factory/review_verdict_publish.js', makeRequire({
+    './publishParams.js': publishParamsReal(),
       './review_verdict.js': rvModule,
       './token_usage.js': tokenUsageModule
     }), globalMocks || {});

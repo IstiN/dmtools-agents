@@ -42,6 +42,9 @@
  */
 'use strict';
 
+var machineAuthor = require('./machineAuthor.js');
+var reviewVerdicts = require('./reviewVerdicts.js');
+
 // gh-840 AC1 bound: N ticks. The SM cron ticks every ~5 min; 30 min = 6
 // ticks — the ticket's "≤6 ticks" self-heal bound. Deployment-tunable via
 // the rule's staleMinutes knob (same shape as sweep_stale_validation).
@@ -103,31 +106,18 @@ function buildRestoreMarkerComment(headSha, reason, atIso) {
 }
 
 function extractMarker(body, prefix) {
-    var text = String(body || '');
-    var start = text.indexOf(prefix);
-    if (start === -1) return null;
-    start += prefix.length;
-    var end = text.indexOf(MARKER_SUFFIX, start);
-    if (end === -1) return null;
-    var raw = text.substring(start, end).trim();
-    var parsed;
-    try { parsed = JSON.parse(raw); } catch (e) { return null; }
-    return (parsed && typeof parsed === 'object') ? parsed : null;
+    return reviewVerdicts.extractMarkerJson(body, prefix, MARKER_SUFFIX);
 }
 
 function commentAuthorLogin(item) {
-    if (!item) return null;
-    var u = item.user || item.author;
-    if (!u) return null;
-    var login = u.login || u.name;
-    return login ? String(login).toLowerCase() : null;
+    return machineAuthor.commentAuthorLogin(item);
 }
 
 // gh-1025 review: trust matching normalizes ONE trailing '[bot]' on both
 // sides — App-authored markers ('dmtools-factory-bot[bot]') are trusted
 // under the bare knob entry; a different bot never matches.
 function trustedLogin(login) {
-    return String(login || '').toLowerCase().replace(/\[bot\]$/i, '');
+    return machineAuthor.trustedLogin(login);
 }
 
 /**

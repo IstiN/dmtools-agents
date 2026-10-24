@@ -182,14 +182,26 @@ function crap4jViolations(lines, checkName, taken, out) {
     });
 }
 
-/** dart analyze: "error • message • path:line:col • code" bullet lines. */
-function dartAnalyzeViolations(lines, checkName, taken, out) {
-    var re = /^\s*(error|warning|info)\s+•\s+(.+?)\s+•\s+(.+?):(\d+):(\d+)\s+•\s+(\S+)\s*$/;
+/**
+ * The shared regex-scanner skeleton of the per-line dart extractors
+ * (gh-1248): visit every not-yet-taken line, match, mark it taken and hand
+ * the match to the caller's push closure. The re/onMatch pair keeps each
+ * check's violation shape local.
+ */
+function forEachUntakenMatch(lines, taken, re, onMatch) {
     lines.forEach(function(line, idx) {
         if (taken[idx]) return;
         var m = line.match(re);
         if (!m) return;
         taken[idx] = true;
+        onMatch(m);
+    });
+}
+
+/** dart analyze: "error • message • path:line:col • code" bullet lines. */
+function dartAnalyzeViolations(lines, checkName, taken, out) {
+    var re = /^\s*(error|warning|info)\s+•\s+(.+?)\s+•\s+(.+?):(\d+):(\d+)\s+•\s+(\S+)\s*$/;
+    forEachUntakenMatch(lines, taken, re, function(m) {
         out.push({
             check: checkName,
             rule: m[6],
@@ -206,11 +218,7 @@ function dartTestViolations(lines, checkName, taken, out) {
     // dropped [E] lines of suites running >=100 minutes (thread
     // PRT_kwDORYAuYs6uJ07q).
     var re = /^(?:\s*\d{1,}:\d{2}\s+\+\d+(?:\s+-\d+)*:\s*)?\s*(\S+\.dart):\s+(.+?)\s+\[E\]\s*$/;
-    lines.forEach(function(line, idx) {
-        if (taken[idx]) return;
-        var m = line.match(re);
-        if (!m) return;
-        taken[idx] = true;
+    forEachUntakenMatch(lines, taken, re, function(m) {
         out.push({
             check: checkName,
             rule: 'test',
@@ -231,11 +239,7 @@ function dartTestViolations(lines, checkName, taken, out) {
  */
 function dartFormatViolations(lines, checkName, taken, out) {
     var re = /^Formatted\s+(\S+\.dart)\s*$/;
-    lines.forEach(function(line, idx) {
-        if (taken[idx]) return;
-        var m = line.match(re);
-        if (!m) return;
-        taken[idx] = true;
+    forEachUntakenMatch(lines, taken, re, function(m) {
         out.push({
             check: checkName,
             rule: 'dart_format',

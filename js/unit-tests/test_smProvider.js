@@ -9,7 +9,7 @@
 // gh-823: smProvider requires ./reviewVerdicts.js at LOAD TIME — every
 // loadModule of it must provide the module in its require map.
 var rvReal = function () {
-    if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+    if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
     return rvReal.mod;
 };
 // gh-1106: smProvider requires ./validationLiveness.js at LOAD TIME —
@@ -1016,7 +1016,7 @@ suite('smProvider — gh-807 machine verdict records', function () {
     }
 
     function loadWith(comments, calls) {
-        var rvMod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        var rvMod = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
         var mod = loadModule(MOD,
             makeRequire({ './reviewVerdicts.js': rvMod, './validationLiveness.js': vlReal() }, {}),
             {
@@ -1075,7 +1075,7 @@ suite('smProvider — gh-807 machine verdict records', function () {
     });
 
     test('probe failure fails open to [] — the guards go inert, never red', function () {
-        var rvMod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        var rvMod = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
         var mod = loadModule(MOD,
             makeRequire({ './reviewVerdicts.js': rvMod, './validationLiveness.js': vlReal() }, {}),
             {
@@ -1196,7 +1196,7 @@ suite('smProvider — gh-1009 CRAP characterization (paths touched by the provid
     var MOD = 'js/common/smProvider.js';
 
     function rvMod() {
-        return loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        return loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
     }
 
     function loadMod(mocks) {

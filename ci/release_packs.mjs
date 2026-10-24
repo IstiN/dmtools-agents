@@ -98,6 +98,23 @@ const SHARED_PREFIXES = ['js/', 'instructions/', 'prompts/', 'scripts/'];
  */
 const FACTORY_SETUP_LEGS = ['bug_development', 'story_development', 'pr_review', 'pr_rework'];
 
+// gh-1248: one recursive file listing shared by the SHA256SUMS inventory,
+// the require gate and the pack load probe (three byte-identical `walk`
+// closures grew below). Depth-first, readdir order — the integrity sums
+// sort before writing, so enumeration order is load-bearing nowhere.
+function listFilesRecursive(rootDir) {
+  const out = [];
+  const walk = (dir, rel) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const relPath = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(join(dir, e.name), relPath);
+      else out.push({ relPath, absPath: join(dir, e.name) });
+    }
+  };
+  walk(rootDir, '');
+  return out;
+}
+
 /** True when any changed file lives under setup/ or the builder itself. */
 function setupTouched() {
   if (AGENTS_INPUT) return true; // explicit dispatch: always ship a fresh asset
@@ -162,14 +179,9 @@ function buildFactorySetup() {
     // Plain integrity inventory (not a dmtools agent-pack manifest — this is
     // workflow glue, never resolved by the agent pack registry).
     const sums = [];
-    const walk = (dir, rel) => {
-      for (const e of readdirSync(dir, { withFileTypes: true })) {
-        const relPath = rel ? `${rel}/${e.name}` : e.name;
-        if (e.isDirectory()) walk(join(dir, e.name), relPath);
-        else sums.push(`${createHash('sha256').update(readFileSync(join(dir, e.name))).digest('hex')}  ${relPath}`);
-      }
-    };
-    walk(staging, '');
+    for (const f of listFilesRecursive(staging)) {
+      sums.push(`${createHash('sha256').update(readFileSync(f.absPath)).digest('hex')}  ${f.relPath}`);
+    }
     writeFileSync(join(staging, 'SHA256SUMS'), `${sums.sort().join('\n')}\n`);
     execSync(`cd ${JSON.stringify(staging)} && zip -q -r ${JSON.stringify(zipPath)} .`);
     const digest = createHash('sha256').update(readFileSync(zipPath)).digest('hex');
@@ -361,19 +373,12 @@ function assertZipRequires(zipPath) {
     execSync(`unzip -q -o ${JSON.stringify(zipPath)} -d ${JSON.stringify(tmp)}`);
     const paths = new Set();
     const sources = [];
-    const walk = (dir, rel) => {
-      for (const e of readdirSync(dir, { withFileTypes: true })) {
-        const relPath = rel ? `${rel}/${e.name}` : e.name;
-        if (e.isDirectory()) walk(join(dir, e.name), relPath);
-        else {
-          paths.add(relPath);
-          if (relPath.endsWith('.js')) {
-            sources.push({ path: relPath, source: readFileSync(join(dir, e.name), 'utf8') });
-          }
-        }
+    for (const f of listFilesRecursive(tmp)) {
+      paths.add(f.relPath);
+      if (f.relPath.endsWith('.js')) {
+        sources.push({ path: f.relPath, source: readFileSync(f.absPath, 'utf8') });
       }
-    };
-    walk(tmp, '');
+    }
     const unresolved = unresolvedRequires(sources, paths);
     if (unresolved.length > 0) {
       const lines = unresolved
@@ -406,15 +411,7 @@ function assertPackLoads(zipPath) {
   const tmp = mkdtempSync(join(tmpdir(), 'pack-load-probe-'));
   try {
     execSync(`unzip -q -o ${JSON.stringify(zipPath)} -d ${JSON.stringify(tmp)}`);
-    const paths = new Set();
-    const walk = (dir, rel) => {
-      for (const e of readdirSync(dir, { withFileTypes: true })) {
-        const relPath = rel ? `${rel}/${e.name}` : e.name;
-        if (e.isDirectory()) walk(join(dir, e.name), relPath);
-        else paths.add(relPath);
-      }
-    };
-    walk(tmp, '');
+    const paths = new Set(listFilesRecursive(tmp).map((f) => f.relPath));
     const files = probeFilesList(paths, PACK_LOAD_PROBE_JS);
     // Teammate packs can be js-free (CLI-driven agents) — nothing to load,
     // nothing to fail; the require gate still scanned the (empty) js set.
