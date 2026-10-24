@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-24T00:07:14.296Z",
+  "ticketKey": "gh-1198",
+  "headSha": "30be30dd117a20198a37b6cbee8778840862666a",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:208cdf589a25573b",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:9a4fed073cc8276c",
+      "size": 8396
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:a01c267eb908020c",
+      "size": 3846
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:50c9dd66ec1a46ac",
+      "size": 2830
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:61abc49c68b93192",
+      "size": 804
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:ee6b10cbc9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:90548b3b710ba747",
+      "size": 1893
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:0de38fda98a89005",
+      "size": 1824
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6vzuDU",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/workflowLint.js:313",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: `findDuplicateKeys` behaviour changed — a dedented comment / non-key line no longer ends a block scalar**\n\nThe ticket rule for gh-1198 is *\"Refactor + tests only: no behaviour change\"*, and the PR description claims *\"Behaviour is unchanged\"*. The `lineContext` extraction breaks that contract in one corner of the block-scalar bookkeeping.\n\n**Root cause** — `lineContext` returns `null` for *two* different situations and the caller can't tell them apart:\n\n1. \"line carries no structure **and stays inside the scalar**\" (`scalar.skip`), and\n2. \"line **leaves the scalar** (dedent) but carries no structure\" — a dedented full-line comment, or a non-key scalar line like `- main`.\n\nFor case 2, `scalarLineVerdict` correctly returns `{ endsScalar: true }` (line 310 sets `leavesScalar = true`), but then `contentContext` returns `null` and line 313 discards the signal — `null` comes back with no `leavesScalar` stamp. In `findDuplicateKeys`, `if (!ctx) continue;` therefore skips `if (ctx.leavesScalar) scalarIndent = -1;`, and the scalar **never closes**. Every deeper-indented line afterwards is swallowed as \"scalar body\" until some dedented *key* line happens to appear. The old inline code reset `scalarIndent = -1` on **any** dedented non-blank line, before content classification.\n\n**Empirical repro** (ran `findDuplicateKeys` from `origin/main` vs this branch on the same inputs):\n\n```\ninput:                          origin/main:                    this branch:\na: |                            [{\"key\":\"dupkey\",\"line\":5}]     []\n  text\n# comment at indent 0\n  dupkey: v1\n  dupkey: v2\n```\n\nIdentical divergence when the dedented line is a list item (`- main`) instead of a comment. A dedented *key* line (the control case) behaves identically — only the no-structure dedent paths regressed.\n\n**Why it matters**: this scanner is the gh-676 guard — duplicate mapping keys make workflow YAML unparseable, which produced stale push-event registrations and instant-fail runs. The regression silently disables duplicate detection for whole file regions after a block scalar followed by a dedented comment (a common shape in real workflows).\n\n**Suggested fix** — keep the scalar-end signal flowing through the null path, e.g.:\n\n```javascript\n// in lineContext: return a no-structure marker instead of null for case 2\nif (scalarIndent >= 0) {\n    var scalar = scalarLineVerdict(raw, scalarIndent);\n    if (scalar.skip) return null;\n    var ctx = contentContext(raw.slice(indentOf(raw)), indentOf(raw));\n    if (!ctx) return { leavesScalar: true };   // dedent with no structure: end the scalar, nothing else\n    ctx.leavesScalar = true;\n    return ctx;\n}\n```\n\nand in `findDuplicateKeys` treat a context without `match`/`reset` as \"reset scalar, continue\". Please also add the two characterization tests that would have caught this (comment-dedent and list-item-dedent closing a scalar, each followed by a duplicate key pair at the former scalar depth) to the `findDuplicateKeys — characterization corners` suite.\n\nEverything else in this PR is differential-verified clean: `orphanedRunChecks` matched `origin/main` on 14/14 edge cases, and `loadSmRules` / `applySafeRecovery` / `updateHistory` / `action` preserve call order and fail-safe semantics per the characterization tests (full suite: 6147 passed, the single `sessionDelta` UT-3 failure reproduces identically on `origin/main` in this sandbox — pre-existing, as disclosed)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-23:2f886a0a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-23",
+      "updatedAt": "2026-10-23",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: `findDuplicateKeys` behaviour changed — a dedented comment / non-key line no longer ends a block scalar**\n\nThe ticket rule for gh-1198 is *\"Refactor + tests only: no behaviour change\"*, and the PR description claims *\"Behaviour is unchanged\"*. The `lineContext` extraction breaks that contract in one corner of the block-scalar bookkeeping.\n\n**Root cause** — `lineContext` returns `null` for *two* different situations and the caller can't tell them apart:\n\n1. \"line carries no structure **and stays inside the scalar**\" (`scalar.skip`), and\n2. \"line **leaves the scalar** (dedent) but carries no structure\" — a dedented full-line comment, or a non-key scalar line like `- main`.\n\nFor case 2, `scalarLineVerdict` correctly returns `{ endsScalar: true }` (line 310 sets `leavesScalar = true`), but then `contentContext` returns `null` and line 313 discards the signal — `null` comes back with no `leavesScalar` stamp. In `findDuplicateKeys`, `if (!ctx) continue;` therefore skips `if (ctx.leavesScalar) scalarIndent = -1;`, and the scalar **never closes**. Every deeper-indented line afterwards is swallowed as \"scalar body\" until some dedented *key* line happens to appear. The old inline code reset `scalarIndent = -1` on **any** dedented non-blank line, before content classification.\n\n**Empirical repro** (ran `findDuplicateKeys` from `origin/main` vs this branch on the same inputs):\n\n```\ninput:                          origin/main:                    this branch:\na: |                            [{\"key\":\"dupkey\",\"line\":5}]     []\n  text\n# comment at indent 0\n  dupkey: v1\n  dupkey: v2\n```\n\nIdentical divergence when the dedented line is a list item (`- main`) instead of a comment. A dedented *key* line (the control case) behaves identically — only the no-structure dedent paths regressed.\n\n**Why it matters**: this scanner is the gh-676 guard — duplicate mapping keys make workflow YAML unparseable, which produced stale push-event registrations and instant-fail runs. The regression silently disables duplicate detection for whole file regions after a block scalar followed by a dedented comment (a common shape in real workflows).\n\n**Suggested fix** — keep the scalar-end signal flowing through the null path, e.g.:\n\n```javascript\n// in lineContext: return a no-structure marker instead of null for case 2\nif (scalarIndent >= 0) {\n    var scalar = scalarLineVerdict(raw, scalarIndent);\n    if (scalar.skip) return null;\n    var ctx = contentContext(raw.slice(indentOf(raw)), indentOf(raw));\n    if (!ctx) return { leavesScalar: true };   // dedent with no structure: end the scalar, nothing else\n    ctx.leavesScalar = true;\n    return ctx;\n}\n```\n\nand in `findDuplicateKeys` treat a context without `match`/`reset` as \"reset scalar, continue\". Please also add the two characterization tests that would have caught this (comment-dedent and list-item-dedent closing a scalar, each followed by a duplicate key pair at the former scalar depth) to the `findDuplicateKeys — characterization corners` suite.\n\nEverything else in this PR is differential-verified clean: `orphanedRunChecks` matched `origin/main` on 14/14 edge cases, and `loadSmRules` / `applySafeRecovery` / `updateHistory` / `action` preserve call order and fail-safe semantics per the characterization tests (full suite: 6147 passed, the single `sessionDelta` UT-3 failure reproduces identically on `origin/main` in this sandbox — pre-existing, as disclosed)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-23:721b62b3",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-23",
+      "updatedAt": "2026-10-23",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: One blocking finding: the `workflowLint.findDuplicateKeys` extraction changed behaviour — a dedented comment or non-key line no longer ends an open block scalar, so duplicate-key detection is silently disabled for the rest of the file after that shape (violates the ticket's \"no behaviour change\" rule; repro included in the inline thread). The other five extractions (`loadSmRules`, `applySafeRecovery`, `orphanedRunChecks`, `updateHistory`, `workflowFailureReporter.action`) are differential-verified behaviour-identical, well-tested, and the one full-suite failure (`sessionDelta` UT-3) reproduces identically on `main` — pre-existing, as disclosed.\n\n**Key Issues**:\n1. 🚨 `js/workflowLint.js` `lineContext`/`findDuplicateKeys` — scalar-end signal dropped when a dedented line carries no mapping structure (BLOCKING, see inline thread)\n\n**Next Steps**:\n1. Fix `lineContext` to carry `leavesScalar` through the no-structure dedent path and add the two missing characterization tests (comment-dedent, list-item-dedent close a scalar)"
+    }
+  ]
+}
