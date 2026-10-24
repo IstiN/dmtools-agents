@@ -421,12 +421,20 @@ function isSubmodulePath(runCommand, workingDir, path) {
         var stageOutput = cleanCommandOutput(
             runCommand('git ls-files --stage -- "' + path + '"', workingDir) || ''
         );
-        return stageOutput.split('\n').some(function(line) {
-            return line.trim().indexOf('160000 ') !== -1;
-        });
+        return stageOutputHasSubmodule(stageOutput);
     } catch (e) {
         return false;
     }
+}
+
+// Pure: a `git ls-files --stage` output carries a submodule (gitlink,
+// mode 160000) when any stage line starts with it. Shared with
+// js/postTestReworkResults.js (gh-1248: one copy of the parse, each caller
+// keeps its own command transport).
+function stageOutputHasSubmodule(stageOutput) {
+    return String(stageOutput || '').split('\n').some(function(line) {
+        return line.trim().indexOf('160000 ') !== -1;
+    });
 }
 
 // Pure: extracts conflicted file paths from `git status --short` output —
@@ -911,6 +919,8 @@ module.exports = {
     remoteBranchExists: remoteBranchExists,
     readTrackedStatus: readTrackedStatus,
     readStagedDiffStat: readStagedDiffStat,
+    lastNonEmptyLine: lastNonEmptyLine,
+    stageOutputHasSubmodule: stageOutputHasSubmodule,
     syncBranchWithBase: syncBranchWithBase,
     createPullRequest: createPullRequest,
     // gh-1041: creation-path helpers exposed as testable pure helpers

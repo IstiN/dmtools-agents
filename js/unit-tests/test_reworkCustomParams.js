@@ -13,7 +13,10 @@ var ticketKeyShapesModule = loadModule('js/common/ticketKeyShapes.js');
 var gitStagingModule = loadModule('js/common/gitStaging.js');
 var forkCheckoutModule = loadModule('js/common/forkCheckout.js', makeRequire({ './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}) }), {});
 // gh-957: githubHelpers + pushReworkChanges now require the no-op loop guard.
-var reworkLoopGuardModule = loadModule('js/common/reworkLoopGuard.js');
+var reworkLoopGuardModule = loadModule('js/common/reworkLoopGuard.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': reviewVerdictsReal()
+            }));
 // Real PR helper (gh-912): the modules under test delegate cleanCommandOutput
 // and the remote-existence probes to it — the canonical implementation must be
 // in every require map below.
@@ -34,7 +37,8 @@ var githubHelpersModule = loadModule(
         './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })),
         './common/reworkLoopGuard.js': reworkLoopGuardModule,
         './ci.js': loadModule('js/common/ci.js'),
-        './ciViolations.js': loadModule('js/common/ciViolations.js')
+        './ciViolations.js': loadModule('js/common/ciViolations.js'),
+        './githubReviewFetch.js': githubReviewFetchReal(),
     }),
     {}
 );

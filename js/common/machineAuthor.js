@@ -81,6 +81,33 @@ function stripBotSuffix(login) {
 }
 
 /**
+ * Comment author login (gh-1248): the author-identity spelling the verdict
+ * and rework marker readers compare on — `user.login`, falling back to
+ * `author.login`/`author.name`, lowercased. One canonical copy here; the
+ * marker modules (reviewVerdicts, reworkConsumption, reworkLoopGuard,
+ * guestTransplant) delegate instead of re-growing local duplicates.
+ *
+ * @param {Object|null} item a comment/review payload with user|author
+ * @returns {string|null} the lowercased login, null when absent
+ */
+function commentAuthorLogin(item) {
+    if (!item) return null;
+    var u = item.user || item.author;
+    if (!u) return null;
+    var login = u.login || u.name;
+    return login ? String(login).toLowerCase() : null;
+}
+
+/**
+ * The trust-matching normalization (gh-1025 review): lowercase + ONE
+ * trailing '[bot]' stripped — an App-authored marker is trusted under the
+ * bare knob entry; a different bot never matches.
+ */
+function trustedLogin(login) {
+    return stripBotSuffix(String(login || '').toLowerCase());
+}
+
+/**
  * Case-insensitive membership test for ACTOR probes (the sticky-park
  * RESET in smAgent.js): those have always lowercase-compared the head
  * commit's GitHub login against the machine login — with a list, a push
@@ -205,5 +232,7 @@ module.exports = {
     isMachineReleaseBump: isMachineReleaseBump,
     isMachineAuthored: isMachineAuthored,
     stripBotSuffix: stripBotSuffix,
-    loginMatchesList: loginMatchesList
+    loginMatchesList: loginMatchesList,
+    commentAuthorLogin: commentAuthorLogin,
+    trustedLogin: trustedLogin
 };

@@ -25,7 +25,7 @@
 
 /* global loadModule, assert, test, suite, file_read */
 
-var dedup = loadModule('js/common/teammateEventDedup.js', makeRequire({}), {});
+var dedup = loadModule('js/common/teammateEventDedup.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {});
 
 var NOW_MS = Date.parse('2026-10-18T20:11:30.000Z');
 var FIVE_MIN_AGO = '2026-10-18T20:06:30.000Z';

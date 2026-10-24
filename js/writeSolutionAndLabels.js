@@ -103,7 +103,7 @@ function buildConfluenceMarkdownSection(sorted) {
     lines.push('## Affected Repositories');
     lines.push('');
     lines.push('| # | Repository | Reason | Depends On |');
-    lines.push('|---|---|');
+    lines.push('|---|---|---|---|');
     // Mermaid dependency diagram (only when there are edges) — a single, plain
     // (unfenced) diagram, consistent with instructions/common/diagram_output_contract.md.
     // The Confluence markdown→storage converter wraps it with the correct macro itself.

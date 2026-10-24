@@ -51,6 +51,8 @@
  */
 'use strict';
 
+var machineAuthor = require('./machineAuthor.js');
+
 // The machine marker: one line, JSON payload, invisible in the rendered PR.
 // Human-written or legacy comments never carry it — that is the point (AC4):
 // verdict head-matching keys on the marker's structured head sha, not on
@@ -118,6 +120,25 @@ function markerPayload(body) {
     return text.substring(start, end).trim();
 }
 
+/**
+ * Generic marker extraction (gh-1248): locate prefix..suffix, JSON.parse
+ * the trimmed payload, admit objects only (arrays included — the rework
+ * marker readers pass those through exactly like their former local
+ * copies). null on absent markers, broken JSON or non-object payloads.
+ * Shared by the rework marker modules (reworkConsumption / reworkLoopGuard).
+ */
+function extractMarkerJson(body, prefix, suffix) {
+    var text = String(body || '');
+    var start = text.indexOf(prefix);
+    if (start === -1) return null;
+    start += prefix.length;
+    var end = text.indexOf(suffix, start);
+    if (end === -1) return null;
+    var parsed;
+    try { parsed = JSON.parse(text.substring(start, end).trim()); } catch (e) { return null; }
+    return (parsed && typeof parsed === 'object') ? parsed : null;
+}
+
 function censusCount(value) {
     return Number(value || 0) || 0;
 }
@@ -168,11 +189,7 @@ function extractVerdictRecord(body) {
  * Returns records oldest-first, each with its payload index as the tiebreak.
  */
 function commentAuthorLogin(item) {
-    if (!item) return null;
-    var u = item.user || item.author;
-    if (!u) return null;
-    var login = u.login || u.name;
-    return login ? String(login).toLowerCase() : null;
+    return machineAuthor.commentAuthorLogin(item);
 }
 
 // gh-1025 review: trust matching normalizes ONE trailing '[bot]' on both
@@ -180,7 +197,7 @@ function commentAuthorLogin(item) {
 // 'dmtools-factory-bot[bot]' is trusted under the bare knob entry
 // 'dmtools-factory-bot'. A different bot still never matches.
 function trustedLogin(login) {
-    return String(login || '').toLowerCase().replace(/\[bot\]$/i, '');
+    return machineAuthor.trustedLogin(login);
 }
 
 // gh-1196: the opts.authorLogins allowlist resolver (null = no allowlist).
@@ -570,6 +587,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         MARKER_PREFIX: MARKER_PREFIX,
         MARKER_SUFFIX: MARKER_SUFFIX,
+        extractMarkerJson: extractMarkerJson,
         VERDICTS: VERDICTS,
         LABEL_APPROVED: LABEL_APPROVED,
         LABEL_REWORK: LABEL_REWORK,

@@ -15,7 +15,7 @@
 
 var assert = globalThis.assert;
 
-var latch = loadModule('js/common/reworkLatch.js', makeRequire({}), {});
+var latch = loadModule('js/common/reworkLatch.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {});
 
 var T0 = '2026-10-09T04:01:00.000Z';
 var T0_MS = Date.parse(T0);

@@ -25,6 +25,22 @@ function makeTrackersStub() {
 }
 
 suite('trackerSlot', function() {
+    test('the slot is the trackers.js createTrackerHolder instance (gh-1250 unification)', function() {
+        var holder = {
+            initTracker: function() { throw new Error('initTracker must be re-exported, not wrapped'); },
+            getTracker: function() { return 'the-tracker'; }
+        };
+        var holderCalls = 0;
+        var trackers = {
+            createTracker: function() { throw new Error('must go through the holder'); },
+            createTrackerHolder: function() { holderCalls += 1; return holder; }
+        };
+        var slot = loadTrackerSlot(trackers);
+        assert.equal(holderCalls, 1, 'one holder per slot module instance');
+        assert.equal(slot.getTracker, holder.getTracker, 'getTracker is the holder method');
+        assert.equal(slot.getTracker(), 'the-tracker');
+    });
+
     test('getTracker lazily creates one tracker from the init context', function() {
         var trackers = makeTrackersStub();
         var slot = loadTrackerSlot(trackers);

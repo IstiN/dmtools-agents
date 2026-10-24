@@ -77,6 +77,7 @@ function setupRecoverDirty(mocks) {
         'js/recoverDirtyReviewTestCase.js',
         makeRequire({
             './common/scm.js': { createScm: function() { return scm; } },
+            './common/loseJson.js': loseJsonReal(),
             './configLoader.js': {
                 loadProjectConfig: function() {
                     return mocks.config || { jira: { statuses: { IN_REWORK: 'In Rework' } } };

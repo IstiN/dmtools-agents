@@ -1166,12 +1166,20 @@ function createTracker(config, customParams) {
         return { key: n.key, id: n.id, fields: issueViewFields(n), raw: t };
     }
 
+    /** The shared page→list head of _issueList/_ticketPage/_commentPage
+     * (gh-1248): a listField of an object envelope, the bare array itself,
+     * else []. */
+    function _pageList(rawPage, listField) {
+        var page = _parseJson(rawPage);
+        return page && typeof page === 'object' && !Array.isArray(page)
+            ? (page[listField] || [])
+            : (Array.isArray(page) ? page : []);
+    }
+
     /** A search result (page object or bare array) as an array of Jira-shaped issue views. */
     function _issueList(rawPage, listField, viewFn) {
         viewFn = viewFn || toIssueView;
-        var page = _parseJson(rawPage);
-        var list = page && typeof page === 'object' && !Array.isArray(page)
-            ? (page[listField] || []) : (Array.isArray(page) ? page : []);
+        var list = _pageList(rawPage, listField);
         var out = [];
         for (var i = 0; i < list.length; i++) {
             var v = viewFn(list[i]);
@@ -1195,10 +1203,7 @@ function createTracker(config, customParams) {
     }
 
     function _ticketPage(rawPage, listField) {
-        var page = _parseJson(rawPage);
-        var list = page && typeof page === 'object' && !Array.isArray(page)
-            ? (page[listField] || [])
-            : (Array.isArray(page) ? page : []);
+        var list = _pageList(rawPage, listField);
         var out = [];
         for (var i = 0; i < list.length; i++) {
             var n = normalizeTicket(list[i]);
@@ -1208,10 +1213,7 @@ function createTracker(config, customParams) {
     }
 
     function _commentPage(rawPage, listField) {
-        var page = _parseJson(rawPage);
-        var list = page && typeof page === 'object' && !Array.isArray(page)
-            ? (page[listField] || [])
-            : (Array.isArray(page) ? page : []);
+        var list = _pageList(rawPage, listField);
         var out = [];
         for (var i = 0; i < list.length; i++) {
             var c = _normalizeComment(list[i]);

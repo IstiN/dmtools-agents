@@ -13,9 +13,13 @@ function loadJiraHelpers() {
         makeRequire({
             '../config.js': configModule,
             'config': configModule,
-            // extractTicketKey never touches the tracker layer — a stub keeps
-            // the load hermetic (no config discovery, no tracker tools).
-            './trackers.js': {},
+            // gh-1248: extractTicketKey delegates to trackers.js — load the
+            // real one (pure helpers, no tracker-tool side effects).
+            './trackers.js': loadModule('js/common/trackers.js',
+                makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js', makeRequire({}), {})
+            }), {}),
             '../configLoader.js': { loadProjectConfig: function() { return null; } }
         }),
         {}

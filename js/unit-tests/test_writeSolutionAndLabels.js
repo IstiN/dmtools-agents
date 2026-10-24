@@ -130,6 +130,24 @@ suite('writeSolutionAndLabels — buildJiraSection', function() {
     });
 });
 
+suite('writeSolutionAndLabels — buildConfluenceMarkdownSection', function() {
+    test('produces a GFM table whose delimiter row matches the 4-column header', function() {
+        var mod = makeLabelsModule({});
+        var repos = [
+            { name: 'core-db', reason: 'DB migration' },
+            { name: 'service-api', reason: 'API', depends_on: ['core-db'] }
+        ];
+        var section = mod.buildConfluenceMarkdownSection(repos);
+        var lines = section.split('\n');
+        var headerIdx = -1;
+        lines.forEach(function(l, i) { if (l.indexOf('| # | Repository | Reason | Depends On |') !== -1) headerIdx = i; });
+        assert.notEqual(headerIdx, -1, '4-column header present');
+        var delimiter = lines[headerIdx + 1];
+        assert.equal(delimiter, '|---|---|---|---|', 'delimiter row must match the header column count (GFM table rule)');
+        assert.equal((delimiter.match(/\|/g) || []).length, 5, 'delimiter has 5 pipes like the header');
+    });
+});
+
 suite('writeSolutionAndLabels — buildMarkdownSection', function() {
     test('produces markdown table with --- delimiters and json code block', function() {
         var mod = makeLabelsModule({});

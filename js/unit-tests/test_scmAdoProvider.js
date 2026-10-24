@@ -10,10 +10,7 @@
 suite('scm ado provider', function () {
 
     function loadAdoMod(mocks) {
-        return loadModule('js/common/scm.js',
-            makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js'),
-            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })) }),
-            mocks || {});
+        return scmReal(mocks || {});
     }
 
     function makeAdo(mocks) {
@@ -240,10 +237,7 @@ suite('scm ado provider', function () {
 suite('scm ado workflow runs', function () {
 
     function makeAdoWithRuns(mocks) {
-        var mod = loadModule('js/common/scm.js',
-            makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js'),
-            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })) }),
-            mocks || {});
+        var mod = scmReal(mocks || {});
         return mod._createAdoProvider('my-repo');
     }
 
@@ -415,10 +409,7 @@ suite('scm ado workflow runs', function () {
 suite('scm ado helpers', function () {
 
     function loadAdoMod(mocks) {
-        return loadModule('js/common/scm.js',
-            makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js'),
-            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })) }),
-            mocks || {});
+        return scmReal(mocks || {});
     }
 
     test('_adoUnwrapList: value envelope, array, bare object, null', function () {

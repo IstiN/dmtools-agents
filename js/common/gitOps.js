@@ -26,6 +26,15 @@ var forkCheckout = require('./forkCheckout.js');
 
 var MAX_PR_DIFF_CONTEXT_CHARS = 12000;
 
+// gh-1248: the workingDir-scoped cli_execute_command closure shared by
+// checkoutPRBranch / getPRDiff / detectMergeConflicts (three byte-identical
+// copies grew here).
+function dirScopedCmd(workingDir) {
+    var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
+    return function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
+}
+
+
 // Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
 // common/pullRequest.js once — this delegate keeps every local call site.
 function cleanCommandOutput(output) {
@@ -137,8 +146,7 @@ function _switchOrPullRef(branchName, cmd, pullRef) {
  */
 function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef) {
     console.log('Checking out PR branch:', branchName);
-    var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
-    var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
+    var cmd = dirScopedCmd(workingDir);
 
     cmd('git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"');
     cmd('git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"');
@@ -299,8 +307,7 @@ function _tryMergeBaseDiff(cmd, baseBranch, headBranch) {
 }
 
 function getPRDiff(baseBranch, headBranch, workingDir) {
-    var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
-    var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
+    var cmd = dirScopedCmd(workingDir);
     try {
         console.log('Generating diff between', baseBranch, 'and', headBranch, workingDir ? '(in ' + workingDir + ')' : '');
 
@@ -448,8 +455,7 @@ function _handleMergeError(cmd, inputFolder, baseBranch, mergeError) {
 }
 
 function detectMergeConflicts(baseBranch, inputFolder, workingDir) {
-    var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
-    var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
+    var cmd = dirScopedCmd(workingDir);
     try {
         console.log('Checking for merge conflicts with origin/' + baseBranch + (workingDir ? ' in ' + workingDir : '') + '...');
 

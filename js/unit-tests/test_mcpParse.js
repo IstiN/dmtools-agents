@@ -56,6 +56,17 @@ suite('mcpParse: payloadList', function () {
         assert.deepEqual(mod.payloadList({ total_count: 0, pullRequests: [] }), []);
     });
 
+    test('preferPullRequests option restores mergeBot precedence when both keys co-occur', function () {
+        var mod = loadMcpParse();
+        assert.deepEqual(mod.payloadList({ items: [1], pullRequests: [2] }, { preferPullRequests: true }), [2],
+            'pullRequests wins over items when the caller opts in');
+        assert.deepEqual(mod.payloadList({ items: [1] }, { preferPullRequests: true }), [1],
+            'items still used when pullRequests is absent');
+        assert.deepEqual(mod.payloadList({ pullRequests: [3] }, { preferPullRequests: true }), [3]);
+        assert.deepEqual(mod.payloadList({ items: [1], pullRequests: [2] }), [1],
+            'default stays items-first (mergeTrigger semantics, pinned above)');
+    });
+
     test('anything that is not a list shape reads as []', function () {
         var mod = loadMcpParse();
         assert.deepEqual(mod.payloadList(null), []);

@@ -12,7 +12,7 @@ suite('machineSm decision core', function () {
     var agent = loadModule('js/machineSmAgent.js', makeRequire({
         './configLoader.js': { loadProjectConfig: function () { return {}; } },
         './common/smProvider.js': { createSmProvider: function () { return {}; } },
-        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
         './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
     }), {
         cli_execute_command: function () { return '{}'; }
@@ -223,7 +223,7 @@ suite('machineSm decision core', function () {
 suite('machineSm resolveSuggestionThreads (gh-828)', function () {
 
     var rvReal = function () {
-        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
         return rvReal.mod;
     };
 
@@ -390,7 +390,7 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
 suite('machineSm cfg knobs — gh-828 review round 4 (override priority)', function () {
 
     var rvReal = function () {
-        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
         return rvReal.mod;
     };
     var maReal = function () {
@@ -488,7 +488,7 @@ suite('machineSm: merged slot-holder releases the concurrency slot (gh-952)', fu
     // is MERGED can never be consumed by the loop — the slot must release.
 
     var rvReal = function () {
-        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
         return rvReal.mod;
     };
     var maReal = function () {
@@ -571,7 +571,7 @@ suite('machineSm: merged slot-holder releases the concurrency slot (gh-952)', fu
 
 suite('machineSm action branches (gh-980 characterization)', function () {
     var rvReal = function () {
-        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
         return rvReal.mod;
     };
     var maReal = function () {
@@ -718,7 +718,7 @@ suite('machineSm action branches (gh-980 characterization)', function () {
 
 suite('machineSm pure helpers (gh-980)', function () {
     var rvReal = function () {
-        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
         return rvReal.mod;
     };
     var maReal = function () {
@@ -816,7 +816,7 @@ suite('machineSm executeAction', function () {
         return loadModule('js/machineSmAgent.js', makeRequire({
             './configLoader.js': { loadProjectConfig: function () { return {}; } },
             './common/smProvider.js': { createSmProvider: function () { return {}; } },
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
         }), {
             cli_execute_command: function () { return '{}'; }

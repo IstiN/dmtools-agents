@@ -117,7 +117,7 @@ var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
         }),
         allMocks

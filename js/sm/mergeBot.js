@@ -54,11 +54,15 @@ function labelNames(pr) {
  * the slot release the whole PR exists for).
  *
  * gh-1250: the normalization itself lives in common/mcpParse.js
- * (payloadList) — the semantics are identical, including the
- * empty-list fallback for payloads carrying neither key.
+ * (payloadList). Precedence note: this caller passes
+ * { preferPullRequests: true } so a payload carrying both keys resolves
+ * to pullRequests — the exact order main's copy of listArray used
+ * (prs.pullRequests || prs.items) before the extraction; the gh-952
+ * merged-slot release consumes this list. The empty-list fallback for
+ * payloads carrying neither key is unchanged.
  */
 function listArray(prs) {
-    return mcpParse.payloadList(prs);
+    return mcpParse.payloadList(prs, { preferPullRequests: true });
 }
 
 /**

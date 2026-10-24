@@ -12,7 +12,7 @@
  *                      reference), JSON.parse(String(raw)) with the
  *                      parse failure swallowed → {} (a bridge error body
  *                      is handled by the caller's own checks).
- *   payloadList(p)   — the list tools have returned both bare arrays and
+ *   payloadList(p, opts) — the list tools have returned both bare arrays and
  *                      wrapped objects ({ items: [...] } /
  *                      { pullRequests: [...] }) across bridge versions.
  *                      Every consumer normalizes through here: a wrapped
@@ -21,6 +21,12 @@
  *                      vanishes from the log (gh-952 review). Anything
  *                      that is not one of the three list shapes reads as
  *                      an empty list — a missing payload never throws.
+ *                      opts.preferPullRequests: when both keys co-occur,
+ *                      pullRequests wins — the precedence mergeBot.js
+ *                      had pre-gh-1250 (sm/mergeBot.js listArray checked
+ *                      pullRequests first); mergeTrigger.js's original
+ *                      asList checked items first, which stays the
+ *                      default.
  *
  * GraalJS-compatible: var/plain functions only, no Node APIs.
  */
@@ -31,8 +37,10 @@ function parseMcp(raw) {
     try { return JSON.parse(String(raw)); } catch (e) { return {}; }
 }
 
-function payloadList(parsed) {
+function payloadList(parsed, options) {
     if (Array.isArray(parsed)) return parsed;
+    var preferPullRequests = options && options.preferPullRequests;
+    if (parsed && Array.isArray(parsed.pullRequests) && preferPullRequests) return parsed.pullRequests;
     if (parsed && Array.isArray(parsed.items)) return parsed.items;
     if (parsed && Array.isArray(parsed.pullRequests)) return parsed.pullRequests;
     return [];

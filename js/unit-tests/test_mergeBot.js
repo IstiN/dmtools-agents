@@ -1411,4 +1411,20 @@ suite('mergeBot: bridge payload normalization (gh-1250)', function () {
         assert.equal(fx.calls.merges.length, 1);
         assert.equal(fx.calls.merges[0].pullRequestId, 7);
     });
+
+    test('a payload carrying BOTH items and pullRequests keeps mergeBot precedence: pullRequests wins', function () {
+        // Pre-PR main behavior (sm/mergeBot.js listArray: prs.pullRequests || prs.items).
+        var fx = normFixture(
+            {
+                items: [{ number: 99, labels: [{ name: 'pr_approved' }], head: { sha: 's9' } }],
+                pullRequests: [{ number: 7, labels: [{ name: 'pr_approved' }], head: { sha: 's7' } }]
+            },
+            ARMED_GREEN_BODY);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(result.success, true);
+        assert.equal(result.acted, 1);
+        assert.equal(fx.calls.merges.length, 1);
+        assert.equal(fx.calls.merges[0].pullRequestId, 7,
+            'pullRequests (not items) is iterated — the gh-952 slot-release list is unchanged');
+    });
 });
