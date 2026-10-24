@@ -6,6 +6,25 @@
  * and the action() update/assign flow including every non-fatal path.
  */
 
+/** Token-usage double for the module under test; g.__tokenUsage overrides the poster. */
+function tokenUsageMock(g) {
+    return Object.assign({ customParamsOf: function(params) {
+        return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+    } }, g.__tokenUsage || { postTokenUsageComments: function() {} });
+}
+
+/** Require-spec map for enhanceSolutionDesignDescriptionAndAssess; g.__* keys inject doubles. */
+function enhanceSDRequireMap(g, outputFilesMock) {
+    return {
+        './common/jiraHelpers.js': { extractTicketKey: function() { return null; } },
+        './config.js': configModule,
+        './configLoader.js': g.__configLoader || { loadProjectConfig: function() { return {}; } },
+        './common/outputFiles.js': outputFilesMock,
+        './common/tokenUsageComment.js': tokenUsageMock(g),
+        './common/trackers.js': { createTracker: function(config, customParams) { return g.__tracker; } }
+    };
+}
+
 function loadEnhanceSD(mocks) {
     var defaults = {
         file_read: function() { return null; },
@@ -17,16 +36,7 @@ function loadEnhanceSD(mocks) {
     } };
     return loadModule(
         'js/enhanceSolutionDesignDescriptionAndAssess.js',
-        makeRequire({
-            './common/jiraHelpers.js': { extractTicketKey: function() { return null; } },
-            './config.js': configModule,
-            './configLoader.js': g.__configLoader || { loadProjectConfig: function() { return {}; } },
-            './common/outputFiles.js': outputFilesMock,
-            './common/tokenUsageComment.js': Object.assign({ customParamsOf: function(params) {
-                return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
-            } }, g.__tokenUsage || { postTokenUsageComments: function() {} }),
-            './common/trackers.js': { createTracker: function(config, customParams) { return g.__tracker; } }
-        }),
+        makeRequire(enhanceSDRequireMap(g, outputFilesMock)),
         g
     );
 }
