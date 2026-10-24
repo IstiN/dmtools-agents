@@ -136,61 +136,77 @@ function autoSaveMessage(ticketKey, timestamp, override, params) {
 
 var DEFAULT_AUTOSAVE_TEMPLATE = '{ticketKey} WIP auto-save {timestamp}';
 
-function autoCommitAndPush(customParams, ticketKey, params) {
+/**
+ * The working dir the timer operates on: the target repo checkout, or the job
+ * directory when no targetRepository is configured. A missing config must
+ * never silently disable crash-safety commits (dev legs ran for years without
+ * targetRepository — the timer was a silent no-op there and kill-timeout runs
+ * lost the workspace), so the fallback is loud.
+ */
+function resolveTimerWorkingDir(customParams) {
     var targetRepo = customParams.targetRepository || {};
-    // Fallback: explicit runner customParams → the job working directory.
-    // A missing config must never silently disable crash-safety commits
-    // (dev legs ran for years without targetRepository — the timer was a
-    // silent no-op there and kill-timeout runs lost the workspace).
     var workingDir = targetRepo.workingDir || '.';
-    if (!targetRepo.workingDir) {
+    var warned = !targetRepo.workingDir;
+    if (warned) {
         console.warn('⏱️ timer: targetRepository.workingDir not configured — falling back to the job directory');
     }
+    return { targetRepo: targetRepo, workingDir: workingDir, warned: warned };
+}
 
-    // Safety net: never auto-commit/push while sitting on the base branch
-    // (develop/main/...). If setup failed to switch onto the ticket branch
-    // (e.g. checkout error, missing PR), HEAD stays on baseBranch — pushing
-    // WIP snapshots there would land straight in the mainline history instead
-    // of the intended ticket branch.
-    if (targetRepo.baseBranch) {
-        var currentBranch;
-        try {
-            currentBranch = cli_execute_command({
-                command: 'git rev-parse --abbrev-ref HEAD',
-                workingDirectory: workingDir
-            });
-        } catch (e) {
-            console.log('⏱️ timer: could not determine current branch, skipping:', e.toString().substring(0, 100));
-            return false;
-        }
-        if (currentBranch && cleanCommandOutput(currentBranch) === targetRepo.baseBranch) {
-            console.warn('⏱️ timer: HEAD is on base branch "' + targetRepo.baseBranch +
-                '" — refusing to auto-commit/push (branch setup likely failed)');
-            return false;
-        }
+/**
+ * Safety net: never auto-commit/push while sitting on the base branch
+ * (develop/main/...). If setup failed to switch onto the ticket branch
+ * (e.g. checkout error, missing PR), HEAD stays on baseBranch — pushing
+ * WIP snapshots there would land straight in the mainline history instead
+ * of the intended ticket branch. A failed branch probe skips the tick too.
+ */
+function baseBranchGuardSkips(targetRepo, workingDir) {
+    if (!targetRepo.baseBranch) return false;
+    var currentBranch;
+    try {
+        currentBranch = cli_execute_command({
+            command: 'git rev-parse --abbrev-ref HEAD',
+            workingDirectory: workingDir
+        });
+    } catch (e) {
+        console.log('⏱️ timer: could not determine current branch, skipping:', e.toString().substring(0, 100));
+        return true;
     }
+    if (currentBranch && cleanCommandOutput(currentBranch) === targetRepo.baseBranch) {
+        console.warn('⏱️ timer: HEAD is on base branch "' + targetRepo.baseBranch +
+            '" — refusing to auto-commit/push (branch setup likely failed)');
+        return true;
+    }
+    return false;
+}
 
-    // gh-761: skip the tick while a merge is in progress. MERGE_HEAD present
-    // means a conflicted merge of the base branch sits unconcluded in the
-    // working tree (the rework setup leaves it there for the agent to
-    // resolve; the agent's own merge of origin/main may be mid-conflict).
-    // A blind `git add -A && git commit` here would stage the unmerged paths
-    // — conflict markers and all — and FINALIZE that merge as a 'WIP
-    // auto-save' commit pushed to origin: silent branch corruption. The
-    // probe runs BEFORE the dirty-tree check (a mid-merge status is always
-    // dirty) and must come after the base-branch guard, which cheaply rules
-    // out the more dangerous wrong-branch case first. The next tick after
-    // the merge concludes (or is aborted) resumes normal auto-saving; the
-    // session artefact upload in action() is git-independent and still runs.
-    if (mergeState.isMergeInProgress(function (command) {
+/**
+ * gh-761: skip the tick while a merge is in progress. MERGE_HEAD present
+ * means a conflicted merge of the base branch sits unconcluded in the
+ * working tree (the rework setup leaves it there for the agent to
+ * resolve; the agent's own merge of origin/main may be mid-conflict).
+ * A blind `git add -A && git commit` here would stage the unmerged paths
+ * — conflict markers and all — and FINALIZE that merge as a 'WIP
+ * auto-save' commit pushed to origin: silent branch corruption. The probe
+ * runs BEFORE the dirty-tree check (a mid-merge status is always dirty)
+ * and must come after the base-branch guard, which cheaply rules out the
+ * more dangerous wrong-branch case first. The next tick after the merge
+ * concludes (or is aborted) resumes normal auto-saving; the session
+ * artefact upload in action() is git-independent and still runs.
+ */
+function mergeInProgressSkips(workingDir) {
+    if (!mergeState.isMergeInProgress(function (command) {
         return cli_execute_command({ command: command, workingDirectory: workingDir });
     }, workingDir)) {
-        console.warn('⏱️ timer: MERGE_HEAD exists — merge in progress, skipping auto-commit/push this tick ' +
-            '(a blind add/commit would finalize the conflicted merge and bake conflict markers into a WIP auto-save)');
         return false;
     }
+    console.warn('⏱️ timer: MERGE_HEAD exists — merge in progress, skipping auto-commit/push this tick ' +
+        '(a blind add/commit would finalize the conflicted merge and bake conflict markers into a WIP auto-save)');
+    return true;
+}
 
-    // Check for changes using git status
+/** True when `git status --porcelain` reports anything (a failed probe reports nothing). */
+function hasDirtyChanges(workingDir) {
     var statusOutput;
     try {
         statusOutput = cli_execute_command({
@@ -201,58 +217,64 @@ function autoCommitAndPush(customParams, ticketKey, params) {
         console.log('⏱️ timer: git status failed:', e.toString().substring(0, 100));
         return false;
     }
+    return Boolean(statusOutput && statusOutput.trim());
+}
 
-    if (!statusOutput || !statusOutput.trim()) {
-        return false;
-    }
+/** The customParams.autoSaveCommitMessage override for autoSaveMessage (null when unset). */
+function autoSaveCommitMessageOverride(customParams) {
+    return customParams.autoSaveCommitMessage || null;
+}
 
-    // There are changes — commit and push
-    var timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
-    // agents#883: the message is a template like every other commit message (formats.commitMessage.autoSave in
-    // the project config), so a repo whose commit-msg hook demands a tracker key can be satisfied. Default is
-    // the previous text, byte for byte. Double quotes are dropped: the message is placed inside git commit -m "...".
-    var commitMsg = autoSaveMessage(ticketKey, timestamp, customParams.autoSaveCommitMessage || null, params);
-
+/**
+ * Untrack machine-local runtime logs that older/poisoned branches may already
+ * carry (gh-628: the timer itself swept .dmtools/credential-helper.log into
+ * three commits on ai/gh-628). Pathspec exclusion cannot help a TRACKED file,
+ * so they are removed from the index. Two plain commands (list tracked, then
+ * rm) — no shell pipe, which the Java validator rejects (epam/dm.ai#679).
+ * A cleanup failure never blocks the WIP save.
+ */
+function untrackRuntimeArtifactsSafe(workingDir) {
     try {
-        // Untrack machine-local runtime logs that older/poisoned branches may already carry (gh-628: the
-        // timer itself swept .dmtools/credential-helper.log into three commits on ai/gh-628). Pathspec
-        // exclusion cannot help a TRACKED file, so they are removed from the index. Two plain commands
-        // (list tracked, then rm) — no shell pipe, which the Java validator rejects (epam/dm.ai#679).
         gitStaging.untrackRuntimeArtifacts(function (command) {
             return cli_execute_command({ command: command, workingDirectory: workingDir });
         });
     } catch (cleanupErr) {
         console.log('⏱️ timer: session cache cleanup skipped:', cleanupErr.toString().substring(0, 100));
     }
+}
 
+/**
+ * Stage everything except the machine-local runtime artifacts.
+ * `:!factory-kit`: the factory workflow's nested machine-infra
+ * repo (when a pin still lands it in the workspace) is a gitlink
+ * a bare `git add -A` cannot stage — exit 128 kills the timer
+ * (live: fa gh-1044 leg 2026-10-03, clip 1791017320716).
+ * `:!.dmtools/...` runtime logs (gh-628): the machine's runtime
+ * artifacts live INSIDE the committed .dmtools/ directory
+ * (config.js, runners/), so the directory itself cannot be
+ * ignored — the credential helper's serving trace, fa trace and
+ * run logs, the watchdog stall capture and the session store
+ * must be excluded by pathspec, exactly like copilot-sessions.
+ * `.dmtools-session-output.log` is this timer's own CLI-stdout
+ * snapshot at the job root — a crash mid-upload leaves it
+ * behind, and the next broad add would commit the full session
+ * log into the ticket branch. Shared canonical list:
+ * js/common/gitStaging.js.
+ * gh-683 (live fa run 37153405587 — this timer's add was the
+ * FIRST casualty of git's ignored-pathspec guard): naming an
+ * existing ignored-untracked path in a `:!` exclusion pathspec
+ * fails the whole add. The check-ignore probe below drops the
+ * exclusion for every path git already ignores, so the timer's
+ * WIP save can never die on the guard again.
+ * gh-1164 (live fa runs 37153882406 + 37220167230): `factory-kit`
+ * must go through the SAME probe — appended statically, it kept
+ * tripping the guard every 5 minutes for 40+ minutes whenever the
+ * kit was materialized AND gitignored, and the dev agent's work
+ * died uncommitted with the runner.
+ */
+function stageWorkingTree(workingDir) {
     try {
         cli_execute_command({
-            // `:!factory-kit`: the factory workflow's nested machine-infra
-            // repo (when a pin still lands it in the workspace) is a gitlink
-            // a bare `git add -A` cannot stage — exit 128 kills the timer
-            // (live: fa gh-1044 leg 2026-10-03, clip 1791017320716).
-            // `:!.dmtools/...` runtime logs (gh-628): the machine's runtime
-            // artifacts live INSIDE the committed .dmtools/ directory
-            // (config.js, runners/), so the directory itself cannot be
-            // ignored — the credential helper's serving trace, fa trace and
-            // run logs, the watchdog stall capture and the session store
-            // must be excluded by pathspec, exactly like copilot-sessions.
-            // `.dmtools-session-output.log` is this timer's own CLI-stdout
-            // snapshot at the job root — a crash mid-upload leaves it
-            // behind, and the next broad add would commit the full session
-            // log into the ticket branch. Shared canonical list:
-            // js/common/gitStaging.js.
-            // gh-683 (live fa run 37153405587 — this timer's add was the
-            // FIRST casualty of git's ignored-pathspec guard): naming an
-            // existing ignored-untracked path in a `:!` exclusion pathspec
-            // fails the whole add. The check-ignore probe below drops the
-            // exclusion for every path git already ignores, so the timer's
-            // WIP save can never die on the guard again.
-            // gh-1164 (live fa runs 37153882406 + 37220167230): `factory-kit`
-            // must go through the SAME probe — appended statically, it kept
-            // tripping the guard every 5 minutes for 40+ minutes whenever the
-            // kit was materialized AND gitignored, and the dev agent's work
-            // died uncommitted with the runner.
             command: 'git add -A -- ' + gitStaging.buildStagingPathspecs(function (args) {
                 return cli_execute_command({
                     command: args.command,
@@ -261,22 +283,30 @@ function autoCommitAndPush(customParams, ticketKey, params) {
             }, ['factory-kit']),
             workingDirectory: workingDir
         });
+        return true;
     } catch (e) {
         console.error('⏱️ timer: git add failed:', e.toString().substring(0, 100));
         return false;
     }
+}
 
+/** Commit the staged tree. False when git refuses (e.g. "nothing to commit" after add). */
+function commitWorkingTree(workingDir, commitMsg) {
     try {
         cli_execute_command({
             command: 'git commit -m "' + commitMsg + '"',
             workingDirectory: workingDir
         });
+        return true;
     } catch (e) {
         // Could be "nothing to commit" after add
         console.log('⏱️ timer: git commit:', e.toString().substring(0, 100));
         return false;
     }
+}
 
+/** Push the WIP commit (with the gh-798 self-heal) and log the outcome. */
+function pushAndLog(workingDir, commitMsg) {
     try {
         pushBranchWithSelfHeal(function (command) {
             return cli_execute_command({
@@ -295,6 +325,29 @@ function autoCommitAndPush(customParams, ticketKey, params) {
         console.error('⏱️ timer: git push failed:', e.toString().substring(0, 100));
         return false;
     }
+}
+
+/**
+ * Auto-commit and push any uncommitted changes in the target repo working dir.
+ * Returns true if a commit was made.
+ */
+function autoCommitAndPush(customParams, ticketKey, params) {
+    var repo = resolveTimerWorkingDir(customParams);
+    if (baseBranchGuardSkips(repo.targetRepo, repo.workingDir)) return false;
+    if (mergeInProgressSkips(repo.workingDir)) return false;
+    if (!hasDirtyChanges(repo.workingDir)) return false;
+
+    // There are changes — commit and push
+    var timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+    // agents#883: the message is a template like every other commit message (formats.commitMessage.autoSave in
+    // the project config), so a repo whose commit-msg hook demands a tracker key can be satisfied. Default is
+    // the previous text, byte for byte. Double quotes are dropped: the message is placed inside git commit -m "...".
+    var commitMsg = autoSaveMessage(ticketKey, timestamp, autoSaveCommitMessageOverride(customParams), params);
+
+    untrackRuntimeArtifactsSafe(repo.workingDir);
+    if (!stageWorkingTree(repo.workingDir)) return false;
+    if (!commitWorkingTree(repo.workingDir, commitMsg)) return false;
+    return pushAndLog(repo.workingDir, commitMsg);
 }
 
 /**
@@ -378,8 +431,14 @@ function action(params) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
+        autoCommitAndPush: autoCommitAndPush,
         autoSaveMessage: autoSaveMessage,
         pushBranchWithSelfHeal: pushBranchWithSelfHeal,
-        isNonFastForwardError: isNonFastForwardError
+        isNonFastForwardError: isNonFastForwardError,
+        resolveTimerWorkingDir: resolveTimerWorkingDir,
+        baseBranchGuardSkips: baseBranchGuardSkips,
+        mergeInProgressSkips: mergeInProgressSkips,
+        hasDirtyChanges: hasDirtyChanges,
+        autoSaveCommitMessageOverride: autoSaveCommitMessageOverride
     };
 }

@@ -241,3 +241,124 @@ suite('recoverMergedPRTicket: stage-label fallback (gh-916)', function() {
         assert.deepEqual(x.added, [{ key: 'TS-700', label: 'stage_merged' }]);
     });
 });
+
+// ─── gh-119 CRAP: uncovered branches + extracted pure helpers ────────────────
+
+suite('recoverMergedPRTicket — uncovered action branches (gh-119 characterization)', function() {
+
+    test('missing ticket key: fails with missing_ticket, tracker untouched', function() {
+        var loaded = loadRecoverMergedPRTicket({});
+        var result = loaded.mod.action({ jobParams: {} });
+        assert.equal(result.success, false);
+        assert.equal(result.action, 'missing_ticket');
+        assert.deepEqual(loaded.statusMoves, []);
+        assert.deepEqual(loaded.comments, []);
+    });
+
+    test('no merged PR found: success none, nothing written', function() {
+        var loaded = loadRecoverMergedPRTicket({ scm: { listPrs: function() { return []; } } });
+        var result = loaded.mod.action({ ticket: { key: 'TS-1' }, jobParams: {} });
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'none');
+        assert.deepEqual(loaded.statusMoves, []);
+        assert.deepEqual(loaded.removedLabels, []);
+        assert.deepEqual(loaded.comments, []);
+    });
+
+    test('PR identified by id/url fallbacks: comment carries #<id> and the url', function() {
+        var loaded = loadRecoverMergedPRTicket({
+            scm: {
+                listPrs: function(state) {
+                    if (state === 'open') return [];
+                    return [{
+                        id: 9001,
+                        title: 'TS-77 fix',
+                        url: 'https://example.com/pr/9001',
+                        head: { ref: 'ai/TS-77' },
+                        merged: true
+                    }];
+                }
+            }
+        });
+        var result = loaded.mod.action({ ticket: { key: 'TS-77' }, jobParams: {} });
+        assert.equal(result.success, true);
+        assert.equal(result.prNumber, 9001);
+        assert.contains(loaded.comments[0].comment, '#9001');
+        assert.contains(loaded.comments[0].comment, 'https://example.com/pr/9001');
+    });
+
+    test('tracker move hard-fails: recovery still removes labels and comments (non-fatal)', function() {
+        var removed = [];
+        var posted = [];
+        var mod = loadModule('js/recoverMergedPRTicket.js', makeRequire({
+            './config.js': configModule,
+            './configLoader.js': makeDefaultConfigLoaderMock({ repository: { owner: 'IstiN', repo: 'trackstate' } }),
+            './common/scm.js': {
+                createScm: function() {
+                    return { listPrs: function(state) {
+                        if (state === 'open') return [];
+                        return [{ number: 5, title: 'TS-5 x', html_url: 'u', head: { ref: 'ai/TS-5' }, merged: true }];
+                    } };
+                }
+            },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/trackers.js': {
+                createTracker: function() {
+                    return {
+                        moveToStatusOrMark: function() { throw new Error('tracker down'); },
+                        removeLabel: function(key, label) { removed.push(label); },
+                        postComment: function(key, text) { posted.push(text); }
+                    };
+                }
+            }
+        }));
+        var result = mod.action({ ticket: { key: 'TS-5' }, jobParams: {} });
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_merged');
+        assert.deepEqual(removed, ['pr_approved', 'sm_pr_merge_triggered', 'sm_story_review_triggered', 'sm_story_rework_triggered']);
+        assert.equal(posted.length, 1);
+    });
+
+    test('token usage comments fire with initiator + customParams (non-fatal on error)', function() {
+        var calls = [];
+        var scm = { listPrs: function(state) {
+            if (state === 'open') return [];
+            return [{ number: 6, title: 'TS-6 x', head: { ref: 'ai/TS-6' }, merged_at: 'z' }];
+        } };
+        var mod = loadModule('js/recoverMergedPRTicket.js', makeRequire({
+            './config.js': configModule,
+            './configLoader.js': makeDefaultConfigLoaderMock({ repository: { owner: 'IstiN', repo: 'trackstate' } }),
+            './common/scm.js': { createScm: function() { return scm; } },
+            './common/tokenUsageComment.js': {
+                postTokenUsageComments: function(key, opts) { calls.push({ key: key, opts: opts }); },
+                customParamsOf: function(params) { return params.customParams || {}; }
+            },
+            './common/trackers.js': trackersWith({
+                jira_move_to_status: function() {},
+                jira_remove_label: function() {},
+                jira_post_comment: function() {}
+            })
+        }));
+        var result = mod.action({ ticket: { key: 'TS-6' }, initiator: 'user-1', customParams: { a: 1 }, jobParams: {} });
+        assert.equal(result.success, true);
+        assert.deepEqual(calls, [{ key: 'TS-6', opts: { initiator: 'user-1', customParams: { a: 1 } } }]);
+    });
+});
+
+suite('recoverMergedPRTicket — pure helpers (gh-119)', function() {
+    var guard = loadRecoverMergedPRTicket({}).mod;
+
+    test('prIdentity: number/id and html_url/url fallback chains', function() {
+        assert.deepEqual(guard.prIdentity({ number: 7, html_url: 'a' }), { number: 7, url: 'a' });
+        assert.deepEqual(guard.prIdentity({ id: 8, url: 'b' }), { number: 8, url: 'b' });
+        assert.deepEqual(guard.prIdentity({}), { number: '?', url: '' });
+        assert.deepEqual(guard.prIdentity({ number: 0, id: 9 }), { number: 9, url: '' });
+    });
+
+    test('recoveryCustomParams: jobParams bag wins, params bag next, {} last', function() {
+        assert.deepEqual(guard.recoveryCustomParams({ jobParams: { customParams: { a: 1 } }, customParams: { b: 2 } }), { a: 1 });
+        assert.deepEqual(guard.recoveryCustomParams({ customParams: { b: 2 } }), { b: 2 });
+        assert.deepEqual(guard.recoveryCustomParams({}), {});
+        assert.deepEqual(guard.recoveryCustomParams({ jobParams: {} }), {});
+    });
+});

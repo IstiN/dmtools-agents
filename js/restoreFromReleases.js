@@ -34,70 +34,106 @@ function resolveCustomParams(params) {
 }
 
 /**
+ * The params bag that carries the ticket: the Teammate call path has it at
+ * params.ticket, the JSRunner path nests everything under params.jobParams.
+ */
+function resolveActualParams(params) {
+    return params.ticket ? params : (params.jobParams || params);
+}
+
+/** The configured assets to restore, or null when the list is absent/empty/malformed. */
+function configuredAssets(config) {
+    var assets = config && config.assets;
+    if (!assets || !Array.isArray(assets) || assets.length === 0) return null;
+    return assets;
+}
+
+/** The SCM provider for the artefact download: projectConfig.scm.provider, github default. */
+function scmProviderOf(projectConfig) {
+    return (projectConfig.scm && projectConfig.scm.provider) || 'github';
+}
+
+/**
+ * Restore one asset. An asset without a name or a target folder is skipped
+ * with a warning; a failed download is non-fatal (the next asset is tried).
+ */
+function restoreOneAsset(artefactRepo, ticketKey, releaseConfig, asset, scmProvider) {
+    if (!asset.name || !asset.toFolder) {
+        console.warn('⚠️  Asset missing name or toFolder, skipping:', JSON.stringify(asset));
+        return;
+    }
+
+    var result = releaseArtefacts.downloadArtefact(
+        artefactRepo.owner, artefactRepo.repo, ticketKey, releaseConfig, asset, scmProvider
+    );
+
+    if (result.restored) {
+        console.log('✅ Restored "' + asset.name + '" →',
+                    releaseArtefacts.resolveTemplate(asset.toFolder, ticketKey));
+    } else if (!result.success) {
+        console.warn('⚠️  Could not restore "' + asset.name + '":', result.error);
+        // Non-fatal — continue to next asset
+    }
+}
+
+/**
+ * The restore flow for one ticket: config → assets → artefact repo →
+ * per-asset downloads. Every skip is a logged no-op — the action is
+ * non-fatal by contract.
+ */
+function restoreTicketAssets(params, actualParams, ticketKey) {
+    var customParams = resolveCustomParams(params);
+    var config = customParams.restoreFromReleases;
+
+    if (!config) {
+        console.log('ℹ️  restoreFromReleases: not configured, skipping');
+        return;
+    }
+
+    var assets = configuredAssets(config);
+    if (!assets) {
+        console.log('ℹ️  restoreFromReleases: no assets configured, skipping');
+        return;
+    }
+
+    var artefactRepo = releaseArtefacts.resolveArtefactRepository(customParams);
+    if (!artefactRepo) {
+        console.warn('⚠️  restoreFromReleases: artefactRepository not configured, skipping');
+        return;
+    }
+
+    var projectConfig = configLoader.loadProjectConfig(actualParams);
+    var scmProvider = scmProviderOf(projectConfig);
+
+    var releaseConfig = {
+        tagTemplate:  config.releaseTagTemplate,
+        nameTemplate: config.releaseNameTemplate
+    };
+
+    console.log('=== restoreFromReleases for', ticketKey, '(' + scmProvider + ') ===');
+    console.log('Release tag:', releaseArtefacts.buildTag(ticketKey, releaseConfig.tagTemplate));
+
+    for (var i = 0; i < assets.length; i++) {
+        restoreOneAsset(artefactRepo, ticketKey, releaseConfig, assets[i], scmProvider);
+    }
+
+    console.log('=== restoreFromReleases done ===');
+}
+
+/**
  * @param {Object} params - Teammate/JSRunner params
  * @returns {boolean} Always true — non-fatal, never blocks processing
  */
 function action(params) {
     try {
-        var actualParams = params.ticket ? params : (params.jobParams || params);
+        var actualParams = resolveActualParams(params);
         var ticketKey = actualParams.ticket && actualParams.ticket.key;
         if (!ticketKey) {
             console.warn('⚠️  restoreFromReleases: no ticketKey found, skipping');
             return true;
         }
 
-        var customParams = resolveCustomParams(params);
-        var config = customParams.restoreFromReleases;
-
-        if (!config) {
-            console.log('ℹ️  restoreFromReleases: not configured, skipping');
-            return true;
-        }
-
-        var assets = config.assets;
-        if (!assets || !Array.isArray(assets) || assets.length === 0) {
-            console.log('ℹ️  restoreFromReleases: no assets configured, skipping');
-            return true;
-        }
-
-        var artefactRepo = releaseArtefacts.resolveArtefactRepository(customParams);
-        if (!artefactRepo) {
-            console.warn('⚠️  restoreFromReleases: artefactRepository not configured, skipping');
-            return true;
-        }
-
-        var projectConfig = configLoader.loadProjectConfig(actualParams);
-        var scmProvider = (projectConfig.scm && projectConfig.scm.provider) || 'github';
-
-        var releaseConfig = {
-            tagTemplate:  config.releaseTagTemplate,
-            nameTemplate: config.releaseNameTemplate
-        };
-
-        console.log('=== restoreFromReleases for', ticketKey, '(' + scmProvider + ') ===');
-        console.log('Release tag:', releaseArtefacts.buildTag(ticketKey, releaseConfig.tagTemplate));
-
-        for (var i = 0; i < assets.length; i++) {
-            var asset = assets[i];
-            if (!asset.name || !asset.toFolder) {
-                console.warn('⚠️  Asset missing name or toFolder, skipping:', JSON.stringify(asset));
-                continue;
-            }
-
-            var result = releaseArtefacts.downloadArtefact(
-                artefactRepo.owner, artefactRepo.repo, ticketKey, releaseConfig, asset, scmProvider
-            );
-
-            if (result.restored) {
-                console.log('✅ Restored "' + asset.name + '" →',
-                            releaseArtefacts.resolveTemplate(asset.toFolder, ticketKey));
-            } else if (!result.success) {
-                console.warn('⚠️  Could not restore "' + asset.name + '":', result.error);
-                // Non-fatal — continue to next asset
-            }
-        }
-
-        console.log('=== restoreFromReleases done ===');
+        restoreTicketAssets(params, actualParams, ticketKey);
 
     } catch (e) {
         console.warn('⚠️  restoreFromReleases error (non-fatal):', e);
@@ -106,4 +142,9 @@ function action(params) {
     return true;
 }
 
-module.exports = { action: action };
+module.exports = {
+    action: action,
+    resolveActualParams: resolveActualParams,
+    configuredAssets: configuredAssets,
+    scmProviderOf: scmProviderOf
+};

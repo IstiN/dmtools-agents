@@ -73,6 +73,71 @@ function removeLabel(ticketKey, label) {
     } catch (e) {}
 }
 
+// Labels the merge pipeline may have put on the ticket while it was in
+// review/rework — all of them are stale once the PR is confirmed merged.
+var RECOVERY_LABELS = [
+    LABELS.PR_APPROVED,
+    'sm_pr_merge_triggered',
+    'sm_story_review_triggered',
+    'sm_story_rework_triggered'
+];
+
+function removeRecoveryLabels(ticketKey) {
+    for (var i = 0; i < RECOVERY_LABELS.length; i++) {
+        removeLabel(ticketKey, RECOVERY_LABELS[i]);
+    }
+}
+
+/** PR number/url read across GitHub REST and dmtools-normalized field namings. */
+function prIdentity(pr) {
+    return {
+        number: pr.number || pr.id || '?',
+        url: pr.html_url || pr.url || ''
+    };
+}
+
+/** The customParams bag: jobParams (JSRunner/post-action path) wins, then the params bag. */
+function recoveryCustomParams(params) {
+    return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+}
+
+/**
+ * Move the ticket to the merged status. gh-916: MERGED can be tag-only
+ * (restricted ADO workflows) — moveToStatusOrMark carries the stage-label
+ * fallback. A hard tracker failure is non-fatal: the recovery continues.
+ */
+function moveTicketToMerged(ticketKey, mergedStatus) {
+    try {
+        var moveResult = getTracker().moveToStatusOrMark(ticketKey, mergedStatus, 'MERGED');
+        if (moveResult.moved || moveResult.marked) {
+            console.log('Moved', ticketKey, 'to', mergedStatus);
+        }
+    } catch (e) {
+        console.warn('Could not move ticket to Merged:', e.message || e);
+    }
+}
+
+/** Announce the recovered PR on the ticket (non-fatal on failure). */
+function postRecoveryComment(ticketKey, prNumber, prUrl, mergedStatus) {
+    try {
+        getTracker().postComment(ticketKey, 'h3. ✅ Merged PR Recovered\n\n' +
+                'Found already merged PR #' + prNumber + (prUrl ? ' — [View PR|' + prUrl + ']' : '') +
+                '. Ticket moved to *' + mergedStatus + '* so the normal post-merge pipeline can continue.');
+    } catch (e) {}
+}
+
+/**
+ * Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
+ * wrote outputs/*_usage.json during the agent run (non-fatal on failure).
+ */
+function postRunTokenUsage(params, ticketKey) {
+    try {
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
 function action(params) {
     var ticketKey = params.ticket && params.ticket.key;
     if (!ticketKey) {
@@ -82,7 +147,7 @@ function action(params) {
 
     var config = configLoader.loadProjectConfig(params.jobParams || params);
     var jiraConfig = config.jira;
-    initTracker(config, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+    initTracker(config, recoveryCustomParams(params));
     var scm = scmModule.createScm(config);
     var pr = findMergedPRForTicket(scm, ticketKey);
 
@@ -91,42 +156,29 @@ function action(params) {
         return { success: true, action: 'none' };
     }
 
-    var prNumber = pr.number || pr.id || '?';
-    var prUrl = pr.html_url || pr.url || '';
+    var identity = prIdentity(pr);
+    var prNumber = identity.number;
+    var prUrl = identity.url;
     console.log('Recovered merged PR #' + prNumber + ' for ' + ticketKey);
 
-    try {
-        // gh-916: MERGED can be tag-only (restricted ADO workflows) — stage-label fallback.
-        var moveResult = getTracker().moveToStatusOrMark(ticketKey, jiraConfig.statuses.MERGED, 'MERGED');
-        if (moveResult.moved || moveResult.marked) {
-            console.log('Moved', ticketKey, 'to', jiraConfig.statuses.MERGED);
-        }
-    } catch (e) {
-        console.warn('Could not move ticket to Merged:', e.message || e);
-    }
+    moveTicketToMerged(ticketKey, jiraConfig.statuses.MERGED);
 
-    removeLabel(ticketKey, LABELS.PR_APPROVED);
-    removeLabel(ticketKey, 'sm_pr_merge_triggered');
-    removeLabel(ticketKey, 'sm_story_review_triggered');
-    removeLabel(ticketKey, 'sm_story_rework_triggered');
+    removeRecoveryLabels(ticketKey);
 
-    try {
-        getTracker().postComment(ticketKey, 'h3. ✅ Merged PR Recovered\n\n' +
-                'Found already merged PR #' + prNumber + (prUrl ? ' — [View PR|' + prUrl + ']' : '') +
-                '. Ticket moved to *' + jiraConfig.statuses.MERGED + '* so the normal post-merge pipeline can continue.');
-    } catch (e) {}
+    postRecoveryComment(ticketKey, prNumber, prUrl, jiraConfig.statuses.MERGED);
 
-    // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-    // wrote outputs/*_usage.json during the agent run.
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    postRunTokenUsage(params, ticketKey);
 
     return { success: true, action: 'moved_to_merged', prNumber: prNumber };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, findMergedPRForTicket, prMatchesTicket, isMergedPR };
+    module.exports = {
+        action: action,
+        findMergedPRForTicket: findMergedPRForTicket,
+        prMatchesTicket: prMatchesTicket,
+        isMergedPR: isMergedPR,
+        prIdentity: prIdentity,
+        recoveryCustomParams: recoveryCustomParams
+    };
 }
