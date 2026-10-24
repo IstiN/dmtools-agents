@@ -191,6 +191,7 @@ suite('wave2d2 ado — createRepoTasks', function() {
         var globals = Object.assign({ java: { lang: { System: { getenv: function() { return ''; } } } } }, rec.mocks);
         var shared = loadModule('js/common/repoTaskShared.js', makeRequire({
             '../config.js': configModule,
+            './trackers.js': w2Trackers(rec.mocks),
             './linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js')
         }), globals);
         var mod = loadModule('js/createRepoTasks.js', makeRequire({ './config.js': configModule, './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'), './common/trackers.js': w2Trackers(rec.mocks), './common/repoTaskShared.js': shared }),

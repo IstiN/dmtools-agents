@@ -8,6 +8,7 @@ function d2Trackers(mocks) {
 function loadRepoTaskShared(globals) {
     return loadModule('js/common/repoTaskShared.js', makeRequire({
         '../config.js': configModule,
+        './trackers.js': d2Trackers(globals),
         './linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js')
     }), globals);
 }

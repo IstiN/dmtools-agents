@@ -135,6 +135,7 @@ suite('wave2d1 tracker — createRepoTasksMulti', function() {
         var globals = Object.assign({ java: { lang: { System: { getenv: function() { return ''; } } } } }, rec.mocks);
         var shared = loadModule('js/common/repoTaskShared.js', makeRequire({
             '../config.js': configModule,
+            './trackers.js': d1Trackers(rec.mocks),
             './linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js')
         }), globals);
         var mod = loadModule('js/createRepoTasksMulti.js', makeRequire({

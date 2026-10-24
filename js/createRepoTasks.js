@@ -20,7 +20,6 @@
  */
 
 var shared = require('./common/repoTaskShared.js');
-var trackersModule = require('./common/trackers.js');
 
 // ---------------------------------------------------------------------------
 // Plan shaping (gh-1245): one plan per repository, consumed by the shared
@@ -90,59 +89,19 @@ function postOutcomeSummaryComment(tracker, saKey, baseUrl, outcome) {
     shared.postOutcomeSummaryComment(tracker, saKey, baseUrl, outcome, 'repo');
 }
 
+function describeRepoUnits(repos) {
+    return 'Found ' + repos.length + ' affected repo(s): ' + shared.repoNamesCsv(repos);
+}
+
 function action(params) {
-    try {
-        var saInfo = shared.extractSaKey(params);
-        if (saInfo.error) {
-            return { success: false, error: saInfo.error };
-        }
-        var saKey = saInfo.saKey;
-
-        console.log('createRepoTasks: processing SA ticket ' + saKey);
-
-        var options = shared.resolveTaskOptions(params);
-        var tracker = trackersModule.createTracker(shared.resolveProjectConfig(params), options.customParams);
-
-        var saContext = shared.resolveSaTicketContext(tracker, saKey);
-        if (!saContext.parentKey) {
-            return { success: false, error: 'SA ticket ' + saKey + ' has no parent ticket' };
-        }
-        console.log('Parent ticket: ' + saContext.parentKey);
-
-        var parentSummary = shared.resolveParentSummary(tracker, saContext.parentKey);
-
-        var reposInfo = shared.requireAffectedRepos(saContext.description, saKey);
-        if (reposInfo.error) {
-            return { success: false, error: reposInfo.error };
-        }
-        var repos = reposInfo.repos;
-        console.log('Found ' + repos.length + ' affected repo(s): ' + shared.repoNamesCsv(repos));
-
-        var baseUrl = shared.getJiraBaseUrl();
-        var projectKey = saContext.parentKey.split('-')[0];
-
-        // Load existing Sub-tasks under the parent to avoid duplicates
-        var existingSummaries = shared.loadExistingSummaries(tracker, saContext.parentKey);
-
-        var outcome = createSubTasks(tracker, repos, projectKey, saContext.parentKey, parentSummary, saKey, baseUrl, options.ticketLabels, existingSummaries);
-
-        // Wire dependencies: blocker Blocks dependent + move dependent to Blocked status
-        shared.wireDependencies(tracker, outcome.created, outcome.repoKeyMap, options.blocksRelationship, options.blockedStatus);
-
-        postOutcomeSummaryComment(tracker, saKey, baseUrl, outcome);
-
-        var successCount = outcome.created.filter(function(c) { return !c.error; }).length;
-        return {
-            success: true,
-            message: 'Created ' + successCount + ' Sub-task(s) under ' + saContext.parentKey + ', skipped ' + outcome.skipped.length,
-            created: successCount,
-            skipped: outcome.skipped.length
-        };
-
-    } catch (error) {
-        console.error('Error in createRepoTasks:', error);
-        return { success: false, error: error.toString() };
-    }
+    return shared.runRepoTaskAction(params, {
+        scriptName: 'createRepoTasks',
+        labelField: 'repo',
+        keyMapOf: function(outcome) { return outcome.repoKeyMap; },
+        buildUnits: function(repos) { return repos; },
+        describeUnits: describeRepoUnits,
+        createSubTasks: createSubTasks
+    });
 }
 
 if (typeof module !== 'undefined' && module.exports) {

@@ -5,6 +5,7 @@
 function loadRepoTaskShared(globals) {
     return loadModule('js/common/repoTaskShared.js', makeRequire({
         '../config.js': configModule,
+        './trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), globals),
         './linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js')
     }), globals);
 }

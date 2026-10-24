@@ -1,7 +1,7 @@
 /**
  * Lazily-created tracker handle for post-actions that must build the tracker
  * only after config resolution but then use it from many helpers
- * (gh-1245 — one shared implementation of the initTracker/getTracker pair that
+ * (gh-1245 — one shared implementation of the lazy tracker pattern that
  * several root scripts used to carry inline).
  *
  * Usage:
@@ -11,16 +11,18 @@
  */
 
 function createLazyTracker(trackersModule) {
-    var ctx = { config: null, customParams: {} };
-    var inst = null;
+    var state = { config: null, customParams: {}, tracker: null };
     return {
         initTracker: function(config, customParams) {
-            ctx = { config: config || null, customParams: customParams || {} };
-            inst = null;
+            state.config = config || null;
+            state.customParams = customParams || {};
+            state.tracker = null;
         },
         getTracker: function() {
-            if (!inst) inst = trackersModule.createTracker(ctx.config, ctx.customParams);
-            return inst;
+            if (!state.tracker) {
+                state.tracker = trackersModule.createTracker(state.config, state.customParams);
+            }
+            return state.tracker;
         }
     };
 }

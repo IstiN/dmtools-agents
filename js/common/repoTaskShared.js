@@ -14,6 +14,7 @@
  */
 
 var configModule = require('../config.js');
+var trackersModule = require('./trackers.js');
 var linkedIssuesReport = require('./linkedIssuesReport.js');
 var configLoader = null;
 try { configLoader = require('../configLoader.js'); } catch (e) {}
@@ -289,8 +290,75 @@ function postOutcomeSummaryComment(tracker, saKey, baseUrl, outcome, labelField)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Shared action orchestration (gh-1245) — createRepoTasks.js and
+// createRepoTasksMulti.js run the exact same sequence of tracker/file calls;
+// only the unit shaping differs, so the skeleton lives here and each script
+// injects its variant:
+//   {scriptName, labelField, keyMapOf(outcome), buildUnits(repos, parentSummary),
+//    describeUnits(repos, units), createSubTasks(...)}
+// ---------------------------------------------------------------------------
+
+function runRepoTaskAction(params, variant) {
+    try {
+        var saInfo = extractSaKey(params);
+        if (saInfo.error) {
+            return { success: false, error: saInfo.error };
+        }
+        var saKey = saInfo.saKey;
+
+        console.log(variant.scriptName + ': processing SA ticket ' + saKey);
+
+        var options = resolveTaskOptions(params);
+        var tracker = trackersModule.createTracker(resolveProjectConfig(params), options.customParams);
+
+        var saContext = resolveSaTicketContext(tracker, saKey);
+        if (!saContext.parentKey) {
+            return { success: false, error: 'SA ticket ' + saKey + ' has no parent ticket' };
+        }
+        console.log('Parent ticket: ' + saContext.parentKey);
+
+        var parentSummary = resolveParentSummary(tracker, saContext.parentKey);
+
+        var reposInfo = requireAffectedRepos(saContext.description, saKey);
+        if (reposInfo.error) {
+            return { success: false, error: reposInfo.error };
+        }
+        var repos = reposInfo.repos;
+
+        var units = variant.buildUnits(repos, parentSummary);
+        console.log(variant.describeUnits(repos, units));
+
+        var baseUrl = getJiraBaseUrl();
+        var projectKey = saContext.parentKey.split('-')[0];
+
+        // Load existing Sub-tasks under the parent to avoid duplicates
+        var existingSummaries = loadExistingSummaries(tracker, saContext.parentKey);
+
+        var outcome = variant.createSubTasks(tracker, units, projectKey, saContext.parentKey, parentSummary, saKey, baseUrl, options.ticketLabels, existingSummaries);
+
+        // Wire dependencies: blocker Blocks dependent + move dependent to Blocked status
+        wireDependencies(tracker, outcome.created, variant.keyMapOf(outcome), options.blocksRelationship, options.blockedStatus);
+
+        postOutcomeSummaryComment(tracker, saKey, baseUrl, outcome, variant.labelField);
+
+        var successCount = outcome.created.filter(function(c) { return !c.error; }).length;
+        return {
+            success: true,
+            message: 'Created ' + successCount + ' Sub-task(s) under ' + saContext.parentKey + ', skipped ' + outcome.skipped.length,
+            created: successCount,
+            skipped: outcome.skipped.length
+        };
+
+    } catch (error) {
+        console.error('Error in ' + variant.scriptName + ':', error);
+        return { success: false, error: error.toString() };
+    }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
+        runRepoTaskAction: runRepoTaskAction,
         resolveProjectConfig: resolveProjectConfig,
         getJiraBaseUrl: getJiraBaseUrl,
         jiraLink: jiraLink,

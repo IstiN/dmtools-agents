@@ -27,7 +27,6 @@
  */
 
 var shared = require('./common/repoTaskShared.js');
-var trackersModule = require('./common/trackers.js');
 
 // ---------------------------------------------------------------------------
 // Flatten repo entries (with optional `tasks`) into a flat list of tasks,
@@ -184,11 +183,12 @@ function buildTaskSubTaskPlans(tasks, saKey, parentKey, baseUrl) {
 
 function createSubTasks(tracker, tasks, projectKey, parentKey, saKey, baseUrl, ticketLabels, existingSummaries) {
     var plans = buildTaskSubTaskPlans(tasks, saKey, parentKey, baseUrl);
-    var outcome = shared.createSubTasks(tracker, plans, {
+    var options = {
         projectKey: projectKey,
         parentKey: parentKey,
         ticketLabels: ticketLabels
-    }, existingSummaries);
+    };
+    var outcome = shared.createSubTasks(tracker, plans, options, existingSummaries);
     return { created: outcome.created, skipped: outcome.skipped, taskKeyMap: outcome.keyMap };
 }
 
@@ -221,61 +221,19 @@ function postOutcomeSummaryComment(tracker, saKey, baseUrl, outcome) {
     shared.postOutcomeSummaryComment(tracker, saKey, baseUrl, outcome, 'summary');
 }
 
+function taskKeyMapOf(outcome) {
+    return outcome.taskKeyMap;
+}
+
 function action(params) {
-    try {
-        var saInfo = shared.extractSaKey(params);
-        if (saInfo.error) {
-            return { success: false, error: saInfo.error };
-        }
-        var saKey = saInfo.saKey;
-
-        console.log('createRepoTasksMulti: processing SA ticket ' + saKey);
-
-        var options = shared.resolveTaskOptions(params);
-
-        var tracker = trackersModule.createTracker(shared.resolveProjectConfig(params), options.customParams);
-        var saContext = shared.resolveSaTicketContext(tracker, saKey);
-        if (!saContext.parentKey) {
-            return { success: false, error: 'SA ticket ' + saKey + ' has no parent ticket' };
-        }
-        console.log('Parent ticket: ' + saContext.parentKey);
-
-        var parentSummary = shared.resolveParentSummary(tracker, saContext.parentKey);
-
-        var reposInfo = shared.requireAffectedRepos(saContext.description, saKey);
-        if (reposInfo.error) {
-            return { success: false, error: reposInfo.error };
-        }
-        var repos = reposInfo.repos;
-
-        var tasks = buildTaskPlan(repos);
-        console.log(describeTaskPlan(repos, tasks));
-
-        var baseUrl = shared.getJiraBaseUrl();
-        var projectKey = saContext.parentKey.split('-')[0];
-
-        // Load existing Sub-tasks under the parent to avoid duplicates
-        var existingSummaries = shared.loadExistingSummaries(tracker, saContext.parentKey);
-
-        var outcome = createSubTasks(tracker, tasks, projectKey, saContext.parentKey, saKey, baseUrl, options.ticketLabels, existingSummaries);
-
-        // Wire dependencies: blocker Blocks dependent + move dependent to Blocked status
-        shared.wireDependencies(tracker, outcome.created, outcome.taskKeyMap, options.blocksRelationship, options.blockedStatus);
-
-        postOutcomeSummaryComment(tracker, saKey, baseUrl, outcome);
-
-        var successCount = outcome.created.filter(function(c) { return !c.error; }).length;
-        return {
-            success: true,
-            message: 'Created ' + successCount + ' Sub-task(s) under ' + saContext.parentKey + ', skipped ' + outcome.skipped.length,
-            created: successCount,
-            skipped: outcome.skipped.length
-        };
-
-    } catch (error) {
-        console.error('Error in createRepoTasksMulti:', error);
-        return { success: false, error: error.toString() };
-    }
+    return shared.runRepoTaskAction(params, {
+        scriptName: 'createRepoTasksMulti',
+        labelField: 'summary',
+        keyMapOf: taskKeyMapOf,
+        buildUnits: buildTaskPlan,
+        describeUnits: describeTaskPlan,
+        createSubTasks: createSubTasks
+    });
 }
 
 if (typeof module !== 'undefined' && module.exports) {
