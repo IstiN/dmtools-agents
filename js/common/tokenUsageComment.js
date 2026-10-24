@@ -186,6 +186,16 @@ function resolveConfig(options) {
 }
 
 /**
+ * The tracker for the posting loop: the caller's explicit tracker when
+ * given, else one built from the resolved config + customParams (agents#854
+ * — agents#942). Extracted so postTokenUsageComments reads as a loop
+ * skeleton (gh-1225).
+ */
+function resolvePostTracker(options, tracker) {
+    return tracker || trackersModule.createTracker(resolveConfig(options), options.customParams || {});
+}
+
+/**
  * Post token usage comments for the given ticket.
  *
  * @param {string} ticketKey - Jira ticket key to comment on.
@@ -221,7 +231,7 @@ function postTokenUsageComments(ticketKey, options) {
         }
 
         try {
-            if (!tracker) tracker = trackersModule.createTracker(resolveConfig(options), options.customParams || {});
+            tracker = resolvePostTracker(options, tracker);
             var comment = formatUsageComment(filePath, data, initiator,
                 typeof tracker.provider === 'function' ? tracker.provider() : null);
             tracker.postComment(ticketKey, comment);
@@ -241,6 +251,7 @@ function postTokenUsageComments(ticketKey, options) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         postTokenUsageComments: postTokenUsageComments,
+        resolvePostTracker: resolvePostTracker,
         customParamsOf: customParamsOf,
         findUsageFiles: findUsageFiles,
         formatUsageComment: formatUsageComment,

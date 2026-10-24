@@ -57,39 +57,72 @@ var DEFAULT_ATTEMPTS = 3;       // concurrent-leg PUT conflict absorber
 // ── ledger parsing (pure) ────────────────────────────────────────────────────
 
 /**
- * Extracts the JSON payload after an `fa-tokens:` marker by balanced-brace
- * scanning (same discipline as aiTeammateTokenUsageReporter.extractFaPayload,
- * but anchored on the marker regex the sh used: `fa-tokens:[ \t]*(\{)`).
- * Returns the payload substring or null when no complete {...} follows.
+ * The in-string scanner state after consuming ch: an escape backslash arms
+ * `escaped`, any char while `escaped` (including a quote) is consumed
+ * verbatim, an unarmed quote closes the string (gh-1225 — the shared tail of
+ * both extractFaPayload scanners).
  */
-function extractFaPayload(text, markerEnd) {
-    var start = -1;
-    for (var i = markerEnd; i < text.length; i++) {
-        var ch = text.charAt(i);
-        if (ch === ' ' || ch === '\t') continue;
-        if (ch === '{') { start = i; break; }
-        return null; // sh regex required the brace right after the marker
-    }
-    if (start === -1) return null;
+function stepInStringState(ch, escaped) {
+    if (escaped) return { escaped: false, inString: true };
+    if (ch === '\\') return { escaped: true, inString: true };
+    if (ch === '"') return { escaped: false, inString: false };
+    return { escaped: false, inString: true };
+}
+
+/**
+ * Index of the `}` that closes the balanced {...} object opening at
+ * `start`, or -1 when the payload is unterminated (truncated log). Braces
+ * and quotes inside string values never open/close the object.
+ */
+function jsonPayloadEndFrom(text, start) {
     var depth = 0;
     var inString = false;
     var escaped = false;
     for (var j = start; j < text.length; j++) {
         var c = text.charAt(j);
         if (inString) {
-            if (escaped) escaped = false;
-            else if (c === '\\') escaped = true;
-            else if (c === '"') inString = false;
+            var step = stepInStringState(c, escaped);
+            escaped = step.escaped;
+            inString = step.inString;
             continue;
         }
         if (c === '"') inString = true;
         else if (c === '{') depth++;
         else if (c === '}') {
             depth--;
-            if (depth === 0) return text.substring(start, j + 1);
+            if (depth === 0) return j;
         }
     }
-    return null; // unterminated payload (truncated log) — ignored
+    return -1;
+}
+
+/**
+ * The `{` after an `fa-tokens:` marker: the first non-space/tab char, which
+ * must be the brace (the sh regex anchored `fa-tokens:[ \t]*(\{)`) — its
+ * index, or -1 when another char (or EOF) comes first.
+ */
+function braceStartAfterMarker(text, markerEnd) {
+    for (var i = markerEnd; i < text.length; i++) {
+        var ch = text.charAt(i);
+        if (ch === ' ' || ch === '\t') continue;
+        if (ch === '{') return i;
+        return -1; // sh regex required the brace right after the marker
+    }
+    return -1;
+}
+
+/**
+ * Extracts the JSON payload after an `fa-tokens:` marker by balanced-brace
+ * scanning (same discipline as aiTeammateTokenUsageReporter.extractFaPayload,
+ * but anchored on the marker regex the sh used: `fa-tokens:[ \t]*(\{)`).
+ * Returns the payload substring or null when no complete {...} follows.
+ */
+function extractFaPayload(text, markerEnd) {
+    var start = braceStartAfterMarker(text, markerEnd);
+    if (start === -1) return null;
+    var end = jsonPayloadEndFrom(text, start);
+    if (end === -1) return null; // unterminated payload (truncated log) — ignored
+    return text.substring(start, end + 1);
 }
 
 /**
@@ -102,6 +135,22 @@ function ledgerInt(v) {
     var s = String(v).trim();
     if (!/^-?\d+$/.test(s)) return null;
     return parseInt(s, 10);
+}
+
+/**
+ * Folds one parsed ledger record into the sums: int() raise (a non-numeric
+ * field) skips the whole record silently; the last-seen non-empty model
+ * wins.
+ */
+function applyLedgerRecord(sums, rec) {
+    var inp = ledgerInt(rec.input);
+    var out = ledgerInt(rec.output);
+    var cr = ledgerInt(rec.cacheRead);
+    if (inp === null || out === null || cr === null) return; // int() raise
+    sums.input += inp;
+    sums.output += out;
+    sums.cacheRead += cr;
+    if (rec.model) sums.model = String(rec.model); // last-seen wins
 }
 
 /**
@@ -121,14 +170,7 @@ function parseFaTokensLedger(text) {
         var rec;
         try { rec = JSON.parse(payload); } catch (e) { continue; }
         if (!rec || typeof rec !== 'object' || Array.isArray(rec)) continue;
-        var inp = ledgerInt(rec.input);
-        var out = ledgerInt(rec.output);
-        var cr = ledgerInt(rec.cacheRead);
-        if (inp === null || out === null || cr === null) continue; // int() raise
-        sums.input += inp;
-        sums.output += out;
-        sums.cacheRead += cr;
-        if (rec.model) sums.model = String(rec.model); // last-seen wins
+        applyLedgerRecord(sums, rec);
     }
     return sums;
 }
@@ -576,6 +618,10 @@ function publishTokenUsage(opts, io) {
 module.exports = {
     parseFaTokensLedger: parseFaTokensLedger,
     extractFaPayload: extractFaPayload,
+    stepInStringState: stepInStringState,
+    jsonPayloadEndFrom: jsonPayloadEndFrom,
+    braceStartAfterMarker: braceStartAfterMarker,
+    applyLedgerRecord: applyLedgerRecord,
     resolveLeg: resolveLeg,
     resolveAnchorKey: resolveAnchorKey,
     utcStampZ: utcStampZ,
