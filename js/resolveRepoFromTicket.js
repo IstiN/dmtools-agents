@@ -112,6 +112,55 @@ function findRepoEntry(repoName, repositoriesFile) {
 
 // ─── Main action ─────────────────────────────────────────────────────────────
 
+/**
+ * The customParams bag for the action: the Teammate call path carries it at
+ * params.customParams, the JSRunner/postJSAction path at params.jobParams.customParams.
+ */
+function resolveCustomParams(params) {
+    return params.customParams ||
+        (params.jobParams && params.jobParams.customParams) ||
+        {};
+}
+
+/**
+ * The targetRepository value for a resolved repo name: repoName always, plus
+ * the repository-file entry's branch/owner/workingDir when an entry exists.
+ * A missing entry is non-fatal — the caller (configLoader) uses project defaults.
+ */
+function buildTargetRepository(repoName, entry, customParams) {
+    var targetRepository = { repo: repoName };
+    if (!entry) {
+        console.warn('resolveRepoFromTicket: repo "' + repoName +
+            '" not found in repositories file — forwarding repoName only');
+        return targetRepository;
+    }
+    if (entry.branch)       targetRepository.baseBranch = entry.branch;
+    if (entry.gitlabGroup)  targetRepository.owner      = entry.gitlabGroup;
+    // workingDir: explicit entry.workingDir → or derive from dependenciesDir/repoName
+    // (checkout.sh clones repos into ./dependencies/{repo}/ by default)
+    var dependenciesDir = customParams.dependenciesDir || './dependencies';
+    targetRepository.workingDir = entry.workingDir || (dependenciesDir + '/' + repoName);
+    console.log('resolveRepoFromTicket: repo entry found — branch=' +
+        (entry.branch || 'n/a') + ', owner=' + (entry.gitlabGroup || 'n/a') +
+        ', workingDir=' + targetRepository.workingDir);
+    return targetRepository;
+}
+
+/**
+ * Mutate params so configLoader and preCliDevelopmentSetup pick the resolved
+ * repository up downstream. configLoader.loadProjectConfig is called as
+ * loadProjectConfig(params.jobParams || params), so we write into both
+ * locations to cover both the Teammate and JSRunner call paths.
+ */
+function publishTargetRepository(params, targetRepository) {
+    if (!params.customParams) params.customParams = {};
+    params.customParams.targetRepository = targetRepository;
+    if (params.jobParams) {
+        if (!params.jobParams.customParams) params.jobParams.customParams = {};
+        params.jobParams.customParams.targetRepository = targetRepository;
+    }
+}
+
 function action(params) {
     var ticket = params.ticket;
     if (!ticket) {
@@ -119,10 +168,7 @@ function action(params) {
         return true;
     }
 
-    var customParams = params.customParams
-        || (params.jobParams && params.jobParams.customParams)
-        || {};
-
+    var customParams = resolveCustomParams(params);
     var strategyName = customParams.repoNameStrategy || 'fromSummary';
     var strategy = STRATEGIES[strategyName];
     if (!strategy) {
@@ -142,36 +188,18 @@ function action(params) {
         '" from ticket ' + ticket.key + ' via strategy "' + strategyName + '"');
 
     var entry = findRepoEntry(repoName, customParams.repositoriesFile);
-    var targetRepository = { repo: repoName };
-
-    if (entry) {
-        if (entry.branch)       targetRepository.baseBranch = entry.branch;
-        if (entry.gitlabGroup)  targetRepository.owner      = entry.gitlabGroup;
-        // workingDir: explicit entry.workingDir → or derive from dependenciesDir/repoName
-        // (checkout.sh clones repos into ./dependencies/{repo}/ by default)
-        var dependenciesDir = customParams.dependenciesDir || './dependencies';
-        targetRepository.workingDir = entry.workingDir || (dependenciesDir + '/' + repoName);
-        console.log('resolveRepoFromTicket: repo entry found — branch=' +
-            (entry.branch || 'n/a') + ', owner=' + (entry.gitlabGroup || 'n/a') +
-            ', workingDir=' + targetRepository.workingDir);
-    } else {
-        console.warn('resolveRepoFromTicket: repo "' + repoName +
-            '" not found in repositories file — forwarding repoName only');
-    }
-
-    // Mutate params so configLoader and preCliDevelopmentSetup pick it up downstream.
-    // configLoader.loadProjectConfig is called as loadProjectConfig(params.jobParams || params),
-    // so we write into both locations to cover both the Teammate and JSRunner call paths.
-    if (!params.customParams) params.customParams = {};
-    params.customParams.targetRepository = targetRepository;
-    if (params.jobParams) {
-        if (!params.jobParams.customParams) params.jobParams.customParams = {};
-        params.jobParams.customParams.targetRepository = targetRepository;
-    }
+    publishTargetRepository(params, buildTargetRepository(repoName, entry, customParams));
 
     return true;
 }
 
 if (typeof module !== 'undefined') {
-    module.exports = { action: action, STRATEGIES: STRATEGIES, findRepoEntry: findRepoEntry };
+    module.exports = {
+        action: action,
+        STRATEGIES: STRATEGIES,
+        findRepoEntry: findRepoEntry,
+        resolveCustomParams: resolveCustomParams,
+        buildTargetRepository: buildTargetRepository,
+        publishTargetRepository: publishTargetRepository
+    };
 }

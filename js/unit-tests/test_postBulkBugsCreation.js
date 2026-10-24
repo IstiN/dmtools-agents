@@ -823,3 +823,103 @@ suite('postBulkBugsCreation.extractTickets', function() {
         assert.deepEqual(extractTickets(42), []);
     });
 });
+
+// ─── gh-119 CRAP: getFailedReasonForTc branches + extracted pure helpers ─────
+
+suite('postBulkBugsCreation.getFailedReasonForTc (gh-119 characterization)', function() {
+    function withIssue(fields, opts) {
+        opts = opts || {};
+        return loadPostBulkBugsCreation(Object.assign({
+            jira_get_ticket: opts.throwing
+                ? function() { throw new Error('tracker down'); }
+                : function() { return fields === null ? null : { fields: fields }; }
+        }, opts.extra || {}));
+    }
+
+    test('missing tcKey or fieldName yields empty string without touching the tracker', function() {
+        var mod = withIssue({ summary: 'x' });
+        assert.equal(mod.getFailedReasonForTc(null, 'customfield_1'), '');
+        assert.equal(mod.getFailedReasonForTc('TS-1', null), '');
+        assert.equal(mod.getFailedReasonForTc('', ''), '');
+    });
+
+    test('direct string value is returned as-is, including an empty string', function() {
+        assert.equal(withIssue({ customfield_1: 'Rate limit exceeded' }).getFailedReasonForTc('TS-1', 'customfield_1'),
+            'Rate limit exceeded');
+        assert.equal(withIssue({ customfield_1: '' }).getFailedReasonForTc('TS-1', 'customfield_1'), '');
+    });
+
+    test('object values are read through their .value, empty string value is a real hit', function() {
+        var mod = withIssue({ customfield_1: { value: 'Object reason' } });
+        assert.equal(mod.getFailedReasonForTc('TS-1', 'customfield_1'), 'Object reason');
+        assert.equal(withIssue({ customfield_1: { value: '' } }).getFailedReasonForTc('TS-1', 'customfield_1'), '');
+    });
+
+    test('non-string non-value shapes fall through to empty string', function() {
+        assert.equal(withIssue({ customfield_1: { other: 1 } }).getFailedReasonForTc('TS-1', 'customfield_1'), '');
+        assert.equal(withIssue({ customfield_1: 42 }).getFailedReasonForTc('TS-1', 'customfield_1'), '');
+    });
+
+    test('customfield fallback scans transformed keys (2+ entries, object and string shapes)', function() {
+        var mod = withIssue({
+            summary: 'unrelated',
+            'Failed Reason (customfield_12345)': 'transformed string hit',
+            'Other (customfield_99999)': 'wrong key'
+        });
+        assert.equal(mod.getFailedReasonForTc('TS-1', 'customfield_12345'), 'transformed string hit');
+
+        var mod2 = withIssue({
+            'A (customfield_12345)': { value: 'transformed value hit' },
+            'B (customfield_12345)': 'later match must not win'
+        });
+        assert.equal(mod2.getFailedReasonForTc('TS-1', 'customfield_12345'), 'transformed value hit');
+    });
+
+    test('customfield fallback returns an empty-string transformed hit verbatim', function() {
+        var mod = withIssue({ 'Empty (customfield_12345)': '' });
+        assert.equal(mod.getFailedReasonForTc('TS-1', 'customfield_12345'), '');
+    });
+
+    test('no customfield in the name: no fallback scan', function() {
+        var mod = withIssue({ 'Failed Reason (customfield_12345)': 'decoy' });
+        assert.equal(mod.getFailedReasonForTc('TS-1', 'failedReason'), '');
+    });
+
+    test('tracker failure and missing fields degrade to empty string', function() {
+        assert.equal(withIssue({}, { throwing: true }).getFailedReasonForTc('TS-1', 'customfield_1'), '');
+        assert.equal(withIssue(null).getFailedReasonForTc('TS-1', 'customfield_1'), '');
+        assert.equal(withIssue({}).getFailedReasonForTc('TS-1', 'customfield_1'), '');
+    });
+});
+
+suite('postBulkBugsCreation — pure helpers (gh-119)', function() {
+    var mod = loadPostBulkBugsCreation({});
+
+    test('fieldTextOf: string passthrough, .value unwrapping, null when no text', function() {
+        assert.equal(mod.fieldTextOf('plain'), 'plain');
+        assert.equal(mod.fieldTextOf(''), '');
+        assert.equal(mod.fieldTextOf({ value: 'wrapped' }), 'wrapped');
+        assert.equal(mod.fieldTextOf({ value: '' }), '');
+        assert.equal(mod.fieldTextOf({ other: 1 }), null);
+        assert.equal(mod.fieldTextOf(null), null);
+        assert.equal(mod.fieldTextOf(undefined), null);
+        assert.equal(mod.fieldTextOf(42), null);
+    });
+
+    test('issueFieldMap: fields bag when present, {} otherwise', function() {
+        var fields = { a: 1 };
+        assert.equal(mod.issueFieldMap({ fields: fields }), fields);
+        assert.deepEqual(mod.issueFieldMap({}), {});
+        assert.deepEqual(mod.issueFieldMap(null), {});
+        assert.deepEqual(mod.issueFieldMap({ fields: null }), {});
+    });
+
+    test('customFieldFallbackValue: scans transformed keys only for customfield names', function() {
+        var fields = { 'Name (customfield_5)': 'hit', other: 'x' };
+        assert.equal(mod.customFieldFallbackValue(fields, 'customfield_5'), 'hit');
+        assert.equal(mod.customFieldFallbackValue(fields, 'summary'), null);
+        assert.equal(mod.customFieldFallbackValue({}, 'customfield_5'), null);
+        assert.equal(mod.customFieldFallbackValue(fields, 'customfield_6'), null);
+        assert.equal(mod.customFieldFallbackValue({ 'A (customfield_5)': { value: 'v' } }, 'customfield_5'), 'v');
+    });
+});
