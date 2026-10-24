@@ -75,6 +75,7 @@ function loadPushReworkChanges() {
         makeRequire({
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -189,6 +190,7 @@ function loadPushReworkChangesForAction(mocks) {
         makeRequire({
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,

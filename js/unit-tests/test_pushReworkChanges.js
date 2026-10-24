@@ -160,6 +160,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
         'js/pushReworkChanges.js',
         makeRequire({
             './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -565,6 +566,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
         'js/pushReworkChanges.js',
         makeRequire({
             './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -973,6 +975,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
         'js/pushReworkChanges.js',
         makeRequire({
             './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -1342,6 +1345,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
         'js/pushReworkChanges.js',
         makeRequire({
             './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -1967,6 +1971,63 @@ suite('pushReworkChanges — PR-anchored lookup & loud lookup failure (fa #1212)
         assert.deepEqual(fx.listCalls, [], 'anchored lookup with a working getPr never list-scans');
         assert.equal(fx.getPrCalls.length, 0, 'default getPr bypassed — override served the PR');
         assert.ok(fx.addCommentCalls.length >= 1, 'default addComment recorder still active');
+    });
+});
+
+// gh-1249 (review thread SZ): the plain-key scan delegates to prLookup —
+// one shared listPrs('open') + substring match, with prLookup's Array.isArray
+// guard (a null/undefined provider payload reads as no match instead of a
+// TypeError) and its fail-closed null on provider errors. The loud
+// PR-LOKUP-FAILED marker contract (requirePrForTicket) must fire unchanged.
+suite('pushReworkChanges — findPRForTicket delegates to prLookup (gh-1249)', function () {
+
+    function runJiraLookup(scmListPrs) {
+        var ticketComments = [];
+        var loaded = loadPushReworkChangesForAction({
+            jira_post_comment: function(args) { ticketComments.push(args.comment || args.body || ''); }
+        }, {
+            scm: {
+                getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+                listPrs: scmListPrs,
+                getPr: function(id) { return { number: Number(id) }; },
+                addComment: function() {},
+                listReviews: function() { return []; }
+            }
+        });
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'A fix summary long enough to matter for the lookup delegation tests.'
+        });
+        return { result: result, ticketComments: ticketComments };
+    }
+
+    test('non-array listPrs payload (null provider result) fails closed with the PR-LOKUP-FAILED marker — no TypeError', function () {
+        var fx = runJiraLookup(function(state) { return null; });
+        console.log('DBG typeof:', typeof fx.result.error, 'idx:', String(fx.result.error).indexOf('PR-LOOKUP-FAILED')); console.log('DBG codes:', String(fx.result.error).slice(0,40).split('').map(function(c){return c.charCodeAt(0)}).join(','));
+        assert.equal(fx.result.success, false, 'lookup failure must fail the leg loudly');
+        assert.contains(String(fx.result.error), 'PR-LOKUP-FAILED');
+        assert.ok(
+            fx.ticketComments.some(function(c) { return String(c).indexOf('PR-LOOKUP-FAILED') !== -1; }),
+            'the marker reaches the tracker error comment'
+        );
+    });
+
+    test('listPrs throwing fails closed with the PR-LOKUP-FAILED marker (prLookup swallows + null)', function () {
+        var fx = runJiraLookup(function() { throw new Error('scm down'); });
+        assert.equal(fx.result.success, false);
+        assert.contains(String(fx.result.error), 'PR-LOOKUP-FAILED');
+    });
+
+    test('plain-key substring scan still matches title OR head branch via the shared prLookup', function () {
+        var viaBranch = runJiraLookup(function() {
+            return [{ number: 7, title: 'unrelated work', head: { ref: 'feature/PROJ-123-x' } }];
+        });
+        assert.equal(viaBranch.result.success, true, 'branch mention matches through prLookup');
+
+        var viaTitle = runJiraLookup(function() {
+            return [{ number: 8, title: 'PROJ-123: title mention', head: { ref: 'feature/other' } }];
+        });
+        assert.equal(viaTitle.result.success, true, 'title mention matches through prLookup');
     });
 });
 
@@ -3517,6 +3578,7 @@ suite('pushReworkChanges.readInputViolations (gh-1119)', function() {
             'js/pushReworkChanges.js',
             makeRequire({
                 './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+                './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
                 './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
                 './common/gitStaging.js': gitStagingModule,
                 './forkCheckout.js': forkCheckoutModule,
@@ -3586,6 +3648,7 @@ suite('pushReworkChanges.runOwnedViolationsGate (gh-1119 AC6b / UT-8 wiring)', f
             'js/pushReworkChanges.js',
             makeRequire({
                 './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+                './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
                 './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
                 './common/gitStaging.js': gitStagingModule,
                 './forkCheckout.js': forkCheckoutModule,
@@ -3703,6 +3766,7 @@ function loadCommitAndPush1082(mocks, moduleOverrides) {
         'js/pushReworkChanges.js',
         makeRequire(Object.assign({
             './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,

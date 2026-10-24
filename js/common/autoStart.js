@@ -13,15 +13,20 @@ function deriveProjectKey(customParams) {
 }
 
 function parseWorkflowRuns(raw) {
-    if (!raw) return [];
-    try {
-        var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        if (Array.isArray(parsed)) return parsed;
-        return parsed.workflow_runs || [];
-    } catch (e) {
-        console.warn('autoStart: failed to parse workflow runs:', e.message || e);
-        return [];
+    // gh-1249: one shared parse lives in workflowRunsModule (array |
+    // { workflow_runs } | { runs } envelopes, silent [] on bad JSON).
+    // autoStart keeps ONLY its own contract on top: a malformed JSON STRING
+    // warns 'autoStart: failed to parse workflow runs:' instead of failing
+    // silently — everything else delegates byte-for-byte.
+    if (typeof raw === 'string' && raw) {
+        try {
+            JSON.parse(raw);
+        } catch (e) {
+            console.warn('autoStart: failed to parse workflow runs:', e.message || e);
+            return [];
+        }
     }
+    return workflowRunsModule.parseWorkflowRuns(raw);
 }
 
 function workflowRunDisplayName(run) {
