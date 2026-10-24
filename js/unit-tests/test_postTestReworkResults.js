@@ -418,6 +418,18 @@ function makeReworkPrHelperMock(recorded, deps) {
  * Full-control harness for postTestReworkResults.action().
  * Every collaborator is a recorded double; file reads come from `deps.files`.
  */
+// gh-1246: jobParams-bag resolution used by the token-usage mocks below
+// (jobParams.customParams wins, then top-level customParams).
+function reworkCustomParamsOf(params) {
+    return (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {};
+}
+
+// gh-1246: the wrapped-cli construction is needed twice (module map + dep
+// bag); hoisting it keeps loadReworkActionHarness under the CRAP ratchet.
+function reworkCliFor(deps, recorded) {
+    return deps.cliWrapper ? deps.cliWrapper(makeReworkCliMock(recorded, deps)) : makeReworkCliMock(recorded, deps);
+}
+
 function loadReworkActionHarness(deps) {
     deps = deps || {};
     var recorded = {
@@ -453,9 +465,9 @@ function loadReworkActionHarness(deps) {
             './common/tokenUsageComment.js': {
                 postTokenUsageComments: function(key, opts) { recorded.tokenUsage.push({ key: key, opts: opts }); },
                 postUsageSummariesSafely: function(key, params) {
-                    recorded.tokenUsage.push({ key: key, opts: { initiator: params.initiator, customParams: (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {} } });
+                    recorded.tokenUsage.push({ key: key, opts: { initiator: params.initiator, customParams: reworkCustomParamsOf(params) } });
                 },
-                customParamsOf: function(params) { return (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {}; }
+                customParamsOf: function(params) { return reworkCustomParamsOf(params); }
             },
             './common/trackers.js': {
                 createTracker: function(config, customParams) { return tracker; }
@@ -463,12 +475,12 @@ function loadReworkActionHarness(deps) {
             './common/commentMarkup.js': loadModule('js/common/commentMarkup.js',
                 makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') })),
             './postStoryTestAutomationShared.js': loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), {
-                cli_execute_command: deps.cliWrapper ? deps.cliWrapper(makeReworkCliMock(recorded, deps)) : makeReworkCliMock(recorded, deps),
+                cli_execute_command: reworkCliFor(deps, recorded),
                 file_read: makeReworkFileReadMock(files)
             })
         }),
         {
-            cli_execute_command: deps.cliWrapper ? deps.cliWrapper(makeReworkCliMock(recorded, deps)) : makeReworkCliMock(recorded, deps),
+            cli_execute_command: reworkCliFor(deps, recorded),
             file_read: makeReworkFileReadMock(files)
         }
     );
