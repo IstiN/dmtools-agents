@@ -156,11 +156,7 @@ function moveTestCaseToBacklog(tracker, ticketKey, totalBugs, statuses, removeLa
  * fail the ready check.
  */
 function postTokenUsageSafely(ticketKey, params) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    tokenUsageComment.postTokenUsageSafely(ticketKey, params);
 }
 
 /**
