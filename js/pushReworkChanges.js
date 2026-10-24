@@ -712,6 +712,14 @@ function rawThreadSnapshotCandidates(ticketKey, outputOptions) {
 }
 
 /**
+ * The thread list of a parsed snapshot payload: a {"threads": [...]} export,
+ * a top-level array export, or [].
+ */
+function threadsOfParsedSnapshot(parsed) {
+    return (parsed && parsed.threads) ? parsed.threads : (Array.isArray(parsed) ? parsed : []);
+}
+
+/**
  * The thread list of one snapshot candidate, or null when the file is
  * missing/blank/unparsable or carries no threads — any of which means "try
  * the next candidate".
@@ -720,8 +728,7 @@ function readRawThreadsSnapshot(path) {
     try {
         var raw = file_read({ path: path });
         if (!raw || !String(raw).trim()) return null;
-        var parsed = JSON.parse(raw);
-        var threads = (parsed && parsed.threads) ? parsed.threads : (Array.isArray(parsed) ? parsed : []);
+        var threads = threadsOfParsedSnapshot(JSON.parse(raw));
         return (threads && threads.length > 0) ? threads : null;
     } catch (e) { return null; }
 }
@@ -2998,6 +3005,6 @@ if (typeof module !== 'undefined' && module.exports) {
     // direct unit testing (per-function CRAP ratchet).
     threadIdLabel, threadLocation, threadBodyExcerpt, replyMatchesThreadId, replyMatchesRootId,
     isConcludedReview, reviewSubmittedAt, compareConcludedReviewsBySubmittedAt, concludedReviewsOf,
-    rawThreadSnapshotCandidates, readRawThreadsSnapshot, openThreadAccountingReason, openThreadAccountingLine,
+    rawThreadSnapshotCandidates, threadsOfParsedSnapshot, readRawThreadsSnapshot, openThreadAccountingReason, openThreadAccountingLine,
     postOneThreadReply, postCombinedUntargetedComment };
 }
