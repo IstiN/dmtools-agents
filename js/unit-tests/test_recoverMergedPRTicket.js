@@ -30,7 +30,8 @@ function loadRecoverMergedPRTicket(options) {
                 repository: { owner: 'IstiN', repo: 'trackstate' }
             }),
             './common/scm.js': { createScm: function() { return scm; } },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; }, },
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
         }, { './common/trackers.js': trackersWith(_m) })), _m); })({
             jira_move_to_status: function(args) { statusMoves.push(args); },
             jira_remove_label: function(args) { removedLabels.push(args); },
@@ -181,7 +182,9 @@ suite('recoverMergedPRTicket: ado tracker provider', function() {
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock({ repository: { owner: 'o', repo: 'r' } }),
             './common/scm.js': { createScm: function() { return scm; } },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; }, },
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/trackers.js': trackersWith(mocks)
         }), mocks);
         var result = mod.action({ ticket: { key: '55' }, jobParams: { customParams: { trackerProvider: 'ado' } } });
@@ -211,7 +214,9 @@ suite('recoverMergedPRTicket: stage-label fallback (gh-916)', function() {
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock({ repository: { owner: 'IstiN', repo: 'trackstate' } }),
             './common/scm.js': { createScm: function() { return scm; } },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; }, },
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/trackers.js': trackersWith(withMoves)
         }), withMoves);
         return { mod: mod, added: added, moves: moves };
@@ -301,7 +306,8 @@ suite('recoverMergedPRTicket — uncovered action branches (gh-119 characterizat
                     } };
                 }
             },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; }, },
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/trackers.js': {
                 createTracker: function() {
                     return {
@@ -331,8 +337,12 @@ suite('recoverMergedPRTicket — uncovered action branches (gh-119 characterizat
             './common/scm.js': { createScm: function() { return scm; } },
             './common/tokenUsageComment.js': {
                 postTokenUsageComments: function(key, opts) { calls.push({ key: key, opts: opts }); },
+                postTokenUsageSafely: function(key, params) {
+                    calls.push({ key: key, opts: { initiator: params.initiator, customParams: params.customParams || {} } });
+                },
                 customParamsOf: function(params) { return params.customParams || {}; }
             },
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/trackers.js': trackersWith({
                 jira_move_to_status: function() {},
                 jira_remove_label: function() {},

@@ -727,11 +727,18 @@ function _ghLatestVerdictRecord(provider, prNumber, headSha, opts) {
 // GraphQL-only surface (REST has no threads endpoint): navigate the
 // {data:{repository:{pullRequest:{reviewThreads:{nodes:[…]}}}}} envelope
 // by hand — parseMcp only unwraps the JSON string.
-function _ghThreadNodes(res) {
+// gh-1249 rework: exported as reviewThreadNodesOf so smAgent.js delegates
+// instead of carrying its own copy (the verbatim envelope chain formed a
+// 50-token clone window between the two files).
+function reviewThreadNodesOf(res) {
     return (res && res.data && res.data.repository &&
             res.data.repository.pullRequest &&
             res.data.repository.pullRequest.reviewThreads &&
             res.data.repository.pullRequest.reviewThreads.nodes) || [];
+}
+
+function _ghThreadNodes(res) {
+    return reviewThreadNodesOf(res);
 }
 
 function _ghReviewThreads(owner, repo, prNumber) {
@@ -1367,6 +1374,8 @@ if (typeof module !== 'undefined' && module.exports) {
         // PR-list and prStatus payload dialects must never drift apart).
         ghPrHeadRepoFull: _ghPrHeadRepoFull,
         ghPrMaintainerCanModify: _ghPrMaintainerCanModify,
+        // gh-1249: shared GraphQL reviewThreads envelope nav (smAgent delegates).
+        reviewThreadNodesOf: reviewThreadNodesOf,
         _cache: _cache
     };
 }

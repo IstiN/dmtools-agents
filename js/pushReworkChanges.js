@@ -19,6 +19,8 @@ var feedbackLoop = require('./common/feedbackLoop.js');
 var autoStart = require('./common/autoStart.js');
 var outputFiles = require('./common/outputFiles.js');
 var gitStaging = require('./common/gitStaging.js');
+var labelListModule = require('./common/labelList.js');
+var prLookup = require('./common/prLookup.js');
 var forkCheckout = require('./common/forkCheckout.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 var cacheToReleases = require('./cacheToReleases.js');
@@ -193,19 +195,8 @@ function prHasApproved(pr, ticket) {
     return hasPrApprovedLabel(ticket);
 }
 
-function normalizeLabels(singleLabel, labelList) {
-    var labels = [];
-    if (singleLabel) labels.push(singleLabel);
-    if (Array.isArray(labelList)) {
-        labelList.forEach(function(label) {
-            if (label && labels.indexOf(label) === -1) labels.push(label);
-        });
-    }
-    return labels;
-}
-
 function removeConfiguredLabels(tracker, ticketKey, customParams) {
-    normalizeLabels(customParams && customParams.removeLabel, customParams && customParams.removeLabels)
+    labelListModule.normalizeLabels(customParams && customParams.removeLabel, customParams && customParams.removeLabels)
         .forEach(function(label) {
             try {
                 tracker.removeLabel(ticketKey, label);
@@ -279,29 +270,22 @@ function findPRForTicket(scm, ticketKey) {
     // get-by-number path. Never list-scan a pseudo key: the PR's title/branch
     // reference the ORIGINAL work item (live fa #1212, 2026-10-04: key
     // 'pr-1212', branch 'ai/gh-1204' — the scan matched nothing and the
-    // replies/resolutions were silently skipped). Jira-shaped keys keep the
-    // unchanged substring scan below (byte-identical jiraSource behavior).
+    // replies/resolutions were silently skipped). Jira-shaped keys delegate
+    // to the shared prLookup scan (gh-1249 review thread: the verbatim
+    // listPrs('open') + title/branch substring copy now lives in ONE place).
     if (/^pr-(\d+)$/.test(String(ticketKey || ''))) {
         return ghHelpers.findPRForTicket(scm, ticketKey);
     }
-    try {
-        const openPRs = scm.listPrs('open');
-
-        const matching = openPRs.filter(function(pr) {
-            return (pr.title && pr.title.indexOf(ticketKey) !== -1) ||
-                   (pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1);
-        });
-
-        if (matching.length > 0) {
-            return matching[0];
-        }
-
+    // prLookup fails closed to null (with its own 'Failed to list PRs:'
+    // diagnostic) and guards non-array listPrs results — strictly safer than
+    // the old unguarded openPRs.filter. This caller keeps its own
+    // 'No open PR found' warn; the loud PR-LOOKUP-FAILED marker contract is
+    // owned by requirePrForTicket and fires on null either way.
+    var pr = prLookup.findOpenPrForTicket(scm, ticketKey);
+    if (!pr) {
         console.warn('No open PR found for ticket', ticketKey);
-        return null;
-    } catch (error) {
-        console.error('Failed to find PR:', error);
-        return null;
     }
+    return pr;
 }
 
 function configureGitAuthor(config) {
@@ -2462,12 +2446,10 @@ function stampCompletionLapMarker(scm, pr, ticketKey, lapGate, lapResolutions) {
 
 function postCompletionTokenUsage(params, ticketKey) {
     // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-    // wrote outputs/*_usage.json during the agent run.
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    // wrote outputs/*_usage.json during the agent run. gh-1249: the try/catch
+    // transport is shared with recoverMergedPRTicket.js via
+    // tokenUsageComment.postTokenUsageSafely (gh-1244 canonical helper).
+    tokenUsageComment.postTokenUsageSafely(ticketKey, params);
 }
 
 // ── action stage helpers (gh-1011 CRAP rework) ──────────────────────────────

@@ -19,6 +19,36 @@
 // a separate coverage unit of complexity 1 (CRAP 2, far below the bar).
 var stubToolchainLine = function (t) { return t; };
 
+// gh-1249 rework (crap-ratchet fix): ONE file-scope tokenUsageComment stub
+// shared by every loader's require map. The gh-1249 dedup initially inlined
+// `postTokenUsageSafely`/`customParamsOf` closures per loader — nested
+// closures count towards the enclosing loader's CC, pushing five of them
+// over the CRAP ratchet (CI: 6 NEW > 8). The named stub is a separate
+// coverage unit (customParamsOf CC 3, exercised by many suites).
+var stubTokenUsageComment = {
+    postTokenUsageComments: function () {},
+    postTokenUsageSafely: function () { return undefined; },
+    customParamsOf: function (p) { return (p && p.customParams) || {}; }
+};
+
+// gh-1249 rework (crap-ratchet characterization): every loader require map
+// rides this ONE file-scope stub. Inlining the closures per loader nested
+// decision points inside the loaders and pushed five of them over the
+// quality-gate CRAP ratchet (CI run 40120145298: 6 NEW > 8). This suite
+// pins the stub contract the maps rely on.
+suite('pushReworkChanges test harness — shared tokenUsageComment stub (gh-1249 CRAP fix)', function () {
+    test('customParamsOf extracts customParams, tolerating null and absence', function () {
+        assert.deepEqual(stubTokenUsageComment.customParamsOf({ customParams: { a: 1 } }), { a: 1 });
+        assert.deepEqual(stubTokenUsageComment.customParamsOf({}), {});
+        assert.deepEqual(stubTokenUsageComment.customParamsOf(null), {});
+    });
+
+    test('postTokenUsageSafely and postTokenUsageComments are quiet no-ops', function () {
+        assert.equal(stubTokenUsageComment.postTokenUsageSafely(), undefined);
+        assert.equal(stubTokenUsageComment.postTokenUsageComments(), undefined);
+    });
+});
+
 // File-scope base module (was previously misplaced INSIDE the file_read mock
 // closure below — a latent defect masked in run_all.json by another test file
 // leaking the same sloppy-mode global, but breaking isolated per-file runs).
@@ -129,6 +159,8 @@ function loadPushReworkChangesModule(fileMap, opts) {
     var mod = loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -143,7 +175,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule({}),
             './cacheToReleases.js': { cacheSessionLog: noop },
-            './common/tokenUsageComment.js': { postTokenUsageComments: noop }
+            './common/tokenUsageComment.js': stubTokenUsageComment
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
@@ -533,6 +565,8 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -557,7 +591,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
             './common/outputFiles.js': { readOutputFile: function() { return null; } },
             './common/trackers.js': makeTrackersModule({}),
             './cacheToReleases.js': {},
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': stubTokenUsageComment
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
@@ -940,6 +974,8 @@ function loadPushReworkChangesForAction(mocks, opts) {
     var mod = loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -961,7 +997,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': stubTokenUsageComment
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
@@ -1308,6 +1344,8 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -1327,7 +1365,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': stubTokenUsageComment
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
@@ -1933,6 +1971,62 @@ suite('pushReworkChanges — PR-anchored lookup & loud lookup failure (fa #1212)
         assert.deepEqual(fx.listCalls, [], 'anchored lookup with a working getPr never list-scans');
         assert.equal(fx.getPrCalls.length, 0, 'default getPr bypassed — override served the PR');
         assert.ok(fx.addCommentCalls.length >= 1, 'default addComment recorder still active');
+    });
+});
+
+// gh-1249 (review thread SZ): the plain-key scan delegates to prLookup —
+// one shared listPrs('open') + substring match, with prLookup's Array.isArray
+// guard (a null/undefined provider payload reads as no match instead of a
+// TypeError) and its fail-closed null on provider errors. The loud
+// PR-LOOKUP-FAILED marker contract (requirePrForTicket) must fire unchanged.
+suite('pushReworkChanges — findPRForTicket delegates to prLookup (gh-1249)', function () {
+
+    function runJiraLookup(scmListPrs) {
+        var ticketComments = [];
+        var loaded = loadPushReworkChangesForAction({
+            jira_post_comment: function(args) { ticketComments.push(args.comment || args.body || ''); }
+        }, {
+            scm: {
+                getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+                listPrs: scmListPrs,
+                getPr: function(id) { return { number: Number(id) }; },
+                addComment: function() {},
+                listReviews: function() { return []; }
+            }
+        });
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'A fix summary long enough to matter for the lookup delegation tests.'
+        });
+        return { result: result, ticketComments: ticketComments };
+    }
+
+    test('non-array listPrs payload (null provider result) fails closed with the PR-LOOKUP-FAILED marker — no TypeError', function () {
+        var fx = runJiraLookup(function(state) { return null; });
+        assert.equal(fx.result.success, false, 'lookup failure must fail the leg loudly');
+        assert.contains(String(fx.result.error), 'PR-LOOKUP-FAILED');
+        assert.ok(
+            fx.ticketComments.some(function(c) { return String(c).indexOf('PR-LOOKUP-FAILED') !== -1; }),
+            'the marker reaches the tracker error comment'
+        );
+    });
+
+    test('listPrs throwing fails closed with the PR-LOOKUP-FAILED marker (prLookup swallows + null)', function () {
+        var fx = runJiraLookup(function() { throw new Error('scm down'); });
+        assert.equal(fx.result.success, false);
+        assert.contains(String(fx.result.error), 'PR-LOOKUP-FAILED');
+    });
+
+    test('plain-key substring scan still matches title OR head branch via the shared prLookup', function () {
+        var viaBranch = runJiraLookup(function() {
+            return [{ number: 7, title: 'unrelated work', head: { ref: 'feature/PROJ-123-x' } }];
+        });
+        assert.equal(viaBranch.result.success, true, 'branch mention matches through prLookup');
+
+        var viaTitle = runJiraLookup(function() {
+            return [{ number: 8, title: 'PROJ-123: title mention', head: { ref: 'feature/other' } }];
+        });
+        assert.equal(viaTitle.result.success, true, 'title mention matches through prLookup');
     });
 });
 
@@ -3482,6 +3576,8 @@ suite('pushReworkChanges.readInputViolations (gh-1119)', function() {
         return loadModule(
             'js/pushReworkChanges.js',
             makeRequire({
+                './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+                './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
                 './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
                 './common/gitStaging.js': gitStagingModule,
                 './forkCheckout.js': forkCheckoutModule,
@@ -3496,7 +3592,7 @@ suite('pushReworkChanges.readInputViolations (gh-1119)', function() {
                 './common/outputFiles.js': { readOutputFile: function() { return null; } },
                 './common/trackers.js': makeTrackersModule({}),
                 './cacheToReleases.js': {},
-                './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+                './common/tokenUsageComment.js': stubTokenUsageComment,
                 './common/ticketKeyShapes.js': ticketKeyShapesModule,
                 './common/commentMarkup.js': commentMarkupModule,
                 './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js', makeRequire({
@@ -3550,6 +3646,8 @@ suite('pushReworkChanges.runOwnedViolationsGate (gh-1119 AC6b / UT-8 wiring)', f
         return loadModule(
             'js/pushReworkChanges.js',
             makeRequire({
+                './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+                './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
                 './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
                 './common/gitStaging.js': gitStagingModule,
                 './forkCheckout.js': forkCheckoutModule,
@@ -3564,7 +3662,7 @@ suite('pushReworkChanges.runOwnedViolationsGate (gh-1119 AC6b / UT-8 wiring)', f
                 './common/outputFiles.js': { readOutputFile: function() { return null; } },
                 './common/trackers.js': makeTrackersModule({}),
                 './cacheToReleases.js': {},
-                './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+                './common/tokenUsageComment.js': stubTokenUsageComment,
                 './common/ticketKeyShapes.js': ticketKeyShapesModule,
                 './common/commentMarkup.js': commentMarkupModule,
                 './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js', makeRequire({
@@ -3666,6 +3764,8 @@ function loadCommitAndPush1082(mocks, moduleOverrides) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire(Object.assign({
+            './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -3689,7 +3789,7 @@ function loadCommitAndPush1082(mocks, moduleOverrides) {
             './common/outputFiles.js': { readOutputFile: function() { return null; } },
             './common/trackers.js': makeTrackersModule({}),
             './cacheToReleases.js': {},
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': stubTokenUsageComment,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
             './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js', makeRequire({

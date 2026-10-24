@@ -18,25 +18,12 @@
  */
 
 var scmModule = require('./common/scm.js');
+var prLookup = require('./common/prLookup.js');
 var configLoader = require('./configLoader.js');
 const { LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var trackersModule = require('./common/trackers.js');
 
-function findPRForTicket(scm, ticketKey) {
-    try {
-        var prList = scm.listPrs('open');
-        var matched = (Array.isArray(prList) ? prList : []).find(function(pr) {
-            var titleMatch = pr.title && pr.title.indexOf(ticketKey) !== -1;
-            var branchMatch = pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1;
-            return titleMatch || branchMatch;
-        });
-        return matched || null;
-    } catch (e) {
-        console.error('Failed to list PRs:', e);
-        return null;
-    }
-}
 
 // ── gh-1186: pure/decide helpers (extracted from action) ────────────────────
 
@@ -156,7 +143,7 @@ function action(params) {
     console.log('Recovering stuck Test Case:', ctx.ticketKey);
 
     var scm = scmModule.createScm(ctx.config);
-    var pr = findPRForTicket(scm, ctx.ticketKey);
+    var pr = prLookup.findOpenPrForTicket(scm, ctx.ticketKey);
 
     if (!pr) {
         return recoverWithoutOpenPr(ctx);
