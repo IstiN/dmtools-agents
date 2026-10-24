@@ -70,12 +70,15 @@ suite('gh-837 merge cadence simulation (AC1)', function () {
      * mutexMax: 1 = serial, 2/3 = gh-837 relaxed window.
      * redOnce: set of PR numbers whose FIRST conclusion on the first armed
      * head is red (the rework leg then pushes a clean head).
+     *
+     * gh-1200 CRAP refactor: the tick phases are named inner builders
+     * (initialSimState/publishSimState/concludeSimTick/mergeGreenBatch/
+     * armThroughSource) — pure mutations of the same state object, same
+     * call order and same live-source queries as the pre-refactor inline
+     * closures.
      */
     function simulate(prNumbers, mutexMax, redOnce) {
-        var st = {};
-        prNumbers.forEach(function (n) {
-            st[n] = { phase: 'waiting', until: 0, refreshed: 0, redPending: (redOnce || []).indexOf(n) !== -1 };
-        });
+        var st = initialSimState(prNumbers, redOnce);
         var merges = [];
         var maxInFlight = 0;
         var redReports = 0;
@@ -85,80 +88,20 @@ suite('gh-837 merge cadence simulation (AC1)', function () {
         var live = { open: [], statuses: {} };
         var source = loadSource(function () { return live.open; }, function () { return live.statuses; });
 
-        function publish() {
-            var open = [], statuses = {};
-            prNumbers.forEach(function (n) {
-                var s = st[n];
-                if (s.phase === 'merged') return; // merged PRs leave the open list
-                var labels = [{ name: 'pr_approved' }];
-                if (s.phase === 'validating') labels.push({ name: 'ai_validating' });
-                if (s.phase === 'green') labels.push({ name: 'ai_validated' });
-                open.push({ number: n, labels: labels, head: { ref: 'ai/gh-' + n }, draft: false });
-                // mergeState: BEHIND only until the refresh lands; then
-                // BLOCKED (fresh head, required checks pending) — the
-                // not-CLEAN/not-BEHIND shapes the real rule matches on.
-                statuses[n] = { number: n, state: 'OPEN',
-                    mergeState: s.phase === 'refresh' ? 'BEHIND' : 'BLOCKED', mergeable: true };
-            });
-            live.open = open;
-            live.statuses = statuses;
-        }
-
         while (merges.length < prNumbers.length && guard < 600) {
             guard++;
             // 1. conclude validations
-            prNumbers.forEach(function (n) {
-                var s = st[n];
-                if (s.phase === 'validating' && now >= s.until) {
-                    if (s.redPending) {
-                        // fail-validation: exactly one unarm + one report;
-                        // the rework leg pushes a new (clean) head — the PR
-                        // re-enters through the normal re-arm path.
-                        s.redPending = false;
-                        s.phase = 'refresh';
-                        s.refreshed = now + REFRESH_TICKS * TICK_MIN;
-                        redReports++;
-                    } else {
-                        s.phase = 'green';
-                    }
-                }
-                if (s.phase === 'refresh' && now >= s.refreshed) s.phase = 'waiting';
-            });
+            redReports += concludeSimTick(st, prNumbers, now);
             var inFlight = prNumbers.filter(function (n) { return st[n].phase === 'validating'; }).length;
             if (inFlight > maxInFlight) maxInFlight = inFlight;
             // 2. merge the whole green batch (mergeBot parity), oldest
             // first; every other head is BEHIND now — unarm + refresh.
-            var greens = prNumbers.filter(function (n) { return st[n].phase === 'green'; })
-                .sort(function (a, b) { return a - b; });
-            if (greens.length) {
-                greens.forEach(function (n) { st[n].phase = 'merged'; merges.push(now); });
-                prNumbers.forEach(function (n) {
-                    if (st[n].phase === 'green' || st[n].phase === 'validating' || st[n].phase === 'waiting') {
-                        st[n].phase = 'refresh';
-                        st[n].refreshed = now + REFRESH_TICKS * TICK_MIN;
-                    }
-                });
-            }
+            mergeGreenBatch(st, prNumbers, now, merges);
             // 3. arm through the REAL source mutex (validate-armed shape) —
             // the gh-837 knob raises the rule limit to the cap, so every
             // free slot fills in ONE tick: the parallel arms conclude
             // together and merge in one batch window.
-            var armedThisTick = 0;
-            while (armedThisTick < mutexMax) {
-                publish();
-                var items = source.query({
-                    limit: 1,
-                    query: { type: 'pr', labels: ['pr_approved'],
-                        notLabels: ['ai_validating', 'validation_failed'],
-                        notMergeState: ['BEHIND', 'DIRTY'], draft: false,
-                        mutex: 'ai_validating', mutexAmong: ['pr_approved'],
-                        mutexMax: mutexMax }
-                }, { repoInfo: { owner: 'a', repo: 'b' } });
-                if (!items.length) break;
-                st[items[0].prNumber].phase = 'validating';
-                st[items[0].prNumber].until = now + VALIDATION_MIN;
-                armedThisTick++;
-            }
+            armThroughSource(source, st, prNumbers, now, mutexMax, live);
             now += TICK_MIN;
         }
         if (merges.length < prNumbers.length) {
@@ -168,6 +111,89 @@ suite('gh-837 merge cadence simulation (AC1)', function () {
         var intervals = merges.slice(1).map(function (t, i) { return t - merges[i]; });
         // Steady state: drop the first interval (pipeline fill distorts it).
         return { intervals: intervals.slice(1), maxInFlight: maxInFlight, redReports: redReports };
+    }
+
+    function initialSimState(prNumbers, redOnce) {
+        var st = {};
+        prNumbers.forEach(function (n) {
+            st[n] = { phase: 'waiting', until: 0, refreshed: 0,
+                      redPending: (redOnce || []).indexOf(n) !== -1 };
+        });
+        return st;
+    }
+
+    function concludeSimTick(st, prNumbers, now) {
+        var redReports = 0;
+        prNumbers.forEach(function (n) {
+            var s = st[n];
+            if (s.phase === 'validating' && now >= s.until) {
+                if (s.redPending) {
+                    // fail-validation: exactly one unarm + one report;
+                    // the rework leg pushes a new (clean) head — the PR
+                    // re-enters through the normal re-arm path.
+                    s.redPending = false;
+                    s.phase = 'refresh';
+                    s.refreshed = now + REFRESH_TICKS * TICK_MIN;
+                    redReports++;
+                } else {
+                    s.phase = 'green';
+                }
+            }
+            if (s.phase === 'refresh' && now >= s.refreshed) s.phase = 'waiting';
+        });
+        return redReports;
+    }
+
+    function mergeGreenBatch(st, prNumbers, now, merges) {
+        var greens = prNumbers.filter(function (n) { return st[n].phase === 'green'; })
+            .sort(function (a, b) { return a - b; });
+        if (greens.length) {
+            greens.forEach(function (n) { st[n].phase = 'merged'; merges.push(now); });
+            prNumbers.forEach(function (n) {
+                if (st[n].phase === 'green' || st[n].phase === 'validating' || st[n].phase === 'waiting') {
+                    st[n].phase = 'refresh';
+                    st[n].refreshed = now + REFRESH_TICKS * TICK_MIN;
+                }
+            });
+        }
+    }
+
+    function publishSimState(st, prNumbers, live) {
+        var open = [], statuses = {};
+        prNumbers.forEach(function (n) {
+            var s = st[n];
+            if (s.phase === 'merged') return; // merged PRs leave the open list
+            var labels = [{ name: 'pr_approved' }];
+            if (s.phase === 'validating') labels.push({ name: 'ai_validating' });
+            if (s.phase === 'green') labels.push({ name: 'ai_validated' });
+            open.push({ number: n, labels: labels, head: { ref: 'ai/gh-' + n }, draft: false });
+            // mergeState: BEHIND only until the refresh lands; then
+            // BLOCKED (fresh head, required checks pending) — the
+            // not-CLEAN/not-BEHIND shapes the real rule matches on.
+            statuses[n] = { number: n, state: 'OPEN',
+                mergeState: s.phase === 'refresh' ? 'BEHIND' : 'BLOCKED', mergeable: true };
+        });
+        live.open = open;
+        live.statuses = statuses;
+    }
+
+    function armThroughSource(source, st, prNumbers, now, mutexMax, live) {
+        var armedThisTick = 0;
+        while (armedThisTick < mutexMax) {
+            publishSimState(st, prNumbers, live);
+            var items = source.query({
+                limit: 1,
+                query: { type: 'pr', labels: ['pr_approved'],
+                    notLabels: ['ai_validating', 'validation_failed'],
+                    notMergeState: ['BEHIND', 'DIRTY'], draft: false,
+                    mutex: 'ai_validating', mutexAmong: ['pr_approved'],
+                    mutexMax: mutexMax }
+            }, { repoInfo: { owner: 'a', repo: 'b' } });
+            if (!items.length) break;
+            st[items[0].prNumber].phase = 'validating';
+            st[items[0].prNumber].until = now + VALIDATION_MIN;
+            armedThisTick++;
+        }
     }
 
     function avg(list) {
