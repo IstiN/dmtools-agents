@@ -61,3 +61,22 @@ suite('loseJson — toArrayLose', function () {
         assert.deepEqual(out, [1]);
     });
 });
+
+suite('loseJson — firstListField', function () {
+    var mod = loadModule('js/common/loseJson.js', makeRequire({}), {});
+
+    test('returns the first present extra list field', function () {
+        assert.deepEqual(mod.firstListField({ issues: [1, 2] }, ['issues']), [1, 2]);
+        assert.deepEqual(mod.firstListField({ a: [1], b: [2] }, ['b', 'a']), [2]);
+    });
+
+    test('answers null when no extra field carries a list', function () {
+        assert.equal(mod.firstListField({ value: [9] }, ['issues']), null);
+        assert.equal(mod.firstListField(null, ['issues']), null);
+        assert.equal(mod.firstListField({}, null), null);
+    });
+
+    test('toArrayLose routes through the extra fields after value', function () {
+        assert.deepEqual(mod.toArrayLose('{"issues":[{"k":1}]}', ['issues']), [{ k: 1 }]);
+    });
+});

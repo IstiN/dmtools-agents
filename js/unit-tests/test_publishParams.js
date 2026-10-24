@@ -54,3 +54,27 @@ suite('publishParams — makePicker', function () {
         assert.deepEqual(params.jobParams.customParams, {});
     });
 });
+
+suite('publishParams — firstNonEmpty / hasJavaEnvBridge', function () {
+    var pp = loadModule('js/factory/publishParams.js', makeRequire({}), {});
+
+    test('firstNonEmpty skips undefined/null/empty and keeps falsy 0/false', function () {
+        assert.equal(pp.firstNonEmpty([undefined, null, '', 'x']), 'x');
+        assert.equal(pp.firstNonEmpty(['', undefined]), '');
+        assert.equal(pp.firstNonEmpty([]), '');
+        assert.equal(pp.firstNonEmpty([0]), 0);
+        assert.equal(pp.firstNonEmpty([false, 'y']), false);
+    });
+
+    test('hasJavaEnvBridge is false without a java global (QuickJS parity)', function () {
+        var noJava = loadModule('js/factory/publishParams.js', makeRequire({}), { java: undefined });
+        assert.equal(noJava.hasJavaEnvBridge(), false);
+        assert.equal(noJava.envValue('ANYTHING'), '');
+    });
+
+    test('pick keeps the resolution order through the extracted helper', function () {
+        var pick = pp.makePicker({ jobParams: { customParams: { n: 0 } } }, { ENV_N: 'env' });
+        assert.equal(pick('n', 'ENV_N', 'dflt'), '0');
+        assert.equal(pp.makePicker({}, {})('missing', 'MISSING_ENV', ''), '');
+    });
+});

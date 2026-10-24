@@ -228,3 +228,23 @@ suite('branchLegGuard — hasActiveLegRunForPull (gh-1075 fork reroute)', functi
         assert.ok(guard.hasActiveLegRunForPull([r], PR, {}));
     });
 });
+
+suite('branchLegGuard — freshness delegates bound to the local ACTIVE_RUN_STATES (gh-1248)', function () {
+    test('isActiveStatus answers the module active-state vocabulary', function () {
+        assert.equal(guard.isActiveStatus('queued'), true);
+        assert.equal(guard.isActiveStatus('in_progress'), true);
+        assert.equal(guard.isActiveStatus('waiting'), true);
+        assert.equal(guard.isActiveStatus('pending'), true);
+        assert.equal(guard.isActiveStatus('requested'), false,
+            'reworkLatch/teammateEventDedup carry the extra requested state, this probe does not');
+        assert.equal(guard.isActiveStatus('completed'), false);
+        assert.equal(guard.isActiveStatus(undefined), false);
+    });
+
+    test('isStaleNonRunning delegates the zombie bound', function () {
+        assert.equal(guard.isStaleNonRunning(
+            { status: 'queued', updated_at: '2020-01-01T00:00:00Z' }, NOW_MS, 1000), true);
+        assert.equal(guard.isStaleNonRunning(
+            { status: 'queued', updated_at: '2026-10-18T08:09:30.000Z' }, NOW_MS, 60000), false);
+    });
+});
