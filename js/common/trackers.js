@@ -1519,10 +1519,39 @@ function createTrackerFromParams(params) {
     return createTracker(resolveProjectConfig(params), _extractCustomParams(params));
 }
 
+/**
+ * Lazy tracker holder factory (gh-1244): one canonical replacement for the
+ * copy-pasted `initTracker`/`getTracker` boilerplate every JSRunner post-action
+ * used to carry. The returned holder creates the tracker lazily on first
+ * getTracker() and discards the cached instance on re-init, exactly like the
+ * previous module-level _trackerCtx/_trackerInst singletons.
+ *
+ * Call sites destructure once at module top level:
+ *   var trackerHolder = trackersModule.createTrackerHolder();
+ *   var initTracker = trackerHolder.initTracker;
+ *   var getTracker = trackerHolder.getTracker;
+ *
+ * @returns {{initTracker: Function, getTracker: Function}}
+ */
+function createTrackerHolder() {
+    var ctx = { config: null, customParams: {} };
+    var inst = null;
+    function initTracker(config, customParams) {
+        ctx = { config: config || null, customParams: customParams || {} };
+        inst = null;
+    }
+    function getTracker() {
+        if (!inst) inst = createTracker(ctx.config, ctx.customParams);
+        return inst;
+    }
+    return { initTracker: initTracker, getTracker: getTracker };
+}
+
 module.exports = {
     createTracker: createTracker,
     createTrackerFromParams: createTrackerFromParams,
     resolveProjectConfig: resolveProjectConfig,
     createGithubTracker: createGithubTracker,
+    createTrackerHolder: createTrackerHolder,
     extractTicketKey: extractTicketKey
 };

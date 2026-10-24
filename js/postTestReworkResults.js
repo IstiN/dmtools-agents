@@ -30,9 +30,9 @@ var commentMarkup = require('./common/commentMarkup.js');
 var shared = require('./postStoryTestAutomationShared.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
-var trackerOps = shared.createTrackerHolder(trackersModule);
-var initTracker = trackerOps.initTracker;
-var getTracker = trackerOps.getTracker;
+var trackerHolder = trackersModule.createTrackerHolder();
+var initTracker = trackerHolder.initTracker;
+var getTracker = trackerHolder.getTracker;
 
 
 /**
@@ -316,7 +316,7 @@ function postReworkTrackerComment(ticketKey, config, customParams, pr, testStatu
 /** Token usage summary comments (outputs/*_usage.json); failures are non-fatal. */
 function postReworkUsageComments(ticketKey, params) {
     // Canonical guarded wrapper in common/tokenUsageComment.js (gh-1246).
-    tokenUsageComment.postUsageSummariesSafely(ticketKey, params);
+    tokenUsageComment.postTokenUsageSafely(ticketKey, params);
 }
 
 /**

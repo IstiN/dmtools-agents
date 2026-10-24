@@ -62,7 +62,7 @@ function loadPostTestReviewComments(mocks, moduleMocks) {
             './common/autoStart.js': autoStartMock,
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': outputFiles,
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postUsageSummariesSafely: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageSafely: function() {} },
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
                 '../config.js': configModule,
                 './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')

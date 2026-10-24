@@ -33,7 +33,7 @@ function loadPostTestReworkResults(cliMock) {
                 './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
             }), {}),
             './common/pullRequest.js': prHelperRealForRework,
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postUsageSummariesSafely: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageSafely: function() {} },
             './mergeState.js': loadModule('js/common/mergeState.js'),
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
             './postStoryTestAutomationShared.js': loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), { cli_execute_command: cliMock })
@@ -464,7 +464,7 @@ function loadReworkActionHarness(deps) {
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
             './common/tokenUsageComment.js': {
                 postTokenUsageComments: function(key, opts) { recorded.tokenUsage.push({ key: key, opts: opts }); },
-                postUsageSummariesSafely: function(key, params) {
+                postTokenUsageSafely: function(key, params) {
                     recorded.tokenUsage.push({ key: key, opts: { initiator: params.initiator, customParams: reworkCustomParamsOf(params) } });
                 },
                 customParamsOf: function(params) { return reworkCustomParamsOf(params); }

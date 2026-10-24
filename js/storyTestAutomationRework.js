@@ -414,11 +414,7 @@ function action(params) {
     }
 
     function postTokenUsageSafely() {
-        try {
-            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: ctx.initiator, tracker: tracker });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
+        tokenUsageComment.postTokenUsageSafely(storyKey, null, { initiator: ctx.initiator, tracker: tracker });
     }
 
     function reworkErrorResult(error) {

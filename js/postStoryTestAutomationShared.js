@@ -6,7 +6,8 @@
  *
  * Extracted in the gh-1008 CRAP split; extended in gh-1246 with the
  * output-file readers, git-author config, autoStart-review trigger and
- * test-PR creation previously duplicated across those post-actions. the tracker lazy-init holder,
+ * test-PR creation previously duplicated across those post-actions. The
+ * tracker lazy-init holder,
  * resume-attempt markers, markdown→Jira-wiki conversion, quiet label removal
  * and the git publish/push operations. Behavior and posted strings stay
  * byte-identical to the originals — they are posted verbatim to the tracker.
@@ -19,23 +20,13 @@
 
 /**
  * Tracker-agnostic ticket operations holder (jira / ado / github): creates
- * the tracker lazily per action() run and resets on re-init, replacing the
- * module-level _trackerCtx/_trackerInst singletons both post-actions used to
- * duplicate.
+ * the tracker lazily per action() run and resets on re-init. gh-1244: the
+ * canonical implementation lives in common/trackers.js (createTrackerHolder);
+ * this delegate keeps the trackersModule argument so call sites and unit
+ * tests keep injecting the module they use.
  */
 function createTrackerHolder(trackersModule) {
-    var ctx = { config: null, customParams: {} };
-    var inst = null;
-    return {
-        initTracker: function(config, customParams) {
-            ctx = { config: config || null, customParams: customParams || {} };
-            inst = null;
-        },
-        getTracker: function() {
-            if (!inst) inst = trackersModule.createTracker(ctx.config, ctx.customParams);
-            return inst;
-        }
-    };
+    return trackersModule.createTrackerHolder();
 }
 
 function readAttemptMarker(markerPath) {
@@ -180,8 +171,10 @@ function triggerAutoStartReviewWorkflow(autoStart, ticketKey, customParams, conf
 /**
  * gh-1246: autoStartRework configured-workflow trigger
  * (pr_test_automation_rework) shared by the test-review post-actions.
+ * gh-1246 review: parameter order aligned with triggerAutoStartReviewWorkflow
+ * — customParams before config.
  */
-function triggerAutoStartReworkWorkflow(autoStart, ticketKey, config, customParams) {
+function triggerAutoStartReworkWorkflow(autoStart, ticketKey, customParams, config) {
     return triggerConfiguredAutoStartWorkflow(autoStart, ticketKey, customParams, config, {
         flag: 'autoStartRework',
         label: 'pr_test_automation_rework'

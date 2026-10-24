@@ -451,7 +451,7 @@ function triggerReviewOrIdle(ticketKey, config, customParams, noCodeChanges) {
 /** Token usage summary comments (outputs/*_usage.json); failures are non-fatal. */
 function postUsageSummaryComments(ticketKey, params) {
     // Canonical guarded wrapper in common/tokenUsageComment.js (gh-1246).
-    tokenUsageComment.postUsageSummariesSafely(ticketKey, params);
+    tokenUsageComment.postTokenUsageSafely(ticketKey, params);
 }
 
 /** Outer-catch side effects: error comment + SM trigger label removal (best-effort). */

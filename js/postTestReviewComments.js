@@ -307,7 +307,7 @@ function postInlineComment(repoInfo, prNumber, inlineComment) {
 
 function triggerReworkIfConfigured(ticketKey, config, customParams) {
     // Canonical trigger in postStoryTestAutomationShared.js (gh-1246).
-    return shared.triggerAutoStartReworkWorkflow(autoStart, ticketKey, config, customParams);
+    return shared.triggerAutoStartReworkWorkflow(autoStart, ticketKey, customParams, config);
 }
 
 function markForSmTestRework(ticketKey, tracker) {
@@ -485,7 +485,7 @@ function decideFinalStatus(isApproved, mergeSucceeded, currentStatus, statuses) 
 // wrote outputs/*_usage.json during the agent run.
 function postTokenUsageSummary(ticketKey, params) {
     // Canonical guarded wrapper in common/tokenUsageComment.js (gh-1246).
-    tokenUsageComment.postUsageSummariesSafely(ticketKey, params);
+    tokenUsageComment.postTokenUsageSafely(ticketKey, params);
 }
 
 // Outer-catch cleanup: recreate the tracker when the failure happened before

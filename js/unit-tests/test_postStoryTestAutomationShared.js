@@ -44,56 +44,42 @@ function fakePrHelper(opts) {
 
 suite('postStoryTestAutomationShared: tracker holder', function() {
 
-    test('creates the tracker lazily once and passes config + customParams through', function() {
-        var created = [];
+    // gh-1244: the holder factory lives in js/common/trackers.js
+    // (createTrackerHolder); the shared-module copy is a delegate that keeps
+    // the trackersModule argument for injection.
+    test('delegates to trackersModule.createTrackerHolder and returns its result', function() {
+        var sentinel = { initTracker: function() {}, getTracker: function() {} };
+        var called = 0;
         var holder = loadShared({}).createTrackerHolder({
-            createTracker: function(config, customParams) {
-                created.push({ config: config, customParams: customParams });
-                return { name: 'tracker-' + created.length };
+            createTrackerHolder: function() {
+                called++;
+                return sentinel;
             }
         });
+
+        assert.equal(called, 1, 'createTrackerHolder called exactly once');
+        assert.equal(holder, sentinel, 'the holder is returned verbatim');
+    });
+
+    // Behavioural pin of the canonical factory (js/common/trackers.js) through
+    // the delegate: lazy create, cached instance, re-init resets.
+    test('holder from the real trackers module keeps the lazy-init behaviour', function() {
+        var trackers = loadModule('js/common/trackers.js', makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }), {});
+        var holder = loadShared({}).createTrackerHolder(trackers);
 
         holder.initTracker({ jira: {} }, { trackerProvider: 'jira' });
-
-        var t1 = holder.getTracker();
-        var t2 = holder.getTracker();
-        assert.equal(created.length, 1, 'tracker created exactly once');
-        assert.equal(t1, t2, 'same instance returned');
-        assert.deepEqual(created[0].customParams, { trackerProvider: 'jira' });
-    });
-
-    test('re-init after a config change creates a fresh tracker', function() {
-        var created = [];
-        var holder = loadShared({}).createTrackerHolder({
-            createTracker: function() {
-                created.push(true);
-                return { name: 'tracker-' + created.length };
-            }
-        });
-
-        holder.initTracker({ a: 1 }, {});
         var first = holder.getTracker();
+        assert.equal(first, holder.getTracker(), 'same instance returned');
+        assert.equal(first.provider(), 'jira');
+        assert.equal(holder.getTracker().provider(), 'jira');
 
-        holder.initTracker({ a: 2 }, { trackerProvider: 'ado' });
+        holder.initTracker({ jira: {} }, { trackerProvider: 'ado' });
         var second = holder.getTracker();
-
-        assert.equal(created.length, 2);
-        assert.notEqual(first, second);
-    });
-
-    test('initTracker tolerates missing config/customParams', function() {
-        var created = [];
-        var holder = loadShared({}).createTrackerHolder({
-            createTracker: function(config, customParams) {
-                created.push({ config: config, customParams: customParams });
-                return {};
-            }
-        });
-        holder.initTracker();
-        holder.getTracker();
-        assert.equal(created.length, 1);
-        assert.equal(created[0].config, null);
-        assert.deepEqual(created[0].customParams, {});
+        assert.notEqual(first, second, 're-init creates a fresh tracker');
+        assert.equal(second.provider(), 'ado');
     });
 
 });
@@ -515,4 +501,56 @@ suite('postStoryTestAutomationShared: git ops', function() {
         assert.ok(calls.indexOf('git push -u origin test/TS-1') !== -1, 'fetch failure is tolerated before the push');
     });
 
+});
+
+suite('postStoryTestAutomationShared: autoStart trigger parameter order (gh-1246 review)', function() {
+
+    // gh-1246 review: triggerAutoStartReworkWorkflow must take
+    // (autoStart, ticketKey, customParams, config) — customParams BEFORE
+    // config — matching the review-flavor sibling triggerAutoStartReviewWorkflow.
+    // A caller copying the review-flavor call shape must not silently swap
+    // config and customParams.
+    function recordingAutoStart(recorded) {
+        return {
+            triggerConfiguredWorkflowForTicket: function(options) {
+                recorded.push(options);
+                return { success: true };
+            }
+        };
+    }
+
+    test('triggerAutoStartReworkWorkflow takes customParams before config', function() {
+        var recorded = [];
+        var customParams = { autoStartRework: true, autoStartReworkConfigFile: 'agents/pr_test_automation_rework.json' };
+        var config = { git: {} };
+
+        var result = loadShared({}).triggerAutoStartReworkWorkflow(
+            recordingAutoStart(recorded), 'TS-1', customParams, config);
+
+        assert.equal(recorded.length, 1, 'the configured workflow was triggered');
+        assert.equal(recorded[0].customParams, customParams, 'customParams landed in the customParams slot');
+        assert.equal(recorded[0].config, config, 'config landed in the config slot');
+        assert.equal(recorded[0].configFile, 'agents/pr_test_automation_rework.json');
+        assert.equal(recorded[0].label, 'pr_test_automation_rework');
+        assert.equal(recorded[0].stripKeys.length, 3);
+        assert.deepEqual(recorded[0].stripKeys, ['removeLabel', 'autoStartRework', 'autoStartReworkConfigFile']);
+        assert.deepEqual(result, { success: true });
+    });
+
+    test('triggerAutoStartReworkWorkflow without the flags does not trigger', function() {
+        var recorded = [];
+        var result = loadShared({}).triggerAutoStartReworkWorkflow(
+            recordingAutoStart(recorded), 'TS-1', {}, { git: {} });
+        assert.equal(recorded.length, 0);
+        assert.equal(result, false);
+    });
+
+    test('triggerAutoStartReworkWorkflow swallows trigger failures', function() {
+        var throwing = {
+            triggerConfiguredWorkflowForTicket: function() { throw new Error('boom'); }
+        };
+        var customParams = { autoStartRework: true, autoStartReworkConfigFile: 'agents/pr_test_automation_rework.json' };
+        var result = loadShared({}).triggerAutoStartReworkWorkflow(throwing, 'TS-1', customParams, {});
+        assert.equal(result, false);
+    });
 });
