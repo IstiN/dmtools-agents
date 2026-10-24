@@ -2861,6 +2861,9 @@ suite('aiTeammateTokenUsageReporter — downloadRunLogs per-job fallback (gh-122
         var globals = Object.assign({
             file_write: function() {},
             github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); },
+            // shadow even a real/guarded run-logs global: null → typeof !==
+            // 'function' → the module takes the per-job fallback path
+            github_get_workflow_run_logs: null,
             github_get_workflow_run_jobs: function() {
                 return JSON.stringify({ jobs: [
                     { id: 11 }, { databaseId: 12 }, {}, { id: 13 }

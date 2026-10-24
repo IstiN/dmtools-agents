@@ -491,7 +491,7 @@ suite('factoryMarkJobDone — entry action edge branches (gh-1225)', function ()
     var transport = bodyExec();
     var entryModule = loadModule('js/factory/mark_job_done_publish.js', makeRequire({
       './mark_job_done.js': mjdModule
-    }), { cli_execute_command: transport.exec });
+    }), { cli_execute_command: transport.exec, file_write: null });
     assert.throws(function () {
       entryModule.action(actionParams());
     }, /file_write is not available/);
