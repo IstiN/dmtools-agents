@@ -436,3 +436,93 @@ suite('factoryMarkJobDone — entry action (mark_job_done_publish.js)', function
     });
   });
 });
+
+// ── gh-1225 — entry action edge branches: global fallbacks, the missing
+// file_write throw, transport unwrap paths, and the envValue no-bridge path.
+
+suite('factoryMarkJobDone — entry action edge branches (gh-1225)', function () {
+
+  function bodyExec() {
+    var calls = [];
+    return {
+      calls: calls,
+      exec: function (args) {
+        var cmd = String((args && args.command) || args || '');
+        calls.push(cmd);
+        if (cmd.indexOf('issue view') !== -1) {
+          return '- [ ] Run started 09:15 [1777](' + RUN_URL + ')\n';
+        }
+        return '';
+      }
+    };
+  }
+
+  function actionParams() {
+    return { jobParams: { customParams: {
+      repo: 'IstiN/target-repo', number: '42', runUrl: RUN_URL,
+      jobResult: 'success', endTs: '12:34'
+    } } };
+  }
+
+  test('envValue degrades to empty string without a java env bridge', function () {
+    var entryModule = loadModule('js/factory/mark_job_done_publish.js', makeRequire({
+      './mark_job_done.js': mjdModule
+    }), {});
+    assert.equal(entryModule.envValue('NUMBER'), '');
+    assert.equal(entryModule.envValue('GITHUB_REPOSITORY'), '');
+  });
+
+  test('action resolves the dmtools globals when deps is omitted (default deps = {})', function () {
+    var transport = bodyExec();
+    var written = null;
+    var entryModule = loadModule('js/factory/mark_job_done_publish.js', makeRequire({
+      './mark_job_done.js': mjdModule
+    }), {
+      cli_execute_command: transport.exec,
+      file_write: function (path, content) { written = { path: path, content: content }; }
+    });
+    var r = entryModule.action(actionParams());
+    assert.equal(r.status, 'flipped');
+    assert.equal(written.content, '- [x] Run started 09:15 · done 12:34 ✅\n');
+    assert.equal(transport.calls.length, 2);
+  });
+
+  test('action throws when neither deps nor the file_write global is available', function () {
+    var transport = bodyExec();
+    var entryModule = loadModule('js/factory/mark_job_done_publish.js', makeRequire({
+      './mark_job_done.js': mjdModule
+    }), { cli_execute_command: transport.exec, file_write: null });
+    assert.throws(function () {
+      entryModule.action(actionParams());
+    }, /file_write is not available/);
+  });
+
+  test('action unwraps a null transport result to an empty body (no silent [object Object])', function () {
+    var entryModule = loadModule('js/factory/mark_job_done_publish.js', makeRequire({
+      './mark_job_done.js': mjdModule
+    }), {});
+    var seen = [];
+    var r = entryModule.action(actionParams(), {
+      cli_execute_command: function (args) {
+        var cmd = String((args && args.command) || args || '');
+        seen.push(cmd);
+        return null;
+      },
+      file_write: function () {},
+      env: {}
+    });
+    assert.equal(r.status, 'no-marker', JSON.stringify(r));
+    assert.equal(seen.length, 1, 'the flip must not run against a null body');
+  });
+
+  test('resolveParams: pick() degrades null/undefined customParams values to env/defaults', function () {
+    var entryModule = loadModule('js/factory/mark_job_done_publish.js', makeRequire({
+      './mark_job_done.js': mjdModule
+    }), {});
+    var p = entryModule.resolveParams(
+      { jobParams: { customParams: { number: null, runUrl: undefined } } },
+      { NUMBER: '42', RUN_URL: 'u' });
+    assert.equal(p.number, '42');
+    assert.equal(p.runUrl, 'u');
+  });
+});
