@@ -678,3 +678,147 @@ suite('checkRunZombies classify — multi-item batch (gh-1085)', function () {
         assert.equal(out.settled, 1);
     });
 });
+
+// ── gh-1198 CRAP extraction: orphanedRunChecks decision helpers ─────────────
+
+suite('checkRunZombies orphan helpers (gh-1198 extraction)', function () {
+    var AT = Date.parse('2026-10-11T22:40:00Z');
+    var GRACE = 5 * 60 * 1000;
+
+    function linkedCr(extra) {
+        var base = { id: 114566277295, name: 'Quality gate',
+                     status: 'in_progress', conclusion: null,
+                     started_at: '2026-10-11T18:33:45Z',
+                     details_url: 'https://github.com/o/r/actions/runs/38164305157' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) base[k] = extra[k]; } }
+        return base;
+    }
+
+    function concluded(conclusion, updatedAt) {
+        return { status: 'completed', conclusion: conclusion, updated_at: updatedAt };
+    }
+
+    test('helpers exist (extraction landed)', function () {
+        ['orphanCheckVerdict', 'orphanVerdictFor', 'orphanRecordOf',
+         'concludedRunLag', 'lagInsideGrace', 'resolvedOwnerState']
+            .forEach(function (name) {
+                assert.equal(typeof cz[name], 'function', name + ' exported');
+            });
+    });
+
+    suite('concludedRunLag (pure)', function () {
+        test('updated_at is the end; lag = now - end', function () {
+            var end = Date.parse('2026-10-11T22:00:00Z');
+            assert.equal(cz.concludedRunLag(concluded('success', '2026-10-11T22:00:00Z'), AT), AT - end);
+        });
+
+        test('created_at is the fallback when updated_at is absent', function () {
+            var end = Date.parse('2026-10-11T21:00:00Z');
+            assert.equal(cz.concludedRunLag({ status: 'completed', created_at: '2026-10-11T21:00:00Z' }, AT), AT - end);
+        });
+
+        test('no parseable timestamp → null (fail-safe path, not an orphan proof)', function () {
+            assert.equal(cz.concludedRunLag(concluded('success', ''), AT), null);
+            assert.equal(cz.concludedRunLag({ status: 'completed' }, AT), null);
+        });
+    });
+
+    suite('lagInsideGrace (pure)', function () {
+        test('non-negative lag inside the grace is still landing', function () {
+            assert.equal(cz.lagInsideGrace(0, GRACE), true);
+            assert.equal(cz.lagInsideGrace(GRACE, GRACE), true, 'exactly at the grace counts inside');
+        });
+        test('negative, past-grace and unknown lags are NOT inside', function () {
+            assert.equal(cz.lagInsideGrace(-1, GRACE), false, 'clock skew — not a grace case');
+            assert.equal(cz.lagInsideGrace(GRACE + 1, GRACE), false);
+            assert.equal(cz.lagInsideGrace(null, GRACE), false);
+        });
+    });
+
+    suite('orphanRecordOf (pure)', function () {
+        test('mirrors the audit identity; id rides when present', function () {
+            var rec = cz.orphanRecordOf(linkedCr(), '38164305157');
+            assert.deepEqual(rec, { name: 'Quality gate', runId: '38164305157',
+                                    id: 114566277295, reason: 'orphan-run-concluded' });
+        });
+        test('nameless/id-less payloads degrade to nulls (gh-857 PATCH-skip shape)', function () {
+            assert.deepEqual(cz.orphanRecordOf(null, 'r1'),
+                { name: null, runId: 'r1', id: null, reason: 'orphan-run-concluded' });
+            assert.equal(cz.orphanRecordOf({ name: 'X' }, 'r2').id, null);
+            assert.equal(cz.orphanRecordOf({ id: 0 }, 'r3').id, 0, 'id 0 is a real id');
+        });
+    });
+
+    suite('orphanVerdictFor (pure — the gh-865 rule)', function () {
+        test('ACTIVE owner → null (AC2 — a live run is never disturbed)', function () {
+            assert.equal(cz.orphanVerdictFor(linkedCr(), 'r', { status: 'in_progress' }, AT, GRACE), null);
+            assert.equal(cz.orphanVerdictFor(linkedCr(), 'r', { status: 'queued' }, AT, GRACE), null);
+            assert.equal(cz.orphanVerdictFor(linkedCr(), 'r', { status: 'IN_PROGRESS' }, AT, GRACE), null,
+                'casing is normalized');
+        });
+        test('completed without a conclusion → null (odd, fail safe — classify parity)', function () {
+            assert.equal(cz.orphanVerdictFor(linkedCr(), 'r', concluded(null, '2026-10-11T18:00:00Z'), AT, GRACE), null);
+        });
+        test('concluded inside the propagation grace → null; past it → the orphan record', function () {
+            var ended = Date.parse('2026-10-11T22:30:00Z');
+            assert.equal(cz.orphanVerdictFor(linkedCr(), 'r', concluded('success', '2026-10-11T22:30:00Z'),
+                ended + 2 * 60 * 1000, GRACE), null, '2 min after — still landing');
+            var out = cz.orphanVerdictFor(linkedCr(), 'r', concluded('success', '2026-10-11T22:30:00Z'),
+                ended + 8 * 60 * 1000, GRACE);
+            assert.equal(out.reason, 'orphan-run-concluded', '8 min after — orphan');
+        });
+        test('unparseable end timestamp → past-grace verdict (lag null is not a grace case)', function () {
+            var out = cz.orphanVerdictFor(linkedCr(), 'r', concluded('cancelled'), AT, GRACE);
+            assert.equal(out.reason, 'orphan-run-concluded');
+        });
+        test('any conclusion counts — cancelled orphans too', function () {
+            assert.equal(cz.orphanVerdictFor(linkedCr(), 'r', concluded('cancelled', '2026-10-11T20:00:00Z'), AT, GRACE).reason,
+                'orphan-run-concluded');
+        });
+    });
+
+    suite('resolvedOwnerState (fail-safe probe)', function () {
+        test('non-function resolver → null (nothing to probe)', function () {
+            assert.equal(cz.resolvedOwnerState('r', null), null);
+            assert.equal(cz.resolvedOwnerState('r', undefined), null);
+            assert.equal(cz.resolvedOwnerState('r', 42), null);
+        });
+        test('probe result rides through; throw degrades to null (retry next tick)', function () {
+            assert.deepEqual(cz.resolvedOwnerState('r', function () { return { status: 'completed' }; }),
+                { status: 'completed' });
+            assert.equal(cz.resolvedOwnerState('r', function () { return null; }), null);
+            assert.equal(cz.resolvedOwnerState('r', function () { throw new Error('boom'); }), null);
+        });
+    });
+
+    suite('orphanCheckVerdict (per-check-run gate)', function () {
+        test('settled check-runs are out of domain', function () {
+            assert.equal(cz.orphanCheckVerdict(linkedCr({ status: 'completed', conclusion: 'success' }),
+                function () { throw new Error('must not probe'); }, AT, GRACE), null);
+        });
+        test('link-less stamps are the placeholder detector\'s domain', function () {
+            assert.equal(cz.orphanCheckVerdict(linkedCr({ details_url: null }),
+                function () { throw new Error('must not probe'); }, AT, GRACE), null);
+        });
+        test('absent owner → null (no-run zombie\'s cure, AC3 — not this detector)', function () {
+            assert.equal(cz.orphanCheckVerdict(linkedCr(), function () { return null; }, AT, GRACE), null);
+        });
+        test('pending + linked + concluded owner past grace → the orphan record', function () {
+            var out = cz.orphanCheckVerdict(linkedCr(),
+                function () { return concluded('success', '2026-10-11T18:33:24Z'); }, AT, GRACE);
+            assert.equal(out.reason, 'orphan-run-concluded');
+            assert.equal(out.runId, '38164305157');
+        });
+    });
+
+    test('orphanedRunChecks stays behaviour-identical end-to-end (same record shape)', function () {
+        var map = {};
+        map['38164305157'] = concluded('success', '2026-10-11T18:33:24Z');
+        var out = cz.orphanedRunChecks(
+            [linkedCr(), linkedCr({ id: 2, name: 'Binaries smoke gate' }),
+             linkedCr({ status: 'completed', conclusion: 'success' })],
+            function (runId) { return map[runId] || null; }, AT, {});
+        assert.equal(out.length, 2);
+        assert.deepEqual(out.map(function (o) { return o.id; }), [114566277295, 2]);
+    });
+});
