@@ -243,5 +243,6 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    // gh-1242: branch internals exported for unit tests (no behavior change).
+    module.exports = { action: action, checkoutBranch: checkoutBranch, alignBranchWithBase: alignBranchWithBase };
 }
