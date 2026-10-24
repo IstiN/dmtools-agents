@@ -449,3 +449,126 @@ suite('workflowFailureReporter.action', function() {
         assert.equal(jiraFind(calls, 'jira_add_label').length, 0);
     });
 });
+
+// ── gh-1198 CRAP extraction: action decomposition helpers ────────────────────
+
+suite('workflowFailureReporter action decomposition (gh-1198)', function() {
+    test('helpers exist (extraction landed)', function() {
+        var mod = loadReporter({}, scmWithRuns(null));
+        ['fetchFailedRuns', 'processAllFailedRuns', 'tallyRunOutcome'].forEach(function(name) {
+            assert.equal(typeof mod[name], 'function', name + ' exported');
+        });
+    });
+
+    suite('tallyRunOutcome (pure)', function() {
+        function m() { return loadReporter({}, scmWithRuns(null)); }
+
+        test('skip outcomes count as skipped', function() {
+            assert.deepEqual(m().tallyRunOutcome({ status: 'skipped_existing' }, []),
+                { created: 0, skipped: 1 });
+            assert.deepEqual(m().tallyRunOutcome({ status: 'skipped_open_bug' }, []),
+                { created: 0, skipped: 1 });
+        });
+
+        test('created outcomes count as created and collect the key (multi-key order)', function() {
+            var keys = [];
+            assert.deepEqual(m().tallyRunOutcome({ status: 'created', key: 'PROJ-2' }, keys),
+                { created: 1, skipped: 0 });
+            m().tallyRunOutcome({ status: 'created', key: 'PROJ-3' }, keys);
+            m().tallyRunOutcome({ status: 'created_keyless' }, keys);
+            assert.deepEqual(keys, ['PROJ-2', 'PROJ-3'], 'keyless runs contribute nothing to createdKeys');
+        });
+
+        test('create_failed counts as neither', function() {
+            assert.deepEqual(m().tallyRunOutcome({ status: 'create_failed' }, []),
+                { created: 0, skipped: 0 });
+        });
+    });
+
+    suite('fetchFailedRuns (transport + parse)', function() {
+        test('null payload → unsupported-provider error result + warn', function() {
+            var mod = loadReporter({}, scmWithRuns(null));
+            var out = mod.fetchFailedRuns({ workspace: 'w', repository: 'r', scmProvider: 'ado' }, 'ci.yml');
+            assert.equal(out.error, 'unsupported');
+            assert.deepEqual(out.result,
+                { success: false, error: 'listWorkflowRuns not supported by provider: ado' });
+        });
+
+        test('null payload without scmProvider reports the github default', function() {
+            var mod = loadReporter({}, scmWithRuns(null));
+            var out = mod.fetchFailedRuns({ workspace: 'w', repository: 'r' }, null);
+            assert.deepEqual(out.result,
+                { success: false, error: 'listWorkflowRuns not supported by provider: github' });
+        });
+
+        test('unparsable payload → parse error', function() {
+            var mod = loadReporter({}, scmWithRuns('{nope'));
+            var out = mod.fetchFailedRuns({ workspace: 'w', repository: 'r' }, 'ci.yml');
+            assert.equal(out.error, 'parse');
+            assert.deepEqual(out.result, { success: false, error: 'Failed to parse workflow runs' });
+        });
+
+        test('happy path returns the workflow_runs array', function() {
+            var mod = loadReporter({}, scmWithRuns(JSON.stringify({ total_count: 1, workflow_runs: [{ id: 1 }] })));
+            var out = mod.fetchFailedRuns({ workspace: 'w', repository: 'r' }, 'ci.yml');
+            assert.deepEqual(out, { runs: [{ id: 1 }] });
+        });
+
+        test('runs list queries the failure status, workflowId and 50-run page', function() {
+            var seen = null;
+            var mod = loadReporter({}, { createScm: function(cfg) {
+                assert.deepEqual(cfg, { repository: { owner: 'w', repo: 'r' },
+                                        scm: { provider: 'github' } });
+                return { listWorkflowRuns: function(status, workflowId, limit) {
+                    seen = { status: status, workflowId: workflowId, limit: limit };
+                    return '{"workflow_runs":[]}';
+                } };
+            } });
+            mod.fetchFailedRuns({ workspace: 'w', repository: 'r' }, 'quality.yml');
+            assert.deepEqual(seen, { status: 'failure', workflowId: 'quality.yml', limit: 50 });
+        });
+    });
+
+    suite('processAllFailedRuns (loop + rollup, tracker calls in run order)', function() {
+        function modWithRuns(runs) {
+            var seq = 0;
+            var calls = [];
+            var mod = loadReporter(jiraMocks(calls, {
+                jira_create_ticket_basic: function(a) {
+                    calls.push({ tool: 'jira_create_ticket_basic', args: a });
+                    seq += 1;
+                    return { key: 'PROJ-' + (20 + seq), id: String(seq) };
+                }
+            }), scmWithRuns(JSON.stringify({ workflow_runs: runs })));
+            return { mod: mod, calls: calls };
+        }
+
+        test('created + skipped tally rolls into the action result (multi-run)', function() {
+            var runs = [
+                { id: 1, name: 'config.json : PROJ-11', run_number: 5, html_url: 'u1', head_branch: 'b', head_sha: 's', url: 'u' },
+                { id: 2, name: 'config.json : PROJ-12', run_number: 6, html_url: 'u2', head_branch: 'b', head_sha: 's', url: 'u' }
+            ];
+            var ctx = modWithRuns(runs);
+            var result = ctx.mod.action({ jobParams: { customParams: {
+                workspace: 'w', repository: 'r', jiraProject: 'PROJ'
+            } } });
+            assert.equal(result.success, true);
+            assert.equal(result.totalRuns, 2);
+            assert.ok(result.created + result.skipped === 2, 'every run lands in exactly one bucket');
+        });
+
+        test('createdKeys ride the result in creation order (multi-run)', function() {
+            var runs = [
+                { id: 1, name: 'config.json : PROJ-21', run_number: 5, html_url: 'u1', head_branch: 'b', head_sha: 's', url: 'u' },
+                { id: 2, name: 'no ticket key here', run_number: 6, html_url: 'u2', head_branch: 'b', head_sha: 's', url: 'u' },
+                { id: 3, name: 'config.json : PROJ-22', run_number: 7, html_url: 'u3', head_branch: 'b', head_sha: 's', url: 'u' }
+            ];
+            var ctx = modWithRuns(runs);
+            var result = ctx.mod.action({ jobParams: { customParams: {
+                workspace: 'w', repository: 'r', jiraProject: 'PROJ'
+            } } });
+            assert.equal(result.created, 3);
+            assert.deepEqual(result.createdKeys, ['PROJ-21', 'PROJ-22', 'PROJ-23']);
+        });
+    });
+});
