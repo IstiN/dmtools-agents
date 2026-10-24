@@ -22,12 +22,10 @@
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
 
-// Canonical copy (gh-823/gh-912 + gh-1248): the output scrubbing and
-// last-non-empty-line helpers live in common/pullRequest.js once — these
-// delegates keep every local call site.
-function cleanCommandOutput(output) {
-    return prHelper.cleanCommandOutput(output);
-}
+// Canonical copy (gh-823/gh-912 + gh-1248): the last-non-empty-line helper
+// lives in common/pullRequest.js once — this delegate keeps the local call
+// site (the old cleanCommandOutput delegate was dead code and went away
+// with the gh-1248 dedup).
 
 function runCommand(command, workingDir) {
     var args = { command: command };

@@ -12,19 +12,40 @@
  */
 
 /**
- * Env reader for the fallback path. The dmtools JS runtimes do not
- * guarantee a java bridge (GraalJS has one; QuickJS does not), so every
- * access is guarded and missing env simply yields '' — the caller's
- * defaults take over.
+ * Guarded java-bridge probe: the dmtools JS runtimes do not guarantee a
+ * java bridge (GraalJS has one; QuickJS does not), so every access is
+ * guarded — a missing bridge simply yields false.
+ */
+function hasJavaEnvBridge() {
+    try {
+        return typeof java !== 'undefined' && java && java.lang &&
+            java.lang.System && typeof java.lang.System.getenv === 'function';
+    } catch (e) { /* no env bridge on this runtime */ }
+    return false;
+}
+
+/**
+ * Env reader for the fallback path: through the guarded java bridge when
+ * present, '' otherwise — the caller's defaults take over.
  */
 function envValue(name) {
     try {
-        if (typeof java !== 'undefined' && java && java.lang &&
-            java.lang.System && typeof java.lang.System.getenv === 'function') {
-            var v = java.lang.System.getenv(name);
-            return (v === null || v === undefined) ? '' : String(v);
-        }
+        if (!hasJavaEnvBridge()) return '';
+        var v = java.lang.System.getenv(name);
+        return (v === null || v === undefined) ? '' : String(v);
     } catch (e) { /* no env bridge on this runtime */ }
+    return '';
+}
+
+/**
+ * The first value that is set (not undefined/null/''); '' when none is.
+ * The pick closure's customParams > env > default cascade, verbatim.
+ */
+function firstNonEmpty(values) {
+    for (var i = 0; i < values.length; i++) {
+        var v = values[i];
+        if (v !== undefined && v !== null && v !== '') return v;
+    }
     return '';
 }
 
@@ -40,14 +61,13 @@ function makePicker(params, envMap) {
         return envValue(name);
     }
     return function pick(key, envName, dflt) {
-        var v = custom[key];
-        if (v === undefined || v === null || v === '') v = env(envName);
-        if (v === undefined || v === null || v === '') v = dflt;
-        return v === undefined || v === null ? '' : String(v);
+        return String(firstNonEmpty([custom[key], env(envName), dflt]));
     };
 }
 
 module.exports = {
+    hasJavaEnvBridge: hasJavaEnvBridge,
     envValue: envValue,
+    firstNonEmpty: firstNonEmpty,
     makePicker: makePicker
 };

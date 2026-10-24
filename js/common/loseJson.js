@@ -22,6 +22,17 @@ function parseJsonLose(raw) {
 }
 
 /**
+ * The caller-specific extra list fields of a parsed envelope: the first
+ * present non-empty field wins, null when none carries a list.
+ */
+function firstListField(parsed, fields) {
+    for (var i = 0; i < (fields || []).length; i++) {
+        if (parsed && parsed[fields[i]]) return parsed[fields[i]];
+    }
+    return null;
+}
+
+/**
  * The shared envelope-flattening head every `_toArray` copy carried:
  *   Array            → itself
  *   { value: [...] } → value        (REST list envelopes, all callers)
@@ -36,13 +47,13 @@ function toArrayLose(raw, fields) {
     var parsed = parseJsonLose(raw);
     if (Array.isArray(parsed)) return parsed;
     if (parsed && parsed.value) return parsed.value;
-    for (var i = 0; i < (fields || []).length; i++) {
-        if (parsed && parsed[fields[i]]) return parsed[fields[i]];
-    }
+    var extra = firstListField(parsed, fields);
+    if (extra) return extra;
     return parsed ? [parsed] : [];
 }
 
 module.exports = {
     parseJsonLose: parseJsonLose,
+    firstListField: firstListField,
     toArrayLose: toArrayLose
 };
