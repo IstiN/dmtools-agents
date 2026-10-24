@@ -206,6 +206,8 @@ suite('preCliTestAutomationSetup — alignBranchWithBase (gh-1242)', function() 
                     loadProjectConfig: function() { return cfg; },
                     formatBranchName: function(prefix, key) { return prefix + '/' + key; }
                 },
+                'branchSetup.js': loadModule('js/common/branchSetup.js', null, allMocks),
+                'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
                 './config.js': configModule,
                 './fetchLinkedBugsToInput.js': { action: function() {} },
                 './common/trackers.js': loadModule(
@@ -359,6 +361,8 @@ suite('preCliTestAutomationSetup — checkoutBranch (gh-1242)', function() {
                     loadProjectConfig: function() { return cfg; },
                     formatBranchName: function(prefix, key) { return prefix + '/' + key; }
                 },
+                'branchSetup.js': loadModule('js/common/branchSetup.js', null, allMocks),
+                'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
                 './config.js': configModule,
                 './fetchLinkedBugsToInput.js': { action: function() {} },
                 './common/trackers.js': loadModule(
@@ -464,6 +468,8 @@ function loadCheckoutFallback(mocks) {
                 loadProjectConfig: function() { return {}; },
                 formatBranchName: function(prefix, key) { return prefix + '/' + key; }
             },
+            'branchSetup.js': loadModule('js/common/branchSetup.js', null, allMocks),
+            'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
             './config.js': configModule,
             './fetchLinkedBugsToInput.js': { action: function() {} },
             './common/trackers.js': loadModule(
