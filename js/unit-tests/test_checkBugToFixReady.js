@@ -4,30 +4,45 @@
 
 function loadCheckBugToFixReady(mocks, requireOverrides) {
     mocks = mocks || {};
-    var requireMap = {
-        './config.js': configModule,
-        './configLoader.js': makeDefaultConfigLoaderMock(),
-        './common/tokenUsageComment.js': {
-            postTokenUsageComments: function() {},
-            postTokenUsageCommentsSafely: function() {},
-            customParamsOf: function(params) {
-                return (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {};
-            }
-        },
-        './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
-        './common/smLock.js': loadModule('js/common/smLock.js', makeRequire({}), {}),
-        './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks)
-    };
-    if (requireOverrides) {
-        for (var k in requireOverrides) {
-            if (requireOverrides.hasOwnProperty(k)) requireMap[k] = requireOverrides[k];
-        }
-    }
+    var requireMap = checkBugToFixReadyRequireMap(mocks);
+    applyCheckBugToFixReadyOverrides(requireMap, requireOverrides);
     return loadModule(
         'js/checkBugToFixReady.js',
         makeRequire(requireMap),
         mocks
     );
+}
+
+// gh-1250: build the makeRequire map in named steps so the loader stays under
+// the CRAP gate; the module mapping itself is unchanged.
+function checkBugToFixReadyRequireMap(mocks) {
+    return {
+        './config.js': configModule,
+        './configLoader.js': makeDefaultConfigLoaderMock(),
+        './common/tokenUsageComment.js': checkBugToFixReadyTokenUsageMock(),
+        './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
+        './common/smLock.js': loadModule('js/common/smLock.js', makeRequire({}), {}),
+        './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks)
+    };
+}
+
+function applyCheckBugToFixReadyOverrides(requireMap, requireOverrides) {
+    if (!requireOverrides) return;
+    for (var k in requireOverrides) {
+        if (requireOverrides.hasOwnProperty(k)) requireMap[k] = requireOverrides[k];
+    }
+}
+
+function checkBugToFixReadyTokenUsageMock() {
+    return {
+        postTokenUsageComments: function() {},
+        postTokenUsageCommentsSafely: function() {},
+        customParamsOf: checkBugToFixReadyCustomParamsOf
+    };
+}
+
+function checkBugToFixReadyCustomParamsOf(params) {
+    return (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {};
 }
 
 function makeTicket(key, issueType) {
@@ -38,6 +53,25 @@ function makeTicket(key, issueType) {
             issuetype: { name: issueType }
         }
     };
+}
+
+// gh-1250: JQL-dispatch condition helpers — hoisted named functions keep the
+// jira_search_by_jql mock closures under the CRAP gate; the routing logic and
+// the returned data are unchanged.
+function storyDirectBugsJql(jql) {
+    return jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = Bug') !== -1;
+}
+
+function storyLinkedTestCasesJql(jql) {
+    return jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = "Test Case"') !== -1;
+}
+
+function tc1LinkedBugsJql(jql) {
+    return jql.indexOf('linkedIssues("TS-TC-1")') !== -1 && jql.indexOf('issuetype = Bug') !== -1;
+}
+
+function notDoneBugsFilterJql(jql) {
+    return jql.indexOf('status != "Done"') !== -1;
 }
 
 suite('checkBugToFixReady', function() {
@@ -139,19 +173,19 @@ suite('checkBugToFixReady', function() {
             jira_search_by_jql: function(args) {
                 var jql = args.jql;
                 // Direct linked bugs of the Story: one Done bug.
-                if (jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = Bug') !== -1) {
-                    if (jql.indexOf('status != "Done"') !== -1) {
+                if (storyDirectBugsJql(jql)) {
+                    if (notDoneBugsFilterJql(jql)) {
                         return [];
                     }
                     return [{ key: 'TS-92', fields: { summary: 's', status: { name: 'Done' } } }];
                 }
                 // Linked Test Cases of the Story.
-                if (jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = "Test Case"') !== -1) {
+                if (storyLinkedTestCasesJql(jql)) {
                     return [{ key: 'TS-TC-1', fields: { summary: 's', status: { name: 'Bug To Fix' } } }];
                 }
                 // Bugs linked to the Test Case: one not-Done bug.
-                if (jql.indexOf('linkedIssues("TS-TC-1")') !== -1 && jql.indexOf('issuetype = Bug') !== -1) {
-                    if (jql.indexOf('status != "Done"') !== -1) {
+                if (tc1LinkedBugsJql(jql)) {
+                    if (notDoneBugsFilterJql(jql)) {
                         return [{ key: 'TS-95', fields: { summary: 's', status: { name: 'Ready For Testing' } } }];
                     }
                     return [
@@ -193,17 +227,17 @@ suite('checkBugToFixReady', function() {
         var module = loadCheckBugToFixReady({
             jira_search_by_jql: function(args) {
                 var jql = args.jql;
-                if (jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = Bug') !== -1) {
-                    if (jql.indexOf('status != "Done"') !== -1) {
+                if (storyDirectBugsJql(jql)) {
+                    if (notDoneBugsFilterJql(jql)) {
                         return [];
                     }
                     return [hostIssue('TS-92', 'Done')];
                 }
-                if (jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = "Test Case"') !== -1) {
+                if (storyLinkedTestCasesJql(jql)) {
                     return [hostIssue('TS-TC-1', 'Bug To Fix')];
                 }
-                if (jql.indexOf('linkedIssues("TS-TC-1")') !== -1 && jql.indexOf('issuetype = Bug') !== -1) {
-                    if (jql.indexOf('status != "Done"') !== -1) {
+                if (tc1LinkedBugsJql(jql)) {
+                    if (notDoneBugsFilterJql(jql)) {
                         return [hostIssue('TS-95', 'Ready For Testing')];
                     }
                     return [hostIssue('TS-95', 'Ready For Testing')];

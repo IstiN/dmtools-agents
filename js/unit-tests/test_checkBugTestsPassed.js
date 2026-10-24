@@ -4,46 +4,64 @@
 
 function loadCheckBugTestsPassed(mocks, requireOverrides) {
     mocks = mocks || {};
-    var configLoaderMock = makeDefaultConfigLoaderMock({
-        jira: {
-            issueTypes: {
-                TEST_CASE: 'Test Case',
-                BUG: 'Bug'
-            }
-        }
-    });
-
-    var requireMap = {
-        './config.js': configModule,
-        './configLoader.js': configLoaderMock,
-        './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {}),
-        './common/tokenUsageComment.js': {
-            postTokenUsageComments: function() {},
-            postTokenUsageCommentsSafely: function() {},
-            customParamsOf: function(params) {
-                return (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {};
-            }
-        },
-        './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
-        './common/smLock.js': loadModule('js/common/smLock.js', makeRequire({}), {}),
-        './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks),
-        './common/scm.js': mocks.__scm || {
-            createScm: function() {
-                return { listPrs: function() { return []; } };
-            }
-        }
-    };
-    if (requireOverrides) {
-        for (var k in requireOverrides) {
-            if (requireOverrides.hasOwnProperty(k)) requireMap[k] = requireOverrides[k];
-        }
-    }
+    var requireMap = checkBugTestsPassedRequireMap(mocks);
+    applyCheckBugTestsPassedOverrides(requireMap, requireOverrides);
 
     return loadModule(
         'js/checkBugTestsPassed.js',
         makeRequire(requireMap),
         mocks
     );
+}
+
+// gh-1250: build the makeRequire map in named steps so the loader stays under
+// the CRAP gate; the module mapping itself is unchanged.
+function checkBugTestsPassedRequireMap(mocks) {
+    return {
+        './config.js': configModule,
+        './configLoader.js': makeDefaultConfigLoaderMock({
+            jira: {
+                issueTypes: {
+                    TEST_CASE: 'Test Case',
+                    BUG: 'Bug'
+                }
+            }
+        }),
+        './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {}),
+        './common/tokenUsageComment.js': checkBugTestsPassedTokenUsageMock(),
+        './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
+        './common/smLock.js': loadModule('js/common/smLock.js', makeRequire({}), {}),
+        './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks),
+        './common/scm.js': checkBugTestsPassedScmMock(mocks)
+    };
+}
+
+function applyCheckBugTestsPassedOverrides(requireMap, requireOverrides) {
+    if (!requireOverrides) return;
+    for (var k in requireOverrides) {
+        if (requireOverrides.hasOwnProperty(k)) requireMap[k] = requireOverrides[k];
+    }
+}
+
+function checkBugTestsPassedTokenUsageMock() {
+    return {
+        postTokenUsageComments: function() {},
+        postTokenUsageCommentsSafely: function() {},
+        customParamsOf: checkBugTestsPassedCustomParamsOf
+    };
+}
+
+function checkBugTestsPassedCustomParamsOf(params) {
+    return (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {};
+}
+
+function checkBugTestsPassedScmMock(mocks) {
+    if (mocks.__scm) return mocks.__scm;
+    return {
+        createScm: function() {
+            return { listPrs: function() { return []; } };
+        }
+    };
 }
 
 function makeTc(key, status) {

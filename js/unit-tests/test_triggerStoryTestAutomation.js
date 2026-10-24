@@ -213,4 +213,12 @@ suite('triggerStoryTestAutomation', function() {
         assert.deepEqual(m.configOf({}), {});
     });
 
+    test('injected token usage mock keeps the jobParams-then-top-level precedence', function() {
+        var customParamsOf = makeTokenUsageMock({}).customParamsOf;
+        assert.deepEqual(customParamsOf({ jobParams: { customParams: { a: 1 } } }), { a: 1 });
+        assert.deepEqual(customParamsOf({ customParams: { b: 2 } }), { b: 2 });
+        assert.deepEqual(customParamsOf({}), {});
+        assert.deepEqual(customParamsOf(null), {});
+    });
+
 });
