@@ -30,10 +30,11 @@ var prLookup = require('./common/prLookup.js');
 const { resolveStatuses } = require('./config.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
-var trackersModule = require('./common/trackers.js');
-var trackerHolder = trackersModule.createTrackerHolder();
-var initTracker = trackerHolder.initTracker;
-var getTracker = trackerHolder.getTracker;
+// gh-1249 rework: one shared session module instead of the copy-pasted holder boilerplate
+// (the verbatim 4-liner formed 50-token clone windows across unrelated action scripts).
+var trackerSession = require('./common/trackerSession.js');
+var initTracker = trackerSession.initTracker;
+var getTracker = trackerSession.getTracker;
 
 
 // ── gh-1229: small helpers extracted from action so it stays well under the
