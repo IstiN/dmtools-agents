@@ -1455,3 +1455,155 @@ suite('preCliReworkSetup.action — diff-before-CI-detection (gh-1119 AC7)', fun
         assert.notOk(h.calls.detectArgs.jenkinsBasePath, 'no Jenkins base configured here');
     });
 });
+
+// ── gh-1195 CRAP ratchet: buildReviewStateMd branch characterization ─────────
+// Pins the review-probe degradation paths and the CHANGES_REQUESTED warning
+// (the branches that were uncovered when buildReviewStateMd sat at CRAP 19.3)
+// before the markdown helpers are extracted.
+suite('preCliReworkSetup.buildReviewStateMd — probe degradation + verdict warning (gh-1195)', function() {
+
+    function reviewsHarness(listReviews) {
+        var h = makeContractHarness();
+        var scm = (listReviews === undefined) ? { /* no listReviews at all */ } : {
+            listReviews: listReviews
+        };
+        return { mod: h.mod, scm: scm };
+    }
+
+    test('a concluded CHANGES_REQUESTED review adds the blocking warning lines', function() {
+        var loaded = reviewsHarness(function() {
+            return [{ state: 'CHANGES_REQUESTED', user: { login: 'reviewer1' },
+                submitted_at: '2026-10-08T18:00:00Z', body: 'Please fix the null deref.' }];
+        });
+        var md = loaded.mod.buildReviewStateMd(loaded.scm, 7, contractThreads(['PRRT_a']));
+        assert.contains(md, 'CHANGES_REQUESTED');
+        assert.contains(md, '⚠️ The reviewer **requires changes** before this PR can merge — treat every open thread as blocking.');
+        assert.contains(md, 'PRRT_a', 'the open thread inventory is still listed');
+    });
+
+    test('a probe failure degrades to the honest not-available note (non-fatal)', function() {
+        var loaded = reviewsHarness(function() { throw new Error('graphql down'); });
+        var md = loaded.mod.buildReviewStateMd(loaded.scm, 7, contractThreads([]));
+        assert.contains(md, 'Review verdicts are not available from this SCM provider');
+        assert.notContains(md, 'requires changes');
+    });
+
+    test('a provider without listReviews support degrades the same way', function() {
+        var loaded = reviewsHarness(undefined);
+        var md = loaded.mod.buildReviewStateMd(loaded.scm, 7, contractThreads([]));
+        assert.contains(md, 'Review verdicts are not available from this SCM provider');
+        assert.contains(md, '**Open review threads at rework start: 0**');
+    });
+
+    test('an APPROVED verdict never renders the blocking warning', function() {
+        var loaded = reviewsHarness(function() {
+            return [{ state: 'APPROVED', user: { login: 'reviewer1' },
+                submitted_at: '2026-10-08T18:00:00Z', body: 'LGTM' }];
+        });
+        var md = loaded.mod.buildReviewStateMd(loaded.scm, 7, contractThreads([]));
+        assert.contains(md, '**Review decision: `APPROVED`**');
+        assert.notContains(md, 'requires changes');
+    });
+
+    test('a census that disagrees with the actionable list renders the exclusion note', function() {
+        var loaded = reviewsHarness(function() { return []; });
+        var md = loaded.mod.buildReviewStateMd(loaded.scm, 7, {
+            rawThreads: {
+                threads: [{ threadId: 'PRRT_open', resolved: false }],
+                census: { graphqlUnresolved: 3 }
+            }
+        });
+        assert.contains(md, '**Open review threads at rework start: 1**');
+        assert.contains(md, '3', 'the census delta is stated, never silently dropped');
+    });
+
+    test('resolved and bot threads are excluded from the open inventory', function() {
+        var loaded = reviewsHarness(function() { return []; });
+        var md = loaded.mod.buildReviewStateMd(loaded.scm, 7, {
+            rawThreads: {
+                threads: [
+                    { threadId: 'PRRT_open', resolved: false },
+                    { threadId: 'PRRT_done', resolved: true },
+                    { threadId: 'PRRT_bot', resolved: false, bot: true },
+                    null
+                ]
+            }
+        });
+        assert.contains(md, '**Open review threads at rework start: 1**');
+        assert.contains(md, 'PRRT_open');
+        assert.notContains(md, 'PRRT_done');
+        assert.notContains(md, 'PRRT_bot');
+    });
+});
+
+// ── gh-1195 CRAP split: review-state helper contracts ────────────────────────
+suite('preCliReworkSetup — review-state markdown helpers (gh-1195)', function() {
+
+    function harness() {
+        return makeContractHarness().mod;
+    }
+
+    suite('fetchReviewsForContext', function() {
+        test('returns the review list (stringified prNumber), [] normalized from a falsy probe', function() {
+            var mod = harness();
+            var seen = [];
+            var scm = { listReviews: function(prNumber) { seen.push(prNumber); return null; } };
+            assert.deepEqual(mod.fetchReviewsForContext(scm, '7'), []);
+            assert.deepEqual(seen, ['7'], 'the prNumber is stringified before the probe');
+        });
+
+        test('a missing probe or a throwing probe degrade to null (never fatal)', function() {
+            var mod = harness();
+            assert.equal(mod.fetchReviewsForContext({ /* no listReviews */ }, 7), null);
+            assert.equal(mod.fetchReviewsForContext(null, 7), null);
+            assert.equal(mod.fetchReviewsForContext({
+                listReviews: function() { throw new Error('boom'); }
+            }, 7), null);
+        });
+    });
+
+    suite('discussionThreadsAndCensus', function() {
+        test('defaults both halves of a missing payload, keeping them independent', function() {
+            var mod = harness();
+            assert.deepEqual(mod.discussionThreadsAndCensus(null), { threads: [], census: null });
+            assert.deepEqual(mod.discussionThreadsAndCensus({}), { threads: [], census: null });
+            assert.deepEqual(mod.discussionThreadsAndCensus({ rawThreads: {} }), { threads: [], census: null });
+            var full = mod.discussionThreadsAndCensus({
+                rawThreads: { threads: [{ threadId: 'PRRT_a' }], census: { total: 1 } }
+            });
+            assert.equal(full.threads.length, 1);
+            assert.deepEqual(full.census, { total: 1 });
+        });
+    });
+
+    suite('openThreadsOf', function() {
+        test('drops resolved, bot-authored and null entries', function() {
+            var mod = harness();
+            var open = mod.openThreadsOf([
+                { threadId: 'a', resolved: false },
+                { threadId: 'b', resolved: true },
+                { threadId: 'c', resolved: false, bot: true },
+                null,
+                { threadId: 'd' }
+            ]);
+            assert.deepEqual(open.map(function(t) { return t.threadId; }), ['a', 'd']);
+            assert.deepEqual(mod.openThreadsOf(null), [], 'a missing list defaults to empty');
+        });
+    });
+
+    suite('reviewRequiresChanges', function() {
+        test('true only for a concluded CHANGES_REQUESTED verdict', function() {
+            var mod = harness();
+            assert.equal(mod.reviewRequiresChanges([
+                { state: 'APPROVED', submitted_at: '2026-10-01T10:00:00Z' },
+                { state: 'CHANGES_REQUESTED', submitted_at: '2026-10-08T10:00:00Z' }
+            ]), true, 'the latest concluded review decides');
+            assert.equal(mod.reviewRequiresChanges([
+                { state: 'CHANGES_REQUESTED', submitted_at: '2026-10-01T10:00:00Z' },
+                { state: 'APPROVED', submitted_at: '2026-10-08T10:00:00Z' }
+            ]), false);
+            assert.equal(mod.reviewRequiresChanges([]), false);
+            assert.equal(mod.reviewRequiresChanges(null), false, 'no probe → no warning');
+        });
+    });
+});
