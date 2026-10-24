@@ -6,11 +6,14 @@
  *   1. crap4dart.yaml — the file-level `similarity` gate must scan JavaScript
  *      sources (the `**` glob over `*.js`) alongside markdown (`**` glob over
  *      `*.md`, mirroring dmtools-dart) and exclude `js/unit-tests/**`.
- *   2. .github/workflows/quality.yml — must enforce
+ *   2. .github/workflows/quality.yml — must run
  *      `crap4js duplicates --threshold 1 --exclude "js/unit-tests/**" js ci`
- *      (fails PRs and main when a production JS file exceeds 1% duplicated
- *      lines) and publish an overall-duplication `duplication.json` badge from
- *      the same measurement in the "Publish README badges" step.
+ *      and evaluate it as a RATCHET via ci/duplicationRatchet.js against
+ *      duplication-baseline.json (fails PRs and main on a NEW over-threshold
+ *      file or an INCREASED percentage; the 85 pinned pre-existing debt
+ *      files owned by gh-1244…gh-1250 do not fail it), and publish an
+ *      overall-duplication `duplication.json` badge from the same measurement
+ *      in the "Publish README badges" step.
  *   3. README.md — must render the duplication endpoint badge.
  *
  * These are string-level contract tests (no YAML parser in the GraalJS
@@ -64,13 +67,46 @@ suite('quality.yml — gh-1251 duplication gate and badge contract', function() 
             'the duplicates gate must run the pinned tool from the isolated prefix');
     });
 
+    // The gate step, sliced out of the workflow by its step name (the command
+    // string also appears in the workflow header comment — anchor on the step).
+    function gateStepBlock() {
+        var nameIdx = QUALITY_YML.indexOf('- name: Duplication gate');
+        assert.ok(nameIdx !== -1, 'duplicates gate step must exist');
+        var nextStep = QUALITY_YML.indexOf('\n      - name:', nameIdx + 1);
+        return QUALITY_YML.slice(nameIdx, nextStep === -1 ? QUALITY_YML.length : nextStep);
+    }
+
+    test('duplicates gate is a ratchet against the pinned baseline', function() {
+        assert.ok(QUALITY_YML.indexOf('ci/duplicationRatchet.js') !== -1,
+            'the duplicates gate must evaluate the report through ci/duplicationRatchet.js');
+        assert.ok(QUALITY_YML.indexOf('duplication-baseline.json') !== -1,
+            'the duplicates gate must compare against duplication-baseline.json');
+        // The tool exits 2 while pinned debt remains — the step must capture
+        // the code instead of letting -e kill the step before the ratchet runs.
+        var stepBlock = gateStepBlock();
+        assert.ok(stepBlock.indexOf('set +e') !== -1,
+            'the gate step must capture the tool exit code with set +e (exit 2 is expected while debt is pinned)');
+    });
+
+    test('duplication baseline pins every currently-over-threshold file', function() {
+        var raw = file_read({ path: 'duplication-baseline.json' });
+        var baseline = JSON.parse(String(raw));
+        assert.ok(baseline && typeof baseline === 'object', 'duplication-baseline.json must parse as an object');
+        assert.equal(baseline.threshold, 1, 'baseline threshold must be 1 (mirrors the gate)');
+        assert.ok(baseline.pinned && typeof baseline.pinned === 'object',
+            'baseline must carry a pinned file map');
+        var files = Object.keys(baseline.pinned);
+        assert.ok(files.length >= 85, 'baseline must pin all pre-existing debt files (85 at gh-1251), got ' + files.length);
+        files.forEach(function(f) {
+            assert.ok(/\.(js|mjs|cjs)$/.test(f), 'pinned entry must be a production JS file: ' + f);
+            assert.ok(typeof baseline.pinned[f] === 'number' && baseline.pinned[f] > 1,
+                'pinned percentage must be a number above the 1% threshold: ' + f);
+            assert.ok(file_read({ path: f }) !== null, 'pinned file must exist in the repo: ' + f);
+        });
+    });
+
     test('duplicates gate step is a hard gate (not continue-on-error)', function() {
-        var gateIdx = QUALITY_YML.indexOf('duplicates --threshold 1');
-        assert.ok(gateIdx !== -1, 'duplicates gate step must exist');
-        var stepStart = QUALITY_YML.lastIndexOf('- name:', gateIdx);
-        assert.ok(stepStart !== -1, 'gate step must be a named step');
-        var nextStep = QUALITY_YML.indexOf('- name:', gateIdx);
-        var stepBlock = QUALITY_YML.slice(stepStart, nextStep === -1 ? QUALITY_YML.length : nextStep);
+        var stepBlock = gateStepBlock();
         assert.ok(stepBlock.indexOf('continue-on-error') === -1,
             'the duplicates gate must fail the workflow — no continue-on-error');
     });

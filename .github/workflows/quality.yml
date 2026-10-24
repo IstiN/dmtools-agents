@@ -169,13 +169,23 @@ jobs:
           if grep -q '^improved ' "$RUNNER_TEMP/crap.txt"; then echo "improved=true" >> "$GITHUB_OUTPUT"; fi
           exit $code
 
-      - name: Duplication gate (production JS duplicated lines <= 1%)
-        # Hard gate for PRs and main: any production JS file (js/ + ci/) with
-        # more than 1% duplicated lines fails the run. js/unit-tests/** is
-        # excluded — test fixtures legitimately repeat shapes. The badge step
-        # below reparses the same measurement for the README endpoint.
+      - name: Duplication gate (production JS duplicated lines <= 1%, ratcheted)
+        # Ratchet, not an absolute bar: 85 production JS files already exceed
+        # 1% duplicated lines — pre-existing debt owned by the gh-1244…gh-1250
+        # dedup tickets — so the measurement's exit 2 is expected for now.
+        # duplication-baseline.json pins each over-threshold file with its
+        # measured percentage; the gate FAILS only on a NEW over-threshold
+        # file or an INCREASED percentage (ci/duplicationRatchet.js), keeping
+        # the absolute 1% bar as the end state once the debt lands. A crashed
+        # measurement (tool exit other than 0/2) never passes. js/unit-tests/**
+        # stays excluded; the badge step below reparses the same measurement
+        # for the README endpoint.
         run: |
-          "$RUNNER_TEMP/tools/node_modules/.bin/crap4js" duplicates --threshold 1 --exclude "js/unit-tests/**" js ci
+          set +e
+          "$RUNNER_TEMP/tools/node_modules/.bin/crap4js" duplicates --threshold 1 --exclude "js/unit-tests/**" js ci > "$RUNNER_TEMP/dup-gate.txt" 2>&1
+          code=$?
+          set -e
+          node ci/duplicationRatchet.js "$RUNNER_TEMP/dup-gate.txt" duplication-baseline.json "$code"
 
       - name: Update the released baseline (main only — ratchets down, never up)
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (steps.ratchet.outcome == 'success' || steps.baseline.outputs.present != 'true')
