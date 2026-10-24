@@ -277,18 +277,14 @@ function ownerLegCompatible(run, eventLeg) {
     return completedLegsCompatible(eventLeg, legOfRunName(run.name));
 }
 
-function isActiveStatus(status) {
-    return ACTIVE_RUN_STATES.indexOf(status) !== -1;
-}
-
-function runTimestampMs(run) {
-    return legRunVocab.runTimestampMs(run);
-}
-
+// The freshness probes bound to this module's active-state vocabulary
+// ('requested' included) — one factory call instead of the former delegate
+// copies (gh-1248 dedup).
+var runProbes = legRunVocab.makeRunProbes(ACTIVE_RUN_STATES);
+var isActiveStatus = runProbes.isActiveStatus;
+var runTimestampMs = runProbes.runTimestampMs;
 /** gh-1028 zombie parity: non-in_progress active state past the stale bound. */
-function isStaleNonRunning(run, nowMs, staleMs) {
-    return legRunVocab.isStaleNonRunning(run, nowMs, staleMs);
-}
+var isStaleNonRunning = runProbes.isStaleNonRunning;
 
 /**
  * A run that concluded 'success' within the freshness window still owns

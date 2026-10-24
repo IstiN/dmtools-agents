@@ -70,7 +70,7 @@ suite('legRunVocab — isFreshActiveRun', function () {
     var ACTIVE = ['in_progress', 'queued', 'requested'];
 
     test('an active run within the stale bound is fresh', function () {
-        var run = { status: 'queued', updated_at: '2026-02-28T12:00:00Z' };
+        var run = { status: 'queued', updated_at: '2026-02-28T23:00:00Z' };
         assert.equal(vocab.isFreshActiveRun(run, ACTIVE, NOW, 3600000), true);
     });
 
@@ -90,8 +90,35 @@ suite('legRunVocab — isFreshActiveRun', function () {
     });
 
     test('callers can pass an extended activeStates vocabulary (reworkLatch requested)', function () {
-        var run = { status: 'requested', updated_at: '2026-02-28T12:00:00Z' };
+        var run = { status: 'requested', updated_at: '2026-02-28T23:00:00Z' };
         assert.equal(vocab.isFreshActiveRun(run, ACTIVE, NOW, 3600000), true);
         assert.equal(vocab.isFreshActiveRun(run, ['in_progress', 'queued'], NOW, 3600000), false);
+    });
+});
+
+suite('legRunVocab — makeRunProbes', function () {
+    var vocab = loadModule('js/common/legRunVocab.js', makeRequire({}), {});
+    var NOW = Date.parse('2026-03-01T00:00:00Z');
+
+    test('binds the caller activeStates list into the probe bundle', function () {
+        var probes = vocab.makeRunProbes(['in_progress', 'queued', 'requested']);
+        assert.equal(probes.isActiveStatus('requested'), true);
+        assert.equal(probes.isActiveStatus('completed'), false);
+        assert.equal(probes.runTimestampMs({ updated_at: '2026-02-28T23:00:00Z' }),
+            Date.parse('2026-02-28T23:00:00Z'));
+        assert.equal(probes.isStaleNonRunning({ status: 'completed',
+            updated_at: '2026-02-01T00:00:00Z' }, NOW, 3600000), true);
+        assert.equal(probes.isFreshActiveRun({ status: 'requested',
+            updated_at: '2026-02-28T23:00:00Z' }, NOW, 3600000), true);
+        assert.equal(probes.isFreshActiveRun({ status: 'requested',
+            updated_at: '2026-02-01T00:00:00Z' }, NOW, 3600000), false);
+    });
+
+    test('two bundles with different lists stay independent', function () {
+        var withRequested = vocab.makeRunProbes(['in_progress', 'requested']);
+        var without = vocab.makeRunProbes(['in_progress']);
+        var run = { status: 'requested', updated_at: '2026-02-28T23:00:00Z' };
+        assert.equal(withRequested.isFreshActiveRun(run, NOW, 3600000), true);
+        assert.equal(without.isFreshActiveRun(run, NOW, 3600000), false);
     });
 });

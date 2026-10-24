@@ -64,12 +64,12 @@ function isLegRun(run, workflowFile) {
     return legRunVocab.isLegRun(run, workflowFile);
 }
 
-function isActiveStatus(status) {
-    return ACTIVE_RUN_STATES.indexOf(status) !== -1;
-}
+// The freshness probes bound to this module's active-state vocabulary —
+// one factory call instead of per-module delegate copies (gh-1248 dedup).
+var runProbes = legRunVocab.makeRunProbes(ACTIVE_RUN_STATES);
 
-function runTimestampMs(run) {
-    return legRunVocab.runTimestampMs(run);
+function isActiveStatus(status) {
+    return runProbes.isActiveStatus(status);
 }
 
 /**
@@ -78,7 +78,7 @@ function runTimestampMs(run) {
  * in_progress run is never stale here (the caller gates on that).
  */
 function isStaleNonRunning(run, nowMs, staleMs) {
-    return legRunVocab.isStaleNonRunning(run, nowMs, staleMs);
+    return runProbes.isStaleNonRunning(run, nowMs, staleMs);
 }
 
 /**
@@ -119,10 +119,10 @@ function nowMsOf(opts) {
  * gh-1075 fork): an ACTIVE run that is not a stale non-running zombie.
  * gh-1075 review (CRAP ratchet): folded into one helper so each
  * legRunOwns* predicate carries the freshness check as a single call.
- * Canonical in legRunVocab (gh-1248); ACTIVE_RUN_STATES stays local — the
- * sibling probes carry an extra 'requested' state. */
+ * Canonical in legRunVocab (gh-1248), bound to the local ACTIVE_RUN_STATES
+ * via runProbes — the sibling probes carry an extra 'requested' state. */
 function isFreshActiveRun(run, nowMs, staleMs) {
-    return legRunVocab.isFreshActiveRun(run, ACTIVE_RUN_STATES, nowMs, staleMs);
+    return runProbes.isFreshActiveRun(run, nowMs, staleMs);
 }
 
 /** One run owns the branch: active, non-stale, the leg workflow, on-branch. */

@@ -69,10 +69,29 @@ function isFreshActiveRun(run, activeStates, nowMs, staleMs) {
     return true;
 }
 
+/**
+ * Binds the freshness vocabulary to the caller's active-state list: one
+ * factory call replaces the per-module delegate wrapper blocks the three
+ * sibling probes used to carry (gh-1248 dedup — those byte-identical
+ * wrapper trios tripped the duplication gate). The returned probes close
+ * over the given list; legRunVocab itself stays pure.
+ */
+function makeRunProbes(activeStates) {
+    return {
+        isActiveStatus: function(status) { return activeStates.indexOf(status) !== -1; },
+        runTimestampMs: runTimestampMs,
+        isStaleNonRunning: isStaleNonRunning,
+        isFreshActiveRun: function(run, nowMs, staleMs) {
+            return isFreshActiveRun(run, activeStates, nowMs, staleMs);
+        }
+    };
+}
+
 module.exports = {
     DEFAULT_LEG_WORKFLOW: DEFAULT_LEG_WORKFLOW,
     isLegRun: isLegRun,
     runTimestampMs: runTimestampMs,
     isStaleNonRunning: isStaleNonRunning,
-    isFreshActiveRun: isFreshActiveRun
+    isFreshActiveRun: isFreshActiveRun,
+    makeRunProbes: makeRunProbes
 };
