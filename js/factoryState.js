@@ -313,6 +313,19 @@ function normTokenRow(r) {
  * pr/issue fields. Bad shapes degrade to an empty map — tokens are
  * decorative, never fatal.
  */
+
+function normalizeTokens(input) {
+    var map = {};
+    if (Array.isArray(input)) {
+        normalizeTokenArray(input, map);
+    } else if (input && typeof input === 'object') {
+        normalizeTokenMap(input, map);
+    }
+    Object.keys(map).forEach(function (k) {
+        map[k].sort(tokenRowAtAsc);
+    });
+    return map;
+}
 // ── gh-1227 CRAP extraction — pure pieces of normalizeTokens ─────────────────
 
 // Ledger key of one raw token row: 'pr-N' wins over 'issue-N', null when the
@@ -344,19 +357,6 @@ function normalizeTokenMap(input, map) {
 // Ascending `at` comparator — a missing at sorts as '' (first).
 function tokenRowAtAsc(a, b) {
     return String(a.at || '').localeCompare(String(b.at || ''));
-}
-
-function normalizeTokens(input) {
-    var map = {};
-    if (Array.isArray(input)) {
-        normalizeTokenArray(input, map);
-    } else if (input && typeof input === 'object') {
-        normalizeTokenMap(input, map);
-    }
-    Object.keys(map).forEach(function (k) {
-        map[k].sort(tokenRowAtAsc);
-    });
-    return map;
 }
 
 /**
@@ -536,25 +536,6 @@ function rowCost(row, rates) {
  * Rows with no parsable `at` price per-row but stay out of the window —
  * an undated row must not silently inflate or vanish from the header.
  */
-// ── gh-1227 CRAP extraction — pure pieces of priceTokens ─────────────────────
-
-// True when the row gained a $cost: model reported AND known to the table.
-// Mutates the row in place — rows are shared by reference with the cards.
-// (rowCost's null return needs a null arg; both are guarded here.)
-function priceRowInPlace(row, pricing) {
-    if (!row || row.model == null) return false;
-    var rates = ratesFor(pricing, row.model);
-    if (!rates) return false;
-    row.cost = rowCost(row, rates);
-    return true;
-}
-
-// The row's leg priced inside the global Σ$ window (14d): dated, parsable
-// and fresh. Undated rows price per-row but never inflate the rollup.
-function inCostWindow(row, nowMs) {
-    var t = row.at ? Date.parse(row.at) : NaN;
-    return !isNaN(t) && nowMs - t < COST_WINDOW_MS;
-}
 
 function priceTokens(tmap, pricing, nowMs) {
     if (!pricing) return null;
@@ -578,6 +559,25 @@ function priceTokens(tmap, pricing, nowMs) {
     // from "pricing off". Suppress the rollup; the per-row $ stays data.
     if (!(summary.usd14d > 0)) return null;
     return summary;
+}
+// ── gh-1227 CRAP extraction — pure pieces of priceTokens ─────────────────────
+
+// True when the row gained a $cost: model reported AND known to the table.
+// Mutates the row in place — rows are shared by reference with the cards.
+// (rowCost's null return needs a null arg; both are guarded here.)
+function priceRowInPlace(row, pricing) {
+    if (!row || row.model == null) return false;
+    var rates = ratesFor(pricing, row.model);
+    if (!rates) return false;
+    row.cost = rowCost(row, rates);
+    return true;
+}
+
+// The row's leg priced inside the global Σ$ window (14d): dated, parsable
+// and fresh. Undated rows price per-row but never inflate the rollup.
+function inCostWindow(row, nowMs) {
+    var t = row.at ? Date.parse(row.at) : NaN;
+    return !isNaN(t) && nowMs - t < COST_WINDOW_MS;
 }
 
 /**
@@ -613,6 +613,13 @@ function fetchTokensFromBranch(repo, cfg, exec) {
  * The parallel *Lane/*State maps record WHICH state key each card sat in —
  * the v3 history accumulator appends on key change.
  */
+
+function prevIndex(prev) {
+    var ix = { pr: {}, issue: {}, prLane: {}, issueState: {} };
+    indexLaneCards(ix, (prev && prev.lanes) || {});
+    indexBacklogCards(ix, prev);
+    return ix;
+}
 // ── gh-1227 CRAP extraction — pure pieces of prevIndex ───────────────────────
 
 // Lane cards into the pr/issue indexes: pr cards remember their lane
@@ -642,13 +649,6 @@ function indexBacklogCards(ix, prev) {
             ix.issueState[c.issue] = bucket;   // the issue-state history
         });
     });
-}
-
-function prevIndex(prev) {
-    var ix = { pr: {}, issue: {}, prLane: {}, issueState: {} };
-    indexLaneCards(ix, (prev && prev.lanes) || {});
-    indexBacklogCards(ix, prev);
-    return ix;
 }
 
 /**
