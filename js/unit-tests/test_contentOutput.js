@@ -650,3 +650,195 @@ suite('contentOutput.publishCommentReplies (gh-1224)', function() {
             'reads ' + JSON.stringify(readPaths) + ' — expected the DEFAULT_REPLIES_FILE');
     });
 });
+
+// ── gh-1224: extracted helper contracts ──────────────────────────────────────
+
+suite('contentOutput.resolveConfig helpers (gh-1224)', function() {
+
+    test('customParamsOf prefers top-level customParams over jobParams.customParams', function() {
+        var lib = loadLibWithGlobals({});
+        assert.deepEqual(lib.customParamsOf({ customParams: { a: 1 }, jobParams: { customParams: { a: 2 } } }), { a: 1 });
+        assert.deepEqual(lib.customParamsOf({ jobParams: { customParams: { a: 2 } } }), { a: 2 });
+        assert.deepEqual(lib.customParamsOf({}), {});
+        assert.deepEqual(lib.customParamsOf(null), {});
+        assert.deepEqual(lib.customParamsOf({ jobParams: {} }), {});
+    });
+
+    test('contentOutputCustomParams digs the contentOutput section ({} when absent)', function() {
+        var lib = loadLibWithGlobals({});
+        assert.deepEqual(lib.contentOutputCustomParams({ customParams: { contentOutput: { target: 'wiki' } } }), { target: 'wiki' });
+        assert.deepEqual(lib.contentOutputCustomParams({ customParams: {} }), {});
+        assert.deepEqual(lib.contentOutputCustomParams({}), {});
+        assert.deepEqual(lib.contentOutputCustomParams(null), {});
+    });
+
+    test('projectContentOutput returns the project section and {} on loader failure', function() {
+        var lib = loadModule(
+            'js/common/contentOutput.js',
+            makeRequire({
+                '../configLoader.js': {
+                    loadProjectConfig: function(params) {
+                        if (params && params.boom) throw new Error('config boom');
+                        return { contentOutput: { space: 'DOC' } };
+                    }
+                },
+                './trackers.js': trackersMock()
+            }),
+            {}
+        );
+        assert.deepEqual(lib.projectContentOutput({ jobParams: { key: 'K' } }), { space: 'DOC' });
+        assert.deepEqual(lib.projectContentOutput({ jobParams: { boom: true } }), {}, 'loader failure stays fail-open');
+        assert.deepEqual(lib.projectContentOutput(null), { space: 'DOC' }, 'no jobParams — the params bag itself is passed');
+    });
+
+    test('builtInContentOutputConfig carries the documented defaults', function() {
+        var lib = loadLibWithGlobals({});
+        var builtIn = lib.builtInContentOutputConfig();
+        assert.equal(builtIn.target, 'jira_field');
+        assert.equal(builtIn.operationType, 'replace');
+        assert.equal(builtIn.updateTrackerField, true);
+        assert.equal(builtIn.deleteOrphans, false);
+        assert.equal(builtIn.includeInlineComments, true);
+        assert.equal(builtIn.space, '');
+        assert.equal(builtIn.parentPageId, '');
+        assert.equal(builtIn.pageTitleSuffix, '');
+    });
+
+    test('resolveConfig keeps the documented layering: defaults < project < customParams', function() {
+        var lib = loadModule(
+            'js/common/contentOutput.js',
+            makeRequire({
+                '../configLoader.js': {
+                    loadProjectConfig: function() { return { contentOutput: { space: 'PROJ', operationType: 'append' } }; }
+                },
+                './trackers.js': trackersMock()
+            }),
+            {}
+        );
+        var cfg = lib.resolveConfig(
+            { customParams: { contentOutput: { space: 'CUSTOM' } } },
+            { field: 'Description' }
+        );
+        assert.equal(cfg.target, 'jira_field', 'untouched layers keep the built-in default');
+        assert.equal(cfg.field, 'Description', 'caller defaults fill gaps');
+        assert.equal(cfg.operationType, 'append', 'project config beats caller defaults');
+        assert.equal(cfg.space, 'CUSTOM', 'customParams beat project config');
+    });
+});
+
+suite('contentOutput comments-digest helpers (gh-1224)', function() {
+
+    test('orMd falls back only on falsy values', function() {
+        var lib = loadLibWithGlobals({});
+        assert.equal(lib.orMd('x', 'fallback'), 'x');
+        assert.equal(lib.orMd('', 'fallback'), 'fallback');
+        assert.equal(lib.orMd(null, 'fallback'), 'fallback');
+        assert.equal(lib.orMd(0, 'fallback'), 'fallback');
+    });
+
+    test('commentMdHeading applies the unknown/untitled fallbacks', function() {
+        var lib = loadLibWithGlobals({});
+        assert.equal(
+            lib.commentMdHeading({ commentId: 'c1', pageTitle: 'Page', pageId: 'p1' }),
+            '## Comment c1 on page "Page" (pageId: p1)');
+        assert.equal(
+            lib.commentMdHeading({}),
+            '## Comment unknown on page "untitled" (pageId: unknown)');
+    });
+
+    test('commentMdLines renders fields, optional parent line, body and separator', function() {
+        var lib = loadLibWithGlobals({});
+        assert.deepEqual(lib.commentMdLines({
+            commentId: 'c1', pageTitle: 'Page', pageId: 'p1',
+            author: 'Ann', created: '2026-01-01', resolved: true,
+            parentCommentId: 'root', body: 'The finding'
+        }), [
+            '## Comment c1 on page "Page" (pageId: p1)',
+            '- **Author:** Ann',
+            '- **Created:** 2026-01-01',
+            '- **Resolved:** yes',
+            '- **Parent comment:** root',
+            '\nThe finding',
+            '\n---\n'
+        ]);
+
+        var minimal = lib.commentMdLines({ resolved: false, body: '' });
+        assert.equal(minimal.length, 6, 'no parent line without parentCommentId');
+        assert.equal(minimal[3], '- **Resolved:** no');
+        assert.equal(minimal[4], '\n', 'a missing body renders the empty fallback');
+    });
+
+    test('buildInlineCommentsMd renders the placeholder and multi-comment digests', function() {
+        var lib = loadLibWithGlobals({});
+        assert.equal(lib.buildInlineCommentsMd([]), '# Inline comments\n\n\n_No inline comments found._');
+        assert.equal(lib.buildInlineCommentsMd(null), '# Inline comments\n\n\n_No inline comments found._');
+
+        var md = lib.buildInlineCommentsMd([{ commentId: 'c1', body: 'one' }, { commentId: 'c2', body: 'two' }]);
+        assert.contains(md, 'Total comments: 2');
+        assert.ok(md.indexOf('## Comment c1') < md.indexOf('## Comment c2'), 'comments render in order');
+        assert.ok(md.indexOf('one') !== -1 && md.indexOf('two') !== -1);
+    });
+});
+
+suite('contentOutput replies helpers (gh-1224)', function() {
+
+    test('parseRepliesPayload accepts a bare array, the wrapper shape and rejects the rest', function() {
+        var lib = loadLibWithGlobals({});
+        assert.deepEqual(lib.parseRepliesPayload('[{"pageId":"p"}]'), [{ pageId: 'p' }]);
+        assert.deepEqual(lib.parseRepliesPayload('{"replies":[{"pageId":"p"}]}'), [{ pageId: 'p' }]);
+        assert.deepEqual(lib.parseRepliesPayload('{"nope":1}'), []);
+        assert.deepEqual(lib.parseRepliesPayload('"scalar"'), []);
+        assert.deepEqual(lib.parseRepliesPayload('null'), [], 'JSON null parses to the empty list');
+        assert.throws(function() { lib.parseRepliesPayload('{broken'); });
+    });
+
+    test('isPostableReply requires all three coordinates', function() {
+        var lib = loadLibWithGlobals({});
+        assert.equal(lib.isPostableReply({ pageId: 'p', commentId: 'c', body: 'b' }), true);
+        assert.equal(lib.isPostableReply({ commentId: 'c', body: 'b' }), false);
+        assert.equal(lib.isPostableReply({ pageId: '', commentId: 'c', body: 'b' }), false);
+        assert.equal(lib.isPostableReply(null), false);
+    });
+
+    test('readRepliesPayload reads the given path and yields [] for blank content', function() {
+        var reads = [];
+        var lib = loadLibWithGlobals({
+            file_read: function(p) { reads.push(p); return p === 'outputs/blank.json' ? '  ' : '["r1"]'; }
+        });
+        assert.deepEqual(lib.readRepliesPayload('outputs/replies.json'), ['r1']);
+        assert.deepEqual(lib.readRepliesPayload('outputs/blank.json'), [], 'a blank file is an empty reply list');
+        assert.deepEqual(reads, ['outputs/replies.json', 'outputs/blank.json']);
+    });
+
+    test('readRepliesPayload falls back to the default replies file path', function() {
+        var reads = [];
+        var lib = loadLibWithGlobals({
+            file_read: function(p) { reads.push(p); return null; }
+        });
+        lib.readRepliesPayload();
+        assert.deepEqual(reads, ['outputs/confluence_replies.json']);
+    });
+
+    test('postReplyToInlineComment stringifies the coordinates and reports failure', function() {
+        var calls = [];
+        var ok = loadLibWithGlobals({
+            confluence_reply_to_inline_comment: function(args) { calls.push(args); }
+        });
+        assert.equal(ok.postReplyToInlineComment({ pageId: 12, commentId: 34, body: 'txt' }), true);
+        assert.deepEqual(calls, [{ pageId: '12', commentId: '34', body: 'txt' }]);
+
+        var warnings = [];
+        var originalWarn = console.warn;
+        console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            var failing = loadLibWithGlobals({
+                confluence_reply_to_inline_comment: function() { throw new Error('gone'); }
+            });
+            assert.equal(failing.postReplyToInlineComment({ pageId: 'p', commentId: 'c9', body: 'b' }), false);
+            assert.equal(warnings.length, 1);
+            assert.contains(warnings[0], 'failed to reply to comment c9');
+        } finally {
+            console.warn = originalWarn;
+        }
+    });
+});

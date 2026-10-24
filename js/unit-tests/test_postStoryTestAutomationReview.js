@@ -588,7 +588,8 @@ suite('postStoryTestAutomationReview.getRepoInfo (gh-1224)', function() {
     function loadWithRepoMocks(opts) {
         var fetchCalls = [];
         var module = loadPostStoryTestAutomationReview({
-            file_read: function(path) {
+            file_read: function(opts) {
+                var path = opts && opts.path;
                 if (path === 'outputs/pr_review.json') {
                     return JSON.stringify({
                         recommendation: 'APPROVE',
@@ -619,17 +620,13 @@ suite('postStoryTestAutomationReview.getRepoInfo (gh-1224)', function() {
     test('a fully configured config.repository wins and the git fallback is never called', function() {
         var ghFallbackCalls = 0;
         var module = loadWithRepoMocks({
-            configLoader: {
-                loadProjectConfig: function() {
-                    return { repository: { owner: 'cfgorg', repo: 'cfgrepo' } };
-                }
-            },
+            configLoader: configDouble({ repository: { owner: 'cfgorg', repo: 'cfgrepo' } }),
             getGitHubRepoInfo: function() { ghFallbackCalls += 1; return { owner: 'gh', repo: 'fallback' }; }
         });
 
         var result = module.action({ ticket: { key: 'TS-700' }, jobParams: {} });
 
-        assert.equal(result.success, true, 'DBG:' + result.error);
+        assert.equal(result.success, true);
         assert.equal(ghFallbackCalls, 0, 'the git-remote fallback is skipped when config.repository is complete');
         assert.equal(module._fetchCalls.length, 1, 'the stale-thread resolution fetched discussions');
         assert.deepEqual(module._fetchCalls[0], { owner: 'cfgorg', repo: 'cfgrepo', prNumber: 70 });
@@ -652,9 +649,7 @@ suite('postStoryTestAutomationReview.getRepoInfo (gh-1224)', function() {
 
     test('a config.repository with owner but no repo falls back to the git remote', function() {
         var module = loadWithRepoMocks({
-            configLoader: {
-                loadProjectConfig: function() { return { repository: { owner: 'cfgorg' } }; }, resolveInstructions: function() { return { jobParamPatch: undefined }; }
-            },
+            configLoader: configDouble({ repository: { owner: 'cfgorg' } }),
             getGitHubRepoInfo: function() { return { owner: 'ghorg', repo: 'ghrepo' }; }
         });
 
