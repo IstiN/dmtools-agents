@@ -83,7 +83,9 @@ suite('wave2d1 tracker — checkBugTestsPassed / checkBugToFixReady', function()
         var mod = loadModule('js/checkBugTestsPassed.js', makeRequire({
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock(),
-            './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {}),
+            './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({
+                './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
+            }), {}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': d1Trackers(rec.mocks),
