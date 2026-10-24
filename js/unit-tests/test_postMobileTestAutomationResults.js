@@ -1083,3 +1083,145 @@ suite('postMobileTestAutomationResults — updateFeaturePRBody (github globals)'
     });
 
 });
+
+// ── Suite: gh-1223 characterization: normalizeResult & findFeaturePR gaps ────
+// Pins the status-inference decision table and the findFeaturePR failure
+// paths ahead of the gh-1223 helper extraction. These tests must keep
+// passing unchanged through the refactor.
+
+suite('postMobileTestAutomationResults — gh-1223 characterization: normalizeResult & findFeaturePR', function() {
+
+    function resultJsonPayload(payload) {
+        return JSON.stringify(payload);
+    }
+
+    test('passRate "100%" with no counts infers status passed', function() {
+        var featureLabels = [];
+        var raw = resultJsonPayload({ summary: 'all green', passRate: '100%' });
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') return raw;
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            github_list_prs: function() {
+                return JSON.stringify({ data: [{ number: 731, title: 'PROJ-8301 fix login', head: { ref: 'bug/PROJ-8301' } }] });
+            },
+            github_add_pr_label: function(opts) { featureLabels.push(opts.label); }
+        });
+
+        var r = m.action(makeParams('PROJ-8301'));
+        assert.equal(r.success, true, 'action succeeds');
+        assert.ok(featureLabels.indexOf('tests_passed') !== -1, 'passRate 100% must infer PASSED');
+    });
+
+    test('passRate "100" (no percent sign) with no counts infers status passed', function() {
+        var featureLabels = [];
+        var raw = resultJsonPayload({ summary: 'all green', pass_rate: '100' });
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') return raw;
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            github_list_prs: function() {
+                return JSON.stringify({ data: [{ number: 731, title: 'PROJ-8302 fix login', head: { ref: 'bug/PROJ-8302' } }] });
+            },
+            github_add_pr_label: function(opts) { featureLabels.push(opts.label); }
+        });
+
+        m.action(makeParams('PROJ-8302'));
+        assert.ok(featureLabels.indexOf('tests_passed') !== -1, 'pass_rate 100 must infer PASSED');
+    });
+
+    test('non-empty results array with no counts infers status failed', function() {
+        var featureLabels = [];
+        var raw = resultJsonPayload({
+            summary: 'flows written but unexecuted',
+            results: [
+                { ticket: 'PROJ-TC-1', status: 'written' },
+                { ticket: 'PROJ-TC-2', status: 'written' }
+            ]
+        });
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') return raw;
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            github_list_prs: function() {
+                return JSON.stringify({ data: [{ number: 731, title: 'PROJ-8303 fix login', head: { ref: 'bug/PROJ-8303' } }] });
+            },
+            github_add_pr_label: function(opts) { featureLabels.push(opts.label); }
+        });
+
+        m.action(makeParams('PROJ-8303'));
+        assert.ok(featureLabels.indexOf('tests_failed') !== -1, 'unexecuted flows must infer FAILED');
+    });
+
+    test('no status signals at all leaves the result failed (tests_failed label)', function() {
+        var featureLabels = [];
+        var raw = resultJsonPayload({ summary: 'nothing measurable' });
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') return raw;
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            github_list_prs: function() {
+                return JSON.stringify({ data: [{ number: 731, title: 'PROJ-8304 fix login', head: { ref: 'bug/PROJ-8304' } }] });
+            },
+            github_add_pr_label: function(opts) { featureLabels.push(opts.label); }
+        });
+
+        m.action(makeParams('PROJ-8304'));
+        assert.ok(featureLabels.indexOf('tests_failed') !== -1,
+            'an empty result payload must stay FAILED (no false green)');
+        assert.equal(featureLabels.indexOf('tests_passed'), -1, 'must never infer PASSED from nothing');
+    });
+
+    test('findFeaturePR returns null when the PR listing throws — action still completes', function() {
+        var jiraComments = [];
+        var featureLabels = [];
+        var raw = resultJsonPayload({ status: 'passed', summary: 'ok', results: [] });
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') return raw;
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            github_list_prs: function() { throw new Error('gh api down'); },
+            github_add_pr_label: function(opts) { featureLabels.push(opts.label); },
+            jira_post_comment: function(opts) { jiraComments.push(opts); }
+        });
+
+        var r = m.action(makeParams('PROJ-8305'));
+        assert.equal(r.success, true, 'a failing feature-PR lookup must not fail the action');
+        assert.equal(featureLabels.length, 0, 'no feature labels without a feature PR');
+        assert.ok(jiraComments.length > 0, 'the Jira comment must still be posted');
+    });
+
+    test('findFeaturePR returns null when no open PR matches the ticket', function() {
+        var jiraComments = [];
+        var featureLabels = [];
+        var raw = resultJsonPayload({ status: 'passed', summary: 'ok', results: [] });
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') return raw;
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            github_list_prs: function() {
+                return JSON.stringify({ data: [{ number: 12, title: 'unrelated change', head: { ref: 'chore/deps' } }] });
+            },
+            github_add_pr_label: function(opts) { featureLabels.push(opts.label); },
+            jira_post_comment: function(opts) { jiraComments.push(opts); }
+        });
+
+        var r = m.action(makeParams('PROJ-8306'));
+        assert.equal(r.success, true, 'action completes without a feature PR');
+        assert.equal(featureLabels.length, 0, 'no feature labels when nothing matches');
+        assert.ok(jiraComments.length > 0, 'the Jira comment must still be posted');
+    });
+
+});
