@@ -355,7 +355,10 @@ function makeActionHarness(overides) {
             state: 'open', head: { ref: 'ai/gh-123', sha: 'sha-123' }, base: { ref: 'master' }, user: { login: 'a' }
         });
     };
-    ghStub.detectFailedChecks = function() { return def1002(overides.failedChecks, []); };
+    ghStub.detectFailedChecks = function(scm, headSha, inputFolder, jenkinsBasePath, diff) {
+        calls.detectFailedChecksArg = { headSha: headSha, inputFolder: inputFolder, jenkinsBasePath: jenkinsBasePath, diff: diff };
+        return def1002(overides.failedChecks, []);
+    };
     ghStub.fetchDiscussionsAndRawData = function() {
         return def1002(overides.discussionData, { markdown: '## d', rawThreads: null });
     };
@@ -372,12 +375,18 @@ function makeActionHarness(overides) {
             calls.checkoutPRBranch.push({ branch: branch, dir: dir, base: base });
             fail1002(overides, 'failCheckout', 'checkout failed');
         },
-        detectMergeConflicts: function() { return def1002(overides.conflictFiles, []); },
+        detectMergeConflicts: function(baseBranch, inputFolder, workingDir) {
+            calls.detectMergeConflictsArg = { baseBranch: baseBranch, inputFolder: inputFolder, workingDir: workingDir };
+            return def1002(overides.conflictFiles, []);
+        },
         getPRDiff: function() { return 'diff --git a/README.md b/README.md'; },
         writePRContext: function(inputFolder, prDetails, diff, markdown, rawThreads) {
             calls.writePRContext = { inputFolder: inputFolder, prNumber: prDetails.number, diff: diff, markdown: markdown, rawThreads: rawThreads };
         },
-        writeInputFile: function(path, content) { files[path] = content; }
+        writeInputFile: function(path, content) {
+            if (overides.failWriteInputFile) { throw new Error('input write failed'); }
+            files[path] = content;
+        }
     };
 
     var config = {
@@ -1605,5 +1614,132 @@ suite('preCliReworkSetup — review-state markdown helpers (gh-1195)', function(
             assert.equal(mod.reviewRequiresChanges([]), false);
             assert.equal(mod.reviewRequiresChanges(null), false, 'no probe → no warning');
         });
+    });
+});
+
+// ── gh-1220: characterization of action()'s context-assembly branches ────────
+// Pins the branches the suite had not exercised BEFORE the gh-1220 CRAP
+// extraction of action()'s input-context assembly: the base-branch fallback
+// (PR details without a base ref), the jenkinsBasePath config hand-off, a
+// head SHA-less PR (no rework_base_head marker), and the non-fatal input
+// contract write failure. They must stay green across the refactor.
+
+suite('preCliReworkSetup.action — context-assembly branches (gh-1220 characterization)', function() {
+
+    test('PR details without a base ref fall back to config.git.baseBranch for the marker and the merge probe', function() {
+        var h = makeActionHarness({
+            prDetails: {
+                number: 7, title: 't', html_url: 'u', state: 'open',
+                head: { ref: 'ai/gh-123', sha: 'sha-123' }, base: null, user: { login: 'a' }
+            }
+        });
+        var result = h.module.action({
+            inputFolderPath: 'input/PROJ-123',
+            jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} }
+        });
+
+        assert.equal(result.success, true, 'action succeeded — got: ' + JSON.stringify(result));
+        assert.equal(h.calls.writeBaseBranchMarker, 'master', 'the config base branch is marked');
+        assert.equal(h.calls.detectMergeConflictsArg.baseBranch, 'master', 'the merge probe runs against the config base branch');
+    });
+
+    test('config.scm.jenkinsBasePath is handed to the failed-checks probe', function() {
+        var h = makeActionHarness({});
+        // The harness builds its config internally; inject the scm block through
+        // the one seam action() reads — the loaded module's own config loader is
+        // the harness stub, so run through an override-friendly variant instead.
+        var ghProbeArgs = null;
+        var ghStub = makeGhStub();
+        ghStub.findPRForTicket = function() { return { number: 7 }; };
+        ghStub.getPRDetails = function() {
+            return { number: 7, title: 't', html_url: 'u', state: 'open',
+                head: { ref: 'ai/gh-123', sha: 'abc' }, base: { ref: 'master' }, user: { login: 'a' } };
+        };
+        ghStub.detectFailedChecks = function(scm, headSha, inputFolder, jenkinsBasePath, diff) {
+            ghProbeArgs = { jenkinsBasePath: jenkinsBasePath, headSha: headSha };
+            return [];
+        };
+        ghStub.fetchDiscussionsAndRawData = function() { return { markdown: '## d', rawThreads: null }; };
+
+        var mod = loadModule(
+            'js/preCliReworkSetup.js',
+            makeRequire({
+                './configLoader.js': {
+                    loadProjectConfig: function() {
+                        return {
+                            git: { baseBranch: 'master' }, workingDir: null,
+                            repository: { owner: 'acme', repo: 'widgets' },
+                            scm: { jenkinsBasePath: 'https://jenkins.example.com' }
+                        };
+                    },
+                    paramsForConfigLoad: function(p) { return p; },
+                    loadHookFn: function() { return null; },
+                    createScm: function() { return { getRemoteRepoInfo: function() { return { owner: 'acme', repo: 'widgets' }; } }; }
+                },
+                './common/githubHelpers.js': ghStub,
+                './forkCheckout.js': forkCheckoutModule,
+                './common/gitOps.js': {
+                    checkoutPRBranch: function() {},
+                    detectMergeConflicts: function() { return []; },
+                    getPRDiff: function() { return ''; },
+                    writePRContext: function() {},
+                    writeInputFile: function() {}
+                },
+                './common/commentMarkup.js': reworkCommentMarkupModule,
+                './fetchQuestionsToInput.js': NOOP_MODULE,
+                './fetchParentContextToInput.js': NOOP_MODULE,
+                './restoreFromReleases.js': NOOP_MODULE,
+                './common/trackers.js': { createTracker: function() { return { postComment: function() {}, moveToStatus: function() {} }; } },
+                './common/setupCommands.js': loadModule('js/common/setupCommands.js'),
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+                './config.js': { resolveStatuses: function() { return {}; } }
+            }),
+            {
+                file_write: function() {},
+                file_read: function() { throw new Error('File does not exist'); },
+                cli_execute_command: function() { return ''; }
+            }
+        );
+
+        var result = mod.action({
+            inputFolderPath: 'input/PROJ-123',
+            jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} }
+        });
+
+        assert.equal(result.success, true, 'action succeeded');
+        assert.equal(ghProbeArgs.jenkinsBasePath, 'https://jenkins.example.com',
+            'the configured jenkins base path reaches the failed-checks probe');
+        assert.equal(ghProbeArgs.headSha, 'abc', 'the PR head sha reaches the failed-checks probe');
+    });
+
+    test('a PR head without a sha writes no rework_base_head marker (the no-fix guard stays off)', function() {
+        var h = makeActionHarness({
+            prDetails: {
+                number: 7, title: 't', html_url: 'u', state: 'open',
+                head: { ref: 'ai/gh-123' }, base: { ref: 'master' }, user: { login: 'a' }
+            }
+        });
+        var result = h.module.action({
+            inputFolderPath: 'input/PROJ-123',
+            jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} }
+        });
+
+        assert.equal(result.success, true, 'action succeeded — got: ' + JSON.stringify(result));
+        assert.equal(h.files['input/PROJ-123/rework_base_head.txt'], undefined,
+            'no marker without a head sha');
+    });
+
+    test('an input-contract write failure is non-fatal: the leg still completes', function() {
+        var h = makeActionHarness({ failWriteInputFile: true });
+        var result = h.module.action({
+            inputFolderPath: 'input/PROJ-123',
+            jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} }
+        });
+
+        assert.equal(result.success, true, 'the contract write failure never kills the leg');
+        var warned = h.logs.warn.filter(function(line) {
+            return line.indexOf('Input contract enforcement failed') !== -1;
+        });
+        assert.equal(warned.length, 1, 'the failure is announced once — got: ' + JSON.stringify(h.logs.warn));
     });
 });
