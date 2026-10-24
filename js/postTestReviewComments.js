@@ -49,37 +49,70 @@ function getCurrentTicketStatus(ticketKey, tracker) {
     }
 }
 
+// ── gh-1224: getPRNumber decomposed into small pure helpers ─────────────────
+
+/**
+ * PR number/URL parsed from the pr_info.md content. Both fields are
+ * best-effort: a missing marker leaves the corresponding field null.
+ */
+function parsePrInfoMd(prInfoText) {
+    var parsed = { prNumber: null, prUrl: null };
+    if (!prInfoText) return parsed;
+    var numMatch = prInfoText.match(/\*\*PR #\*\*:\s*(\d+)/);
+    var urlMatch = prInfoText.match(/\*\*URL\*\*:\s*(https:\/\/[^\s]+)/);
+    if (numMatch) parsed.prNumber = parseInt(numMatch[1], 10);
+    if (urlMatch) parsed.prUrl = urlMatch[1];
+    return parsed;
+}
+
+/**
+ * Exact test/ branch match on open PRs only — never fuzzy-match (would find
+ * ai/ feature PRs). The first matching PR wins.
+ */
+function prNumberFromOpenPrs(openPRs, ticketKey) {
+    var branchName = 'test/' + ticketKey;
+    var openMatch = (openPRs || []).filter(function(pr) {
+        return pr.head && pr.head.ref && pr.head.ref === branchName;
+    });
+    if (openMatch.length > 0) {
+        return { prNumber: openMatch[0].number, prUrl: openMatch[0].html_url };
+    }
+    return { prNumber: null, prUrl: null };
+}
+
+/** Open-PR branch search; a listing failure degrades to nulls with a warning. */
+function prNumberFromBranchSearch(repoInfo, ticketKey) {
+    var branchName = 'test/' + ticketKey;
+    try {
+        var openPRs = github_list_prs({ workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open' });
+        var found = prNumberFromOpenPrs(openPRs, ticketKey);
+        if (found.prNumber) return found;
+        console.warn('No open PR found for branch', branchName);
+    } catch (e) {
+        console.warn('Failed to find test PR by branch:', e);
+    }
+    return { prNumber: null, prUrl: null };
+}
+
 function getPRNumber(params, ticketKey, repoInfo) {
-    let prNumber = null;
-    let prUrl = null;
+    var prNumber = null;
+    var prUrl = null;
 
     try {
         const inputFolder = params.inputFolderPath || ('input/' + ticketKey);
         const prInfo = readFile(inputFolder + '/pr_info.md');
         if (prInfo) {
-            const numMatch = prInfo.match(/\*\*PR #\*\*:\s*(\d+)/);
-            const urlMatch = prInfo.match(/\*\*URL\*\*:\s*(https:\/\/[^\s]+)/);
-            if (numMatch) prNumber = parseInt(numMatch[1], 10);
-            if (urlMatch) prUrl = urlMatch[1];
+            const parsed = parsePrInfoMd(prInfo);
+            prNumber = parsed.prNumber;
+            prUrl = parsed.prUrl;
         }
     } catch (e) {}
 
     if (!prNumber && repoInfo) {
-        // Use exact test/ branch match on open PRs only — never fuzzy-match (would find ai/ feature PRs)
-        const branchName = 'test/' + ticketKey;
-        try {
-            const openPRs = github_list_prs({ workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open' });
-            const openMatch = openPRs.filter(function(pr) {
-                return pr.head && pr.head.ref && pr.head.ref === branchName;
-            });
-            if (openMatch.length > 0) {
-                prNumber = openMatch[0].number;
-                prUrl = openMatch[0].html_url;
-            } else {
-                console.warn('No open PR found for branch', branchName);
-            }
-        } catch (e) {
-            console.warn('Failed to find test PR by branch:', e);
+        const found = prNumberFromBranchSearch(repoInfo, ticketKey);
+        if (found.prNumber) {
+            prNumber = found.prNumber;
+            prUrl = found.prUrl;
         }
     }
 
@@ -202,9 +235,41 @@ function postFallbackInlineComment(repoInfo, prNumber, filePath, line, commentTe
     console.log('✅ Posted fallback PR comment for ' + lineRef);
 }
 
+// ── gh-1224: postInlineComment decomposed into small pure helpers ───────────
+
+/** Target file of an inline comment: the JSON `path` field, else the legacy `file`. */
+function inlineCommentTargetOf(inlineComment) {
+    return inlineComment.path || inlineComment.file;
+}
+
+/** Comment text: the inline `body`, else the content of the referenced `comment` file. */
+function inlineCommentTextOf(inlineComment, readFileFn) {
+    return inlineComment.body || readFileFn(inlineComment.comment);
+}
+
+/** The github_add_inline_comment payload; optional range/side fields when set. */
+function buildInlineCommentParams(repoInfo, prNumber, filePath, inlineComment, commentText) {
+    const params = {
+        workspace: repoInfo.owner,
+        repository: repoInfo.repo,
+        pullRequestId: String(prNumber),
+        path: filePath,
+        line: String(inlineComment.line),
+        text: commentText
+    };
+    if (inlineComment.startLine) params.startLine = String(inlineComment.startLine);
+    if (inlineComment.side) params.side = inlineComment.side;
+    return params;
+}
+
+/** Whether the diff check forces the PR-comment fallback (null diff = unknown). */
+function lineMissingFromDiff(diffText, filePath, line) {
+    return diffText !== null && !isLinePresentInDiff(diffText, filePath, line);
+}
+
 function postInlineComment(repoInfo, prNumber, inlineComment) {
-    const filePath = inlineComment.path || inlineComment.file;
-    const commentText = inlineComment.body || readFile(inlineComment.comment);
+    const filePath = inlineCommentTargetOf(inlineComment);
+    const commentText = inlineCommentTextOf(inlineComment, readFile);
 
     try {
         if (!commentText) {
@@ -216,25 +281,14 @@ function postInlineComment(repoInfo, prNumber, inlineComment) {
             return false;
         }
 
-        const params = {
-            workspace: repoInfo.owner,
-            repository: repoInfo.repo,
-            pullRequestId: String(prNumber),
-            path: filePath,
-            line: String(inlineComment.line),
-            text: commentText
-        };
-        if (inlineComment.startLine) params.startLine = String(inlineComment.startLine);
-        if (inlineComment.side) params.side = inlineComment.side;
-
         var diffText = getPrDiff(repoInfo, prNumber);
-        if (diffText !== null && !isLinePresentInDiff(diffText, filePath, inlineComment.line)) {
+        if (lineMissingFromDiff(diffText, filePath, inlineComment.line)) {
             console.warn('Inline comment line is not present in PR diff; falling back to PR comment on ' + filePath + ':' + inlineComment.line);
             postFallbackInlineComment(repoInfo, prNumber, filePath, inlineComment.line, commentText);
             return true;
         }
 
-        github_add_inline_comment(params);
+        github_add_inline_comment(buildInlineCommentParams(repoInfo, prNumber, filePath, inlineComment, commentText));
         console.log('✅ Inline comment on ' + filePath + ':' + inlineComment.line);
         return true;
     } catch (e) {
@@ -584,6 +638,14 @@ if (typeof module !== 'undefined' && module.exports) {
         trackInlineHeaderLine: trackInlineHeaderLine,
         inlineHunkStartOf: inlineHunkStartOf,
         inlineContentLineMatches: inlineContentLineMatches,
-        scanInlineLinePresence: scanInlineLinePresence
+        scanInlineLinePresence: scanInlineLinePresence,
+        // gh-1224: getPRNumber / postInlineComment pure helpers (test surface)
+        parsePrInfoMd: parsePrInfoMd,
+        prNumberFromOpenPrs: prNumberFromOpenPrs,
+        prNumberFromBranchSearch: prNumberFromBranchSearch,
+        inlineCommentTargetOf: inlineCommentTargetOf,
+        inlineCommentTextOf: inlineCommentTextOf,
+        buildInlineCommentParams: buildInlineCommentParams,
+        lineMissingFromDiff: lineMissingFromDiff
     };
 }
