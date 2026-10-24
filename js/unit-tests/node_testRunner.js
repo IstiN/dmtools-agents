@@ -336,9 +336,7 @@ var configModule = loadModule('agents/js/config.js');
 var machineNoticeModule = loadModule('agents/js/common/machineNotice.js');
 var reviewThreadInventoryModule = loadModule('agents/js/common/reviewThreadInventory.js',
     makeRequire({ './machineNotice.js': machineNoticeModule }));
-var scmModule = loadModule('agents/js/common/scm.js',
-    makeRequire({ './machineNotice.js': machineNoticeModule,
-                  './reviewThreadInventory.js': reviewThreadInventoryModule }));
+var scmModule = scmReal();
 var configLoaderModule = loadModule(
     'agents/js/configLoader.js',
     makeRequire({
@@ -407,6 +405,68 @@ function makeDefaultConfigLoaderMock(extraConfig) {
 
 global.makeDefaultJiraConfig = makeDefaultJiraConfig;
 global.makeDefaultConfigLoaderMock = makeDefaultConfigLoaderMock;
+
+// ── gh-1248 shared real-module loaders (mirror of testRunner.js) ─────────────
+// The dedup extraction gave the runtime modules new leaf deps; every suite
+// that loads the REAL module maps the same closure through these helpers so
+// the makeRequire maps never drift.
+
+function machineAuthorReal() {
+    return loadModule('agents/js/common/machineAuthor.js');
+}
+
+function loseJsonReal() {
+    return loadModule('agents/js/common/loseJson.js');
+}
+
+function legRunVocabReal() {
+    return loadModule('agents/js/common/legRunVocab.js');
+}
+
+function publishParamsReal() {
+    return loadModule('agents/js/factory/publishParams.js');
+}
+
+function reviewVerdictsReal() {
+    return loadModule('agents/js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': machineAuthorReal() }));
+}
+
+function githubReviewFetchReal(mocks) {
+    var machineNotice = loadModule('agents/js/common/machineNotice.js');
+    return loadModule('agents/js/common/githubReviewFetch.js',
+        makeRequire({ './machineNotice.js': machineNotice,
+                      './reviewThreadInventory.js': loadModule('agents/js/common/reviewThreadInventory.js',
+                          makeRequire({ './machineNotice.js': machineNotice })) }),
+        mocks || {});
+}
+
+function pullRequestReal() {
+    return loadModule('agents/js/common/pullRequest.js',
+        makeRequire({ './mergeState.js': loadModule('agents/js/common/mergeState.js') }));
+}
+
+// The real js/common/scm.js with its full gh-1248 dep closure mapped.
+function scmReal(mocks) {
+    return loadModule('agents/js/common/scm.js',
+        makeRequire({
+            './reviewThreadInventory.js': loadModule('agents/js/common/reviewThreadInventory.js',
+                makeRequire({ './machineNotice.js': loadModule('agents/js/common/machineNotice.js') })),
+            './githubReviewFetch.js': githubReviewFetchReal(mocks),
+            './pullRequest.js': pullRequestReal(),
+            './loseJson.js': loseJsonReal()
+        }), mocks);
+}
+
+global.machineAuthorReal = machineAuthorReal;
+
+global.loseJsonReal = loseJsonReal;
+global.legRunVocabReal = legRunVocabReal;
+global.publishParamsReal = publishParamsReal;
+global.reviewVerdictsReal = reviewVerdictsReal;
+global.githubReviewFetchReal = githubReviewFetchReal;
+global.pullRequestReal = pullRequestReal;
+global.scmReal = scmReal;
 
 function runTestFile(filePath) {
     console.log('\n📂 ' + filePath);

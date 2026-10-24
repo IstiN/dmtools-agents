@@ -14,13 +14,7 @@
 suite('scm file helpers > _readFileMaybe (gh-1041)', function() {
 
     function loadScm(mocks) {
-        return loadModule('js/common/scm.js',
-            makeRequire({
-                './machineNotice.js': loadModule('js/common/machineNotice.js'),
-                './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js',
-                    makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') }))
-            }),
-            mocks || {});
+        return scmReal(mocks || {});
     }
 
     test('returns the object-form content when file_read accepts {path}', function() {

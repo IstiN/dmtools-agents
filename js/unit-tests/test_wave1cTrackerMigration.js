@@ -44,6 +44,7 @@ function w1cLoadClose(rec) {
 function w1cLoadDirty(rec) {
     return loadModule('js/recoverDirtyReviewTestCase.js', makeRequire({
         './configLoader.js': { loadProjectConfig: function() { return W1C_CFG; } },
+        './common/loseJson.js': loseJsonReal(),
         './common/scm.js': { createScm: function() {
             return { listPrs: function() { return [{ number: 7, title: String(w1cKey.k) + ' fix', head: { ref: 'ai/TS-5' }, mergeable: false }]; },
                      getPr: function() { return { mergeable: false }; } };

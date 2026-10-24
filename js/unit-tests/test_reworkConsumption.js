@@ -27,7 +27,10 @@
 /* global suite, test, assert, loadModule, makeRequire */
 
 suite('reworkConsumption — consume-audit marker (gh-840 audit log)', function () {
-    var rc = loadModule('js/common/reworkConsumption.js', makeRequire({}), {});
+    var rc = loadModule('js/common/reworkConsumption.js', makeRequire({
+        './machineAuthor.js': machineAuthorReal(),
+        './reviewVerdicts.js': reviewVerdictsReal()
+    }), {});
 
     test('buildConsumeAuditComment embeds path + head in the structured marker + one short line', function () {
         var body = rc.buildConsumeAuditComment('dispatch', 'aaaabbbbccccddddeeeeffff0000111122223333');
@@ -90,7 +93,10 @@ suite('reworkConsumption — consume-audit marker (gh-840 audit log)', function 
 });
 
 suite('reworkConsumption — shouldRestoreArm (gh-840 sweep decision)', function () {
-    var rc = loadModule('js/common/reworkConsumption.js', makeRequire({}), {});
+    var rc = loadModule('js/common/reworkConsumption.js', makeRequire({
+        './machineAuthor.js': machineAuthorReal(),
+        './reviewVerdicts.js': reviewVerdictsReal()
+    }), {});
 
     var NOW = Date.parse('2026-10-10T14:00:00.000Z');
     var STALE_MS = 30 * 60 * 1000;
@@ -192,7 +198,10 @@ suite('reworkConsumption — shouldRestoreArm (gh-840 sweep decision)', function
 });
 
 suite('reworkConsumption: [bot]-suffixed machine authors are trusted (gh-1025)', function () {
-    var rc = loadModule('js/common/reworkConsumption.js', makeRequire({}), {});
+    var rc = loadModule('js/common/reworkConsumption.js', makeRequire({
+        './machineAuthor.js': machineAuthorReal(),
+        './reviewVerdicts.js': reviewVerdictsReal()
+    }), {});
 
     test('consume/restore markers authored by dmtools-factory-bot[bot] parse under the bare knob entry', function () {
         var body = rc.buildConsumeAuditComment('dispatch', 'abc1234');
@@ -217,7 +226,10 @@ suite('reworkConsumption: [bot]-suffixed machine authors are trusted (gh-1025)',
 // (the branches that left parseMarkers at CRAP 20) — before the comparator is
 // extracted into a named helper.
 suite('reworkConsumption.parseMarkers — ordering contract (gh-1195 characterization)', function () {
-    var rc = loadModule('js/common/reworkConsumption.js', makeRequire({}), {});
+    var rc = loadModule('js/common/reworkConsumption.js', makeRequire({
+        './machineAuthor.js': machineAuthorReal(),
+        './reviewVerdicts.js': reviewVerdictsReal()
+    }), {});
     var h = 'aaaabbbbccccddddeeeeffff0000111122223333';
 
     function consumeBody(at) {
@@ -258,7 +270,10 @@ suite('reworkConsumption.parseMarkers — ordering contract (gh-1195 characteriz
 // shouldRestoreArm — every branch stays covered under its own name so the
 // per-function ratchet sees CRAP ≤ CC for each.
 suite('reworkConsumption — extracted parse/decision helpers (gh-1195)', function () {
-    var rc = loadModule('js/common/reworkConsumption.js', makeRequire({}), {});
+    var rc = loadModule('js/common/reworkConsumption.js', makeRequire({
+        './machineAuthor.js': machineAuthorReal(),
+        './reviewVerdicts.js': reviewVerdictsReal()
+    }), {});
 
     suite('trustedAuthorLogins', function () {
         test('a non-empty authorLogins array is the allowlist; everything else disables the filter', function () {

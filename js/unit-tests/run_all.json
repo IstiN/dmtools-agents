@@ -206,7 +206,10 @@
         "js/unit-tests/test_isCodeGraphAvailable.js",
         "js/unit-tests/test_closeQuestionTicket.js",
         "js/unit-tests/test_enhanceSolutionDesignDescriptionAndAssess.js",
-        "js/unit-tests/test_prepareBugFixBatchContext.js"
+        "js/unit-tests/test_prepareBugFixBatchContext.js",
+        "js/unit-tests/test_loseJson.js",
+        "js/unit-tests/test_legRunVocab.js",
+        "js/unit-tests/test_publishParams.js"
       ]
     }
   }

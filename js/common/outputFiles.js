@@ -59,15 +59,21 @@ function buildOutputCandidates(pathOrName, options) {
     return candidates;
 }
 
-function readOutputFile(pathOrName, options) {
-    var candidates = buildOutputCandidates(pathOrName, options);
+/** The shared candidate scan of readOutputFile/readOutputFileDetailed
+ * (gh-1248): first non-empty read wins, returned with the path it hit. */
+function readFirstCandidate(candidates) {
     for (var i = 0; i < candidates.length; i++) {
         var content = readRaw(candidates[i]);
         if (content) {
-            return content;
+            return { content: content, path: candidates[i] };
         }
     }
     return null;
+}
+
+function readOutputFile(pathOrName, options) {
+    var hit = readFirstCandidate(buildOutputCandidates(pathOrName, options));
+    return hit ? hit.content : null;
 }
 
 /**
@@ -100,14 +106,7 @@ function hasOutputFile(pathOrName, options) {
 }
 
 function readOutputFileDetailed(pathOrName, options) {
-    var candidates = buildOutputCandidates(pathOrName, options);
-    for (var i = 0; i < candidates.length; i++) {
-        var content = readRaw(candidates[i]);
-        if (content) {
-            return { content: content, path: candidates[i] };
-        }
-    }
-    return null;
+    return readFirstCandidate(buildOutputCandidates(pathOrName, options));
 }
 
 if (typeof module !== 'undefined' && module.exports) {

@@ -18,21 +18,23 @@
 // (the SAME reviewThreads census the SM arm rule counts) enriched from the
 // conversations export, with the gh-808 machine-notice filter preserved.
 var reviewThreadInventory = require('./reviewThreadInventory.js');
+// gh-1248: the lenient JSON coercion helpers — one canonical copy shared
+// with the other runtime modules (loseJson.js).
+var loseJson = require('./loseJson.js');
+// gh-912/gh-1248: the script-wrapper output scrubber — canonical copy in
+// common/pullRequest.js once; this module's former private duplicate is a
+// thin delegate.
+var prHelper = require('./pullRequest.js');
+// gh-1248: the review-discussion fetch/render blocks — one canonical copy
+// shared with common/githubHelpers.js (githubReviewFetch.js).
+var githubReviewFetch = require('./githubReviewFetch.js');
 
 function _parseJson(raw) {
-    if (typeof raw === 'string') {
-        try { return JSON.parse(raw); } catch (e) { return raw; }
-    }
-    return raw;
+    return loseJson.parseJsonLose(raw);
 }
 
 function _toArray(raw) {
-    var parsed = _parseJson(raw);
-    if (Array.isArray(parsed)) return parsed;
-    if (parsed && parsed.value) return parsed.value;
-    if (parsed && parsed.workflow_runs) return parsed.workflow_runs;
-    if (parsed && parsed.runs) return parsed.runs;
-    return parsed ? [parsed] : [];
+    return loseJson.toArrayLose(raw, ['workflow_runs', 'runs']);
 }
 
 function _readFileMaybe(path) {
@@ -48,14 +50,11 @@ function _readFileMaybe(path) {
     return null;
 }
 
+// gh-912/gh-1248: canonical copy in common/pullRequest.js — the scrubber
+// backs ~20 delegating copies across the runtime; scm's former private
+// duplicate now rides the same delegate.
 function _cleanCommandOutput(output) {
-    if (!output) return '';
-    return output.split('\n').filter(function(line) {
-        return line.indexOf('Script started') === -1 &&
-               line.indexOf('Script done') === -1 &&
-               line.indexOf('COMMAND=') === -1 &&
-               line.indexOf('COMMAND_EXIT_CODE=') === -1;
-    }).join('\n').trim();
+    return prHelper.cleanCommandOutput(output);
 }
 
 function _looksLikeJavaObjectString(value) {
@@ -354,15 +353,10 @@ function _githubGetCommitCheckRuns(workspace, repository, sha) {
     return _githubMergeLegacyStatuses(checkRuns, legacyStatuses);
 }
 
-// The 'Discussions: …' census log line, verbatim from the former closure.
+// The 'Discussions: …' census log line — canonical in githubReviewFetch
+// (gh-1248: one copy shared with githubHelpers' fetchDiscussionsAndRawData).
 function _githubLogInventoryCounts(inv, rawThreads) {
-    var c = inv.counts;
-    console.log('Discussions: ' + c.total + ' threads (' + c.open + ' open, ' + c.resolved + ' resolved, ' + c.bot + ' bot, ' + c.notices + ' machine notices),',
-        rawThreads.filter(function(t) { return t.rootCommentId; }).length + ' reply IDs,',
-        rawThreads.filter(function(t) { return t.threadId; }).length + ' resolve IDs' +
-        (inv.census.graphqlUnresolved !== null
-            ? ' — GraphQL census: ' + inv.census.graphqlUnresolved + ' unresolved (arm-rule count)'
-            : ''));
+    githubReviewFetch.logInventoryCounts(inv, rawThreads);
 }
 
 // Review-thread inventory (gh-957): GraphQL-first — enumerated from the SAME
@@ -375,23 +369,8 @@ function _githubLogInventoryCounts(inv, rawThreads) {
 // produce the full inventory, otherwise the rework leg can never see what the
 // armer counted and the no-op loop never converges).
 function _githubFetchReviewThreadInventory(workspace, repository, prIdStr) {
-    var conversations = [];
-    try {
-        conversations = github_get_pr_conversations({
-            workspace: workspace, repository: repository, pullRequestId: prIdStr
-        }) || [];
-    } catch (e) {
-        console.warn('github_get_pr_conversations failed:', e.message || e);
-    }
-    var graphqlRaw = null;
-    try {
-        graphqlRaw = github_get_pr_review_threads({
-            workspace: workspace, repository: repository, pullRequestId: prIdStr
-        });
-        console.log('Got', reviewThreadInventory.parseGraphQLNodes(graphqlRaw).length, 'review threads for GraphQL IDs');
-    } catch (e) {
-        console.warn('github_get_pr_review_threads failed (falling back to conversations-only inventory):', e.message || e);
-    }
+    var conversations = githubReviewFetch.fetchPrConversations(workspace, repository, prIdStr);
+    var graphqlRaw = githubReviewFetch.fetchPrReviewThreadsRaw(workspace, repository, prIdStr);
     var inv = _githubCollectThreadInventory(conversations, graphqlRaw);
     if (!inv) return null;
     var rawThreads = inv.threads;
@@ -416,24 +395,11 @@ function _githubCollectThreadInventory(conversations, graphqlRaw) {
     return null;
 }
 
-// gh-1097 follow-up: hidden `<!-- dmtools:` audit comments (naked-pr-rearm
-// etc.) are machine bookkeeping — never review feedback. Mirrors
-// machineNotice.isDmtoolsMarkerBody (inlined: keeps loader maps unchanged).
-function _isDmtoolsMarkerComment(comment) {
-    return String((comment && comment.body) || '').replace(/^\s+/, '').indexOf('<!-- dmtools:') === 0;
-}
-
 // Pure renderer for the '## General PR Comments' section (verbatim shape).
+// (The dmtools-marker predicate itself is machineNotice.isDmtoolsMarkerBody,
+// used inside githubReviewFetch.buildGeneralCommentsSection — gh-1248.)
 function _githubRenderCommentsSection(comments) {
-    var commentsSection = '## General PR Comments\n\n';
-    comments.forEach(function(comment) {
-        if (_isDmtoolsMarkerComment(comment)) return;
-        var author = (comment.user && comment.user.login) ? comment.user.login : 'unknown';
-        var date = comment.created_at ? comment.created_at.substring(0, 10) : '';
-        commentsSection += '**' + author + '** (' + date + '):\n\n';
-        commentsSection += (comment.body || '').trim() + '\n\n---\n\n';
-    });
-    return commentsSection;
+    return githubReviewFetch.buildGeneralCommentsSection(comments);
 }
 
 function _githubFetchGeneralCommentsSection(workspace, repository, prIdStr) {
@@ -1281,12 +1247,10 @@ function _adoGetRemoteRepoInfo() {
     try {
         var rawUrl = cli_execute_command({ command: 'git config --get remote.origin.url' }) || '';
         var lines = rawUrl.split('\n').filter(function(l) { return l.trim(); });
-        var remoteUrl = lines.join('').trim();
-        var match = remoteUrl.match(/dev\.azure\.com[/:]([^/]+)\/([^/]+)\/_git\/([^/]+)/);
-        if (match) return { owner: match[1], repo: match[3] };
-        match = remoteUrl.match(/ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+)/);
-        if (match) return { owner: match[1], repo: match[3] };
-        return null;
+        // The dev.azure.com / ssh.dev.azure.com remote-URL parse is
+        // canonical in _adoRepoFromRemote below (gh-1248: the provider's
+        // copy and this standalone probe share one implementation).
+        return _adoRepoFromRemote(lines.join('').trim());
     } catch (e) { return null; }
 }
 

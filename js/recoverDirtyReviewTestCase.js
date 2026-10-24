@@ -15,6 +15,9 @@
 var scmModule = require('./common/scm.js');
 var configLoader = require('./configLoader.js');
 var trackersModule = require('./common/trackers.js');
+// gh-1248: the lenient JSON coercion helpers — canonical copy in
+// common/loseJson.js (shared with scm.js).
+var loseJson = require('./common/loseJson.js');
 
 var PR_CACHE_FILE = 'outputs/.recover_dirty_prs_cache.json';
 var PR_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -57,18 +60,11 @@ function _writeCache(prList) {
 }
 
 function _parseJson(raw) {
-    if (typeof raw === 'string') {
-        try { return JSON.parse(raw); } catch (e) { return raw; }
-    }
-    return raw;
+    return loseJson.parseJsonLose(raw);
 }
 
 function _toArray(raw) {
-    var parsed = _parseJson(raw);
-    if (Array.isArray(parsed)) return parsed;
-    if (parsed && parsed.value) return parsed.value;
-    if (parsed && parsed.items) return parsed.items;
-    return parsed ? [parsed] : [];
+    return loseJson.toArrayLose(raw, ['items']);
 }
 
 function listOpenPrsCached(scm, config) {
