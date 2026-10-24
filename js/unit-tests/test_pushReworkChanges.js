@@ -19,6 +19,36 @@
 // a separate coverage unit of complexity 1 (CRAP 2, far below the bar).
 var stubToolchainLine = function (t) { return t; };
 
+// gh-1249 rework (crap-ratchet fix): ONE file-scope tokenUsageComment stub
+// shared by every loader's require map. The gh-1249 dedup initially inlined
+// `postRunTokenUsageSafely`/`customParamsOf` closures per loader — nested
+// closures count towards the enclosing loader's CC, pushing five of them
+// over the CRAP ratchet (CI: 6 NEW > 8). The named stub is a separate
+// coverage unit (customParamsOf CC 3, exercised by many suites).
+var stubTokenUsageComment = {
+    postTokenUsageComments: function () {},
+    postRunTokenUsageSafely: function () { return undefined; },
+    customParamsOf: function (p) { return (p && p.customParams) || {}; }
+};
+
+// gh-1249 rework (crap-ratchet characterization): every loader require map
+// rides this ONE file-scope stub. Inlining the closures per loader nested
+// decision points inside the loaders and pushed five of them over the
+// quality-gate CRAP ratchet (CI run 40120145298: 6 NEW > 8). This suite
+// pins the stub contract the maps rely on.
+suite('pushReworkChanges test harness — shared tokenUsageComment stub (gh-1249 CRAP fix)', function () {
+    test('customParamsOf extracts customParams, tolerating null and absence', function () {
+        assert.deepEqual(stubTokenUsageComment.customParamsOf({ customParams: { a: 1 } }), { a: 1 });
+        assert.deepEqual(stubTokenUsageComment.customParamsOf({}), {});
+        assert.deepEqual(stubTokenUsageComment.customParamsOf(null), {});
+    });
+
+    test('postRunTokenUsageSafely and postTokenUsageComments are quiet no-ops', function () {
+        assert.equal(stubTokenUsageComment.postRunTokenUsageSafely(), undefined);
+        assert.equal(stubTokenUsageComment.postTokenUsageComments(), undefined);
+    });
+});
+
 // File-scope base module (was previously misplaced INSIDE the file_read mock
 // closure below — a latent defect masked in run_all.json by another test file
 // leaking the same sloppy-mode global, but breaking isolated per-file runs).
@@ -140,7 +170,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule({}),
             './cacheToReleases.js': { cacheSessionLog: noop },
-            './common/tokenUsageComment.js': { postTokenUsageComments: noop, postRunTokenUsageSafely: noop, customParamsOf: noop }
+            './common/tokenUsageComment.js': stubTokenUsageComment
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
@@ -552,7 +582,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
             './common/outputFiles.js': { readOutputFile: function() { return null; } },
             './common/trackers.js': makeTrackersModule({}),
             './cacheToReleases.js': {},
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; } }
+            './common/tokenUsageComment.js': stubTokenUsageComment
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
@@ -954,7 +984,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; } }
+            './common/tokenUsageComment.js': stubTokenUsageComment
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
@@ -1318,7 +1348,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; } }
+            './common/tokenUsageComment.js': stubTokenUsageComment
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
@@ -3485,7 +3515,7 @@ suite('pushReworkChanges.readInputViolations (gh-1119)', function() {
                 './common/outputFiles.js': { readOutputFile: function() { return null; } },
                 './common/trackers.js': makeTrackersModule({}),
                 './cacheToReleases.js': {},
-                './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; } },
+                './common/tokenUsageComment.js': stubTokenUsageComment,
                 './common/ticketKeyShapes.js': ticketKeyShapesModule,
                 './common/commentMarkup.js': commentMarkupModule,
                 './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
@@ -3551,7 +3581,7 @@ suite('pushReworkChanges.runOwnedViolationsGate (gh-1119 AC6b / UT-8 wiring)', f
                 './common/outputFiles.js': { readOutputFile: function() { return null; } },
                 './common/trackers.js': makeTrackersModule({}),
                 './cacheToReleases.js': {},
-                './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; } },
+                './common/tokenUsageComment.js': stubTokenUsageComment,
                 './common/ticketKeyShapes.js': ticketKeyShapesModule,
                 './common/commentMarkup.js': commentMarkupModule,
                 './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
@@ -3674,7 +3704,7 @@ function loadCommitAndPush1082(mocks, moduleOverrides) {
             './common/outputFiles.js': { readOutputFile: function() { return null; } },
             './common/trackers.js': makeTrackersModule({}),
             './cacheToReleases.js': {},
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; } },
+            './common/tokenUsageComment.js': stubTokenUsageComment,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
             './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')

@@ -54,6 +54,20 @@ suite('workflowRuns parseWorkflowRuns', function () {
     });
 });
 
+// gh-1249 rework (crap-ratchet fix): the envelope unwrap is its own exported
+// function so parseWorkflowRuns stays under the quality-gate CRAP threshold.
+suite('workflowRuns unwrapWorkflowRunsEnvelope', function () {
+    test('array passes through by reference; envelopes unwrapped; junk → []', function () {
+        var list = [run()];
+        assert.deepEqual(workflowRuns.unwrapWorkflowRunsEnvelope(list), list);
+        assert.deepEqual(workflowRuns.unwrapWorkflowRunsEnvelope({ workflow_runs: list }), list);
+        assert.deepEqual(workflowRuns.unwrapWorkflowRunsEnvelope({ runs: list }), list);
+        assert.deepEqual(workflowRuns.unwrapWorkflowRunsEnvelope(null), []);
+        assert.deepEqual(workflowRuns.unwrapWorkflowRunsEnvelope('{"workflow_runs":[]}'), []);
+        assert.deepEqual(workflowRuns.unwrapWorkflowRunsEnvelope({ workflow_runs: 'nope' }), []);
+    });
+});
+
 // ── eachActiveStatusRun ──────────────────────────────────────────────────────
 
 suite('workflowRuns eachActiveStatusRun', function () {

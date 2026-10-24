@@ -19,6 +19,19 @@
 var ACTIVE_RUN_STATUSES = ['queued', 'in_progress', 'waiting', 'pending'];
 
 /**
+ * Unwraps a decoded payload into a run list: an array passes through, a
+ * { workflow_runs } / { runs } envelope is unwrapped. Anything else reads
+ * as [] — its own function so parseWorkflowRuns stays under the CRAP
+ * ratchet (nested decisions count towards the enclosing function).
+ */
+function unwrapWorkflowRunsEnvelope(parsed) {
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && Array.isArray(parsed.workflow_runs)) return parsed.workflow_runs;
+    if (parsed && Array.isArray(parsed.runs)) return parsed.runs;
+    return [];
+}
+
+/**
  * Unwraps a REST workflow-run list payload: an array passes through, a
  * { workflow_runs } / { runs } envelope is unwrapped, a JSON string is
  * parsed. Anything unparseable reads as [] (the smAgent.js copy, moved
@@ -30,10 +43,7 @@ function parseWorkflowRuns(raw) {
     if (typeof raw === 'string') {
         try { parsed = JSON.parse(raw); } catch (e) { return []; }
     }
-    if (Array.isArray(parsed)) return parsed;
-    if (parsed && Array.isArray(parsed.workflow_runs)) return parsed.workflow_runs;
-    if (parsed && Array.isArray(parsed.runs)) return parsed.runs;
-    return [];
+    return unwrapWorkflowRunsEnvelope(parsed);
 }
 
 /**
@@ -155,6 +165,7 @@ function indexRunsById(runs) {
 module.exports = {
     ACTIVE_RUN_STATUSES: ACTIVE_RUN_STATUSES,
     parseWorkflowRuns: parseWorkflowRuns,
+    unwrapWorkflowRunsEnvelope: unwrapWorkflowRunsEnvelope,
     eachActiveStatusRun: eachActiveStatusRun,
     workflowRunTimestamp: workflowRunTimestamp,
     workflowRunAge: workflowRunAge,
