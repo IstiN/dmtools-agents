@@ -75,24 +75,51 @@ function workflowFileOf(opts) {
     return (wf && typeof wf === 'string') ? wf : DEFAULT_LEG_WORKFLOW;
 }
 
+// The raw snapshot payload must be a plain key→entry object — arrays and
+// primitives are snapshot drift, never a latch map.
+function isRawLatchMap(raw) {
+    return !!raw && typeof raw === 'object' && !Array.isArray(raw);
+}
+
+// Keys are 'pr-<N>@<head>' — a string carrying the @ separator. (Object.keys
+// yields strings; the typeof check stays as the defensive twin of the
+// original guard so a weird host never turns a key into a latch.)
+function isLatchKey(key) {
+    return typeof key === 'string' && key.indexOf('@') !== -1;
+}
+
+// The entry itself must be a plain object (arrays are drift).
+function isLatchEntryObject(entry) {
+    return !!entry && typeof entry === 'object' && !Array.isArray(entry);
+}
+
+// A well-formed entry: a non-empty string head (the latch key's other half)
+// and an `at` stamp (the stamp may itself be unparsable; isActive then fails
+// CLOSED to stale so a corrupt stamp can never latch forever).
+function latchEntryValid(entry) {
+    return isLatchEntryObject(entry) && !!entry.head &&
+        typeof entry.head === 'string' && !!entry.at;
+}
+
+// The persisted entry shape: { head, at } (+ by when the armer was named).
+function normalizeLatchEntry(entry) {
+    var out = { head: entry.head, at: entry.at };
+    if (entry.by) out.by = String(entry.by);
+    return out;
+}
+
 /**
  * Sanitize a persisted latch map (the snapshot's reworkInFlight). Keeps only
  * well-formed entries — 'pr-<N>@<head>' keys with a non-empty head string and
- * an `at` field (the timestamp may itself be unparsable; isActive then fails
- * CLOSED to stale so a corrupt stamp can never latch forever). Anything else
- * is dropped: the latch must never wedge the armer on snapshot drift.
+ * an `at` field. Anything else is dropped: the latch must never wedge the
+ * armer on snapshot drift.
  */
 function normalizeMap(raw) {
     var map = {};
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return map;
+    if (!isRawLatchMap(raw)) return map;
     Object.keys(raw).forEach(function (key) {
-        var entry = raw[key];
-        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
-        if (typeof key !== 'string' || key.indexOf('@') === -1) return;
-        if (!entry.head || typeof entry.head !== 'string') return;
-        if (!entry.at) return;
-        map[key] = { head: entry.head, at: entry.at };
-        if (entry.by) map[key].by = String(entry.by);
+        if (!isLatchKey(key) || !latchEntryValid(raw[key])) return;
+        map[key] = normalizeLatchEntry(raw[key]);
     });
     return map;
 }

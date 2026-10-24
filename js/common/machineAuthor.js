@@ -123,17 +123,26 @@ function isMachineLogin(login, machineAuthor) {
 var RELEASE_BUMP_BRANCH_RE = /^chore\/release-v/;
 var RELEASE_BUMP_TITLE_RE = /^chore\(release\):/;
 
+// Carrier-field reader: the SM item shape carries author/branch/title
+// either flat on the item or on the linked pr payload (both appear in the
+// wild — issue-carrier items are flat, prStatus payloads nest under pr).
+// Missing everywhere reads as ''.
+function itemField(item, field) {
+    return String((item && (item[field] || (item.pr && item.pr[field]))) || '');
+}
+
 function itemAuthor(item) {
-    return String((item && (item.author || (item.pr && item.pr.author))) || '');
+    return itemField(item, 'author');
 }
 
 function isMachineReleaseBump(item, owner) {
     var author = itemAuthor(item);
     if (!owner || !author) return false;
     if (author.toLowerCase() !== String(owner).toLowerCase()) return false;
-    var branch = String((item && (item.branch || (item.pr && item.pr.branch))) || '');
-    var title = String((item && (item.title || (item.pr && item.pr.title))) || '');
-    return RELEASE_BUMP_BRANCH_RE.test(branch) || RELEASE_BUMP_TITLE_RE.test(title);
+    // The shape: branch `chore/release-v*` (auto_release.sh) OR title
+    // `chore(release): …` (the squash subject the bump PR carries).
+    return RELEASE_BUMP_BRANCH_RE.test(itemField(item, 'branch')) ||
+        RELEASE_BUMP_TITLE_RE.test(itemField(item, 'title'));
 }
 
 /**
