@@ -4246,3 +4246,343 @@ suite('pushReworkChanges — extracted pure helpers (gh-1195)', function() {
         });
     });
 });
+
+// ── gh-1220: characterization of the CRAP-target thread helpers ──────────────
+// Pins the branch behavior of replyTargetsThread / threadLabel /
+// readInputRawThreads / buildOpenThreadAccountingBlock / concludedReviewsSorted
+// and postThreadReplies' combined-comment failure path on the branches the
+// suite had not exercised, BEFORE the gh-1220 CRAP extraction. They must stay
+// green across the refactor — any behavior drift is a regression, not a
+// cleanup.
+
+suite('pushReworkChanges.replyTargetsThread — targeting matrix (gh-1220 characterization)', function() {
+
+    function rtt() {
+        return loadPushReworkChangesModule({}).mod.replyTargetsThread;
+    }
+
+    test('a missing reply or a missing thread targets nothing', function() {
+        var targets = rtt();
+        assert.equal(targets(null, ghThread('PRRT_a', 1)), false, 'no reply → not targeted');
+        assert.equal(targets({ threadId: 'PRRT_a' }, null), false, 'no thread → not targeted');
+        assert.equal(targets(null, null), false, 'neither → not targeted');
+    });
+
+    test('threadId match wins, coercing number ids to strings in both directions', function() {
+        var targets = rtt();
+        assert.equal(targets({ threadId: 'PRRT_a' }, ghThread('PRRT_a', 1)), true);
+        assert.equal(targets({ threadId: 'PRRT_a' }, { threadId: 'PRRT_a' }), true, 'thread without a root id still matches by threadId');
+        assert.equal(targets({ threadId: 42 }, { threadId: '42' }), true, 'numeric reply id vs string thread id');
+        assert.equal(targets({ threadId: '42' }, { threadId: 42 }), true, 'string reply id vs numeric thread id');
+    });
+
+    test('after a threadId mismatch the root ids are still consulted (historical fall-through)', function() {
+        var targets = rtt();
+        assert.equal(
+            targets({ threadId: 'PRRT_other', rootCommentId: 1 }, ghThread('PRRT_a', 1)),
+            true,
+            'characterization: the threadId check does not short-circuit — a matching rootCommentId still targets');
+        assert.equal(
+            targets({ threadId: 'PRRT_other', inReplyToId: 1 }, ghThread('PRRT_a', 1)),
+            true,
+            'same fall-through for inReplyToId');
+        assert.equal(
+            targets({ threadId: 'PRRT_other', rootCommentId: 9 }, ghThread('PRRT_a', 1)),
+            false,
+            'mismatched ids on both spaces → not targeted');
+    });
+
+    test('a thread with no threadId and no rootCommentId is untargetable by anything', function() {
+        var targets = rtt();
+        assert.equal(targets({ threadId: 'PRRT_a' }, { threadId: null, rootCommentId: null }), false);
+        assert.equal(targets({ threadId: 'PRRT_a' }, { threadId: null, rootCommentId: undefined }), false);
+        assert.equal(targets({ rootCommentId: 1 }, { threadId: null, rootCommentId: null }), false);
+    });
+
+    test('reply.rootCommentId targets the thread root id (post-enrichment parity)', function() {
+        var targets = rtt();
+        assert.equal(targets({ rootCommentId: 5550001 }, { threadId: null, rootCommentId: 5550001 }), true);
+        assert.equal(targets({ rootCommentId: '5550001' }, { threadId: null, rootCommentId: 5550001 }), true, 'numeric thread id vs string reply id');
+    });
+
+    test('reply.inReplyToId targets the thread root id', function() {
+        var targets = rtt();
+        assert.equal(targets({ inReplyToId: 770001 }, { threadId: null, rootCommentId: 770001 }), true);
+        assert.equal(targets({ inReplyToId: '770001' }, { threadId: null, rootCommentId: 770001 }), true, 'numeric thread id vs string inReplyToId');
+    });
+
+    test('unrelated root ids do not target (2+ non-matching replies case)', function() {
+        var targets = rtt();
+        var thread = { threadId: null, rootCommentId: 100 };
+        assert.equal(targets({ rootCommentId: 200 }, thread), false);
+        assert.equal(targets({ inReplyToId: 300 }, thread), false);
+        assert.equal(targets({ rootCommentId: 200, inReplyToId: 300 }, thread), false, 'both present, neither matches');
+        assert.equal(targets({}, thread), false, 'reply with no ids at all');
+    });
+});
+
+suite('pushReworkChanges.threadLabel — label shapes (gh-1220 characterization)', function() {
+
+    function labelOf(t) {
+        return loadPushReworkChangesModule({}).mod.threadLabel(t);
+    }
+
+    test('null/undefined thread labels as unknown', function() {
+        assert.equal(labelOf(null), '(unknown thread)');
+        assert.equal(labelOf(undefined), '(unknown thread)');
+    });
+
+    test('full shape: id (location) — "title"', function() {
+        assert.equal(
+            labelOf(ghThread('PRRT_a', 1, { path: 'src/a.dart', line: 12, body: 'Fix the null deref here' })),
+            'PRRT_a (src/a.dart:12) — "Fix the null deref here"');
+    });
+
+    test('a path without a line renders the bare path; no path renders no location', function() {
+        assert.equal(
+            labelOf(ghThread('PRRT_a', 1, { path: 'README.md', line: null })),
+            'PRRT_a (README.md) — "Fix the null deref here"');
+        assert.equal(
+            labelOf(ghThread('PRRT_a', 1, { path: null })),
+            'PRRT_a — "Fix the null deref here"');
+    });
+
+    test('no threadId falls back to comment#<rootCommentId>; nothing at all to no-id', function() {
+        assert.equal(
+            labelOf({ threadId: null, rootCommentId: 42, body: 'b' }),
+            'comment#42 — "b"');
+        assert.equal(
+            labelOf({ threadId: null, rootCommentId: undefined, body: 'b' }),
+            'no-id — "b"');
+    });
+
+    test('only the first body line is used', function() {
+        assert.equal(
+            labelOf({ threadId: 'PRRT_a', body: 'First line\nsecond line\nthird' }),
+            'PRRT_a — "First line"');
+    });
+
+    test('a body over 120 chars is truncated to 117 + ellipsis', function() {
+        var long = new Array(130 + 1).join('x');
+        var label = labelOf({ threadId: 'PRRT_a', body: long });
+        assert.ok(label.indexOf('...') !== -1, 'truncation ellipsis present');
+        assert.equal(label, 'PRRT_a — "' + long.substring(0, 117) + '..."');
+        assert.equal(label.length, 131, 'label stays bounded');
+    });
+
+    test('an empty body renders no body segment', function() {
+        assert.equal(labelOf({ threadId: 'PRRT_a', body: '' }), 'PRRT_a');
+        assert.equal(labelOf({ threadId: 'PRRT_a' }), 'PRRT_a');
+    });
+});
+
+suite('pushReworkChanges.readInputRawThreads — snapshot shapes (gh-1220 characterization)', function() {
+
+    test('a null/missing ticket key reads nothing', function() {
+        var loaded = loadPushReworkChangesModule({
+            'input/PROJ-123/pr_discussions_raw.json': JSON.stringify({ threads: [ghThread('PRRT_a', 1)] })
+        });
+        assert.deepEqual(loaded.mod.readInputRawThreads(null, {}), []);
+        assert.deepEqual(loaded.mod.readInputRawThreads(undefined, {}), []);
+    });
+
+    test('the {"threads": [...]} snapshot shape returns the threads (2+ items)', function() {
+        var loaded = loadPushReworkChangesModule({
+            'input/PROJ-123/pr_discussions_raw.json': JSON.stringify({ threads: [ghThread('PRRT_a', 1), ghThread('PRRT_b', 2)] })
+        });
+        var threads = loaded.mod.readInputRawThreads('PROJ-123', {});
+        assert.equal(threads.length, 2);
+        assert.equal(threads[0].threadId, 'PRRT_a');
+    });
+
+    test('a top-level array snapshot shape returns the array', function() {
+        var loaded = loadPushReworkChangesModule({
+            'input/PROJ-123/pr_discussions_raw.json': JSON.stringify([ghThread('PRRT_a', 1), ghThread('PRRT_b', 2)])
+        });
+        var threads = loaded.mod.readInputRawThreads('PROJ-123', {});
+        assert.equal(threads.length, 2, 'bare array export is honored');
+    });
+
+    test('the zero-threads contract placeholder yields []', function() {
+        var loaded = loadPushReworkChangesModule({
+            'input/PROJ-123/pr_discussions_raw.json': JSON.stringify({ threads: [] })
+        });
+        assert.deepEqual(loaded.mod.readInputRawThreads('PROJ-123', {}), []);
+    });
+
+    test('a snapshot object with neither threads nor array shape yields []', function() {
+        var loaded = loadPushReworkChangesModule({
+            'input/PROJ-123/pr_discussions_raw.json': JSON.stringify({ something: 'else' })
+        });
+        assert.deepEqual(loaded.mod.readInputRawThreads('PROJ-123', {}), []);
+    });
+
+    test('blank and unparsable files yield [] without throwing', function() {
+        var loaded = loadPushReworkChangesModule({
+            'input/PROJ-123/pr_discussions_raw.json': '   '
+        });
+        assert.deepEqual(loaded.mod.readInputRawThreads('PROJ-123', {}), []);
+
+        var broken = loadPushReworkChangesModule({
+            'input/PROJ-123/pr_discussions_raw.json': '{not json'
+        });
+        assert.deepEqual(broken.mod.readInputRawThreads('PROJ-123', {}), []);
+    });
+
+    test('a missing snapshot yields []', function() {
+        var loaded = loadPushReworkChangesModule({});
+        assert.deepEqual(loaded.mod.readInputRawThreads('PROJ-123', {}), []);
+    });
+
+    test('the workingDir-relative candidate is read when the job-root candidate is absent', function() {
+        var loaded = loadPushReworkChangesModule({
+            'dependencies/proj/input/PROJ-123/pr_discussions_raw.json':
+                JSON.stringify({ threads: [ghThread('PRRT_wd', 1), ghThread('PRRT_wd2', 2)] })
+        });
+        var threads = loaded.mod.readInputRawThreads('PROJ-123', { workingDir: 'dependencies/proj' });
+        assert.equal(threads.length, 2, 'the setup snapshot written under workingDir is found');
+        assert.equal(threads[0].threadId, 'PRRT_wd');
+    });
+
+    test('the job-root candidate wins over the workingDir copy', function() {
+        var loaded = loadPushReworkChangesModule({
+            'input/PROJ-123/pr_discussions_raw.json': JSON.stringify({ threads: [ghThread('PRRT_root', 1)] }),
+            'dependencies/proj/input/PROJ-123/pr_discussions_raw.json': JSON.stringify({ threads: [ghThread('PRRT_wd', 1)] })
+        });
+        var threads = loaded.mod.readInputRawThreads('PROJ-123', { workingDir: 'dependencies/proj' });
+        assert.equal(threads[0].threadId, 'PRRT_root', 'first candidate order preserved');
+    });
+});
+
+suite('pushReworkChanges.buildOpenThreadAccountingBlock — per-thread reasons (gh-1220 characterization)', function() {
+
+    var md = commentMarkupModule.forFlavor('markdown');
+
+    function block(liveOpen, inputThreads, unaddressed) {
+        return loadPushReworkChangesModule({}).mod.buildOpenThreadAccountingBlock(md, liveOpen, inputThreads, unaddressed);
+    }
+
+    test('every live open thread is listed with drift / unaddressed / still-open accounting', function() {
+        var inputThreads = [ghThread('PRRT_old', 1), ghThread('PRRT_un', 2), ghThread('PRRT_re', 3)];
+        var unaddressed = [ghThread('PRRT_un', 2)];
+        var out = block(
+            [
+                ghThread('PRRT_new', 9, { path: 'src/new.dart', line: 7, body: 'Late finding' }),
+                ghThread('PRRT_un', 2, { path: 'src/un.dart', line: 8, body: 'Never answered' }),
+                ghThread('PRRT_re', 3, { path: 'src/re.dart', line: 9, body: 'Replied but open' })
+            ],
+            inputThreads,
+            unaddressed);
+        var lines = out.split('\n');
+        assert.equal(lines.length, 4, 'three bullets + trailing newline, got: ' + JSON.stringify(lines));
+        assert.contains(lines[0], 'PRRT_new');
+        assert.contains(lines[0], 'appeared mid-run');
+        assert.contains(lines[1], 'PRRT_un');
+        assert.contains(lines[1], 'not addressed by any reply in');
+        assert.contains(lines[1], 'outputs/review_replies.json');
+        assert.contains(lines[2], 'PRRT_re');
+        assert.contains(lines[2], 'reply posted, thread still open');
+        assert.equal(out.lastIndexOf('\n'), out.length - 1, 'block ends with exactly one newline');
+    });
+
+    test('a thread with no GraphQL id is labeled comment#<rootId> and can still be drift-accounted', function() {
+        var out = block(
+            [{ threadId: null, rootCommentId: 77, path: 'src/x.dart', line: 3, body: 'No graphql id' }],
+            [{ threadId: null, rootCommentId: 77, path: 'src/x.dart', line: 3, body: 'No graphql id' }],
+            []);
+        assert.contains(out, 'comment#77');
+        assert.contains(out, 'reply posted, thread still open', 'matched into the input snapshot by the comment id');
+    });
+
+    test('a path without a line and a body over 120 chars stay bounded in the block', function() {
+        var long = new Array(140 + 1).join('y');
+        var out = block(
+            [{ threadId: 'PRRT_long', rootCommentId: 1, path: 'src/long.dart', line: null, body: long }],
+            [ghThread('PRRT_long', 1)],
+            []);
+        assert.contains(out, 'src/long.dart', 'bare path location rendered');
+        assert.ok(out.indexOf('...') !== -1, 'long body truncated');
+        assert.ok(out.length < 300, 'block stays bounded, got length ' + out.length);
+    });
+
+    test('an id-less thread is labeled no-id and accounted as drift', function() {
+        var out = block(
+            [{ threadId: null, rootCommentId: null, body: 'machine notice' }],
+            [],
+            []);
+        assert.contains(out, 'no-id');
+        assert.contains(out, 'appeared mid-run');
+    });
+});
+
+suite('pushReworkChanges.concludedReviewsSorted — verdict probe (gh-1220 characterization)', function() {
+
+    function sortedOf(reviews, scmExtra) {
+        var scm = scmExtra || { listReviews: function() { return reviews; } };
+        return loadPushReworkChangesModule({}).mod.concludedReviewsSorted(scm, { number: 5 });
+    }
+
+    test('keeps only CHANGES_REQUESTED / APPROVED, oldest first (2+ items, out of order)', function() {
+        var out = sortedOf([
+            { state: 'CHANGES_REQUESTED', submitted_at: '2026-01-03T00:00:00Z' },
+            { state: 'COMMENTED', submitted_at: '2026-01-02T00:00:00Z' },
+            { state: 'APPROVED', submitted_at: '2026-01-01T00:00:00Z' }
+        ]);
+        assert.equal(out.length, 2, 'COMMENTED is not a concluded verdict');
+        assert.equal(out[0].state, 'APPROVED', 'oldest first');
+        assert.equal(out[1].state, 'CHANGES_REQUESTED');
+    });
+
+    test('missing submitted_at sorts as the empty string (oldest)', function() {
+        var out = sortedOf([
+            { state: 'APPROVED', submitted_at: '2026-01-01T00:00:00Z' },
+            { state: 'CHANGES_REQUESTED' }
+        ]);
+        assert.equal(out[0].state, 'CHANGES_REQUESTED', 'no timestamp → sorts first');
+        assert.equal(out[1].state, 'APPROVED');
+    });
+
+    test('equal submitted_at keeps both entries (comparator never drops entries)', function() {
+        var out = sortedOf([
+            { state: 'APPROVED', submitted_at: 'same' },
+            { state: 'CHANGES_REQUESTED', submitted_at: 'same' }
+        ]);
+        assert.equal(out.length, 2);
+    });
+
+    test('fail-open: no probe, no PR, null reviews, and a throwing probe all return []', function() {
+        var mod = loadPushReworkChangesModule({}).mod;
+        assert.deepEqual(mod.concludedReviewsSorted({}, { number: 5 }), [], 'scm without listReviews');
+        assert.deepEqual(mod.concludedReviewsSorted({ listReviews: function() { return []; } }, null), [], 'no PR');
+        assert.deepEqual(mod.concludedReviewsSorted({ listReviews: function() { return []; } }, {}), [], 'PR without a number');
+        assert.deepEqual(sortedOf(null), [], 'null review list');
+        assert.deepEqual(sortedOf([], { listReviews: function() { throw new Error('boom'); } }), [], 'probe failure');
+    });
+});
+
+suite('pushReworkChanges.postThreadReplies — combined untargeted comment failure (gh-1220 characterization)', function() {
+
+    test('a failed combined untargeted comment is warned, never thrown, and posts 0', function() {
+        var loaded = loadPushReworkChangesModule({
+            'outputs/review_replies.json': JSON.stringify({
+                replies: [
+                    { body: 'no ids at all on this one' },
+                    { body: 'nor on this one', threadId: null }
+                ]
+            })
+        });
+        loaded.scm.addComment = function() { throw new Error('comment post rejected'); };
+
+        var posted = loaded.mod.postThreadReplies(loaded.scm, '123', {});
+
+        assert.equal(posted, 0, 'the failed combined comment does not count as posted');
+        assert.equal(loaded.replyCalls.length, 0, 'no threaded reply was possible');
+    });
+
+    test('no outputOptions at all degrades to the empty reply file path (posted 0, no crash)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var posted = loaded.mod.postThreadReplies(loaded.scm, '123');
+        assert.equal(posted, 0);
+        assert.equal(loaded.replyCalls.length, 0);
+    });
+});
