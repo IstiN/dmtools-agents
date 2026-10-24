@@ -1,14 +1,4 @@
 {
-  "issue-846": [
-    {
-      "leg": "review",
-      "at": "2026-10-10T19:02:27Z",
-      "prompt": 43992,
-      "completion": 9913,
-      "total": 53905,
-      "model": ""
-    }
-  ],
   "issue-848": [
     {
       "leg": "dev",
@@ -4992,6 +4982,17 @@
       "completion": 29366,
       "total": 99450,
       "cacheRead": 3858458,
+      "model": "kimi-for-coding"
+    }
+  ],
+  "issue-1247": [
+    {
+      "leg": "dev",
+      "at": "2026-10-24T19:12:11Z",
+      "prompt": 114541,
+      "completion": 35193,
+      "total": 149734,
+      "cacheRead": 8698880,
       "model": "kimi-for-coding"
     }
   ]
