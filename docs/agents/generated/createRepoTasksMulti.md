@@ -36,9 +36,6 @@ Full prompt / instruction set: [`agents/snapshots/createRepoTasksMulti.md`](agen
 _Create Repository Development Sub-tasks — Multi-Task Variant_
 
 - Source: `agents/js/createRepoTasksMulti.js`
-- Side effects:
-  - post ticket comment (via tracker)
-  - move ticket to status (via tracker)
 - Parameters (customParams):
   - `adoTextFormat`
   - `blockedStatus`
