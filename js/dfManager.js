@@ -640,6 +640,8 @@ if (typeof module !== 'undefined' && module.exports) {
         extractTicketKey: extractTicketKey,
         detectStaleSmLabels: detectStaleSmLabels,
         detectPrMergeGaps: detectPrMergeGaps,
+        detectRepeatedFailureLoops: detectRepeatedFailureLoops,
+        parseJsonMaybe: parseJsonMaybe,
         detectDuplicateRuns: detectDuplicateRuns,
         buildLabelStatusMap: buildLabelStatusMap,
         extractStatusesFromJql: extractStatusesFromJql,
