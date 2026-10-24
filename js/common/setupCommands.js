@@ -55,6 +55,72 @@ function truncateSetupError(text) {
         text.slice(text.length - tailLen);
 }
 
+
+// ---------------------------------------------------------------------------
+// Pure entry normalizers (gh-1197) — no side effects, unit-tested directly.
+// Plain string entries run in the default working dir and are non-fatal;
+// object entries may override workingDir/name and set allowFailure.
+// ---------------------------------------------------------------------------
+
+function entryCommand(entry) {
+    return typeof entry === 'string' ? entry : (entry && entry.command);
+}
+
+function entryWorkingDir(entry, defaultWorkingDir) {
+    return (entry && entry.workingDir) || defaultWorkingDir || null;
+}
+
+function entryAllowFailure(entry, isString) {
+    return isString ? true : (entry.allowFailure !== false);
+}
+
+function entryName(entry, command) {
+    return (entry && entry.name) || command;
+}
+
+/**
+ * Normalizes one setupCommands entry into { command, workingDir, allowFailure, name },
+ * or null when the entry carries no runnable command (skipped, not failed).
+ */
+function normalizeSetupEntry(entry, defaultWorkingDir) {
+    var isString = typeof entry === 'string';
+    var command = entryCommand(entry);
+    if (!command) return null;
+    var opts = isString ? null : entry;
+    return {
+        command: command,
+        workingDir: entryWorkingDir(opts, defaultWorkingDir),
+        allowFailure: entryAllowFailure(entry, isString),
+        name: entryName(opts, command)
+    };
+}
+
+/**
+ * Runs one normalized setup command. Returns the success/failure record; a
+ * failure of a required (allowFailure: false) command throws after recording
+ * the bounded message — stopping development before the CLI agent starts.
+ */
+function runOneSetupCommand(spec) {
+    try {
+        console.log('Running setup command "' + spec.name + '": ' + spec.command);
+        var args = { command: spec.command };
+        if (spec.workingDir) args.workingDirectory = spec.workingDir;
+        var output = cli_execute_command(args);
+        return { name: spec.name, success: true, output: output };
+    } catch (e) {
+        var errorText = e && e.message ? e.message : String(e);
+        // Log the BOUNDED text only. The full errorText stays in `results` (callers and
+        // buildSetupWarningsMarkdown apply their own bound). A multi-megabyte tool output
+        // printed as a single console line makes the GitHub Actions log processor take
+        // minutes (dm.ai#635: two 500 KB lines = ~800 s of a 13 s test run).
+        console.warn('Setup command "' + spec.name + '" failed:', truncateSetupError(errorText));
+        if (spec.allowFailure === false) {
+            throw new Error('Required setup command failed: ' + spec.name + ' — ' + truncateSetupError(errorText));
+        }
+        return { name: spec.name, success: false, error: errorText };
+    }
+}
+
 function runSetupCommands(customParams, defaultWorkingDir) {
     var commands = (customParams && customParams.setupCommands) || [];
     if (!Array.isArray(commands) || commands.length === 0) {
@@ -63,33 +129,9 @@ function runSetupCommands(customParams, defaultWorkingDir) {
 
     var results = [];
     for (var i = 0; i < commands.length; i++) {
-        var entry = commands[i];
-        var isString = typeof entry === 'string';
-        var command = isString ? entry : (entry && entry.command);
-        if (!command) continue;
-
-        var workingDir = (!isString && entry.workingDir) || defaultWorkingDir || null;
-        var allowFailure = isString ? true : (entry.allowFailure !== false);
-        var name = (!isString && entry.name) || command;
-
-        try {
-            console.log('Running setup command "' + name + '": ' + command);
-            var args = { command: command };
-            if (workingDir) args.workingDirectory = workingDir;
-            var output = cli_execute_command(args);
-            results.push({ name: name, success: true, output: output });
-        } catch (e) {
-            var errorText = e && e.message ? e.message : String(e);
-            // Log the BOUNDED text only. The full errorText stays in `results` (callers and
-            // buildSetupWarningsMarkdown apply their own bound). A multi-megabyte tool output
-            // printed as a single console line makes the GitHub Actions log processor take
-            // minutes (dm.ai#635: two 500 KB lines = ~800 s of a 13 s test run).
-            console.warn('Setup command "' + name + '" failed:', truncateSetupError(errorText));
-            results.push({ name: name, success: false, error: errorText });
-            if (allowFailure === false) {
-                throw new Error('Required setup command failed: ' + name + ' — ' + truncateSetupError(errorText));
-            }
-        }
+        var spec = normalizeSetupEntry(commands[i], defaultWorkingDir);
+        if (!spec) continue;
+        results.push(runOneSetupCommand(spec));
     }
     return { ran: results.length, results: results };
 }

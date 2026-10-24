@@ -151,57 +151,104 @@ function fetchDiffAndDiscussions(scm, prDetails) {
     };
 }
 
+
+// ---------------------------------------------------------------------------
+// Pure param/context helpers (gh-1197) — extracted from action so each stays
+// small and directly unit-testable; no SCM calls outside resolveScm().
+// ---------------------------------------------------------------------------
+
+function resolveActualParams(params) {
+    return params.inputFolderPath ? params : (params.jobParams || params);
+}
+
+function resolveCustomParams(params, actualParams) {
+    // Custom params live under jobParams in the real Teammate execution path;
+    // keep the top-level fallback for direct/JSRunner invocations.
+    return (params.jobParams && params.jobParams.customParams) || actualParams.customParams || {};
+}
+
+function resolveTicketKey(actualParams, customParams) {
+    return actualParams.ticket
+        ? (actualParams.ticket.key || actualParams.ticket)
+        : (customParams.ticket || null);
+}
+
+function skipNoKnowledgeDir(inputFolder) {
+    console.log('No customParams.knowledgeDir configured for this repo — skipping (no-op).');
+    writeNoOpMarker(inputFolder,
+        'This repo has not configured `customParams.knowledgeDir`, so there is no ' +
+        'review-knowledge base to update yet.');
+    return { success: true, skipped: true, reason: 'knowledgeDir not configured' };
+}
+
+function resolveScm(config, customParams) {
+    // Direct content (diff/discussions supplied inline) needs no SCM client at all.
+    var hasDirectContent = !!(customParams.diffText || customParams.discussionsMarkdown);
+    return hasDirectContent ? null : configLoader.createScm(config);
+}
+
+function skipNoPrContext(inputFolder) {
+    writeNoOpMarker(inputFolder,
+        'No PR/MR context could be resolved. Provide `customParams.prNumber` (direct ' +
+        'backfill run), `customParams.diffText`/`discussionsMarkdown` (direct content), ' +
+        'or invoke this action with a ticket in context.');
+    return { success: true, skipped: true, reason: 'no PR context resolved' };
+}
+
+function hasNoMaterial(resolved) {
+    return !resolved.diffText && !resolved.discussionsMarkdown;
+}
+
+function skipNoMaterial(inputFolder) {
+    console.warn('Neither diff nor discussions could be obtained — nothing to learn from.');
+    writeNoOpMarker(inputFolder,
+        'Both the diff and the discussions were unavailable for this PR/MR — there is ' +
+        'nothing to distill.');
+    return { success: true, skipped: true, reason: 'no diff or discussions available' };
+}
+
+function writeKnowledgeTaskContext(inputFolder, knowledgeDir, resolved) {
+    var prDetailsForContext = resolved.prDetails || {};
+    gh.writePRContext(inputFolder, prDetailsForContext, resolved.diffText, resolved.discussionsMarkdown, resolved.discussionsRaw);
+    writeTaskMarker(inputFolder, knowledgeDir, resolved.prDetails);
+
+    console.log('✅ Knowledge update setup complete — target:', knowledgeDir);
+
+    return {
+        success: true,
+        prNumber: prDetailsForContext.number || null,
+        prUrl: prDetailsForContext.html_url || null,
+        knowledgeDir: knowledgeDir
+    };
+}
+
 function action(params) {
     try {
-        var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
+        var actualParams = resolveActualParams(params);
         var inputFolder = actualParams.inputFolderPath;
         var config = configLoader.loadProjectConfig(params.jobParams || params);
-        var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams || {};
-        var ticketKey = actualParams.ticket ? (actualParams.ticket.key || actualParams.ticket) : (customParams.ticket || null);
+        var customParams = resolveCustomParams(params, actualParams);
+        var ticketKey = resolveTicketKey(actualParams, customParams);
 
         console.log('=== Knowledge update setup ===');
 
         var knowledgeDir = customParams.knowledgeDir;
         if (!knowledgeDir) {
-            console.log('No customParams.knowledgeDir configured for this repo — skipping (no-op).');
-            writeNoOpMarker(inputFolder,
-                'This repo has not configured `customParams.knowledgeDir`, so there is no ' +
-                'review-knowledge base to update yet.');
-            return { success: true, skipped: true, reason: 'knowledgeDir not configured' };
+            return skipNoKnowledgeDir(inputFolder);
         }
 
-        var hasDirectContent = !!(customParams.diffText || customParams.discussionsMarkdown);
-        var scm = hasDirectContent ? null : configLoader.createScm(config);
+        var scm = resolveScm(config, customParams);
 
         var resolved = resolvePrContext(scm, customParams, ticketKey);
         if (!resolved) {
-            writeNoOpMarker(inputFolder,
-                'No PR/MR context could be resolved. Provide `customParams.prNumber` (direct ' +
-                'backfill run), `customParams.diffText`/`discussionsMarkdown` (direct content), ' +
-                'or invoke this action with a ticket in context.');
-            return { success: true, skipped: true, reason: 'no PR context resolved' };
+            return skipNoPrContext(inputFolder);
         }
 
-        if (!resolved.diffText && !resolved.discussionsMarkdown) {
-            console.warn('Neither diff nor discussions could be obtained — nothing to learn from.');
-            writeNoOpMarker(inputFolder,
-                'Both the diff and the discussions were unavailable for this PR/MR — there is ' +
-                'nothing to distill.');
-            return { success: true, skipped: true, reason: 'no diff or discussions available' };
+        if (hasNoMaterial(resolved)) {
+            return skipNoMaterial(inputFolder);
         }
 
-        var prDetailsForContext = resolved.prDetails || {};
-        gh.writePRContext(inputFolder, prDetailsForContext, resolved.diffText, resolved.discussionsMarkdown, resolved.discussionsRaw);
-        writeTaskMarker(inputFolder, knowledgeDir, resolved.prDetails);
-
-        console.log('✅ Knowledge update setup complete — target:', knowledgeDir);
-
-        return {
-            success: true,
-            prNumber: prDetailsForContext.number || null,
-            prUrl: prDetailsForContext.html_url || null,
-            knowledgeDir: knowledgeDir
-        };
+        return writeKnowledgeTaskContext(inputFolder, knowledgeDir, resolved);
 
     } catch (error) {
         console.error('❌ Error in preCliKnowledgeUpdateSetup:', error);
@@ -210,5 +257,9 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, writeNoOpMarker, resolvePrContext };
+    module.exports = {
+        action: action,
+        writeNoOpMarker: writeNoOpMarker,
+        resolvePrContext: resolvePrContext
+    };
 }

@@ -301,3 +301,96 @@ suite('preCliKnowledgeUpdateSetup — no usable material at all', function() {
         assert.equal(result.reason, 'no diff or discussions available');
     });
 });
+
+// ---------------------------------------------------------------------------
+// gh-1197 characterization: param-resolution branches before CRAP extraction
+// ---------------------------------------------------------------------------
+
+suite('preCliKnowledgeUpdateSetup — param resolution branches', function() {
+
+    test('resolves inputFolderPath and customParams nested under jobParams (real Teammate path)', function() {
+        var tracker = makeWriteTracker();
+        var gh = makeGhStub();
+        var mod = loadPreCliKnowledgeUpdateSetup(gh, {}, { file_write: tracker.file_write });
+
+        var result = mod.action({
+            jobParams: {
+                inputFolderPath: 'input/nested',
+                customParams: { knowledgeDir: 'knowledge' }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.skipped, true);
+        assert.equal(result.reason, 'no PR context resolved', 'no ticket, no direct PR/content params');
+        var marker = tracker.find('input/nested/knowledge_task.md');
+        assert.ok(marker, 'no-op marker written into the jobParams inputFolderPath');
+        assert.contains(marker.content, 'customParams.prNumber');
+    });
+
+    test('resolves the ticket key from customParams.ticket when no ticket is in context', function() {
+        var tracker = makeWriteTracker();
+        var findCalls = [];
+        var gh = makeGhStub({
+            findMergedPRForTicket: function(scmArg, ticketKey) {
+                findCalls.push(ticketKey);
+                return null;
+            }
+        });
+        var mod = loadPreCliKnowledgeUpdateSetup(gh, {}, { file_write: tracker.file_write });
+
+        var result = mod.action({
+            inputFolderPath: 'input/pr_knowledge_update',
+            customParams: { knowledgeDir: 'knowledge', ticket: 'TICK-9' }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.skipped, true);
+        assert.deepEqual(findCalls, ['TICK-9'], 'customParams.ticket is the fallback key source');
+    });
+
+    test('accepts a plain-string ticket object and reads the key verbatim', function() {
+        var tracker = makeWriteTracker();
+        var findCalls = [];
+        var gh = makeGhStub({
+            findMergedPRForTicket: function(scmArg, ticketKey) {
+                findCalls.push(ticketKey);
+                return null;
+            }
+        });
+        var mod = loadPreCliKnowledgeUpdateSetup(gh, {}, { file_write: tracker.file_write });
+
+        mod.action({
+            inputFolderPath: 'input/pr_knowledge_update',
+            ticket: 'PLAIN-1',
+            customParams: { knowledgeDir: 'knowledge' }
+        });
+
+        assert.deepEqual(findCalls, ['PLAIN-1'], 'string ticket is used as the key directly');
+    });
+
+    test('returns failure when the project config cannot be loaded (outer catch)', function() {
+        var tracker = makeWriteTracker();
+        var mod = loadModule(
+            'js/preCliKnowledgeUpdateSetup.js',
+            makeRequire({
+                './configLoader.js': {
+                    loadProjectConfig: function() { throw new Error('config down'); },
+                    createScm: function() { throw new Error('scm not expected'); }
+                },
+                './common/githubHelpers.js': makeGhStub()
+            }),
+            { file_write: tracker.file_write }
+        );
+
+        var result = mod.action({
+            inputFolderPath: 'input/pr_knowledge_update',
+            customParams: { knowledgeDir: 'knowledge' }
+        });
+
+        assert.equal(result.success, false, 'unexpected errors surface as failure');
+        assert.ok(result.error.indexOf('config down') !== -1, 'underlying error preserved');
+        assert.equal(tracker.writes.length, 0, 'no marker written on an unexpected failure');
+    });
+
+});
