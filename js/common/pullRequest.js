@@ -521,100 +521,205 @@ function resolveMergeConflicts(runCommand, workingDir, baseBranch, branchName) {
     }
 }
 
-function syncBranchWithBase(options) {
+// ── gh-1190: syncBranchWithBase seam split ───────────────────────────────────
+// Extracted pure parse/build/decide helpers so the orchestration function
+// stays under the CRAP quality gate. Behaviour-preserving: same probes and
+// decisions in the same order, same log lines, same return shapes — pinned
+// by the syncBranchWithBase characterization tests
+// (js/unit-tests/test_pullRequestHelper.js).
+
+/** Pure: validates the sync inputs; returns the refusal message or null. */
+function validateSyncInputs(branchName, baseBranch) {
+    if (!branchName) return 'branchName is required';
+    if (!isSafeRefName(branchName)) return 'Unsafe branch name: ' + branchName;
+    if (!isSafeRefName(baseBranch)) return 'Unsafe base branch name: ' + baseBranch;
+    return null;
+}
+
+/**
+ * Pure builder for the gh-761 refusal: a merge is already in progress
+ * (MERGE_HEAD present — e.g. the agent left a conflicted base-branch merge
+ * unconcluded in the tree). `git merge --no-edit` on top of it fails with
+ * "You have not concluded your merge", and the resolveMergeConflicts/abort
+ * fallback would then auto-resolve the LEFTOVER unmerged paths — or silently
+ * `git merge --abort` a fully staged in-flight resolution — finalizing a
+ * merge this step did not start (marker-baking / work destruction). The
+ * refusal is the first decision, before anything mutating; callers surface
+ * the error as a merge-sync failure on the ticket.
+ */
+function mergeInProgressSyncResult(branchName, baseBranch) {
+    return {
+        success: false,
+        mergeInProgress: true,
+        error: 'A merge is already in progress (MERGE_HEAD exists). Conclude or abort it before syncing ' +
+            branchName + ' with origin/' + baseBranch + ' — refusing to start a second merge on top of it.'
+    };
+}
+
+/** Pure builder: the unrelated-histories refusal result. */
+function unrelatedHistoriesSyncResult(baseBranch) {
+    return {
+        success: false,
+        unrecoverableByAgent: true,
+        error: 'No merge base found between HEAD and origin/' + baseBranch + '; refusing to merge unrelated histories. Fetch full branch history or recreate the branch from origin/' + baseBranch + ' before publishing.'
+    };
+}
+
+/** Pure builder: the dirty-working-tree refusal result. */
+function uncleanTreeSyncResult(baseBranch, status) {
+    return {
+        success: false,
+        error: 'Cannot sync with origin/' + baseBranch + ' because the working tree is not clean:\n' + status
+    };
+}
+
+/**
+ * Dirty-tree realign attempt: when `readTrackedStatus` reports anything, try
+ * `git submodule update --init --recursive` once and re-read the status.
+ * Matches the original try/catch semantics — a failed submodule update is a
+ * warning, not an error.
+ */
+function realignSubmodulesBeforeSync(runCommand, workingDir) {
+    var status = readTrackedStatus(runCommand, workingDir);
+    if (status.trim()) {
+        try {
+            runCommand('git submodule update --init --recursive', workingDir);
+            status = readTrackedStatus(runCommand, workingDir);
+        } catch (submoduleError) {
+            console.warn('Could not realign submodules before syncing with base:', submoduleError.message || submoduleError);
+        }
+    }
+    return status;
+}
+
+/**
+ * The merge-precondition decision cluster: already-up-to-date early exit,
+ * merge-base existence (+ deepen retry), then the dirty-tree realign probe.
+ * Returns { block: <terminal result> } when the merge must not start, else
+ * { status: <post-realign tracked status> }.
+ */
+function resolveSyncPreconditions(runCommand, workingDir, baseBranch, branchName) {
+    var upToDate = branchContainsBase(runCommand, workingDir, baseBranch);
+    if (upToDate) {
+        console.log('✅ Branch already contains origin/' + baseBranch);
+        return { block: { success: true, updated: false } };
+    }
+
+    if (!branchHasMergeBase(runCommand, workingDir, baseBranch) &&
+            !fetchAdditionalHistoryForMergeBase(runCommand, workingDir, baseBranch, branchName)) {
+        return { block: unrelatedHistoriesSyncResult(baseBranch) };
+    }
+
+    return { status: realignSubmodulesBeforeSync(runCommand, workingDir) };
+}
+
+/** Best-effort `git merge --abort` — a failed abort is silently tolerated. */
+function abortMergeQuietly(runCommand, workingDir) {
+    try { runCommand('git merge --abort', workingDir); } catch (abortError) {}
+}
+
+/**
+ * Pure: shapes the catch-path failure message — a conflict list beats a
+ * specific auto-resolve failure, which beats the original git error (when
+ * autoResolve found zero conflict markers, `error` was never a real merge
+ * conflict — e.g. a missing origin/<baseBranch> ref — so the original git
+ * error is kept instead of the misleading generic message).
+ */
+function buildSyncFailureMessage(error, autoResolve, baseBranch) {
+    var message = error && error.message ? error.message : String(error);
+    var conflictFiles = autoResolve.conflictFiles || [];
+    if (conflictFiles.length > 0) {
+        return 'Merge conflict while syncing with origin/' + baseBranch + ': ' + conflictFiles.join(', ');
+    }
+    if (autoResolve.error && autoResolve.error !== 'No conflicted files detected') {
+        // A specific auto-resolve failure (unresolved conflicts, commit failure)
+        // is more actionable than the original git error — surface it.
+        return autoResolve.error;
+    }
+    return message;
+}
+
+/** Pure builder: the failure result for the sync catch path. */
+function syncFailureResult(message, autoResolve) {
+    var conflictFiles = autoResolve.conflictFiles || [];
+    return {
+        success: false,
+        conflict: conflictFiles.length > 0,
+        conflictFiles: conflictFiles,
+        error: message
+    };
+}
+
+// ── gh-1190: two-branch-mode feature-branch route decision ──────────────────
+// Pure decision shared by checkoutBranch.js and preCliDevelopmentSetup.js —
+// both had the identical `!local && !remote → create / remote && !local →
+// checkout-remote / else checkout-local` chain inline. `featureLocalExists`
+// is the truthiness of the cleaned `git branch --list` capture,
+// `featureRemoteExists` the strict ls-remote probe result.
+function decideFeatureBranchRoute(featureLocalExists, featureRemoteExists) {
+    if (!featureLocalExists && !featureRemoteExists) return 'create';
+    if (featureRemoteExists && !featureLocalExists) return 'checkout-remote';
+    return 'checkout-local';
+}
+
+/** Pure resolution of the sync options bag (defaults included). */
+function syncOptionsOf(options) {
     options = options || {};
-    var branchName = options.branchName;
-    var baseBranch = options.baseBranch || 'main';
-    var workingDir = options.workingDir || null;
-    var runCommand = options.runCommand || defaultRunCommand;
+    return {
+        branchName: options.branchName,
+        baseBranch: options.baseBranch || 'main',
+        workingDir: options.workingDir || null,
+        runCommand: options.runCommand || defaultRunCommand
+    };
+}
 
-    if (!branchName) return { success: false, error: 'branchName is required' };
-    if (!isSafeRefName(branchName)) return { success: false, error: 'Unsafe branch name: ' + branchName };
-    if (!isSafeRefName(baseBranch)) return { success: false, error: 'Unsafe base branch name: ' + baseBranch };
+/**
+ * The catch-path recovery: conflict auto-resolution first (an auto-resolved
+ * sync still succeeds), then a quiet abort and the shaped failure result.
+ */
+function recoverFromSyncError(runCommand, workingDir, baseBranch, branchName, error) {
+    var autoResolve = resolveMergeConflicts(runCommand, workingDir, baseBranch, branchName);
+    if (autoResolve.resolved) {
+        return { success: true, updated: true, autoResolved: true };
+    }
 
-    // gh-761: refuse to start while a merge is already in progress (MERGE_HEAD
-    // present — e.g. the agent left a conflicted base-branch merge unconcluded
-    // in the tree). `git merge --no-edit` on top of it fails with "You have
-    // not concluded your merge", and the resolveMergeConflicts/abort fallback
-    // below would then auto-resolve the LEFTOVER unmerged paths — or silently
-    // `git merge --abort` a fully staged in-flight resolution — finalizing a
-    // merge this step did not start (marker-baking / work destruction). The
-    // refusal is the first decision, before anything mutating; callers
-    // surface the error as a merge-sync failure on the ticket.
+    abortMergeQuietly(runCommand, workingDir);
+
+    var message = buildSyncFailureMessage(error, autoResolve, baseBranch);
+    console.warn('Could not synchronize branch with base:', message);
+    return syncFailureResult(message, autoResolve);
+}
+
+function syncBranchWithBase(options) {
+    var opts = syncOptionsOf(options);
+    var branchName = opts.branchName;
+    var baseBranch = opts.baseBranch;
+    var workingDir = opts.workingDir;
+    var runCommand = opts.runCommand;
+
+    var inputError = validateSyncInputs(branchName, baseBranch);
+    if (inputError) return { success: false, error: inputError };
+
     if (mergeState.isMergeInProgress(runCommand, workingDir)) {
-        return {
-            success: false,
-            mergeInProgress: true,
-            error: 'A merge is already in progress (MERGE_HEAD exists). Conclude or abort it before syncing ' +
-                branchName + ' with origin/' + baseBranch + ' — refusing to start a second merge on top of it.'
-        };
+        return mergeInProgressSyncResult(branchName, baseBranch);
     }
 
     try {
         console.log('Synchronizing ' + branchName + ' with origin/' + baseBranch + ' before publishing...');
         ensureRemoteBranchRef(runCommand, workingDir, baseBranch);
 
-        var upToDate = branchContainsBase(runCommand, workingDir, baseBranch);
-        if (upToDate) {
-            console.log('✅ Branch already contains origin/' + baseBranch);
-            return { success: true, updated: false };
-        }
+        var preconditions = resolveSyncPreconditions(runCommand, workingDir, baseBranch, branchName);
+        if (preconditions.block) return preconditions.block;
 
-        if (!branchHasMergeBase(runCommand, workingDir, baseBranch) &&
-                !fetchAdditionalHistoryForMergeBase(runCommand, workingDir, baseBranch, branchName)) {
-            return {
-                success: false,
-                unrecoverableByAgent: true,
-                error: 'No merge base found between HEAD and origin/' + baseBranch + '; refusing to merge unrelated histories. Fetch full branch history or recreate the branch from origin/' + baseBranch + ' before publishing.'
-            };
-        }
-
-        var status = readTrackedStatus(runCommand, workingDir);
-        if (status.trim()) {
-            try {
-                runCommand('git submodule update --init --recursive', workingDir);
-                status = readTrackedStatus(runCommand, workingDir);
-            } catch (submoduleError) {
-                console.warn('Could not realign submodules before syncing with base:', submoduleError.message || submoduleError);
-            }
-        }
-        if (status.trim()) {
-            return {
-                success: false,
-                error: 'Cannot sync with origin/' + baseBranch + ' because the working tree is not clean:\n' + status
-            };
+        if (preconditions.status.trim()) {
+            return uncleanTreeSyncResult(baseBranch, preconditions.status);
         }
 
         runCommand('git merge --no-edit origin/' + baseBranch, workingDir);
         console.log('✅ Merged origin/' + baseBranch + ' into ' + branchName);
         return { success: true, updated: true };
     } catch (error) {
-        var autoResolve = resolveMergeConflicts(runCommand, workingDir, baseBranch, branchName);
-        if (autoResolve.resolved) {
-            return { success: true, updated: true, autoResolved: true };
-        }
-
-        var conflictFiles = autoResolve.conflictFiles || [];
-        try { runCommand('git merge --abort', workingDir); } catch (abortError) {}
-
-        var message = error && error.message ? error.message : String(error);
-        if (conflictFiles.length > 0) {
-            message = 'Merge conflict while syncing with origin/' + baseBranch + ': ' + conflictFiles.join(', ');
-        } else if (autoResolve.error && autoResolve.error !== 'No conflicted files detected') {
-            // A specific auto-resolve failure (unresolved conflicts, commit failure)
-            // is more actionable than the original git error — surface it.
-            message = autoResolve.error;
-        }
-        // Otherwise autoResolve found zero conflict markers, meaning `error` was
-        // never a real merge conflict (e.g. a missing origin/<baseBranch> ref) —
-        // keep the original git error instead of the misleading generic message.
-        console.warn('Could not synchronize branch with base:', message);
-        return {
-            success: false,
-            conflict: conflictFiles.length > 0,
-            conflictFiles: conflictFiles,
-            error: message
-        };
+        return recoverFromSyncError(runCommand, workingDir, baseBranch, branchName, error);
     }
 }
 
@@ -818,5 +923,21 @@ module.exports = {
     createGhPullRequest: createGhPullRequest,
     resolveGhTempBodyPath: resolveGhTempBodyPath,
     runGhPrCreate: runGhPrCreate,
-    toErrorString: toErrorString
+    toErrorString: toErrorString,
+    // gh-1190: syncBranchWithBase seam — pure build/decide helpers exposed
+    // for direct characterization tests.
+    validateSyncInputs: validateSyncInputs,
+    mergeInProgressSyncResult: mergeInProgressSyncResult,
+    unrelatedHistoriesSyncResult: unrelatedHistoriesSyncResult,
+    uncleanTreeSyncResult: uncleanTreeSyncResult,
+    realignSubmodulesBeforeSync: realignSubmodulesBeforeSync,
+    resolveSyncPreconditions: resolveSyncPreconditions,
+    abortMergeQuietly: abortMergeQuietly,
+    buildSyncFailureMessage: buildSyncFailureMessage,
+    syncFailureResult: syncFailureResult,
+    recoverFromSyncError: recoverFromSyncError,
+    syncOptionsOf: syncOptionsOf,
+    // gh-1190: shared two-branch-mode route decision (used by
+    // checkoutBranch.js and preCliDevelopmentSetup.js).
+    decideFeatureBranchRoute: decideFeatureBranchRoute
 };
