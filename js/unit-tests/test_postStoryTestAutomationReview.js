@@ -13,6 +13,14 @@ function configLoaderMockOf(moduleMocks, fallback) {
     return (moduleMocks && moduleMocks.configLoader) || fallback;
 }
 
+/** gh-1224: optional moduleMocks.githubHelpers override for getRepoInfo tests. */
+function githubHelpersMockOf(moduleMocks) {
+    return (moduleMocks && moduleMocks.githubHelpers) || {
+        getGitHubRepoInfo: function() { return { owner: 'IstiN', repo: 'trackstate' }; },
+        fetchDiscussionsAndRawData: function() { return { rawThreads: { threads: [] } }; }
+    };
+}
+
 function loadPostStoryTestAutomationReview(mocks, moduleMocks) {
     var defaults = {
         jira_post_comment: function() {},
@@ -130,10 +138,7 @@ var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({
                 triggerSmIfIdle: smIdleMockOf(moduleMocks)
             },
             './common/outputFiles.js': outputFiles,
-            './common/githubHelpers.js': {
-                getGitHubRepoInfo: function() { return { owner: 'IstiN', repo: 'trackstate' }; },
-                fetchDiscussionsAndRawData: function() { return { rawThreads: { threads: [] } }; }
-            },
+            './common/githubHelpers.js': githubHelpersMockOf(moduleMocks),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './postPRReviewComments.js': prReviewComments,
             './postStoryTestAutomationShared.js': sharedModule,
@@ -564,5 +569,125 @@ suite('postStoryTestAutomationReview — review-data and verdict branches (gh-11
         assert.ok(comments.some(function(c) {
             return c.indexOf('❌ Story Test Review Error') !== -1 && c.indexOf('config boom') !== -1;
         }));
+    });
+});
+
+// ── gh-1224: getRepoInfo — config repository vs the git-remote fallback ──────
+
+suite('postStoryTestAutomationReview.getRepoInfo (gh-1224)', function() {
+
+    /** Minimal configLoader double: loadProjectConfig + the resolveInstructions contract. */
+    function configDouble(config) {
+        return {
+            loadProjectConfig: function() { return config; },
+            resolveInstructions: function() { return { jobParamPatch: undefined }; }
+        };
+    }
+
+    /** Loads the module with a recorded fetchDiscussionsAndRawData + one stale thread. */
+    function loadWithRepoMocks(opts) {
+        var fetchCalls = [];
+        var module = loadPostStoryTestAutomationReview({
+            file_read: function(path) {
+                if (path === 'outputs/pr_review.json') {
+                    return JSON.stringify({
+                        recommendation: 'APPROVE',
+                        generalComment: 'outputs/pr_review_general.md'
+                    });
+                }
+                if (path === 'outputs/pr_review_general.md') return 'LGTM';
+                if (path === 'input/TS-700/pr_info.md') {
+                    return '**PR #**: 70\n**URL**: https://github.com/IstiN/trackstate/pull/70';
+                }
+                return null;
+            },
+            prDiff: 'diff --git a/t.ts b/t.ts\n--- a/t.ts\n+++ b/t.ts\n@@ -1,1 +1,1 @@\n-old\n+new'
+        }, {
+            configLoader: opts.configLoader,
+            githubHelpers: {
+                getGitHubRepoInfo: opts.getGitHubRepoInfo,
+                fetchDiscussionsAndRawData: function(owner, repo, prNumber) {
+                    fetchCalls.push({ owner: owner, repo: repo, prNumber: prNumber });
+                    return { rawThreads: { threads: [{ threadId: 555, resolved: false }] } };
+                }
+            }
+        });
+        module._fetchCalls = fetchCalls;
+        return module;
+    }
+
+    test('a fully configured config.repository wins and the git fallback is never called', function() {
+        var ghFallbackCalls = 0;
+        var module = loadWithRepoMocks({
+            configLoader: {
+                loadProjectConfig: function() {
+                    return { repository: { owner: 'cfgorg', repo: 'cfgrepo' } };
+                }
+            },
+            getGitHubRepoInfo: function() { ghFallbackCalls += 1; return { owner: 'gh', repo: 'fallback' }; }
+        });
+
+        var result = module.action({ ticket: { key: 'TS-700' }, jobParams: {} });
+
+        assert.equal(result.success, true, 'DBG:' + result.error);
+        assert.equal(ghFallbackCalls, 0, 'the git-remote fallback is skipped when config.repository is complete');
+        assert.equal(module._fetchCalls.length, 1, 'the stale-thread resolution fetched discussions');
+        assert.deepEqual(module._fetchCalls[0], { owner: 'cfgorg', repo: 'cfgrepo', prNumber: 70 });
+        assert.ok(module._scmCalls.resolveThread.some(function(c) { return c.thread.threadId === 555; }),
+            'the stale thread was resolved with the config-provided repo context');
+    });
+
+    test('without config.repository the git-remote fallback supplies owner/repo', function() {
+        var module = loadWithRepoMocks({
+            configLoader: configDouble({ workingDir: null }),
+            getGitHubRepoInfo: function() { return { owner: 'ghorg', repo: 'ghrepo' }; }
+        });
+
+        var result = module.action({ ticket: { key: 'TS-700' }, jobParams: {} });
+
+        assert.equal(result.success, true);
+        assert.equal(module._fetchCalls.length, 1);
+        assert.deepEqual(module._fetchCalls[0], { owner: 'ghorg', repo: 'ghrepo', prNumber: 70 });
+    });
+
+    test('a config.repository with owner but no repo falls back to the git remote', function() {
+        var module = loadWithRepoMocks({
+            configLoader: {
+                loadProjectConfig: function() { return { repository: { owner: 'cfgorg' } }; }, resolveInstructions: function() { return { jobParamPatch: undefined }; }
+            },
+            getGitHubRepoInfo: function() { return { owner: 'ghorg', repo: 'ghrepo' }; }
+        });
+
+        var result = module.action({ ticket: { key: 'TS-700' }, jobParams: {} });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(module._fetchCalls[0], { owner: 'ghorg', repo: 'ghrepo', prNumber: 70 },
+            'an incomplete config.repository is not usable — the fallback supplies both fields');
+    });
+
+    test('a failing git-remote probe leaves repoInfo null and the action still succeeds', function() {
+        var module = loadWithRepoMocks({
+            configLoader: configDouble({}),
+            getGitHubRepoInfo: function() { throw new Error('not a git repo'); }
+        });
+
+        var result = module.action({ ticket: { key: 'TS-700' }, jobParams: {} });
+
+        assert.equal(result.success, true, 'the missing repo info degrades gracefully');
+        assert.equal(module._fetchCalls.length, 0, 'no repo context — no discussion fetch');
+        assert.ok(module._scmCalls.addComment.some(function(c) { return c.text === 'LGTM'; }),
+            'the general comment is still posted to the PR');
+    });
+
+    test('a git-remote probe throwing a message-less value hits the same null path', function() {
+        var module = loadWithRepoMocks({
+            configLoader: configDouble({}),
+            getGitHubRepoInfo: function() { throw 'plain string failure'; }
+        });
+
+        var result = module.action({ ticket: { key: 'TS-700' }, jobParams: {} });
+
+        assert.equal(result.success, true);
+        assert.equal(module._fetchCalls.length, 0);
     });
 });

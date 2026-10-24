@@ -721,3 +721,345 @@ suite('postTestReviewComments.isLinePresentInDiff — pure diff scanner (gh-1192
         assert.equal(st.newLine, 14, 'prefix-less junk advanced');
     });
 });
+
+// ── gh-1224: resolveApprovedThreads branch coverage (characterization) ──────
+
+suite('postTestReviewComments.resolveApprovedThreads — thread resolution (gh-1224)', function() {
+
+    function actionWithResolvedThreadIds(mocks, resolvedThreadIds) {
+        var module = loadPostTestReviewComments(Object.assign({
+            file_read: function(opts) {
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify({
+                        recommendation: 'REQUEST_CHANGES',
+                        generalComment: 'outputs/pr_review_general.md',
+                        resolvedThreadIds: resolvedThreadIds
+                    });
+                }
+                if (opts.path === 'outputs/pr_review_general.md') return 'General comment';
+                return null;
+            },
+            github_list_prs: function() {
+                return [{ number: 255, html_url: 'https://github.com/org/repo/pull/255', head: { ref: 'test/DMC-RT' } }];
+            },
+            cli_execute_command: function() {
+                return 'https://github.com/IstiN/trackstate';
+            }
+        }, mocks || {}));
+
+        return module.action({
+            ticket: { key: 'DMC-RT', fields: { summary: 'Thread resolution' } }
+        });
+    }
+
+    test('resolves every thread in order with the exact tool arguments (2+ threads)', function() {
+        var resolved = [];
+        var result = actionWithResolvedThreadIds({
+            github_resolve_pr_thread: function(args) { resolved.push(args); }
+        }, [777, 888, 999]);
+
+        assert.equal(result.success, true);
+        assert.equal(resolved.length, 3, 'each thread id is resolved individually');
+        assert.deepEqual(resolved.map(function(a) { return a.threadId; }), [777, 888, 999], 'resolution keeps the review order');
+        resolved.forEach(function(args) {
+            assert.equal(args.workspace, 'IstiN');
+            assert.equal(args.repository, 'trackstate');
+            assert.equal(args.pullRequestId, '255');
+        });
+    });
+
+    test('a failing thread does not stop the remaining resolutions (e.message arm)', function() {
+        var resolved = [];
+        var result = actionWithResolvedThreadIds({
+            github_resolve_pr_thread: function(args) {
+                if (args.threadId === 888) throw new Error('thread already resolved');
+                resolved.push(args);
+            }
+        }, [777, 888, 999]);
+
+        assert.equal(result.success, true);
+        assert.deepEqual(resolved.map(function(a) { return a.threadId; }), [777, 999], 'resolution continues past a failing thread');
+    });
+
+    test('a thread failure whose error has no message still resolves the rest (fallback arm)', function() {
+        var resolved = [];
+        var result = actionWithResolvedThreadIds({
+            github_resolve_pr_thread: function(args) {
+                if (args.threadId === 777) throw 'string failure without a message';
+                resolved.push(args);
+            }
+        }, [777, 888]);
+
+        assert.equal(result.success, true);
+        assert.deepEqual(resolved.map(function(a) { return a.threadId; }), [888], 'the next thread is still resolved');
+    });
+
+    test('an empty resolvedThreadIds list calls the resolve tool zero times', function() {
+        var calls = 0;
+        var result = actionWithResolvedThreadIds({
+            github_resolve_pr_thread: function() { calls += 1; }
+        }, []);
+
+        assert.equal(result.success, true);
+        assert.equal(calls, 0, 'nothing to resolve — the tool is never called');
+    });
+});
+
+// ── gh-1224: getPRNumber branch coverage (characterization) ─────────────────
+
+suite('postTestReviewComments.getPRNumber — PR discovery (gh-1224)', function() {
+
+    function actionWithReviewData(mocks, reviewData) {
+        var module = loadPostTestReviewComments(Object.assign({
+            file_read: function(opts) {
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify(Object.assign({
+                        recommendation: 'APPROVE',
+                        generalComment: 'outputs/pr_review_general.md'
+                    }, reviewData));
+                }
+                if (opts.path === 'outputs/pr_review_general.md') return 'General comment';
+                return null;
+            },
+            github_list_prs: function() { return []; },
+            cli_execute_command: function() {
+                return 'https://github.com/IstiN/trackstate';
+            }
+        }, mocks || {}));
+
+        return {
+            module: module,
+            result: module.action({
+                ticket: { key: 'DMC-PR', fields: { summary: 'PR discovery' } }
+            })
+        };
+    }
+
+    test('parses PR number and URL from pr_info.md and never lists open PRs', function() {
+        var listCalls = 0;
+        var inlineCalls = [];
+        var both = actionWithReviewData({
+            file_read: function(opts) {
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify({
+                        recommendation: 'APPROVE',
+                        generalComment: 'outputs/pr_review_general.md'
+                    });
+                }
+                if (opts.path === 'outputs/pr_review_general.md') return 'General comment';
+                if (opts.path === 'input/DMC-PR/pr_info.md') {
+                    return '**Ticket**: DMC-PR\n**PR #**: 41\n**URL**: https://github.com/IstiN/trackstate/pull/41\n';
+                }
+                return null;
+            },
+            github_list_prs: function() { listCalls += 1; return []; },
+            github_add_pr_label: function() {},
+            github_add_pr_comment: function() {},
+            github_add_inline_comment: function(args) { inlineCalls.push(args); }
+        }, {});
+
+        assert.equal(both.result.success, true);
+        assert.equal(listCalls, 0, 'the pr_info.md hit short-circuits the open-PR listing');
+        assert.ok(inlineCalls.length === 0, 'no inline comments in this review');
+    });
+
+    test('honours params.inputFolderPath for the pr_info.md lookup', function() {
+        var readPaths = [];
+        var module = loadPostTestReviewComments({
+            file_read: function(opts) {
+                readPaths.push(opts.path);
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify({ recommendation: 'APPROVE', generalComment: 'outputs/pr_review_general.md' });
+                }
+                if (opts.path === 'outputs/pr_review_general.md') return 'General comment';
+                if (opts.path === '/workdir/checkout/pr_info.md') {
+                    return '**PR #**: 77\n**URL**: https://github.com/IstiN/trackstate/pull/77';
+                }
+                return null;
+            },
+            cli_execute_command: function() { return 'https://github.com/IstiN/trackstate'; }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-PR', fields: { summary: 'Working dir PR info' } },
+            inputFolderPath: '/workdir/checkout'
+        });
+
+        assert.equal(result.success, true);
+        assert.ok(readPaths.indexOf('/workdir/checkout/pr_info.md') !== -1, 'pr_info.md is read from inputFolderPath');
+    });
+
+    test('picks the test/ branch PR among several open PRs (exact head.ref match)', function() {
+        var inlineCalls = [];
+        var both = actionWithReviewData({
+            github_list_prs: function() {
+                return [
+                    { number: 10, html_url: 'https://github.com/IstiN/trackstate/pull/10', head: { ref: 'ai/DMC-PR-feature' } },
+                    { number: 11, head: {} },
+                    { number: 12, html_url: 'https://github.com/IstiN/trackstate/pull/12', head: { ref: 'test/OTHER-1' } },
+                    { number: 41, html_url: 'https://github.com/IstiN/trackstate/pull/41', head: { ref: 'test/DMC-PR' } }
+                ];
+            },
+            github_add_pr_label: function() {},
+            github_add_pr_comment: function() {},
+            github_add_inline_comment: function(args) { inlineCalls.push(args); }
+        }, {});
+
+        assert.equal(both.result.success, true);
+    });
+
+    test('an open-PR listing failure still completes the action with no PR', function() {
+        var both = actionWithReviewData({
+            github_list_prs: function() { throw new Error('rate limited'); }
+        }, {});
+
+        assert.equal(both.result.success, true);
+        assert.equal(both.result.mergeSucceeded, false, 'no PR — nothing queued for merge');
+        assert.equal(both.result.finalStatus, 'In Rework');
+    });
+
+    test('no open PR for the test branch falls through with a warning, not an error', function() {
+        var both = actionWithReviewData({
+            github_list_prs: function() {
+                return [{ number: 10, html_url: 'https://github.com/IstiN/trackstate/pull/10', head: { ref: 'ai/DMC-PR-unrelated' } }];
+            }
+        }, {});
+
+        assert.equal(both.result.success, true);
+        assert.equal(both.result.mergeSucceeded, false);
+    });
+});
+
+// ── gh-1224: postInlineComment branch coverage (characterization) ───────────
+
+suite('postTestReviewComments.postInlineComment — content and target branches (gh-1224)', function() {
+
+    function actionWithInlineComment(mocks, inlineComment) {
+        var module = loadPostTestReviewComments(Object.assign({
+            file_read: function(opts) {
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify({
+                        recommendation: 'REQUEST_CHANGES',
+                        generalComment: 'outputs/pr_review_general.md',
+                        inlineComments: [inlineComment]
+                    });
+                }
+                if (opts.path === 'outputs/pr_review_general.md') return 'General comment';
+                if (opts.path === 'outputs/inline_note.md') return 'Body read from the referenced comment file.';
+                return null;
+            },
+            github_list_prs: function() {
+                return [{ number: 255, html_url: 'https://github.com/org/repo/pull/255', head: { ref: 'test/DMC-IC' } }];
+            },
+            cli_execute_command: function() {
+                return 'https://github.com/IstiN/trackstate';
+            }
+        }, mocks || {}));
+
+        return module.action({
+            ticket: { key: 'DMC-IC', fields: { summary: 'Inline branches' } }
+        });
+    }
+
+    test('falls back to the legacy `file` field when `path` is absent', function() {
+        var inlineCalls = [];
+        var result = actionWithInlineComment({
+            github_add_inline_comment: function(args) { inlineCalls.push(args); },
+            github_add_pr_comment: function() {}
+        }, { file: 'testing/legacy/path.ts', line: 12, body: 'Legacy file field.' });
+
+        assert.equal(result.success, true);
+        assert.equal(inlineCalls.length, 1);
+        assert.equal(inlineCalls[0].path, 'testing/legacy/path.ts');
+    });
+
+    test('reads the body from the referenced comment file when `body` is absent', function() {
+        var inlineCalls = [];
+        var result = actionWithInlineComment({
+            github_add_inline_comment: function(args) { inlineCalls.push(args); },
+            github_add_pr_comment: function() {}
+        }, { path: 'testing/note.ts', line: 3, comment: 'outputs/inline_note.md' });
+
+        assert.equal(result.success, true);
+        assert.equal(inlineCalls.length, 1);
+        assert.equal(inlineCalls[0].text, 'Body read from the referenced comment file.');
+    });
+
+    test('no comment content resolves to no API call at all', function() {
+        var inlineCalls = [];
+        var prComments = [];
+        var result = actionWithInlineComment({
+            github_add_inline_comment: function(args) { inlineCalls.push(args); },
+            github_add_pr_comment: function(args) { prComments.push(args); }
+        }, { path: 'testing/empty.ts', line: 5, comment: 'outputs/does_not_exist.md' });
+
+        assert.equal(result.success, true);
+        assert.equal(inlineCalls.length, 0, 'no inline comment without content');
+        assert.equal(prComments.length, 1, 'only the general review comment was posted');
+    });
+
+    test('no file path and no file field resolves to no API call at all', function() {
+        var inlineCalls = [];
+        var prComments = [];
+        var result = actionWithInlineComment({
+            github_add_inline_comment: function(args) { inlineCalls.push(args); },
+            github_add_pr_comment: function(args) { prComments.push(args); }
+        }, { line: 5, body: 'Orphan comment without a file target.' });
+
+        assert.equal(result.success, true);
+        assert.equal(inlineCalls.length, 0, 'no inline comment without a file path');
+        assert.equal(prComments.length, 1, 'only the general review comment was posted');
+    });
+
+    test('startLine and side are forwarded to the inline comment payload', function() {
+        var inlineCalls = [];
+        var result = actionWithInlineComment({
+            github_add_inline_comment: function(args) { inlineCalls.push(args); },
+            github_add_pr_comment: function() {}
+        }, {
+            path: 'testing/range.ts',
+            line: 20,
+            startLine: 18,
+            side: 'RIGHT',
+            body: 'Multi-line range finding.'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(inlineCalls.length, 1);
+        assert.equal(inlineCalls[0].startLine, '18');
+        assert.equal(inlineCalls[0].side, 'RIGHT');
+        assert.equal(inlineCalls[0].line, '20');
+    });
+
+    test('no startLine and no side keeps the payload minimal', function() {
+        var inlineCalls = [];
+        var result = actionWithInlineComment({
+            github_add_inline_comment: function(args) { inlineCalls.push(args); },
+            github_add_pr_comment: function() {}
+        }, { path: 'testing/single.ts', line: 7, body: 'Single line finding.' });
+
+        assert.equal(result.success, true);
+        assert.equal(inlineCalls.length, 1);
+        assert.equal(inlineCalls[0].startLine, undefined);
+        assert.equal(inlineCalls[0].side, undefined);
+    });
+
+    test('a failing inline post AND a failing fallback post never crash the action', function() {
+        var prComments = [];
+        var result = actionWithInlineComment({
+            github_add_inline_comment: function() { throw new Error('422 unprocessable'); },
+            github_add_pr_comment: function(args) {
+                if (args.text.indexOf('📍') === 0) throw new Error('502 bad gateway');
+                prComments.push(args);
+            }
+        }, { path: 'testing/doomed.ts', line: 9, body: 'Both channels fail.' });
+
+        assert.equal(result.success, true, 'the failure is contained per inline comment');
+        assert.equal(prComments.length, 1, 'only the general review comment call happened');
+    });
+});
