@@ -15,8 +15,8 @@ const tokenUsageComment = require('./common/tokenUsageComment.js');
 var enhancementPost = require('./common/enhancementPost.js');
 
 // Tracker-agnostic ticket operations — created lazily per action() run.
+// gh-1250: the slot init preamble lives in common/enhancementPost.js.
 var trackerSlot = require('./common/trackerSlot.js');
-function initTracker(config, customParams) { trackerSlot.initTracker(config, customParams); }
 function getTracker() { return trackerSlot.getTracker(); }
 
 /**

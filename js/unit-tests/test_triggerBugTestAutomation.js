@@ -18,17 +18,15 @@ function loadAutoStartTrigger(mocks) {
     };
     return loadModule(
         'js/common/autoStartTrigger.js',
-        makeRequire({ './autoStart.js': autoStartMock }),
+        makeRequire({
+            './autoStart.js': autoStartMock,
+            './tokenUsageComment.js': makeTokenUsageMock(mocks)
+        }),
         {}
     );
 }
 
-function loadTriggerBugTestAutomation(mocks) {
-    var defaults = {
-        jira_remove_label: function() {},
-        jira_post_comment: function() {}
-    };
-
+function makeTokenUsageMock(mocks) {
     var tokenUsageMock = {
         postTokenUsageComments: function(key, opts) {
             if (mocks && mocks.postTokenUsageComments) mocks.postTokenUsageComments(key, opts);
@@ -45,12 +43,20 @@ function loadTriggerBugTestAutomation(mocks) {
             console.warn('Failed to post token usage comments:', e);
         }
     };
+    return tokenUsageMock;
+}
+
+function loadTriggerBugTestAutomation(mocks) {
+    var defaults = {
+        jira_remove_label: function() {},
+        jira_post_comment: function() {}
+    };
 
     return loadModule(
         'js/triggerBugTestAutomation.js',
         makeRequire({
             './common/autoStartTrigger.js': loadAutoStartTrigger(mocks),
-            './common/tokenUsageComment.js': tokenUsageMock
+            './common/tokenUsageComment.js': makeTokenUsageMock(mocks)
         }),
         Object.assign({}, defaults, mocks)
     );
@@ -229,6 +235,77 @@ suite('autoStartTrigger (shared, via bug test suite)', function() {
         assert.equal(triggered, false);
         assert.equal(workflowCalled, false);
         assert.equal(smCalled, true);
+    });
+
+    test('runTriggerAction: posts token usage via postTokenUsageCommentsSafely and reports the keyed result', function() {
+        var usageCalls = [];
+        var module = loadAutoStartTrigger({
+            triggerConfiguredWorkflowForTicket: function() { return true; },
+            postTokenUsageComments: function(key, opts) { usageCalls.push({ key: key, opts: opts }); }
+        });
+
+        var result = module.runTriggerAction({
+            params: {
+                ticket: { key: 'TP-301' },
+                initiator: 'sm',
+                jobParams: { customParams: { autoStartBugTestAutomation: true, autoStartBugTestAutomationConfigFile: 'agents/bug_test_automation.json' } }
+            },
+            label: 'bug_test_automation',
+            keyName: 'bugKey',
+            errorPrefix: 'err:',
+            logHeader: function() {},
+            afterTrigger: function() {},
+            tokenUsageOptions: function(params) {
+                return { initiator: params.initiator, customParams: module.customParamsOf(params) };
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.triggered, true);
+        assert.equal(result.bugKey, 'TP-301');
+        assert.equal(usageCalls.length, 1);
+        assert.equal(usageCalls[0].key, 'TP-301');
+        assert.deepEqual(usageCalls[0].opts.customParams, { autoStartBugTestAutomation: true, autoStartBugTestAutomationConfigFile: 'agents/bug_test_automation.json' });
+    });
+
+    test('runTriggerAction: a throwing token-usage post is swallowed and the action still succeeds', function() {
+        var module = loadAutoStartTrigger({
+            triggerSmIfIdle: function() {},
+            postTokenUsageComments: function() { throw new Error('usage api down'); }
+        });
+
+        var result = module.runTriggerAction({
+            params: { ticket: { key: 'TP-302' }, initiator: 'sm' },
+            label: 'bug_test_automation',
+            keyName: 'bugKey',
+            errorPrefix: 'err:',
+            logHeader: function() {},
+            afterTrigger: function() {},
+            tokenUsageOptions: function() { return {}; }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.triggered, false);
+        assert.equal(result.bugKey, 'TP-302');
+    });
+
+    test('runTriggerAction: action-level failure returns the structured error contract', function() {
+        var module = loadAutoStartTrigger({
+            triggerSmIfIdle: function() { throw new Error('sm exploded'); }
+        });
+
+        var result = module.runTriggerAction({
+            params: { ticket: { key: 'TP-303' }, jobParams: { customParams: {} } },
+            label: 'bug_test_automation',
+            keyName: 'bugKey',
+            errorPrefix: 'err:',
+            logHeader: function() {},
+            afterTrigger: function() {},
+            tokenUsageOptions: function() { return {}; }
+        });
+
+        assert.equal(result.success, false);
+        assert.ok(result.error.indexOf('sm exploded') !== -1);
     });
 
 });

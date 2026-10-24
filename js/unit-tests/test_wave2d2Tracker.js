@@ -11,6 +11,11 @@ function w2Trackers(mocks) {
     }), mocks);
 }
 
+// The shared epic/story intake helper has no requires of its own.
+function w2EpicIntakeFetch() {
+    return loadModule('js/common/epicIntakeFetch.js', makeRequire({}));
+}
+
 function w2Rec(extra) {
     var calls = [];
     var mocks = {};
@@ -109,6 +114,7 @@ suite('wave2d2 ado — fetchEpicsToInput', function() {
             ado_get_work_item: function(a) { return w2Wi(Number(a.id), 'Item ' + a.id, 'New'); }
         });
         var mod = loadModule('js/fetchEpicsToInput.js', makeRequire({ './common/trackers.js': w2Trackers(rec.mocks),
+                './common/epicIntakeFetch.js': w2EpicIntakeFetch(),
                 './configLoader.js': { loadProjectConfig: function() { return {}; } } }),
             Object.assign({ file_write: function(p, c) { writes[p] = c; } }, rec.mocks));
         mod.action({ inputFolderPath: 'input/TS-1', jobParams: W2_ADO });
@@ -133,6 +139,7 @@ suite('github — fetchEpicsToInput', function() {
         };
         var mod = loadModule('js/fetchEpicsToInput.js', makeRequire({
             './common/trackers.js': w2Trackers(mocks),
+            './common/epicIntakeFetch.js': w2EpicIntakeFetch(),
             './configLoader.js': { loadProjectConfig: function() { return { repository: { owner: 'acme', repo: 'widgets' } }; } }
         }), Object.assign({ file_write: function(p, c) { writes[p] = c; } }, mocks));
         mod.action({ inputFolderPath: 'input/gh-12', jobParams: { customParams: { trackerProvider: 'github' } } });
@@ -150,6 +157,7 @@ suite('github — fetchEpicsToInput', function() {
         var mocks = { cli_execute_command: function() { return 'gh: command not found'; } };
         var mod = loadModule('js/fetchEpicsToInput.js', makeRequire({
             './common/trackers.js': w2Trackers(mocks),
+            './common/epicIntakeFetch.js': w2EpicIntakeFetch(),
             './configLoader.js': { loadProjectConfig: function() { return { repository: { owner: 'acme', repo: 'widgets' } }; } }
         }), Object.assign({ file_write: function(p, c) { writes[p] = c; } }, mocks));
         mod.action({ inputFolderPath: 'input/gh-12', jobParams: { customParams: { trackerProvider: 'github' } } });

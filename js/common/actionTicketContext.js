@@ -15,18 +15,26 @@
 var configLoader = require('../configLoader.js');
 var trackersModule = require('./trackers.js');
 
-/** Ticket key of the triggering params, or null when the action has no ticket. */
-function ticketKeyOf(params) {
-    return params.ticket ? params.ticket.key : null;
-}
-
-/** Custom params: jobParams wins (Teammate path), then top-level, then {}. */
-function customParamsOf(params) {
-    return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+/**
+ * Print the shared "Moving <key> to <status>" opener; a no-op unless the
+ * caller asked for it via options.statusKey. options.logNote is appended
+ * verbatim (moveToDone uses it for its "(bug with test cases generated)"
+ * suffix).
+ */
+function announceMove(ticketKey, jiraConfig, options) {
+    if (!options || !options.statusKey) {
+        return;
+    }
+    console.log('Moving ' + ticketKey + ' to ' + jiraConfig.statuses[options.statusKey] + (options.logNote || ''));
 }
 
 /**
  * Resolve the shared context a moveTo* action works against.
+ *
+ * The ticket key comes from params.ticket.key; the custom params prefer
+ * params.jobParams.customParams (Teammate path), then top-level
+ * params.customParams, then {}. options.statusKey additionally prints the
+ * shared opener right after tracker creation.
  *
  * Returns { ok: true, ticketKey, projectConfig, jiraConfig, tracker } on
  * success, or { ok: false, failure: { success: false, error } } when the
@@ -34,25 +42,28 @@ function customParamsOf(params) {
  * errors are NOT swallowed — they propagate so the caller's action-level
  * try/catch keeps its exact old behavior.
  */
-function resolveTicketContext(params) {
-    var ticketKey = ticketKeyOf(params);
+function resolveTicketContext(params, options) {
+    var ticketKey = params.ticket ? params.ticket.key : null;
     if (!ticketKey) {
         return { ok: false, failure: { success: false, error: 'No ticket key found in params' } };
     }
+    var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
     var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    var jiraConfig = projectConfig.jira;
+    var tracker = trackersModule.createTracker(projectConfig, customParams);
+    announceMove(ticketKey, jiraConfig, options);
     return {
         ok: true,
         ticketKey: ticketKey,
         projectConfig: projectConfig,
-        jiraConfig: projectConfig.jira,
-        tracker: trackersModule.createTracker(projectConfig, customParamsOf(params))
+        jiraConfig: jiraConfig,
+        tracker: tracker
     };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        ticketKeyOf: ticketKeyOf,
-        customParamsOf: customParamsOf,
-        resolveTicketContext: resolveTicketContext
+        resolveTicketContext: resolveTicketContext,
+        announceMove: announceMove
     };
 }

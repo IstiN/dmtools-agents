@@ -50,12 +50,28 @@ function w2LoadPR(rec) {
 }
 
 function w2LoadEnh(rec) {
+    var trackers = w2Trackers(rec.mocks);
+    // One shared trackerSlot instance so the action's getTracker() and the
+    // helper's initEnhancementTracker() operate on the same lazy slot.
+    var trackerSlot = loadModule('js/common/trackerSlot.js', makeRequire({ './trackers.js': trackers }));
+    var enhancementPost = loadModule('js/common/enhancementPost.js', makeRequire({
+        './trackerSlot.js': trackerSlot,
+        '../config.js': configModule
+    }));
     return loadModule('js/enhanceSolutionDesignDescriptionAndAssess.js', makeRequire({
         './common/jiraHelpers.js': { extractTicketKey: function() { return null; } },
         './config.js': configModule,
         './common/outputFiles.js': { readOutputFile: function(n) { return n === 'response.md' ? 'DESC' : 'graph TD'; } },
-        './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
-        './common/trackers.js': w2Trackers(rec.mocks)
+        './common/tokenUsageComment.js': {
+            postTokenUsageComments: function() {},
+            postTokenUsageCommentsSafely: function() {},
+            customParamsOf: function(params) {
+                return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+            }
+        },
+        './common/trackerSlot.js': trackerSlot,
+        './common/enhancementPost.js': enhancementPost,
+        './common/trackers.js': trackers
     }), rec.mocks);
 }
 

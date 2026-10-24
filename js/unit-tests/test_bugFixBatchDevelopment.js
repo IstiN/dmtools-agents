@@ -49,6 +49,19 @@ function loadPrepareBugFixBatchContext(mocks) {
     var fetchQuestionsStub = { action: function(p) { fetchCalls.push({ name: 'questions', params: p }); } };
     var fetchLinkedTestsStub = { action: function(p) { fetchCalls.push({ name: 'linkedTests', params: p }); } };
 
+    var realPrHelper = loadModule('js/common/pullRequest.js',
+        makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
+    var realTrackers = loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), allMocks);
+    // gh-1250: shared batch runtime helper — real module, requires mapped.
+    var sharedBatchCtx = loadModule('js/common/bugFixBatchContext.js', makeRequire({
+        './pullRequest.js': realPrHelper,
+        './configLoader.js': configLoaderModule,
+        './trackers.js': realTrackers
+    }), allMocks);
+
     var mod = loadModule(
         'js/prepareBugFixBatchContext.js',
         makeRequire({
@@ -56,14 +69,11 @@ function loadPrepareBugFixBatchContext(mocks) {
             './configLoader.js': configLoaderModule,
             // Real PR helper (gh-912): prepareBugFixBatchContext delegates
             // cleanCommandOutput to it — canonical implementation required.
-            './common/pullRequest.js': loadModule('js/common/pullRequest.js',
-                makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
+            './common/pullRequest.js': realPrHelper,
             './fetchQuestionsToInput.js': fetchQuestionsStub,
             './fetchLinkedTestsToInput.js': fetchLinkedTestsStub,
-            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
-                '../config.js': configModule,
-                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
-            }), allMocks)
+            './common/trackers.js': realTrackers,
+            './common/bugFixBatchContext.js': sharedBatchCtx
         }),
         allMocks
     );
@@ -110,17 +120,26 @@ function loadDevelopBugFixBatchAndCreatePR(mocks) {
         }
     );
 
+    var realTrackers = loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), allMocks);
+    // gh-1250: shared batch runtime helper — real module, requires mapped.
+    var sharedBatchCtx = loadModule('js/common/bugFixBatchContext.js', makeRequire({
+        './pullRequest.js': prHelperStub,
+        './configLoader.js': configLoaderModule,
+        './trackers.js': realTrackers
+    }), allMocks);
+
     var mod = loadModule(
         'js/developBugFixBatchAndCreatePR.js',
         makeRequire({
             './config.js': configModule,
             './configLoader.js': configLoaderModule,
             './common/pullRequest.js': prHelperStub,
-            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
-                '../config.js': configModule,
-                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
-            }), allMocks),
-            './prepareBugFixBatchContext.js': mocks.batchContextStub || { findBugsInEpic: function() { return []; } }
+            './common/trackers.js': realTrackers,
+            './prepareBugFixBatchContext.js': mocks.batchContextStub || { findBugsInEpic: function() { return []; } },
+            './common/bugFixBatchContext.js': sharedBatchCtx
         }),
         allMocks
     );

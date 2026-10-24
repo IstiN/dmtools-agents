@@ -301,3 +301,102 @@ suite('intakePreAction.action', function () {
     });
 
 });
+
+suite('epicIntakeFetch helper branches (via intakePreAction mapping)', function () {
+
+    test('mapEpic reads diagrams straight off the raw search fields', function () {
+        var helper = loadEpicIntakeFetch();
+        var mapped = helper.mapEpic({
+            key: 'PROJ-10',
+            fields: { summary: 'Epic one', diagrams: 'diag-1', parent: { key: 'PROJ-1' } }
+        }, function (fields) { return fields.diagrams || null; });
+        assert.deepEqual(mapped, {
+            key: 'PROJ-10',
+            summary: 'Epic one',
+            description: '',
+            priority: '',
+            diagrams: 'diag-1',
+            parent: 'PROJ-1'
+        });
+    });
+
+    test('mapStory without extras omits acceptanceCriteria and solution keys', function () {
+        var helper = loadEpicIntakeFetch();
+        var mapped = helper.mapStory({
+            key: 'PROJ-20',
+            fields: { summary: 'Story one', status: { name: 'To Do' }, diagrams: 'diag-2' }
+        }, { diagramsOf: function (fields) { return fields.diagrams || null; } });
+        assert.deepEqual(mapped, {
+            key: 'PROJ-20',
+            summary: 'Story one',
+            status: 'To Do',
+            priority: '',
+            diagrams: 'diag-2',
+            parent: null
+        });
+        assert.equal('description' in mapped, false, 'intake stories carry no description key');
+        assert.equal('acceptanceCriteria' in mapped, false);
+        assert.equal('solution' in mapped, false);
+    });
+
+    test('customParamsOf prefers jobParams over the params body', function () {
+        var helper = loadEpicIntakeFetch();
+        assert.deepEqual(helper.customParamsOf({ jobParams: { customParams: { a: 1 } }, customParams: { b: 2 } }), { a: 1 });
+        assert.deepEqual(helper.customParamsOf({ customParams: { b: 2 } }), { b: 2 });
+        assert.deepEqual(helper.customParamsOf({}), {}, 'no customParams anywhere yields {}');
+    });
+
+    test('createTrackerFor passes the params body to the config loader', function () {
+        var helper = loadEpicIntakeFetch();
+        var loadedWith = [];
+        var trackers = {
+            createTracker: function (config, customParams) {
+                return { config: config, customParams: customParams };
+            }
+        };
+        var configLoader = { loadProjectConfig: function (params) { loadedWith.push(params); return { repo: 'r' }; } };
+        var params = { ticket: { key: 'P-1' }, customParams: { c: 3 } };
+        var tracker = helper.createTrackerFor(trackers, configLoader, params, params);
+        assert.deepEqual(loadedWith, [params], 'project config loaded from the params body');
+        assert.deepEqual(tracker, { config: { repo: 'r' }, customParams: { c: 3 } });
+    });
+
+    test('fetchAndWrite maps 2+ search hits straight off the results', function () {
+        var helper = loadEpicIntakeFetch();
+        var writes = [];
+        var tracker = {
+            searchIssues: function () {
+                return [
+                    { key: 'P-1', fields: { summary: 'One' } },
+                    { key: 'P-2', fields: { summary: 'Two' } }
+                ];
+            }
+        };
+        helper.fetchAndWrite(tracker, 'input/P-9', {
+            jql: 'q',
+            fields: ['key', 'summary'],
+            map: function (issue) { return { key: issue.key, summary: issue.fields.summary }; },
+            listKey: 'stories',
+            fileName: 'existing_stories.json',
+            writeFile: function (folder, payload) { writes.push({ folder: folder, payload: payload }); },
+            plural: 'stories',
+            collect: function (t, spec) { return t.searchIssues(spec.jql, { fields: spec.fields }).map(spec.map); }
+        });
+        assert.equal(writes.length, 1);
+        assert.deepEqual(JSON.parse(writes[0].payload).stories, [{ key: 'P-1', summary: 'One' }, { key: 'P-2', summary: 'Two' }]);
+    });
+
+    test('fetchAndWrite swallows a collect failure and writes nothing', function () {
+        var helper = loadEpicIntakeFetch();
+        var writes = [];
+        helper.fetchAndWrite({}, 'input/P-9', {
+            listKey: 'stories',
+            fileName: 'existing_stories.json',
+            writeFile: function (folder, payload) { writes.push(payload); },
+            plural: 'stories',
+            collect: function () { throw new Error('search down'); }
+        });
+        assert.deepEqual(writes, [], 'no file written when the collect step fails');
+    });
+
+});

@@ -9,15 +9,13 @@ var actionTicketContext = require('./common/actionTicketContext.js');
 
 function action(params) {
     try {
-        var ctx = actionTicketContext.resolveTicketContext(params);
+        var ctx = actionTicketContext.resolveTicketContext(params, { statusKey: 'DONE', logNote: ' (bug with test cases generated)' });
         if (!ctx.ok) {
             return ctx.failure;
         }
         const ticketKey = ctx.ticketKey;
         const jiraConfig = ctx.jiraConfig;
         var tracker = ctx.tracker;
-
-        console.log('Moving ' + ticketKey + ' to ' + jiraConfig.statuses.DONE + ' (bug with test cases generated)');
 
         tracker.moveToStatus(ticketKey, jiraConfig.statuses.DONE);
 

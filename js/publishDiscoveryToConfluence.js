@@ -125,15 +125,10 @@ function tryResumeForMissingFinalOutput(params, ticketKey, customParams) {
     }
 }
 
+// gh-1250: single shared implementation in contentOutput.js; this thin
+// wrapper keeps the local call sites and module.exports surface unchanged.
 function findTicketPage(children, ticketKey) {
-    if (!children || !Array.isArray(children)) return null;
-    for (var i = 0; i < children.length; i++) {
-        var c = children[i];
-        if (c && c.title && c.title.indexOf(ticketKey) === 0) {
-            return c;
-        }
-    }
-    return null;
+    return contentOutput.findTicketPage(children, ticketKey);
 }
 
 // ── Extracted step helpers (gh-1187 CRAP split): same tracker/Confluence
@@ -267,11 +262,8 @@ function postPublishedCommentQuietly(ctx, ticketKey, comment) {
 }
 
 function postTokenUsageQuietly(tracker, ticketKey, params) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    // gh-1250: single shared try/catch wrapper (was duplicated in moveToInTesting.js).
+    tokenUsageComment.postTokenUsageCommentsSafely(ticketKey, { initiator: params.initiator, tracker: tracker });
 }
 
 function postFailureCommentQuietly(tracker, ticketKey, error) {
@@ -356,13 +348,10 @@ if (typeof module !== 'undefined' && module.exports) {
     };
 }
 
+// gh-1250: single shared implementation in contentOutput.js; this thin
+// wrapper keeps the local call sites and module.exports surface unchanged.
 function buildPageUrl(page) {
-    if (!page || !page._links) return null;
-    var webui = page._links.webui;
-    if (!webui) return null;
-    var base = page._links.base;
-    if (!base) return null;
-    return base + webui;
+    return contentOutput.buildPageUrl(page);
 }
 
 /**
@@ -371,17 +360,11 @@ function buildPageUrl(page) {
  * omit `_links.base` — only a single-item GET (confluence_content_by_id)
  * reliably includes it. Do one lightweight follow-up GET to get an
  * authoritative, always-populated `_links.base` rather than depending on env
- * var access from within the JS sandbox.
+ * var access from within the JS sandbox. The follow-up failure keeps its
+ * historical console.warn here (contentOutput.resolvePageUrl stays silent for
+ * other callers unless options.warnOnFailure is set).
  */
 function resolvePageUrl(page) {
-    var direct = buildPageUrl(page);
-    if (direct) return direct;
-    try {
-        var fresh = confluence_content_by_id({ contentId: page.id });
-        return buildPageUrl(fresh);
-    } catch (e) {
-        console.warn('resolvePageUrl: follow-up confluence_content_by_id lookup failed:', e);
-        return null;
-    }
+    return contentOutput.resolvePageUrl(page, { warnOnFailure: true });
 }
 

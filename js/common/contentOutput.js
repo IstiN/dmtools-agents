@@ -36,25 +36,18 @@ try { configLoader = require('../configLoader.js'); } catch (e) { /* unit tests 
 // ./trackers.js"); load-time requires resolve file-relative and dmtools
 // compile discovers them for the pack closure.
 var trackersModule = require('./trackers.js');
+var mergeObjectsShared = require('./mergeObjects.js');
 
 var DEFAULT_REPLIES_FILE = 'outputs/confluence_replies.json';
 var COMMENTS_BASE_NAME = 'confluence_output_comments';
 
 // ── Config resolution ────────────────────────────────────────────────────────
 
+// gh-1250: single shared copy of the shallow-merge loop (was duplicated in
+// fetchParentContextToInput.js). Here an explicit `undefined` override value
+// must not shadow a base/default value.
 function mergeObjects(base, override) {
-    var result = {};
-    var key;
-    for (key in (base || {})) {
-        if (Object.prototype.hasOwnProperty.call(base, key)) result[key] = base[key];
-    }
-    for (key in (override || {})) {
-        // undefined means "not set" — it must not shadow a base/default value
-        if (Object.prototype.hasOwnProperty.call(override, key) && override[key] !== undefined) {
-            result[key] = override[key];
-        }
-    }
-    return result;
+    return mergeObjectsShared.mergeObjects(base, override, true);
 }
 
 // ── gh-1224: resolveConfig decomposed into small pure helpers ────────────────
@@ -187,13 +180,18 @@ function buildPageUrl(page) {
     return base + webui;
 }
 
-function resolvePageUrl(page) {
+function resolvePageUrl(page, options) {
     var direct = buildPageUrl(page);
     if (direct) return direct;
     try {
         var fresh = confluence_content_by_id({ contentId: page.id });
         return buildPageUrl(fresh);
     } catch (e) {
+        // gh-1250: publishDiscoveryToConfluence passes { warnOnFailure: true }
+        // to keep its historical console.warn here; other callers stay silent.
+        if (options && options.warnOnFailure) {
+            console.warn('resolvePageUrl: follow-up confluence_content_by_id lookup failed:', e);
+        }
         return null;
     }
 }
@@ -328,6 +326,23 @@ function injectCommentPlaceholders(markdown, anchors) {
 }
 
 
+
+/**
+ * Fetch a page's storage-format body (confluence_content_by_id) and re-expose
+ * its inline comment anchors as [[ic:REF]]...[[/ic]] placeholders inside
+ * `body` — the shared core of fetchConfluenceOutputContext.js's and
+ * prepareDiscoveryContext.js's anchor re-injection (gh-1250). Throws when the
+ * storage lookup fails (callers wrap); returns null when the page carries no
+ * anchors (callers keep the body unchanged), otherwise the
+ * injectCommentPlaceholders result.
+ */
+function injectPageCommentAnchors(body, pageId) {
+    var storage = confluence_content_by_id({ contentId: pageId });
+    var storageBody = storage && storage.body && storage.body.storage && storage.body.storage.value;
+    var anchors = extractInlineCommentMarkers(storageBody);
+    if (anchors.length === 0) return null;
+    return injectCommentPlaceholders(body, anchors);
+}
 
 // Inline comment body representations, checked in order: v2 storage, ADR
 // document, v1 view. The first representation carrying a string value wins.
@@ -562,6 +577,7 @@ if (typeof module !== 'undefined' && module.exports) {
         mapInlineComment: mapInlineComment,
         extractInlineCommentMarkers: extractInlineCommentMarkers,
         injectCommentPlaceholders: injectCommentPlaceholders,
+        injectPageCommentAnchors: injectPageCommentAnchors,
         COMMENTS_BASE_NAME: COMMENTS_BASE_NAME,
         DEFAULT_REPLIES_FILE: DEFAULT_REPLIES_FILE,
         // gh-1224: config / comments-digest / replies pure helpers (test surface)

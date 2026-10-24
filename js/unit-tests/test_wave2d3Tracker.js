@@ -20,9 +20,13 @@ function d3Boom(name) {
 function d3LoadCheckTask(mocks) {
     return loadModule('js/checkTaskStoriesDone.js', makeRequire({
         './configLoader.js': { loadProjectConfig: function() { return { jira: { statuses: { DONE: 'Done', READY_FOR_TESTING: 'Ready For Testing' } } }; } },
-        './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+        './common/tokenUsageComment.js': {
+            postTokenUsageComments: function() {},
+            postTokenUsageCommentsSafely: function() {}
+        },
         './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
-        './common/trackers.js': d3Trackers(mocks)
+        './common/trackers.js': d3Trackers(mocks),
+        './common/smDoneCheck.js': loadModule('js/common/smDoneCheck.js', makeRequire({}))
     }), mocks);
 }
 
@@ -104,7 +108,8 @@ suite('checkTaskStoriesDone: tracker layer', function() {
 
 function d3LoadIntakePre(mocks) {
     return loadModule('js/intakePreAction.js', makeRequire({
-        './common/trackers.js': d3Trackers(mocks)
+        './common/trackers.js': d3Trackers(mocks),
+        './common/epicIntakeFetch.js': loadModule('js/common/epicIntakeFetch.js', makeRequire({}))
     }), mocks);
 }
 

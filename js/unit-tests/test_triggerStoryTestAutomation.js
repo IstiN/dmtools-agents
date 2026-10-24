@@ -26,12 +26,6 @@ function loadTriggerStoryTestAutomation(mocks) {
                 : { success: true };
         }
     };
-    var autoStartTriggerMod = loadModule(
-        'js/common/autoStartTrigger.js',
-        makeRequire({ './autoStart.js': autoStartMock }),
-        {}
-    );
-
     var tokenUsageMock = {
         postTokenUsageComments: function(key, opts) {
             if (mocks && mocks.postTokenUsageComments) mocks.postTokenUsageComments(key, opts);
@@ -48,6 +42,14 @@ function loadTriggerStoryTestAutomation(mocks) {
             console.warn('Failed to post token usage comments:', e);
         }
     };
+    var autoStartTriggerMod = loadModule(
+        'js/common/autoStartTrigger.js',
+        makeRequire({
+            './autoStart.js': autoStartMock,
+            './tokenUsageComment.js': tokenUsageMock
+        }),
+        {}
+    );
 
     return loadModule(
         'js/triggerStoryTestAutomation.js',

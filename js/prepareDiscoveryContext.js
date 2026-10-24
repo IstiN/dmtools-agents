@@ -47,23 +47,14 @@ var contentOutput = require('./common/contentOutput.js');
 var DISCOVERY_OUTPUT_DIR = 'outputs/discovery';
 var COMMENTS_BASE_NAME = 'discovery_comments';
 
+// gh-1250: single shared implementations in contentOutput.js; these thin
+// wrappers keep the local call sites and module.exports surface unchanged.
 function sanitizeFileName(title) {
-    return String(title || 'untitled').replace(/[\\/:*?"<>|]/g, '-').trim();
+    return contentOutput.sanitizeFileName(title);
 }
 
-/**
- * Find the child page whose title starts with the ticket key (tickets may be
- * retitled with the summary changing, but the ticket-key prefix stays stable).
- */
 function findTicketPage(children, ticketKey) {
-    if (!children || !Array.isArray(children)) return null;
-    for (var i = 0; i < children.length; i++) {
-        var c = children[i];
-        if (c && c.title && c.title.indexOf(ticketKey) === 0) {
-            return c;
-        }
-    }
-    return null;
+    return contentOutput.findTicketPage(children, ticketKey);
 }
 
 /**
@@ -77,12 +68,8 @@ function findTicketPage(children, ticketKey) {
  */
 function injectCommentAnchors(pageId, body) {
     try {
-        var storage = confluence_content_by_id({ contentId: pageId });
-        var storageBody = storage && storage.body && storage.body.storage && storage.body.storage.value;
-        var anchors = contentOutput.extractInlineCommentMarkers(storageBody);
-        if (anchors.length === 0) return body;
-        var injected = contentOutput.injectCommentPlaceholders(body, anchors);
-        return injected.content;
+        var injected = contentOutput.injectPageCommentAnchors(body, pageId);
+        return injected ? injected.content : body;
     } catch (e) {
         console.warn('prepareDiscoveryContext: inline comment anchor extraction failed for page ' + pageId + ' (non-fatal):', e);
         return body;

@@ -114,21 +114,7 @@ function runBaReadinessCheck(tracker, projectConfig, ticketKey, removeLabel, ini
 }
 
 function action(params) {
-    const ticketKey = params.ticket && params.ticket.key;
-    const customParams = params.jobParams && params.jobParams.customParams;
-    const removeLabel = customParams && customParams.removeLabel;
-
-    const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-    const tracker = trackersModule.createTracker(projectConfig, customParams || {});
-
-    try {
-        if (!ticketKey) throw new Error('params.ticket.key is missing');
-        return runBaReadinessCheck(tracker, projectConfig, ticketKey, removeLabel, params.initiator);
-    } catch (error) {
-        console.error('❌ Error in checkSubtasksDoneForBA:', error);
-        smDoneCheck.releaseSmLock(tracker, ticketKey, removeLabel);
-        return { success: false, error: error.toString() };
-    }
+    return smDoneCheck.runDoneCheckAction(params, runBaReadinessCheck, 'checkSubtasksDoneForBA', configLoader, trackersModule);
 }
 
 if (typeof module !== 'undefined' && module.exports) {

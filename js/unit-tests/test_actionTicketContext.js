@@ -41,21 +41,6 @@ function makeRecordingDeps(overrides) {
 
 suite('actionTicketContext', function() {
 
-    test('ticketKeyOf: the ticket key, or null when the action has no ticket', function() {
-        var m = loadActionTicketContext({});
-        assert.equal(m.ticketKeyOf({ ticket: { key: 'TS-1' } }), 'TS-1');
-        assert.equal(m.ticketKeyOf({}), null);
-        assert.equal(m.ticketKeyOf({ ticket: {} }), undefined);
-    });
-
-    test('customParamsOf: jobParams wins, then top-level, then {}', function() {
-        var m = loadActionTicketContext({});
-        assert.deepEqual(m.customParamsOf({ jobParams: { customParams: { a: 1 } } }), { a: 1 });
-        assert.deepEqual(m.customParamsOf({ jobParams: {}, customParams: { b: 2 } }), { b: 2 });
-        assert.deepEqual(m.customParamsOf({ customParams: { c: 3 } }), { c: 3 });
-        assert.deepEqual(m.customParamsOf({}), {});
-    });
-
     test('resolveTicketContext: no ticket key -> structured failure, no config load, no tracker', function() {
         var rec = makeRecordingDeps();
         var m = loadActionTicketContext(rec.deps);
@@ -103,6 +88,75 @@ suite('actionTicketContext', function() {
         m.resolveTicketContext({ ticket: { key: 'TS-12' }, customParams: { stageFallback: 'none' } });
 
         assert.deepEqual(rec.calls.createTracker[0].customParams, { stageFallback: 'none' });
+    });
+
+    test('resolveTicketContext: options.statusKey prints the shared "Moving" opener after tracker creation', function() {
+        var rec = makeRecordingDeps();
+        var logs = [];
+        var m = loadActionTicketContext(Object.assign({
+            console: {
+                log: function(msg) { logs.push(String(msg)); },
+                warn: function() {},
+                error: function() {}
+            }
+        }, rec.deps));
+
+        var result = m.resolveTicketContext({ ticket: { key: 'TS-20' } }, { statusKey: 'DONE' });
+
+        assert.equal(result.ok, true);
+        assert.deepEqual(logs, ['Moving TS-20 to Done']);
+    });
+
+    test('resolveTicketContext: options.logNote is appended verbatim to the opener', function() {
+        var rec = makeRecordingDeps();
+        var logs = [];
+        var m = loadActionTicketContext(Object.assign({
+            console: {
+                log: function(msg) { logs.push(String(msg)); },
+                warn: function() {},
+                error: function() {}
+            }
+        }, rec.deps));
+
+        m.resolveTicketContext({ ticket: { key: 'TS-21' } }, { statusKey: 'DONE', logNote: ' (bug with test cases generated)' });
+
+        assert.deepEqual(logs, ['Moving TS-21 to Done (bug with test cases generated)']);
+    });
+
+    test('resolveTicketContext: no options.statusKey -> silent, context still resolved', function() {
+        var rec = makeRecordingDeps();
+        var logs = [];
+        var m = loadActionTicketContext(Object.assign({
+            console: {
+                log: function(msg) { logs.push(String(msg)); },
+                warn: function() {},
+                error: function() {}
+            }
+        }, rec.deps));
+
+        var result = m.resolveTicketContext({ ticket: { key: 'TS-22' } });
+
+        assert.equal(result.ok, true);
+        assert.deepEqual(logs, []);
+    });
+
+    test('announceMove: direct call — no-op without options, opener with statusKey + logNote', function() {
+        var rec = makeRecordingDeps();
+        var logs = [];
+        var m = loadActionTicketContext(Object.assign({
+            console: {
+                log: function(msg) { logs.push(String(msg)); },
+                warn: function() {},
+                error: function() {}
+            }
+        }, rec.deps));
+        var jiraConfig = { statuses: { READY_FOR_TESTING: 'Ready For Testing' } };
+
+        m.announceMove('TS-30', jiraConfig, null);
+        assert.deepEqual(logs, []);
+
+        m.announceMove('TS-30', jiraConfig, { statusKey: 'READY_FOR_TESTING', logNote: '!' });
+        assert.deepEqual(logs, ['Moving TS-30 to Ready For Testing!']);
     });
 
     test('resolveTicketContext: a throwing configLoader propagates (caller catch keeps old behavior)', function() {

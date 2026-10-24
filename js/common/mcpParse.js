@@ -1,7 +1,7 @@
 /**
  * mcpParse — shared MCP-bridge payload normalization (gh-1250).
  *
- * The snake_case github_*/jira_*/cli_* bridge tools return their payload
+ * The snake_case github_*, jira_*, cli_* bridge tools return their payload
  * in whatever shape the backing SDK produced: an already-parsed object, a
  * JSON string, an error-message body, or null/undefined on a 404-ish
  * miss. Every action script used to carry its own copy of these two

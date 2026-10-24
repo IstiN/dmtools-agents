@@ -7,7 +7,13 @@ function loadCheckBugToFixReady(mocks, requireOverrides) {
     var requireMap = {
         './config.js': configModule,
         './configLoader.js': makeDefaultConfigLoaderMock(),
-        './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageCommentsSafely: function() {} },
+        './common/tokenUsageComment.js': {
+            postTokenUsageComments: function() {},
+            postTokenUsageCommentsSafely: function() {},
+            customParamsOf: function(params) {
+                return (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {};
+            }
+        },
         './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
         './common/smLock.js': loadModule('js/common/smLock.js', makeRequire({}), {}),
         './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks)

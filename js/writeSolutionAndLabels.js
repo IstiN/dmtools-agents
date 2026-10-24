@@ -73,19 +73,8 @@ function buildJiraSection(sorted) {
     lines.push('h2. Affected Repositories');
     lines.push('');
     lines.push('|| # || Repository || Reason || Depends On ||');
-
-    affectedReposSection.appendRepoTableRows(lines, sorted);
-
-    // Mermaid diagram (only when there are edges)
-    affectedReposSection.appendMermaidEdges(lines, sorted, '{code}', '{code}');
-
-    // JSON anchor for createRepoTasks script
-    lines.push('');
-    lines.push('{code:json|title=affected_repos}');
-    lines.push(JSON.stringify(sorted, null, 2));
-    lines.push('{code}');
+    affectedReposSection.appendSectionBody(lines, sorted, affectedReposSection.JIRA_FENCES);
     lines.push('----');
-
     return lines.join('\n');
 }
 
@@ -100,17 +89,8 @@ function buildMarkdownSection(sorted) {
     lines.push('');
     lines.push('| # | Repository | Reason | Depends On |');
     lines.push('|---|---|---|---|');
-
-    affectedReposSection.appendRepoTableRows(lines, sorted);
-
-    affectedReposSection.appendMermaidEdges(lines, sorted, '```mermaid', '```');
-
-    lines.push('');
-    lines.push('```json');
-    lines.push(JSON.stringify(sorted, null, 2));
-    lines.push('```');
+    affectedReposSection.appendSectionBody(lines, sorted, affectedReposSection.MARKDOWN_FENCES);
     lines.push('---');
-
     return lines.join('\n');
 }
 
@@ -123,15 +103,11 @@ function buildConfluenceMarkdownSection(sorted) {
     lines.push('## Affected Repositories');
     lines.push('');
     lines.push('| # | Repository | Reason | Depends On |');
-    lines.push('|---|---|---|---|');
-
-    affectedReposSection.appendRepoTableRows(lines, sorted);
-
+    lines.push('|---|---|');
     // Mermaid dependency diagram (only when there are edges) — a single, plain
     // (unfenced) diagram, consistent with instructions/common/diagram_output_contract.md.
     // The Confluence markdown→storage converter wraps it with the correct macro itself.
-    affectedReposSection.appendMermaidEdges(lines, sorted, '```mermaid', '```');
-
+    affectedReposSection.appendSectionBody(lines, sorted, affectedReposSection.CONFLUENCE_FENCES);
     return lines.join('\n');
 }
 

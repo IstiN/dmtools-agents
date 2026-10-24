@@ -5,6 +5,15 @@
  * affected-repository labels from outputs/affected_repos.json.
  */
 
+// gh-1250 shared helpers: pure modules with no requires of their own, so the
+// real implementation is loaded everywhere (no mocks needed).
+function labelsTrackerFieldValue() {
+    return loadModule('js/common/trackerFieldValue.js', makeRequire({}), {});
+}
+function labelsAffectedReposSection() {
+    return loadModule('js/common/affectedReposSection.js', makeRequire({}), {});
+}
+
 function makeOutputFiles(fileMap) {
     return loadModule('js/common/outputFiles.js', makeRequire({}), {
         // The suite only reads via `file_read({ path })` (see js/common/outputFiles.js::readRaw).
@@ -43,6 +52,8 @@ function makeLabelsModule(fileMap, extraGlobals) {
             './writeSolutionAndDiagrams.js': baseModule,
             './common/outputFiles.js': outputFiles,
             './config.js': configModule,
+            './common/trackerFieldValue.js': labelsTrackerFieldValue(),
+            './common/affectedReposSection.js': labelsAffectedReposSection(),
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/autoStart.js': { triggerSmIfIdle: function() {}, triggerConfiguredWorkflowForTicket: function() { return false; } },
@@ -519,6 +530,8 @@ suite('writeSolutionAndLabels — repo label flow', function() {
                 './writeSolutionAndDiagrams.js': failingBase,
                 './common/outputFiles.js': outputFiles,
                 './config.js': configModule,
+                './common/trackerFieldValue.js': labelsTrackerFieldValue(),
+                './common/affectedReposSection.js': labelsAffectedReposSection(),
                 './configLoader.js': configLoaderModule,
                 './common/scm.js': { createScm: function() { return {}; } },
                 './common/autoStart.js': {},

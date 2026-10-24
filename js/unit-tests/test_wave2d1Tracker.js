@@ -84,8 +84,13 @@ suite('wave2d1 tracker — checkBugTestsPassed / checkBugToFixReady', function()
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock(),
             './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {}),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': {
+                postTokenUsageComments: function() {},
+                postTokenUsageCommentsSafely: function() {},
+                customParamsOf: function() { return {}; }
+            },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
+            './common/smLock.js': loadModule('js/common/smLock.js', makeRequire({}), {}),
             './common/trackers.js': d1Trackers(rec.mocks),
             './common/scm.js': { createScm: function() { return { listPrs: function() { return []; } }; } }
         }), rec.mocks);
@@ -106,8 +111,13 @@ suite('wave2d1 tracker — checkBugTestsPassed / checkBugToFixReady', function()
         var mod = loadModule('js/checkBugToFixReady.js', makeRequire({
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock(),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': {
+                postTokenUsageComments: function() {},
+                postTokenUsageCommentsSafely: function() {},
+                customParamsOf: function() { return {}; }
+            },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
+            './common/smLock.js': loadModule('js/common/smLock.js', makeRequire({}), {}),
             './common/trackers.js': d1Trackers(rec.mocks)
         }), rec.mocks);
         var r = mod.action({
@@ -256,6 +266,8 @@ suite('wave2d1 tracker — preCli setups / writeSolutionAndLabels', function() {
             './writeSolutionAndDiagrams.js': { action: function() { return { success: true }; } },
             './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), mocks),
             './config.js': configModule,
+            './common/trackerFieldValue.js': loadModule('js/common/trackerFieldValue.js', makeRequire({}), {}),
+            './common/affectedReposSection.js': loadModule('js/common/affectedReposSection.js', makeRequire({}), {}),
             './common/trackers.js': d1Trackers(mocks)
         }), mocks);
         var r = mod.action({ ticket: { key: '40' }, customParams: { trackerProvider: 'ado', solutionField: 'description' } });

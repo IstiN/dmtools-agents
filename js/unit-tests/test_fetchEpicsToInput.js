@@ -345,11 +345,13 @@ suite('epicIntakeFetch helper branches (via fetchEpicsToInput mapping)', functio
             key: 'PROJ-20',
             fields: {
                 summary: 'Story one',
+                description: 'Desc',
                 status: { name: 'In Progress' },
                 priority: { name: 'Low' },
                 parent: { key: 'PROJ-10' }
             }
         }, {
+            descriptionOf: function (fields) { return fields.description || ''; },
             diagramsOf: function () { return null; },
             acceptanceCriteriaOf: function () { return 'AC text'; },
             solutionOf: function () { return 'Sol text'; }
@@ -357,7 +359,7 @@ suite('epicIntakeFetch helper branches (via fetchEpicsToInput mapping)', functio
         assert.deepEqual(mapped, {
             key: 'PROJ-20',
             summary: 'Story one',
-            description: '',
+            description: 'Desc',
             status: 'In Progress',
             priority: 'Low',
             diagrams: null,
@@ -378,12 +380,12 @@ suite('epicIntakeFetch helper branches (via fetchEpicsToInput mapping)', functio
         assert.deepEqual(mapped, {
             key: 'PROJ-21',
             summary: '',
-            description: '',
             status: '',
             priority: '',
             diagrams: 'd',
             parent: null
         });
+        assert.equal('description' in mapped, false, 'no description key without descriptionOf');
         assert.equal('acceptanceCriteria' in mapped, false, 'no acceptanceCriteria key');
         assert.equal('solution' in mapped, false, 'no solution key');
     });

@@ -102,7 +102,10 @@ suite('wave1a tracker migration — triggerStoryTestAutomation (ado)', function(
         var autoStartMock = { triggerConfiguredWorkflowForTicket: function() { return false; }, triggerSmIfIdle: function() {} };
         var m = loadModule('js/triggerStoryTestAutomation.js', makeRequire({
             './common/autoStart.js': autoStartMock,
-            './common/autoStartTrigger.js': loadModule('js/common/autoStartTrigger.js', makeRequire({ './autoStart.js': autoStartMock }), {}),
+            './common/autoStartTrigger.js': loadModule('js/common/autoStartTrigger.js', makeRequire({
+                './autoStart.js': autoStartMock,
+                './tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageCommentsSafely: function() {} }
+            }), {}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageCommentsSafely: function() {} },
             './common/trackers.js': w1aTrackers(rec.mocks)
         }), rec.mocks);

@@ -50,13 +50,12 @@ function resolvePageBody(existing) {
  * <ac:inline-comment-marker> elements which the Markdown conversion strips;
  * re-inject them as [[ic:REF]]...[[/ic]] placeholders so the agent can keep
  * the anchors in its output. Returns the (possibly unchanged) body.
+ * gh-1250: the storage fetch + re-injection lives in
+ * contentOutput.injectPageCommentAnchors (shared with prepareDiscoveryContext).
  */
 function injectStoredCommentAnchors(body, pageId) {
-    var storage = confluence_content_by_id({ contentId: pageId });
-    var storageBody = storage && storage.body && storage.body.storage && storage.body.storage.value;
-    var anchors = contentOutput.extractInlineCommentMarkers(storageBody);
-    if (anchors.length === 0) return body;
-    var injected = contentOutput.injectCommentPlaceholders(body, anchors);
+    var injected = contentOutput.injectPageCommentAnchors(body, pageId);
+    if (!injected) return body;
     console.log('fetchConfluenceOutputContext: injected ' + injected.injected.length +
         ' inline comment placeholder(s)' +
         (injected.missed.length > 0 ? ', ' + injected.missed.length + ' anchor text(s) not found in Markdown' : ''));

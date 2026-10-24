@@ -56,19 +56,22 @@ function mapEpic(issue, diagramsOf) {
     };
 }
 
-// Story summary shape written to existing_stories.json. Optional extractors
-// add acceptanceCriteria/solution between diagrams and parent so the written
-// JSON key order matches each action's established payload.
+// Story summary shape written to existing_stories.json. The description key
+// and the optional extractors are added only when supplied, in their
+// established positions (description after summary, extras between diagrams
+// and parent) so each action's written JSON key order is unchanged.
 function mapStory(issue, options) {
     var sf = issue.fields || {};
     var story = {
         key: issue.key || '',
-        summary: sf.summary || '',
-        description: sf.description || '',
-        status: statusNameOf(sf),
-        priority: priorityNameOf(sf),
-        diagrams: options.diagramsOf(sf)
+        summary: sf.summary || ''
     };
+    if (options.descriptionOf) {
+        story.description = options.descriptionOf(sf);
+    }
+    story.status = statusNameOf(sf);
+    story.priority = priorityNameOf(sf);
+    story.diagrams = options.diagramsOf(sf);
     if (options.acceptanceCriteriaOf) {
         story.acceptanceCriteria = options.acceptanceCriteriaOf(sf);
     }

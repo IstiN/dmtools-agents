@@ -1,15 +1,19 @@
 /**
- * Shared trigger helper for the test-automation post-actions
+ * Shared action skeleton for the test-automation post-actions
  * (triggerBugTestAutomation, triggerStoryTestAutomation).
  *
  * gh-1250: both actions used to carry byte-identical copies of the gh-1229
- * header block (configOf/customParamsOf + triggerWorkflowOrAskSm); this module
- * is the single parameterized copy. The per-workflow differences (customParams
- * flag names, config-file key, stripKeys, log noun) live in VARIANTS, keyed by
- * the workflow label. Log output is byte-identical to the previous inline flow.
+ * header block (configOf/customParamsOf + triggerWorkflowOrAskSm), the
+ * success/error reporting tail, and the try/catch wrapper; this module is
+ * the single parameterized copy. The per-workflow differences (customParams
+ * flag names, config-file key, stripKeys, log noun) live in VARIANTS, keyed
+ * by the workflow label; the remaining differences arrive as hooks on
+ * runTriggerAction's opts. Log output is byte-identical to the previous
+ * inline flow.
  */
 
 var autoStart = require('./autoStart.js');
+var tokenUsageComment = require('./tokenUsageComment.js');
 
 /** Config: jobParams wins (Teammate path), then top-level, then {}. */
 function configOf(params) {
@@ -89,10 +93,61 @@ function triggerWorkflowOrAskSm(opts) {
     return triggered;
 }
 
+/**
+ * The shared action skeleton: resolve ticket/config/customParams, log the
+ * header, trigger the workflow (or ask the SM), run the per-action
+ * beforeHeader/afterTrigger hooks, post token-usage comments (never failing
+ * the action on them), and report the structured result. Behavior and log
+ * output are byte-identical to the previous inline flow in each action.
+ *
+ * @param {Object} opts
+ * @param {Object} opts.params - the action params.
+ * @param {string} opts.label - workflow label; selects the VARIANTS entry.
+ * @param {string} opts.keyName - result property name ('bugKey'/'storyKey').
+ * @param {string} opts.errorPrefix - console.error prefix on action failure.
+ * @param {Function} opts.logHeader - logs the '=== Triggering ... ===' line.
+ * @param {Function} [opts.beforeHeader] - runs after params resolve, before
+ *     logHeader; its return value is handed to afterTrigger/tokenUsageOptions.
+ * @param {Function} opts.afterTrigger - per-action post-trigger step.
+ * @param {Function} opts.tokenUsageOptions - builds the
+ *     postTokenUsageComments options from (params, beforeHeader context).
+ * @returns {Object} structured action result.
+ */
+function runTriggerAction(opts) {
+    try {
+        var params = opts.params;
+        var ticketKey = params.ticket.key;
+        var config = configOf(params);
+        var customParams = customParamsOf(params);
+        var context = opts.beforeHeader ? opts.beforeHeader(config, customParams) : null;
+
+        opts.logHeader(ticketKey);
+
+        var triggered = triggerWorkflowOrAskSm({
+            ticketKey: ticketKey,
+            config: config,
+            customParams: customParams,
+            label: opts.label
+        });
+
+        opts.afterTrigger(ticketKey, config, customParams, context);
+
+        tokenUsageComment.postTokenUsageCommentsSafely(ticketKey, opts.tokenUsageOptions(params, context));
+
+        var result = { success: true, triggered: triggered };
+        result[opts.keyName] = ticketKey;
+        return result;
+    } catch (error) {
+        console.error(opts.errorPrefix, error);
+        return { success: false, error: error.toString() };
+    }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         configOf: configOf,
         customParamsOf: customParamsOf,
-        triggerWorkflowOrAskSm: triggerWorkflowOrAskSm
+        triggerWorkflowOrAskSm: triggerWorkflowOrAskSm,
+        runTriggerAction: runTriggerAction
     };
 }

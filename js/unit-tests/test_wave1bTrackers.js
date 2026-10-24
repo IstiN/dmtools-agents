@@ -63,11 +63,21 @@ suite('recoverStuckDevelopment: tracker layer', function() {
 });
 
 function loadEnhanceSD(mocks) {
+    var trackers = trackersWithMocks(mocks);
+    // One shared trackerSlot instance so the action's getTracker() and the
+    // helper's initEnhancementTracker() operate on the same lazy slot.
+    var trackerSlot = loadModule('js/common/trackerSlot.js', makeRequire({ './trackers.js': trackers }));
+    var enhancementPost = loadModule('js/common/enhancementPost.js', makeRequire({
+        './trackerSlot.js': trackerSlot,
+        '../config.js': configModule
+    }));
     return loadModule('js/enhanceSDAPIDescriptionAndAssess.js', makeRequire({
         './common/jiraHelpers.js': { extractTicketKey: function(k) { return k; } },
         './config.js': configModule,
         './common/aiResponseParser.js': loadModule('js/common/aiResponseParser.js', makeRequire({ '../config.js': configModule }), {}),
-        './common/trackers.js': trackersWithMocks(mocks)
+        './common/trackerSlot.js': trackerSlot,
+        './common/enhancementPost.js': enhancementPost,
+        './common/trackers.js': trackers
     }), mocks);
 }
 

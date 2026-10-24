@@ -4,9 +4,10 @@
  * Pure formatting helpers for the "Affected Repositories" block appended to
  * the solution field (writeSolutionAndLabels.js) and the Confluence page
  * (writeSolutionAndDiagrams.js, via the lazy require cycle-breaker). The
- * repo-table rows and the mermaid dependency graph appeared identically in
- * three formatters (Jira wiki, ADO markdown, Confluence markdown) — the
- * per-format differences are only the fence tokens, so they are parameters.
+ * repo-table rows, the mermaid dependency graph and the JSON anchor appeared
+ * identically in three formatters (Jira wiki, ADO markdown, Confluence
+ * markdown) — the per-format differences are only the code-fence tokens, so
+ * they live in the exported FENCES constants.
  *
  * GraalJS-compatible: var declarations, plain functions, no arrow functions.
  */
@@ -38,17 +39,30 @@ function buildDependencyEdges(sorted) {
     return edges;
 }
 
-/** Append the repo table rows for sorted repos to lines (in place). */
-function appendRepoTableRows(lines, sorted) {
-    buildRepoTableRows(sorted).forEach(function(row) { lines.push(row); });
-}
+// Per-format code fences for the section body.
+//   - jsonOpen/jsonClose are omitted for Confluence: the JSON anchor is a
+//     tracker-field-only payload (createRepoTasks parses it back out of the
+//     field), meaningless on a Confluence page.
+var JIRA_FENCES = {
+    mermaidOpen: '{code}',
+    mermaidClose: '{code}',
+    jsonOpen: '{code:json|title=affected_repos}',
+    jsonClose: '{code}'
+};
 
-/**
- * Append the mermaid dependency graph for sorted repos to lines (in place).
- * The whole block is skipped when there are no edges. fenceOpen/fenceClose
- * are the per-format code fences: jira '{code}'/'{code}', markdown
- * '```mermaid'/'```'.
- */
+var MARKDOWN_FENCES = {
+    mermaidOpen: '```mermaid',
+    mermaidClose: '```',
+    jsonOpen: '```json',
+    jsonClose: '```'
+};
+
+var CONFLUENCE_FENCES = {
+    mermaidOpen: '```mermaid',
+    mermaidClose: '```'
+};
+
+/** Mermaid dependency graph block ('graph LR' + edges), only when there are edges. */
 function appendMermaidEdges(lines, sorted, fenceOpen, fenceClose) {
     var edges = buildDependencyEdges(sorted);
     if (edges.length > 0) {
@@ -60,12 +74,35 @@ function appendMermaidEdges(lines, sorted, fenceOpen, fenceClose) {
     }
 }
 
+/** JSON anchor block: the machine-readable payload createRepoTasks parses. */
+function appendJsonAnchor(lines, sorted, fenceOpen, fenceClose) {
+    lines.push('');
+    lines.push(fenceOpen);
+    lines.push(JSON.stringify(sorted, null, 2));
+    lines.push(fenceClose);
+}
+
+/**
+ * Append the full section body for sorted repos to lines (in place): the repo
+ * table rows, the mermaid dependency graph (only when there are edges) and,
+ * unless fences.jsonOpen is absent (Confluence), the JSON anchor block.
+ */
+function appendSectionBody(lines, sorted, fences) {
+    buildRepoTableRows(sorted).forEach(function(row) { lines.push(row); });
+    appendMermaidEdges(lines, sorted, fences.mermaidOpen, fences.mermaidClose);
+    if (fences.jsonOpen) {
+        appendJsonAnchor(lines, sorted, fences.jsonOpen, fences.jsonClose);
+    }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         formatRepoDeps: formatRepoDeps,
         buildRepoTableRows: buildRepoTableRows,
         buildDependencyEdges: buildDependencyEdges,
-        appendRepoTableRows: appendRepoTableRows,
-        appendMermaidEdges: appendMermaidEdges
+        appendSectionBody: appendSectionBody,
+        JIRA_FENCES: JIRA_FENCES,
+        MARKDOWN_FENCES: MARKDOWN_FENCES,
+        CONFLUENCE_FENCES: CONFLUENCE_FENCES
     };
 }

@@ -29,9 +29,44 @@ function waitingResult(tracker, ticketKey, removeLabel, logMessage, total, notDo
     return { success: true, action: 'waiting', total: total, notDone: notDone, ticketKey: ticketKey };
 }
 
+/**
+ * Resolve the action context both done-check actions share: ticketKey,
+ * removeLabel, the project config and the tracker built from it.
+ */
+function resolveActionContext(params, configLoader, trackersModule) {
+    var customParams = params.jobParams && params.jobParams.customParams;
+    var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    return {
+        ticketKey: params.ticket && params.ticket.key,
+        removeLabel: customParams && customParams.removeLabel,
+        projectConfig: projectConfig,
+        tracker: trackersModule.createTracker(projectConfig, customParams || {})
+    };
+}
+
+/**
+ * Shared action() skeleton for the SM done-check postJSActions: resolves the
+ * action context, runs the caller's check and, on failure, releases the SM
+ * lock and returns the standard failure shape. The caller's checkFn receives
+ * (tracker, projectConfig, ticketKey, removeLabel, initiator).
+ */
+function runDoneCheckAction(params, checkFn, scriptName, configLoader, trackersModule) {
+    var ctx = resolveActionContext(params, configLoader, trackersModule);
+    try {
+        if (!ctx.ticketKey) throw new Error('params.ticket.key is missing');
+        return checkFn(ctx.tracker, ctx.projectConfig, ctx.ticketKey, ctx.removeLabel, params.initiator);
+    } catch (error) {
+        console.error('❌ Error in ' + scriptName + ':', error);
+        releaseSmLock(ctx.tracker, ctx.ticketKey, ctx.removeLabel);
+        return { success: false, error: error.toString() };
+    }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         releaseSmLock: releaseSmLock,
-        waitingResult: waitingResult
+        waitingResult: waitingResult,
+        resolveActionContext: resolveActionContext,
+        runDoneCheckAction: runDoneCheckAction
     };
 }

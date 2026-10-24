@@ -414,3 +414,121 @@ suite('enhanceSDAPIDescriptionAndAssess.action — failure paths', function () {
         }
     });
 });
+
+suite('enhanceSDAPIDescriptionAndAssess — shared enhancementPost helper (gh-1250)', function () {
+
+    function loadEnhancementPost(tracker) {
+        var created = [];
+        var trackersStub = {
+            createTracker: function (config, customParams) {
+                created.push({ config: config, customParams: customParams });
+                return tracker;
+            }
+        };
+        var slot = loadModule('js/common/trackerSlot.js', makeRequire({ './trackers.js': trackersStub }));
+        var helper = loadModule('js/common/enhancementPost.js', makeRequire({
+            './trackerSlot.js': slot,
+            '../config.js': configModule,
+            '../configLoader.js': {
+                loadProjectConfig: function (params) {
+                    return { tracker: { provider: 'jira' }, __params: params };
+                }
+            }
+        }));
+        return { helper: helper, slot: slot, created: created };
+    }
+
+    function recordingTracker(overrides) {
+        var calls = { updateDescription: [], updateField: [] };
+        var tracker = {
+            updateDescription: function (key, description) { calls.updateDescription.push({ key: key, description: description }); },
+            updateField: function (key, field, value) { calls.updateField.push({ key: key, field: field, value: value }); }
+        };
+        for (var k in (overrides || {})) { tracker[k] = overrides[k]; }
+        return { tracker: tracker, calls: calls };
+    }
+
+    test('updateDescriptionAndDiagram: both steps land, diagram wrapped in the mermaid code tags', function () {
+        var rec = recordingTracker();
+        var env = loadEnhancementPost(rec.tracker);
+        var results = env.helper.updateDescriptionAndDiagram(function () { return rec.tracker; }, 'BICE-600', {
+            description: 'h2. Enhanced',
+            diagram: 'sequenceDiagram\n A->>B: call'
+        });
+        assert.equal(results.descriptionUpdated, true);
+        assert.equal(results.diagramUpdated, true);
+        assert.deepEqual(results.errors, []);
+        assert.deepEqual(rec.calls.updateDescription, [{ key: 'BICE-600', description: 'h2. Enhanced' }]);
+        assert.equal(rec.calls.updateField.length, 1);
+        assert.equal(rec.calls.updateField[0].field, configModule.JIRA_FIELDS.DIAGRAMS);
+        assert.equal(
+            rec.calls.updateField[0].value,
+            configModule.DIAGRAM_FORMAT.MERMAID_WRAPPER_START + 'sequenceDiagram\n A->>B: call' + configModule.DIAGRAM_FORMAT.MERMAID_WRAPPER_END
+        );
+    });
+
+    test('updateDescriptionAndDiagram: a description failure is recorded and the diagram still updates', function () {
+        var rec = recordingTracker({ updateDescription: function () { throw new Error('locked'); } });
+        var env = loadEnhancementPost(rec.tracker);
+        var orig = silenceConsole();
+        var results;
+        try {
+            results = env.helper.updateDescriptionAndDiagram(function () { return rec.tracker; }, 'BICE-601', {
+                description: 'd', diagram: 'seq'
+            });
+        } finally {
+            console.error = orig.error; console.warn = orig.warn; console.log = orig.log;
+        }
+        assert.equal(results.descriptionUpdated, false);
+        assert.equal(results.diagramUpdated, true, 'the diagram step is isolated from the description failure');
+        assert.equal(results.errors.length, 1);
+        assert.ok(results.errors[0].indexOf('Description update failed') !== -1);
+        assert.equal(rec.calls.updateField.length, 1, 'diagram still pushed');
+    });
+
+    test('updateDescriptionAndDiagram: a diagram failure is recorded on its own', function () {
+        var rec = recordingTracker({ updateField: function () { throw new Error('no field'); } });
+        var env = loadEnhancementPost(rec.tracker);
+        var orig = silenceConsole();
+        var results;
+        try {
+            results = env.helper.updateDescriptionAndDiagram(function () { return rec.tracker; }, 'BICE-602', {
+                description: 'd', diagram: 'seq'
+            });
+        } finally {
+            console.error = orig.error; console.warn = orig.warn; console.log = orig.log;
+        }
+        assert.equal(results.descriptionUpdated, true, 'the description step is unaffected');
+        assert.equal(results.diagramUpdated, false);
+        assert.equal(results.errors.length, 1);
+        assert.ok(results.errors[0].indexOf('Diagrams field update failed') !== -1);
+    });
+
+    test('initEnhancementTracker: jobParams.customParams win and the project config is resolved', function () {
+        var rec = recordingTracker();
+        var env = loadEnhancementPost(rec.tracker);
+        var params = { jobParams: { customParams: { trackerProvider: 'ado' } }, customParams: { trackerProvider: 'jira' } };
+        env.helper.initEnhancementTracker(params);
+        var tracker = env.slot.getTracker();
+        assert.equal(tracker, rec.tracker);
+        assert.equal(env.created.length, 1);
+        assert.equal(env.created[0].config.tracker.provider, 'jira', 'project config resolved via configLoader');
+        assert.equal(env.created[0].config.__params, params, 'the action params are passed to the loader');
+        assert.deepEqual(env.created[0].customParams, { trackerProvider: 'ado' }, 'jobParams.customParams win');
+    });
+
+    test('initEnhancementTracker: falls back to params.customParams, then {}', function () {
+        var rec = recordingTracker();
+        var env = loadEnhancementPost(rec.tracker);
+
+        env.helper.initEnhancementTracker({ customParams: { trackerProvider: 'github' } });
+        env.slot.getTracker();
+        assert.deepEqual(env.created[0].customParams, { trackerProvider: 'github' }, 'params.customParams fallback');
+
+        env.helper.initEnhancementTracker({});
+        assert.equal(env.created.length, 1, 'the slot is lazy until the next getTracker');
+        env.slot.getTracker();
+        assert.deepEqual(env.created[1].customParams, {}, 'empty fallback');
+        assert.equal(env.slot.getTracker(), rec.tracker);
+    });
+});

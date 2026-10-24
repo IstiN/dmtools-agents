@@ -2,7 +2,7 @@
  * Unit tests for js/checkBugTestsPassed.js
  */
 
-function loadCheckBugTestsPassed(mocks) {
+function loadCheckBugTestsPassed(mocks, requireOverrides) {
     mocks = mocks || {};
     var configLoaderMock = makeDefaultConfigLoaderMock({
         jira: {
@@ -13,21 +13,35 @@ function loadCheckBugTestsPassed(mocks) {
         }
     });
 
+    var requireMap = {
+        './config.js': configModule,
+        './configLoader.js': configLoaderMock,
+        './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {}),
+        './common/tokenUsageComment.js': {
+            postTokenUsageComments: function() {},
+            postTokenUsageCommentsSafely: function() {},
+            customParamsOf: function(params) {
+                return (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {};
+            }
+        },
+        './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
+        './common/smLock.js': loadModule('js/common/smLock.js', makeRequire({}), {}),
+        './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks),
+        './common/scm.js': mocks.__scm || {
+            createScm: function() {
+                return { listPrs: function() { return []; } };
+            }
+        }
+    };
+    if (requireOverrides) {
+        for (var k in requireOverrides) {
+            if (requireOverrides.hasOwnProperty(k)) requireMap[k] = requireOverrides[k];
+        }
+    }
+
     return loadModule(
         'js/checkBugTestsPassed.js',
-        makeRequire({
-            './config.js': configModule,
-            './configLoader.js': configLoaderMock,
-            './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {}),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
-            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
-            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks),
-            './common/scm.js': mocks.__scm || {
-                createScm: function() {
-                    return { listPrs: function() { return []; } };
-                }
-            }
-        }),
+        makeRequire(requireMap),
         mocks
     );
 }
@@ -1098,5 +1112,48 @@ suite('checkBugTestsPassed — gh-1188 extracted step helpers', function() {
         assert.equal(comments.length, 1);
         assert.contains(comments[0], 'Done');
         assert.deepEqual(removed, ['sm_l']);
+    });
+
+    test('completeBugDone: token usage goes through the shared never-throwing wrapper', function() {
+        var calls = [];
+        var mod = loadCheckBugTestsPassed({}, {
+            './common/tokenUsageComment.js': {
+                postTokenUsageCommentsSafely: function(key, options) { calls.push([key, options]); },
+                customParamsOf: function(params) { return (params.jobParams && params.jobParams.customParams) || {}; }
+            }
+        });
+        var tracker = makeTrackerStub1188({});
+        var params = { initiator: 'sm', jobParams: { customParams: { removeLabel: 'sm_l' } } };
+        mod.completeBugDone(tracker, 'TS-1', 2, { statuses: { DONE: 'Done' } }, params, 'sm_l');
+        assert.equal(calls.length, 1, 'posted exactly once');
+        assert.equal(calls[0][0], 'TS-1', 'ticketKey forwarded');
+        assert.equal(calls[0][1].initiator, 'sm', 'initiator forwarded');
+        assert.deepEqual(calls[0][1].customParams, { removeLabel: 'sm_l' }, 'jobParams.customParams forwarded');
+
+        // gh-1250 contract: the shared wrapper logs and swallows provider failures.
+        var realTuc = loadModule('js/common/tokenUsageComment.js', makeRequire({
+            './trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), {})
+        }), { file_read: function() { return null; } });
+        var warned = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warned.push(String(m)); };
+        var threw = false;
+        var options = {};
+        Object.defineProperty(options, 'outputsDir', {
+            get: function() { throw new Error('provider down'); }
+        });
+        try {
+            realTuc.postTokenUsageCommentsSafely('TS-2', options);
+        } catch (e) {
+            threw = true;
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(threw, false, 'failure never propagates');
+        assert.equal(warned.length, 1, 'exactly one warning');
+        assert.contains(warned[0], 'Failed to post token usage comments');
     });
 });

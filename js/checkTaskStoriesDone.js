@@ -36,7 +36,7 @@ function runTaskDoneCheck(tracker, jiraConfig, ticketKey, removeLabel, initiator
 
     if (totalItems === 0) {
         console.log('No linked Stories or Bugs found — releasing lock, will re-check next cycle');
-        releaseSmLock(tracker, ticketKey, removeLabel);
+        smDoneCheck.releaseSmLock(tracker, ticketKey, removeLabel);
         return { success: true, action: 'no_stories', ticketKey: ticketKey };
     }
 
@@ -63,21 +63,9 @@ function runTaskDoneCheck(tracker, jiraConfig, ticketKey, removeLabel, initiator
 }
 
 function action(params) {
-    const ticketKey = params.ticket && params.ticket.key;
-    const customParams = params.jobParams && params.jobParams.customParams;
-    const removeLabel = customParams && customParams.removeLabel;
-    const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-    const jiraConfig = projectConfig.jira;
-    const tracker = trackersModule.createTracker(projectConfig, customParams || {});
-
-    try {
-        if (!ticketKey) throw new Error('params.ticket.key is missing');
-        return runTaskDoneCheck(tracker, jiraConfig, ticketKey, removeLabel, params.initiator);
-    } catch (error) {
-        console.error('❌ Error in checkTaskStoriesDone:', error);
-        smDoneCheck.releaseSmLock(tracker, ticketKey, removeLabel);
-        return { success: false, error: error.toString() };
-    }
+    return smDoneCheck.runDoneCheckAction(params, function(tracker, projectConfig, ticketKey, removeLabel, initiator) {
+        return runTaskDoneCheck(tracker, projectConfig.jira, ticketKey, removeLabel, initiator);
+    }, 'checkTaskStoriesDone', configLoader, trackersModule);
 }
 
 if (typeof module !== 'undefined' && module.exports) {

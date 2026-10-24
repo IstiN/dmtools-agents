@@ -1402,6 +1402,7 @@ function runLocalAction(jsPath, ticket, agentParams) {
         { id: 'trackers.js', varName: '_tr' },
         { id: 'linkedIssuesReport.js', varName: '_lir' },
         { id: 'tokenUsageComment.js', varName: '_tu' },
+        { id: 'smDoneCheck.js', varName: '_sdc' },
         { id: 'aiChat.js', varName: '_ac' },
         { id: 'validateInputJql.js', varName: '_vq' },
         { id: 'buildEncodedConfig.js', varName: '_bc' },
@@ -1436,6 +1437,7 @@ function runLocalAction(jsPath, ticket, agentParams) {
         '      if (id.indexOf("trackers.js") !== -1) return _tr.exports;\n' +
         '      if (id.indexOf("linkedIssuesReport.js") !== -1) return _lir.exports;\n' +
         '      if (id.indexOf("tokenUsageComment.js") !== -1) return _tu.exports;\n' +
+        '      if (id.indexOf("smDoneCheck.js") !== -1) return _sdc.exports;\n' +
         '      if (id.indexOf("aiChat.js") !== -1) return _ac.exports;\n' +
         '      if (id.indexOf("validateInputJql.js") !== -1) return _vq.exports;\n' +
         '      if (id.indexOf("buildEncodedConfig.js") !== -1) return _bc.exports;\n' +

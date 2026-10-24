@@ -7,15 +7,13 @@ var actionTicketContext = require('./common/actionTicketContext.js');
 
 function action(params) {
     try {
-        var ctx = actionTicketContext.resolveTicketContext(params);
+        var ctx = actionTicketContext.resolveTicketContext(params, { statusKey: 'READY_FOR_TESTING' });
         if (!ctx.ok) {
             return ctx.failure;
         }
         const ticketKey = ctx.ticketKey;
         const jiraConfig = ctx.jiraConfig;
         var tracker = ctx.tracker;
-
-        console.log('Moving ' + ticketKey + ' to ' + jiraConfig.statuses.READY_FOR_TESTING);
 
         // gh-916: READY_FOR_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback in 'label' mode.
         var moveResult = tracker.moveToStatusOrMark(ticketKey, jiraConfig.statuses.READY_FOR_TESTING, 'READY_FOR_TESTING');

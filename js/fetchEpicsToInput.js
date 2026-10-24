@@ -92,6 +92,7 @@ function mapEpic(issue) {
 // Story summary shape written to existing_stories.json.
 function mapStory(issue) {
     return epicIntakeFetch.mapStory(issue, {
+        descriptionOf: function (fields) { return fields.description || ''; },
         diagramsOf: function (fields) { return findField(fields, 'Diagrams') || null; },
         acceptanceCriteriaOf: acceptanceCriteriaOf,
         solutionOf: function (fields) { return findField(fields, 'Solution') || null; }
