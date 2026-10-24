@@ -242,16 +242,24 @@ function cleanCommandOutput(output) {
     return prHelper.cleanCommandOutput(output);
 }
 
+/**
+ * gh-1195 CRAP split: the owner/repo parsed from a git remote URL — https or
+ * ssh form, trailing .git stripped; null when the remote is not a github.com
+ * URL. Pure.
+ */
+function parseGitHubRemoteUrl(remoteUrl) {
+    const match = String(remoteUrl || '').match(/github\.com[:/]([^/]+)\/([^/?#\s]+)/);
+    if (!match) {
+        return null;
+    }
+    return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
+}
+
 function getGitHubRepoInfo() {
     try {
-        const remoteUrl = cleanCommandOutput(
+        return parseGitHubRemoteUrl(cleanCommandOutput(
             cli_execute_command({ command: 'git config --get remote.origin.url' }) || ''
-        );
-        const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/?#\s]+)/);
-        if (!match) {
-            return null;
-        }
-        return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
+        ));
     } catch (error) {
         console.error('Failed to get GitHub repo info:', error);
         return null;
@@ -1036,6 +1044,80 @@ function buildOpenThreadAccountingBlock(m, liveOpen, inputThreads, unaddressed) 
     return lines.join('\n') + '\n';
 }
 
+// ── gh-1195 CRAP split: one builder per completion wording ───────────────────
+// Each historical branch of buildReworkCompletionComment, verbatim, in its
+// own named function; the dispatcher only selects the wording. Byte-identical
+// output — pinned by the gh-799 completion suites in
+// js/unit-tests/test_pushReworkChanges.js.
+
+/** The open-threads wording: per-thread accounting for every live open thread. */
+function openThreadsCompletionComment(m, ctx, liveOpen, unaddressed) {
+    var comment = m.h(3, '⚠️ Rework Completed — ' + liveOpen.length + ' review thread(s) remain open') + '\n';
+    if (ctx.prUrl) comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
+    if (ctx.branchName) comment += m.bold('Branch') + ': ' + m.inline(ctx.branchName) + '\n';
+    comment += '\n' + m.bold('Rework pushed; ' + liveOpen.length +
+        ' review thread(s) remain open — the SM will re-arm a threads-rework.') + '\n';
+    comment += buildOpenThreadAccountingBlock(m, liveOpen, ctx.inputThreads || [], unaddressed);
+    return comment;
+}
+
+/** The unaddressed-replies wording: every input thread no reply targeted. */
+function unaddressedRepliesCompletionComment(m, ctx, unaddressed) {
+    var comment = m.h(3, '⚠️ Rework Completed — some review threads had no targeted reply') + '\n';
+    if (ctx.prUrl) comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
+    comment += '\nAll review threads are now resolved, but ' + unaddressed.length +
+        ' open thread(s) from the rework input had no targeted reply in ' +
+        m.inline('outputs/review_replies.json') + ':\n';
+    comment += unaddressed.map(function(t) { return '* ' + threadLabel(t); }).join('\n') + '\n';
+    return comment;
+}
+
+/** The changes-requested-verdict wording: the verdict still blocks the merge. */
+function changesRequestedCompletionComment(m, ctx) {
+    var comment = m.h(3, ctx.codeChangesCommitted ? '✅ Rework Completed' : '✅ Rework Analysis Completed') + '\n';
+    if (ctx.prUrl) comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
+    if (ctx.codeChangesCommitted) {
+        comment += m.bold('Branch') + ': ' + m.inline(ctx.branchName) + '\n';
+        comment += '\nRework changes were pushed.\n';
+    } else {
+        comment += '\nThe rework analysis completed without code changes.\n';
+    }
+    comment += '\n' + m.bold('The latest review verdict is still CHANGES_REQUESTED') +
+        ' — the SM will re-check before this PR can merge.\n';
+    return comment;
+}
+
+/** The clean wording — the historical text, byte-identical (AC4). */
+function cleanCompletionComment(m, ctx) {
+    var comment;
+    if (ctx.codeChangesCommitted) {
+        comment = m.h(3, '✅ Rework Completed') + '\n\n';
+        comment += m.bold('Branch') + ': ' + m.inline(ctx.branchName) + '\n';
+        if (ctx.prUrl) {
+            comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
+        }
+        comment += '\nAI Teammate has addressed all PR review comments and pushed the fixes.\n';
+    } else {
+        comment = m.h(3, '✅ Rework Analysis Completed') + '\n\n';
+        if (ctx.prUrl) {
+            comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
+        }
+        comment += '\nAI Teammate analyzed all PR review comments and determined no code changes are required.\n';
+    }
+    return comment;
+}
+
+/**
+ * The "fix summary posted" trailer: the clean wording flows straight on after
+ * its closing sentence; every other wording leads the trailer with a newline.
+ */
+function completionPrCommentSuffix(wording) {
+    if (wording === 'clean') {
+        return 'A fix summary has been posted as a comment on the Pull Request.';
+    }
+    return '\nA fix summary has been posted as a comment on the Pull Request.';
+}
+
 /**
  * gh-799: builds the completion ticket comment from the LIVE PR state.
  * "No code changes are required" is allowed ONLY on the clean path (zero live
@@ -1057,53 +1139,17 @@ function buildReworkCompletionComment(m, ctx) {
 
     var comment;
     if (wording === 'open-threads') {
-        comment = m.h(3, '⚠️ Rework Completed — ' + liveOpen.length + ' review thread(s) remain open') + '\n';
-        if (ctx.prUrl) comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
-        if (ctx.branchName) comment += m.bold('Branch') + ': ' + m.inline(ctx.branchName) + '\n';
-        comment += '\n' + m.bold('Rework pushed; ' + liveOpen.length +
-            ' review thread(s) remain open — the SM will re-arm a threads-rework.') + '\n';
-        comment += buildOpenThreadAccountingBlock(m, liveOpen, ctx.inputThreads || [], unaddressed);
+        comment = openThreadsCompletionComment(m, ctx, liveOpen, unaddressed);
     } else if (wording === 'unaddressed-replies') {
-        comment = m.h(3, '⚠️ Rework Completed — some review threads had no targeted reply') + '\n';
-        if (ctx.prUrl) comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
-        comment += '\nAll review threads are now resolved, but ' + unaddressed.length +
-            ' open thread(s) from the rework input had no targeted reply in ' +
-            m.inline('outputs/review_replies.json') + ':\n';
-        comment += unaddressed.map(function(t) { return '* ' + threadLabel(t); }).join('\n') + '\n';
+        comment = unaddressedRepliesCompletionComment(m, ctx, unaddressed);
     } else if (wording === 'changes-requested-verdict') {
-        comment = m.h(3, ctx.codeChangesCommitted ? '✅ Rework Completed' : '✅ Rework Analysis Completed') + '\n';
-        if (ctx.prUrl) comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
-        if (ctx.codeChangesCommitted) {
-            comment += m.bold('Branch') + ': ' + m.inline(ctx.branchName) + '\n';
-            comment += '\nRework changes were pushed.\n';
-        } else {
-            comment += '\nThe rework analysis completed without code changes.\n';
-        }
-        comment += '\n' + m.bold('The latest review verdict is still CHANGES_REQUESTED') +
-            ' — the SM will re-check before this PR can merge.\n';
+        comment = changesRequestedCompletionComment(m, ctx);
     } else {
         // Clean path — the historical wording, byte-identical (AC4).
-        if (ctx.codeChangesCommitted) {
-            comment = m.h(3, '✅ Rework Completed') + '\n\n';
-            comment += m.bold('Branch') + ': ' + m.inline(ctx.branchName) + '\n';
-            if (ctx.prUrl) {
-                comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
-            }
-            comment += '\nAI Teammate has addressed all PR review comments and pushed the fixes.\n';
-        } else {
-            comment = m.h(3, '✅ Rework Analysis Completed') + '\n\n';
-            if (ctx.prUrl) {
-                comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
-            }
-            comment += '\nAI Teammate analyzed all PR review comments and determined no code changes are required.\n';
-        }
+        comment = cleanCompletionComment(m, ctx);
     }
     if (ctx.prCommentPosted) {
-        if (wording === 'clean') {
-            comment += 'A fix summary has been posted as a comment on the Pull Request.';
-        } else {
-            comment += '\nA fix summary has been posted as a comment on the Pull Request.';
-        }
+        comment += completionPrCommentSuffix(wording);
     }
     return comment;
 }
@@ -1905,6 +1951,48 @@ function parkBlockedPr(scm, tracker, pr, ticketKey) {
     ARMS.forEach(function(arm) { stripArmFromIssue(tracker, ticketKey, arm); });
 }
 
+// ── gh-1195 CRAP split: best-effort steps of the blocked close ───────────────
+// Each step keeps its historical log lines and fail-quiet semantics; the
+// sequence in handleReworkBlocked is unchanged.
+
+/** The ❌ leg-log line — the open count reconciled with machine-notice totals. */
+function blockedLogLine(coverage) {
+    var openCount = coverage.openCount;
+    return '❌ Rework blocked (no code changes, ' + openCount + ' open addressable thread(s)' +
+        (coverage.totalOpenCount > openCount ? ', ' + coverage.totalOpenCount + ' open in total' : '') + ')';
+}
+
+/** Best-effort PR comment — a post failure never blocks the Blocked close. */
+function postBlockedPrComment(scm, prNumber, message) {
+    try {
+        scm.addComment(prNumber, message);
+    } catch (e) {
+        console.warn('Failed to post blocked rework comment on PR #' + prNumber + ':', e.message || e);
+    }
+}
+
+/** The Blocked move — best-effort, defaulting to the literal 'Blocked' name. */
+function moveToBlockedStatus(tracker, ticketKey, statuses) {
+    var blocked = (statuses && statuses.BLOCKED) || 'Blocked';
+    try {
+        tracker.moveToStatus(ticketKey, blocked);
+        console.log('✅ Moved', ticketKey, 'to', blocked);
+    } catch (e) {
+        console.warn('Failed to move ' + ticketKey + ' to ' + blocked + ':', e.message || e);
+    }
+}
+
+/**
+ * The leg-context WIP label (<contextId>_wip) — removed best-effort when the
+ * run carries a context id at all.
+ */
+function removeContextWipLabel(tracker, ticketKey, actualParams) {
+    var wip = actualParams ? wipLabelOf(actualParams) : null;
+    if (wip) {
+        try { tracker.removeLabel(ticketKey, wip); } catch (e) { /* non-fatal */ }
+    }
+}
+
 /**
  * agents#827 + gh-957: the rework pass produced no production change while
  * review threads are open AND reply coverage is incomplete (gh-957 tightens
@@ -1921,31 +2009,16 @@ function handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, 
     var openCount = coverage.openCount;
     var message = buildBlockedReworkComment(openCount, coverage.unaddressed || [], coverage.unaddressable || [],
         fixSummary, reworkRunUrl(), coverage.totalOpenCount);
-    console.error('❌ Rework blocked (no code changes, ' + openCount + ' open addressable thread(s)' +
-        (coverage.totalOpenCount > openCount ? ', ' + coverage.totalOpenCount + ' open in total' : '') + ')');
-    try {
-        scm.addComment(pr.number, message);
-    } catch (e) {
-        console.warn('Failed to post blocked rework comment on PR #' + pr.number + ':', e.message || e);
-    }
+    console.error(blockedLogLine(coverage));
+    postBlockedPrComment(scm, pr.number, message);
     // gh-957: the empty lap counts toward the SM no-op loop guard.
     postLapMarker(scm, pr.number, readReworkBaseHead(ticketKey), false, 0);
-    var blocked = (statuses && statuses.BLOCKED) || 'Blocked';
-    try {
-        tracker.moveToStatus(ticketKey, blocked);
-        console.log('✅ Moved', ticketKey, 'to', blocked);
-    } catch (e) {
-        console.warn('Failed to move ' + ticketKey + ' to ' + blocked + ':', e.message || e);
-    }
+    moveToBlockedStatus(tracker, ticketKey, statuses);
     // gh-1060: bridge the two blocked vocabularies — park the PR in the same
     // breath as the Blocked move (blocked label + arms stripped, one atomic
     // park), otherwise the armed PR loops rework legs on the blocked ticket.
     parkBlockedPr(scm, tracker, pr, ticketKey);
-    var wip = actualParams && actualParams.metadata && actualParams.metadata.contextId
-        ? actualParams.metadata.contextId + '_wip' : null;
-    if (wip) {
-        try { tracker.removeLabel(ticketKey, wip); } catch (e) { /* non-fatal */ }
-    }
+    removeContextWipLabel(tracker, ticketKey, actualParams);
     return { success: false, blocked: true, error: 'Rework blocked: no code changes while ' + openCount + ' review thread(s) are open' };
 }
 
@@ -2595,160 +2668,210 @@ function annotateFixSummary(response, config) {
     ) || '_(No fix summary generated)_';
 }
 
+// ── action stage helpers (gh-1195 CRAP split) ────────────────────────────────
+// Extracted verbatim from the former action prologue/ladder/tail. Stage order,
+// git/SCM calls, tracker calls, log lines and every return shape are
+// byte-identical to the inline code they replace — pinned by the action
+// characterization suites in js/unit-tests/test_pushReworkChanges.js.
+
+// The setup prologue: resolve params, project config, SCM, custom params, the
+// fix summary and the statuses — in exactly the order action used to.
+function actionSetup(params) {
+    const actualParams = params.ticket ? params : (params.jobParams || params);
+    const ticketKey = actualParams.ticket.key;
+    currentInputFolderName = runInputFolderName(params, actualParams);
+    resolvedInputFolder = null;
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var scm = scmModule.createScm(config);
+    const customParams = resolveCustomParams(params, actualParams, config);
+    const fixSummary = annotateFixSummary(actualParams.response, config);
+    const statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
+    return {
+        actualParams: actualParams,
+        ticketKey: ticketKey,
+        config: config,
+        scm: scm,
+        customParams: customParams,
+        fixSummary: fixSummary,
+        statuses: statuses
+    };
+}
+
+// Commit and push, then the post-publish gates — each mapping its failure
+// modes onto outcome objects (one resume attempt, then an honest failure).
+// A resume is reported as { resume: true } so action can re-enter itself.
+function pushAndPublishOrFail(ticketKey, config, customParams, tracker) {
+    var pushOutcome = commitAndPushWithRecovery(ticketKey, config, customParams, tracker);
+    if (pushOutcome.resume) {
+        return { resume: true };
+    }
+    if (pushOutcome.failed) {
+        return { failed: true, error: pushOutcome.error };
+    }
+    var publishOutcome = runPostPublishGatesOrFail(ticketKey, config, customParams, tracker);
+    if (publishOutcome.resume) {
+        return { resume: true };
+    }
+    if (publishOutcome.failed) {
+        return { failed: true, error: publishOutcome.error };
+    }
+    return {
+        branchName: pushOutcome.branchName,
+        codeChangesCommitted: pushOutcome.codeChangesCommitted
+    };
+}
+
+// The interrupted / failed-CLI ladder: a resume attempt then the honest
+// terminal handler for each; null when the response is neither — the leg
+// continues to the completion tail.
+function resumeOrFailLadder(ticketKey, customParams, tracker, branchName, statuses, fixSummary) {
+    if (isInterruptedReworkResponse(fixSummary)) {
+        return resumeOrHandleInterrupted(ticketKey, customParams, tracker, branchName, statuses, fixSummary);
+    }
+    // Fatal CLI failure (non-zero exit ≠ interruption): one resume attempt,
+    // then the honest failure path — never a "Rework Complete" announcement
+    // (live 2026-09-29: exit 1 was announced as completion, the #1052 loop).
+    if (isFailedCliReworkResponse(fixSummary)) {
+        return resumeOrHandleFailedCli(ticketKey, customParams, tracker, branchName, statuses, fixSummary);
+    }
+    return null;
+}
+
+// The completion tail: PR lookup, lap gate, thread replies, PR/ticket
+// comments, machine-loop latches, auto-start, artefact caching and the lap
+// stamp — in exactly the order action used to run them.
+function completeReworkLeg(params, setup, tracker, branchName, codeChangesCommitted, gateSummary) {
+    var scm = setup.scm;
+    var config = setup.config;
+    var ticketKey = setup.ticketKey;
+    var actualParams = setup.actualParams;
+    var statuses = setup.statuses;
+    var fixSummary = setup.fixSummary;
+    var fixSummaryWithWarnings = gateSummary.fixSummaryWithWarnings;
+    var nonBlockingGateWarningBlock = gateSummary.nonBlockingGateWarningBlock;
+
+    // Find PR to post comment — prefer targetRepository from config over git remote
+    var repoInfo = resolveRepoInfo(config, scm, ticketKey);
+    const pr = requirePrForTicket(scm, ticketKey, branchName);
+    // agents#827 + gh-957: rework only reworks — but a pass that changed no
+    // production file while review threads are open is BLOCKED only when
+    // the reply coverage is INCOMPLETE. A leg that put a targeted,
+    // explanatory reply on EVERY open thread (already addressed on the
+    // head / invalid finding) is allowed to resolve those threads with
+    // the audit line (rework run URL) even with zero pushed commits —
+    // a reply per thread is not a silent drop. Incomplete coverage keeps
+    // the historical blocked path (threads NOT resolved, ticket Blocked)
+    // and the gh-957 lap marker records the empty lap for the SM guard.
+    var lapGateRun = runLapGate(ticketKey, config, codeChangesCommitted, actualParams, statuses,
+        scm, tracker, pr, fixSummary);
+    if (lapGateRun.blocked) {
+        return lapGateRun.result;
+    }
+    var lapGate = lapGateRun.lapGate;
+    let prCommentPosted = false;
+
+    // Reply to each review thread and resolve it. responseText feeds the
+    // gh-692 closure sweep: threads cited in the rework response MUST be
+    // resolved even when review_replies.json lacks their ids. The
+    // resolutions counter feeds the gh-957 lap marker.
+    const lapResolutions = { resolved: 0 };
+    const repliesPosted = postThreadReplies(scm, pr.number, {
+        ticketKey: ticketKey,
+        workingDir: config.workingDir || null,
+        responseText: fixSummary,
+        resolutions: lapResolutions,
+        auditNoCodeChange: lapGate.auditResolve,
+        runUrl: reworkRunUrl()
+    });
+    console.log('Thread replies posted:', repliesPosted);
+
+    prCommentPosted = postCompletionPrComment(scm, pr, ticketKey, fixSummary, fixSummaryWithWarnings,
+        repliesPosted, nonBlockingGateWarningBlock, codeChangesCommitted);
+
+    finalizeTicketState(tracker, ticketKey, statuses, actualParams, setup.customParams);
+
+    // Post completion comment to the ticket.
+    // gh-799: the comment is generated from a LIVE unresolved-thread
+    // re-check + verdict probe + reply coverage — never from the stale
+    // input snapshot. Open threads (including mid-run arrivals) are listed
+    // with per-thread accounting; "no code changes are required" only on
+    // the verified-clean path.
+    const prUrl = pr ? pr.html_url : null;
+    postJiraComment(tracker, ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted,
+        fixSummaryWithWarnings, buildCompletionLiveState(scm, pr, ticketKey, config));
+
+    // GitHub machine loop: the once-guard lives on the PR (ai_pr_reviewed),
+    // not the issue. Clear it so the reworked head gets a FRESH review —
+    // otherwise review-after-dev (notPrLabels: ai_pr_reviewed) skips the
+    // PR forever and the loop stalls after one review round.
+    var stickyApproved = prHasApproved(pr, actualParams.ticket || (params.jobParams && params.jobParams.ticket));
+    var freshReviewWanted = !stickyApproved && headMovedSinceLastReview(scm, pr);
+    stickyApprovalNotice(scm, pr, stickyApproved);
+    noopLapDecisions(scm, tracker, pr, ticketKey, stickyApproved, freshReviewWanted, lapResolutions.resolved);
+    clearAiReviewedLatch(pr, freshReviewWanted, repoInfo);
+
+    runAutoStartReview(scm, config, ticketKey, params, actualParams, setup.customParams, freshReviewWanted, stickyApproved);
+
+    // Cache configured artefacts (e.g. cosmo test reports) to GitHub Release — non-fatal
+    cacheCompletionArtifacts(params);
+
+    console.log('✅ Rework workflow completed successfully');
+
+    stampCompletionLapMarker(scm, pr, ticketKey, lapGate, lapResolutions);
+    postCompletionTokenUsage(params, ticketKey);
+
+    return {
+        success: true,
+        message: ticketKey + ' rework pushed, PR commented, moved to ' + statuses.IN_REVIEW,
+        branchName: branchName,
+        prUrl: prUrl,
+        prCommentPosted: prCommentPosted
+    };
+}
+
 function action(params) {
     var tracker = null;
     try {
-        const actualParams = params.ticket ? params : (params.jobParams || params);
-        const ticketKey = actualParams.ticket.key;
-        currentInputFolderName = runInputFolderName(params, actualParams);
-        resolvedInputFolder = null;
-        var config = configLoader.loadProjectConfig(params.jobParams || params);
-        var scm = scmModule.createScm(config);
-        const _customParams = resolveCustomParams(params, actualParams, config);
-        const fixSummary = annotateFixSummary(actualParams.response, config);
-        const statuses = resolveStatuses(_customParams, config.jira && config.jira.statuses);
+        var setup = actionSetup(params);
         // Probe the tracker provider once — the same script then runs unchanged
         // on Jira / ADO / GitHub deployments.
-        tracker = trackersModule.createTracker(config, _customParams);
+        tracker = trackersModule.createTracker(setup.config, setup.customParams);
 
-        console.log('=== Push rework changes for:', ticketKey, '===');
+        console.log('=== Push rework changes for:', setup.ticketKey, '===');
 
         // Configure git
-        configureGitAuthor(config);
+        configureGitAuthor(setup.config);
 
-        var gateSummary = runPrePushGates(ticketKey, _customParams, fixSummary);
-        const fixSummaryWithWarnings = gateSummary.fixSummaryWithWarnings;
-        const nonBlockingGateWarningBlock = gateSummary.nonBlockingGateWarningBlock;
+        var gateSummary = runPrePushGates(setup.ticketKey, setup.customParams, setup.fixSummary);
 
         // If rework setup already failed (e.g. no PR found for this ticket), there is
         // nothing to commit/push to and no amount of CLI retrying can fix a missing PR.
         // Bail out here, before touching git at all.
-        var reworkSetupFailure = readReworkSetupFailure(ticketKey);
+        var reworkSetupFailure = readReworkSetupFailure(setup.ticketKey);
         if (reworkSetupFailure !== null) {
-            return handleReworkSetupAlreadyFailed(tracker, ticketKey, _customParams, reworkSetupFailure);
+            return handleReworkSetupAlreadyFailed(tracker, setup.ticketKey, setup.customParams, reworkSetupFailure);
         }
 
-        // Commit and push
-        var pushOutcome = commitAndPushWithRecovery(ticketKey, config, _customParams, tracker);
+        // Commit and push + post-publish gates
+        var pushOutcome = pushAndPublishOrFail(setup.ticketKey, setup.config, setup.customParams, tracker);
         if (pushOutcome.resume) {
             return action(params);
         }
         if (pushOutcome.failed) {
             return { success: false, error: pushOutcome.error };
         }
-        const branchName = pushOutcome.branchName;
-        const codeChangesCommitted = pushOutcome.codeChangesCommitted;
 
-        var publishOutcome = runPostPublishGatesOrFail(ticketKey, config, _customParams, tracker);
-        if (publishOutcome.resume) {
-            return action(params);
-        }
-        if (publishOutcome.failed) {
-            return { success: false, error: publishOutcome.error };
-        }
-
-        if (isInterruptedReworkResponse(fixSummary)) {
-            var interruptedOutcome = resumeOrHandleInterrupted(ticketKey, _customParams, tracker, branchName, statuses, fixSummary);
-            if (interruptedOutcome.resume) {
+        var failOutcome = resumeOrFailLadder(setup.ticketKey, setup.customParams, tracker,
+            pushOutcome.branchName, setup.statuses, setup.fixSummary);
+        if (failOutcome) {
+            if (failOutcome.resume) {
                 return action(params);
             }
-            return interruptedOutcome.result;
+            return failOutcome.result;
         }
 
-        // Fatal CLI failure (non-zero exit ≠ interruption): one resume attempt,
-        // then the honest failure path — never a "Rework Complete" announcement
-        // (live 2026-09-29: exit 1 was announced as completion, the #1052 loop).
-        if (isFailedCliReworkResponse(fixSummary)) {
-            var failedResume = tryResumeAgent({
-                ticketKey: ticketKey,
-                customParams: _customParams,
-                section: 'postAction',
-                stage: 'rework_cli_failed',
-                error: String(fixSummary).substring(0, 2000)
-            });
-            if (failedResume.attempted) {
-                return action(params);
-            }
-            return handleFailedReworkCli(tracker, ticketKey, branchName, _customParams, statuses, fixSummary);
-        }
-
-        // Find PR to post comment — prefer targetRepository from config over git remote
-        var repoInfo = resolveRepoInfo(config, scm, ticketKey);
-        const pr = requirePrForTicket(scm, ticketKey, branchName);
-        // agents#827 + gh-957: rework only reworks — but a pass that changed no
-        // production file while review threads are open is BLOCKED only when
-        // the reply coverage is INCOMPLETE. A leg that put a targeted,
-        // explanatory reply on EVERY open thread (already addressed on the
-        // head / invalid finding) is allowed to resolve those threads with
-        // the audit line (rework run URL) even with zero pushed commits —
-        // a reply per thread is not a silent drop. Incomplete coverage keeps
-        // the historical blocked path (threads NOT resolved, ticket Blocked)
-        // and the gh-957 lap marker records the empty lap for the SM guard.
-        var lapGateRun = runLapGate(ticketKey, config, codeChangesCommitted, actualParams, statuses,
-            scm, tracker, pr, fixSummary);
-        if (lapGateRun.blocked) {
-            return lapGateRun.result;
-        }
-        var lapGate = lapGateRun.lapGate;
-        let prCommentPosted = false;
-
-        // Reply to each review thread and resolve it. responseText feeds the
-        // gh-692 closure sweep: threads cited in the rework response MUST be
-        // resolved even when review_replies.json lacks their ids. The
-        // resolutions counter feeds the gh-957 lap marker.
-        const lapResolutions = { resolved: 0 };
-        const repliesPosted = postThreadReplies(scm, pr.number, {
-            ticketKey: ticketKey,
-            workingDir: config.workingDir || null,
-            responseText: fixSummary,
-            resolutions: lapResolutions,
-            auditNoCodeChange: lapGate.auditResolve,
-            runUrl: reworkRunUrl()
-        });
-        console.log('Thread replies posted:', repliesPosted);
-
-        prCommentPosted = postCompletionPrComment(scm, pr, ticketKey, fixSummary, fixSummaryWithWarnings,
-            repliesPosted, nonBlockingGateWarningBlock, codeChangesCommitted);
-
-        finalizeTicketState(tracker, ticketKey, statuses, actualParams, _customParams);
-
-        // Post completion comment to the ticket.
-        // gh-799: the comment is generated from a LIVE unresolved-thread
-        // re-check + verdict probe + reply coverage — never from the stale
-        // input snapshot. Open threads (including mid-run arrivals) are listed
-        // with per-thread accounting; "no code changes are required" only on
-        // the verified-clean path.
-        const prUrl = pr ? pr.html_url : null;
-        postJiraComment(tracker, ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted,
-            fixSummaryWithWarnings, buildCompletionLiveState(scm, pr, ticketKey, config));
-
-        // GitHub machine loop: the once-guard lives on the PR (ai_pr_reviewed),
-        // not the issue. Clear it so the reworked head gets a FRESH review —
-        // otherwise review-after-dev (notPrLabels: ai_pr_reviewed) skips the
-        // PR forever and the loop stalls after one review round.
-        var stickyApproved = prHasApproved(pr, actualParams.ticket || (params.jobParams && params.jobParams.ticket));
-        var freshReviewWanted = !stickyApproved && headMovedSinceLastReview(scm, pr);
-        stickyApprovalNotice(scm, pr, stickyApproved);
-        noopLapDecisions(scm, tracker, pr, ticketKey, stickyApproved, freshReviewWanted, lapResolutions.resolved);
-        clearAiReviewedLatch(pr, freshReviewWanted, repoInfo);
-
-        runAutoStartReview(scm, config, ticketKey, params, actualParams, _customParams, freshReviewWanted, stickyApproved);
-
-        // Cache configured artefacts (e.g. cosmo test reports) to GitHub Release — non-fatal
-        cacheCompletionArtifacts(params);
-
-        console.log('✅ Rework workflow completed successfully');
-
-        stampCompletionLapMarker(scm, pr, ticketKey, lapGate, lapResolutions);
-        postCompletionTokenUsage(params, ticketKey);
-
-        return {
-            success: true,
-            message: ticketKey + ' rework pushed, PR commented, moved to ' + statuses.IN_REVIEW,
-            branchName: branchName,
-            prUrl: prUrl,
-            prCommentPosted: prCommentPosted
-        };
+        return completeReworkLeg(params, setup, tracker, pushOutcome.branchName,
+            pushOutcome.codeChangesCommitted, gateSummary);
 
     } catch (error) {
         return handleActionError(params, error, tracker);
@@ -2756,5 +2879,9 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch, assertReworkBranchSynced, squashReworkWipIfEnabled, readInputViolations, runOwnedViolationsGate, handleOwnedViolationsRejected, buildOwnedViolationsRejectedComment };
+    module.exports = { action, getGitHubRepoInfo, parseGitHubRemoteUrl,
+    actionSetup, pushAndPublishOrFail, resumeOrFailLadder, completeReworkLeg,
+    openThreadsCompletionComment, unaddressedRepliesCompletionComment, changesRequestedCompletionComment, cleanCompletionComment, completionPrCommentSuffix,
+    blockedLogLine, postBlockedPrComment, moveToBlockedStatus, removeContextWipLabel,
+    hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch, assertReworkBranchSynced, squashReworkWipIfEnabled, readInputViolations, runOwnedViolationsGate, handleOwnedViolationsRejected, buildOwnedViolationsRejectedComment };
 }
