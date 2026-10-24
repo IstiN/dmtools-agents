@@ -139,6 +139,33 @@ function makeTempWorkspace(exec, opts) {
 }
 
 /**
+ * gh-1196: the deps-seam resolution, split out of action. Production
+ * resolves the dmtools globals (cli_execute_command / file_write /
+ * file_read) when the deps seam leaves a name unset; a runtime without the
+ * global resolves null and the seam's user fails (writeFile/readFile throw
+ * their not-available errors). Each seam keeps its original name under
+ * deps.* as the test override.
+ */
+function resolveDeps(deps) {
+    return {
+        exec: deps.cli_execute_command ||
+            (typeof cli_execute_command === 'function' ? cli_execute_command : null),
+        write: deps.file_write ||
+            (typeof file_write === 'function' ? file_write : null),
+        read: deps.file_read ||
+            (typeof file_read === 'function' ? file_read : null)
+    };
+}
+
+// gh-1196: the one console.log line, split out of action (the ternaries ride
+// along — the decision line is optional).
+function verdictLogLine(result) {
+    return '  ⚖️ review verdict: ' + result.status +
+        (result.pr ? ' (PR #' + result.pr + ')' : '') +
+        (result.decision ? ' — ' + result.decision : '');
+}
+
+/**
  * JSRunner action. deps is a test seam: production resolves the dmtools
  * globals (cli_execute_command / file_write / file_read). The no-verdict
  * path throws (exit-1 parity — the workflow step must redden); every other
@@ -146,30 +173,25 @@ function makeTempWorkspace(exec, opts) {
  */
 function action(params, deps) {
     deps = deps || {};
-    var execRaw = deps.cli_execute_command ||
-        (typeof cli_execute_command === 'function' ? cli_execute_command : null);
-    var writeRaw = deps.file_write ||
-        (typeof file_write === 'function' ? file_write : null);
-    var readRaw = deps.file_read ||
-        (typeof file_read === 'function' ? file_read : null);
+    var seams = resolveDeps(deps);
     var opts = resolveParams(params, deps.env);
     // execOut unwrap through the module's canonical definition (no trim:
     // bodies/file paths ride verbatim; an empty-output result object is an
     // empty output — never '[object Object]' as a command string).
     var exec = function (cmd) {
-        return reviewVerdict.unwrap(execRaw({ command: cmd }));
+        return reviewVerdict.unwrap(seams.exec({ command: cmd }));
     };
     var ws = makeTempWorkspace(exec, opts);
     try {
         var result = reviewVerdict.applyReviewVerdict(opts, {
             exec: exec,
             writeFile: function (p, c) {
-                if (!writeRaw) throw new Error('file_write is not available on this runtime');
-                return writeRaw(p, c);
+                if (!seams.write) throw new Error('file_write is not available on this runtime');
+                return seams.write(p, c);
             },
             readFile: function (p) {
-                if (!readRaw) throw new Error('file_read is not available on this runtime');
-                return readRaw({ path: p });
+                if (!seams.read) throw new Error('file_read is not available on this runtime');
+                return seams.read({ path: p });
             },
             tempFile: ws.tempFile,
             clock: deps.clock || function () { return new Date(); },
@@ -177,9 +199,7 @@ function action(params, deps) {
             log: deps.console_log ||
                 (typeof console_log === 'function' ? console_log : function (line) { console.log(line); })
         });
-        console.log('  ⚖️ review verdict: ' + result.status +
-            (result.pr ? ' (PR #' + result.pr + ')' : '') +
-            (result.decision ? ' — ' + result.decision : ''));
+        console.log(verdictLogLine(result));
         return result;
     } finally {
         ws.cleanup();
