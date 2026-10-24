@@ -81,8 +81,6 @@ _Post Story Test Automation Results Action_
 - Parameters (customParams):
   - `adoTextFormat`
   - `aiRepository`
-  - `autoStartReview`
-  - `autoStartReviewConfigFile`
   - `branchCreateFnPath`
   - `branchNamingFnPath`
   - `configPath`
@@ -124,8 +122,6 @@ _Post Story Test Automation Results Action_
 - `trackerProvider` _(used by JS action)_
 - `testFilesGlob` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
-- `autoStartReview` _(used by JS action)_
-- `autoStartReviewConfigFile` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
 - `localTeammate` _(used by JS action)_

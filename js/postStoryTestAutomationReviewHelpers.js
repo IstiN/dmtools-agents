@@ -198,16 +198,9 @@ function postInlineComment(scm, prNumber, inlineComment, storyKey, readFile, prR
     const commentText = resolveCommentText(inlineComment, readFile);
 
     try {
-        if (!commentText) {
-            console.warn('No comment content found for inline comment on', filePath);
+        if (!validateInlineCommentTarget(filePath, inlineComment.line, commentText)) {
             return false;
         }
-        if (!filePath) {
-            console.warn('No file path found for inline comment');
-            return false;
-        }
-
-        console.log('Posting inline comment on ' + filePath + ':' + inlineComment.line);
 
         var diffText = scm.getPrDiff(prNumber);
         var anchor = resolveInlineAnchor(diffText, inlineComment, prReviewComments);
@@ -360,6 +353,41 @@ function buildReworkFeedback(reviewData, readFile) {
     return appendGeneralFeedback(feedback, reviewData.generalComment, readFile);
 }
 
+/**
+ * gh-1246: jobParamPatch merge previously duplicated by every review
+ * post-action: configLoader.resolveInstructions(contextId) customParams
+ * first, then the runtime params' customParams win.
+ */
+function resolveCustomParams(configLoader, params, config, contextId) {
+    var merged = {};
+    var patch = configLoader.resolveInstructions(contextId, null, config).jobParamPatch;
+    if (patch && patch.customParams) {
+        Object.assign(merged, patch.customParams);
+    }
+    Object.assign(merged,
+        (params.jobParams && params.jobParams.customParams) || params.customParams || {}
+    );
+    return merged;
+}
+
+/**
+ * gh-1246: guard + log line shared by every inline-comment poster. Returns
+ * false when the comment text or the file path is missing; logs the target
+ * location otherwise.
+ */
+function validateInlineCommentTarget(filePath, line, commentText) {
+    if (!commentText) {
+        console.warn('No comment content found for inline comment on', filePath);
+        return false;
+    }
+    if (!filePath) {
+        console.warn('No file path found for inline comment');
+        return false;
+    }
+    console.log('Posting inline comment on ' + filePath + ':' + line);
+    return true;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         parsePrInfoFields: parsePrInfoFields,
@@ -377,6 +405,9 @@ if (typeof module !== 'undefined' && module.exports) {
         applyVerdictLabels: applyVerdictLabels,
         buildInlineFeedbackEntries: buildInlineFeedbackEntries,
         appendGeneralFeedback: appendGeneralFeedback,
-        buildReworkFeedback: buildReworkFeedback
+        buildReworkFeedback: buildReworkFeedback,
+        // gh-1246 dedup exports:
+        resolveCustomParams: resolveCustomParams,
+        validateInlineCommentTarget: validateInlineCommentTarget
     };
 }

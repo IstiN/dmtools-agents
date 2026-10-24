@@ -118,22 +118,6 @@ function decideTargetStatus(passed, noCodeChanges, statuses) {
 }
 
 /**
- * Pure sync-strategy decision for publishExistingBranch from the three known
- * revisions (gh-1043 CRAP split). Mirrors the original in-function conditions
- * EXACTLY — including the empty-string edge cases (a failed rev-parse yields
- * ''), because the command sequence and log lines differ per strategy:
- * 'identical' | 'ahead' (fast-forward push, then fall through to the
- * diverged escalation when the push fails) | 'behind' (reset --hard) |
- * 'diverged' (normal push → --force-with-lease escalation).
- */
-function decidePublishStrategy(localSha, remoteSha, mergeBase) {
-    if (localSha && remoteSha && localSha === remoteSha) return 'identical';
-    if (mergeBase === remoteSha && mergeBase !== localSha) return 'ahead';
-    if (mergeBase === localSha && mergeBase !== remoteSha) return 'behind';
-    return 'diverged';
-}
-
-/**
  * Ticket identity for action() logging/comments (gh-1083): the key, the
  * operator-facing summary (fields.summary degrading to the key) and the
  * project key (part before the first dash).
@@ -202,7 +186,6 @@ if (typeof module !== 'undefined' && module.exports) {
         buildErrorComment: buildErrorComment,
         buildPartialCommitMessage: buildPartialCommitMessage,
         decideTargetStatus: decideTargetStatus,
-        decidePublishStrategy: decidePublishStrategy,
         resolveTicketIdentity: resolveTicketIdentity,
         decideGitStageRoute: decideGitStageRoute,
         resolveJobParams: resolveJobParams,

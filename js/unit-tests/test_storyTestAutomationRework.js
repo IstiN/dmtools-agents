@@ -44,6 +44,7 @@ function loadRework(mocks, loaderOverride) {
         file_write: function () {}
     }, mocks || {});
     requireMap['./common/trackers.js'] = loadTrackersSr(allMocks);
+    requireMap['./postStoryTestAutomationShared.js'] = loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), allMocks);
     if (loaderOverride) requireMap['./configLoader.js'] = loaderOverride;
     return loadModule(
         'js/storyTestAutomationRework.js',
@@ -152,7 +153,8 @@ suite('storyTestAutomationRework — mergeMain mid-merge guard (gh-761)', functi
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
             './config.js': { LABELS: {} },
             './common/tokenUsageComment.js': { postTokenUsageComments: function () {} },
-            './common/trackers.js': loadTrackersSr(mocks)
+            './common/trackers.js': loadTrackersSr(mocks),
+            './postStoryTestAutomationShared.js': loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), mocks)
         };
         var mod = loadModule('js/storyTestAutomationRework.js', makeRequire(req), mocks);
         var result = mod.action({
@@ -470,7 +472,8 @@ function loadReworkWith(autoStartModule, scmFactory, mocks, tokenUsageModule) {
         './common/mergeState.js': loadModule('js/common/mergeState.js'),
         './config.js': { LABELS: {} },
         './common/tokenUsageComment.js': tokenUsageModule || { postTokenUsageComments: function () {} },
-        './common/trackers.js': loadTrackersSr(allMocks)
+        './common/trackers.js': loadTrackersSr(allMocks),
+        './postStoryTestAutomationShared.js': loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), allMocks)
     };
     return loadModule('js/storyTestAutomationRework.js', makeRequire(requireMap), allMocks);
 }
