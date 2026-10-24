@@ -775,3 +775,104 @@ suite('sessionDelta — UT-4 & IT-1: composite resume prompt & bash provider int
         assert.equal(bridged.parseDiscussionsRawJson(JSON.stringify([null, { id: 'arr-1', body: 'hi' }])).length, 1);
     });
 });
+
+// ── gh-1224: resolveDefaultSessionSubpath — deterministic fallback ladder ────
+// Every name in an env ladder is pinned in ctx.env (hasOwnProperty override),
+// so these assertions never read the runner's own environment.
+
+suite('sessionDelta.resolveDefaultSessionSubpath (gh-1224)', function() {
+
+    function envOf(map) { return map; }
+
+    test('explicit ctx fields win over everything', function() {
+        assert.equal(
+            sessionDelta.resolveDefaultSessionSubpath({
+                repo: 'IstiN/dmtools-agents',
+                ticketKey: 'GH-1224',
+                configFile: 'agents/pr_review.json',
+                sessionGroup: 'custom-group',
+                env: envOf({
+                    GITHUB_REPOSITORY: 'should-not-win',
+                    AI_TEAMMATE_DISPLAY_KEY: 'should-not-win',
+                    AI_TEAMMATE_CONFIG_FILE: 'should-not-win'
+                })
+            }),
+            '.dmtools/fa-sessions/istin-dmtools-agents/gh-1224/custom-group');
+    });
+
+    test('env ladders fill the gaps when ctx fields are absent', function() {
+        assert.equal(
+            sessionDelta.resolveDefaultSessionSubpath({
+                env: envOf({
+                    GITHUB_REPOSITORY: 'Acme/Corp Repo',
+                    AI_TEAMMATE_DISPLAY_KEY: 'display-9',
+                    AI_TEAMMATE_CONFIG_FILE: 'agents/pr_test_automation_review.json'
+                })
+            }),
+            '.dmtools/fa-sessions/acme-corp-repo/display-9/test-review');
+    });
+
+    test('second and third ladder entries are honoured when the first is empty', function() {
+        assert.equal(
+            sessionDelta.resolveDefaultSessionSubpath({
+                env: envOf({
+                    GITHUB_REPOSITORY: '',
+                    AI_TEAMMATE_DISPLAY_KEY: '',
+                    DISPLAY_KEY: 'display-fallback',
+                    AI_TEAMMATE_CONCURRENCY_KEY: 'concurrency-ignored',
+                    AI_TEAMMATE_CONFIG_FILE: '',
+                    CONFIG_FILE: 'agents/pr_rework.json'
+                })
+            }),
+            '.dmtools/fa-sessions/local/display-fallback/dev-write');
+    });
+
+    test('a fully unpinned context degrades to the local defaults', function() {
+        assert.equal(
+            sessionDelta.resolveDefaultSessionSubpath({
+                env: envOf({
+                    GITHUB_REPOSITORY: '',
+                    AI_TEAMMATE_DISPLAY_KEY: '',
+                    DISPLAY_KEY: '',
+                    AI_TEAMMATE_CONCURRENCY_KEY: '',
+                    AI_TEAMMATE_CONFIG_FILE: '',
+                    CONFIG_FILE: ''
+                })
+            }),
+            '.dmtools/fa-sessions/local/local/dev-write');
+    });
+
+    test('a config outside the session-group map slugifies to itself', function() {
+        assert.equal(
+            sessionDelta.resolveDefaultSessionSubpath({
+                configFile: 'agents/my_custom_flow.json',
+                env: envOf({
+                    GITHUB_REPOSITORY: '',
+                    AI_TEAMMATE_DISPLAY_KEY: '',
+                    DISPLAY_KEY: '',
+                    AI_TEAMMATE_CONCURRENCY_KEY: '',
+                    AI_TEAMMATE_CONFIG_FILE: '',
+                    CONFIG_FILE: ''
+                })
+            }),
+            '.dmtools/fa-sessions/local/local/my_custom_flow');
+    });
+
+    test('null/undefined ctx fields behave like absent ones', function() {
+        assert.equal(
+            sessionDelta.resolveDefaultSessionSubpath({
+                repo: null,
+                ticketKey: undefined,
+                configFile: null,
+                env: envOf({
+                    GITHUB_REPOSITORY: '',
+                    AI_TEAMMATE_DISPLAY_KEY: '',
+                    DISPLAY_KEY: '',
+                    AI_TEAMMATE_CONCURRENCY_KEY: '',
+                    AI_TEAMMATE_CONFIG_FILE: '',
+                    CONFIG_FILE: ''
+                })
+            }),
+            '.dmtools/fa-sessions/local/local/dev-write');
+    });
+});
