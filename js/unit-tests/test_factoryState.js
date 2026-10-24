@@ -2552,3 +2552,132 @@ suite('factoryState — gh-1108 REG guards (agents token stream)', function () {
       'outside the window the card (and its rows) drop — E1 honesty');
   });
 });
+
+// ── gh-1198 CRAP extraction: updateHistory helpers ──────────────────────────
+
+suite('factoryState — updateHistory helpers (gh-1198 extraction)', function () {
+  var CFG = { repo: 'IstiN/flutter_agent_harness', asset: 'fa-state.json' };
+
+  test('helpers exist (extraction landed)', function () {
+    ['historyIndexPath', 'existingHistorySha', 'currentHistorySnaps',
+     'historyEntry', 'validSnapshots'].forEach(function (name) {
+      assert.equal(typeof fsModule[name], 'function', name + ' exported');
+    });
+  });
+
+  test('historyIndexPath: the -history.json sibling of the snapshot base', function () {
+    assert.equal(fsModule.historyIndexPath('fa-state'), 'data/fa-state-history.json');
+  });
+
+  suite('existingHistorySha (sha probe)', function () {
+    test('returns the probed sha when the index exists', function () {
+      var cmds = [];
+      var sha = fsModule.existingHistorySha('IstiN/flutter_agent_harness',
+        'data/fa-state-history.json', 'factory-data', function (a) {
+          cmds.push(a.command);
+          return { output: 'feedface\n' };
+        });
+      assert.equal(sha, 'feedface');
+      assert.equal(cmds.length, 1);
+      assert.ok(cmds[0].indexOf('--jq .sha') > 0);
+      assert.ok(cmds[0].indexOf('data/fa-state-history.json') > 0);
+      assert.ok(cmds[0].indexOf('?ref=factory-data') > 0);
+    });
+
+    test("a 'Not Found' string is data (first publish) — degrades to ''", function () {
+      var sha = fsModule.existingHistorySha('o/r', 'data/x-history.json', 'factory-data',
+        function () { return { output: 'Not Found (404)\n' }; });
+      assert.equal(sha, '');
+    });
+
+    test('a transport throw degrades to empty sha (first-publish shape)', function () {
+      var sha = fsModule.existingHistorySha('o/r', 'data/x-history.json', 'factory-data',
+        function () { throw new Error('rate limit'); });
+      assert.equal(sha, '');
+    });
+  });
+
+  suite('currentHistorySnaps (index read)', function () {
+    test('parses the snapshots array out of the probed index', function () {
+      var snaps = [{ ts: 't1', url: 'u1' }, { ts: 't2', url: 'u2' }];
+      var out = fsModule.currentHistorySnaps('o/r', 'data/x-history.json', CFG,
+        function () { return { output: JSON.stringify({ schema: 1, snapshots: snaps }) }; });
+      assert.deepEqual(out, snaps);
+    });
+
+    test('an empty probe parses as an empty index ({} fallback)', function () {
+      var out = fsModule.currentHistorySnaps('o/r', 'data/x-history.json', CFG,
+        function () { return { output: '' }; });
+      assert.deepEqual(out, []);
+    });
+
+    test('invalid JSON degrades to [] — the index is rebuilt, never fatal', function () {
+      var out = fsModule.currentHistorySnaps('o/r', 'data/x-history.json', CFG,
+        function () { return { output: '{nope' }; });
+      assert.deepEqual(out, []);
+    });
+
+    test('a snapshot-less index object degrades to []', function () {
+      var out = fsModule.currentHistorySnaps('o/r', 'data/x-history.json', CFG,
+        function () { return { output: JSON.stringify({ schema: 1 }) }; });
+      assert.deepEqual(out, []);
+    });
+  });
+
+  test('validSnapshots keeps only entries with a url (shape-drift tolerance, multi-item)', function () {
+    assert.deepEqual(
+      fsModule.validSnapshots([{ url: 'u1' }, null, {}, { ts: 't' }, { url: 'u2' }]),
+      [{ url: 'u1' }, { url: 'u2' }]);
+    assert.deepEqual(fsModule.validSnapshots([]), []);
+    assert.deepEqual(fsModule.validSnapshots(null), []);
+  });
+
+  test('historyEntry: the new head entry shape (ts, tick, stamp, url)', function () {
+    var state = { repo: 'o/r', tick: { at: '2026-09-23T22:35:55Z' } };
+    var entry = fsModule.historyEntry('o/r', 'factory-data', 'fa-state', '20260923-2235', state);
+    assert.equal(entry.tick, '2026-09-23T22:35:55Z');
+    assert.equal(entry.stamp, '20260923-2235');
+    assert.equal(entry.url,
+      'https://raw.githubusercontent.com/o/r/factory-data/data/fa-state-20260923-2235.json');
+    assert.ok(entry.ts, 'ts is stamped');
+  });
+
+  test('historyEntry tolerates a stateless tick payload', function () {
+    var entry = fsModule.historyEntry('o/r', 'factory-data', 'fa-state', 's', null);
+    assert.equal(entry.tick, '');
+  });
+
+  suite('updateHistory — exec call order is unchanged (characterization)', function () {
+    var ST = fsModule.buildFactoryState({
+      repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' },
+      prs: [], runs: [], now: '2026-09-23T22:35:55Z'
+    });
+
+    test('fresh publish: snapshot PUT → sha probe → index PUT (three calls, no content probe)', function () {
+      var seen = [];
+      fsModule.updateHistory(ST, CFG, function (a) {
+        seen.push(a.command);
+        if (a.command.indexOf('--jq .sha') > 0) throw new Error('Not Found');
+        return undefined;
+      });
+      assert.equal(seen.length, 3);
+      assert.ok(seen[0].indexOf('data/fa-state-20260923-2235.json') > 0, 'snapshot lands first');
+      assert.ok(seen[1].indexOf('--jq .sha') > 0, 'sha probe second');
+      assert.ok(seen[2].indexOf('data/fa-state-history.json') > 0, 'index PUT third');
+    });
+
+    test('existing index: snapshot PUT → sha probe → content probe → index PUT, sha rides the PUT', function () {
+      var seen = [];
+      fsModule.updateHistory(ST, CFG, function (a) {
+        seen.push(a.command);
+        if (a.command.indexOf('--jq .sha') > 0) return { output: 'feedface\n' };
+        if (a.command.indexOf('--jq .content') > 0) {
+          return { output: JSON.stringify({ schema: 1, snapshots: [{ url: 'u1' }] }) };
+        }
+        return undefined;
+      });
+      assert.equal(seen.length, 4, 'the content probe only fires when the index exists');
+      assert.ok(seen[3].indexOf("-f sha='feedface'") > 0, 'the probed sha rides the index PUT');
+    });
+  });
+});
