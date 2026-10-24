@@ -221,19 +221,29 @@ function withTokenUsageCompat(mock) {
             try {
                 var options = {
                     initiator: (overrides && overrides.initiator) || (params && params.initiator),
-                    customParams: typeof mock.customParamsOf === 'function' ? mock.customParamsOf(params) : {}
+                    customParams: tokenUsageCustomParamsOf(mock, params)
                 };
-                if (overrides) {
-                    if (overrides.tracker) options.tracker = overrides.tracker;
-                    if (overrides.config) options.config = overrides.config;
-                }
-                mock.postTokenUsageComments(ticketKey, options);
+                mock.postTokenUsageComments(ticketKey, tokenUsageSafelyOverrides(options, overrides));
             } catch (e) {
                 console.warn('Failed to post token usage comments:', e);
             }
         };
     }
     return mock;
+}
+
+// customParamsOf(params) when the mock provides it, {} otherwise — mirrors
+// the real module's customParamsOf(params) for callers without action params.
+function tokenUsageCustomParamsOf(mock, params) {
+    return typeof mock.customParamsOf === 'function' ? mock.customParamsOf(params) : {};
+}
+
+// tracker/config overrides win over the params-derived options (pure).
+function tokenUsageSafelyOverrides(options, overrides) {
+    if (!overrides) return options;
+    if (overrides.tracker) options.tracker = overrides.tracker;
+    if (overrides.config) options.config = overrides.config;
+    return options;
 }
 
 /**
