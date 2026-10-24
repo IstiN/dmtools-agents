@@ -114,4 +114,39 @@ suite('finishTestCasesGeneration: stage-label fallback (gh-916)', function() {
         assert.ok(!x.logs.some(function(l) { return l.indexOf('✅ Moved') !== -1; }), '✅ must not print when nothing worked');
         assert.ok(x.warns.some(function(l) { return l.indexOf('Could not move Story to Ready For Testing') !== -1; }));
     });
+
+    // ── gh-1229 characterization: seams pinned before helper extraction ──
+
+    test('missing ticket key: structured failure and no tracker interactions', function() {
+        var x = finishGh916WithLogs({
+            jira_move_to_status: function() { throw new Error('must not be called'); },
+            jira_remove_label: function() { throw new Error('must not be called'); }
+        });
+
+        var result = x.module.action({});
+
+        assert.deepEqual(result, { success: false, error: 'No ticket key found in params' });
+        assert.ok(x.warns.every(function(l) { return l.indexOf('token usage') === -1; }));
+    });
+
+    test('a failing removeLabel only warns and the action still succeeds', function() {
+        var moved = [];
+        var x = finishGh916WithLogs({
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_remove_label: function() { throw new Error('label api down'); }
+        });
+
+        var result = x.module.action({ ticket: { key: 'TS-212' } });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(moved, [{ key: 'TS-212', statusName: 'Ready For Testing' }]);
+        assert.ok(x.warns.some(function(l) { return l.indexOf('Could not remove sm_test_cases_triggered label') !== -1; }));
+    });
+
+    test('customParamsOf keeps the jobParams-then-top-level precedence', function() {
+        var m = loadFinishTestCasesGeneration({});
+        assert.deepEqual(m.customParamsOf({ jobParams: { customParams: { a: 1 } } }), { a: 1 });
+        assert.deepEqual(m.customParamsOf({ customParams: { b: 2 } }), { b: 2 });
+        assert.deepEqual(m.customParamsOf({}), {});
+    });
 });
