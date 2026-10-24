@@ -324,3 +324,41 @@ suite('reworkLatch — arming-storm dedupe (L2)', function () {
         assert.equal(res.allowed.length, 1, 'terminated leg re-arms');
     });
 });
+
+// ── gh-1221 CRAP characterization: normalizeMap arms + degenerate inputs ─────
+// Pins the normalizeMap validation table (entry shapes, the `by` copy) and
+// the degenerate-input guards of isLegRun / pruneStale so the helper split
+// of the normalize loop cannot move a decision.
+suite('reworkLatch — gh-1221 normalizeMap arms + degenerate inputs', function () {
+
+    test('normalizeMap copies the `by` attribution as a string', function () {
+        var map = latch.normalizeMap({ 'pr-1@aaa': { head: 'aaa', at: T0, by: 42 } });
+        assert.equal(map['pr-1@aaa'].by, '42', 'by is normalized to a string');
+        assert.deepEqual(Object.keys(map['pr-1@aaa']).sort(), ['at', 'by', 'head'],
+            'exactly head/at/by survive — every other field is dropped');
+    });
+
+    test('normalizeMap drops array entries and non-string heads', function () {
+        assert.deepEqual(latch.normalizeMap({ 'pr-1@aaa': ['a'] }), {},
+            'an array entry is not an object — dropped');
+        assert.deepEqual(latch.normalizeMap({ 'pr-2@bbb': { head: 7, at: T0 } }), {},
+            'a non-string head is dropped');
+        assert.deepEqual(latch.normalizeMap({ 'pr-3@ccc': { head: 'ccc', at: '' } }), {},
+            'an empty at stamp is dropped');
+    });
+
+    test('normalizeMap keeps a numeric at stamp (epoch ms shape rides the snapshot too)', function () {
+        var map = latch.normalizeMap({ 'pr-4@ddd': { head: 'ddd', at: T0_MS } });
+        assert.equal(map['pr-4@ddd'].at, T0_MS, 'at is kept as-is — toMs() decides parsability later');
+    });
+
+    test('isLegRun(null) is false (no run, no effect)', function () {
+        assert.equal(latch.isLegRun(null, 'ai-teammate.yml'), false);
+        assert.equal(latch.isLegRun(undefined), false, 'default workflow file applies');
+    });
+
+    test('pruneStale on a non-object map returns an empty sweep', function () {
+        assert.deepEqual(latch.pruneStale(null, {}), { map: {}, cleared: [] });
+        assert.deepEqual(latch.pruneStale('junk', {}), { map: {}, cleared: [] });
+    });
+});
