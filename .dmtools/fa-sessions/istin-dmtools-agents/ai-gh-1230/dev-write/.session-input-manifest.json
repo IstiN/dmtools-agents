@@ -1,0 +1,313 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-24T14:32:55.345Z",
+  "ticketKey": "pr-1240",
+  "headSha": "d97ef267f34de261b16f108efeb60e1331a84db4",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "merge_conflicts.md": {
+      "hash": "fnv1a64:61a85ebab56d5c1d",
+      "size": 508
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:58b09863cb87ac7b",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:0ab61cb796fe19a1",
+      "size": 25158
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:32ea27a9bdac2a63",
+      "size": 12317
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:119dc69c4fe2adea",
+      "size": 3512
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:25e50ab5dcd31f91",
+      "size": 2698
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:87a47d96c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:8462b0378bc6c5e7",
+      "size": 3261
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:b782a964b0db6e0a",
+      "size": 3166
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6v47wd",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_timerAutoCommitAndSave.js:1157",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: `assert.throws` second argument is a fail-message, not a matcher — the error-message contract is not actually pinned**\n\n`js/unit-tests/test_timerAutoCommitAndSave.js:1157`:\n\n```js\nassert.throws(function() { timerConfigLoader({ configThrows: true }).loadProjectConfig({}); },\n    /config unreadable/);\n```\n\nIn both harnesses (`js/unit-tests/testRunner.js:154`, `js/unit-tests/node_testRunner.js:92`) the signature is `throws: function(fn, msg)` — the second argument is only used as the failure message when the function does **not** throw. The thrown error is never matched against `/config unreadable/`, so the test passes today but would stay green if the message text changed (e.g. a refactor renames \"config unreadable\"). For a characterization suite whose purpose is to pin contracts, this is a silent no-op assertion on the message.\n\nUse the `try/catch` + `assert.contains` pattern used everywhere else in this PR:\n\n```js\nvar threw = null;\ntry { timerConfigLoader({ configThrows: true }).loadProjectConfig({}); } catch (e) { threw = e; }\nassert.ok(threw, 'configThrows must fail the config load');\nassert.contains(threw.message, 'config unreadable');\n```"
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v47x5",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_postPRReviewComments.js:2716",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: trailing whitespace in the new characterization test**\n\n`js/unit-tests/test_postPRReviewComments.js:2716`:\n\n```js\nmocks.jira_remove_label({}); \n```\n\nThere is a trailing space after `{});`. The same added block also packs five calls on one line (`mocks.jira_add_label({}); mocks.jira_move_to_status({}); …`) — splitting them one-per-line keeps the recorder contract readable in future diffs. Cosmetic only; no linter is configured in this repo to catch it."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v47zh",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_factoryTokenUsageIssue889.js:36",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: new file-level helpers keep their old in-suite 2-space indent**\n\n`js/unit-tests/test_factoryTokenUsageIssue889.js:36` — `boardExecStub` / `boardExecResponse` were moved from inside a `suite` body (2-space) to file level, but the 2-space indentation came along. The file's top-level style is 4-space (102 lines vs 44 for the new 2-space block), as in every other unit-test file. Re-indenting the two helpers (plus their characterization suites) to 4 spaces keeps the file uniform. Cosmetic only — behavior verified identical."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v471r",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_unitTestMocks.js:51",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: update the `/* global */` declaration for the newly used harness globals**\n\nThe new suite at `js/unit-tests/test_unitTestMocks.js:51` uses `makeDefaultConfigLoaderMock`, `makeDefaultJiraConfig` and `configLoaderModule` (provided by both `testRunner.js` and `node_testRunner.js`), but the file header still reads:\n\n```js\n/* global trackersMock, suite, test, assert */\n```\n\nAdd the three names so the file's declared surface matches what it actually consumes (no linter enforces this today, but the comment is the file's contract documentation). Note both runners define these globals — verified in `testRunner.js:254-298` and `node_testRunner.js:274-324` — so the suite is dual-runner safe as written."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v473H",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_workingDir.js:848",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: characterization reads a live, unrelated repo-root file (`crap4dart.yaml`)**\n\n`js/unit-tests/test_workingDir.js:848` (and the same pattern at lines 859/866):\n\n```js\nassert.equal(configBlockingFileRead(null)({ path: 'crap4dart.yaml' }), file_read({ path: 'crap4dart.yaml' }),\n    'null map falls through to the real file_read');\n```\n\nThe pass-through assertion is proven by comparing two live reads of `crap4dart.yaml` — a tooling config owned by the crap4dart gate, unrelated to workingDir. If that file is ever renamed/moved, this suite breaks for a confusing reason. A self-owned fixture (write a scratch file into `outputs/`, or use an existing repo-owned file like `README.md`) pins the same behavior without the coupling. Pattern-wise the pass-through itself is pre-existing behavior — only the new assertions hard-code the yaml path."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v5C0G",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_timerAutoCommitAndSave.js:1157",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT (re-raised — unfixed in the rework push): `assert.throws` second argument is a fail-message, not a matcher — the error-message contract is still not pinned**\n\n`js/unit-tests/test_timerAutoCommitAndSave.js:1157`:\n\n```js\nassert.throws(function() { timerConfigLoader({ configThrows: true }).loadProjectConfig({}); },\n    /config unreadable/);\n```\n\nThis thread was opened in the previous review round and is still present unchanged. In both harnesses (`js/unit-tests/testRunner.js:154`, `js/unit-tests/node_testRunner.js:92`) the signature is `throws: function(fn, msg)` — the second argument is only used as the failure message when the function does **not** throw. The thrown error is never matched against `/config unreadable/`, so the test passes today and stays green if the message text changes. For a characterization suite whose purpose is to pin contracts, this is a silent no-op assertion on the message.\n\nUse the `try/catch` + `assert.contains` pattern used everywhere else in this PR:\n\n```js\nvar threw = null;\ntry { timerConfigLoader({ configThrows: true }).loadProjectConfig({}); } catch (e) { threw = e; }\nassert.ok(threw, 'configThrows must fail the config load');\nassert.contains(threw.message, 'config unreadable');\n```"
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v5C1Q",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_postPRReviewComments.js:2716",
+      "resolved": false,
+      "body": "💡 **SUGGESTION (re-raised — unfixed): trailing whitespace in the new characterization test**\n\n`js/unit-tests/test_postPRReviewComments.js:2716`:\n\n```js\nmocks.jira_remove_label({}); \n```\n\nThere is still a trailing space after `{});`. The same added block also packs five calls on one line (`mocks2.jira_add_label({}); mocks2.jira_move_to_status({}); …` at line 2779) — splitting them one-per-line keeps the recorder contract readable in future diffs. Cosmetic only; no linter is configured in this repo to catch it."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v5C11",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_factoryTokenUsageIssue889.js:36",
+      "resolved": false,
+      "body": "💡 **SUGGESTION (re-raised — unfixed): new file-level helpers keep their old in-suite 2-space indent**\n\n`js/unit-tests/test_factoryTokenUsageIssue889.js:36` — `boardExecStub` / `boardExecResponse` were moved from inside a `suite` body (2-space) to file level, but the 2-space indentation came along:\n\n```js\nfunction boardExecStub(map) {\n  var state = { puts: 0, trackerCalls: [], commands: [] };\n```\n\nThe file's top-level style is 4-space (the header comment block, `var tokenUsage = …`, `var NOW = …` above), as in every other unit-test file. Re-indenting the two helpers plus their characterization suites (lines 36–66 and 205–266) to 4 spaces keeps the file uniform. Cosmetic only — behavior verified identical."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v5C2j",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_unitTestMocks.js:51",
+      "resolved": false,
+      "body": "💡 **SUGGESTION (re-raised — unfixed): update the `/* global */` declaration for the newly used harness globals**\n\nThe new suite anchored at `js/unit-tests/test_unitTestMocks.js:51` uses `makeDefaultConfigLoaderMock`, `makeDefaultJiraConfig` and `configLoaderModule` (provided by both `testRunner.js` and `node_testRunner.js`), but the file header at line 15 still reads:\n\n```js\n/* global trackersMock, suite, test, assert */\n```\n\nAdd the three names so the file's declared surface matches what it actually consumes (no linter enforces this today, but the comment is the file's contract documentation):\n\n```js\n/* global trackersMock, suite, test, assert, makeDefaultConfigLoaderMock, makeDefaultJiraConfig, configLoaderModule */\n```\n\nBoth runners define these globals — verified in `testRunner.js:254-298` and `node_testRunner.js:274-324` (`makeDefaultJiraConfig`, `makeDefaultConfigLoaderMock`, `configLoaderModule`) — so the suite is dual-runner safe as written."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v5C3Z",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_workingDir.js:848",
+      "resolved": false,
+      "body": "💡 **SUGGESTION (re-raised — unfixed): characterization reads a live, unrelated repo-root file (`crap4dart.yaml`)**\n\n`js/unit-tests/test_workingDir.js:848` (and the same pattern at lines 859/866):\n\n```js\nassert.equal(configBlockingFileRead(null)({ path: 'crap4dart.yaml' }), file_read({ path: 'crap4dart.yaml' }),\n    'null map falls through to the real file_read');\n```\n\nThe pass-through assertion is proven by comparing two live reads of `crap4dart.yaml` — a tooling config owned by the crap4dart markdown-similarity gate, unrelated to workingDir. If that file is ever renamed or moved, this suite breaks for a confusing reason. A self-owned fixture (write a scratch file into `outputs/`, or use an existing repo-owned file like `README.md`) pins the same behavior without the coupling. The pass-through behavior itself is pre-existing and correct — only the new assertions hard-code the yaml path."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v5C4i",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_restoreFromReleases.js:14",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `artefactBuildTag` / `artefactBuildReleaseName` / `artefactResolveRepository` are duplicated verbatim in two test files**\n\nThis PR hoists the releaseArtefacts mock helpers to file level in **both** `test_restoreFromReleases.js` (lines 14–32) and `test_timerAutoCommitAndSave.js` (lines 16–34) — the three template/repository helpers are byte-for-byte identical copies:\n\n```js\nfunction artefactBuildTag(ticketKey, template) {\n    var t = (template || 'ai-{ticketKey}').replace(/\\{ticketKey\\}/g, ticketKey);\n    return t.toLowerCase().replace(/[^a-z0-9._/-]/g, '-');\n}\n// artefactBuildReleaseName / artefactResolveRepository: same duplication\n```\n\nOnly `recordingDownloadArtefact` vs `recordingUploadRawFile` genuinely differ (download vs upload contract). If the mock's tag-normalization rules ever change (e.g. a new releaseArtefacts rule), both copies must be edited in lockstep and nothing ties them together. A tiny shared fixture module (e.g. `js/unit-tests/_fixtures/releaseArtefactsMock.js`, loaded via the existing `run_*.json` file lists or `loadModule`) would keep the two harnesses in sync. Not blocking — each test file is deliberately self-contained today, and every copy is now pinned by its own characterization suite."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:30e17403",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: `assert.throws` second argument is a fail-message, not a matcher — the error-message contract is not actually pinned**\n\n`js/unit-tests/test_timerAutoCommitAndSave.js:1157`:\n\n```js\nassert.throws(function() { timerConfigLoader({ configThrows: true }).loadProjectConfig({}); },\n    /config unreadable/);\n```\n\nIn both harnesses (`js/unit-tests/testRunner.js:154`, `js/unit-tests/node_testRunner.js:92`) the signature is `throws: function(fn, msg)` — the second argument is only used as the failure message when the function does **not** throw. The thrown error is never matched against `/config unreadable/`, so the test passes today but would stay green if the message text changed (e.g. a refactor renames \"config unreadable\"). For a characterization suite whose purpose is to pin contracts, this is a silent no-op assertion on the message.\n\nUse the `try/catch` + `assert.contains` pattern used everywhere else in this PR:\n\n```js\nvar threw = null;\ntry { timerConfigLoader({ configThrows: true }).loadProjectConfig({}); } catch (e) { threw = e; }\nassert.ok(threw, 'configThrows must fail the config load');\nassert.contains(threw.message, 'config unreadable');\n```"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:2b865e94",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: trailing whitespace in the new characterization test**\n\n`js/unit-tests/test_postPRReviewComments.js:2716`:\n\n```js\nmocks.jira_remove_label({}); \n```\n\nThere is a trailing space after `{});`. The same added block also packs five calls on one line (`mocks.jira_add_label({}); mocks.jira_move_to_status({}); …`) — splitting them one-per-line keeps the recorder contract readable in future diffs. Cosmetic only; no linter is configured in this repo to catch it."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:703b2a61",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: new file-level helpers keep their old in-suite 2-space indent**\n\n`js/unit-tests/test_factoryTokenUsageIssue889.js:36` — `boardExecStub` / `boardExecResponse` were moved from inside a `suite` body (2-space) to file level, but the 2-space indentation came along. The file's top-level style is 4-space (102 lines vs 44 for the new 2-space block), as in every other unit-test file. Re-indenting the two helpers (plus their characterization suites) to 4 spaces keeps the file uniform. Cosmetic only — behavior verified identical."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:14cf405f",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: update the `/* global */` declaration for the newly used harness globals**\n\nThe new suite at `js/unit-tests/test_unitTestMocks.js:51` uses `makeDefaultConfigLoaderMock`, `makeDefaultJiraConfig` and `configLoaderModule` (provided by both `testRunner.js` and `node_testRunner.js`), but the file header still reads:\n\n```js\n/* global trackersMock, suite, test, assert */\n```\n\nAdd the three names so the file's declared surface matches what it actually consumes (no linter enforces this today, but the comment is the file's contract documentation). Note both runners define these globals — verified in `testRunner.js:254-298` and `node_testRunner.js:274-324` — so the suite is dual-runner safe as written."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:5753546f",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: characterization reads a live, unrelated repo-root file (`crap4dart.yaml`)**\n\n`js/unit-tests/test_workingDir.js:848` (and the same pattern at lines 859/866):\n\n```js\nassert.equal(configBlockingFileRead(null)({ path: 'crap4dart.yaml' }), file_read({ path: 'crap4dart.yaml' }),\n    'null map falls through to the real file_read');\n```\n\nThe pass-through assertion is proven by comparing two live reads of `crap4dart.yaml` — a tooling config owned by the crap4dart gate, unrelated to workingDir. If that file is ever renamed/moved, this suite breaks for a confusing reason. A self-owned fixture (write a scratch file into `outputs/`, or use an existing repo-owned file like `README.md`) pins the same behavior without the coupling. Pattern-wise the pass-through itself is pre-existing behavior — only the new assertions hard-code the yaml path."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:b2f1ac71",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT (re-raised — unfixed in the rework push): `assert.throws` second argument is a fail-message, not a matcher — the error-message contract is still not pinned**\n\n`js/unit-tests/test_timerAutoCommitAndSave.js:1157`:\n\n```js\nassert.throws(function() { timerConfigLoader({ configThrows: true }).loadProjectConfig({}); },\n    /config unreadable/);\n```\n\nThis thread was opened in the previous review round and is still present unchanged. In both harnesses (`js/unit-tests/testRunner.js:154`, `js/unit-tests/node_testRunner.js:92`) the signature is `throws: function(fn, msg)` — the second argument is only used as the failure message when the function does **not** throw. The thrown error is never matched against `/config unreadable/`, so the test passes today and stays green if the message text changes. For a characterization suite whose purpose is to pin contracts, this is a silent no-op assertion on the message.\n\nUse the `try/catch` + `assert.contains` pattern used everywhere else in this PR:\n\n```js\nvar threw = null;\ntry { timerConfigLoader({ configThrows: true }).loadProjectConfig({}); } catch (e) { threw = e; }\nassert.ok(threw, 'configThrows must fail the config load');\nassert.contains(threw.message, 'config unreadable');\n```"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:348dd458",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION (re-raised — unfixed): trailing whitespace in the new characterization test**\n\n`js/unit-tests/test_postPRReviewComments.js:2716`:\n\n```js\nmocks.jira_remove_label({}); \n```\n\nThere is still a trailing space after `{});`. The same added block also packs five calls on one line (`mocks2.jira_add_label({}); mocks2.jira_move_to_status({}); …` at line 2779) — splitting them one-per-line keeps the recorder contract readable in future diffs. Cosmetic only; no linter is configured in this repo to catch it."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:ca228744",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION (re-raised — unfixed): new file-level helpers keep their old in-suite 2-space indent**\n\n`js/unit-tests/test_factoryTokenUsageIssue889.js:36` — `boardExecStub` / `boardExecResponse` were moved from inside a `suite` body (2-space) to file level, but the 2-space indentation came along:\n\n```js\nfunction boardExecStub(map) {\n  var state = { puts: 0, trackerCalls: [], commands: [] };\n```\n\nThe file's top-level style is 4-space (the header comment block, `var tokenUsage = …`, `var NOW = …` above), as in every other unit-test file. Re-indenting the two helpers plus their characterization suites (lines 36–66 and 205–266) to 4 spaces keeps the file uniform. Cosmetic only — behavior verified identical."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:43c52794",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION (re-raised — unfixed): update the `/* global */` declaration for the newly used harness globals**\n\nThe new suite anchored at `js/unit-tests/test_unitTestMocks.js:51` uses `makeDefaultConfigLoaderMock`, `makeDefaultJiraConfig` and `configLoaderModule` (provided by both `testRunner.js` and `node_testRunner.js`), but the file header at line 15 still reads:\n\n```js\n/* global trackersMock, suite, test, assert */\n```\n\nAdd the three names so the file's declared surface matches what it actually consumes (no linter enforces this today, but the comment is the file's contract documentation):\n\n```js\n/* global trackersMock, suite, test, assert, makeDefaultConfigLoaderMock, makeDefaultJiraConfig, configLoaderModule */\n```\n\nBoth runners define these globals — verified in `testRunner.js:254-298` and `node_testRunner.js:274-324` (`makeDefaultJiraConfig`, `makeDefaultConfigLoaderMock`, `configLoaderModule`) — so the suite is dual-runner safe as written."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:3f8bfc42",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION (re-raised — unfixed): characterization reads a live, unrelated repo-root file (`crap4dart.yaml`)**\n\n`js/unit-tests/test_workingDir.js:848` (and the same pattern at lines 859/866):\n\n```js\nassert.equal(configBlockingFileRead(null)({ path: 'crap4dart.yaml' }), file_read({ path: 'crap4dart.yaml' }),\n    'null map falls through to the real file_read');\n```\n\nThe pass-through assertion is proven by comparing two live reads of `crap4dart.yaml` — a tooling config owned by the crap4dart markdown-similarity gate, unrelated to workingDir. If that file is ever renamed or moved, this suite breaks for a confusing reason. A self-owned fixture (write a scratch file into `outputs/`, or use an existing repo-owned file like `README.md`) pins the same behavior without the coupling. The pass-through behavior itself is pre-existing and correct — only the new assertions hard-code the yaml path."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:3b0d0682",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `artefactBuildTag` / `artefactBuildReleaseName` / `artefactResolveRepository` are duplicated verbatim in two test files**\n\nThis PR hoists the releaseArtefacts mock helpers to file level in **both** `test_restoreFromReleases.js` (lines 14–32) and `test_timerAutoCommitAndSave.js` (lines 16–34) — the three template/repository helpers are byte-for-byte identical copies:\n\n```js\nfunction artefactBuildTag(ticketKey, template) {\n    var t = (template || 'ai-{ticketKey}').replace(/\\{ticketKey\\}/g, ticketKey);\n    return t.toLowerCase().replace(/[^a-z0-9._/-]/g, '-');\n}\n// artefactBuildReleaseName / artefactResolveRepository: same duplication\n```\n\nOnly `recordingDownloadArtefact` vs `recordingUploadRawFile` genuinely differ (download vs upload contract). If the mock's tag-normalization rules ever change (e.g. a new releaseArtefacts rule), both copies must be edited in lockstep and nothing ties them together. A tiny shared fixture module (e.g. `js/unit-tests/_fixtures/releaseArtefactsMock.js`, loaded via the existing `run_*.json` file lists or `loadModule`) would keep the two harnesses in sync. Not blocking — each test file is deliberately self-contained today, and every copy is now pinned by its own characterization suite."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:69e1998d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — APPROVE (with suggestions)\n\n**Summary**: gh-1230 CRAP reduction of 18 unit-test-harness helpers verified mechanically: a clean merge-ref run passes the full suite 7070/0 and the crap4js ratchet against the released baseline reports `0 regression(s), 0 new over threshold, 18 improvement(s), 2 removed` — every before→after value in the PR table matches the measurement exactly (plus an unlisted bonus: `test_workingDir.js::fileReadMock` 8.8 → 2.1). No product code touched, no assertion weakened; findings below are non-blocking.\n\n**Key Issues**:\n- ⚠️ `assert.throws(fn, /config unreadable/)` — both harnesses treat arg 2 as a fail-message, never matching the thrown error; the message contract is not actually pinned (see inline thread)\n- ⚠️ Branch predates gh-1220 (#1238, merged 13:52:49Z); the released baseline has since ratcheted down, so a quality-gate run dispatched on the raw head fails with 8 false `NEW > 8` (reproduced, exit 2). `pull_request` CI measures the merge ref and is green; merge is safe — sync `origin/main` into the branch (branch state, not a diff line → no inline thread)\n- 💡 Four style suggestions as inline threads (trailing whitespace, carried-over 2-space indent, `/* global */` header, `crap4dart.yaml` coupling)\n\n**Next Steps**:\n1. Merge `origin/main` into `ai/gh-1230`\n2. Fix the `assert.throws` message assertion (`try/catch` + `assert.contains`)\n3. Optional: the 💡 polish items"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:284d0ccc",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — APPROVE (with suggestions) — re-review after rework\n\n**Summary**: The gh-1230 CRAP work verifies cleanly on this head: the full node suite passes 7033/0 (with `FA_SESSION_ROOT` unset; the single failure with it set is the pre-existing `test_sessionDelta` UT-3 env probe documented in the PR description — env-driven, not diff-related), and an instrumented crap4js measurement reproduces the PR's CRAP table exactly: `0 regression(s), 18 improvement(s), 2 removed`, every listed target at its claimed value and every new helper ≤ 8.0. No product code touched, no assertion weakened, no CRAP baseline committed. However, the rework push only merged `main` (13:45) — **none of the 5 open review threads were addressed** — and `main` has moved again since (gh-1220 #1238 at 13:52, gh-1228 #1231 at 14:13).\n\n**Key Issues**:\n- ⚠️ Branch is stale against the ratcheted baseline again: the released baseline now covers `main@2797d77`, and a raw-head quality-gate run fails with **17 false `NEW > 8`** (all product functions gh-1220/gh-1228 already reduced on `main` — reproduced locally, exit 2). Merge-ref CI (`crap` job) is green, so merge remains safe — sync `origin/main` into the branch again (branch state, not a diff line → no inline thread)\n- ⚠️ `assert.throws(fn, /config unreadable/)` — both harnesses treat arg 2 as a fail-message, never matching the thrown error; the message contract is still not pinned (re-raised inline)\n- 💡 Five style/polish suggestions re-raised or newly noted inline (trailing whitespace, carried-over 2-space indent, `/* global */` header, `crap4dart.yaml` coupling, duplicated `artefact*` mock helpers)\n\n**Next Steps**:\n1. Merge `origin/main` into `ai/gh-1230` (restores a green raw-head validation dispatch)\n2. Fix the `assert.throws` message assertion (`try/catch` + `assert.contains`)\n3. Optional: the 💡 polish items"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:f65bab9c",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ silent-update failure — attempt 1 at 2026-10-24T14:30:41.370Z"
+    }
+  ]
+}
