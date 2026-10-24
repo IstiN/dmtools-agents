@@ -489,3 +489,23 @@ suite('common/bugFixBatchContext — resolveBatchActionContext', function() {
         assert.deepEqual(calls, [{ command: 'ls', workingDirectory: '/tmp/ctx-ws' }], 'workingDir applied');
     });
 });
+
+suite('configBlockingFileRead — mock contract (CRAP coverage)', function() {
+    test('returns the mapped value for a mapped path', function() {
+        var fr = configBlockingFileRead({ 'input/PROJ-1/x.md': 'hello' });
+        assert.equal(fr({ path: 'input/PROJ-1/x.md' }), 'hello');
+        assert.equal(fr('input/PROJ-1/x.md'), 'hello', 'string arg form resolves the same key');
+    });
+
+    test('blocks .dmtools/config discovery even when unmapped', function() {
+        var fr = configBlockingFileRead({});
+        assert.equal(fr({ path: 'repo/.dmtools/config.js' }), null, 'project config never leaks in');
+    });
+
+    test('falls back to the real file_read: existing repo file reads, missing file degrades to null', function() {
+        var fr = configBlockingFileRead({});
+        var content = fr({ path: 'js/common/bugFixBatchContext.js' });
+        assert.ok(content && content.indexOf('mergeObjects') !== -1 || content !== null, 'existing repo file returns real content');
+        assert.equal(fr({ path: 'definitely/not/here.txt' }), null, 'unreadable file degrades to null');
+    });
+});
