@@ -23,16 +23,9 @@ function resolveProjectConfig(params) {
 }
 // Shared pure query/parse/markdown helpers (gh-1038) — no tracker/file side effects.
 var linkedIssuesReport = require('./common/linkedIssuesReport.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
-function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
-}
-function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
-}
+var trackerHolder = trackersModule.createTrackerHolder();
+var initTracker = trackerHolder.initTracker;
+var getTracker = trackerHolder.getTracker;
 
 function fetchLinkedTests(ticketKey) {
     try {

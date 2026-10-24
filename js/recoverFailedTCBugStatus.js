@@ -13,16 +13,9 @@ const linkedIssuesReport = require('./common/linkedIssuesReport.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
-function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
-}
-function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
-}
+var trackerHolder = trackersModule.createTrackerHolder();
+var initTracker = trackerHolder.initTracker;
+var getTracker = trackerHolder.getTracker;
 
 
 function removeLabel(ticketKey, label) {
@@ -47,11 +40,7 @@ function moveFailedTcToBugToFix(ticketKey, jiraConfig) {
 }
 
 function postTokenUsageSafely(ticketKey, params) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    tokenUsageComment.postTokenUsageSafely(ticketKey, params);
 }
 
 function action(params) {
