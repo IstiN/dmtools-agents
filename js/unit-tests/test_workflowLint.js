@@ -655,3 +655,244 @@ suite('workflow contract — stub run-name carries the gh-1075 pr anchor', funct
     });
 });
 
+
+// ── gh-1198 CRAP extraction: findDuplicateKeys scanner helpers ───────────────
+
+suite('workflowLint findDuplicateKeys helpers (gh-1198 extraction)', function () {
+    test('helpers exist (extraction landed)', function () {
+        ['lineContext', 'contentContext', 'scalarLineVerdict', 'applyKeyLine',
+         'popFramesDeeperThan', 'pushListItemFrame', 'recordMappingKey',
+         'opensBlockScalar'].forEach(function (name) {
+            assert.equal(typeof lint[name], 'function', name + ' exported');
+        });
+    });
+
+    suite('scalarLineVerdict (pure — block scalar body classification)', function () {
+        test('blank lines never end a scalar (skip, scalar stays open)', function () {
+            assert.deepEqual(lint.scalarLineVerdict('   ', 4), { skip: true });
+            assert.deepEqual(lint.scalarLineVerdict('', 0), { skip: true });
+        });
+        test('deeper content is scalar body (skip)', function () {
+            assert.deepEqual(lint.scalarLineVerdict('      key: inside', 4), { skip: true });
+        });
+        test('a line at or below the scalar indent ends it', function () {
+            assert.deepEqual(lint.scalarLineVerdict('    runs-on: x', 4), { endsScalar: true });
+            assert.deepEqual(lint.scalarLineVerdict('  x: y', 4), { endsScalar: true });
+        });
+    });
+
+    suite('contentContext (pure — structural line classification)', function () {
+        test('full-line comments are skipped', function () {
+            assert.equal(lint.contentContext('# the ceiling grant', 2), null);
+            assert.equal(lint.contentContext('#', 0), null);
+        });
+        test('document markers reset the mapping stack', function () {
+            assert.deepEqual(lint.contentContext('---', 0), { reset: true });
+            assert.deepEqual(lint.contentContext('...', 0), { reset: true });
+        });
+        test('non-key scalars (list entries like "- main") are skipped', function () {
+            assert.equal(lint.contentContext('- main', 0), null);
+            assert.equal(lint.contentContext('plain text', 0), null);
+        });
+        test('mapping-key lines carry their indent + regex match', function () {
+            var ctx = lint.contentContext('issues: write', 2);
+            assert.equal(ctx.indent, 2);
+            assert.equal(ctx.match[2].trim(), 'issues');
+            assert.equal(ctx.match[3], ' write');
+            assert.equal(ctx.leavesScalar, undefined, 'leavesScalar is stamped by lineContext');
+        });
+    });
+
+    suite('lineContext (pure — one raw line, scalar-aware)', function () {
+        test('blank lines are skipped and never leave the scalar', function () {
+            assert.equal(lint.lineContext('   ', 4), null);
+        });
+        test('scalar body is skipped; the scalar stays open', function () {
+            assert.equal(lint.lineContext('      key: inside', 4), null);
+        });
+        test('dedent out of a scalar leaves it AND processes the line as structure', function () {
+            var ctx = lint.lineContext('    runs-on: x', 6);
+            assert.equal(ctx.leavesScalar, true);
+            assert.equal(ctx.match[2].trim(), 'runs-on');
+        });
+        test('a document marker inside a scalar also leaves it', function () {
+            var ctx = lint.lineContext('---', 2);
+            assert.equal(ctx.reset, true);
+            assert.equal(ctx.leavesScalar, true);
+        });
+        test('a NO-STRUCTURE dedent (comment / list item) still leaves the scalar', function () {
+            // The scalar-end signal must survive even when the line carries no
+            // mapping structure — the caller closes the scalar on leavesScalar.
+            var comment = lint.lineContext('# comment at indent 0', 0);
+            assert.deepEqual(comment, { leavesScalar: true },
+                'dedented full-line comment: ends the scalar, no structure');
+            var listItem = lint.lineContext('- main', 0);
+            assert.deepEqual(listItem, { leavesScalar: true },
+                'dedented non-key list item: ends the scalar, no structure');
+        });
+        test('outside a scalar, nothing leaves anything', function () {
+            assert.equal(lint.lineContext('permissions:', -1).leavesScalar, false);
+            assert.equal(lint.lineContext('# comment', -1), null);
+        });
+    });
+
+    suite('opensBlockScalar (pure)', function () {
+        test('literal |, folded >, and chomping/indent indicators open a scalar', function () {
+            assert.equal(lint.opensBlockScalar([null, null, null, '|']), true);
+            assert.equal(lint.opensBlockScalar([null, null, null, '>-']), true);
+            assert.equal(lint.opensBlockScalar([null, null, null, '|2']), true);
+            assert.equal(lint.opensBlockScalar([null, null, null, '|+']), true);
+        });
+        test('plain values, flow lists and missing payloads do not', function () {
+            assert.equal(lint.opensBlockScalar([null, null, null, ' write']), false);
+            assert.equal(lint.opensBlockScalar([null, null, null, ' [main]']), false);
+            assert.equal(lint.opensBlockScalar([null, null, null, null]), false,
+                'a key without a value never opens a scalar');
+        });
+    });
+
+    suite('stack machine (pure — pop/push/record)', function () {
+        test('popFramesDeeperThan pops every frame at or deeper than the indent', function () {
+            var stack = [{ indent: 0, keys: {} }, { indent: 2, keys: {} }, { indent: 4, keys: {} }];
+            lint.popFramesDeeperThan(stack, 2);
+            assert.deepEqual(stack.map(function (f) { return f.indent; }), [0]);
+        });
+        test('popFramesDeeperThan keeps shallower frames', function () {
+            var stack = [{ indent: 0, keys: {} }, { indent: 2, keys: {} }];
+            lint.popFramesDeeperThan(stack, 4);
+            assert.equal(stack.length, 2);
+        });
+        test('pushListItemFrame opens a frame at indent+1, popping the previous item', function () {
+            var stack = [{ indent: 6, keys: {} }, { indent: 7, keys: {} }];
+            lint.pushListItemFrame(stack, 6);
+            assert.deepEqual(stack.map(function (f) { return f.indent; }), [6, 7],
+                'the previous item frame (indent+1) is popped; the parent stays');
+        });
+        test('pushListItemFrame keeps a shallower parent frame', function () {
+            var stack = [{ indent: 6, keys: {} }];
+            lint.pushListItemFrame(stack, 6);
+            assert.deepEqual(stack.map(function (f) { return f.indent; }), [6, 7]);
+        });
+        test('recordMappingKey records in the parent and flags duplicates with the line number', function () {
+            var stack = [{ indent: 0, keys: {} }];
+            var dups = [];
+            lint.recordMappingKey(stack, 'issues', 2, dups, 3);
+            lint.recordMappingKey(stack, 'contents', 2, dups, 4);
+            lint.recordMappingKey(stack, 'issues', 2, dups, 5);
+            assert.deepEqual(dups, [{ key: 'issues', line: 5 }]);
+            assert.deepEqual(Object.keys(stack[0].keys), ['issues', 'contents'],
+                'the parent frame holds every recorded key');
+            assert.deepEqual(stack[stack.length - 1].indent, 2,
+                'each key opens its own child frame for the next scan');
+        });
+        test('recordMappingKey without a parent records nothing (top-level key)', function () {
+            var stack = [];
+            var dups = [];
+            lint.recordMappingKey(stack, 'on', 0, dups, 1);
+            assert.deepEqual(dups, []);
+            assert.deepEqual(stack.map(function (f) { return f.indent; }), [0]);
+        });
+        test('applyKeyLine routes list items to fresh frames and plain keys to the parent', function () {
+            var stack = [];
+            var dups = [];
+            var mkMatch = function (marker, key, value) {
+                return [null, marker || null, key, value || null];
+            };
+            lint.applyKeyLine(stack, mkMatch('- ', 'name', ' one'), 6, dups, 4);
+            assert.deepEqual(stack.map(function (f) { return f.indent; }), [7]);
+            lint.applyKeyLine(stack, mkMatch(null, 'uses', ' checkout@v4'), 8, dups, 5);
+            assert.deepEqual(stack.map(function (f) { return f.indent; }), [7, 8]);
+            lint.applyKeyLine(stack, mkMatch('- ', 'name', ' two'), 6, dups, 6);
+            assert.deepEqual(stack.map(function (f) { return f.indent; }), [7]);
+            lint.applyKeyLine(stack, mkMatch(null, 'name', ' root'), 0, dups, 7);
+            assert.deepEqual(dups, [], 'the two step names live in different item mappings');
+        });
+    });
+
+    suite('findDuplicateKeys — characterization corners (behaviour unchanged)', function () {
+        test('duplicate keys across document markers are NOT duplicates (stack reset)', function () {
+            var yml = [
+                'permissions:',
+                '  issues: write',
+                '---',
+                'permissions:',
+                '  issues: write'
+            ].join('\n');
+            assert.deepEqual(lint.findDuplicateKeys(yml), []);
+        });
+
+        test('blank lines inside a block scalar do not end it', function () {
+            var yml = [
+                'jobs:',
+                '  a:',
+                '    steps:',
+                '      - run: |',
+                '',
+                '          echo key: inside-scalar',
+                '    runs-on: ubuntu-latest',
+                '    runs-on: ubuntu-latest'
+            ].join('\n');
+            var dups = lint.findDuplicateKeys(yml);
+            assert.equal(dups.length, 1);
+            assert.equal(dups[0].key, 'runs-on');
+        });
+
+        test('MULTI-ITEM: three occurrences report two entries with 1-based lines', function () {
+            var yml = [
+                'permissions:',
+                '  contents: read',
+                '  contents: write',
+                '  contents: admin'
+            ].join('\n');
+            var dups = lint.findDuplicateKeys(yml);
+            assert.deepEqual(dups, [
+                { key: 'contents', line: 3 },
+                { key: 'contents', line: 4 }
+            ]);
+        });
+
+        test('quoted duplicate keys are caught after unquoting (inside a mapping)', function () {
+            var yml = [
+                'permissions:',
+                '  "issues": write',
+                '  "issues": write'
+            ].join('\n');
+            var dups = lint.findDuplicateKeys(yml);
+            assert.deepEqual(dups, [{ key: 'issues', line: 3 }]);
+        });
+
+        test('top-level keys have no parent frame — root duplicates are not flagged (pinned behaviour)', function () {
+            var yml = [
+                '"on":',
+                '  push:',
+                '"on":',
+                '  schedule:'
+            ].join('\n');
+            assert.deepEqual(lint.findDuplicateKeys(yml), []);
+        });
+
+        test('a dedented COMMENT closes an open block scalar (comment-dedent corner)', function () {
+            // gh-676 guard: after the scalar ends at the dedented comment, the
+            // duplicate pair at the former scalar depth must be scanned again.
+            var yml = [
+                'a: |',
+                '  text',
+                '# comment at indent 0',
+                '  dupkey: v1',
+                '  dupkey: v2'
+            ].join('\n');
+            assert.deepEqual(lint.findDuplicateKeys(yml), [{ key: 'dupkey', line: 5 }]);
+        });
+
+        test('a dedented LIST ITEM closes an open block scalar (list-item-dedent corner)', function () {
+            var yml = [
+                'a: |',
+                '  text',
+                '- main',
+                '  dupkey: v1',
+                '  dupkey: v2'
+            ].join('\n');
+            assert.deepEqual(lint.findDuplicateKeys(yml), [{ key: 'dupkey', line: 5 }]);
+        });
+    });
+});
