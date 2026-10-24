@@ -1,22 +1,4 @@
 {
-  "issue-844": [
-    {
-      "leg": "dev",
-      "at": "2026-10-10T17:12:22Z",
-      "prompt": 54241,
-      "completion": 20683,
-      "total": 74924,
-      "model": ""
-    },
-    {
-      "leg": "review",
-      "at": "2026-10-10T17:19:16Z",
-      "prompt": 48923,
-      "completion": 16756,
-      "total": 65679,
-      "model": ""
-    }
-  ],
   "issue-846": [
     {
       "leg": "dev",
@@ -4910,6 +4892,17 @@
       "completion": 48126,
       "total": 195913,
       "cacheRead": 9619968,
+      "model": "kimi-for-coding"
+    }
+  ],
+  "issue-1251": [
+    {
+      "leg": "dev",
+      "at": "2026-10-24T17:32:59Z",
+      "prompt": 50649,
+      "completion": 18159,
+      "total": 68808,
+      "cacheRead": 2601935,
       "model": "kimi-for-coding"
     }
   ]
