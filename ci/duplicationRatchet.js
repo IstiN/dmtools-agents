@@ -77,6 +77,33 @@ function recoverDupLines(percent, totalLines) {
 }
 
 /**
+ * Classify one violated file against its baseline entry and current line
+ * count. Returns { kind, ... } where kind is 'fresh' (no baseline entry),
+ * 'error' (line count unavailable), 'regressions' (absolute count grew),
+ * 'improved' (absolute count fell), 'shifted' (pct moved, absolute flat),
+ * or 'pinned' (unchanged).
+ */
+function classifyViolation(v, entry, total) {
+    if (!entry || typeof entry.lines !== 'number') {
+        return { kind: 'fresh', file: v.file, percent: v.percent };
+    }
+    if (typeof total !== 'number') {
+        return { kind: 'error', message: 'cannot determine line count of ' + v.file };
+    }
+    var absNow = recoverDupLines(v.percent, total);
+    if (absNow > entry.lines) {
+        return { kind: 'regressions', file: v.file, fromLines: entry.lines, toLines: absNow };
+    }
+    if (absNow < entry.lines) {
+        return { kind: 'improved', file: v.file, fromLines: entry.lines, toLines: absNow };
+    }
+    if (v.percent !== entry.pct) {
+        return { kind: 'shifted', file: v.file, fromPct: entry.pct, toPct: v.percent, lines: absNow };
+    }
+    return { kind: 'pinned', file: v.file };
+}
+
+/**
  * Compare a parsed violation list against the pinned baseline.
  * `lineCounts` maps each violated file to its current line count (main()
  * builds it by reading the files). Baseline entries are
@@ -86,45 +113,27 @@ function recoverDupLines(percent, totalLines) {
  */
 function compareWithBaseline(violations, baseline, lineCounts) {
     var pinned = (baseline && baseline.pinned) || {};
-    var fresh = [];
-    var regressions = [];
-    var improved = [];
-    var shifted = [];
+    var buckets = { fresh: [], regressions: [], improved: [], shifted: [] };
     var seen = {};
     var pinnedCount = 0;
 
     for (var i = 0; i < violations.length; i++) {
         var v = violations[i];
         seen[v.file] = true;
-        var entry = pinned[v.file];
-        if (!entry || typeof entry.lines !== 'number') {
-            fresh.push({ file: v.file, percent: v.percent });
-            continue;
-        }
-        var total = lineCounts[v.file];
-        if (typeof total !== 'number') {
-            return { error: 'cannot determine line count of ' + v.file };
-        }
-        var absNow = recoverDupLines(v.percent, total);
-        if (absNow > entry.lines) {
-            regressions.push({ file: v.file, fromLines: entry.lines, toLines: absNow });
-        } else if (absNow < entry.lines) {
-            improved.push({ file: v.file, fromLines: entry.lines, toLines: absNow });
-        } else if (v.percent !== entry.pct) {
-            shifted.push({ file: v.file, fromPct: entry.pct, toPct: v.percent, lines: absNow });
-        } else {
-            pinnedCount++;
-        }
+        var c = classifyViolation(v, pinned[v.file], lineCounts[v.file]);
+        if (c.kind === 'error') return { error: c.message };
+        if (c.kind === 'pinned') { pinnedCount++; continue; }
+        buckets[c.kind].push(c);
     }
 
     var cleared = Object.keys(pinned).filter(function(f) { return !seen[f]; });
 
     return {
-        clean: fresh.length === 0 && regressions.length === 0,
-        fresh: fresh,
-        regressions: regressions,
-        improved: improved,
-        shifted: shifted,
+        clean: buckets.fresh.length === 0 && buckets.regressions.length === 0,
+        fresh: buckets.fresh,
+        regressions: buckets.regressions,
+        improved: buckets.improved,
+        shifted: buckets.shifted,
         cleared: cleared,
         pinnedCount: pinnedCount
     };
@@ -249,6 +258,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         parseViolations: parseViolations,
         recoverDupLines: recoverDupLines,
+        classifyViolation: classifyViolation,
         compareWithBaseline: compareWithBaseline,
         main: main
     };

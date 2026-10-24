@@ -125,7 +125,7 @@ suite('duplicationRatchet — compareWithBaseline', function() {
             { file: 'js/brandNewDup.js', line: 3, percent: 4.20 }
         ], DEBT, { 'js/fakeA.js': 200, 'js/brandNewDup.js': 100 });
         assert.equal(result.clean, false);
-        assert.deepEqual(result.fresh, [{ file: 'js/brandNewDup.js', percent: 4.20 }]);
+        assert.deepEqual(result.fresh, [{ kind: 'fresh', file: 'js/brandNewDup.js', percent: 4.20 }]);
         assert.equal(result.regressions.length, 0);
     });
 
@@ -137,7 +137,7 @@ suite('duplicationRatchet — compareWithBaseline', function() {
         ], DEBT, COUNTS);
         assert.equal(result.clean, false);
         assert.deepEqual(result.regressions, [
-            { file: 'js/fakeB.js', fromLines: 2, toLines: 4 }
+            { kind: 'regressions', file: 'js/fakeB.js', fromLines: 2, toLines: 4 }
         ]);
     });
 
@@ -150,7 +150,7 @@ suite('duplicationRatchet — compareWithBaseline', function() {
         assert.equal(result.clean, true);
         assert.deepEqual(result.regressions, []);
         assert.deepEqual(result.shifted, [
-            { file: 'js/fakeB.js', fromPct: 1.01, toPct: 1.52, lines: 2 }
+            { kind: 'shifted', file: 'js/fakeB.js', fromPct: 1.01, toPct: 1.52, lines: 2 }
         ]);
     });
 
@@ -162,7 +162,7 @@ suite('duplicationRatchet — compareWithBaseline', function() {
         ], DEBT, COUNTS);
         assert.equal(result.clean, true);
         assert.deepEqual(result.improved, [
-            { file: 'js/fakeB.js', fromLines: 2, toLines: 1 }
+            { kind: 'improved', file: 'js/fakeB.js', fromLines: 2, toLines: 1 }
         ]);
     });
 
@@ -179,7 +179,7 @@ suite('duplicationRatchet — compareWithBaseline', function() {
             { file: 'js/fakeA.js', line: 8, percent: 12.50 }
         ], baselineOf({}), COUNTS);
         assert.equal(result.clean, false);
-        assert.deepEqual(result.fresh, [{ file: 'js/fakeA.js', percent: 12.50 }]);
+        assert.deepEqual(result.fresh, [{ kind: 'fresh', file: 'js/fakeA.js', percent: 12.50 }]);
     });
 
     test('zero violations is clean even with a non-empty baseline', function() {
