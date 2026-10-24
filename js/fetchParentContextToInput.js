@@ -188,8 +188,9 @@ function isSystemField(fieldName) {
         fieldName === 'comment';
 }
 
-/** Guard: only non-system, non-customfield names need a tracker lookup. */
-function needsNameResolution(fieldName) {
+/** Guard: a falsy, system, or already-resolved customfield_* name is returned
+ *  as-is, without a tracker lookup; only other names need resolution. */
+function isPassThroughField(fieldName) {
     return !fieldName || isSystemField(fieldName) || fieldName.indexOf('customfield_') === 0;
 }
 
@@ -209,7 +210,7 @@ function resolvedCustomFieldCode(resolved, fieldName, fieldLabels) {
 }
 
 function resolveFieldName(fieldName, projectKey, fieldLabels, shouldResolve, tracker) {
-    if (needsNameResolution(fieldName) || !shouldResolve || !tracker) {
+    if (isPassThroughField(fieldName) || !shouldResolve || !tracker) {
         return fieldName;
     }
 
@@ -782,7 +783,7 @@ if (typeof module !== 'undefined' && module.exports) {
         buildDefaultFields: buildDefaultFields,
         resolveFieldName: resolveFieldName,
         resolveFetchFields: resolveFetchFields,
-        needsNameResolution: needsNameResolution,
+        isPassThroughField: isPassThroughField,
         unwrapTrackerResult: unwrapTrackerResult,
         resolvedCustomFieldCode: resolvedCustomFieldCode
     };

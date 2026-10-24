@@ -1541,14 +1541,14 @@ suite('fetchParentContextToInput — resolveFieldName helpers', function() {
         );
     }
 
-    test('needsNameResolution flags exactly the names worth a tracker lookup', function() {
+    test('isPassThroughField flags exactly the names returned as-is without a tracker lookup', function() {
         var mod = loadHelpers();
-        assert.equal(mod.needsNameResolution(''), true, 'falsy needs no lookup');
-        assert.equal(mod.needsNameResolution(null), true, 'null needs no lookup');
-        assert.equal(mod.needsNameResolution('summary'), true, 'system field');
-        assert.equal(mod.needsNameResolution('description'), true, 'system field');
-        assert.equal(mod.needsNameResolution('customfield_1'), true, 'already resolved');
-        assert.equal(mod.needsNameResolution('Story Points'), false, 'human name needs resolution');
+        assert.equal(mod.isPassThroughField(''), true, 'falsy name is passed through');
+        assert.equal(mod.isPassThroughField(null), true, 'null name is passed through');
+        assert.equal(mod.isPassThroughField('summary'), true, 'system field is passed through');
+        assert.equal(mod.isPassThroughField('description'), true, 'system field is passed through');
+        assert.equal(mod.isPassThroughField('customfield_1'), true, 'already-resolved code is passed through');
+        assert.equal(mod.isPassThroughField('Story Points'), false, 'human name needs a tracker lookup');
     });
 
     test('unwrapTrackerResult unwraps exactly one {result: ...} level', function() {

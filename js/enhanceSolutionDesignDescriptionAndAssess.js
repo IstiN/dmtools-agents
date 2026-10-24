@@ -148,8 +148,9 @@ function countSuccessfulUpdates(updateResults) {
            (updateResults.diagramUpdated ? 1 : 0);
 }
 
-/** Post token usage summary comments; a failure is logged and skipped. */
-function postTokenUsageCommentsSafely(params, ticketKey) {
+/** Post token usage summary comments; a failure is logged and skipped.
+ *  Parameter order matches closeQuestionTicket.js's same-named helper. */
+function postTokenUsageCommentsSafely(ticketKey, params) {
     try {
         tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
     } catch (e) {
@@ -187,7 +188,7 @@ function action(params) {
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
-        postTokenUsageCommentsSafely(params, ticketKey);
+        postTokenUsageCommentsSafely(ticketKey, params);
 
         return {
             success: true,

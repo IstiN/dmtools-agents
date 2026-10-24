@@ -319,13 +319,13 @@ suite('enhanceSolutionDesignDescriptionAndAssess — extracted helpers', functio
             __tokenUsage: { postTokenUsageComments: function(key, opts) { calls.push({ key: key, opts: opts }); } }
         });
         var params = { initiator: 'acc', jobParams: { customParams: { trackerProvider: 'jira' } } };
-        ok.postTokenUsageCommentsSafely(params, 'PROJ-20');
+        ok.postTokenUsageCommentsSafely('PROJ-20', params);
         assert.equal(calls.length, 1, 'posted once');
         assert.equal(calls[0].key, 'PROJ-20');
 
         var failing = loadEnhanceSD({
             __tokenUsage: { postTokenUsageComments: function() { throw new Error('usage down'); } }
         });
-        assert.doesNotThrow(function() { failing.postTokenUsageCommentsSafely(params, 'PROJ-20'); }, 'failure swallowed');
+        assert.doesNotThrow(function() { failing.postTokenUsageCommentsSafely('PROJ-20', params); }, 'failure swallowed');
     });
 });
