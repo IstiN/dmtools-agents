@@ -57,29 +57,36 @@ function mergeObjects(base, override) {
     return result;
 }
 
-function resolveConfig(params, defaults) {
-    var customParams = (params && params.customParams) ||
-        (params && params.jobParams && params.jobParams.customParams) || {};
-    var fromCustom = customParams.contentOutput || {};
+// ── gh-1224: resolveConfig decomposed into small pure helpers ────────────────
 
-    var fromProject = {};
+/** customParams of a params bag: top-level first, then jobParams.customParams. */
+function customParamsOf(params) {
+    return (params && params.customParams) ||
+        (params && params.jobParams && params.jobParams.customParams) || {};
+}
+
+/** The contentOutput section of the params' customParams ({} when absent). */
+function contentOutputCustomParams(params) {
+    return customParamsOf(params).contentOutput || {};
+}
+
+/**
+ * The project-config contentOutput section. Config loading is best-effort
+ * here; callers usually pass jobParams.
+ */
+function projectContentOutput(params) {
     try {
-        // gh-823: the loader holder is resolved at LOAD TIME (the top-level
-        // try above) — no deferred fallback require here. A require executed
-        // after module init resolves against the pack's js/ root only, so
-        // the old `configLoader || require('../configLoader.js')` fallback
-        // could only ever look at <packRoot>/configLoader.js, outside js/ —
-        // the exact gh-823 miss shape. When the load-time require failed
-        // (unit tests inject their own), best-effort stays fail-open.
         var loader = configLoader;
         var projectConfig = loader.loadProjectConfig((params && params.jobParams) || params || {});
-        fromProject = (projectConfig && projectConfig.contentOutput) || {};
+        return (projectConfig && projectConfig.contentOutput) || {};
     } catch (e) {
-        // config loading is best-effort here; callers usually pass jobParams
+        return {};
     }
+}
 
-    // Priority (low → high): built-in defaults < caller defaults < project config < customParams
-    var cfg = {
+/** Built-in contentOutput defaults (lowest priority layer). */
+function builtInContentOutputConfig() {
+    return {
         target: 'jira_field',
         operationType: 'replace',
         updateTrackerField: true,
@@ -89,9 +96,13 @@ function resolveConfig(params, defaults) {
         deleteOrphans: false,
         includeInlineComments: true
     };
-    cfg = mergeObjects(cfg, defaults);
-    cfg = mergeObjects(cfg, fromProject);
-    cfg = mergeObjects(cfg, fromCustom);
+}
+
+function resolveConfig(params, defaults) {
+    // Priority (low → high): built-in defaults < caller defaults < project config < customParams
+    var cfg = mergeObjects(builtInContentOutputConfig(), defaults);
+    cfg = mergeObjects(cfg, projectContentOutput(params));
+    cfg = mergeObjects(cfg, contentOutputCustomParams(params));
     return cfg;
 }
 
@@ -408,6 +419,48 @@ function fetchPageInlineComments(pageId, pageTitle, limit) {
     return comments;
 }
 
+// ── gh-1224: writeCommentsFiles decomposed into small pure helpers ───────────
+
+/** Markdown fallback for a missing comment field ('' renders as the falsy arm). */
+function orMd(value, fallback) {
+    return value || fallback;
+}
+
+/** The `## Comment ...` heading of one inline comment entry. */
+function commentMdHeading(c) {
+    return '## Comment ' + orMd(c.commentId, 'unknown') +
+        ' on page "' + orMd(c.pageTitle, 'untitled') +
+        '" (pageId: ' + orMd(c.pageId, 'unknown') + ')';
+}
+
+/** Markdown lines of one inline comment entry (heading, fields, body, separator). */
+function commentMdLines(c) {
+    var lines = [
+        commentMdHeading(c),
+        '- **Author:** ' + orMd(c.author, 'Unknown'),
+        '- **Created:** ' + orMd(c.created, ''),
+        '- **Resolved:** ' + (c.resolved ? 'yes' : 'no')
+    ];
+    if (c.parentCommentId) lines.push('- **Parent comment:** ' + c.parentCommentId);
+    lines.push('\n' + orMd(c.body, ''));
+    lines.push('\n---\n');
+    return lines;
+}
+
+/** The full markdown digest of the inline comments (placeholder when empty). */
+function buildInlineCommentsMd(comments) {
+    var lines = ['# Inline comments\n'];
+    if (!comments || comments.length === 0) {
+        lines.push('\n_No inline comments found._');
+    } else {
+        lines.push('\nTotal comments: ' + comments.length + '\n');
+        for (var i = 0; i < comments.length; i++) {
+            lines = lines.concat(commentMdLines(comments[i]));
+        }
+    }
+    return lines.join('\n');
+}
+
 function writeCommentsFiles(folder, comments, baseName) {
     var name = baseName || COMMENTS_BASE_NAME;
     try {
@@ -416,25 +469,49 @@ function writeCommentsFiles(folder, comments, baseName) {
         console.warn('contentOutput: failed to write ' + name + '.json:', e);
     }
     try {
-        var lines = ['# Inline comments\n'];
-        if (!comments || comments.length === 0) {
-            lines.push('\n_No inline comments found._');
-        } else {
-            lines.push('\nTotal comments: ' + comments.length + '\n');
-            for (var i = 0; i < comments.length; i++) {
-                var c = comments[i];
-                lines.push('## Comment ' + (c.commentId || 'unknown') + ' on page "' + (c.pageTitle || 'untitled') + '" (pageId: ' + (c.pageId || 'unknown') + ')');
-                lines.push('- **Author:** ' + (c.author || 'Unknown'));
-                lines.push('- **Created:** ' + (c.created || ''));
-                lines.push('- **Resolved:** ' + (c.resolved ? 'yes' : 'no'));
-                if (c.parentCommentId) lines.push('- **Parent comment:** ' + c.parentCommentId);
-                lines.push('\n' + (c.body || ''));
-                lines.push('\n---\n');
-            }
-        }
-        file_write(folder + '/' + name + '.md', lines.join('\n'));
+        file_write(folder + '/' + name + '.md', buildInlineCommentsMd(comments));
     } catch (e) {
         console.warn('contentOutput: failed to write ' + name + '.md:', e);
+    }
+}
+
+// ── gh-1224: publishCommentReplies decomposed into small pure helpers ────────
+
+/** Replies payload shapes: a bare array or a { replies: [...] } wrapper. */
+function parseRepliesPayload(raw) {
+    var parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && Array.isArray(parsed.replies)) return parsed.replies;
+    return [];
+}
+
+/**
+ * Read + parse the replies file; an absent/blank file yields an empty list.
+ * Throws when the file is unreadable or the payload is not valid JSON.
+ */
+function readRepliesPayload(repliesFilePath) {
+    var raw = file_read(repliesFilePath || DEFAULT_REPLIES_FILE);
+    if (!raw || !raw.trim()) return [];
+    return parseRepliesPayload(raw);
+}
+
+/** A reply is postable only with all three coordinates present. */
+function isPostableReply(r) {
+    return !!(r && r.pageId && r.commentId && r.body);
+}
+
+/** One Confluence reply post; failures are counted by the caller, never thrown. */
+function postReplyToInlineComment(r) {
+    try {
+        confluence_reply_to_inline_comment({
+            pageId: String(r.pageId),
+            commentId: String(r.commentId),
+            body: String(r.body)
+        });
+        return true;
+    } catch (e) {
+        console.warn('contentOutput: failed to reply to comment ' + r.commentId + ':', e);
+        return false;
     }
 }
 
@@ -447,31 +524,19 @@ function publishCommentReplies(repliesFilePath) {
     var failed = 0;
     var replies = [];
     try {
-        var raw = file_read(repliesFilePath || DEFAULT_REPLIES_FILE);
-        if (raw && raw.trim()) {
-            var parsed = JSON.parse(raw);
-            if (Array.isArray(parsed)) replies = parsed;
-            else if (parsed && Array.isArray(parsed.replies)) replies = parsed.replies;
-        }
+        replies = readRepliesPayload(repliesFilePath);
     } catch (e) {
         return { posted: 0, failed: 0 };
     }
     for (var i = 0; i < replies.length; i++) {
-        var r = replies[i];
-        if (!r || !r.pageId || !r.commentId || !r.body) {
+        if (!isPostableReply(replies[i])) {
             failed += 1;
             continue;
         }
-        try {
-            confluence_reply_to_inline_comment({
-                pageId: String(r.pageId),
-                commentId: String(r.commentId),
-                body: String(r.body)
-            });
+        if (postReplyToInlineComment(replies[i])) {
             posted += 1;
-        } catch (e) {
+        } else {
             failed += 1;
-            console.warn('contentOutput: failed to reply to comment ' + r.commentId + ':', e);
         }
     }
     return { posted: posted, failed: failed };
@@ -498,6 +563,19 @@ if (typeof module !== 'undefined' && module.exports) {
         extractInlineCommentMarkers: extractInlineCommentMarkers,
         injectCommentPlaceholders: injectCommentPlaceholders,
         COMMENTS_BASE_NAME: COMMENTS_BASE_NAME,
-        DEFAULT_REPLIES_FILE: DEFAULT_REPLIES_FILE
+        DEFAULT_REPLIES_FILE: DEFAULT_REPLIES_FILE,
+        // gh-1224: config / comments-digest / replies pure helpers (test surface)
+        customParamsOf: customParamsOf,
+        contentOutputCustomParams: contentOutputCustomParams,
+        projectContentOutput: projectContentOutput,
+        builtInContentOutputConfig: builtInContentOutputConfig,
+        orMd: orMd,
+        commentMdHeading: commentMdHeading,
+        commentMdLines: commentMdLines,
+        buildInlineCommentsMd: buildInlineCommentsMd,
+        parseRepliesPayload: parseRepliesPayload,
+        readRepliesPayload: readRepliesPayload,
+        isPostableReply: isPostableReply,
+        postReplyToInlineComment: postReplyToInlineComment
     };
 }
