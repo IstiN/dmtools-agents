@@ -156,6 +156,25 @@ var CONFLUENCE_URL_MAP = {};
 // ── Merge utilities ──────────────────────────────────────────────────────────
 
 /**
+ * A value deepMerge may recurse into: a non-null, non-array object.
+ * Arrays and non-object values are replaced entirely.
+ */
+function isMergeableObject(value) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Merge one key's values: recursion when both sides are mergeable objects,
+ * otherwise the source value replaces the target value outright.
+ */
+function mergeKeyValues(targetValue, sourceValue) {
+    if (isMergeableObject(sourceValue) && isMergeableObject(targetValue)) {
+        return deepMerge(targetValue, sourceValue);
+    }
+    return sourceValue;
+}
+
+/**
  * Simple deep merge of two plain objects. Source values override target.
  * Arrays and non-object values are replaced entirely.
  */
@@ -171,17 +190,60 @@ function deepMerge(target, source) {
     }
     for (key in source) {
         if (source.hasOwnProperty(key)) {
-            var sv = source[key];
-            var tv = result[key];
-            if (sv && typeof sv === 'object' && !Array.isArray(sv) &&
-                tv && typeof tv === 'object' && !Array.isArray(tv)) {
-                result[key] = deepMerge(tv, sv);
-            } else {
-                result[key] = sv;
-            }
+            result[key] = mergeKeyValues(result[key], source[key]);
         }
     }
     return result;
+}
+
+// Full-replacement map sections: when the override provides the key (truthy),
+// the default/merged value is discarded entirely (per agent key).
+var FULL_REPLACE_SECTIONS = [
+    'labels',
+    'additionalInstructions',
+    'instructionOverrides',
+    'cliPrompts',
+    'cliPromptOverrides',
+    'cliPromptsByTracker',
+    'agentParamPatches',
+    'jobParamPatches'
+];
+
+/**
+ * statuses/issueTypes merge over defaults via deepMerge above — restore them
+ * if an explicit null in overrides wiped the section, and fully replace
+ * jira.questions when provided.
+ */
+function restoreWipedJiraSections(result, defaults, overrides) {
+    if (!overrides.jira) return;
+    if (!result.jira.statuses) result.jira.statuses = defaults.jira.statuses;
+    if (!result.jira.issueTypes) result.jira.issueTypes = defaults.jira.issueTypes;
+    if (overrides.jira.questions) {
+        result.jira.questions = overrides.jira.questions;
+    }
+}
+
+/**
+ * Full-replacement rule lists: smRules/smMergeRules accept an explicit null
+ * as a real replacement (provided = `!== undefined`), unlike the map sections.
+ */
+function applyFullReplaceRules(result, overrides) {
+    if (overrides.smRules !== undefined) {
+        result.smRules = overrides.smRules;
+    }
+    if (overrides.smMergeRules !== undefined) {
+        result.smMergeRules = overrides.smMergeRules;
+    }
+}
+
+/** Replace every provided full-replacement section in one pass. */
+function applyFullReplaceSections(result, overrides) {
+    for (var i = 0; i < FULL_REPLACE_SECTIONS.length; i++) {
+        var key = FULL_REPLACE_SECTIONS[i];
+        if (overrides[key]) {
+            result[key] = overrides[key];
+        }
+    }
 }
 
 /**
@@ -191,6 +253,19 @@ function deepMerge(target, source) {
  * - jira.questions, labels, smRules, smMergeRules: full replacement
  * - everything else: deep merge
  */
+function mergeProjectConfig(defaults, overrides) {
+    if (!overrides) return defaults;
+
+    var result = deepMerge(defaults, overrides);
+
+    restoreWipedJiraSections(result, defaults, overrides);
+    applyFullReplaceRules(result, overrides);
+    applyFullReplaceSections(result, overrides);
+
+    syncTrackerStatuses(result, defaults, overrides);
+    return result;
+}
+
 /**
  * Copy flat string entries (and optional per-provider sub-map entries) from a
  * tracker/jira statuses object onto target.
@@ -232,56 +307,6 @@ function syncTrackerStatuses(result, defaults, overrides) {
     var trackerStatuses = _trackerStatusesOf(overrides);
     if (!trackerStatuses) return;
     jiraCfg.statuses = copyStatusEntries(jiraCfg.statuses, trackerStatuses, _trackerProviderOf(result));
-}
-
-function mergeProjectConfig(defaults, overrides) {
-    if (!overrides) return defaults;
-
-    var result = deepMerge(defaults, overrides);
-
-    // Full replacement sections: if override provides these, use them entirely
-    if (overrides.jira) {
-        // statuses/issueTypes merge over defaults via deepMerge above — restore them
-        // if an explicit null in overrides wiped the section
-        if (!result.jira.statuses) result.jira.statuses = defaults.jira.statuses;
-        if (!result.jira.issueTypes) result.jira.issueTypes = defaults.jira.issueTypes;
-        if (overrides.jira.questions) {
-            result.jira.questions = overrides.jira.questions;
-        }
-    }
-    if (overrides.labels) {
-        result.labels = overrides.labels;
-    }
-    if (overrides.smRules !== undefined) {
-        result.smRules = overrides.smRules;
-    }
-    if (overrides.smMergeRules !== undefined) {
-        result.smMergeRules = overrides.smMergeRules;
-    }
-    if (overrides.additionalInstructions) {
-        result.additionalInstructions = overrides.additionalInstructions;
-    }
-    if (overrides.instructionOverrides) {
-        result.instructionOverrides = overrides.instructionOverrides;
-    }
-    if (overrides.cliPrompts) {
-        result.cliPrompts = overrides.cliPrompts;
-    }
-    if (overrides.cliPromptOverrides) {
-        result.cliPromptOverrides = overrides.cliPromptOverrides;
-    }
-    if (overrides.cliPromptsByTracker) {
-        result.cliPromptsByTracker = overrides.cliPromptsByTracker;
-    }
-    if (overrides.agentParamPatches) {
-        result.agentParamPatches = overrides.agentParamPatches;
-    }
-    if (overrides.jobParamPatches) {
-        result.jobParamPatches = overrides.jobParamPatches;
-    }
-
-    syncTrackerStatuses(result, defaults, overrides);
-    return result;
 }
 
 // ── Config discovery and loading ─────────────────────────────────────────────
@@ -1256,6 +1281,12 @@ module.exports = {
     paramsForConfigLoad: paramsForConfigLoad,
     mergeProjectConfig: mergeProjectConfig,
     deepMerge: deepMerge,
+    // gh-122: extracted merge helpers, exported for unit tests.
+    isMergeableObject: isMergeableObject,
+    mergeKeyValues: mergeKeyValues,
+    restoreWipedJiraSections: restoreWipedJiraSections,
+    applyFullReplaceRules: applyFullReplaceRules,
+    applyFullReplaceSections: applyFullReplaceSections,
     formatTemplate: formatTemplate,
     interpolateJql: interpolateJql,
     interpolateStatusPlaceholders: interpolateStatusPlaceholders,
