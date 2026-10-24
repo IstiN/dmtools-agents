@@ -53,6 +53,8 @@ _Check WIP Label Pre-Action_
 _retryMergePR.js_
 
 - Source: `agents/js/retryMergePR.js`
+- Side effects:
+  - post ticket comment (via tracker)
 - Parameters (customParams):
   - `adoTextFormat`
   - `aiRepository`

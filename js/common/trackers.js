@@ -1166,26 +1166,25 @@ function createTracker(config, customParams) {
         return { key: n.key, id: n.id, fields: issueViewFields(n), raw: t };
     }
 
-    /** The shared page→list head of _issueList/_ticketPage/_commentPage
-     * (gh-1248): a listField of an object envelope, the bare array itself,
-     * else []. */
-    function _pageList(rawPage, listField) {
-        var page = _parseJson(rawPage);
-        return page && typeof page === 'object' && !Array.isArray(page)
-            ? (page[listField] || [])
-            : (Array.isArray(page) ? page : []);
-    }
-
     /** A search result (page object or bare array) as an array of Jira-shaped issue views. */
     function _issueList(rawPage, listField, viewFn) {
         viewFn = viewFn || toIssueView;
-        var list = _pageList(rawPage, listField);
+        var list = _pageList(_parseJson(rawPage), listField);
         var out = [];
         for (var i = 0; i < list.length; i++) {
             var v = viewFn(list[i]);
             if (v) out.push(v);
         }
         return out;
+    }
+
+    // The list-bearing slice of a parsed page: a bare array rides as-is, an
+    // object contributes its list field (defaulting to empty), anything
+    // else (null, primitives) is an empty page.
+    function _pageList(page, listField) {
+        if (Array.isArray(page)) return page;
+        if (page && typeof page === 'object') return page[listField] || [];
+        return [];
     }
 
     function _flatTicket(key, id, title, status, assignee, labels, description, url) {
@@ -1203,7 +1202,7 @@ function createTracker(config, customParams) {
     }
 
     function _ticketPage(rawPage, listField) {
-        var list = _pageList(rawPage, listField);
+        var list = _pageList(_parseJson(rawPage), listField);
         var out = [];
         for (var i = 0; i < list.length; i++) {
             var n = normalizeTicket(list[i]);
@@ -1213,7 +1212,10 @@ function createTracker(config, customParams) {
     }
 
     function _commentPage(rawPage, listField) {
-        var list = _pageList(rawPage, listField);
+        var page = _parseJson(rawPage);
+        var list = page && typeof page === 'object' && !Array.isArray(page)
+            ? (page[listField] || [])
+            : (Array.isArray(page) ? page : []);
         var out = [];
         for (var i = 0; i < list.length; i++) {
             var c = _normalizeComment(list[i]);

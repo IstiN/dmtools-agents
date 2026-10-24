@@ -25,7 +25,7 @@ var devCommentMarkupModule = loadModule('js/common/commentMarkup.js',
 // action() tests exercise the actual github/jira provider gating.
 var trackersModuleReal = loadModule(
     'js/common/trackers.js',
-    makeRequire({
+    makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
         '../config.js': configModule,
         './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
     }),
@@ -38,7 +38,7 @@ var PR_HELPER_REAL = loadModule('js/common/pullRequest.js',
 function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
     return loadModule(
         'js/preCliDevelopmentSetup.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks || {}),
             './configLoader.js': configLoaderStub,
             './common/pullRequest.js': PR_HELPER_REAL,
             './config.js': NOOP_CONFIG_JS,
@@ -525,9 +525,26 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
     }
 
     function loadPreCliDevelopmentSetupWithExtras(bag, config, githubBehavior, extraMocks) {
+        var modMocks = Object.assign({
+                cli_execute_command: makeCliMock(bag.cliCalls, {}),
+                jira_move_to_status: function (args) { bag.moves.push(args); },
+                file_write: function (args) { bag.writes.push(args); },
+                github_add_labels: function (args) {
+                    bag.events.push({ op: 'add', args: args });
+                    if (githubBehavior && githubBehavior.addThrows) {
+                        throw new Error('label add failed');
+                    }
+                },
+                github_remove_label: function (args) {
+                    bag.events.push({ op: 'remove', args: args });
+                    if (githubBehavior && githubBehavior.removeThrowsFor === args.label) {
+                        throw new Error('label absent');
+                    }
+                }
+            }, extraMocks || {});
         return loadModule(
             'js/preCliDevelopmentSetup.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, modMocks),
                 './configLoader.js': makeActionConfigLoaderStub(config),
                 './common/pullRequest.js': PR_HELPER_REAL,
                 './config.js': NOOP_CONFIG_JS,
@@ -547,23 +564,7 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
                     './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
                 }), extraMocks) : trackersModuleReal
             }),
-            Object.assign({
-                cli_execute_command: makeCliMock(bag.cliCalls, {}),
-                jira_move_to_status: function (args) { bag.moves.push(args); },
-                file_write: function (args) { bag.writes.push(args); },
-                github_add_labels: function (args) {
-                    bag.events.push({ op: 'add', args: args });
-                    if (githubBehavior && githubBehavior.addThrows) {
-                        throw new Error('label add failed');
-                    }
-                },
-                github_remove_label: function (args) {
-                    bag.events.push({ op: 'remove', args: args });
-                    if (githubBehavior && githubBehavior.removeThrowsFor === args.label) {
-                        throw new Error('label absent');
-                    }
-                }
-            }, extraMocks || {})
+            modMocks
         );
     }
 
@@ -692,7 +693,7 @@ suite('preCliDevelopmentSetup.postSetupErrorComment — routes through the probe
     function loadWithTrackerStub(posted, postThrows) {
         return loadModule(
             'js/preCliDevelopmentSetup.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, {}),
                 './configLoader.js': {
                     loadProjectConfig: function () { return makeConfig(); },
                     paramsForConfigLoad: function (p) { return p; }
@@ -925,7 +926,7 @@ suite('preCliDevelopmentSetup.action — branch-coverage characterization (gh-10
         }), globals);
         return loadModule(
             'js/preCliDevelopmentSetup.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './configLoader.js': {
                     loadProjectConfig: function () { return config; },
                     paramsForConfigLoad: function (p) { return p; },
@@ -1156,7 +1157,7 @@ suite('preCliDevelopmentSetup — extracted helpers (gh-1042)', function() {
         var posted = [];
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './configLoader.js': {
                     loadProjectConfig: function () { return makeConfig(); },
                     paramsForConfigLoad: function (p) { return p; }

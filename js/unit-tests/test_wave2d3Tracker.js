@@ -170,7 +170,7 @@ function d3LoadIntake(mocks) {
         './common/aiResponseParser.js': loadModule('js/common/aiResponseParser.js', makeRequire({ '../config.js': configModule }), {}),
         './config.js': configModule,
         './configLoader.js': { loadProjectConfig: function() { return {}; } },
-        './common/issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {}),
+        './common/issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({ }), {}),
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), mocks),
         './common/trackers.js': d3Trackers(mocks)
@@ -259,7 +259,7 @@ suite('createIntakeTickets: tracker layer', function() {
 // ── preCliTestReworkSetup ────────────────────────────────────────────────────
 
 function d3LoadPreCli(mocks, scm) {
-    return loadModule('js/preCliTestReworkSetup.js', makeRequire({
+    return loadModule('js/preCliTestReworkSetup.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
         './configLoader.js': {
             loadProjectConfig: function() { return { jira: { statuses: { BACKLOG: 'Backlog' } }, git: { baseBranch: 'main' }, formats: { prTitle: { rework: 'x' } } }; },
             createScm: function() { return scm; }

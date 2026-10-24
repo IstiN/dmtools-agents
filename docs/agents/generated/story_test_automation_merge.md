@@ -34,6 +34,8 @@ Full prompt / instruction set: [`agents/snapshots/story_test_automation_merge.md
 _Merge Story/Bug Test Automation PR_
 
 - Source: `agents/js/mergeStoryTestAutomationPR.js`
+- Side effects:
+  - post ticket comment (via tracker)
 - Parameters (customParams):
   - `adoTextFormat`
   - `branchCreateFnPath`

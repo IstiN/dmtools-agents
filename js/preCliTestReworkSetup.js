@@ -12,6 +12,7 @@ var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
 const prHelper = require('./common/pullRequest.js');
+const branchSetup = require('./common/branchSetup.js');
 const trackersModule = require('./common/trackers.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchLinkedBugsToInput = require('./fetchLinkedBugsToInput.js');
@@ -265,17 +266,11 @@ function reportActionError(params, tracker, error) {
 }
 
 function findTestPRForTicket(scm, ticketKey) {
+    const branchName = 'test/' + ticketKey;
     try {
-        const branchName = 'test/' + ticketKey;
-        console.log('Searching for PR on branch:', branchName);
-
-        const openPRs = scm.listPrs('open');
-        const openMatch = openPRs.filter(function(pr) {
-            return pr.head && pr.head.ref && pr.head.ref === branchName;
-        });
-        if (openMatch.length > 0) {
-            console.log('Found open test PR #' + openMatch[0].number);
-            return openMatch[0];
+        const openPr = branchSetup.findOpenTestPrForBranch(scm, branchName);
+        if (openPr) {
+            return openPr;
         }
 
         console.warn('No open PR found for test branch:', branchName);

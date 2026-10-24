@@ -49,7 +49,7 @@ var DEFAULT_PR_HELPER_STUB = loadModule('js/common/pullRequest.js',
 function loadCheckoutBranch(configLoaderStub, mocks) {
     return loadModule(
         'js/checkoutBranch.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './config.js': { GIT_CONFIG: {} },
             './configLoader.js': configLoaderStub,
             './common/pullRequest.js': DEFAULT_PR_HELPER_STUB

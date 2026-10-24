@@ -369,12 +369,120 @@ function analyzeActionFile(filePath, phase) {
         };
     }
 
+    // gh-1247: extraction tickets move file_write / cli_execute_command
+    // literals out of the action into js/common/ helper functions the action
+    // delegates to (e.g. branchSetup.writeBranchConflictGuidance). Scan ONLY
+    // the bodies of the helper methods the action actually invokes, so the
+    // generated docs keep attributing those runtime artifacts to the
+    // delegating action without importing every literal in the helper
+    // module (over-reporting).
+    var srcs = [src];
+    collectDelegatedCommonBodies(filePath, src).forEach(function(body) {
+        srcs.push(body);
+    });
+
+    var artifacts = { reads: [], writes: [] };
+    var seenRead = {}, seenWrite = {}, seenEffect = {};
+    var effects = [];
+    srcs.forEach(function(s) {
+        var a = collectArtifacts(s, phase);
+        a.reads.forEach(function(p) {
+            if (!seenRead[p]) { seenRead[p] = true; artifacts.reads.push(p); }
+        });
+        a.writes.forEach(function(p) {
+            if (!seenWrite[p]) { seenWrite[p] = true; artifacts.writes.push(p); }
+        });
+        collectSideEffects(s).forEach(function(e) {
+            if (!seenEffect[e]) { seenEffect[e] = true; effects.push(e); }
+        });
+    });
+    artifacts.reads.sort();
+    artifacts.writes.sort();
+
     return {
         description: firstJsDescription(src),
-        artifacts: collectArtifacts(src, phase),
-        effects: collectSideEffects(src),
+        artifacts: artifacts,
+        effects: effects,
         paramsUsed: collectCustomParamsUsageFrom(filePath, src)
     };
+}
+
+/**
+ * Collect the function bodies a source delegates to in js/common/ helpers:
+ * resolve `var x = require('./common/...')` bindings, find the member
+ * methods the source invokes on each binding (e.g. `bs.writeBranch...`),
+ * and extract those methods' bodies from the helper source. Only requires
+ * resolving under a `common/` directory are considered; methods not found
+ * in the helper are skipped. Extraction is shallow (one level) on purpose.
+ */
+function collectDelegatedCommonBodies(filePath, src) {
+    var bodies = [];
+    var seen = {};
+    var requireRe = /([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g;
+    var req;
+    while ((req = requireRe.exec(src)) !== null) {
+        var resolved = resolveLocalRequire(filePath, req[2]);
+        if (resolved.indexOf('/common/') === -1) continue;
+        var helperSrc = readSource(resolved);
+        if (!helperSrc) continue;
+        var usageRe = new RegExp('\\b' + req[1] + '\\.([A-Za-z_$][\\w$]*)', 'g');
+        var usage;
+        while ((usage = usageRe.exec(src)) !== null) {
+            var name = usage[1];
+            if (seen[name + '@' + resolved]) continue;
+            seen[name + '@' + resolved] = true;
+            var body = extractFunctionBody(helperSrc, name);
+            if (body) bodies.push(body);
+        }
+    }
+    return bodies;
+}
+
+/**
+ * Extract the body of `function name(...) { ... }` (or the
+ * `name: function(...) { ... }` object form) from a source. Returns null
+ * when the function is not present or has no complete body.
+ */
+function extractFunctionBody(src, name) {
+    var declRe = new RegExp('(?:function\\s+' + name + '|' + name + '\\s*:\\s*function)\\s*\\(');
+    var decl = declRe.exec(src);
+    if (!decl) return null;
+    var start = src.indexOf('{', decl.index);
+    if (start === -1) return null;
+    var end = findMatchingBrace(src, start);
+    return end === -1 ? null : src.substring(start, end + 1);
+}
+
+function isQuoteChar(c) {
+    return c === "'" || c === '"' || c === '`';
+}
+
+// Index of the closing quote for the string whose opening quote is at `i`;
+// escaped characters are skipped. Returns src.length - 1 when unterminated.
+function skipQuoted(src, i) {
+    var quote = src[i];
+    for (i = i + 1; i < src.length; i++) {
+        if (src[i] === '\\') { i++; continue; }
+        if (src[i] === quote) return i;
+    }
+    return src.length - 1;
+}
+
+// Index just past the `}` matching the `{` at `start`, or -1 when the
+// source ends before the block closes. Braces inside string literals and
+// escaped characters do not affect the depth count.
+function findMatchingBrace(src, start) {
+    var depth = 0;
+    for (var i = start; i < src.length; i++) {
+        var c = src[i];
+        if (isQuoteChar(c)) { i = skipQuoted(src, i); continue; }
+        if (c === '{') { depth++; continue; }
+        if (c === '}') {
+            depth--;
+            if (depth === 0) return i;
+        }
+    }
+    return -1;
 }
 
 /**

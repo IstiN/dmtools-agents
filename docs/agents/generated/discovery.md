@@ -51,6 +51,7 @@ _Prepare Discovery Context — preCliJSAction for the discovery agent._
 
 - Source: `agents/js/prepareDiscoveryContext.js`
 - Writes:
+  - `input/<KEY>/`
   - `input/<KEY>/discovery_meta.json`
 - Parameters (customParams):
   - `adoTextFormat`

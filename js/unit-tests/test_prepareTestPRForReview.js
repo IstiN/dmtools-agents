@@ -1,5 +1,6 @@
 function d4TrackersWith(mocks) {
     return loadModule('js/common/trackers.js', makeRequire({
+                                                             'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
         '../config.js': configModule,
         './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
     }), mocks || {});
@@ -29,7 +30,8 @@ function loadPrepareTestPRForReview(mocks) {
 
     var freshConfigLoader = loadModule(
         'js/configLoader.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+                      'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return scmMock; } }
         }),
@@ -38,7 +40,8 @@ function loadPrepareTestPRForReview(mocks) {
 
     var prHelper = loadModule(
         'js/common/pullRequest.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+                      'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
             './config.js': configModule,
             './mergeState.js': loadModule('js/common/mergeState.js'),
             './common/mergeState.js': loadModule('js/common/mergeState.js')
@@ -61,7 +64,8 @@ function loadPrepareTestPRForReview(mocks) {
 
     return loadModule(
         'js/prepareTestPRForReview.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+                      'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
             './config.js': configModule,
             './configLoader.js': freshConfigLoader,
             './common/githubHelpers.js': githubHelpers,
@@ -333,6 +337,41 @@ suite('prepareTestPRForReview', function() {
         assert.deepEqual(labelsAdded, [{ key: 'TS-95', label: 'test_pr_merged' }]);
         assert.deepEqual(statusMoves, [{ key: 'TS-95', statusName: 'In Testing' }]);
         assert.ok(commands.some(function(c) { return c === 'git push origin --delete test/TS-95'; }));
+    });
+
+    test('already-merged: stale branch is still deleted when the tracker move fails (gh-1247 delegation)', function() {
+        // Behavior note (PR #1257 review): before the gh-1247 extraction the
+        // label+move+comment and the branch deletion shared one try, so a
+        // tracker failure skipped the deletion. moveMergedTicketAndReport now
+        // swallows move errors, and the deletion below always runs — a merged
+        // test branch is stale regardless of tracker-move success.
+        var commands = [];
+
+        var module = loadPrepareTestPRForReview({
+            jira_add_label: function() {},
+            jira_move_to_status: function() { throw new Error('tracker unavailable'); },
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-955') === 0) {
+                    return 'abc123\trefs/heads/test/TS-955';
+                }
+                if (opts.command.indexOf('gh pr list --head test/TS-955') === 0) return '';
+                if (opts.command.indexOf('gh pr create') === 0) {
+                    throw new Error('No commits between main and test/TS-955');
+                }
+                return '';
+            }
+        });
+
+        var result = module.action({
+            inputFolderPath: 'input/TS-955',
+            ticket: { key: 'TS-955', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result, false);
+        assert.ok(commands.some(function(c) { return c === 'git push origin --delete test/TS-955'; }),
+            'stale merged branch must be deleted even when the tracker move fails');
     });
 
     test('PR creation failure → setup-failed comment, returns false (no status move)', function() {

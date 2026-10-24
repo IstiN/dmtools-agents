@@ -11,11 +11,11 @@ var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
 var prHelper = require('./common/pullRequest.js');
+var branchSetup = require('./common/branchSetup.js');
 const { LABELS } = require('./config.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
-var trackersModule = require('./common/trackers.js');
-var trackerHolder = trackersModule.createTrackerHolder();
+var trackerHolder = require('./common/trackerHolder.js').create(require('./common/trackers.js'));
 var initTracker = trackerHolder.initTracker;
 var getTracker = trackerHolder.getTracker;
 
@@ -39,24 +39,15 @@ function ensureInputFolder(inputFolder) {
 function findTestPRForTicket(scm, ticketKey) {
     try {
         const branchName = 'test/' + ticketKey;
-        console.log('Searching for PR on branch:', branchName);
-
-        const openPRs = scm.listPrs('open');
-        const openMatch = openPRs.filter(function(pr) {
-            return pr.head && pr.head.ref && pr.head.ref === branchName;
-        });
-        if (openMatch.length > 0) {
-            console.log('Found open test PR #' + openMatch[0].number);
-            return { pr: openMatch[0], merged: false };
+        const openPr = branchSetup.findOpenTestPrForBranch(scm, branchName);
+        if (openPr) {
+            return { pr: openPr, merged: false };
         }
 
-        const closedPRs = scm.listPrs('closed');
-        const mergedMatch = closedPRs.filter(function(pr) {
-            return pr.head && pr.head.ref && pr.head.ref === branchName && pr.merged_at;
-        });
-        if (mergedMatch.length > 0) {
-            console.log('Found already-merged test PR #' + mergedMatch[0].number);
-            return { pr: mergedMatch[0], merged: true };
+        const mergedPr = branchSetup.findMergedPrForBranch(scm, branchName);
+        if (mergedPr) {
+            console.log('Found already-merged test PR #' + mergedPr.number);
+            return { pr: mergedPr, merged: true };
         }
 
         console.warn('No PR found for test branch:', branchName);
@@ -147,26 +138,31 @@ function ensureReviewPrExists(scm, ticketKey, config, jiraConfig, issueType) {
     }
 }
 
-// gh-965: PR already merged — move ticket to final status without re-reviewing.
-function handleAlreadyMergedPr(ticketKey, pr, issueType, jiraConfig) {
-    markTestPrMerged(ticketKey);
+// gh-1247: shared tail of the two "test code already merged" paths — marks the
+// PR merged, moves the ticket to its final status and posts the caller-built
+// notice when the move happened.
+function moveMergedTicketAndReport(ticketKey, issueType, jiraConfig, buildNotice, consoleMsg, warnPrefix) {
     try {
-        const ticket = getTracker().getIssue(ticketKey);
-        const finalStatus = resolveFinalStatus(ticket, issueType, jiraConfig, getTracker());
-        // gh-916: the final status (Passed/Failed/In Testing) can be tag-only — stage-label fallback.
-        const moved = getTracker().moveToStatusOrMark(ticketKey, finalStatus,
-            issueType === jiraConfig.issueTypes.TEST_CASE
-                ? (finalStatus === jiraConfig.statuses.FAILED ? 'FAILED' : 'PASSED')
-                : 'IN_TESTING');
+        markTestPrMerged(ticketKey);
+        const status = moveMergedTicketToFinalStatus(ticketKey, issueType, jiraConfig);
+        const finalStatus = status.finalStatus;
+        const moved = status.moved;
         if (moved.moved || moved.marked) {
-            getTracker().postComment(ticketKey, 'h3. ✅ Test PR Already Merged\n\n' +
-                    'PR [#' + pr.number + '|' + pr.html_url + '] for branch {code}test/' + ticketKey + '{code} was already merged.\n\n' +
-                    'Skipping re-review — moved ticket to *' + finalStatus + '*.');
-            console.log('✅ PR already merged — moved', ticketKey, 'to', finalStatus);
+            getTracker().postComment(ticketKey, buildNotice(finalStatus));
+            console.log(consoleMsg, ticketKey, 'to', finalStatus);
         }
     } catch (e) {
-        console.warn('Failed to handle already-merged PR:', e);
+        console.warn(warnPrefix, e);
     }
+}
+
+// gh-965: PR already merged — move ticket to final status without re-reviewing.
+function handleAlreadyMergedPr(ticketKey, pr, issueType, jiraConfig) {
+    moveMergedTicketAndReport(ticketKey, issueType, jiraConfig, function (finalStatus) {
+        return 'h3. ✅ Test PR Already Merged\n\n' +
+            'PR [#' + pr.number + '|' + pr.html_url + '] for branch {code}test/' + ticketKey + '{code} was already merged.\n\n' +
+            'Skipping re-review — moved ticket to *' + finalStatus + '*.';
+    }, '✅ PR already merged — moved', 'Failed to handle already-merged PR:');
 }
 
 // gh-965: a PR whose diff is empty carries no test code to review.
@@ -269,6 +265,22 @@ function resolveFinalStatus(ticket, issueType, jiraConfig, tracker) {
     return jiraConfig.statuses.IN_TESTING;
 }
 
+/**
+ * gh-965/gh-1247: shared by handleAlreadyMergedPr and
+ * finalizeAlreadyMergedTestCase — resolves the ticket's final status and
+ * moves (or stage-labels) it; the caller posts its own result comment.
+ */
+function moveMergedTicketToFinalStatus(ticketKey, issueType, jiraConfig) {
+    const ticket = getTracker().getIssue(ticketKey);
+    const finalStatus = resolveFinalStatus(ticket, issueType, jiraConfig, getTracker());
+    // gh-916: the final status (Passed/Failed/In Testing) can be tag-only — stage-label fallback.
+    const moved = getTracker().moveToStatusOrMark(ticketKey, finalStatus,
+        issueType === jiraConfig.issueTypes.TEST_CASE
+            ? (finalStatus === jiraConfig.statuses.FAILED ? 'FAILED' : 'PASSED')
+            : 'IN_TESTING');
+    return { finalStatus: finalStatus, moved: moved };
+}
+
 function markTestPrMerged(ticketKey) {
     try {
         getTracker().addLabel(ticketKey, LABELS.TEST_PR_MERGED);
@@ -278,30 +290,29 @@ function markTestPrMerged(ticketKey) {
     }
 }
 
+/**
+ * gh-965/gh-1247: finalize an already-merged test case — move the ticket to
+ * its final status, post the notice, then delete the stale test branch.
+ *
+ * Behavior note (review follow-up on PR #1257): the branch deletion now runs
+ * even when the tracker move above fails (moveMergedTicketAndReport swallows
+ * its own errors). Before the gh-1247 extraction both steps shared one try,
+ * so a tracker failure kept the branch. The decoupling is intentional: a
+ * merged test branch is stale regardless of tracker-move success. Pinned by
+ * test_prepareTestPRForReview.js ('stale branch is still deleted when the
+ * tracker move fails').
+ */
 function finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType, jiraConfig) {
+    moveMergedTicketAndReport(ticketKey, issueType, jiraConfig, function (finalStatus) {
+        return 'h3. ✅ Test Code Already Merged\n\n' +
+            'Branch {code}' + branchName + '{code} has no commits ahead of main, so the test code is already in main.\n\n' +
+            'Moved ticket to *' + finalStatus + '* and removed the stale branch.';
+    }, '✅ Branch has no commits ahead of main — moved', 'Failed to finalize already-merged test case:');
     try {
-        markTestPrMerged(ticketKey);
-        const ticket = getTracker().getIssue(ticketKey);
-        const finalStatus = resolveFinalStatus(ticket, issueType, jiraConfig, getTracker());
-        // gh-916: the final status (Passed/Failed/In Testing) can be tag-only — stage-label fallback.
-        const moved = getTracker().moveToStatusOrMark(ticketKey, finalStatus,
-            issueType === jiraConfig.issueTypes.TEST_CASE
-                ? (finalStatus === jiraConfig.statuses.FAILED ? 'FAILED' : 'PASSED')
-                : 'IN_TESTING');
-        if (moved.moved || moved.marked) {
-            getTracker().postComment(ticketKey, 'h3. ✅ Test Code Already Merged\n\n' +
-                    'Branch {code}' + branchName + '{code} has no commits ahead of main, so the test code is already in main.\n\n' +
-                    'Moved ticket to *' + finalStatus + '* and removed the stale branch.');
-            console.log('✅ Branch has no commits ahead of main — moved', ticketKey, 'to', finalStatus);
-        }
-        try {
-            cli_execute_command({ command: 'git push origin --delete ' + branchName });
-            console.log('✅ Deleted stale branch:', branchName);
-        } catch (delErr) {
-            console.warn('Could not delete stale branch', branchName + ':', delErr);
-        }
-    } catch (e) {
-        console.warn('Failed to finalize already-merged test case:', e);
+        cli_execute_command({ command: 'git push origin --delete ' + branchName });
+        console.log('✅ Deleted stale branch:', branchName);
+    } catch (delErr) {
+        console.warn('Could not delete stale branch', branchName + ':', delErr);
     }
 }
 
