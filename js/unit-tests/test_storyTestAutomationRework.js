@@ -655,3 +655,121 @@ suite('storyTestAutomationRework: action characterization (gh-1080 CRAP split)',
             'the WIP lock is released by the error path');
     });
 });
+
+// ── gh-1229 characterization: commitAndPush contract pinned before helper
+//    extraction (direct calls; cli_execute_command fully scripted). ──
+suite('storyTestAutomationRework: commitAndPush characterization (gh-1229)', function() {
+
+    function scriptedRework(handler) {
+        var commands = [];
+        var m = loadRework({
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                return handler(args.command) || '';
+            }
+        });
+        return { mod: m, commands: commands };
+    }
+
+    function lsRemoteLine(branch) {
+        return '9a7e2ae1234567' + String.fromCharCode(9) + 'refs/heads/' + branch;
+    }
+
+    function happyHandler(branch, staged) {
+        return function(command) {
+            if (command === 'git branch --show-current') return branch;
+            if (command === 'git diff --cached --stat') return staged || '';
+            if (command === 'git ls-remote --heads origin ' + branch) return lsRemoteLine(branch);
+            if (command === 'git rev-parse --quiet --verify MERGE_HEAD') {
+                throw new Error('Command execution failed (exit code 1)'); // no merge in progress
+            }
+            return '';
+        };
+    }
+
+    test('refuses to commit on main/master before any other git call', function() {
+        var x = scriptedRework(function(command) {
+            if (command === 'git branch --show-current') return 'main';
+            return '';
+        });
+
+        var threw = null;
+        try { x.mod.commitAndPush('PROJ-1', TEST_CONFIG); } catch (e) { threw = e; }
+
+        assert.ok(threw, 'main must be refused');
+        assert.contains(threw.toString(), 'Refusing to commit rework directly');
+        assert.ok(x.commands.every(function(c) { return c !== 'git merge origin/main --no-edit'; }),
+            'nothing may run before the refusal');
+    });
+
+    test('an undetectable current branch fails loudly', function() {
+        var x = scriptedRework(function() { return ''; });
+
+        var threw = null;
+        try { x.mod.commitAndPush('PROJ-1', TEST_CONFIG); } catch (e) { threw = e; }
+
+        assert.ok(threw, 'missing branch must be refused');
+        assert.contains(threw.toString(), 'Could not determine current git branch');
+    });
+
+    test('staged testing/ changes are committed with the rework template, then pushed', function() {
+        var x = scriptedRework(happyHandler('test/PROJ-1', '3 files changed, 9 insertions(+)'));
+        var config = Object.assign({}, TEST_CONFIG, {
+            formats: { commitMessage: { testRework: '[{ticketKey}] address review comments' } }
+        });
+
+        var branch = x.mod.commitAndPush('PROJ-1', config);
+
+        assert.equal(branch, 'test/PROJ-1');
+        assert.ok(x.commands.indexOf('git add testing/') !== -1);
+        assert.ok(x.commands.some(function(c) { return c.indexOf('git commit -m') === 0 && c.indexOf('PROJ-1') !== -1; }),
+            'commit message carries the ticket key');
+        assert.ok(x.commands.indexOf('git push -u origin test/PROJ-1') !== -1);
+        assert.ok(x.commands.indexOf('git ls-remote --heads origin test/PROJ-1') !== -1,
+            'push verified via ls-remote (gh-912)');
+    });
+
+    test('a clean staging area skips the commit and pushes existing commits only', function() {
+        var x = scriptedRework(happyHandler('test/PROJ-2', ''));
+
+        var branch = x.mod.commitAndPush('PROJ-2', TEST_CONFIG);
+
+        assert.equal(branch, 'test/PROJ-2');
+        assert.equal(x.commands.filter(function(c) { return c.indexOf('git commit') === 0; }).length, 0,
+            'no commit command on a clean staging area');
+        assert.ok(x.commands.indexOf('git push -u origin test/PROJ-2') !== -1);
+    });
+
+    test('a rejected normal push falls back to force-pushing the rework branch', function() {
+        var x = scriptedRework(function(command) {
+            if (command === 'git branch --show-current') return 'test/PROJ-3';
+            if (command === 'git ls-remote --heads origin test/PROJ-3') return lsRemoteLine('test/PROJ-3');
+            if (command === 'git push -u origin test/PROJ-3') throw new Error('non-fast-forward');
+            if (command === 'git rev-parse --quiet --verify MERGE_HEAD') {
+                throw new Error('Command execution failed (exit code 1)');
+            }
+            return '';
+        });
+
+        var branch = x.mod.commitAndPush('PROJ-3', TEST_CONFIG);
+
+        assert.equal(branch, 'test/PROJ-3');
+        assert.ok(x.commands.indexOf('git push -u origin test/PROJ-3 --force') !== -1, 'force fallback ran');
+    });
+
+    test('a push that leaves no remote branch fails the guard', function() {
+        var x = scriptedRework(function(command) {
+            if (command === 'git branch --show-current') return 'test/PROJ-4';
+            if (command === 'git rev-parse --quiet --verify MERGE_HEAD') {
+                throw new Error('Command execution failed (exit code 1)');
+            }
+            return '';
+        });
+
+        var threw = null;
+        try { x.mod.commitAndPush('PROJ-4', TEST_CONFIG); } catch (e) { threw = e; }
+
+        assert.ok(threw, 'missing remote branch must fail');
+        assert.contains(threw.toString(), 'Branch not found on remote after push');
+    });
+});

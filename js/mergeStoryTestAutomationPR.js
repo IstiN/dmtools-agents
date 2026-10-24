@@ -23,19 +23,24 @@ function getTracker() {
 }
 
 
+/**
+ * The first PR on `branchName` with the expected merged state, or undefined.
+ * `expectMerged` mirrors the two original predicates: falsy → open PR
+ * (`!pr.merged_at`), truthy → closed-and-merged PR (`pr.merged_at`).
+ */
+function findPrOnBranch(prList, branchName, expectMerged) {
+    return (Array.isArray(prList) ? prList : []).find(function(pr) {
+        return pr.head && pr.head.ref && pr.head.ref === branchName && !!pr.merged_at === expectMerged;
+    });
+}
+
 function findPRForStory(scm, storyKey) {
     try {
         const branchName = 'test/' + storyKey;
-        const openList = scm.listPrs('open');
-        const openMatch = (Array.isArray(openList) ? openList : []).find(function(pr) {
-            return pr.head && pr.head.ref && pr.head.ref === branchName && !pr.merged_at;
-        });
+        const openMatch = findPrOnBranch(scm.listPrs('open'), branchName, false);
         if (openMatch) return { pr: openMatch, merged: false };
 
-        const closedList = scm.listPrs('closed');
-        const mergedMatch = (Array.isArray(closedList) ? closedList : []).find(function(pr) {
-            return pr.head && pr.head.ref && pr.head.ref === branchName && pr.merged_at;
-        });
+        const mergedMatch = findPrOnBranch(scm.listPrs('closed'), branchName, true);
         if (mergedMatch) return { pr: mergedMatch, merged: true };
 
         return null;
@@ -645,6 +650,8 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
         attemptMerge: attemptMerge,
+        findPRForStory: findPRForStory,
+        findPrOnBranch: findPrOnBranch,
         // gh-964: pure helpers extracted from checkCiStatus / attemptMerge —
         // exported for direct unit testing (additive surface, same signatures).
         normalizeCheckRuns: normalizeCheckRuns,

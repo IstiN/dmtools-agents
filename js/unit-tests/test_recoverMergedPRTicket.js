@@ -362,3 +362,69 @@ suite('recoverMergedPRTicket — pure helpers (gh-119)', function() {
         assert.deepEqual(guard.recoveryCustomParams({ jobParams: {} }), {});
     });
 });
+
+// ── gh-1229 characterization: findMergedPRForTicket contract pinned before
+//    helper extraction (direct calls, no tracker needed). ──
+suite('recoverMergedPRTicket — findMergedPRForTicket contract (gh-1229)', function() {
+    var guard = loadRecoverMergedPRTicket({}).mod;
+
+    test('returns the first closed+merged PR matching title or branch', function() {
+        var prA = { number: 1, title: 'TS-1 one', head: { ref: 'ai/x' }, merged_at: 't1' };
+        var prB = { number: 2, title: 'unrelated', head: { ref: 'ai/TS-1-b' }, merged_at: 't2' };
+        assert.deepEqual(guard.findMergedPRForTicket({
+            listPrs: function(state) { return state === 'open' ? [] : [prA, prB]; }
+        }, 'TS-1'), prA);
+    });
+
+    test('a matching open PR wins the guard: null and no closed scan', function() {
+        var closedScanned = false;
+        var result = guard.findMergedPRForTicket({
+            listPrs: function(state) {
+                if (state === 'open') return [{ number: 9, title: 'TS-9 open', head: { ref: 'ai/TS-9' } }];
+                closedScanned = true;
+                return [];
+            }
+        }, 'TS-9');
+        assert.equal(result, null);
+        assert.equal(closedScanned, false, 'closed list must not be scanned when an open PR matches');
+    });
+
+    test('an open-PR listing failure aborts the recovery lookup with null', function() {
+        var result = guard.findMergedPRForTicket({
+            listPrs: function(state) {
+                if (state === 'open') throw new Error('open api down');
+                throw new Error('closed must not be reached');
+            }
+        }, 'TS-1');
+        assert.equal(result, null);
+    });
+
+    test('a closed-PR listing failure returns null instead of a partial match', function() {
+        var result = guard.findMergedPRForTicket({
+            listPrs: function(state) {
+                if (state === 'open') return [];
+                throw new Error('closed api down');
+            }
+        }, 'TS-1');
+        assert.equal(result, null);
+    });
+
+    test('closed PRs that match but are not merged are skipped', function() {
+        var merged = guard.findMergedPRForTicket({
+            listPrs: function(state) {
+                if (state === 'open') return [];
+                return [
+                    { number: 3, title: 'TS-1 stale', head: { ref: 'ai/TS-1' }, merged_at: null },
+                    { number: 4, title: 'TS-1 merged', head: { ref: 'ai/TS-1' }, state: 'MERGED' }
+                ];
+            }
+        }, 'TS-1');
+        assert.equal(merged.number, 4);
+        assert.equal(guard.findMergedPRForTicket({
+            listPrs: function(state) {
+                if (state === 'open') return [];
+                return [{ number: 3, title: 'TS-1 stale', head: { ref: 'ai/TS-1' }, merged_at: null }];
+            }
+        }, 'TS-1'), null);
+    });
+});

@@ -85,4 +85,42 @@ suite('moveToInTesting', function() {
         var all = x.logs.concat(x.warns);
         assert.ok(all.some(function(l) { return l.indexOf('❌ Error in moveToInTesting') !== -1; }));
     });
+
+    // ── gh-1229 characterization: seams pinned before helper extraction ──
+
+    test('missing ticket key: structured failure, no tracker creation and no status move', function() {
+        var x = moveToInTestingCapturingLogs({
+            jira_move_to_status: function() { throw new Error('must not be called'); }
+        });
+
+        var result = x.module.action({});
+
+        assert.deepEqual(result, { success: false, error: 'No ticket key found in params' });
+        assert.ok(x.logs.concat(x.warns).every(function(l) { return l.indexOf('In Testing') === -1; }));
+    });
+
+    test('top-level params.customParams is honored when jobParams carries none', function() {
+        var added = [];
+        var x = moveToInTestingCapturingLogs({
+            jira_move_to_status: function() { throw new Error("The field 'State' contains the value 'In Testing' that is not in the list of supported values"); },
+            jira_add_label: function(args) { added.push(args); }
+        });
+
+        var result = x.module.action({
+            ticket: { key: 'TS-303' },
+            customParams: { stageFallback: 'label' }
+        });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(added, [{ key: 'TS-303', label: 'stage_in_testing' }]);
+    });
+
+    test('helper exports keep the param-resolution contract', function() {
+        var m = loadMoveToInTesting({});
+        assert.equal(m.ticketKeyOf({ ticket: { key: 'TS-1' } }), 'TS-1');
+        assert.equal(m.ticketKeyOf({}), null);
+        assert.deepEqual(m.customParamsOf({ jobParams: { customParams: { a: 1 } } }), { a: 1 });
+        assert.deepEqual(m.customParamsOf({ customParams: { b: 2 } }), { b: 2 });
+        assert.deepEqual(m.customParamsOf({}), {});
+    });
 });
