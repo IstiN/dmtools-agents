@@ -26,32 +26,20 @@ var shared = require('./postStoryTestAutomationShared.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
-var trackerHolder = shared.createTrackerHolder(trackersModule);
-function initTracker(config, customParams) {
-    trackerHolder.initTracker(config, customParams);
-}
-function getTracker() {
-    return trackerHolder.getTracker();
-}
+var trackerOps = shared.createTrackerHolder(trackersModule);
+var initTracker = trackerOps.initTracker;
+var getTracker = trackerOps.getTracker;
 
 var gitOps = shared.createGitOps(prHelper);
 var runInRepo = shared.runInRepo;
+var outputReaders = shared.makeOutputFileReaders(outputFiles);
+var readFile = outputReaders.readFile;
+var readOutputFile = outputReaders.readOutputFile;
 
 var RESUME_MARKER = 'outputs/.story-test-resume-attempted';
 
 function cleanCommandOutput(output) {
     return prHelper.cleanCommandOutput(output);
-}
-
-function readFile(path) {
-    return outputFiles.readOutputFile(path, {});
-}
-
-function readOutputFile(relativePath, workingDir, ticketKey) {
-    return outputFiles.readOutputFile(relativePath, {
-        workingDir: workingDir,
-        ticketKey: ticketKey
-    });
 }
 
 function readResultJson(workingDir, storyKey) {
@@ -223,20 +211,17 @@ function readJiraComment(params, workingDir, storyKey) {
 }
 
 function createPullRequest(title, branchName, baseBranch, workingDir, scm, ticketKey) {
-    console.log('Creating Pull Request...');
-    return prHelper.createPullRequest({
+    // gh-737: merge bot links approved issues via 'Closes #N' — emitted by
+    // construction on every story test-automation PR; the defaultBody
+    // fallback is posted verbatim.
+    return shared.createTestPullRequest(prHelper, runInRepo, readFile, {
+        defaultBody: 'Automated story test automation changes.',
         title: title,
         branchName: branchName,
         baseBranch: baseBranch,
         workingDir: workingDir,
         scm: scm,
-        // gh-737: merge bot links approved issues via 'Closes #N' — emit it
-        // by construction on every story test-automation PR.
-        ticketKey: ticketKey,
-        bodyFileCandidates: ['outputs/pr_body.md', 'outputs/response.md'],
-        defaultBody: 'Automated story test automation changes.',
-        runCommand: runInRepo,
-        readFile: readFile
+        ticketKey: ticketKey
     });
 }
 
@@ -358,22 +343,7 @@ function autoStartStoryTestReview(storyKey, config, customParams, noCodeChanges)
         console.log('ℹ️ autoStartReview: skipped — no test code changes to review');
         return false;
     }
-    if (!customParams || !customParams.autoStartReview || !customParams.autoStartReviewConfigFile) {
-        return false;
-    }
-    try {
-        return autoStart.triggerConfiguredWorkflowForTicket({
-            ticketKey: storyKey,
-            customParams: customParams,
-            config: config,
-            configFile: customParams.autoStartReviewConfigFile,
-            label: 'pr_story_test_automation_review',
-            stripKeys: ['removeLabel', 'autoStartReview', 'autoStartReviewConfigFile']
-        });
-    } catch (e) {
-        console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
-        return false;
-    }
+    return shared.triggerAutoStartReviewWorkflow(autoStart, storyKey, customParams, config, 'pr_story_test_automation_review');
 }
 
 function removeAutomationLabels(storyKey, params) {

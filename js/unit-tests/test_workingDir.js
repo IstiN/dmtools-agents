@@ -666,7 +666,7 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
                 triggerConfiguredWorkflowForTicket: function() { return false; }
             },
             './common/outputFiles.js': outputFiles,
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageSafely: function() {} }
         ,
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
                 '../config.js': configModule,
@@ -677,6 +677,11 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
                 'js/postTestAutomationResultsHelpers.js',
                 makeRequire({}),
                 {}
+            ),
+            './postStoryTestAutomationShared.js': loadModule(
+                'js/postStoryTestAutomationShared.js',
+                makeRequire({}),
+                allMocks
             ),
         }),
         allMocks
