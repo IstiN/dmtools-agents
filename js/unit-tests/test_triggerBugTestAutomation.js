@@ -26,15 +26,26 @@ function loadAutoStartTrigger(mocks) {
     );
 }
 
+function postTokenUsageCommentsMock(mocks) {
+    return function(key, opts) {
+        if (mocks && mocks.postTokenUsageComments) mocks.postTokenUsageComments(key, opts);
+    };
+}
+
+function customParamsOfMock(params) {
+    if (params && params.jobParams && params.jobParams.customParams) {
+        return params.jobParams.customParams;
+    }
+    if (params && params.customParams) {
+        return params.customParams;
+    }
+    return {};
+}
+
 function makeTokenUsageMock(mocks) {
     var tokenUsageMock = {
-        postTokenUsageComments: function(key, opts) {
-            if (mocks && mocks.postTokenUsageComments) mocks.postTokenUsageComments(key, opts);
-        },
-        customParamsOf: function(params) {
-            return (params && params.jobParams && params.jobParams.customParams) ||
-                (params && params.customParams) || {};
-        }
+        postTokenUsageComments: postTokenUsageCommentsMock(mocks),
+        customParamsOf: customParamsOfMock
     };
     tokenUsageMock.postTokenUsageCommentsSafely = function(key, opts) {
         try {

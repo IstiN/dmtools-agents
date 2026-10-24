@@ -2,38 +2,58 @@
  * Unit tests for js/triggerStoryTestAutomation.js
  */
 
-function loadTriggerStoryTestAutomation(mocks) {
-    var defaults = {
+function defaultTriggerMocks() {
+    return {
         jira_remove_label: function() {},
         jira_post_comment: function() {}
     };
+}
 
-    var allMocks = Object.assign({}, defaults, mocks);
-    var trackersMod = loadModule('js/common/trackers.js', makeRequire({
-        '../config.js': configModule,
-        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
-    }), allMocks);
-
-    var autoStartMock = {
-        triggerConfiguredWorkflowForTicket: function(opts) {
-            return (mocks && mocks.triggerConfiguredWorkflowForTicket)
-                ? mocks.triggerConfiguredWorkflowForTicket(opts)
-                : false;
-        },
-        triggerSmIfIdle: function(opts) {
-            return (mocks && mocks.triggerSmIfIdle)
-                ? mocks.triggerSmIfIdle(opts)
-                : { success: true };
+function triggerWorkflowForTicketMock(mocks) {
+    return function(opts) {
+        if (mocks && mocks.triggerConfiguredWorkflowForTicket) {
+            return mocks.triggerConfiguredWorkflowForTicket(opts);
         }
+        return false;
     };
-    var tokenUsageMock = {
-        postTokenUsageComments: function(key, opts) {
-            if (mocks && mocks.postTokenUsageComments) mocks.postTokenUsageComments(key, opts);
-        },
-        customParamsOf: function(params) {
-            return (params && params.jobParams && params.jobParams.customParams) ||
-                (params && params.customParams) || {};
+}
+
+function triggerSmIfIdleMock(mocks) {
+    return function(opts) {
+        if (mocks && mocks.triggerSmIfIdle) {
+            return mocks.triggerSmIfIdle(opts);
         }
+        return { success: true };
+    };
+}
+
+function makeAutoStartMock(mocks) {
+    return {
+        triggerConfiguredWorkflowForTicket: triggerWorkflowForTicketMock(mocks),
+        triggerSmIfIdle: triggerSmIfIdleMock(mocks)
+    };
+}
+
+function postTokenUsageCommentsMock(mocks) {
+    return function(key, opts) {
+        if (mocks && mocks.postTokenUsageComments) mocks.postTokenUsageComments(key, opts);
+    };
+}
+
+function customParamsOfMock(params) {
+    if (params && params.jobParams && params.jobParams.customParams) {
+        return params.jobParams.customParams;
+    }
+    if (params && params.customParams) {
+        return params.customParams;
+    }
+    return {};
+}
+
+function makeTokenUsageMock(mocks) {
+    var tokenUsageMock = {
+        postTokenUsageComments: postTokenUsageCommentsMock(mocks),
+        customParamsOf: customParamsOfMock
     };
     tokenUsageMock.postTokenUsageCommentsSafely = function(key, opts) {
         try {
@@ -42,6 +62,21 @@ function loadTriggerStoryTestAutomation(mocks) {
             console.warn('Failed to post token usage comments:', e);
         }
     };
+    return tokenUsageMock;
+}
+
+function loadTrackersModule(allMocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), allMocks);
+}
+
+function loadTriggerStoryTestAutomation(mocks) {
+    var allMocks = Object.assign({}, defaultTriggerMocks(), mocks);
+    var trackersMod = loadTrackersModule(allMocks);
+    var autoStartMock = makeAutoStartMock(mocks);
+    var tokenUsageMock = makeTokenUsageMock(mocks);
     var autoStartTriggerMod = loadModule(
         'js/common/autoStartTrigger.js',
         makeRequire({

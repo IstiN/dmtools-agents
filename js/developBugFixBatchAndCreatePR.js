@@ -27,9 +27,7 @@ function findExistingPR(branchName) {
     return null;
 }
 
-function buildPRBody(epic, bugs) {
-    var epicFields = epic.fields || {};
-    var lines = [];
+function pushEpicSection(lines, epic, epicFields) {
     lines.push('## Epic');
     lines.push('');
     lines.push('**' + epic.key + '**: ' + (epicFields.summary || ''));
@@ -37,18 +35,30 @@ function buildPRBody(epic, bugs) {
         lines.push('');
         lines.push(epicFields.description);
     }
-    lines.push('');
+}
+
+function pushBugLine(lines, bug) {
+    var f = bug.fields || {};
+    lines.push('- **' + bug.key + '** — ' + (f.summary || '(no summary)'));
+}
+
+function pushBugsSection(lines, bugs) {
     lines.push('## Bugs fixed in this batch');
     lines.push('');
     if (!bugs || bugs.length === 0) {
         lines.push('_No bugs listed._');
-    } else {
-        for (var i = 0; i < bugs.length; i++) {
-            var bug = bugs[i];
-            var f = bug.fields || {};
-            lines.push('- **' + bug.key + '** — ' + (f.summary || '(no summary)'));
-        }
+        return;
     }
+    for (var i = 0; i < bugs.length; i++) {
+        pushBugLine(lines, bugs[i]);
+    }
+}
+
+function buildPRBody(epic, bugs) {
+    var epicFields = epic.fields || {};
+    var lines = [];
+    pushEpicSection(lines, epic, epicFields);
+    pushBugsSection(lines, bugs);
     lines.push('');
     lines.push('---');
     lines.push('_Automated bug-fix batch PR._');
@@ -107,6 +117,33 @@ function addLabels(keys, label, tracker) {
     }
 }
 
+function collectKeysToUpdate(epicKey, bugs) {
+    var keysToUpdate = [epicKey];
+    for (var i = 0; i < bugs.length; i++) {
+        keysToUpdate.push(bugs[i].key);
+    }
+    return keysToUpdate;
+}
+
+function warnIfPRFailed(prResult) {
+    if (!prResult || !prResult.success) {
+        console.warn('Could not ensure PR exists:', prResult && prResult.error);
+    }
+}
+
+function postPRCommentIfPossible(tracker, epicKey, prResult, bugs) {
+    if (!prResult || !prResult.prUrl) {
+        return;
+    }
+    try {
+        tracker.postComment(epicKey, 'h3. *Bug-fix Batch PR Created/Updated*\n\n' +
+            'PR: ' + prResult.prUrl + '\n\n' +
+            'Linked bugs: ' + bugs.map(function(b) { return b.key; }).join(', '));
+    } catch (e) {
+        console.warn('Failed to post PR comment on Epic (non-fatal):', e);
+    }
+}
+
 function action(params) {
     try {
         var ctx = bugFixBatchCtx.resolveBatchActionContext(params);
@@ -128,27 +165,14 @@ function action(params) {
         // Make sure a PR exists. The CLI agent should have created it, but this
         // action is idempotent and will create one if missing.
         var prResult = ensurePRExists(branchName, epic, config, bugs);
-        if (!prResult || !prResult.success) {
-            console.warn('Could not ensure PR exists:', prResult && prResult.error);
-        }
+        warnIfPRFailed(prResult);
 
-        var keysToUpdate = [epicKey];
-        for (var i = 0; i < bugs.length; i++) {
-            keysToUpdate.push(bugs[i].key);
-        }
+        var keysToUpdate = collectKeysToUpdate(epicKey, bugs);
 
         transitionTickets(keysToUpdate, statuses.IN_REVIEW, tracker);
         addLabels(keysToUpdate, LABELS.AI_DEVELOPED, tracker);
 
-        if (prResult && prResult.prUrl) {
-            try {
-                tracker.postComment(epicKey, 'h3. *Bug-fix Batch PR Created/Updated*\n\n' +
-                    'PR: ' + prResult.prUrl + '\n\n' +
-                    'Linked bugs: ' + bugs.map(function(b) { return b.key; }).join(', '));
-            } catch (e) {
-                console.warn('Failed to post PR comment on Epic (non-fatal):', e);
-            }
-        }
+        postPRCommentIfPossible(tracker, epicKey, prResult, bugs);
 
     } catch (error) {
         console.error('Error in developBugFixBatchAndCreatePR:', error);
