@@ -438,3 +438,99 @@ suite('prepareDiscoveryContext — gh-1187 extracted helpers', function() {
     });
 
 });
+
+// ── snapshotPageTree failure paths (gh-1228 CRAP characterization) ──────────
+
+suite('prepareDiscoveryContext — snapshotPageTree failure paths', function() {
+
+    function treeModule(mocks) {
+        return loadPrepareDiscoveryContext(Object.assign({
+            confluence_get_children_by_id: function() { return []; },
+            confluence_content_by_id: function() { return { body: { storage: { value: '# Root' } } }; },
+            confluence_get_page_inline_comments: function() { return '{}'; },
+            file_write: function() {}
+        }, mocks || {}), { space: 'DISC', parentPageId: '123' });
+    }
+
+    test('root body fetch failure snapshots nothing and returns 0 (non-fatal)', function() {
+        var writes = {};
+        var mod = treeModule({
+            confluence_content_by_id: function() { throw new Error('confluence down'); },
+            file_write: function(p, c) { writes[p] = c; }
+        });
+
+        var total = mod.snapshotPageTree({ id: '456', title: 'PROJ-2 root' }, 'outputs/discovery', []);
+
+        assert.equal(total, 0, 'nothing counted when the root fetch fails');
+        assert.equal(Object.keys(writes).length, 0, 'no files written');
+    });
+
+    test('grandchild lookup failure degrades the child to a leaf file', function() {
+        var writes = {};
+        var mod = treeModule({
+            confluence_get_children_by_id: function(args) {
+                if (args.contentId === 'root') {
+                    return [{ id: '457', title: 'PRD', body: { storage: { value: '# PRD\ncontent' } } }];
+                }
+                if (args.contentId === '457') { throw new Error('child lookup down'); }
+                return [];
+            },
+            file_write: function(p, c) { writes[p] = c; }
+        });
+
+        var total = mod.snapshotPageTree({ id: 'root', title: 'PROJ-2 root' }, 'outputs/discovery', []);
+
+        assert.equal(total, 1, 'the child still counted');
+        assert.equal(writes['outputs/discovery/PRD.md'], '# PRD\ncontent', 'child body written as a leaf file');
+    });
+
+    test('inline comment fetch failure for one page does not stop the snapshot', function() {
+        var writes = {};
+        var mod = treeModule({
+            confluence_get_children_by_id: function(args) {
+                if (args.contentId === 'root') {
+                    return [{ id: '457', title: 'PRD', body: { storage: { value: '# PRD\ncontent' } } }];
+                }
+                return [];
+            },
+            confluence_get_page_inline_comments: function(args) {
+                if (args.pageId === '457') { throw new Error('comments down'); }
+                return '{}';
+            },
+            file_write: function(p, c) { writes[p] = c; }
+        });
+
+        var total = mod.snapshotPageTree({ id: 'root', title: 'PROJ-2 root' }, 'outputs/discovery', []);
+
+        assert.equal(total, 1, 'snapshot completed');
+        assert.equal(writes['outputs/discovery/PRD.md'], '# PRD\ncontent', 'child file written');
+        assert.equal(writes['outputs/discovery/index.md'], '# Root', 'root file written');
+    });
+
+    test('page body without comment anchors is written unchanged', function() {
+        var writes = {};
+        var mod = treeModule({
+            confluence_content_by_id: function() {
+                return { body: { storage: { value: '# Root\nplain body, no markers' } } };
+            },
+            file_write: function(p, c) { writes[p] = c; }
+        });
+
+        var total = mod.snapshotPageTree({ id: 'root', title: 'PROJ-2 root' }, 'outputs/discovery', []);
+
+        assert.equal(total, 0, 'no descendants');
+        assert.equal(writes['outputs/discovery/index.md'], '# Root\nplain body, no markers', 'body written unchanged');
+    });
+
+    test('empty root body falls back to the placeholder text', function() {
+        var writes = {};
+        var mod = treeModule({
+            confluence_content_by_id: function() { return { body: { storage: { value: '' } } }; },
+            file_write: function(p, c) { writes[p] = c; }
+        });
+
+        mod.snapshotPageTree({ id: 'root', title: 'PROJ-2 root' }, 'outputs/discovery', []);
+
+        assert.equal(writes['outputs/discovery/index.md'], '_(existing page had no body)_', 'placeholder written');
+    });
+});

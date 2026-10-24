@@ -199,7 +199,10 @@
         "js/unit-tests/test_createSolutionDesignTicketsAndAssignForReview.js",
         "js/unit-tests/test_legacyRootScriptsTracker.js",
         "js/unit-tests/test_jiraHelpers.js",
-        "js/unit-tests/test_isCodeGraphAvailable.js"
+        "js/unit-tests/test_isCodeGraphAvailable.js",
+        "js/unit-tests/test_closeQuestionTicket.js",
+        "js/unit-tests/test_enhanceSolutionDesignDescriptionAndAssess.js",
+        "js/unit-tests/test_prepareBugFixBatchContext.js"
       ]
     }
   }
