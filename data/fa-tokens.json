@@ -1,24 +1,4 @@
 {
-  "issue-840": [
-    {
-      "leg": "review",
-      "at": "2026-10-10T14:24:47Z",
-      "prompt": 118855,
-      "completion": 8498,
-      "total": 127353,
-      "model": ""
-    }
-  ],
-  "pr-841": [
-    {
-      "leg": "rework",
-      "at": "2026-10-10T14:22:18Z",
-      "prompt": 90772,
-      "completion": 33690,
-      "total": 124462,
-      "model": ""
-    }
-  ],
   "issue-842": [
     {
       "leg": "dev",
@@ -4890,6 +4870,17 @@
       "completion": 41374,
       "total": 166556,
       "cacheRead": 6732800,
+      "model": "glm-5.3-flash"
+    }
+  ],
+  "pr-1241": [
+    {
+      "leg": "review",
+      "at": "2026-10-24T14:28:29Z",
+      "prompt": 109648,
+      "completion": 26602,
+      "total": 136250,
+      "cacheRead": 2806464,
       "model": "glm-5.3-flash"
     }
   ]
