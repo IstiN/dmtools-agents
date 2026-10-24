@@ -358,6 +358,38 @@ function autoCommitAndPush(customParams, ticketKey, params) {
  * Uploads .log directly — no zip needed (timer doesn't inherit CLI_ALLOWED_COMMANDS,
  * so `zip` is not in whitelist; raw .log upload is simpler and sufficient).
  */
+// ── gh-1229: saveSessionArtefact decomposed into small steps; behavior is
+//    byte-identical to the previous inline flow. ──
+
+/** cacheToReleases tag/name templates, when the timer is configured to publish. */
+function releaseTemplatesOf(customParams) {
+    var cacheToReleases = customParams.cacheToReleases || {};
+    return {
+        tagTemplate: cacheToReleases.releaseTagTemplate,
+        nameTemplate: cacheToReleases.releaseNameTemplate
+    };
+}
+
+/** Write the wrapped snapshot; false (with the error logged) when the write fails. */
+function writeSessionSnapshot(outputFile, snapshotHeader, currentCliOutput, snapshotFooter) {
+    try {
+        file_write({ path: outputFile, content: snapshotHeader + currentCliOutput + snapshotFooter });
+        return true;
+    } catch (e) {
+        console.error('⏱️ timer: failed to write CLI output file:', e.toString().substring(0, 100));
+        return false;
+    }
+}
+
+/** Upload outcome is logged, never thrown — a failed save must not kill the timer. */
+function reportSessionUpload(result, assetName, tag, scmProvider) {
+    if (result.success) {
+        console.log('⏱️ timer: ✅ session saved: ' + assetName + ' → ' + tag + ' (' + scmProvider + ')');
+    } else {
+        console.error('⏱️ timer: session upload failed:', String(result.error).substring(0, 150));
+    }
+}
+
 function saveSessionArtefact(params, customParams, ticketKey, contextId, currentCliOutput) {
     var artefactRepo = releaseArtefacts.resolveArtefactRepository(customParams);
     if (!artefactRepo) {
@@ -372,11 +404,9 @@ function saveSessionArtefact(params, customParams, ticketKey, contextId, current
     var scmProvider = (projectConfig.scm && projectConfig.scm.provider) || 'github';
 
     var assetName = contextId + '-session.log';
-    var tagTemplate = customParams.cacheToReleases && customParams.cacheToReleases.releaseTagTemplate;
-    var nameTemplate = customParams.cacheToReleases && customParams.cacheToReleases.releaseNameTemplate;
-
-    var tag = releaseArtefacts.buildTag(ticketKey, tagTemplate);
-    var releaseConfig = { tagTemplate: tagTemplate, nameTemplate: nameTemplate };
+    var templates = releaseTemplatesOf(customParams);
+    var tag = releaseArtefacts.buildTag(ticketKey, templates.tagTemplate);
+    var releaseConfig = { tagTemplate: templates.tagTemplate, nameTemplate: templates.nameTemplate };
 
     // Write to working dir (FileTools blocks /tmp/ paths)
     var outputFile = '.dmtools-session-output.log';
@@ -386,10 +416,7 @@ function saveSessionArtefact(params, customParams, ticketKey, contextId, current
                          '=== This is a periodic snapshot of the running agent output, NOT a new agent run ===\n\n';
     var snapshotFooter = '\n\n=== ⏱️ TIMER SESSION SNAPSHOT END ===\n';
 
-    try {
-        file_write({ path: outputFile, content: snapshotHeader + currentCliOutput + snapshotFooter });
-    } catch (e) {
-        console.error('⏱️ timer: failed to write CLI output file:', e.toString().substring(0, 100));
+    if (!writeSessionSnapshot(outputFile, snapshotHeader, currentCliOutput, snapshotFooter)) {
         return;
     }
 
@@ -397,11 +424,7 @@ function saveSessionArtefact(params, customParams, ticketKey, contextId, current
     var result = releaseArtefacts.uploadRawFile(
         artefactRepo.owner, artefactRepo.repo, ticketKey, releaseConfig, outputFile, assetName, scmProvider
     );
-    if (result.success) {
-        console.log('⏱️ timer: ✅ session saved: ' + assetName + ' → ' + tag + ' (' + scmProvider + ')');
-    } else {
-        console.error('⏱️ timer: session upload failed:', String(result.error).substring(0, 150));
-    }
+    reportSessionUpload(result, assetName, tag, scmProvider);
 
     // Cleanup
     try { file_delete({ path: outputFile }); } catch (e) { /* ignore */ }
@@ -439,6 +462,8 @@ if (typeof module !== 'undefined' && module.exports) {
         baseBranchGuardSkips: baseBranchGuardSkips,
         mergeInProgressSkips: mergeInProgressSkips,
         hasDirtyChanges: hasDirtyChanges,
-        autoSaveCommitMessageOverride: autoSaveCommitMessageOverride
+        autoSaveCommitMessageOverride: autoSaveCommitMessageOverride,
+        saveSessionArtefact: saveSessionArtefact,
+        releaseTemplatesOf: releaseTemplatesOf
     };
 }

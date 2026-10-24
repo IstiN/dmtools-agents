@@ -407,6 +407,64 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
 // ls-remote always, one log/diff only when the branch exists, and the result
 // lands in input/<ticketKey>/existing_work.md so the agent sees previous
 // rounds' work before it starts.
+//
+// gh-1229: the metric collection / report rendering is decomposed into small
+// helpers (each with a single non-fatal degradation path).
+
+/** Best-effort refresh of exactly the two refs the report compares (gh-729). */
+function refreshExistingWorkRefs(baseBranch, branchName) {
+    try {
+        var fetchCmd = prHelper.buildTargetedOriginFetchCommand([baseBranch, branchName]);
+        if (fetchCmd) runCmd({ command: fetchCmd });
+    } catch (e) {
+        console.warn('Could not refresh refs for existing-work report (non-fatal):', e);
+    }
+}
+
+/** Ahead-count with three-dot --right-only merge-base semantics; '?' on failure. */
+function countCommitsAhead(originRef, branchRef) {
+    try {
+        return cleanCommandOutput(runCmd({ command: 'git rev-list --count --right-only ' + originRef + '...' + branchRef }) || '') || '0';
+    } catch (e) {
+        console.warn('Could not count branch commits (non-fatal):', e);
+        return '?';
+    }
+}
+
+/** Oneline log of the branch's own commits; '' on failure (non-fatal). */
+function commitLogLines(originRef, branchRef) {
+    try {
+        return cleanCommandOutput(runCmd({ command: 'git log --oneline -20 ' + originRef + '..' + branchRef }) || '');
+    } catch (e) {
+        return '';
+    }
+}
+
+/** Brief file stat of the branch vs base; '' on failure (non-fatal). */
+function diffStatLines(originRef, branchRef) {
+    try {
+        return cleanCommandOutput(runCmd({ command: 'git diff --shortstat ' + originRef + '...' + branchRef }) || '');
+    } catch (e) {
+        return '';
+    }
+}
+
+/** The existing_work.md body: resumed-leg warning + metrics + commit list. */
+function buildExistingWorkReport(branchName, originRef, branchRef, metrics) {
+    var content = '# Existing Work on Remote Branch\n\n' +
+        '⚠️ `' + branchRef + '` already exists — this is a RESUMED development leg. ' +
+        'Previous rounds\' work lives on this branch. Do NOT mistake the base branch tip (' + originRef + ') ' +
+        'or session-memory claims for your own landed work — the commits below are what actually exists.\n\n' +
+        '- Branch: `' + branchName + '` (remote)\n' +
+        '- Base: `' + originRef + '`\n' +
+        '- Commits ahead of base: ' + metrics.commitsAhead + '\n' +
+        '- Diff vs base: ' + (metrics.diffStat || '(no diff)') + '\n';
+    if (metrics.logLines) {
+        content += '\n## Commits ahead of base\n\n```\n' + metrics.logLines + '\n```\n';
+    }
+    return content;
+}
+
 function reportExistingDevBranch(ticketKey, config, ticket, inputFolder) {
     var branchName = configLoader.resolveBranchName(config, ticket, 'development');
     var baseBranch = configLoader.resolvePRTargetBranch(config, ticket);
@@ -434,42 +492,16 @@ function reportExistingDevBranch(ticketKey, config, ticket, inputFolder) {
     // counting, and count with a three-dot --right-only range so the number
     // carries the same merge-base semantics as the diff it is printed next
     // to (a fully-merged branch counts 0 ahead instead of main's history).
-    try {
-        var fetchCmd = prHelper.buildTargetedOriginFetchCommand([baseBranch, branchName]);
-        if (fetchCmd) runCmd({ command: fetchCmd });
-    } catch (e) {
-        console.warn('Could not refresh refs for existing-work report (non-fatal):', e);
-    }
-    var commitsAhead = '?';
-    var logLines = '';
-    var diffStat = '';
-    try {
-        commitsAhead = cleanCommandOutput(runCmd({ command: 'git rev-list --count --right-only ' + originRef + '...' + branchRef }) || '') || '0';
-    } catch (e) {
-        console.warn('Could not count branch commits (non-fatal):', e);
-    }
-    try {
-        logLines = cleanCommandOutput(runCmd({ command: 'git log --oneline -20 ' + originRef + '..' + branchRef }) || '');
-    } catch (e) { }
-    try {
-        diffStat = cleanCommandOutput(runCmd({ command: 'git diff --shortstat ' + originRef + '...' + branchRef }) || '');
-    } catch (e) { }
-
-    var content = '# Existing Work on Remote Branch\n\n' +
-        '⚠️ `' + branchRef + '` already exists — this is a RESUMED development leg. ' +
-        'Previous rounds\' work lives on this branch. Do NOT mistake the base branch tip (' + originRef + ') ' +
-        'or session-memory claims for your own landed work — the commits below are what actually exists.\n\n' +
-        '- Branch: `' + branchName + '` (remote)\n' +
-        '- Base: `' + originRef + '`\n' +
-        '- Commits ahead of base: ' + commitsAhead + '\n' +
-        '- Diff vs base: ' + (diffStat || '(no diff)') + '\n';
-    if (logLines) {
-        content += '\n## Commits ahead of base\n\n```\n' + logLines + '\n```\n';
-    }
+    refreshExistingWorkRefs(baseBranch, branchName);
+    var metrics = {
+        commitsAhead: countCommitsAhead(originRef, branchRef),
+        logLines: commitLogLines(originRef, branchRef),
+        diffStat: diffStatLines(originRef, branchRef)
+    };
 
     try {
-        file_write({ path: inputFolder + '/existing_work.md', content: content });
-        console.log('📋 Reported existing remote work: ' + branchRef + ' is ' + commitsAhead +
+        file_write({ path: inputFolder + '/existing_work.md', content: buildExistingWorkReport(branchName, originRef, branchRef, metrics) });
+        console.log('📋 Reported existing remote work: ' + branchRef + ' is ' + metrics.commitsAhead +
             ' commit(s) ahead of ' + originRef + ' → ' + inputFolder + '/existing_work.md');
     } catch (e) {
         console.warn('Could not write existing_work.md (non-fatal):', e);
@@ -802,6 +834,11 @@ if (typeof module !== 'undefined' && module.exports) {
         establishFeatureBranch,
         checkoutLocalBranchWithAlign,
         checkoutExistingRemoteBranch,
-        createNewDevBranch
+        createNewDevBranch,
+        // gh-1229: existing-work report decomposition — exported for direct tests.
+        buildExistingWorkReport,
+        countCommitsAhead,
+        commitLogLines,
+        diffStatLines
     };
 }
