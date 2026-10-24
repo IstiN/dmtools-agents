@@ -653,3 +653,115 @@ suite('factoryTokenUsage — entry action (token_usage_publish.js)', function ()
     assert.equal(result.reason, 'no-run-output');
   });
 });
+
+// ── gh-1193: characterization tests for the CRAP-target helpers ──────────────
+// Every branch of mergeTokenRows and publishTokenUsage is pinned here before
+// the helper extraction so the refactor can be proven behaviour-identical.
+
+suite('factoryTokenUsage — mergeTokenRows helpers (gh-1193)', function () {
+
+    test('objectOrEmpty degrades corrupt shapes to {} and keeps objects', function () {
+        assert.deepEqual(tuModule.objectOrEmpty(null), {});
+        assert.deepEqual(tuModule.objectOrEmpty('junk'), {});
+        assert.deepEqual(tuModule.objectOrEmpty([1, 2]), {});
+        var src = { 'issue-1': [] };
+        assert.equal(tuModule.objectOrEmpty(src), src);
+    });
+
+    test('orderedKeysOf keeps insertion order and appends a new key once', function () {
+        var src = { b: [], a: [] };
+        assert.deepEqual(tuModule.orderedKeysOf(src, 'c'), ['b', 'a', 'c']);
+        assert.deepEqual(tuModule.orderedKeysOf(src, 'a'), ['b', 'a']);
+        assert.deepEqual(tuModule.orderedKeysOf({}, 'k'), ['k']);
+    });
+
+    test('retainedRowsOf keeps at/after-cutoff rows and caps the tail at 40', function () {
+        var rows = [];
+        for (var i = 0; i < 45; i++) {
+            rows.push({ at: '2026-10-0' + (1 + Math.floor(i / 5)) + 'T00:00:0' + (i % 10) + 'Z', i: i });
+        }
+        var kept = tuModule.retainedRowsOf(rows, '2026-10-01T00:00:00Z');
+        assert.equal(kept.length, 40);
+        assert.equal(kept[kept.length - 1].i, 44, 'the newest row survives the tail cap');
+
+        var dropped = tuModule.retainedRowsOf([
+            { at: '2026-09-01T00:00:00Z' },
+            { at: '2026-10-13T00:00:00Z' }
+        ], '2026-10-01T00:00:00Z');
+        assert.equal(dropped.length, 1);
+        assert.equal(dropped[0].at, '2026-10-13T00:00:00Z');
+
+        assert.deepEqual(tuModule.retainedRowsOf([{ nope: 1 }, null], '2026-10-01T00:00:00Z'), [],
+            'non-row shapes drop');
+        assert.deepEqual(tuModule.retainedRowsOf([], '2026-10-01T00:00:00Z'), []);
+    });
+});
+
+suite('factoryTokenUsage — publishTokenUsage branches (gh-1193)', function () {
+
+    test('a sha probe answering literal "Not Found" PUTs without a sha', function () {
+        var commands = [];
+        var puts = [];
+        var exec = function (args) {
+            var cmd = String((args && args.command) || args || '');
+            commands.push(cmd);
+            if (cmd.indexOf('-X PUT') !== -1) { puts.push(cmd); return { output: '' }; }
+            if (cmd.indexOf('--jq .sha') !== -1) return { output: 'Not Found' };
+            if (cmd.indexOf('base64 -d') !== -1) throw new Error('gh: Not Found (404)');
+            return { output: '' };
+        };
+        var ledger = 'fa-tokens: {"input":10,"output":5,"cacheRead":1}';
+        var result = tuModule.publishTokenUsage({
+            runOutput: 'out.txt',
+            anchor: 'pr-12',
+            repo: 'O/R',
+            now: NOW
+        }, { exec: exec, read: function () { return ledger; } });
+
+        assert.equal(result.status, 'published');
+        assert.equal(puts.length, 1);
+        assert.notContains(puts[0], '-f sha=', 'first publish omits -f sha entirely');
+    });
+
+    test('a corrupt branch body merges from {} (jq empty guard)', function () {
+        var commands = [];
+        var exec = function (args) {
+            var cmd = String((args && args.command) || args || '');
+            commands.push(cmd);
+            if (cmd.indexOf('-X PUT') !== -1) return { output: '' };
+            if (cmd.indexOf('--jq .sha') !== -1) return { output: 'abc123' };
+            if (cmd.indexOf('base64 -d') !== -1) return { output: '{not json' };
+            return { output: '' };
+        };
+        var ledger = 'fa-tokens: {"input":10,"output":5,"cacheRead":1}';
+        var result = tuModule.publishTokenUsage({
+            runOutput: 'out.txt',
+            anchor: 'gh-9',
+            repo: 'O/R',
+            now: NOW
+        }, { exec: exec, read: function () { return ledger; } });
+
+        assert.equal(result.status, 'published');
+        assert.equal(result.key, 'issue-9');
+    });
+
+    test('without opts.now the publisher rides the live clock', function () {
+        var exec = function (args) {
+            var cmd = String((args && args.command) || args || '');
+            if (cmd.indexOf('-X PUT') !== -1) return { output: '' };
+            if (cmd.indexOf('--jq .sha') !== -1) throw new Error('gh: Not Found (404)');
+            if (cmd.indexOf('base64 -d') !== -1) throw new Error('gh: Not Found (404)');
+            return { output: '' };
+        };
+        var ledger = 'fa-tokens: {"input":10,"output":5,"cacheRead":1}';
+        var result = tuModule.publishTokenUsage({
+            runOutput: 'out.txt',
+            anchor: 'pr-3',
+            repo: 'O/R'
+        }, { exec: exec, read: function () { return ledger; } });
+
+        assert.equal(result.status, 'published');
+        assert.equal(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(result.row.at), true,
+            'row.at is a live UTC stamp: ' + result.row.at);
+    });
+});
