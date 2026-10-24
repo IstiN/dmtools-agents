@@ -81,6 +81,58 @@ function writeTaskMarker(inputFolder, knowledgeDir, prDetails) {
 }
 
 /**
+ * Mode 1: direct content — fully offline, no SCM calls. Null when neither
+ * diffText nor discussionsMarkdown was supplied.
+ */
+function directContentContext(customParams) {
+    if (!customParams.diffText && !customParams.discussionsMarkdown) {
+        return null;
+    }
+    console.log('Knowledge update: using directly supplied diff/discussions content (no SCM calls).');
+    var directPr = {
+        number: customParams.prNumber || null,
+        html_url: customParams.prUrl || null,
+        title: customParams.prTitle || null,
+        state: 'merged'
+    };
+    return {
+        prDetails: directPr,
+        diffText: customParams.diffText || null,
+        discussionsMarkdown: customParams.discussionsMarkdown || null,
+        discussionsRaw: null
+    };
+}
+
+/**
+ * Mode 2: direct PR/MR reference — the primary standalone/backfill entry
+ * point. Null when the referenced PR/MR cannot be fetched.
+ */
+function prNumberContext(scm, customParams) {
+    console.log('Knowledge update: resolving PR/MR #' + customParams.prNumber + ' directly.');
+    var prByNumber = gh.getPRDetails(scm, customParams.prNumber);
+    if (!prByNumber) {
+        console.warn('Could not fetch PR/MR #' + customParams.prNumber + ' — skipping.');
+        return null;
+    }
+    return fetchDiffAndDiscussions(scm, prByNumber);
+}
+
+/**
+ * Mode 3: ticket-based — only when this action happens to be invoked with a
+ * ticket. Null when no merged PR/MR exists for the ticket.
+ */
+function ticketContext(scm, ticketKey) {
+    console.log('Knowledge update: resolving merged PR/MR for ticket', ticketKey, '.');
+    var prByTicket = gh.findMergedPRForTicket(scm, ticketKey);
+    if (!prByTicket) {
+        console.warn('No merged PR found for ticket', ticketKey, '— skipping.');
+        return null;
+    }
+    var prDetails = gh.getPRDetails(scm, prByTicket.number) || prByTicket;
+    return fetchDiffAndDiscussions(scm, prDetails);
+}
+
+/**
  * Resolves how to source PR context, in priority order:
  * direct content > direct PR reference > ticket-based lookup.
  *
@@ -88,44 +140,17 @@ function writeTaskMarker(inputFolder, knowledgeDir, prDetails) {
  * if nothing usable could be resolved (caller writes the no-op marker).
  */
 function resolvePrContext(scm, customParams, ticketKey) {
-    // Mode 1: direct content — fully offline, no SCM calls.
-    if (customParams.diffText || customParams.discussionsMarkdown) {
-        console.log('Knowledge update: using directly supplied diff/discussions content (no SCM calls).');
-        var directPr = {
-            number: customParams.prNumber || null,
-            html_url: customParams.prUrl || null,
-            title: customParams.prTitle || null,
-            state: 'merged'
-        };
-        return {
-            prDetails: directPr,
-            diffText: customParams.diffText || null,
-            discussionsMarkdown: customParams.discussionsMarkdown || null,
-            discussionsRaw: null
-        };
+    var direct = directContentContext(customParams);
+    if (direct) {
+        return direct;
     }
 
-    // Mode 2: direct PR/MR reference — the primary standalone/backfill entry point.
     if (customParams.prNumber) {
-        console.log('Knowledge update: resolving PR/MR #' + customParams.prNumber + ' directly.');
-        var prByNumber = gh.getPRDetails(scm, customParams.prNumber);
-        if (!prByNumber) {
-            console.warn('Could not fetch PR/MR #' + customParams.prNumber + ' — skipping.');
-            return null;
-        }
-        return fetchDiffAndDiscussions(scm, prByNumber);
+        return prNumberContext(scm, customParams);
     }
 
-    // Mode 3: ticket-based — only when this action happens to be invoked with a ticket.
     if (ticketKey) {
-        console.log('Knowledge update: resolving merged PR/MR for ticket', ticketKey, '.');
-        var prByTicket = gh.findMergedPRForTicket(scm, ticketKey);
-        if (!prByTicket) {
-            console.warn('No merged PR found for ticket', ticketKey, '— skipping.');
-            return null;
-        }
-        var prDetails = gh.getPRDetails(scm, prByTicket.number) || prByTicket;
-        return fetchDiffAndDiscussions(scm, prDetails);
+        return ticketContext(scm, ticketKey);
     }
 
     return null;

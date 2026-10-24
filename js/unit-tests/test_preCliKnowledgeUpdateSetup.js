@@ -394,3 +394,81 @@ suite('preCliKnowledgeUpdateSetup — param resolution branches', function() {
     });
 
 });
+
+// ── gh-1229 characterization: resolvePrContext mode decomposition pinned
+//    before helper extraction (direct calls with gh/scm stubs). ──
+suite('preCliKnowledgeUpdateSetup — resolvePrContext modes (gh-1229)', function() {
+    function modWithGh(ghStub) {
+        return loadPreCliKnowledgeUpdateSetup(ghStub, {}, {});
+    }
+
+    function baseGhStub() {
+        return {
+            getPRDetails: function(scm, number) { return { number: number, html_url: 'u' }; },
+            findMergedPRForTicket: function(scm, key) { return { number: 55, title: key }; },
+            fetchDiscussionsAndRawData: function(scm, number) { return { markdown: 'm', rawThreads: ['t'] }; },
+            writePRContext: function() {}
+        };
+    }
+
+    test('mode 1 wins over prNumber and ticket: direct content, PR fields carried', function() {
+        var mod = modWithGh(baseGhStub());
+        var resolved = mod.resolvePrContext({}, {
+            diffText: 'd',
+            discussionsMarkdown: 'c',
+            prNumber: 9,
+            prUrl: 'http://x',
+            prTitle: 'T'
+        }, 'TS-1');
+        assert.deepEqual(resolved, {
+            prDetails: { number: 9, html_url: 'http://x', title: 'T', state: 'merged' },
+            diffText: 'd',
+            discussionsMarkdown: 'c',
+            discussionsRaw: null
+        });
+    });
+
+    test('mode 1: missing optional PR fields degrade to null without failing', function() {
+        var mod = modWithGh(baseGhStub());
+        var resolved = mod.resolvePrContext({}, { diffText: 'd' }, null);
+        assert.deepEqual(resolved.prDetails, { number: null, html_url: null, title: null, state: 'merged' });
+        assert.equal(resolved.diffText, 'd');
+        assert.equal(resolved.discussionsMarkdown, null);
+        assert.equal(resolved.discussionsRaw, null);
+    });
+
+    test('mode 2: prNumber without direct content resolves through getPRDetails', function() {
+        var mod = modWithGh(baseGhStub());
+        var resolved = mod.resolvePrContext({}, { prNumber: 42 }, 'TS-1');
+        assert.equal(resolved.prDetails.number, 42);
+        assert.equal(resolved.diffText, null, 'scm without getDiffText yields no diff');
+        assert.equal(resolved.discussionsMarkdown, 'm');
+        assert.deepEqual(resolved.discussionsRaw, ['t']);
+    });
+
+    test('mode 2: unfetchable PR returns null (caller writes the no-op marker)', function() {
+        var mod = modWithGh(Object.assign(baseGhStub(), {
+            getPRDetails: function() { return null; }
+        }));
+        assert.equal(mod.resolvePrContext({}, { prNumber: 42 }, 'TS-1'), null);
+    });
+
+    test('mode 3: ticket key without direct params resolves the merged PR for the ticket', function() {
+        var mod = modWithGh(baseGhStub());
+        var resolved = mod.resolvePrContext({}, {}, 'TS-7');
+        assert.equal(resolved.prDetails.number, 55);
+        assert.equal(resolved.discussionsMarkdown, 'm');
+    });
+
+    test('mode 3: no merged PR for the ticket returns null', function() {
+        var mod = modWithGh(Object.assign(baseGhStub(), {
+            findMergedPRForTicket: function() { return null; }
+        }));
+        assert.equal(mod.resolvePrContext({}, {}, 'TS-7'), null);
+    });
+
+    test('no mode applies (no content, no prNumber, no ticket) returns null', function() {
+        var mod = modWithGh(baseGhStub());
+        assert.equal(mod.resolvePrContext({}, {}, null), null);
+    });
+});
