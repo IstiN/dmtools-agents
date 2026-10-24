@@ -1,0 +1,337 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-24T21:47:39.393Z",
+  "ticketKey": "pr-1257",
+  "headSha": "473241c1838a16a1718448b94d7ceb0c02aebb4b",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:be3835b84fa87f4d",
+      "size": 643
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:3072fc5043a3baaf",
+      "size": 189
+    },
+    "merge_conflicts.md": {
+      "hash": "fnv1a64:92c5d4be42831f44",
+      "size": 547
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:a807c58c70a14d55",
+      "size": 12304
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:3f5bcff6d4b29c06",
+      "size": 42899
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:5186893fffaedd53",
+      "size": 6961
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:85de19166b7203cd",
+      "size": 2886
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:b6baf77518c35ebd",
+      "size": 1223
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:e401445ec9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:49af4168c0fa0784",
+      "size": 2635
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:75720bd902e91ea9",
+      "size": 2540
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6v767X",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/scm.js:22",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: merge `473241c1` reverted main's gh-1248 dedup in `scm.js` — and it is what fails the `crap` gate**\n\nThis hunk is the pre-gh-1248 inlined `_parseJson`/`_toArray`/`_cleanCommandOutput`. On main (`c7cd7e30`) this file delegates to `require('./loseJson.js')`, `prHelper.cleanCommandOutput` and `require('./githubReviewFetch.js')` (all gh-1248, #1260). The branch never touched `scm.js` (last branch-side touch: none — `git log e60d05ee -- js/common/scm.js` shows only pre-gh-1248 history), so the merge conflict was resolved by taking \"ours\" and silently reverted a merged main PR.\n\nVerified consequences (duplication gate reproduced byte-for-byte locally with the pinned tool `IstiN/crap4js@83ee6201`, same command as `quality.yml`):\n\n```\nfresh duplication: js/common/githubReviewFetch.js 24.74% (not pinned in duplication-baseline.json)\nfresh duplication: js/factory/publishParams.js 5.48% (not pinned in duplication-baseline.json)\nduplication regression: js/factory/review_verdict_publish.js 6 -> 8 duplicated lines\nduplication regression: js/factory/token_usage_publish.js 6 -> 8 duplicated lines\nduplication ratchet: FAIL — 3 fresh, 2 regressed\n```\n\n`githubReviewFetch.js` is over threshold **only because** this file re-inlined the exact blocks it delegates to on main (clones at `githubReviewFetch.js:27-36 ↔ scm.js:376-383`, `:46-54 ↔ scm.js:385-391`, `:68-72 ↔ scm.js:357-360`). I measured `origin/main` directly: neither `githubReviewFetch.js` nor `publishParams.js` is over threshold there — main is clean; the revert creates all of it.\n\nFix: re-resolve the merge taking main's side for this file, e.g.\n\n```bash\ngit fetch origin main\ngit checkout origin/main -- js/common/scm.js\n```\n\nthen re-run the gate locally (see the workflow for the exact commands) before pushing:\n\n```bash\ncrap4js duplicates --threshold 1 --exclude \"js/unit-tests/**\" js ci > dup-gate.txt 2>&1\nnode ci/duplicationRatchet.js dup-gate.txt duplication-baseline.json $?\n```"
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v768e",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/factory/review_verdict_publish.js:44",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: same merge revert in the three `js/factory/*_publish.js` files — `publishParams.js` is now dead production code**\n\nThis re-inlined `_envBridge`/`envValue`/`pick` block is main's code **before** gh-1248. On `origin/main`, all three publish entries share one canonical implementation:\n\n```js\n// gh-1248: the env reader + pick closure are canonical in publishParams.js\n// (one copy shared by the three *_publish entries).\nvar publishParams = require('./publishParams.js');\n```\n\nAfter this merge, `grep -rn \"require.*publishParams\" js ci` finds **zero production consumers** — only unit tests still load `js/factory/publishParams.js`. The module main extracted in #1260 is orphaned, and the two re-inlined clones are exactly what the gate flags:\n\n```\nduplication regression: js/factory/review_verdict_publish.js 6 -> 8 duplicated lines\nduplication regression: js/factory/token_usage_publish.js 6 -> 8 duplicated lines\nfresh duplication: js/factory/publishParams.js 5.48% (not pinned in duplication-baseline.json)\n```\n\n(The clone report shows the 4-way pair `mark_job_done_publish.js:57-61 ↔ publishParams.js:57-60 ↔ review_verdict_publish.js:36-50 ↔ token_usage_publish.js`.)\n\nNone of this is gh-1247 scope — the PR description and the whole discussion history never mention `publishParams` or the factory publish files; the branch did not touch them before the merge (`git log e60d05ee -- js/factory/review_verdict_publish.js` stops at `3d27959b`, a main commit). This is merge fallout, and it reverts work main already merged.\n\nFix: restore main's side for all three files:\n\n```bash\ngit checkout origin/main -- js/factory/mark_job_done_publish.js js/factory/review_verdict_publish.js js/factory/token_usage_publish.js\n```\n\nUnit tests pass either way (CI: 7471/0 — the inlined code is semantically equivalent), so this is pure duplication/scope damage; but it must not merge."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v769M",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/common/trackerHolder.js:36",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: the PR's own new file `trackerHolder.js` is 10.91% duplicated and unpinned — it alone keeps the `crap` gate red even after the merge revert is fixed**\n\nThe duplication gate (reproduced locally, byte-for-byte identical to CI on head `473241c1`) reports:\n\n```\nfresh duplication: js/common/trackerHolder.js 10.91% (not pinned in duplication-baseline.json)\n```\n\nThe clone pair is this body against the coexistence implementation the review already flagged — `js/common/trackers.js:1540-1545` (`createTrackerHolder` there is byte-similar: `initTracker`/`getTracker` with `ctx`/`inst` state). The docblock documents the deliberate coexistence (only 2 of ~23 files migrated, gh-1261 filed for consolidation), which is a reasonable scope decision — but the gate does not care about intent: a new file over 1% that is not in `duplication-baseline.json` fails the build, and unlike the other four violations this one is **not** caused by the merge revert; it ships with this PR's own diff.\n\nThe PR's acceptance claim \"all 8 target files now report ≤ 1.0% duplication\" is true but incomplete — the shared helper the 8 files delegate to is itself over the gate.\n\nTwo sanctioned ways out (pick one):\n\n1. **Pin it** — `duplication-baseline.json`'s own header documents this as the DoD for dedup tickets: *\"Regeneration is part of every gh-1244..gh-1250 dedup ticket DoD: after merging such a PR, run the tool on the merged head and rewrite 'pinned' with each reported file { pct, lines }.\"* Add `js/common/trackerHolder.js` with `{ pct: 10.91, lines: 6 }` (55-line file) plus a note pointing at gh-1261, and prune the now-stale \"cleared\" entries while there.\n2. **De-duplicate** — have this holder delegate to `trackers.js::createTrackerHolder`. That is blocked today by the require-free design constraint (the eval-based test harness loads this module bare), which is presumably why the coexistence was accepted — so option 1 is the pragmatic fix until gh-1261 consolidates.\n\nEither way, re-run the gate locally before pushing:\n\n```bash\ncrap4js duplicates --threshold 1 --exclude \"js/unit-tests/**\" js ci > dup-gate.txt 2>&1\nnode ci/duplicationRatchet.js dup-gate.txt duplication-baseline.json $?\n```"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:4eff6f6d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: the PR's own new file `trackerHolder.js` is 10.91% duplicated and unpinned — it alone keeps the `crap` gate red even after the merge revert is fixed**\n\nThe duplication gate (reproduced locally, byte-for-byte identical to CI on head `473241c1`) reports:\n\n```\nfresh duplication: js/common/trackerHolder.js 10.91% (not pinned in duplication-baseline.json)\n```\n\nThe clone pair is this body against the coexistence implementation the review already flagged — `js/common/trackers.js:1540-1545` (`createTrackerHolder` there is byte-similar: `initTracker`/`getTracker` with `ctx`/`inst` state). The docblock documents the deliberate coexistence (only 2 of ~23 files migrated, gh-1261 filed for consolidation), which is a reasonable scope decision — but the gate does not care about intent: a new file over 1% that is not in `duplication-baseline.json` fails the build, and unlike the other four violations this one is **not** caused by the merge revert; it ships with this PR's own diff.\n\nThe PR's acceptance claim \"all 8 target files now report ≤ 1.0% duplication\" is true but incomplete — the shared helper the 8 files delegate to is itself over the gate.\n\nTwo sanctioned ways out (pick one):\n\n1. **Pin it** — `duplication-baseline.json`'s own header documents this as the DoD for dedup tickets: *\"Regeneration is part of every gh-1244..gh-1250 dedup ticket DoD: after merging such a PR, run the tool on the merged head and rewrite 'pinned' with each reported file { pct, lines }.\"* Add `js/common/trackerHolder.js` with `{ pct: 10.91, lines: 6 }` (55-line file) plus a note pointing at gh-1261, and prune the now-stale \"cleared\" entries while there.\n2. **De-duplicate** — have this holder delegate to `trackers.js::createTrackerHolder`. That is blocked today by the require-free design constraint (the eval-based test harness loads this module bare), which is presumably why the coexistence was accepted — so option 1 is the pragmatic fix until gh-1261 consolidates.\n\nEither way, re-run the gate locally before pushing:\n\n```bash\ncrap4js duplicates --threshold 1 --exclude \"js/unit-tests/**\" js ci > dup-gate.txt 2>&1\nnode ci/duplicationRatchet.js dup-gate.txt duplication-baseline.json $?\n```"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:96a1ce8a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: Two \"canonical\" tracker-holder implementations now coexist**\n\nThe docblock claims the canonical implementation lives here ONCE, but `js/common/trackers.js:1536` still exports its own `createTrackerHolder()` — used by ~20 action files (`grep -rn \"createTrackerHolder\" js --include=\"*.js\"` shows `retryMergePR.js`, `recoverStuckDevelopment.js`, `checkWipLabel.js`, `developTicketAndCreatePR.js`, etc.), while only `preCliTestAutomationSetup.js` and `prepareTestPRForReview.js` migrated to this new module. Both factories implement the same lazy-singleton-with-reinit semantics, so any future fix (e.g. to null-normalization) must be applied in two places or the behaviors silently diverge.\n\nI understand the migration was deliberately limited to 2 SUTs to stay under the 50-token clone window — that's fine for this ticket. Please file a follow-up ticket to consolidate `trackers.js::createTrackerHolder` onto this require-free module (or vice versa) so the \"canonical ONCE\" claim becomes true."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:bc2f8e35",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `|| 'main'` fallback is new behavior for the story-setup caller**\n\n`checkoutTestBranchHead` fetches `[branchName, (config.git && config.git.baseBranch) || 'main']`. The preCliTestAutomationSetup original had exactly this fallback, but `preCliStoryTestAutomationSetup.js`'s original `checkoutBranch` built the fetch list as `[branchName, config.git.baseBranch]` — no `'main'` default (see `origin/main:js/preCliStoryTestAutomationSetup.js:209`). In practice `config.git.baseBranch` is always set, so the deviation is unreachable-ish, but it slightly contradicts the PR's \"exact commands unchanged\" claim. If the fallback is intentional hardening, a one-line comment here would make that explicit."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:72e08b2e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: unmentioned behavior change — stale-branch deletion now runs even when the ticket move fails**\n\nBefore the extraction, `finalizeAlreadyMergedTestCase` wrapped the label+move+comment **and** the `git push origin --delete` in one `try` — if `getTracker().getIssue`/`moveToStatusOrMark` threw, the branch deletion was skipped. Now `moveMergedTicketAndReport` swallows its own errors and the deletion below always executes. This is arguably an improvement (a merged test branch is stale regardless of tracker-move success), but it is a real behavior change not noted in the PR description. Consider one sentence in the docblock, or restore the old skip-on-failure coupling if it was deliberate (e.g. keeping the branch for investigation when the move fails)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:9139d40e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: test polish — indentation + repeated require-map boilerplate**\n\nTwo nits in the test changes:\n\n1. `var outerMocks = ...` sits at column 0 in the middle of the `gh-1223 characterization` suite body (should be indented 8 spaces like the surrounding statements).\n2. The `'branchSetup.js': loadModule('js/common/branchSetup.js')` require-map entry is now copy-pasted inline across ~10 test files (and sometimes also injected into nested `trackers.js`/`pullRequest.js`/`aiResponseParser.js` require maps, where it is never used — e.g. `test_wave2d1Tracker.js` adds it for `postBugCreation.js`, which never requires branchSetup). This file already shows the better pattern with `bsWith(mocks)` at the top; hoisting a shared `loadBranchSetup()` helper into the test framework (or at least per-file) would keep the next dedup leg from re-touching all these maps."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:1a2f5fa1",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Reply — Regenerated docs under-report runtime writes/side effects\n\nFixed in code rather than by hand-annotation (hand-edits would be wiped by the\n`agent-docs` workflow, which regenerates `docs/agents/generated/*` and fails on any diff).\n\n**`js/agentDocGenerator.js` now follows delegation into `js/common/`** —\n`analyzeActionFile` collects the function bodies an action actually invokes on its\n`js/common/` requires (`var bs = require('./common/branchSetup.js')` → only bodies of\nmethods called via `bs.<method>(...)` are scanned) and attributes their\n`file_write` / `cli_execute_command` literals to the delegating action. Only the invoked\nmethod bodies are scanned — not the whole helper module — so no over-reporting (a first\nwhole-module attempt added spurious entries like \"create Jira ticket\" to checkWipLabel\nand was rejected; verified by the regenerated diff).\n\nTDD: 4 new tests in `js/unit-tests/test_agentDocs.js`\n(`renderActionSection — js/common delegation (gh-1247)`) — RED first (2 failures), GREEN\nafter the fix; the two \"not followed\" tests pin the no-over-reporting guard.\n\nDocs regenerated with `node js/agentDocGenerator.js`:\n\n- `story_test_automation.md` — `input/<KEY>/merge_conflicts.md` is back in the\n  preCliStoryTestAutomationSetup Writes list (the exact line flagged here).\n- `test_case_automation.md` — `input/<KEY>/merge_conflicts.md` write **and** the\n  `git merge` side effect are back (runtime `git merge-tree` via\n  `branchSetup.collectMergeTreeDetails`).\n- All 7 pre-CLI action docs re-acquired their lost `merge_conflicts.md` entries.\n- A few docs gained additional *accurate* attributions main never showed (e.g.\n  `outputs/pr_base_branch.txt` via `baseBranchMarker.writeBaseBranchMarker` in\n  preCliDevelopmentSetup/preCliReworkSetup, `git merge` where the action calls\n  merge-tree) — same direction, runtime-accurate.\n\nVerified: `story_test_automation.md` and `test_case_automation.md` now match main's\nentries exactly on the flagged sections; docs-freshness suites\n(`test_agentDocs.js` 42/42, `test_agentDocsCoverage.js`) green; full suite\n7395 passed / 0 failed."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:e1ecf35c",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Reply — Two \"canonical\" tracker-holder implementations coexist\n\nBoth halves addressed:\n\n1. **Docblock corrected** — `js/common/trackerHolder.js` no longer claims \"The canonical\n   implementation lives here ONCE\". It now explicitly documents the coexistence with\n   `js/common/trackers.js::createTrackerHolder()` (used by ~20 action files), warns that\n   any semantic fix must be mirrored in both places until consolidation, and references\n   the follow-up ticket.\n\n2. **Follow-up ticket filed: gh-1261** —\n   https://github.com/IstiN/dmtools-agents/issues/1261\n   (\"consolidate the two coexisting tracker-holder implementations\"), with the goal,\n   acceptance criteria (one implementation remains, duplication gate stays green,\n   semantics pinned by `test_trackerHolder.js` unchanged) and the consumer list.\n\nAgreed that migrating the remaining ~20 files in this PR is out of scope — it would\nre-open the 50-token clone window the gh-1247 leg deliberately closed."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:6a59267d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Reply — `|| 'main'` fallback is new behavior for the story-setup caller\n\nThe fallback is **intentional hardening**, now documented with a one-line comment at\n`js/common/branchSetup.js:303` (above `fetchBranchRefs` in `checkoutTestBranchHead`):\n\n```js\n// gh-1247: the `|| 'main'` fallback is preCliTestAutomationSetup's original\n// behavior, kept as intentional hardening for callers whose config always\n// sets git.baseBranch (preCliStoryTestAutomationSetup previously had no\n// default — with baseBranch set the fetch list is identical).\n```\n\nAs you noted, `config.git.baseBranch` is always set in practice, so the fetch command\nis byte-identical for the story-setup caller; the deviation is only observable with a\nhand-edited config missing `git.baseBranch` (where `'main'` is the sane default anyway).\nNo test added — the comment documents intent; the fetch-list shape is already pinned by\nthe gh-1223 characterization suites."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:1e06ae78",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Reply — stale-branch deletion now runs even when the ticket move fails\n\nDecision: **keep the decoupled behavior** (deletion always runs) — a merged test branch\nis stale regardless of tracker-move success, and silently keeping dead branches is the\nworse failure mode. Documented and pinned instead of restoring the old skip-on-failure\ncoupling:\n\n- **Docblock** on `finalizeAlreadyMergedTestCase` (`js/prepareTestPRForReview.js`) now\n  states the behavior explicitly, including that pre-gh-1247 both steps shared one `try`,\n  and that the decoupling is intentional.\n- **Characterization test** added (`test_prepareTestPRForReview.js` —\n  \"already-merged: stale branch is still deleted when the tracker move fails\"):\n  `jira_move_to_status` throws → the flow still issues\n  `git push origin --delete test/TS-955` and returns `false`. This locks the behavior so\n  a future refactor cannot silently re-couple the steps.\n\nSuite: 35/35 on the file, full run 7395 passed / 0 failed."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:94a8c8bb",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Reply — test polish: indentation + repeated require-map boilerplate\n\nBoth nits addressed:\n\n1. **Indentation fixed** — `var outerMocks = ...` in\n   `js/unit-tests/test_preCliStoryTestAutomationSetup.js` (gh-1223 suite) is now indented\n   8 spaces like the surrounding statements.\n\n2. **Unused require-map entries removed** — surveyed every\n   `'branchSetup.js': loadModule('js/common/branchSetup.js')` entry across the ~13 test\n   files that carry them and removed the 29 that are provably dead: the entry is only\n   needed when the SUT being loaded (or its non-mocked nested modules) actually requires\n   branchSetup — confirmed per target module by grepping its `require()` calls. This\n   includes the exact case you cited (`test_wave2d1Tracker.js` injecting the entry for\n   `postBugCreation.js`, which never requires branchSetup) and the analogous dead\n   entries for `checkBugTestsPassed(Helpers)`, `checkBugToFixReady`,\n   `fetchLinkedBugsToInput`, `prepareBulkBugsCreationContext`, `writeSolutionAndLabels`,\n   `fetchParentContextToInput`, `triggerBitriseTestAutomation`,\n   `recoverStuckDevelopment`, `enhanceSDAPIDescriptionAndAssess`, `checkTaskStoriesDone`,\n   `intakePreAction`, `createIntakeTickets`, plus dead entries inside nested\n   `trackers.js` / `pullRequest.js` / `aiResponseParser.js` / `mergeState.js` /\n   `linkedIssuesReport.js` / `issuePlan.js` maps. Entries whose owning SUT genuinely\n   requires branchSetup (the 8 migrated SUTs, `baseBranchMarker`, `checkoutBranch`) were\n   kept; ambiguously-attributed ones left untouched.\n\n   Every removal is validated empirically: the makeRequire harness throws loudly on a\n   missing module, and all 10 touched test files pass (plus the full suite: 7395/0).\n\n**Deferred (noted, deliberately out of scope)**: hoisting a shared `loadBranchSetup()`\nhelper into the test framework across all ~10 files would be a larger refactor for a\ncosmetic gain now that the dead entries are gone — the remaining live entries differ in\nmock shape per file (`bsWith(mocks)` vs plain `loadModule`), which a single shared\nhelper would paper over. Happy to take it as a follow-up if you feel strongly."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:a19e2693",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: merge `473241c1` reverted main's gh-1248 dedup in `scm.js` — and it is what fails the `crap` gate**\n\nThis hunk is the pre-gh-1248 inlined `_parseJson`/`_toArray`/`_cleanCommandOutput`. On main (`c7cd7e30`) this file delegates to `require('./loseJson.js')`, `prHelper.cleanCommandOutput` and `require('./githubReviewFetch.js')` (all gh-1248, #1260). The branch never touched `scm.js` (last branch-side touch: none — `git log e60d05ee -- js/common/scm.js` shows only pre-gh-1248 history), so the merge conflict was resolved by taking \"ours\" and silently reverted a merged main PR.\n\nVerified consequences (duplication gate reproduced byte-for-byte locally with the pinned tool `IstiN/crap4js@83ee6201`, same command as `quality.yml`):\n\n```\nfresh duplication: js/common/githubReviewFetch.js 24.74% (not pinned in duplication-baseline.json)\nfresh duplication: js/factory/publishParams.js 5.48% (not pinned in duplication-baseline.json)\nduplication regression: js/factory/review_verdict_publish.js 6 -> 8 duplicated lines\nduplication regression: js/factory/token_usage_publish.js 6 -> 8 duplicated lines\nduplication ratchet: FAIL — 3 fresh, 2 regressed\n```\n\n`githubReviewFetch.js` is over threshold **only because** this file re-inlined the exact blocks it delegates to on main (clones at `githubReviewFetch.js:27-36 ↔ scm.js:376-383`, `:46-54 ↔ scm.js:385-391`, `:68-72 ↔ scm.js:357-360`). I measured `origin/main` directly: neither `githubReviewFetch.js` nor `publishParams.js` is over threshold there — main is clean; the revert creates all of it.\n\nFix: re-resolve the merge taking main's side for this file, e.g.\n\n```bash\ngit fetch origin main\ngit checkout origin/main -- js/common/scm.js\n```\n\nthen re-run the gate locally (see the workflow for the exact commands) before pushing:\n\n```bash\ncrap4js duplicates --threshold 1 --exclude \"js/unit-tests/**\" js ci > dup-gate.txt 2>&1\nnode ci/duplicationRatchet.js dup-gate.txt duplication-baseline.json $?\n```"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:545abe14",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: same merge revert in the three `js/factory/*_publish.js` files — `publishParams.js` is now dead production code**\n\nThis re-inlined `_envBridge`/`envValue`/`pick` block is main's code **before** gh-1248. On `origin/main`, all three publish entries share one canonical implementation:\n\n```js\n// gh-1248: the env reader + pick closure are canonical in publishParams.js\n// (one copy shared by the three *_publish entries).\nvar publishParams = require('./publishParams.js');\n```\n\nAfter this merge, `grep -rn \"require.*publishParams\" js ci` finds **zero production consumers** — only unit tests still load `js/factory/publishParams.js`. The module main extracted in #1260 is orphaned, and the two re-inlined clones are exactly what the gate flags:\n\n```\nduplication regression: js/factory/review_verdict_publish.js 6 -> 8 duplicated lines\nduplication regression: js/factory/token_usage_publish.js 6 -> 8 duplicated lines\nfresh duplication: js/factory/publishParams.js 5.48% (not pinned in duplication-baseline.json)\n```\n\n(The clone report shows the 4-way pair `mark_job_done_publish.js:57-61 ↔ publishParams.js:57-60 ↔ review_verdict_publish.js:36-50 ↔ token_usage_publish.js`.)\n\nNone of this is gh-1247 scope — the PR description and the whole discussion history never mention `publishParams` or the factory publish files; the branch did not touch them before the merge (`git log e60d05ee -- js/factory/review_verdict_publish.js` stops at `3d27959b`, a main commit). This is merge fallout, and it reverts work main already merged.\n\nFix: restore main's side for all three files:\n\n```bash\ngit checkout origin/main -- js/factory/mark_job_done_publish.js js/factory/review_verdict_publish.js js/factory/token_usage_publish.js\n```\n\nUnit tests pass either way (CI: 7471/0 — the inlined code is semantically equivalent), so this is pure duplication/scope damage; but it must not merge."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:16a4e0a5",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: Regenerated docs now under-report runtime writes/side effects**\n\nThis line used to be preceded by `-  - \\`input/<KEY>/merge_conflicts.md\\``; the regenerated docs for all 7 pre-CLI actions dropped that entry (and `test_case_automation.md` additionally dropped the `git merge` side effect). The deletion is a static-scan artifact, not a behavior change:\n\n- `js/preCliStoryTestAutomationSetup.js:47` still delegates to `branchSetup.writeBranchConflictGuidance(...)`, which writes `input/<KEY>/merge_conflicts.md` at runtime.\n- `js/preCliTestAutomationSetup.js` still runs `git merge-tree` via `branchSetup.collectMergeTreeDetails` (on main the generator matched the `git merge-tree` literal as a \"git merge\" side effect).\n\nSo the generated docs — which agents and humans read to understand what each action touches — are now factually wrong in the \"less info\" direction. Suggest a follow-up: either teach `js/agentDocGenerator.js` to follow `require`s into `js/common/` when attributing `file_write`/`cli_execute_command` calls, or hand-annotate the affected sections. Non-blocking since runtime behavior is unchanged and pinned by the characterization suites."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:00da05a3",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 3c9311a402f2b814d1567bfa75426bb08086c3f0 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:3bf68cb7",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## 🔧 Rework Complete — pr-1257\n\nAll PR review comments have been addressed. See fix summary below."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:82290930",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `7fc52332eaebc64f8592094eebd242384ddba5c9`) Rework re-queued (linked issue #1247 re-armed): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:355bb846",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 5dc2e835556f02acbf69861f1bd5e3c37d304066 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:94e9c775",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## 🔧 Rework Complete — gh-1247\n\nAll PR review comments have been addressed. See fix summary below."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:ba82469b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — APPROVE\n\n**Summary**: Solid mechanical dedup — `js/common/branchSetup.js` and `js/common/trackerHolder.js` extract the cloned branch/setup and tracker-singleton logic with exact semantics preserved (verified: duplication gate shows all 8 gh-1247 target files absent from the >1% list; full unit suite 7390 passed / 0 failed on a clean env; 46 new helper tests green). No blocking issues; CI on head `e60d05ee` is green and no open review threads exist.\n\n**Key Issues**:\n- ⚠️ The regenerated agent docs now under-report runtime writes/side effects: 7 generated docs dropped `input/<KEY>/merge_conflicts.md` and `test_case_automation.md` dropped `git merge`, because the generator statically scans the action file and the literals moved into `js/common/branchSetup.js` — but the actions still write `merge_conflicts.md` and still run `git merge-tree` at runtime.\n- ⚠️ Two tracker-holder implementations now coexist (`trackers.js::createTrackerHolder` used by ~20 files vs the new `trackerHolder.js::create` used by 2) — worth a follow-up consolidation ticket.\n\n**Next Steps**:\n1. (Follow-up, non-blocking) Teach `agentDocGenerator.js` to follow delegation into `js/common/` — or hand-annotate the Writes/Side effects — so the generated docs stay runtime-accurate.\n2. (Follow-up) Consolidate the two tracker-holder factories in a future dedup leg.\n3. Merge as-is; the 3 suggestions are optional polish."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:3a27432e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `e60d05ee6f040a2ce418e00821cb6b4f706efd99`) Rework re-queued (linked issue #1247 re-armed): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:501c5a01",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "✅ Rework finished. `pr_approved` is sticky (approved once — never re-reviewed): the new head re-validates and merges directly."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:0945c97e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 473241c1838a16a1718448b94d7ceb0c02aebb4b — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:046e2b8b",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The `crap` check is red on head `473241c1` — the duplication ratchet fails (3 fresh, 2 regressed, reproduced byte-for-byte locally with the pinned tool). Root cause of 4 of 5 violations is merge `473241c1` resolving conflicts by taking \"ours\": it reverted main's gh-1248 dedup in `js/common/scm.js` and all three `js/factory/*_publish.js` files, orphaning `publishParams.js` (zero production consumers) and re-inlining the blocks `githubReviewFetch.js` exists to hold. The fifth violation is PR-owned: the new `js/common/trackerHolder.js` is 10.91% duplicated (clone pair with `trackers.js:1540-1545`, the documented gh-1261 coexistence) and unpinned. Unit suite (7471/0) and CRAP ratchet are otherwise green; the previous round's substance (branchSetup/trackerHolder extraction, docs regeneration) remains sound.\n\n**Key Issues**:\n- 🚨 Merge `473241c1` reverted gh-1248 (#1260, already merged to main) — out-of-scope revert and the direct cause of the red gate.\n- 🚨 `js/common/trackerHolder.js` 10.91% fresh duplication — PR-owned; pin in `duplication-baseline.json` (documented dedup-ticket DoD) or dedupe.\n\n**Next Steps**:\n1. Re-resolve the merge taking main's side for `js/common/scm.js` and `js/factory/{mark_job_done,review_verdict,token_usage}_publish.js` (`git checkout origin/main -- <files>`).\n2. Pin `js/common/trackerHolder.js` in `duplication-baseline.json` (per its own regeneration note) with a gh-1261 reference, or restructure to drop the `trackers.js` clone.\n3. Re-run the duplication gate locally before pushing: `crap4js duplicates --threshold 1 --exclude \"js/unit-tests/**\" js ci` + `node ci/duplicationRatchet.js dup-gate.txt duplication-baseline.json $?` — expect `0 fresh, 0 regressed`."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:69c74bb1",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚖️ Verdict reconciliation (gh-807): the effective review verdict on head `473241c1838a16a1718448b94d7ceb0c02aebb4b` is **REQUEST_CHANGES** (at 2026-10-24T21:41:42.657Z, source: pr_review.json).\n\nRemoving `pr_approved` until re-review (approval-gated paths blocked, gh-807)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:abce7a7e",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `473241c1838a16a1718448b94d7ceb0c02aebb4b`) Rework re-queued (linked issue #1247 re-armed): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    }
+  ]
+}
