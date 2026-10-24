@@ -960,32 +960,119 @@ function loadForPrTail(mocks, opts) {
 // Simulates the live gh-1197 branch state at post-action: the CLI agent
 // already committed its work (branch 2 commits ahead of origin/main) and the
 // working tree is clean — post-action must push and create the PR.
+//
+// gh-1200 CRAP refactor: the canned responses live in an ordered rule table
+// (committedWorkGitRules — same order as the pre-refactor if chain, so
+// match semantics are bit-identical), and the dispatcher is two tiny named
+// helpers. Same commands → same outputs/throws, in the same order.
+function committedWorkGitRules(branchName, prUrl, opts) {
+    return [
+        { prefix: 'gh pr list --head ' + branchName, run: function () { return ''; } },
+        { exact: 'git branch --show-current', run: function () { return branchName; } },
+        { prefix: 'git ls-files -- ', run: function () { return ''; } },
+        {
+            prefix: 'git check-ignore', // not ignored → keep exclusions
+            run: function () { throw new Error('Command execution failed (exit code 1)'); }
+        },
+        { prefix: 'git add . --', run: function () { return ''; } },
+        { exact: 'git diff --cached --stat', run: function () { return ''; } },
+        { prefix: 'git rev-list --count', run: function () { return '2'; } },
+        { prefix: 'git fetch', run: function () { return ''; } },
+        { prefix: 'git rev-parse origin/', run: function () { return 'basesha123'; } },
+        { prefix: 'git merge-base', run: function () { return 'basesha123'; } },
+        { prefix: 'git push', run: function () { return ''; } },
+        { exact: 'git ls-remote --heads origin main', run: function () { return 'sha9\trefs/heads/main'; } },
+        { exact: 'git ls-remote --heads origin ' + branchName, run: function () { return 'abc123\trefs/heads/' + branchName; } },
+        {
+            prefix: 'gh pr create',
+            run: function () {
+                if (opts.prCreateFails) throw new Error('HTTP 502: GraphQL: Bad Gateway');
+                return prUrl;
+            }
+        }
+    ];
+}
+
+function committedWorkGitRuleHit(rule, command) {
+    if (rule.exact !== undefined) return command === rule.exact;
+    return command.indexOf(rule.prefix) === 0;
+}
+
+function committedWorkGitRespond(rules, command) {
+    for (var i = 0; i < rules.length; i++) {
+        if (committedWorkGitRuleHit(rules[i], command)) return rules[i].run(command);
+    }
+    return '';
+}
+
 function committedWorkGitMock(branchName, prUrl, opts) {
     opts = opts || {};
+    var rules = committedWorkGitRules(branchName, prUrl, opts);
     return function (args) {
-        var command = args.command;
-        if (command.indexOf('gh pr list --head ' + branchName) === 0) return '';
-        if (command === 'git branch --show-current') return branchName;
-        if (command.indexOf('git ls-files -- ') === 0) return '';
-        if (command.indexOf('git check-ignore') === 0) {
-            throw new Error('Command execution failed (exit code 1)'); // not ignored → keep exclusions
-        }
-        if (command.indexOf('git add . --') === 0) return '';
-        if (command === 'git diff --cached --stat') return '';
-        if (command.indexOf('git rev-list --count') === 0) return '2';
-        if (command.indexOf('git fetch') === 0) return '';
-        if (command.indexOf('git rev-parse origin/') === 0) return 'basesha123';
-        if (command.indexOf('git merge-base') === 0) return 'basesha123';
-        if (command.indexOf('git push') === 0) return '';
-        if (command === 'git ls-remote --heads origin main') return 'sha9\trefs/heads/main';
-        if (command === 'git ls-remote --heads origin ' + branchName) return 'abc123\trefs/heads/' + branchName;
-        if (command.indexOf('gh pr create') === 0) {
-            if (opts.prCreateFails) throw new Error('HTTP 502: GraphQL: Bad Gateway');
-            return prUrl;
-        }
-        return '';
+        return committedWorkGitRespond(rules, args.command);
     };
 }
+
+// ── committedWorkGitMock characterization (gh-1200 CRAP refactor) ────────────
+// Pins the canned git response table rule-by-rule, in evaluation order, so the
+// table-driven extraction cannot silently reorder or drop a mapping. Every
+// rule fires exactly once here (also keeps each extracted rule covered).
+
+suite('developTicketAndCreatePR > committedWorkGitMock canned responses (characterization)', function () {
+
+    var BR = 'ai/TS-30';
+    var PR = 'https://github.com/acme/widgets/pull/1263';
+
+    function outFor(command, opts) {
+        return committedWorkGitMock(BR, PR, opts)({ command: command });
+    }
+
+    function throwsFor(command, opts) {
+        var caught = null;
+        try { outFor(command, opts); } catch (e) { caught = e; }
+        return caught;
+    }
+
+    test('prefix rules map to their canned outputs in declaration order', function () {
+        assert.equal(outFor('gh pr list --head ' + BR + ' --state open'), '', 'gh pr list --head <branch>');
+        assert.equal(outFor('git ls-files -- .dmtools/credential-helper.log'), '', 'git ls-files --');
+        var ignored = throwsFor('git check-ignore -q .dmtools/run-output.txt');
+        assert.ok(ignored && ignored.message.indexOf('Command execution failed (exit code 1)') === 0,
+            'git check-ignore throws the exit-1 (not ignored) error');
+        assert.equal(outFor('git add . -- :!.dmtools/run-output.txt'), '', 'git add . --');
+        assert.equal(outFor('git rev-list --count origin/main..HEAD'), '2', 'git rev-list --count');
+        assert.equal(outFor('git fetch origin main'), '', 'git fetch');
+        assert.equal(outFor('git rev-parse origin/main'), 'basesha123', 'git rev-parse origin/');
+        assert.equal(outFor('git merge-base origin/main HEAD'), 'basesha123', 'git merge-base');
+        assert.equal(outFor('git push -u origin ' + BR), '', 'git push');
+        assert.equal(outFor('gh pr create --title t'), PR, 'gh pr create returns the PR url');
+    });
+
+    test('exact rules map to their canned outputs', function () {
+        assert.equal(outFor('git branch --show-current'), BR, 'branch --show-current → branch name');
+        assert.equal(outFor('git diff --cached --stat'), '', 'diff --cached --stat → empty');
+        assert.equal(outFor('git ls-remote --heads origin main'), 'sha9\trefs/heads/main', 'ls-remote main');
+        assert.equal(outFor('git ls-remote --heads origin ' + BR), 'abc123\trefs/heads/' + BR, 'ls-remote branch');
+    });
+
+    test('unmatched commands fall through to empty output', function () {
+        assert.equal(outFor('git status --porcelain'), '', 'unknown command → empty string');
+    });
+
+    test('opts.prCreateFails flips gh pr create into a 502 throw', function () {
+        var caught = throwsFor('gh pr create --title t', { prCreateFails: true });
+        assert.ok(caught, 'pr create throws when prCreateFails');
+        assert.contains(String(caught && caught.message), 'HTTP 502: GraphQL: Bad Gateway');
+        assert.equal(outFor('git push -u origin ' + BR, { prCreateFails: true }), '',
+            'other rules are unaffected by prCreateFails');
+    });
+
+    test('rule order matters: the exact ls-remote main rule wins over the branch rule spelling', function () {
+        // Both exact rules share the 'git ls-remote --heads origin ' prefix —
+        // the pin guards the declaration order (main first, then <branch>).
+        assert.equal(outFor('git ls-remote --heads origin main'), 'sha9\trefs/heads/main');
+    });
+});
 
 suite('developTicketAndCreatePR > PR-creation tail (gh-729)', function () {
 
