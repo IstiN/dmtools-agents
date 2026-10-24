@@ -528,6 +528,148 @@ function loadRenderHarness(files) {
     return mod;
 }
 
+suite('renderActionSection — js/common delegation (gh-1247)', function() {
+    // gh-1247 extraction moved file_write / cli_execute_command literals out of
+    // the preCli*Setup actions into js/common/branchSetup.js. The generated docs
+    // must keep attributing those runtime artifacts to the delegating action.
+    var DELEGATING_ACTION = [
+        '/**',
+        ' * Pre-CLI setup — delegates branch work to branchSetup.',
+        ' */',
+        "var branchSetup = require('./common/branchSetup.js');",
+        'function action(params) {',
+        '    branchSetup.writeBranchConflictGuidance(params.ticket.key, {});',
+        '    var exec = function(cmd) { return cmd; };',
+        '    branchSetup.collectMergeTreeDetails(exec);',
+        '    return { success: true };',
+        '}'
+    ].join('\n');
+
+    var COMMON_HELPER = [
+        "function writeBranchConflictGuidance(ticketKey, details) {",
+        "    file_write({ path: 'input/' + ticketKey + '/merge_conflicts.md', content: 'x' });",
+        '}',
+        'function collectMergeTreeDetails(exec) {',
+        "    return exec('git merge-tree base HEAD origin/main');",
+        '}'
+    ].join('\n');
+
+    function renderWith(files, actionPath) {
+        var mock = makeMockFs(Object.assign({ 'agents/js/agentDocGenerator.js': '// probe' }, files));
+        var mod = loadModule(
+            'js/agentDocGenerator.js',
+            makeRequire({ 'fs': mock.fs, 'path': makeMockPath() }),
+            {}
+        );
+        return mod.renderActionSection('preCliJSAction', actionPath, 'pre');
+    }
+
+    test('file_write delegated into js/common/ is attributed to the action', function() {
+        var md = renderWith({
+            'agents/js/preCliStoryTestAutomationSetup.js': DELEGATING_ACTION,
+            'agents/js/common/branchSetup.js': COMMON_HELPER
+        }, 'agents/js/preCliStoryTestAutomationSetup.js');
+        assert.contains(md, '`input/<KEY>/merge_conflicts.md`');
+    });
+
+    test('cli_execute_command (git merge) delegated into js/common/ is attributed to the action', function() {
+        var md = renderWith({
+            'agents/js/preCliStoryTestAutomationSetup.js': DELEGATING_ACTION,
+            'agents/js/common/branchSetup.js': COMMON_HELPER
+        }, 'agents/js/preCliStoryTestAutomationSetup.js');
+        assert.contains(md, '- git merge');
+    });
+
+    test('non-common requires are NOT followed (no over-reporting)', function() {
+        var md = renderWith({
+            'agents/js/someAction.js': [
+                "require('./localHelper.js');",
+                "file_write('outputs/own.md', d);"
+            ].join('\n'),
+            'agents/js/localHelper.js': "file_write('outputs/helper.md', d);"
+        }, 'agents/js/someAction.js');
+        assert.contains(md, '`outputs/own.md`');
+        assert.ok(md.indexOf('outputs/helper.md') === -1,
+            'helper next to the action must not be scanned for artifacts/effects');
+    });
+
+    test('requires outside js/common/ are NOT followed even under a common dir', function() {
+        // a js/common module requiring a sibling action-level module must not
+        // drag that module's artifacts into the action's doc.
+        var md = renderWith({
+            'agents/js/someAction.js': "require('./common/helper.js');",
+            'agents/js/common/helper.js': "require('../actionShared.js');",
+            'agents/js/actionShared.js': "file_write('outputs/shared.md', d);"
+        }, 'agents/js/someAction.js');
+        assert.ok(md.indexOf('outputs/shared.md') === -1,
+            'common→non-common requires must not be followed');
+    });
+
+    test('delegated body containing braces and escapes inside strings is extracted whole', function() {
+        var helper = [
+            'function messy(ticketKey) {',
+            "    var tpl = 'a}b';",              // brace inside a string
+            "    var esc = 'it\\'s {';",        // escaped quote, then a lone brace
+            "    file_write({ path: 'input/' + ticketKey + '/messy.md', content: tpl + esc });",
+            '}'
+        ].join('\n');
+        var md = renderWith({
+            'agents/js/act2.js': [
+                "var h = require('./common/h2.js');",
+                'function action(p) { h.messy(p.key); return {}; }'
+            ].join('\n'),
+            'agents/js/common/h2.js': helper
+        }, 'agents/js/act2.js');
+        assert.contains(md, '`input/<KEY>/messy.md`');
+    });
+
+    test('object-literal method form (name: function) is extracted', function() {
+        var md = renderWith({
+            'agents/js/act3.js': [
+                "var h = require('./common/h3.js');",
+                'function action(p) { h.obl(p.key); return {}; }'
+            ].join('\n'),
+            'agents/js/common/h3.js': [
+                'module.exports = {',
+                '    obl: function(ticketKey) {',
+                "        file_write({ path: 'input/' + ticketKey + '/obl.md', content: 'x' });",
+                '    }',
+                '};'
+            ].join('\n')
+        }, 'agents/js/act3.js');
+        assert.contains(md, '`input/<KEY>/obl.md`');
+    });
+
+    test('helper method without a complete body is skipped silently', function() {
+        var md = renderWith({
+            'agents/js/act4.js': [
+                "var h = require('./common/h4.js');",
+                'function action(p) { h.broken(p.key); return {}; }'
+            ].join('\n'),
+            // unterminated body — extraction must not bleed into artifacts
+            'agents/js/common/h4.js': "function broken(ticketKey) {\n    var x = 1;"
+        }, 'agents/js/act4.js');
+        assert.ok(md.indexOf('Writes:') === -1 || md.indexOf('/broken') === -1,
+            'unterminated delegated body contributes no artifacts');
+    });
+
+    test('unterminated string inside a delegated body does not swallow the scan', function() {
+        var md = renderWith({
+            'agents/js/act5.js': [
+                "var h = require('./common/h5.js');",
+                'function action(p) { h.unterm(p.key); return {}; }'
+            ].join('\n'),
+            'agents/js/common/h5.js': [
+                'function unterm(ticketKey) {',
+                "    var s = 'never closed;",   // string runs to EOF
+                '}'
+            ].join('\n')
+        }, 'agents/js/act5.js');
+        assert.ok(md.indexOf('/unterm') === -1,
+            'body with an unterminated string must not be attributed');
+    });
+});
+
 suite('agentDocGenerator.renderActionSection (gh-119 characterization)', function() {
 
     test('empty filePath renders nothing', function() {

@@ -30,6 +30,8 @@
  * @param {string} baseBranch - the resolved base branch name, WITHOUT any "origin/"
  *                              prefix (e.g. "master", "develop/3.9.0"). No-op if falsy.
  */
+var branchSetup = require('./branchSetup.js');
+
 function writeBaseBranchMarker(baseBranch) {
     if (!baseBranch) return;
     ensureOutputsLocalExclude();
@@ -56,25 +58,11 @@ function writeBaseBranchMarker(baseBranch) {
  * `.codegraph/` exclusion in preCliDevelopmentSetup.js's ensureCodegraphLocalExclude().
  */
 function ensureOutputsLocalExclude() {
-    try {
-        var content = '';
-        try { content = file_read({ path: '.git/info/exclude' }) || ''; } catch (e) { content = ''; }
-        var lines = content.split('\n');
-        var alreadyPresent = false;
-        for (var i = 0; i < lines.length; i++) {
-            if (lines[i].trim() === 'outputs/') { alreadyPresent = true; break; }
-        }
-        if (!alreadyPresent) {
-            var sep = content && content.charAt(content.length - 1) !== '\n' ? '\n' : '';
-            file_write({
-                path: '.git/info/exclude',
-                content: content + sep + '\n# Job output marker files (e.g. pr_base_branch.txt) - must never be committed\noutputs/\n'
-            });
-        }
-    } catch (e) {
-        console.warn('ensureOutputsLocalExclude: failed to update .git/info/exclude (non-fatal):',
-            e && e.toString ? e.toString() : String(e));
-    }
+    branchSetup.ensureGitInfoExclude(
+        'outputs/',
+        '# Job output marker files (e.g. pr_base_branch.txt) - must never be committed',
+        'ensureOutputsLocalExclude: failed to update .git/info/exclude (non-fatal):'
+    );
 }
 
 if (typeof module !== 'undefined' && module.exports) {

@@ -27,7 +27,8 @@ function loadTestAutomationSetup(mocks) {
 
     return loadModule(
         'js/preCliTestAutomationSetup.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, allMocks),
+                      'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
             './configLoader.js': { loadProjectConfig: function() { return cfg; } },
             './config.js': configModule,
             './fetchLinkedBugsToInput.js': fetchLinkedBugs,
@@ -38,7 +39,8 @@ function loadTestAutomationSetup(mocks) {
             ),
             './common/pullRequest.js': loadModule(
                 'js/common/pullRequest.js',
-                makeRequire({
+                makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+                              'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
                     './config.js': configModule,
                     './mergeState.js': loadModule('js/common/mergeState.js'),
                     './common/mergeState.js': loadModule('js/common/mergeState.js')
@@ -204,6 +206,8 @@ suite('preCliTestAutomationSetup — alignBranchWithBase (gh-1242)', function() 
                     loadProjectConfig: function() { return cfg; },
                     formatBranchName: function(prefix, key) { return prefix + '/' + key; }
                 },
+                'branchSetup.js': loadModule('js/common/branchSetup.js', null, allMocks),
+                'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
                 './config.js': configModule,
                 './fetchLinkedBugsToInput.js': { action: function() {} },
                 './common/trackers.js': loadModule(
@@ -357,6 +361,8 @@ suite('preCliTestAutomationSetup — checkoutBranch (gh-1242)', function() {
                     loadProjectConfig: function() { return cfg; },
                     formatBranchName: function(prefix, key) { return prefix + '/' + key; }
                 },
+                'branchSetup.js': loadModule('js/common/branchSetup.js', null, allMocks),
+                'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
                 './config.js': configModule,
                 './fetchLinkedBugsToInput.js': { action: function() {} },
                 './common/trackers.js': loadModule(
@@ -462,6 +468,8 @@ function loadCheckoutFallback(mocks) {
                 loadProjectConfig: function() { return {}; },
                 formatBranchName: function(prefix, key) { return prefix + '/' + key; }
             },
+            'branchSetup.js': loadModule('js/common/branchSetup.js', null, allMocks),
+            'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
             './config.js': configModule,
             './fetchLinkedBugsToInput.js': { action: function() {} },
             './common/trackers.js': loadModule(

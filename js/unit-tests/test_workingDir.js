@@ -114,9 +114,19 @@ function loadPreCli(workingDir) {
         { file_read: fileReadMock }
     );
 
+
+    var modMocks = {
+            cli_execute_command: mockCli,
+            file_read: fileReadMock,
+            file_write: function() {},
+            jira_search_by_jql: function() { return JSON.stringify({ issues: [] }); },
+            jira_transition_issue: function() {}
+        };
+    var bs = loadModule('js/common/branchSetup.js', null, modMocks);
     var mod = loadModule(
         'js/preCliDevelopmentSetup.js',
         makeRequire({
+                'branchSetup.js': bs,
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
             './common/pullRequest.js': PR_HELPER_REAL,
@@ -129,13 +139,7 @@ function loadPreCli(workingDir) {
             './common/commentMarkup.js': commentMarkupModule,
             './common/trackers.js': trackersModuleReal
         }),
-        {
-            cli_execute_command: mockCli,
-            file_read: fileReadMock,
-            file_write: function() {},
-            jira_search_by_jql: function() { return JSON.stringify({ issues: [] }); },
-            jira_transition_issue: function() {}
-        }
+        modMocks
     );
 
     return { mod: mod, calls: calls };
@@ -225,9 +229,21 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             } }
         );
 
+
+        var modMocks = {
+                cli_execute_command: mockCli,
+                file_read: function(opts) {
+                    try { return file_read(opts); } catch (e) { return null; }
+                },
+                file_write: function() {},
+                jira_move_to_status: function() {},
+                jira_search_by_jql: function() { return []; }
+            };
+        var bs = loadModule('js/common/branchSetup.js', null, modMocks);
         mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
+                'branchSetup.js': bs,
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,
@@ -241,15 +257,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
         }),
-            {
-                cli_execute_command: mockCli,
-                file_read: function(opts) {
-                    try { return file_read(opts); } catch (e) { return null; }
-                },
-                file_write: function() {},
-                jira_move_to_status: function() {},
-                jira_search_by_jql: function() { return []; }
-            }
+            modMocks
         );
 
         mod.action({
@@ -291,9 +299,21 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             } }
         );
 
+
+        var modMocks = {
+                cli_execute_command: mockCli,
+                file_read: function(opts) {
+                    try { return file_read(opts); } catch (e) { return null; }
+                },
+                file_write: function() {},
+                jira_move_to_status: function() {},
+                jira_search_by_jql: function() { return []; }
+            };
+        var bs = loadModule('js/common/branchSetup.js', null, modMocks);
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
+                'branchSetup.js': bs,
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,
@@ -307,15 +327,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
         }),
-            {
-                cli_execute_command: mockCli,
-                file_read: function(opts) {
-                    try { return file_read(opts); } catch (e) { return null; }
-                },
-                file_write: function() {},
-                jira_move_to_status: function() {},
-                jira_search_by_jql: function() { return []; }
-            }
+            modMocks
         );
 
         mod.action({
@@ -361,9 +373,21 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             } }
         );
 
+
+        var modMocks = {
+                cli_execute_command: mockCli,
+                file_read: function(opts) {
+                    try { return file_read(opts); } catch (e) { return null; }
+                },
+                file_write: function(args) { writes.push(args); },
+                jira_move_to_status: function() {},
+                jira_search_by_jql: function() { return []; }
+            };
+        var bs = loadModule('js/common/branchSetup.js', null, modMocks);
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
+                'branchSetup.js': bs,
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,
@@ -377,15 +401,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
         }),
-            {
-                cli_execute_command: mockCli,
-                file_read: function(opts) {
-                    try { return file_read(opts); } catch (e) { return null; }
-                },
-                file_write: function(args) { writes.push(args); },
-                jira_move_to_status: function() {},
-                jira_search_by_jql: function() { return []; }
-            }
+            modMocks
         );
 
         mod.action({
@@ -434,6 +450,8 @@ function loadPreCliTestAutomation(workingDir) {
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
             './common/pullRequest.js': PR_HELPER_REAL,
+            'branchSetup.js': loadModule('js/common/branchSetup.js', null, _m),
+            'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
             './fetchLinkedBugsToInput.js': { action: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
@@ -513,8 +531,9 @@ suite('preCliTestAutomationSetup > workingDir', function() {
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,
-                './fetchLinkedBugsToInput.js': { action: function() {} }
-            ,
+                './fetchLinkedBugsToInput.js': { action: function() {} },
+                'branchSetup.js': loadModule('js/common/branchSetup.js', null, _m),
+                'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
             './common/commentMarkup.js': commentMarkupModule,
         }, { './common/trackers.js': trackersWith(_m) })), _m); })({
                 cli_execute_command: mockCli,
@@ -569,6 +588,8 @@ suite('preCliTestAutomationSetup > workingDir', function() {
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,
+                'branchSetup.js': loadModule('js/common/branchSetup.js', null, _m),
+                'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
                 './fetchLinkedBugsToInput.js': { action: function() {} }
             ,
             './common/commentMarkup.js': commentMarkupModule,

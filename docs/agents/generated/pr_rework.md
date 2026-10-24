@@ -61,9 +61,12 @@ _Check WIP Label Pre-Action_
 _Pre-CLI Rework Setup Action (preCliJSAction for pr_rework agent)_
 
 - Source: `agents/js/preCliReworkSetup.js`
+- Writes:
+  - `outputs/pr_base_branch.txt`
 - Side effects:
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
+  - git merge
 - Parameters (customParams):
   - `adoTextFormat`
   - `aiRepository`
@@ -101,6 +104,8 @@ _Push Rework Changes Post-Action_
   - move ticket to status (via tracker)
   - assign ticket (via tracker)
   - git checkout
+  - git merge
+  - git push
 - Parameters (customParams):
   - `adoTextFormat`
   - `aiRepository`
