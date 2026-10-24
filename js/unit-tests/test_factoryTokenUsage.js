@@ -765,3 +765,98 @@ suite('factoryTokenUsage — publishTokenUsage branches (gh-1193)', function () 
             'row.at is a live UTC stamp: ' + result.row.at);
     });
 });
+
+// ── gh-1225 — CRAP gaps: extractFaPayload branches + ledger skips + helpers ──
+
+suite('factoryTokenUsage — extractFaPayload marker-scan branches (gh-1225)', function () {
+
+  test('a non-space, non-brace char right after the marker → null (sh regex anchored)', function () {
+    assert.equal(tuModule.extractFaPayload('fa-tokens:x{"input":1}', 'fa-tokens:'.length), null);
+    assert.equal(tuModule.extractFaPayload('fa-tokens:fa-tokens: {"input":1}', 'fa-tokens:'.length), null);
+  });
+
+  test('only spaces/tabs after the marker → null (EOF without a brace)', function () {
+    assert.equal(tuModule.extractFaPayload('fa-tokens:  \t ', 'fa-tokens:'.length), null);
+    assert.equal(tuModule.extractFaPayload('fa-tokens:', 'fa-tokens:'.length), null);
+  });
+
+  test('escaped backslash and escaped quote inside a string value survive the balanced scan', function () {
+    var text = 'fa-tokens: {"say":"a\\\\b \\"c}done","input":1,"output":2}';
+    var payload = tuModule.extractFaPayload(text, 'fa-tokens:'.length);
+    assert.equal(payload, '{"say":"a\\\\b \\"c}done","input":1,"output":2}');
+    var sums = tuModule.parseFaTokensLedger(text);
+    assert.equal(sums.input, 1);
+    assert.equal(sums.output, 2);
+  });
+
+  test('braces and quotes inside string values do not open/close the payload', function () {
+    var payload = tuModule.extractFaPayload('fa-tokens: {"m":"}{ \\" {","output":5}', 'fa-tokens:'.length);
+    assert.equal(payload, '{"m":"}{ \\" {","output":5}');
+  });
+});
+
+suite('factoryTokenUsage — parseFaTokensLedger skip branches (gh-1225)', function () {
+
+  test('a non-object payload (array) is skipped', function () {
+    assert.deepEqual(tuModule.parseFaTokensLedger('fa-tokens: [1,2,3]'),
+        { input: 0, output: 0, cacheRead: 0, model: '' });
+  });
+
+  test('a non-numeric string field invalidates the whole record (the sh int() raise)', function () {
+    assert.deepEqual(tuModule.parseFaTokensLedger('fa-tokens: {"input":"12x","output":3}'),
+        { input: 0, output: 0, cacheRead: 0, model: '' });
+  });
+
+  test('valid records still sum after skipped ones (marker-paced, non-overlapping)', function () {
+    var sums = tuModule.parseFaTokensLedger(
+        'fa-tokens:x\n' +
+        'fa-tokens: {"input":"1e3","output":2}\n' +
+        'fa-tokens: {"input":10,"output":20,"cacheRead":5,"model":"kimi"}');
+    assert.deepEqual(sums, { input: 10, output: 20, cacheRead: 5, model: 'kimi' });
+  });
+});
+
+suite('factoryTokenUsage — balanced-payload scan helpers (gh-1225)', function () {
+
+  test('jsonPayloadEndFrom returns the index of the closing brace', function () {
+    var text = 'x {"a":"} still string"} tail';
+    var open = text.indexOf('{');
+    assert.equal(tuModule.jsonPayloadEndFrom(text, open), text.indexOf('"}') + 1);
+  });
+
+  test('jsonPayloadEndFrom: escaped backslash does not close the string; escaped quote neither', function () {
+    var text = '{"p":"a\\\\b \\" q"}';
+    assert.equal(tuModule.jsonPayloadEndFrom(text, 0), text.lastIndexOf('}'));
+  });
+
+  test('jsonPayloadEndFrom: unterminated payload → -1', function () {
+    assert.equal(tuModule.jsonPayloadEndFrom('{"a":1', 0), -1);
+  });
+
+  test('jsonPayloadEndFrom: nested objects close at the outermost brace', function () {
+    var text = '{"a":{"b":2},"c":3}';
+    assert.equal(tuModule.jsonPayloadEndFrom(text, 0), text.length - 1);
+  });
+
+  test('stepInStringState: the escape lifecycle inside a string', function () {
+    assert.deepEqual(tuModule.stepInStringState('\\', false), { escaped: true, inString: true });
+    assert.deepEqual(tuModule.stepInStringState('n', true), { escaped: false, inString: true });
+    assert.deepEqual(tuModule.stepInStringState('"', true), { escaped: false, inString: true });
+    assert.deepEqual(tuModule.stepInStringState('"', false), { escaped: false, inString: false });
+    assert.deepEqual(tuModule.stepInStringState('a', false), { escaped: false, inString: true });
+  });
+
+  test('applyLedgerRecord sums fields and rides the last-seen model', function () {
+    var sums = { input: 0, output: 0, cacheRead: 0, model: '' };
+    tuModule.applyLedgerRecord(sums, { input: 10, output: '20', cacheRead: 5, model: 'kimi' });
+    tuModule.applyLedgerRecord(sums, { input: 1, output: 2, cacheRead: 3, model: '' });
+    tuModule.applyLedgerRecord(sums, { input: 7, output: 8, cacheRead: 9, model: 'copilot' });
+    assert.deepEqual(sums, { input: 18, output: 30, cacheRead: 17, model: 'copilot' });
+  });
+
+  test('applyLedgerRecord: a non-numeric field skips the record silently (int() raise)', function () {
+    var sums = { input: 4, output: 4, cacheRead: 0, model: '' };
+    tuModule.applyLedgerRecord(sums, { input: '1e3', output: 2 });
+    assert.deepEqual(sums, { input: 4, output: 4, cacheRead: 0, model: '' });
+  });
+});
