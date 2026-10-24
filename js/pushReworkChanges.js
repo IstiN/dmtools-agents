@@ -699,6 +699,41 @@ function extractCitedThreadIds(text) {
 }
 
 /**
+ * The candidate paths of the setup-time thread snapshot, in read order: the
+ * job-root input folder first, then the workingDir-relative copy when the
+ * run has a workingDir.
+ */
+function rawThreadSnapshotCandidates(ticketKey, outputOptions) {
+    var candidates = [inputFolderFor(ticketKey) + '/pr_discussions_raw.json'];
+    if (outputOptions && outputOptions.workingDir) {
+        candidates.push(outputOptions.workingDir + '/' + inputFolderFor(ticketKey) + '/pr_discussions_raw.json');
+    }
+    return candidates;
+}
+
+/**
+ * The thread list of a parsed snapshot payload: a {"threads": [...]} export,
+ * a top-level array export, or [].
+ */
+function threadsOfParsedSnapshot(parsed) {
+    return (parsed && parsed.threads) ? parsed.threads : (Array.isArray(parsed) ? parsed : []);
+}
+
+/**
+ * The thread list of one snapshot candidate, or null when the file is
+ * missing/blank/unparsable or carries no threads — any of which means "try
+ * the next candidate".
+ */
+function readRawThreadsSnapshot(path) {
+    try {
+        var raw = file_read({ path: path });
+        if (!raw || !String(raw).trim()) return null;
+        var threads = threadsOfParsedSnapshot(JSON.parse(raw));
+        return (threads && threads.length > 0) ? threads : null;
+    } catch (e) { return null; }
+}
+
+/**
  * Reads the setup-time thread snapshot input/<ticketKey>/pr_discussions_raw.json
  * (written by preCliReworkSetup via gitOps.writePRContext). Each thread carries
  * BOTH ids needed post-rework: rootCommentId (inline reply target) and threadId
@@ -706,18 +741,10 @@ function extractCitedThreadIds(text) {
  */
 function readInputRawThreads(ticketKey, outputOptions) {
     if (!ticketKey) return [];
-    var candidates = [inputFolderFor(ticketKey) + '/pr_discussions_raw.json'];
-    if (outputOptions && outputOptions.workingDir) {
-        candidates.push(outputOptions.workingDir + '/' + inputFolderFor(ticketKey) + '/pr_discussions_raw.json');
-    }
+    var candidates = rawThreadSnapshotCandidates(ticketKey, outputOptions);
     for (var i = 0; i < candidates.length; i++) {
-        try {
-            var raw = file_read({ path: candidates[i] });
-            if (!raw || !String(raw).trim()) continue;
-            var parsed = JSON.parse(raw);
-            var threads = (parsed && parsed.threads) ? parsed.threads : (Array.isArray(parsed) ? parsed : []);
-            if (threads && threads.length > 0) return threads;
-        } catch (e) { /* try next candidate */ }
+        var threads = readRawThreadsSnapshot(candidates[i]);
+        if (threads) return threads;
     }
     return [];
 }
@@ -792,17 +819,43 @@ function isUnaddressableThread(t) {
 }
 
 /**
+ * The thread-id part of a label: threadId, else 'comment#<rootCommentId>',
+ * else 'no-id'. Shared by threadLabel (full label), shortThreadId (capped)
+ * and the open-thread accounting block — one id rendering instead of three
+ * inline copies (gh-1220 CRAP split).
+ */
+function threadIdLabel(t) {
+    return t.threadId ||
+        (t.rootCommentId !== null && t.rootCommentId !== undefined ? 'comment#' + t.rootCommentId : 'no-id');
+}
+
+/**
+ * The file:line location of a thread, or null when it has no path.
+ */
+function threadLocation(t) {
+    return t.path ? (t.path + (t.line ? ':' + t.line : '')) : null;
+}
+
+/**
+ * The first body line of a thread (the reviewer's title), hard-capped at
+ * 120 chars (117 + trailing '...').
+ */
+function threadBodyExcerpt(t) {
+    var body = String(t.body || '').split('\n')[0].trim();
+    return body.length > 120 ? body.substring(0, 117) + '...' : body;
+}
+
+/**
  * Human-readable thread identification for logs and completion comments:
  * id, file:line location, and the first body line (the reviewer's title).
  */
 function threadLabel(t) {
     if (!t) return '(unknown thread)';
-    var id = t.threadId ||
-        (t.rootCommentId !== null && t.rootCommentId !== undefined ? 'comment#' + t.rootCommentId : 'no-id');
-    var loc = t.path ? (t.path + (t.line ? ':' + t.line : '')) : null;
-    var body = String(t.body || '').split('\n')[0].trim();
-    if (body.length > 120) body = body.substring(0, 117) + '...';
-    return id + (loc ? ' (' + loc + ')' : '') + (body ? ' — "' + body + '"' : '');
+    var loc = threadLocation(t);
+    var body = threadBodyExcerpt(t);
+    return threadIdLabel(t) +
+        (loc ? ' (' + loc + ')' : '') +
+        (body ? ' — "' + body + '"' : '');
 }
 
 /**
@@ -810,9 +863,7 @@ function threadLabel(t) {
  * 'comment#<rootCommentId>', else 'no-id', hard-capped at 16 chars.
  */
 function shortThreadId(t) {
-    var id = t.threadId ||
-        (t.rootCommentId !== null && t.rootCommentId !== undefined ? 'comment#' + t.rootCommentId : 'no-id');
-    id = String(id);
+    var id = String(threadIdLabel(t));
     return id.length > 16 ? id.substring(0, 13) + '...' : id;
 }
 
@@ -851,6 +902,28 @@ function readRepliesArray(outputOptions) {
 }
 
 /**
+ * True when reply and thread name the SAME GraphQL thread id (stringified —
+ * the AI output and the snapshot may disagree on number vs string).
+ */
+function replyMatchesThreadId(reply, thread) {
+    return !!(reply && thread && thread.threadId && reply.threadId &&
+        String(thread.threadId) === String(reply.threadId));
+}
+
+/**
+ * True when the reply claims the thread's root comment — by rootCommentId or
+ * inReplyToId (either id proves the thread was addressed). rootId arrives
+ * already stringified (post-enrichment parity), falsy never reaches here.
+ */
+function replyMatchesRootId(reply, rootId) {
+    if (reply.rootCommentId !== null && reply.rootCommentId !== undefined &&
+        String(reply.rootCommentId) === rootId) return true;
+    if (reply.inReplyToId !== null && reply.inReplyToId !== undefined &&
+        String(reply.inReplyToId) === rootId) return true;
+    return false;
+}
+
+/**
  * gh-799 AC2: reply-targeting coverage. N open threads in the input snapshot
  * vs how many of them a reply row actually targets — matched by threadId OR
  * rootCommentId/inReplyToId in either direction (post-enrichment parity: 
@@ -861,15 +934,11 @@ function readRepliesArray(outputOptions) {
  */
 function replyTargetsThread(reply, thread) {
     if (!reply || !thread) return false;
-    if (thread.threadId && reply.threadId && String(thread.threadId) === String(reply.threadId)) return true;
+    if (replyMatchesThreadId(reply, thread)) return true;
     var rootId = (thread.rootCommentId !== null && thread.rootCommentId !== undefined)
         ? String(thread.rootCommentId) : null;
     if (!rootId) return false;
-    if (reply.rootCommentId !== null && reply.rootCommentId !== undefined &&
-        String(reply.rootCommentId) === rootId) return true;
-    if (reply.inReplyToId !== null && reply.inReplyToId !== undefined &&
-        String(reply.inReplyToId) === rootId) return true;
-    return false;
+    return replyMatchesRootId(reply, rootId);
 }
 
 function buildReplyCoverage(inputThreads, replies) {
@@ -964,6 +1033,29 @@ function latestConcludedVerdict(scm, pr) {
 }
 
 /**
+ * A CONCLUDED review verdict — the only states the rework gates act on
+ * (COMMENTED and unknown states are never blocking evidence).
+ */
+function isConcludedReview(r) {
+    return !!r && (r.state === 'CHANGES_REQUESTED' || r.state === 'APPROVED');
+}
+
+/** The submission timestamp key of the oldest-first verdict order. */
+function reviewSubmittedAt(r) {
+    return String(r.submitted_at || '');
+}
+
+/** Oldest-first comparator over concluded reviews (equal timestamps never drop an entry). */
+function compareConcludedReviewsBySubmittedAt(a, b) {
+    return reviewSubmittedAt(a) < reviewSubmittedAt(b) ? -1 : 1;
+}
+
+/** The concluded reviews of a review list, oldest first. */
+function concludedReviewsOf(reviews) {
+    return (reviews || []).filter(isConcludedReview).sort(compareConcludedReviewsBySubmittedAt);
+}
+
+/**
  * Concluded (CHANGES_REQUESTED / APPROVED) reviews of a PR, oldest first.
  * Shared by the token-burn guard and the completion verdict gate. Returns []
  * when the provider exposes no reviews or the probe fails — callers apply
@@ -972,14 +1064,7 @@ function latestConcludedVerdict(scm, pr) {
 function concludedReviewsSorted(scm, pr) {
     try {
         if (!scm || typeof scm.listReviews !== 'function' || !pr || !pr.number) return [];
-        var reviews = scm.listReviews(pr.number) || [];
-        var concluded = reviews.filter(function(r) {
-            return r && (r.state === 'CHANGES_REQUESTED' || r.state === 'APPROVED');
-        });
-        concluded.sort(function(a, b) {
-            return String(a.submitted_at || '') < String(b.submitted_at || '') ? -1 : 1;
-        });
-        return concluded;
+        return concludedReviewsOf(scm.listReviews(pr.number));
     } catch (e) {
         console.warn('Review-verdict probe failed (fail-open):', e.message || e);
         return [];
@@ -1005,11 +1090,9 @@ function selectReworkCompletionWording(liveOpenCount, unaddressedCount, verdict)
 }
 
 /**
- * Per-thread accounting block for the open-threads completion comment: every
- * live open thread listed with WHY it is still open — appeared mid-run (drift,
- * AC5), never targeted by a reply (AC2), or replied to but still open.
- * Membership is checked by either id kind (threadId or rootCommentId) because
- * the live fetch and the input snapshot may disagree on which ids they carry.
+ * Membership probe by either id kind (threadId or the 'c'-prefixed root
+ * comment id) — the live fetch and the input snapshot may disagree on which
+ * ids they carry.
  */
 function threadKeySetContains(keySet, t) {
     if (!t) return false;
@@ -1018,28 +1101,48 @@ function threadKeySetContains(keySet, t) {
     return false;
 }
 
+/**
+ * WHY a live open thread is still open: it appeared mid-run (not in the
+ * rework input snapshot — drift, AC5), was never targeted by a reply (AC2),
+ * or was replied to but is still open.
+ */
+function openThreadAccountingReason(t, inputKeys, unaddressedKeys, repliesFileRef) {
+    var key = threadKeyOf(t);
+    if (!key || !threadKeySetContains(inputKeys, t)) {
+        return '🆕 appeared mid-run (not present in the rework input snapshot)';
+    }
+    if (threadKeySetContains(unaddressedKeys, t)) {
+        return 'not addressed by any reply in ' + repliesFileRef;
+    }
+    return 'reply posted, thread still open';
+}
+
+/**
+ * One accounting bullet: the labeled thread (id, location, title) with its
+ * still-open reason.
+ */
+function openThreadAccountingLine(m, t, inputKeys, unaddressedKeys) {
+    var loc = threadLocation(t);
+    var body = threadBodyExcerpt(t);
+    var reason = openThreadAccountingReason(t, inputKeys, unaddressedKeys, m.inline('outputs/review_replies.json'));
+    return '* ' + m.inline(threadIdLabel(t)) +
+        (loc ? ' — ' + m.inline(loc) : '') +
+        (body ? ' — "' + body + '"' : '') +
+        ' — ' + reason;
+}
+
+/**
+ * Per-thread accounting block for the open-threads completion comment: every
+ * live open thread listed with WHY it is still open — appeared mid-run (drift,
+ * AC5), never targeted by a reply (AC2), or replied to but still open.
+ * Membership is checked by either id kind (threadId or rootCommentId) because
+ * the live fetch and the input snapshot may disagree on which ids they carry.
+ */
 function buildOpenThreadAccountingBlock(m, liveOpen, inputThreads, unaddressed) {
     var inputKeys = threadKeySet(inputThreads);
     var unaddressedKeys = threadKeySet(unaddressed);
     var lines = liveOpen.map(function(t) {
-        var key = threadKeyOf(t);
-        var reason;
-        if (!key || !threadKeySetContains(inputKeys, t)) {
-            reason = '🆕 appeared mid-run (not present in the rework input snapshot)';
-        } else if (threadKeySetContains(unaddressedKeys, t)) {
-            reason = 'not addressed by any reply in ' + m.inline('outputs/review_replies.json');
-        } else {
-            reason = 'reply posted, thread still open';
-        }
-        var id = t.threadId ||
-            (t.rootCommentId !== null && t.rootCommentId !== undefined ? 'comment#' + t.rootCommentId : 'no-id');
-        var loc = t.path ? (t.path + (t.line ? ':' + t.line : '')) : null;
-        var body = String(t.body || '').split('\n')[0].trim();
-        if (body.length > 120) body = body.substring(0, 117) + '...';
-        return '* ' + m.inline(id) +
-            (loc ? ' — ' + m.inline(loc) : '') +
-            (body ? ' — "' + body + '"' : '') +
-            ' — ' + reason;
+        return openThreadAccountingLine(m, t, inputKeys, unaddressedKeys);
     });
     return lines.join('\n') + '\n';
 }
@@ -1422,6 +1525,50 @@ function postReplyAndResolve(scm, pullRequestId, item, thread, replyText, state)
 }
 
 /**
+ * One reply row of the per-item pass (gh-1220 CRAP split of
+ * postThreadReplies): enrich ids from the setup-time snapshot, resolve the
+ * reply text, track every claimed id for the closure sweep, then post + resolve.
+ * Call order is byte-identical to the former inline body.
+ */
+function postOneThreadReply(scm, pullRequestId, item, lookup, outputOptions, auditLine, addressed, state) {
+    // Accept both the documented field names (inReplyToId/reply) and the
+    // input-schema field names (rootCommentId/body) — the AI agent commonly
+    // mirrors field names from input/<TICKET>/pr_discussions_raw.json
+    // instead of renaming them for output. gh-692 fills either missing id
+    // from the setup-time snapshot so the reply is threaded + resolvable.
+    const inReplyToId = enrichReplyIds(item, lookup);
+    const replyText = resolveReplyText(item.reply || item.body, outputOptions) + (auditLine || '');
+    const thread = { rootCommentId: inReplyToId, threadId: item.threadId || null };
+
+    // Track every id this rework claims as addressed — the closure sweep
+    // below retries resolution for anything the per-item pass could not
+    // name or complete.
+    if (item.threadId) addressed.threadIds[String(item.threadId)] = true;
+    if (inReplyToId) addressed.rootIds[String(inReplyToId)] = true;
+
+    postReplyAndResolve(scm, pullRequestId, item, thread, replyText, state);
+}
+
+/**
+ * The single combined top-level comment for every untargeted reply
+ * (anti-spam — never one generic comment per item). Returns 1 when posted,
+ * 0 otherwise; a failed post is warned about, never thrown.
+ */
+function postCombinedUntargetedComment(scm, pullRequestId, untargeted) {
+    if (untargeted.length === 0) return 0;
+    try {
+        // Post exactly one combined top-level comment for all untargeted replies
+        // instead of one generic comment per item.
+        scm.addComment(pullRequestId, buildCombinedUntargetedComment(untargeted));
+        console.log('✅ Posted 1 combined comment for ' + untargeted.length + ' untargeted repl' + (untargeted.length === 1 ? 'y' : 'ies'));
+        return 1;
+    } catch (e) {
+        console.warn('Failed to post combined untargeted reply comment:', e.message || e);
+        return 0;
+    }
+}
+
+/**
  * Post replies to each review thread and resolve them.
  * Reads outputs/review_replies.json produced by the cursor agent.
  *
@@ -1446,9 +1593,8 @@ function postReplyAndResolve(scm, pullRequestId, item, thread, replyText, state)
  * Anti-spam: replies without any usable comment id (no inReplyToId/rootCommentId,
  * even after enrichment) cannot be posted as an inline threaded reply. Instead of
  * posting one generic top-level PR comment per such item (which spams the
- * conversation with repeated "✅ Addressed." messages), all of them are batched
- * into a single combined top-level comment — the specified fallback for
- * unciteable items.
+ * conversation with repeated "✅ Addressed." messages), all of them are batched into
+ * a single combined top-level comment — the specified fallback for unciteable items.
  */
 function postThreadReplies(scm, pullRequestId, outputOptions) {
     outputOptions = outputOptions || {};
@@ -1466,49 +1612,20 @@ function postThreadReplies(scm, pullRequestId, outputOptions) {
         console.log('No thread replies to post');
     }
 
-    let posted = 0;
     const untargeted = [];
     const addressed = { threadIds: {}, rootIds: {} };
     // gh-957: lap-accounting counter — incremented on every successful
     // resolution so the leg close can stamp an accurate lap marker.
-    const resolutions = outputOptions.resolutions || null;
-    const state = { posted: 0, untargeted: untargeted, resolutions: resolutions };
+    const state = { posted: 0, untargeted: untargeted, resolutions: outputOptions.resolutions || null };
     // gh-957 audit-resolve: when the leg changed no code, every reply below
     // carries the audit line (rework run URL) — resolution without a code
     // change is allowed ONLY with this per-thread explanation.
     const auditLine = buildAuditResolveLine(outputOptions.auditNoCodeChange, outputOptions.runUrl);
 
     replies.forEach(function(item) {
-        // Accept both the documented field names (inReplyToId/reply) and the
-        // input-schema field names (rootCommentId/body) — the AI agent commonly
-        // mirrors field names from input/<TICKET>/pr_discussions_raw.json
-        // instead of renaming them for output. gh-692 fills either missing id
-        // from the setup-time snapshot so the reply is threaded + resolvable.
-        const inReplyToId = enrichReplyIds(item, lookup);
-        const replyText = resolveReplyText(item.reply || item.body, outputOptions) + (auditLine || '');
-        const thread = { rootCommentId: inReplyToId, threadId: item.threadId || null };
-
-        // Track every id this rework claims as addressed — the closure sweep
-        // below retries resolution for anything the per-item pass could not
-        // name or complete.
-        if (item.threadId) addressed.threadIds[String(item.threadId)] = true;
-        if (inReplyToId) addressed.rootIds[String(inReplyToId)] = true;
-
-        postReplyAndResolve(scm, pullRequestId, item, thread, replyText, state);
+        postOneThreadReply(scm, pullRequestId, item, lookup, outputOptions, auditLine, addressed, state);
     });
-    posted = state.posted;
-
-    if (untargeted.length > 0) {
-        // Post exactly one combined top-level comment for all untargeted replies
-        // instead of one generic comment per item.
-        try {
-            scm.addComment(pullRequestId, buildCombinedUntargetedComment(untargeted));
-            console.log('✅ Posted 1 combined comment for ' + untargeted.length + ' untargeted repl' + (untargeted.length === 1 ? 'y' : 'ies'));
-            posted++;
-        } catch (e) {
-            console.warn('Failed to post combined untargeted reply comment:', e.message || e);
-        }
-    }
+    state.posted += postCombinedUntargetedComment(scm, pullRequestId, untargeted);
 
     // Closure step (gh-692): sweep the PR's fresh open threads and resolve every
     // still-open thread this rework addressed — plus the ids cited in the rework
@@ -1521,8 +1638,8 @@ function postThreadReplies(scm, pullRequestId, outputOptions) {
         resolutions: outputOptions.resolutions || null
     });
 
-    console.log('Posted ' + posted + '/' + replies.length + ' thread replies');
-    return posted;
+    console.log('Posted ' + state.posted + '/' + replies.length + ' thread replies');
+    return state.posted;
 }
 
 function postPRComment(scm, pullRequestId, fixSummary, ticketKey, repliesPosted) {
@@ -2883,5 +3000,11 @@ if (typeof module !== 'undefined' && module.exports) {
     actionSetup, pushAndPublishOrFail, resumeOrFailLadder, completeReworkLeg,
     openThreadsCompletionComment, unaddressedRepliesCompletionComment, changesRequestedCompletionComment, cleanCompletionComment, completionPrCommentSuffix,
     blockedLogLine, postBlockedPrComment, moveToBlockedStatus, removeContextWipLabel,
-    hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch, assertReworkBranchSynced, squashReworkWipIfEnabled, readInputViolations, runOwnedViolationsGate, handleOwnedViolationsRejected, buildOwnedViolationsRejectedComment };
+    hasMeaningfulSummary, isUnaddressableThread, threadShortLabel, buildUnaddressedThreadsFold, buildBlockedReworkComment, postCompletionPrComment, wipLabelOf, finalizeTicketState, latchGateOpen, rearmNoopRework, noopLapDecisions, stickyApprovalNotice, clearAiReviewedLatch, ticketOf, autoStartReviewSkipReason, triggerAutoStartReview, runAutoStartReview, cacheCompletionArtifacts, stampCompletionLapMarker, postCompletionTokenUsage, squashReworkWipCommits, hasRealCodeChanges, evaluateAuditResolveGate, buildAuditResolveLine, buildCombinedUntargetedComment, enrichReplyIds, resolveReplyText, postReplyAndResolve, resolveReplyThread, firstPresentId, threadRootIdOrNull, fillThreadIdFromRoot, isAddressedThread, sweepAddressedThreads, resolveCitedThreads, fetchFreshThreadsForSweep, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, replyTargetsThread, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment, reworkRunUrl, readReworkBaseHead, postLapMarker, parkBlockedPr, handleReworkBlocked, reworkCmdOpts, readReworkPrInfoHeadBranch, parseReworkBaseBranch, resolveReworkBaseBranch, reworkBranchMismatch, checkoutExpectedBranch, isBaseBranchViolation, baseBranchRefusalMessage, untrackRuntimeArtifactsQuietly, hasStagedChanges, buildReworkCommitMessage, commitStagedReworkChanges, squashEnabled, pushReworkBranch, assertReworkBranchSynced, squashReworkWipIfEnabled, readInputViolations, runOwnedViolationsGate, handleOwnedViolationsRejected, buildOwnedViolationsRejectedComment,
+    // gh-1220: helpers extracted from the CRAP-target functions — exported for
+    // direct unit testing (per-function CRAP ratchet).
+    threadIdLabel, threadLocation, threadBodyExcerpt, replyMatchesThreadId, replyMatchesRootId,
+    isConcludedReview, reviewSubmittedAt, compareConcludedReviewsBySubmittedAt, concludedReviewsOf,
+    rawThreadSnapshotCandidates, threadsOfParsedSnapshot, readRawThreadsSnapshot, openThreadAccountingReason, openThreadAccountingLine,
+    postOneThreadReply, postCombinedUntargetedComment };
 }
