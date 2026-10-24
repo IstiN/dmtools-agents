@@ -741,6 +741,7 @@ if (typeof module !== 'undefined' && module.exports) {
         slugifySegment: slugifySegment,
         sessionGroupForConfig: sessionGroupForConfig,
         resolveSessionStateDir: resolveSessionStateDir,
+        resolveDefaultSessionSubpath: resolveDefaultSessionSubpath,
         hasActiveSessionOnDisk: hasActiveSessionOnDisk,
         defaultDeltaStorage: defaultDeltaStorage,
         parsePrInfoMd: parsePrInfoMd,
