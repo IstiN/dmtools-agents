@@ -270,46 +270,70 @@ function resumeAgent(options) {
 // - a failed/timed-out wrapper invocation is a resume FAILURE, not a crash:
 //   it is returned (attempted: true, failed: true) so the caller can re-check
 //   the deliverable and fall back to the EXISTING cold reset verbatim.
+function missingResponseScoped(root) {
+    return (root.missingResponse && typeof root.missingResponse === 'object') ? root.missingResponse : {};
+}
+
+// The two opt-outs in contract order: the section-level switch wins over
+// everything (even an outage-forced resume); the generic feedback-loop
+// enablement switch applies unless the caller forces the resume.
+function missingResponseDisabled(scoped, options, customParams) {
+    if (scoped.enabled === false) {
+        return true;
+    }
+    return !options.force && !isFeedbackEnabled(customParams, 'missingResponse');
+}
+
+function missingResponseTimeoutSeconds(scoped) {
+    var timeoutSeconds = parseInt(scoped.timeoutSeconds, 10);
+    if (!timeoutSeconds || timeoutSeconds < 1) {
+        return DEFAULT_MISSING_RESPONSE_TIMEOUT_SECONDS;
+    }
+    return timeoutSeconds;
+}
+
+// The resumeAgent invocation for the missing-deliverable resume: exactly one
+// attempt for the dedicated stage, the caller's error text (or the built
+// follow-up prompt when no override is supplied) and the hard timeout cap.
+function missingResponseResumeOptions(options, forcedCustomParams, timeoutSeconds) {
+    return {
+        ticketKey: options.ticketKey,
+        customParams: forcedCustomParams,
+        section: 'missingResponse',
+        stage: MISSING_RESPONSE_STAGE,
+        error: options.error || '',
+        promptOverride: options.promptOverride || buildMissingResponsePrompt({
+            ticketKey: options.ticketKey
+        }),
+        timeoutSeconds: timeoutSeconds
+    };
+}
+
 function resumeOnceForMissingResponse(options) {
     options = options || {};
     var customParams = options.customParams || {};
     var root = customParams.feedbackLoop || {};
-    var scoped = (root.missingResponse && typeof root.missingResponse === 'object') ? root.missingResponse : {};
-    if (scoped.enabled === false) {
+    var scoped = missingResponseScoped(root);
+    if (missingResponseDisabled(scoped, options, customParams)) {
         return { attempted: false, reason: 'disabled' };
     }
+
     // gh-1121: the provider-outage resume bypasses the GENERIC enablement
     // flag (options.force) — an outage that killed the leg mid-flight must
     // not depend on feedbackLoop being configured. An explicit
     // missingResponse.enabled=false still opts the project out.
-    if (!options.force && !isFeedbackEnabled(customParams, 'missingResponse')) {
-        return { attempted: false, reason: 'disabled' };
-    }
 
-    var timeoutSeconds = parseInt(scoped.timeoutSeconds, 10);
-    if (!timeoutSeconds || timeoutSeconds < 1) {
-        timeoutSeconds = DEFAULT_MISSING_RESPONSE_TIMEOUT_SECONDS;
-    }
+    var timeoutSeconds = missingResponseTimeoutSeconds(scoped);
 
     // Force exactly one attempt for this stage regardless of the inherited
     // root maxAttempts — gh-775 is explicit: no multi-resume retries.
     var forced = forcedResumeParams(customParams, root, scoped);
 
     try {
-        return resumeAgent({
-            ticketKey: options.ticketKey,
-            customParams: forced,
-            section: 'missingResponse',
-            stage: MISSING_RESPONSE_STAGE,
-            error: options.error || '',
-            promptOverride: options.promptOverride || buildMissingResponsePrompt({
-                ticketKey: options.ticketKey
-            }),
-            timeoutSeconds: timeoutSeconds
-        });
+        return resumeAgent(missingResponseResumeOptions(options, forced, timeoutSeconds));
     } catch (e) {
         console.warn('Bounded resume for missing outputs/response.md failed/timed out:', e);
-        return { attempted: true, failed: true, error: e && e.message ? e.message : String(e) };
+        return { attempted: true, failed: true, error: errorTextOf(e) };
     }
 }
 
@@ -606,6 +630,11 @@ module.exports = {
     MISSING_RESPONSE_STAGE: MISSING_RESPONSE_STAGE,
     resumeAgent: resumeAgent,
     resumeOnceForMissingResponse: resumeOnceForMissingResponse,
+    // gh-122: extracted missingResponse helpers, exported for unit tests.
+    missingResponseScoped: missingResponseScoped,
+    missingResponseDisabled: missingResponseDisabled,
+    missingResponseTimeoutSeconds: missingResponseTimeoutSeconds,
+    missingResponseResumeOptions: missingResponseResumeOptions,
     resumeOnceForProviderOutage: resumeOnceForProviderOutage,
     providerTransientBackoffSeconds: providerTransientBackoffSeconds,
     buildFeedbackPrompt: buildFeedbackPrompt,
