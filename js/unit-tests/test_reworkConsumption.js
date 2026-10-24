@@ -210,3 +210,146 @@ suite('reworkConsumption: [bot]-suffixed machine authors are trusted (gh-1025)',
         assert.equal(markers.length, 0);
     });
 });
+
+// ── gh-1195 CRAP ratchet: marker ordering characterization ───────────────────
+// Pins the newest-first ordering contract of parseMarkers — timestamp order
+// with payload order as the tiebreak, and NaN timestamps sinking to the front
+// (the branches that left parseMarkers at CRAP 20) — before the comparator is
+// extracted into a named helper.
+suite('reworkConsumption.parseMarkers — ordering contract (gh-1195 characterization)', function () {
+    var rc = loadModule('js/common/reworkConsumption.js', makeRequire({}), {});
+    var h = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function consumeBody(at) {
+        var payload = { path: 'dispatch', head: h, at: at };
+        return rc.CONSUME_MARKER_PREFIX + JSON.stringify(payload) + ' -->';
+    }
+
+    test('equal timestamps fall back to payload order (the comparator tiebreak)', function () {
+        var markers = rc.parseConsumeMarkers([
+            { body: consumeBody('2026-10-10T10:00:00.000Z'), user: { login: 'ai-teammate' } },
+            { body: consumeBody('2026-10-10T10:00:00.000Z'), user: { login: 'ai-teammate' } },
+            { body: consumeBody('2026-10-10T09:00:00.000Z'), user: { login: 'ai-teammate' } }
+        ]);
+        assert.equal(markers.length, 3);
+        assert.equal(markers[0].at, '2026-10-10T09:00:00.000Z', 'oldest timestamp first');
+        assert.equal(markers[1].order, 0, 'same tick → payload order wins (comment 0)');
+        assert.equal(markers[2].order, 1, 'same tick → payload order wins (comment 1)');
+    });
+
+    test('unparsable timestamps sort oldest (NaN sink) and never crash the comparator', function () {
+        var markers = rc.parseConsumeMarkers([
+            { body: consumeBody('not-a-date'), user: { login: 'ai-teammate' } },
+            { body: consumeBody('2026-10-10T10:00:00.000Z'), user: { login: 'ai-teammate' } }
+        ]);
+        assert.equal(markers.length, 2);
+        assert.equal(markers[0].at, 'not-a-date', 'NaN atMs sinks to the front');
+        assert.equal(markers[1].at, '2026-10-10T10:00:00.000Z');
+    });
+
+    test('a non-array comments argument yields an empty marker list', function () {
+        assert.deepEqual(rc.parseConsumeMarkers(null, {}), []);
+        assert.deepEqual(rc.parseRestoreMarkers('nope', {}), []);
+    });
+});
+
+// ── gh-1195 CRAP split: named helper contracts ────────────────────────────────
+// Direct unit coverage for the helpers extracted from parseMarkers /
+// shouldRestoreArm — every branch stays covered under its own name so the
+// per-function ratchet sees CRAP ≤ CC for each.
+suite('reworkConsumption — extracted parse/decision helpers (gh-1195)', function () {
+    var rc = loadModule('js/common/reworkConsumption.js', makeRequire({}), {});
+
+    suite('trustedAuthorLogins', function () {
+        test('a non-empty authorLogins array is the allowlist; everything else disables the filter', function () {
+            var allow = ['ai-teammate'];
+            assert.equal(rc.trustedAuthorLogins({ authorLogins: allow }), allow);
+            assert.equal(rc.trustedAuthorLogins({ authorLogins: [] }), null, 'empty → filter off');
+            assert.equal(rc.trustedAuthorLogins({ authorLogins: 'ai-teammate' }), null, 'not an array → filter off');
+            assert.equal(rc.trustedAuthorLogins({}), null, 'no key → filter off');
+            assert.equal(rc.trustedAuthorLogins(null), null, 'no opts → filter off');
+        });
+    });
+
+    suite('isTrustedMarkerAuthor', function () {
+        test('no allowlist trusts every comment', function () {
+            assert.equal(rc.isTrustedMarkerAuthor({ body: 'x', user: { login: 'anyone' } }, null), true);
+        });
+
+        test('the allowlist matches case-insensitively with one [bot] suffix normalized', function () {
+            var allow = ['dmtools-factory-bot'];
+            assert.equal(rc.isTrustedMarkerAuthor({ user: { login: 'DMTools-Factory-Bot[bot]' } }, allow), true,
+                'App-authored [bot] spelling matches the bare knob entry');
+            assert.equal(rc.isTrustedMarkerAuthor({ user: { login: 'ai-teammate' } }, allow), false,
+                'a different author is not trusted');
+            assert.equal(rc.isTrustedMarkerAuthor({ user: { login: 'dmtools-factory-bot[spoof]' } }, allow), false,
+                'anything but one trailing [bot] stays unmatched');
+            assert.equal(rc.isTrustedMarkerAuthor({}, allow), false, 'an authorless comment is not trusted');
+        });
+    });
+
+    suite('collectMarkerRecords', function () {
+        test('skips untrusted comments and unparsable bodies, stamps atMs + payload order', function () {
+            var h = 'aaaabbbbccccddddeeeeffff0000111122223333';
+            var marker = rc.buildConsumeAuditComment('dispatch', h, '2026-10-10T09:00:00.000Z');
+            var records = rc.collectMarkerRecords([
+                { body: marker, user: { login: 'intruder' } },              // untrusted → skipped
+                { body: 'just talk', user: { login: 'ai-teammate' } },      // no marker → skipped
+                { body: marker, user: { login: 'ai-teammate' } }            // kept, order 2
+            ], rc.CONSUME_MARKER_PREFIX, ['ai-teammate']);
+            assert.equal(records.length, 1);
+            assert.equal(records[0].order, 2, 'the payload index is stamped for the tiebreak');
+            assert.equal(records[0].atMs, Date.parse('2026-10-10T09:00:00.000Z'));
+        });
+    });
+
+    suite('compareMarkerRecords', function () {
+        test('orders by timestamp, NaN sinks, ties fall back to payload order', function () {
+            assert.equal(rc.compareMarkerRecords({ atMs: 100, order: 0 }, { atMs: 200, order: 0 }), -1);
+            assert.equal(rc.compareMarkerRecords({ atMs: 200, order: 0 }, { atMs: 100, order: 0 }), 1);
+            assert.equal(rc.compareMarkerRecords({ atMs: NaN, order: 5 }, { atMs: 100, order: 0 }), -1,
+                'NaN atMs sorts as -1 → oldest');
+            assert.equal(rc.compareMarkerRecords({ atMs: 100, order: 3 }, { atMs: 100, order: 7 }), -4,
+                'same tick → payload order (stable Array.prototype.sort contract)');
+            assert.equal(rc.compareMarkerRecords({ atMs: 100 }, { atMs: 100 }), 0,
+                'missing order defaults to 0 on both sides');
+        });
+    });
+
+    suite('msOrNull / quietSinceOf / restoreStaleMs', function () {
+        test('msOrNull passes numbers through, nulls everything else', function () {
+            assert.equal(rc.msOrNull(1000), 1000);
+            assert.equal(rc.msOrNull(NaN), null, 'NaN is a number typeof but unparsable');
+            assert.equal(rc.msOrNull('1000'), null, 'a string timestamp is not trusted');
+            assert.equal(rc.msOrNull(null), null);
+            assert.equal(rc.msOrNull(undefined), null);
+        });
+
+        test('quietSinceOf prefers the newest evidence, tolerating single-source states', function () {
+            assert.equal(rc.quietSinceOf(100, 300), 300, 'both present → the later marker');
+            assert.equal(rc.quietSinceOf(300, 100), 300);
+            assert.equal(rc.quietSinceOf(null, 300), 300, 'consume-only state');
+            assert.equal(rc.quietSinceOf(100, null), 100, 'restore-only state');
+        });
+
+        test('restoreStaleMs honors a positive staleMs knob and falls back to the default', function () {
+            assert.equal(rc.restoreStaleMs({ staleMs: 60000 }), 60000);
+            assert.equal(rc.restoreStaleMs({ staleMs: 0 }), rc.DEFAULT_RESTORE_STALE_MS, 'zero is not a bound');
+            assert.equal(rc.restoreStaleMs({ staleMs: -5 }), rc.DEFAULT_RESTORE_STALE_MS);
+            assert.equal(rc.restoreStaleMs({}), rc.DEFAULT_RESTORE_STALE_MS);
+        });
+    });
+
+    suite('restoreBlockReason', function () {
+        test('the arm-state guards in their historical priority order', function () {
+            assert.equal(rc.restoreBlockReason({ hasReworkLabel: true, reworkInFlight: true, unresolvedMachineThreads: 0 }),
+                'arm-present', 'the label wins over everything');
+            assert.equal(rc.restoreBlockReason({ reworkInFlight: true }), 'rework-in-flight');
+            assert.equal(rc.restoreBlockReason({ unresolvedMachineThreads: 0 }), 'no-unresolved-threads');
+            assert.equal(rc.restoreBlockReason({ unresolvedMachineThreads: '2' }), null,
+                'a numeric string passes the census check (Number() coercion)');
+            assert.equal(rc.restoreBlockReason({ unresolvedMachineThreads: 3 }), null,
+                'open machine threads → the evidence gate may run');
+        });
+    });
+});

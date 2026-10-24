@@ -772,3 +772,331 @@ suite('checkBugTestsPassed: uncovered paths (gh-1043)', function() {
     });
 
 });
+
+// ── gh-1188: action decomposition — characterization tests for the extracted
+// step helpers and the previously uncovered catch branches. ──
+
+// gh-1188: status-name comparison hoisted out of the stub literal — keeps
+// the stub builder itself at plain-closure complexity.
+function stubHasStage1188(tc, stage, statusName) {
+    var name = tc.fields && tc.fields.status && tc.fields.status.name;
+    return name !== undefined && name !== null && name === statusName;
+}
+
+function makeTrackerStub1188(overrides) {
+    var stub = {
+        provider: function() { return 'jira'; },
+        stageFallback: function() { return 'none'; },
+        hasStage: stubHasStage1188,
+        getIssue: function() { return null; },
+        searchIssues: function() { return []; },
+        removeLabel: function() {},
+        addLabel: function() {},
+        moveToStatus: function() {},
+        postComment: function() {}
+    };
+    if (overrides) {
+        for (var k in overrides) {
+            if (overrides.hasOwnProperty(k)) stub[k] = overrides[k];
+        }
+    }
+    return stub;
+}
+
+suite('checkBugTestsPassed — gh-1188 extracted step helpers', function() {
+    test('releaseLock: removed only with key+label; failure swallowed', function() {
+        var removed = [];
+        var tracker = makeTrackerStub1188({ removeLabel: function(k, l) { removed.push(l); } });
+        var mod = loadCheckBugTestsPassed({});
+        mod.releaseLock(tracker, 'TS-1', 'sm_l');
+        assert.deepEqual(removed, ['sm_l']);
+        mod.releaseLock(tracker, 'TS-1', null);
+        assert.deepEqual(removed, ['sm_l']);
+        var failing = makeTrackerStub1188({ removeLabel: function() { throw new Error('boom'); } });
+        mod.releaseLock(failing, 'TS-1', 'sm_l');
+        assert.deepEqual(removed, ['sm_l']);
+    });
+
+    test('getTicketSafely: issue or {}; read failure degrades to {}', function() {
+        var mod = loadCheckBugTestsPassed({});
+        assert.deepEqual(mod.getTicketSafely(makeTrackerStub1188({ getIssue: function() { return null; } }), 'TS-1'), {});
+        assert.deepEqual(
+            mod.getTicketSafely(makeTrackerStub1188({ getIssue: function() { return { key: 'TS-1' }; } }), 'TS-1'),
+            { key: 'TS-1' }
+        );
+        assert.deepEqual(
+            mod.getTicketSafely(makeTrackerStub1188({ getIssue: function() { throw new Error('boom'); } }), 'TS-1'),
+            {}
+        );
+    });
+
+    test('directLinkedTestCases: filters by issuetype, tolerates broken links, label-mode re-fetch', function() {
+        var mod = loadCheckBugTestsPassed({});
+        assert.deepEqual(mod.directLinkedTestCases({}, 'TS-1', 'Test Case', makeTrackerStub1188({})), []);
+        var ticket = {
+            fields: {
+                issuelinks: [
+                    { outwardIssue: makeTc('TS-A', 'Passed') },
+                    { inwardIssue: makeTc('TS-B', 'In Testing') },
+                    { outwardIssue: { fields: { summary: 'no issuetype' } } },
+                    { outwardIssue: null },
+                    { outwardIssue: makeTc('TS-C', 'Passed').fields && { key: 'TS-C', fields: { issuetype: { name: 'Bug' } } } }
+                ]
+            }
+        };
+        var tcs = mod.directLinkedTestCases(ticket, 'TS-1', 'Test Case', makeTrackerStub1188({}));
+        assert.deepEqual(tcs.map(function(tc) { return tc.key; }), ['TS-A', 'TS-B']);
+
+        var throwingTicket = { fields: {} };
+        Object.defineProperty(throwingTicket.fields, 'issuelinks', { get: function() { throw new Error('boom'); } });
+        assert.deepEqual(mod.directLinkedTestCases(throwingTicket, 'TS-1', 'Test Case', makeTrackerStub1188({})), []);
+
+        var labelMode = makeTrackerStub1188({
+            stageFallback: function() { return 'label'; },
+            getIssue: function(k) { return { key: k, fields: { labels: ['stage_passed'] } }; }
+        });
+        var refetched = mod.directLinkedTestCases(ticket, 'TS-1', 'Test Case', labelMode);
+        assert.deepEqual(refetched.map(function(tc) { return tc.key; }), ['TS-A', 'TS-B']);
+        assert.equal(refetched[0].fields.labels[0], 'stage_passed', 'label mode re-fetches full fields');
+    });
+
+    test('allLinkedTestCases / linkedBugsOf: null-tolerant, failure → []', function() {
+        var mod = loadCheckBugTestsPassed({});
+        assert.deepEqual(mod.allLinkedTestCases(makeTrackerStub1188({ searchIssues: function() { return null; } }), 'jira', 'TS-1', 'Test Case'), []);
+        assert.deepEqual(mod.allLinkedTestCases(makeTrackerStub1188({ searchIssues: function() { throw new Error('boom'); } }), 'jira', 'TS-1', 'Test Case'), []);
+        assert.deepEqual(mod.linkedBugsOf(makeTrackerStub1188({ searchIssues: function() { return null; } }), 'jira', 'TC-1', 'Bug'), []);
+        assert.deepEqual(mod.linkedBugsOf(makeTrackerStub1188({ searchIssues: function() { throw new Error('boom'); } }), 'jira', 'TC-1', 'Bug'), []);
+    });
+
+    test('isBlockingTestCase: passed/skipped/irrelevant false; bug-to-fix with another active bug false; otherwise true', function() {
+        var jiraConfig = { statuses: { PASSED: 'Passed', SKIPPED: 'Skipped', IRRELEVANT: 'Irrelevant', BUG_TO_FIX: 'Bug To Fix', DONE: 'Done' } };
+        var mod = loadCheckBugTestsPassed({});
+        var tracker = makeTrackerStub1188({
+            searchIssues: function() { return [{ key: 'B-9', fields: { status: { name: 'In Progress' } } }]; }
+        });
+        assert.equal(mod.isBlockingTestCase(tracker, makeTc('TC-1', 'Passed'), 'TS-1', 'Bug', 'jira', jiraConfig), false);
+        assert.equal(mod.isBlockingTestCase(tracker, makeTc('TC-2', 'Skipped'), 'TS-1', 'Bug', 'jira', jiraConfig), false);
+        assert.equal(mod.isBlockingTestCase(tracker, makeTc('TC-3', 'Irrelevant'), 'TS-1', 'Bug', 'jira', jiraConfig), false);
+        assert.equal(mod.isBlockingTestCase(tracker, makeTc('TC-4', 'Bug To Fix'), 'TS-1', 'Bug', 'jira', jiraConfig), false, 'tracked by another active bug');
+        assert.equal(mod.isBlockingTestCase(tracker, makeTc('TC-5', 'In Testing'), 'TS-1', 'Bug', 'jira', jiraConfig), true);
+        var noBugs = makeTrackerStub1188({ searchIssues: function() { return []; } });
+        assert.equal(mod.isBlockingTestCase(noBugs, makeTc('TC-6', 'Bug To Fix'), 'TS-1', 'Bug', 'jira', jiraConfig), true, 'no other bug → blocking');
+    });
+
+    test('findOpenTestPrForTicket: match, list failure and createScm failure → null', function() {
+        var mod = loadCheckBugTestsPassed({});
+        var matching = makeTrackerStub1188({});
+        var scmFactory = {
+            createScm: function() {
+                return { listPrs: function() { return [{ number: 5, title: 'TS-1 tests', head: { ref: 'ai/ts-1' } }]; } };
+            }
+        };
+        var pr = mod.findOpenTestPrForTicket(scmFactory, {}, 'TS-1');
+        assert.equal(pr.number, 5);
+        var throwingList = { createScm: function() { return { listPrs: function() { throw new Error('boom'); } }; } };
+        assert.equal(mod.findOpenTestPrForTicket(throwingList, {}, 'TS-1'), null);
+        var throwingCreate = { createScm: function() { throw new Error('boom'); } };
+        assert.equal(mod.findOpenTestPrForTicket(throwingCreate, {}, 'TS-1'), null);
+    });
+
+    test('resolveBlockingRoute: blocked → Blocked move + comment + lock release', function() {
+        var moves = [];
+        var comments = [];
+        var removed = [];
+        var tracker = makeTrackerStub1188({
+            moveToStatus: function(k, s) { moves.push(s); },
+            postComment: function(k, c) { comments.push(c); },
+            removeLabel: function(k, l) { removed.push(l); }
+        });
+        var jiraConfig = { statuses: { BLOCKED: 'Blocked', IN_REWORK: 'In Rework' } };
+        var result = loadCheckBugTestsPassed({}).resolveBlockingRoute(
+            tracker, 'TS-1', ['test_pr_finalized', 'sm_bug_rework_attempted'], 2,
+            [makeTc('TC-1', 'In Testing'), makeTc('TC-2', 'Failed')],
+            jiraConfig, 'sm_l'
+        );
+        assert.equal(result.action, 'moved_to_blocked');
+        assert.deepEqual(moves, ['Blocked']);
+        assert.contains(comments[0], 'Still Blocking After Rework');
+        assert.deepEqual(removed, ['sm_l']);
+        assert.deepEqual(result.blockingTCs, ['TC-1', 'TC-2']);
+    });
+
+    test('resolveBlockingRoute: rework → In Rework move + attempt label + comment + lock release', function() {
+        var moves = [];
+        var comments = [];
+        var added = [];
+        var removed = [];
+        var tracker = makeTrackerStub1188({
+            moveToStatus: function(k, s) { moves.push(s); },
+            postComment: function(k, c) { comments.push(c); },
+            addLabel: function(k, l) { added.push(l); },
+            removeLabel: function(k, l) { removed.push(l); }
+        });
+        var jiraConfig = { statuses: { BLOCKED: 'Blocked', IN_REWORK: 'In Rework' } };
+        var result = loadCheckBugTestsPassed({}).resolveBlockingRoute(
+            tracker, 'TS-1', ['test_pr_finalized'], 1, [makeTc('TC-1', 'Failed')],
+            jiraConfig, 'sm_l'
+        );
+        assert.equal(result.action, 'moved_to_rework');
+        assert.deepEqual(moves, ['In Rework']);
+        assert.deepEqual(added, ['sm_bug_rework_attempted']);
+        assert.contains(comments[0], 'Still Blocking');
+        assert.deepEqual(removed, ['sm_l']);
+    });
+
+    test('resolveBlockingRoute: not finalized → waiting, lock released, no moves', function() {
+        var moves = [];
+        var tracker = makeTrackerStub1188({
+            moveToStatus: function(k, s) { moves.push(s); },
+            removeLabel: function() {}
+        });
+        var result = loadCheckBugTestsPassed({}).resolveBlockingRoute(
+            tracker, 'TS-1', [], 3, [makeTc('TC-1', 'In Testing')],
+            { statuses: {} }, 'sm_l'
+        );
+        assert.equal(result.action, 'waiting');
+        assert.equal(result.totalTCs, 3);
+        assert.equal(result.blockingCount, 1);
+        assert.deepEqual(result.blockingTCs, ['TC-1']);
+        assert.deepEqual(moves, []);
+    });
+
+    test('action: Bug To Fix TC whose bug query fails still counts as blocking', function() {
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: function() {
+                return { fields: { issuelinks: [{ outwardIssue: makeTc('TS-11', 'Bug To Fix') }] } };
+            },
+            jira_search_by_jql: function() { throw new Error('search down'); },
+            jira_move_to_status: function() {},
+            jira_post_comment: function() {},
+            jira_remove_label: function() {}
+        });
+        var result = module.action({
+            ticket: { key: 'TS-10' },
+            jobParams: { customParams: { removeLabel: 'sm_l' } }
+        });
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'waiting');
+        assert.deepEqual(result.blockingTCs, ['TS-11']);
+    });
+
+    test('action: PR listing failure does not block the Done move', function() {
+        var moved = [];
+        var module = loadCheckBugTestsPassed({
+            __scm: { createScm: function() { return { listPrs: function() { throw new Error('gh down'); } }; } },
+            jira_get_ticket: function() {
+                return { fields: { issuelinks: [{ outwardIssue: makeTc('TS-11', 'Passed') }] } };
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function() {},
+            jira_remove_label: function() {}
+        });
+        var result = module.action({
+            ticket: { key: 'TS-10' },
+            jobParams: { customParams: { removeLabel: 'sm_l' } }
+        });
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_done');
+        assert.deepEqual(moved, [{ key: 'TS-10', statusName: 'Done' }]);
+    });
+
+    test('action: sm_bug_rework_attempted label removal failure is swallowed on Done', function() {
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: function() {
+                return { fields: { issuelinks: [{ outwardIssue: makeTc('TS-11', 'Passed') }] } };
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_move_to_status: function() {},
+            jira_post_comment: function() {},
+            jira_remove_label: function(args) {
+                if (args.label === 'sm_bug_rework_attempted') throw new Error('boom');
+            }
+        });
+        var result = module.action({
+            ticket: { key: 'TS-10' },
+            jobParams: { customParams: { removeLabel: 'sm_l' } }
+        });
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_done');
+    });
+
+    test('resolveTicketKey / resolveSmLabelOptions / resolveTicketLabels: null-tolerant', function() {
+        var mod = loadCheckBugTestsPassed({});
+        assert.equal(mod.resolveTicketKey({ ticket: { key: 'TS-1' } }), 'TS-1');
+        assert.equal(mod.resolveTicketKey({}), undefined);
+        assert.equal(mod.resolveTicketKey({ ticket: null }), null);
+        var opts = mod.resolveSmLabelOptions({ jobParams: { customParams: { removeLabel: 'sm_l' } } });
+        assert.deepEqual(opts, { customParams: { removeLabel: 'sm_l' }, removeLabel: 'sm_l' });
+        assert.deepEqual(mod.resolveSmLabelOptions({}), { customParams: undefined, removeLabel: undefined });
+        assert.deepEqual(mod.resolveSmLabelOptions({ jobParams: {} }), { customParams: undefined, removeLabel: undefined });
+        assert.deepEqual(mod.resolveTicketLabels({ fields: { labels: ['a'] } }), ['a']);
+        assert.deepEqual(mod.resolveTicketLabels({}), []);
+        assert.deepEqual(mod.resolveTicketLabels(null), []);
+    });
+
+    test('resolveTrackedIssueTypes: configured types with fallbacks', function() {
+        var mod = loadCheckBugTestsPassed({});
+        assert.deepEqual(
+            mod.resolveTrackedIssueTypes({ issueTypes: { TEST_CASE: 'Testcase', BUG: 'Defect' } }),
+            { testCaseType: 'Testcase', bugType: 'Defect' }
+        );
+        assert.deepEqual(
+            mod.resolveTrackedIssueTypes({ issueTypes: {} }),
+            { testCaseType: 'Test Case', bugType: 'Bug' }
+        );
+    });
+
+    test('filterBlockingTestCases: keeps only blocking TCs (multi-item)', function() {
+        var jiraConfig = { statuses: { PASSED: 'Passed', SKIPPED: 'Skipped', IRRELEVANT: 'Irrelevant', BUG_TO_FIX: 'Bug To Fix', DONE: 'Done' } };
+        var tracker = makeTrackerStub1188({ searchIssues: function() { return []; } });
+        var tcs = [
+            makeTc('TC-1', 'Passed'),
+            makeTc('TC-2', 'In Testing'),
+            makeTc('TC-3', 'Skipped'),
+            makeTc('TC-4', 'Failed')
+        ];
+        var blocking = loadCheckBugTestsPassed({}).filterBlockingTestCases(tcs, tracker, 'TS-1', 'Bug', 'jira', jiraConfig);
+        assert.deepEqual(blocking.map(function(tc) { return tc.key; }), ['TC-2', 'TC-4']);
+    });
+
+    test('openTestPrWaitResult: no PR → null; PR → wait outcome + lock released', function() {
+        var mod = loadCheckBugTestsPassed({});
+        var tracker = makeTrackerStub1188({});
+        assert.equal(mod.openTestPrWaitResult(null, tracker, 'TS-1', 2, 'sm_l'), null);
+        var removed = [];
+        var tracked = makeTrackerStub1188({ removeLabel: function(k, l) { removed.push(l); } });
+        var result = mod.openTestPrWaitResult({ number: 7, html_url: 'http://pr/7' }, tracked, 'TS-1', 2, 'sm_l');
+        assert.deepEqual(result, {
+            success: true,
+            action: 'waiting_for_test_pr_merge',
+            reason: 'open_pr',
+            prNumber: 7,
+            prUrl: 'http://pr/7',
+            totalTCs: 2,
+            ticketKey: 'TS-1'
+        });
+        assert.deepEqual(removed, ['sm_l']);
+    });
+
+    test('completeBugDone: move + comment + lock release; rework label cleanup tolerated', function() {
+        var mod = loadCheckBugTestsPassed({});
+        var moves = [];
+        var comments = [];
+        var removed = [];
+        var tracker = makeTrackerStub1188({
+            moveToStatus: function(k, s) { moves.push(s); },
+            postComment: function(k, c) { comments.push(c); },
+            removeLabel: function(k, l) {
+                if (l === 'sm_bug_rework_attempted') throw new Error('no such label');
+                removed.push(l);
+            }
+        });
+        var result = mod.completeBugDone(tracker, 'TS-1', 4, { statuses: { DONE: 'Done' } }, {}, 'sm_l');
+        assert.deepEqual(result, { success: true, action: 'moved_to_done', totalTCs: 4, ticketKey: 'TS-1' });
+        assert.deepEqual(moves, ['Done']);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0], 'Done');
+        assert.deepEqual(removed, ['sm_l']);
+    });
+});

@@ -3960,3 +3960,289 @@ suite('pushReworkChanges.commitAndPush — branch decisions (gh-1082 characteriz
         assert.ok(squashCalls.indexOf('git commit -m "PROJ-123 rework"') !== -1, 'one rework commit');
     });
 });
+
+// ── gh-1195 CRAP ratchet: characterization of the remote-url parse ───────────
+// getGitHubRepoInfo() was the one fully-uncovered function left in the module
+// (CRAP 20 at 0% coverage). These tests pin the git-remote → {owner, repo}
+// contract BEFORE the pure parse helper is extracted, so the extraction is
+// provably behavior-preserving.
+suite('pushReworkChanges.getGitHubRepoInfo — remote parse (gh-1195 characterization)', function() {
+
+    function loadWithRemote(remoteOutput, throwOnProbe) {
+        var commands = [];
+        var loaded = loadPushReworkChangesForAction({
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (throwOnProbe) throw new Error('git not found');
+                return remoteOutput;
+            }
+        });
+        return { mod: loaded.mod, commands: commands };
+    }
+
+    test('parses an ssh remote (git@github.com:owner/repo) — trailing .git stripped', function() {
+        var loaded = loadWithRemote('git@github.com:acme/widgets.git\n');
+        var info = loaded.mod.getGitHubRepoInfo();
+        assert.deepEqual(info, { owner: 'acme', repo: 'widgets' });
+        assert.equal(loaded.commands[0], 'git config --get remote.origin.url');
+    });
+
+    test('parses an https remote (https://github.com/owner/repo.git)', function() {
+        var loaded = loadWithRemote('https://github.com/acme/widgets.git\n');
+        assert.deepEqual(loaded.mod.getGitHubRepoInfo(), { owner: 'acme', repo: 'widgets' });
+    });
+
+    test('parses a remote without a .git suffix', function() {
+        var loaded = loadWithRemote('https://github.com/acme/widgets\n');
+        assert.deepEqual(loaded.mod.getGitHubRepoInfo(), { owner: 'acme', repo: 'widgets' });
+    });
+
+    test('a non-github remote yields null (no throw)', function() {
+        var loaded = loadWithRemote('git@gitlab.com:acme/widgets.git\n');
+        assert.equal(loaded.mod.getGitHubRepoInfo(), null);
+    });
+
+    test('an empty remote output yields null', function() {
+        var loaded = loadWithRemote('');
+        assert.equal(loaded.mod.getGitHubRepoInfo(), null);
+    });
+
+    test('a failed git probe is swallowed → null (fail-open caller semantics unchanged)', function() {
+        var loaded = loadWithRemote(null, true);
+        assert.equal(loaded.mod.getGitHubRepoInfo(), null);
+    });
+});
+
+// ── gh-1195 CRAP ratchet: handleReworkBlocked branch characterization ────────
+// Pins the three fail-quiet branches (PR comment post failure, Blocked move
+// failure, WIP-label removal incl. its tolerated throw) before the
+// best-effort helpers are extracted.
+suite('pushReworkChanges.handleReworkBlocked — fail-quiet branches (gh-1195 characterization)', function() {
+
+    function blockedCoverage() {
+        return {
+            openCount: 2,
+            targetedCount: 0,
+            unaddressed: [ghThread('PRRT_a', 1), ghThread('PRRT_b', 2)],
+            unaddressable: [],
+            totalOpenCount: 2
+        };
+    }
+
+    test('a failed PR comment post is warned about and never blocks the Blocked close', function() {
+        var warnings = [];
+        var origWarn = console.warn;
+        console.warn = function(msg) { warnings.push(msg); };
+        try {
+            var moved = [];
+            var mod = loadPushReworkChangesModule({}).mod;
+            var scm = { addComment: function() { throw new Error('graphql exploded'); } };
+            var tracker = {
+                moveToStatus: function(key, s) { moved.push(s); },
+                removeLabel: function() {}
+            };
+            var result = mod.handleReworkBlocked(scm, tracker, { number: 9 }, 'PROJ-9',
+                { BLOCKED: 'Blocked' }, 'reason', blockedCoverage(), { metadata: {} });
+            assert.equal(result.blocked, true, 'the leg still concludes blocked');
+            assert.deepEqual(moved, ['Blocked'], 'the Blocked move still happens');
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.ok(warnings.join('\n').indexOf('Failed to post blocked rework comment on PR #9') !== -1,
+            'the failure is logged, never rethrown');
+    });
+
+    test('a failed Blocked move is warned about and never blocks the park + result', function() {
+        var warnings = [];
+        var origWarn = console.warn;
+        console.warn = function(msg) { warnings.push(msg); };
+        try {
+            var commented = [];
+            var mod = loadPushReworkChangesModule({}).mod;
+            var scm = { addComment: function(n, body) { commented.push(body); } };
+            var tracker = { moveToStatus: function() { throw new Error('transition rejected'); } };
+            var result = mod.handleReworkBlocked(scm, tracker, { number: 9 }, 'PROJ-9',
+                { BLOCKED: 'Blocked' }, 'reason', blockedCoverage(), { metadata: {} });
+            assert.equal(result.blocked, true, 'the leg still concludes blocked');
+            assert.equal(commented.length, 1, 'the PR comment was still posted');
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.ok(warnings.join('\n').indexOf('Failed to move PROJ-9 to Blocked') !== -1,
+            'the move failure is logged, never rethrown');
+    });
+
+    test('statuses without BLOCKED falls back to the literal "Blocked" status name', function() {
+        var moved = [];
+        var mod = loadPushReworkChangesModule({}).mod;
+        var scm = { addComment: function() {} };
+        var tracker = {
+            moveToStatus: function(key, s) { moved.push(s); },
+            removeLabel: function() {}
+        };
+        mod.handleReworkBlocked(scm, tracker, { number: 9 }, 'PROJ-9', null, 'reason',
+            blockedCoverage(), { metadata: {} });
+        assert.deepEqual(moved, ['Blocked'], 'the historical default status name');
+    });
+
+    test('the context WIP label (<contextId>_wip) is removed from the ticket', function() {
+        var removedLabels = [];
+        var mod = loadPushReworkChangesModule({}).mod;
+        var scm = { addComment: function() {} };
+        var tracker = {
+            moveToStatus: function() {},
+            removeLabel: function(key, label) { removedLabels.push(label); }
+        };
+        mod.handleReworkBlocked(scm, tracker, { number: 9 }, 'PROJ-9', { BLOCKED: 'Blocked' },
+            'reason', blockedCoverage(), { metadata: { contextId: 'pr_rework' } });
+        assert.ok(removedLabels.indexOf('pr_rework_wip') !== -1,
+            'the leg-context WIP label is stripped (alongside the gh-1060 arm strip)');
+    });
+
+    test('a failing WIP-label removal is tolerated (non-fatal)', function() {
+        var mod = loadPushReworkChangesModule({}).mod;
+        var scm = { addComment: function() {} };
+        var tracker = {
+            moveToStatus: function() {},
+            removeLabel: function() { throw new Error('label api down'); }
+        };
+        var result = mod.handleReworkBlocked(scm, tracker, { number: 9 }, 'PROJ-9',
+            { BLOCKED: 'Blocked' }, 'reason', blockedCoverage(), { metadata: { contextId: 'pr_rework' } });
+        assert.equal(result.blocked, true, 'a non-fatal label failure never breaks the blocked close');
+    });
+
+    test('no actualParams (or no metadata) → no WIP label removal attempted', function() {
+        var removedLabels = [];
+        var mod = loadPushReworkChangesModule({}).mod;
+        var scm = { addComment: function() {} };
+        var tracker = {
+            moveToStatus: function() {},
+            removeLabel: function(key, label) { removedLabels.push(label); }
+        };
+        mod.handleReworkBlocked(scm, tracker, { number: 9 }, 'PROJ-9', { BLOCKED: 'Blocked' },
+            'reason', blockedCoverage(), null);
+        mod.handleReworkBlocked(scm, tracker, { number: 9 }, 'PROJ-9', { BLOCKED: 'Blocked' },
+            'reason', blockedCoverage(), { metadata: {} });
+        assert.deepEqual(removedLabels.filter(function(l) { return l.indexOf('_wip') !== -1; }), [],
+            'no context id → no WIP label removal (the gh-1060 arm strip still runs)');
+    });
+});
+
+// ── gh-1195 CRAP ratchet: completion comment suffix pins ─────────────────────
+// The "fix summary posted" trailer is wording-dependent (clean path has no
+// leading newline). Pinned per wording so the suffix extraction stays
+// byte-identical.
+suite('pushReworkChanges.buildReworkCompletionComment — prCommentPosted suffix per wording (gh-1195)', function() {
+
+    var md = commentMarkupModule.forFlavor('markdown');
+
+    function baseCtx(overrides) {
+        return Object.assign({
+            ticketKey: 'PROJ-123',
+            prUrl: 'https://github.com/acme/widgets/pull/1420',
+            branchName: 'ai/gh-1420',
+            prCommentPosted: true,
+            codeChangesCommitted: true,
+            liveOpenThreads: [],
+            inputThreads: [],
+            unaddressed: [],
+            verdict: null
+        }, overrides || {});
+    }
+
+    test('open-threads wording: trailer appended after a newline', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var out = loaded.mod.buildReworkCompletionComment(md, baseCtx({
+            liveOpenThreads: [ghThread('PRRT_1', 1)],
+            inputThreads: [ghThread('PRRT_1', 1)]
+        }));
+        assert.ok(out.indexOf('\nA fix summary has been posted as a comment on the Pull Request.') !== -1,
+            'non-clean wordings lead the trailer with a newline');
+        assert.ok(out.lastIndexOf('A fix summary has been posted') === out.length - 'A fix summary has been posted as a comment on the Pull Request.'.length,
+            'the trailer is the last text of the comment');
+    });
+
+    test('unaddressed-replies wording: trailer appended after a newline', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var out = loaded.mod.buildReworkCompletionComment(md, baseCtx({
+            codeChangesCommitted: true,
+            inputThreads: [ghThread('PRRT_1', 1)],
+            unaddressed: [ghThread('PRRT_1', 1)]
+        }));
+        assert.ok(out.indexOf('\nA fix summary has been posted as a comment on the Pull Request.') !== -1);
+    });
+
+    test('changes-requested-verdict wording: trailer appended after a newline', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var out = loaded.mod.buildReworkCompletionComment(md, baseCtx({
+            codeChangesCommitted: false,
+            verdict: 'CHANGES_REQUESTED'
+        }));
+        assert.ok(out.indexOf('\nA fix summary has been posted as a comment on the Pull Request.') !== -1);
+    });
+
+    test('clean wording: trailer appended WITHOUT a leading newline (historical byte shape)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var out = loaded.mod.buildReworkCompletionComment(md, baseCtx({
+            prCommentPosted: true,
+            codeChangesCommitted: false
+        }));
+        assert.ok(out.indexOf('are required.\nA fix summary has been posted') !== -1,
+            'the clean path joins the trailer with a single newline after the closing sentence');
+    });
+
+    test('prCommentPosted false → no trailer on any wording', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var open = loaded.mod.buildReworkCompletionComment(md, baseCtx({
+            prCommentPosted: false,
+            liveOpenThreads: [ghThread('PRRT_1', 1)],
+            inputThreads: [ghThread('PRRT_1', 1)]
+        }));
+        var clean = loaded.mod.buildReworkCompletionComment(md, baseCtx({ prCommentPosted: false }));
+        assert.notContains(open, 'A fix summary has been posted');
+        assert.notContains(clean, 'A fix summary has been posted');
+    });
+});
+
+// ── gh-1195 CRAP split: pure helper contracts ────────────────────────────────
+suite('pushReworkChanges — extracted pure helpers (gh-1195)', function() {
+
+    suite('parseGitHubRemoteUrl', function() {
+        var parse = loadPushReworkChangesForAction({}).mod.parseGitHubRemoteUrl;
+
+        test('ssh, https and no-suffix forms all parse; .git stripped', function() {
+            assert.deepEqual(parse('git@github.com:acme/widgets.git'), { owner: 'acme', repo: 'widgets' });
+            assert.deepEqual(parse('https://github.com/acme/widgets'), { owner: 'acme', repo: 'widgets' });
+        });
+
+        test('a port-form scp-ish remote parses exactly as the historical regex always did', function() {
+            // Characterization (gh-1195): the regex is unchanged — the first
+            // segment after github.com[:/] becomes the owner even when it is a
+            // port number. Pinned so a future fix is a deliberate decision.
+            assert.deepEqual(parse('ssh://git@github.com:2222/acme/widgets.git'),
+                { owner: '2222', repo: 'acme' });
+        });
+
+        test('query strings, fragments and whitespace do not leak into the repo name', function() {
+            assert.deepEqual(parse('https://github.com/acme/widgets.git#main'), { owner: 'acme', repo: 'widgets' });
+            assert.deepEqual(parse('https://github.com/acme/widgets?token=x'), { owner: 'acme', repo: 'widgets' });
+        });
+
+        test('non-github and empty remotes yield null', function() {
+            assert.equal(parse('git@gitlab.com:acme/widgets.git'), null);
+            assert.equal(parse(''), null);
+            assert.equal(parse(null), null);
+        });
+    });
+
+    suite('completionPrCommentSuffix', function() {
+        var suffix = loadPushReworkChangesForAction({}).mod.completionPrCommentSuffix;
+
+        test('the clean wording flows straight on; every other wording leads with a newline', function() {
+            assert.equal(suffix('clean'), 'A fix summary has been posted as a comment on the Pull Request.');
+            assert.equal(suffix('open-threads'), '\nA fix summary has been posted as a comment on the Pull Request.');
+            assert.equal(suffix('unaddressed-replies'), '\nA fix summary has been posted as a comment on the Pull Request.');
+            assert.equal(suffix('changes-requested-verdict'), '\nA fix summary has been posted as a comment on the Pull Request.');
+        });
+    });
+});
