@@ -1187,3 +1187,310 @@ suite('pullRequest helper > body freeze (gh-960)', function() {
     });
 
 });
+
+// ── gh-1190: syncBranchWithBase seam split — helper characterization ─────────
+
+suite('pullRequest helper — syncBranchWithBase seam helpers (gh-1190)', function() {
+
+    test('validateSyncInputs returns the exact refusal message per input defect', function() {
+        var pr = loadPullRequestHelper();
+        assert.equal(pr.validateSyncInputs('feature/DMC-1', 'main'), null, 'valid inputs → null');
+        assert.equal(pr.validateSyncInputs(null, 'main'), 'branchName is required');
+        assert.equal(pr.validateSyncInputs(undefined, 'main'), 'branchName is required');
+        assert.equal(pr.validateSyncInputs('-evil', 'main'), 'Unsafe branch name: -evil',
+            'a leading dash is an unsafe branch name');
+        assert.equal(pr.validateSyncInputs('feature/DMC-1', '../escape'), 'Unsafe base branch name: ../escape',
+            'a traversal base branch is unsafe');
+    });
+
+    test('mergeInProgressSyncResult builds the gh-761 refusal shape', function() {
+        var pr = loadPullRequestHelper();
+        var result = pr.mergeInProgressSyncResult('feature/DMC-9', 'main');
+        assert.equal(result.success, false);
+        assert.equal(result.mergeInProgress, true, 'must flag the refusal as mergeInProgress');
+        assert.contains(result.error, 'MERGE_HEAD');
+        assert.contains(result.error, 'feature/DMC-9');
+        assert.contains(result.error, 'origin/main');
+    });
+
+    test('unrelatedHistoriesSyncResult builds the unrecoverable refusal shape', function() {
+        var pr = loadPullRequestHelper();
+        var result = pr.unrelatedHistoriesSyncResult('develop/3.9.0');
+        assert.equal(result.success, false);
+        assert.equal(result.unrecoverableByAgent, true);
+        assert.contains(result.error, 'No merge base found');
+        assert.contains(result.error, 'origin/develop/3.9.0');
+    });
+
+    test('uncleanTreeSyncResult embeds the tracked status in the refusal', function() {
+        var pr = loadPullRequestHelper();
+        var result = pr.uncleanTreeSyncResult('main', ' M src/a.js');
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'working tree is not clean');
+        assert.contains(result.error, ' M src/a.js');
+    });
+
+    test('realignSubmodulesBeforeSync re-reads status after a submodule update and warns on failure', function() {
+        var pr = loadPullRequestHelper();
+        var commands = [];
+        var statusReads = 0;
+        var warned = null;
+        var originalWarn = console.warn;
+        console.warn = function() { warned = Array.prototype.slice.call(arguments).join(' '); };
+        try {
+            var status = pr.realignSubmodulesBeforeSync(function(command) {
+                commands.push(command);
+                if (command === 'git status --porcelain --ignore-submodules=dirty') {
+                    statusReads++;
+                    return statusReads === 1 ? ' M dirty\n' : '';
+                }
+                return '';
+            }, 'repo');
+            assert.equal(status, '', 'status is clean after the realign');
+            assert.deepEqual(commands, [
+                'git status --porcelain --ignore-submodules=dirty',
+                'git submodule update --init --recursive',
+                'git status --porcelain --ignore-submodules=dirty'
+            ]);
+            assert.equal(warned, null, 'no warning when the realign succeeds');
+        } finally {
+            console.warn = originalWarn;
+        }
+    });
+
+    test('realignSubmodulesBeforeSync tolerates a failing submodule update (warn, keep dirty status)', function() {
+        var pr = loadPullRequestHelper();
+        var warned = null;
+        var originalWarn = console.warn;
+        console.warn = function() { warned = Array.prototype.slice.call(arguments).join(' '); };
+        try {
+            var status = pr.realignSubmodulesBeforeSync(function(command) {
+                if (command === 'git status --porcelain --ignore-submodules=dirty') return ' M dirty';
+                if (command === 'git submodule update --init --recursive') throw new Error('submodule boom');
+                return '';
+            }, 'repo');
+            assert.equal(status, 'M dirty', 'the first (dirty) status is kept when the update throws');
+            assert.contains(warned, 'Could not realign submodules before syncing with base');
+            assert.contains(warned, 'submodule boom');
+        } finally {
+            console.warn = originalWarn;
+        }
+    });
+
+    test('resolveSyncPreconditions blocks with the up-to-date early exit before any merge-base probe', function() {
+        var pr = loadPullRequestHelper();
+        var commands = [];
+        var pre = pr.resolveSyncPreconditions(function(command) {
+            commands.push(command);
+            if (command === 'git rev-parse origin/main') return 'base-sha';
+            if (command === 'git merge-base origin/main HEAD') return 'base-sha';
+            return '';
+        }, 'repo', 'main', 'feature/DMC-5');
+
+        assert.deepEqual(pre.block, { success: true, updated: false });
+        assert.equal(pre.status, undefined, 'no status probe runs once blocked');
+        assert.equal(commands.indexOf('git status --porcelain --ignore-submodules=dirty'), -1,
+            'the dirty-tree probe must not run for an up-to-date branch');
+    });
+
+    test('resolveSyncPreconditions blocks with the unrelated-histories result after the deepen attempts', function() {
+        var pr = loadPullRequestHelper();
+        var pre = pr.resolveSyncPreconditions(function(command) {
+            if (command === 'git rev-parse origin/main') return 'base-sha';
+            if (command === 'git merge-base origin/main HEAD') return '';
+            return '';
+        }, 'repo', 'main', 'feature/DMC-7');
+
+        assert.equal(pre.block.unrecoverableByAgent, true);
+        assert.contains(pre.block.error, 'No merge base found');
+        assert.equal(pre.status, undefined);
+    });
+
+    test('resolveSyncPreconditions returns the realigned status when the merge may start', function() {
+        var pr = loadPullRequestHelper();
+        var pre = pr.resolveSyncPreconditions(function(command) {
+            if (command === 'git rev-parse origin/main') return 'base-sha';
+            if (command === 'git merge-base origin/main HEAD') return 'old-sha';
+            if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
+            return '';
+        }, 'repo', 'main', 'feature/DMC-4');
+
+        assert.equal(pre.block, undefined, 'nothing blocks the merge');
+        assert.equal(pre.status, '');
+    });
+
+    test('abortMergeQuietly always issues the abort and never throws through', function() {
+        var pr = loadPullRequestHelper();
+        var commands = [];
+        pr.abortMergeQuietly(function(command) {
+            commands.push(command);
+            throw new Error('no merge to abort');
+        }, 'repo');
+        assert.deepEqual(commands, ['git merge --abort'], 'abort runs exactly once');
+        pr.abortMergeQuietly(function(command) { commands.push(command); }, null);
+        assert.equal(commands.length, 2, 'a succeeding abort is issued the same way');
+    });
+
+    test('buildSyncFailureMessage prefers the conflict list, then a specific auto-resolve error, then the git error', function() {
+        var pr = loadPullRequestHelper();
+        var gitError = new Error('Merge conflict in src/a.js');
+
+        assert.equal(
+            pr.buildSyncFailureMessage(gitError, { conflictFiles: ['src/a.js', 'src/b.js'] }, 'main'),
+            'Merge conflict while syncing with origin/main: src/a.js, src/b.js',
+            'a conflict list beats every other message');
+
+        assert.equal(
+            pr.buildSyncFailureMessage(gitError, { conflictFiles: [], error: 'Unresolved conflicts remain: src/a.js' }, 'main'),
+            'Unresolved conflicts remain: src/a.js',
+            'a specific auto-resolve error beats the raw git error');
+
+        assert.equal(
+            pr.buildSyncFailureMessage(gitError, { conflictFiles: [], error: 'No conflicted files detected' }, 'main'),
+            'Merge conflict in src/a.js',
+            'the generic no-conflict note never replaces the original git error');
+
+        assert.equal(
+            pr.buildSyncFailureMessage('plain string error', { conflictFiles: [] }, 'main'),
+            'plain string error',
+            'a non-Error throw is stringified');
+    });
+
+    test('syncFailureResult mirrors the conflict shape of the original catch path', function() {
+        var pr = loadPullRequestHelper();
+        var withConflicts = pr.syncFailureResult('boom', { conflictFiles: ['a.js'] });
+        assert.deepEqual(withConflicts, { success: false, conflict: true, conflictFiles: ['a.js'], error: 'boom' });
+
+        var withoutConflicts = pr.syncFailureResult('boom', {});
+        assert.deepEqual(withoutConflicts, { success: false, conflict: false, conflictFiles: [], error: 'boom' });
+    });
+
+    test('decideFeatureBranchRoute covers the full (local, remote) matrix', function() {
+        var pr = loadPullRequestHelper();
+        assert.equal(pr.decideFeatureBranchRoute(false, false), 'create',
+            'neither local nor remote → create');
+        assert.equal(pr.decideFeatureBranchRoute(true, false), 'checkout-local',
+            'local only → checkout-local');
+        assert.equal(pr.decideFeatureBranchRoute(false, true), 'checkout-remote',
+            'remote only → checkout-remote');
+        assert.equal(pr.decideFeatureBranchRoute(true, true), 'checkout-local',
+            'both → checkout-local');
+    });
+
+    test('syncBranchWithBase refuses a dirty tree that survives the submodule realign', function() {
+        var pr = loadPullRequestHelper();
+        var result = pr.syncBranchWithBase({
+            branchName: 'feature/DMC-dirty',
+            baseBranch: 'main',
+            runCommand: function(command) {
+                if (command === 'git rev-parse origin/main') return 'base-sha';
+                if (command === 'git merge-base origin/main HEAD') return 'old-sha';
+                if (command === 'git status --porcelain --ignore-submodules=dirty') return ' M stubborn.js';
+                return '';
+            }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.conflict, undefined, 'a dirty-tree refusal is not a conflict');
+        assert.contains(result.error, 'working tree is not clean');
+    });
+
+    test('syncBranchWithBase reports a specific auto-resolve failure over the raw git error', function() {
+        var pr = loadPullRequestHelper();
+        var result = pr.syncBranchWithBase({
+            branchName: 'feature/DMC-unres',
+            baseBranch: 'main',
+            runCommand: function(command) {
+                if (command === 'git rev-parse origin/main') return 'base-sha';
+                if (command === 'git merge-base origin/main HEAD') return 'old-sha';
+                if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
+                if (command === 'git merge --no-edit origin/main') throw new Error('Automatic merge failed');
+                if (command === 'git status --short') return 'UU src/a.js';
+                if (command === 'git diff --name-only --diff-filter=U') return 'src/a.js';
+                if (command === 'git merge --abort') throw new Error('cannot abort');
+                return '';
+            }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.conflict, true);
+        assert.deepEqual(result.conflictFiles, ['src/a.js']);
+        assert.contains(result.error, 'Merge conflict while syncing with origin/main');
+    });
+
+    test('syncOptionsOf applies the documented defaults', function() {
+        var pr = loadPullRequestHelper();
+        var opts = pr.syncOptionsOf({ branchName: 'feature/DMC-1' });
+        assert.equal(opts.branchName, 'feature/DMC-1');
+        assert.equal(opts.baseBranch, 'main', 'baseBranch defaults to main');
+        assert.equal(opts.workingDir, null, 'workingDir defaults to null');
+        assert.ok(typeof opts.runCommand === 'function', 'runCommand defaults to the cli wrapper');
+        assert.equal(opts.runCommand('echo hi'), '', 'the default runCommand runs through cli_execute_command');
+
+        var custom = pr.syncOptionsOf({
+            branchName: 'b',
+            baseBranch: 'develop/3.9.0',
+            workingDir: 'repo',
+            runCommand: function() { return 'x'; }
+        });
+        assert.equal(custom.baseBranch, 'develop/3.9.0');
+        assert.equal(custom.workingDir, 'repo');
+        assert.equal(custom.runCommand('any'), 'x');
+        assert.deepEqual(pr.syncOptionsOf(null).baseBranch, 'main', 'a missing options bag still yields defaults');
+    });
+
+    test('recoverFromSyncError returns the auto-resolved success before any abort runs', function() {
+        var pr = loadPullRequestHelper();
+        var commands = [];
+        var outcome = pr.recoverFromSyncError(function(command) {
+            commands.push(command);
+            if (command === 'git status --short') return 'UU src/a.js';
+            if (command === 'git diff --name-only --diff-filter=U') return '';
+            if (command === 'git merge-base origin/main HEAD') return 'mb';
+            return '';
+        }, 'repo', 'main', 'feature/DMC-1', new Error('Automatic merge failed'));
+
+        assert.deepEqual(outcome, { success: true, updated: true, autoResolved: true });
+        assert.equal(commands.indexOf('git merge --abort'), -1, 'a resolved sync must not abort the merge');
+    });
+
+    test('recoverFromSyncError aborts and shapes the conflict failure when resolution leaves unmerged paths', function() {
+        var pr = loadPullRequestHelper();
+        var commands = [];
+        var outcome = pr.recoverFromSyncError(function(command) {
+            commands.push(command);
+            if (command === 'git status --short') return 'UU src/a.js';
+            if (command === 'git diff --name-only --diff-filter=U') return 'src/a.js';
+            if (command === 'git merge-base origin/main HEAD') return 'mb';
+            return '';
+        }, 'repo', 'main', 'feature/DMC-1', new Error('Automatic merge failed'));
+
+        assert.equal(outcome.success, false);
+        assert.equal(outcome.conflict, true);
+        assert.deepEqual(outcome.conflictFiles, ['src/a.js']);
+        assert.ok(commands.indexOf('git merge --abort') !== -1, 'the unresolved merge is aborted');
+        assert.contains(outcome.error, 'Merge conflict while syncing with origin/main');
+    });
+
+    test('syncBranchWithBase keeps the original git error when the conflict scan finds nothing', function() {
+        var pr = loadPullRequestHelper();
+        var result = pr.syncBranchWithBase({
+            branchName: 'feature/DMC-noref',
+            baseBranch: 'main',
+            runCommand: function(command) {
+                if (command === 'git rev-parse origin/main') return 'base-sha';
+                if (command === 'git merge-base origin/main HEAD') return 'old-sha';
+                if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
+                if (command === 'git merge --no-edit origin/main') throw new Error('fatal: cannot lock ref');
+                if (command === 'git status --short') return '';
+                return '';
+            }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.conflict, false);
+        assert.equal(result.error, 'fatal: cannot lock ref',
+            'the raw git error survives when autoResolve found zero conflict markers');
+    });
+
+});
