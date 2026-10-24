@@ -807,3 +807,286 @@ suite('mergeStoryTestAutomationPR: attemptMerge CI and merge-decision paths (gh-
         assert.ok(comments[0].indexOf('required checks failed: unit') !== -1);
     });
 });
+
+// ── gh-1186: CRAP-reduction — merge-outcome helpers (characterization) ──────
+
+suite('mergeStoryTestAutomationPR: merge-outcome helpers (gh-1186)', function() {
+
+    var PR42 = { number: 42, html_url: 'https://github.com/IstiN/trackstate/pull/42' };
+
+    function loadHelpers() {
+        return loadMergeStoryTestAutomationPR({});
+    }
+
+    test('undeterminedMergeOutcome: failing checks → ci_failed with failedNames', function() {
+        var m = loadHelpers();
+        var scm = { getCommitCheckRuns: function() {
+            return [{ name: 'build', status: 'completed', conclusion: 'failure' }];
+        } };
+        var r = m.undeterminedMergeOutcome(scm, PR42, { headSha: 'abc123', mergeableState: 'unknown' });
+        assert.deepEqual(r, { success: false, reason: 'ci_failed', prNumber: 42, prUrl: PR42.html_url, failedNames: ['build'] });
+    });
+
+    test('undeterminedMergeOutcome: pending checks → ci_running', function() {
+        var m = loadHelpers();
+        var scm = { getCommitCheckRuns: function() {
+            return [{ name: 'unit', status: 'queued', conclusion: '' }];
+        } };
+        var r = m.undeterminedMergeOutcome(scm, PR42, { headSha: 'abc123', mergeableState: 'checking' });
+        assert.deepEqual(r, { success: false, reason: 'ci_running', prNumber: 42, prUrl: PR42.html_url });
+    });
+
+    test('undeterminedMergeOutcome: green checks → not_ready', function() {
+        var m = loadHelpers();
+        var scm = { getCommitCheckRuns: function() {
+            return [{ name: 'unit', status: 'completed', conclusion: 'success' }];
+        } };
+        var r = m.undeterminedMergeOutcome(scm, PR42, { headSha: 'abc123', mergeableState: 'blocked' });
+        assert.deepEqual(r, { success: false, reason: 'not_ready', prNumber: 42, prUrl: PR42.html_url });
+    });
+
+    test('staticMergeStateOutcome: behind requests a branch update and reports behind', function() {
+        var m = loadHelpers();
+        var updates = [];
+        var scm = { updateBranch: function(prNumber, owner, repo) { updates.push([prNumber, owner, repo]); } };
+        var r = m.staticMergeStateOutcome(scm, { owner: 'IstiN', repo: 'trackstate' }, PR42, { mergeableState: 'behind' });
+        assert.deepEqual(r, { success: false, reason: 'behind', prNumber: 42, prUrl: PR42.html_url });
+        assert.deepEqual(updates, [[42, 'IstiN', 'trackstate']]);
+    });
+
+    test('staticMergeStateOutcome: conflict states report conflict without side effects', function() {
+        var m = loadHelpers();
+        var r = m.staticMergeStateOutcome({}, { owner: 'o', repo: 'r' }, PR42, { mergeable: false, mergeableState: 'dirty' });
+        assert.deepEqual(r, { success: false, reason: 'conflict', prNumber: 42, prUrl: PR42.html_url });
+        var r2 = m.staticMergeStateOutcome({}, null, PR42, { mergeable: true, mergeableState: 'conflict' });
+        assert.equal(r2.reason, 'conflict');
+    });
+
+    test('staticMergeStateOutcome: clean state returns null — merge proceeds', function() {
+        var m = loadHelpers();
+        assert.equal(m.staticMergeStateOutcome({}, null, PR42, { mergeable: true, mergeableState: 'clean' }), null);
+    });
+
+    test('ciRetryOutcome: a conflict never re-checks CI', function() {
+        var m = loadHelpers();
+        var called = false;
+        var scm = { getCommitCheckRuns: function() { called = true; return []; } };
+        var r = m.ciRetryOutcome(scm, 'abc', { isConflict: true, isCIBlocking: false, errMsg: 'Merge conflict' }, 42, 'u');
+        assert.equal(r, null);
+        assert.equal(called, false);
+    });
+
+    test('ciRetryOutcome: non-CI non-empty errors do not re-check CI', function() {
+        var m = loadHelpers();
+        var called = false;
+        var scm = { getCommitCheckRuns: function() { called = true; return []; } };
+        var r = m.ciRetryOutcome(scm, 'abc', { isConflict: false, isCIBlocking: false, errMsg: 'network timeout' }, 42, 'u');
+        assert.equal(r, null);
+        assert.equal(called, false);
+    });
+
+    test('ciRetryOutcome: CI-blocking error maps check results to ci_failed / ci_running', function() {
+        var m = loadHelpers();
+        var failing = { getCommitCheckRuns: function() {
+            return [{ name: 'e2e', status: 'completed', conclusion: 'timed_out' }];
+        } };
+        assert.deepEqual(
+            m.ciRetryOutcome(failing, 'abc', { isConflict: false, isCIBlocking: true, errMsg: '422' }, 42, 'u'),
+            { success: false, reason: 'ci_failed', prNumber: 42, prUrl: 'u', failedNames: ['e2e'] });
+
+        var running = { getCommitCheckRuns: function() {
+            return [{ name: 'unit', status: 'queued', conclusion: '' }];
+        } };
+        assert.deepEqual(
+            m.ciRetryOutcome(running, 'abc', { isConflict: false, isCIBlocking: true, errMsg: '422' }, 42, 'u'),
+            { success: false, reason: 'ci_running', prNumber: 42, prUrl: 'u' });
+    });
+
+    test('ciRetryOutcome: green checks leave the decision to the caller (null); absent checks read as running', function() {
+        var m = loadHelpers();
+        var green = { getCommitCheckRuns: function() {
+            return [{ name: 'unit', status: 'completed', conclusion: 'success' }];
+        } };
+        assert.equal(m.ciRetryOutcome(green, 'abc', { isConflict: false, isCIBlocking: true, errMsg: 'blocked' }, 42, 'u'), null);
+        var none = { getCommitCheckRuns: function() { return []; } };
+        assert.deepEqual(
+            m.ciRetryOutcome(none, 'abc', { isConflict: false, isCIBlocking: true, errMsg: 'blocked' }, 42, 'u'),
+            { success: false, reason: 'ci_running', prNumber: 42, prUrl: 'u' });
+    });
+
+    test('mergeFailureOutcome: conflict vs merge_failed, error text carried through', function() {
+        var m = loadHelpers();
+        assert.deepEqual(
+            m.mergeFailureOutcome({ isConflict: true, errMsg: 'conflict!' }, 42, 'u'),
+            { success: false, reason: 'conflict', prNumber: 42, prUrl: 'u', error: 'conflict!' });
+        assert.deepEqual(
+            m.mergeFailureOutcome({ isConflict: false, errMsg: 'boom' }, 42, 'u'),
+            { success: false, reason: 'merge_failed', prNumber: 42, prUrl: 'u', error: 'boom' });
+    });
+
+    test('isRetryPendingReason / isMissingPrerequisiteReason truth tables', function() {
+        var m = loadHelpers();
+        assert.equal(m.isRetryPendingReason('ci_running'), true);
+        assert.equal(m.isRetryPendingReason('behind'), true);
+        assert.equal(m.isRetryPendingReason('not_ready'), true);
+        assert.equal(m.isRetryPendingReason('conflict'), false);
+        assert.equal(m.isRetryPendingReason('merge_failed'), false);
+        assert.equal(m.isRetryPendingReason('ci_failed'), false);
+        assert.equal(m.isRetryPendingReason(undefined), false);
+        assert.equal(m.isMissingPrerequisiteReason('missing_key'), true);
+        assert.equal(m.isMissingPrerequisiteReason('no_repo'), true);
+        assert.equal(m.isMissingPrerequisiteReason('conflict'), false);
+        assert.equal(m.isMissingPrerequisiteReason(undefined), false);
+    });
+
+    test('issueTypeNameOf: full chain, partial ticket, missing ticket', function() {
+        var m = loadHelpers();
+        assert.equal(m.issueTypeNameOf({ ticket: { fields: { issuetype: { name: 'Bug' } } } }), 'Bug');
+        assert.equal(m.issueTypeNameOf({ ticket: { fields: { issuetype: {} } } }), undefined);
+        assert.equal(m.issueTypeNameOf({ ticket: { fields: {} } }), undefined);
+        assert.equal(m.issueTypeNameOf({ ticket: {} }), undefined);
+        assert.equal(m.issueTypeNameOf({}), undefined);
+    });
+
+    test('reworkSkipLabelOf: Bug vs everything else', function() {
+        var m = loadHelpers();
+        var issueTypes = { BUG: 'Bug' };
+        assert.equal(m.reworkSkipLabelOf('Bug', { issueTypes: issueTypes }), 'sm_bug_test_rework_triggered');
+        assert.equal(m.reworkSkipLabelOf('Story', { issueTypes: issueTypes }), 'sm_story_test_rework_triggered');
+        assert.equal(m.reworkSkipLabelOf(null, { issueTypes: issueTypes }), 'sm_story_test_rework_triggered');
+    });
+
+    test('reworkFailureComment: conflict panel, ci_failed panel with check names, unknown PR', function() {
+        var m = loadHelpers();
+        var conflict = m.reworkFailureComment({ reason: 'conflict', prNumber: 42, prUrl: 'u' });
+        assert.contains(conflict, 'MERGE CONFLICT');
+        assert.contains(conflict, 'Could not merge PR #42');
+        assert.contains(conflict, '[View PR|u]');
+        assert.contains(conflict, 'merge conflict');
+
+        var ciFailed = m.reworkFailureComment({ reason: 'ci_failed', prNumber: 42, failedNames: ['unit', 'e2e'] });
+        assert.contains(ciFailed, 'MERGE FAILED');
+        assert.contains(ciFailed, 'required checks failed: unit, e2e');
+        assert.notContains(ciFailed, '[View PR|', 'no PR link without prUrl');
+
+        var bare = m.reworkFailureComment({ reason: 'merge_failed' });
+        assert.contains(bare, 'PR #unknown');
+        assert.contains(bare, 'CI checks failing or PR not mergeable');
+    });
+
+    test('removePrLabelSafe: removes when a PR number is present, no-op and error-safe otherwise', function() {
+        var m = loadHelpers();
+        var removed = [];
+        m.removePrLabelSafe({ removeLabel: function(n, l) { removed.push([n, l]); } }, 42);
+        assert.deepEqual(removed, [[42, 'pr_approved']]);
+
+        removed.length = 0;
+        m.removePrLabelSafe({ removeLabel: function() { removed.push('called'); } }, null);
+        assert.deepEqual(removed, [], 'no PR number — no removal call');
+
+        m.removePrLabelSafe({ removeLabel: function() { throw new Error('provider down'); } }, 42);
+    });
+});
+
+// ── gh-1186: CRAP-reduction — action/attemptMerge outcome mapping ───────────
+
+suite('mergeStoryTestAutomationPR: action/attemptMerge outcome mapping (gh-1186)', function() {
+
+    function outcomeHarness(mocks) {
+        return loadMergeStoryTestAutomationPR(Object.assign({
+            cli_execute_command: function() { return ''; },
+            github_list_prs: function() { return []; },
+            github_get_pr: function() { return {}; },
+            github_merge_pr: function() {},
+            github_remove_pr_label: function() {},
+            jira_search_by_jql: function() { return []; },
+            jira_move_to_status: function() {},
+            jira_remove_label: function() {},
+            jira_add_label: function() {},
+            jira_post_comment: function() {}
+        }, mocks));
+    }
+
+    test('attemptMerge: missing ticket key → missing_key', function() {
+        var m = outcomeHarness({});
+        var r = m.attemptMerge({ ticket: {}, jobParams: {} });
+        assert.deepEqual(r, { success: false, reason: 'missing_key' });
+    });
+
+    test('attemptMerge: unresolvable remote → no_repo', function() {
+        var m = outcomeHarness({});
+        var r = m.attemptMerge({ ticket: { key: 'TS-40' }, jobParams: {} });
+        assert.deepEqual(r, { success: false, reason: 'no_repo' });
+    });
+
+    test('action: onlyAttemptMerge returns the raw merge outcome', function() {
+        var m = outcomeHarness({});
+        var r = m.action({ ticket: { key: 'TS-40' }, jobParams: { customParams: { onlyAttemptMerge: true } } });
+        assert.deepEqual(r, { success: false, reason: 'no_repo' });
+    });
+
+    test('action: missing ticket key → false', function() {
+        var m = outcomeHarness({});
+        assert.equal(m.action({ ticket: {}, jobParams: {} }), false);
+    });
+
+    test('action: retry-pending outcomes keep the lock and return false without a rework comment', function() {
+        var comments = [];
+        var m = outcomeHarness({
+            cli_execute_command: function(opts) {
+                return opts.command === 'git config --get remote.origin.url' ? 'https://github.com/IstiN/trackstate.git' : '';
+            },
+            github_list_prs: function() { return [{ number: 42, head: { ref: 'test/TS-40' } }]; },
+            github_get_pr: function() { return { mergeable: null, mergeable_state: 'unknown' }; },
+            jira_post_comment: function(args) { comments.push(args.comment); }
+        });
+        assert.equal(m.action({ ticket: { key: 'TS-40' }, jobParams: { customParams: {} } }), false);
+        assert.deepEqual(comments, [], 'no rework comment while the SM should simply retry');
+    });
+
+    test('action: no_repo releases the lock and returns false', function() {
+        var removed = [];
+        var m = outcomeHarness({
+            jira_remove_label: function(args) { removed.push(args); }
+        });
+        assert.equal(m.action({ ticket: { key: 'TS-40' }, jobParams: { customParams: { removeLabel: 'sm_lock' } } }), false);
+        assert.deepEqual(removed, [{ key: 'TS-40', label: 'sm_lock' }]);
+    });
+
+    test('action: missing_key releases the lock and returns false', function() {
+        var removed = [];
+        var m = outcomeHarness({
+            jira_remove_label: function(args) { removed.push(args); }
+        });
+        assert.equal(m.action({ ticket: {}, jobParams: { customParams: { removeLabel: 'sm_lock' } } }), false);
+        assert.deepEqual(removed, [], 'nothing to release without a story key');
+    });
+
+    test('action: merge_failed rework removes the PR label and both tracker labels in order', function() {
+        var labelsRemoved = [];
+        var labelsAdded = [];
+        var prLabelsRemoved = [];
+        var m = outcomeHarness({
+            cli_execute_command: function(opts) {
+                return opts.command === 'git config --get remote.origin.url' ? 'https://github.com/IstiN/trackstate.git' : '';
+            },
+            github_list_prs: function() { return [{ number: 42, head: { ref: 'test/TS-40' } }]; },
+            github_get_pr: function() { return { mergeable: true, mergeable_state: 'clean' }; },
+            github_merge_pr: function() { throw new Error('network timeout'); },
+            github_remove_pr_label: function(opts) { prLabelsRemoved.push(opts); },
+            jira_remove_label: function(args) { labelsRemoved.push(args.label); },
+            jira_add_label: function(args) { labelsAdded.push(args.label); },
+            jira_post_comment: function() {},
+            jira_move_to_status: function() {}
+        });
+        assert.equal(m.action({
+            ticket: { key: 'TS-40', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: {} }
+        }), true);
+        assert.equal(prLabelsRemoved.length, 1);
+        assert.equal(prLabelsRemoved[0].pullRequestId, '42');
+        assert.equal(prLabelsRemoved[0].label, 'pr_approved');
+        assert.deepEqual(labelsRemoved, ['pr_approved', 'sm_story_test_rework_triggered']);
+        assert.deepEqual(labelsAdded, ['test_pr_rework_needed']);
+    });
+});
