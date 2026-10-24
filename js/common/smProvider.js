@@ -1296,6 +1296,52 @@ function gitlabProvider(cfg) {
 }
 
 /**
+ * The repository binding every forge needs: owner + repo. Anything less is
+ * a loud config error (never a silent half-wired provider). Returns the
+ * repository so the caller reads owner/repo off a validated shape.
+ */
+function requiredRepository(cfg) {
+    if (!cfg.repository || !cfg.repository.owner || !cfg.repository.repo) {
+        throw new Error('smProvider: repository.owner and repository.repo are required');
+    }
+    return cfg.repository;
+}
+
+// prStatus leg of the preseed: {number-as-string: status} — see the
+// github provider's memoPrStatus for the write-back side.
+function preseedPrStatuses(owner, repo, prStatus) {
+    var memoIds = Object.keys(prStatus);
+    for (var mi = 0; mi < memoIds.length; mi++) {
+        ioCachePut(owner, repo, 'prStatus', memoIds[mi], prStatus[memoIds[mi]]);
+    }
+}
+
+// Re-hydrate the per-tick ioCache from an args-carried snapshot() bundle —
+// runAsync worker engines call this so their first cache read hits instead
+// of re-fetching the lists the main engine already paid for.
+function preseedIoCache(owner, repo, preseed) {
+    if (preseed.openPrs) {
+        ioCachePut(owner, repo, 'openPrs', null, preseed.openPrs);
+    }
+    if (preseed.mergedPrs) {
+        ioCachePut(owner, repo, 'mergedPrs', null, preseed.mergedPrs);
+    }
+    if (preseed.branchHeads) {
+        ioCachePut(owner, repo, 'branches', null, preseed.branchHeads);
+    }
+    if (preseed.prStatus) {
+        preseedPrStatuses(owner, repo, preseed.prStatus);
+    }
+}
+
+// The forge backend from the effective config (github default).
+function smProviderFor(provider, cfg) {
+    if (provider === 'gitlab') return gitlabProvider(cfg);
+    if (provider === 'github') return githubProvider(cfg);
+    throw new Error('smProvider: unknown provider "' + provider + '" (github | gitlab)');
+}
+
+/**
  * Creates the SM provider for the configured forge.
  * @param {Object} config - { scm: { provider }, repository: { owner, repo } }
  * @returns {Object} provider implementing the contract above
@@ -1303,36 +1349,11 @@ function gitlabProvider(cfg) {
 function createSmProvider(config) {
     var cfg = config || {};
     var provider = (cfg.scm && cfg.scm.provider) || 'github';
-    if (!cfg.repository || !cfg.repository.owner || !cfg.repository.repo) {
-        throw new Error('smProvider: repository.owner and repository.repo are required');
-    }
-    // Preseed: re-hydrate the per-tick ioCache from an args-carried
-    // snapshot() bundle — runAsync worker engines call this so their
-    // first cache read hits instead of re-fetching the lists the main
-    // engine already paid for.
+    var repository = requiredRepository(cfg);
     if (cfg.preseed) {
-        if (cfg.preseed.openPrs) {
-            ioCachePut(cfg.repository.owner, cfg.repository.repo, 'openPrs', null, cfg.preseed.openPrs);
-        }
-        if (cfg.preseed.mergedPrs) {
-            ioCachePut(cfg.repository.owner, cfg.repository.repo, 'mergedPrs', null, cfg.preseed.mergedPrs);
-        }
-        if (cfg.preseed.branchHeads) {
-            ioCachePut(cfg.repository.owner, cfg.repository.repo, 'branches', null, cfg.preseed.branchHeads);
-        }
-        if (cfg.preseed.prStatus) {
-            // {number-as-string: status} leg of snapshot() — see the
-            // github provider's memoPrStatus for the write-back side.
-            var memoIds = Object.keys(cfg.preseed.prStatus);
-            for (var mi = 0; mi < memoIds.length; mi++) {
-                ioCachePut(cfg.repository.owner, cfg.repository.repo,
-                    'prStatus', memoIds[mi], cfg.preseed.prStatus[memoIds[mi]]);
-            }
-        }
+        preseedIoCache(repository.owner, repository.repo, cfg.preseed);
     }
-    if (provider === 'gitlab') return gitlabProvider(cfg);
-    if (provider === 'github') return githubProvider(cfg);
-    throw new Error('smProvider: unknown provider "' + provider + '" (github | gitlab)');
+    return smProviderFor(provider, cfg);
 }
 
 if (typeof module !== 'undefined' && module.exports) {
