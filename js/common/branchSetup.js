@@ -125,6 +125,14 @@ function establishFeatureBranch(prHelper, configLoader, exec, workingDir, config
     return featureBranchName;
 }
 
+/** True when any trimmed line of `lines` equals `entry`. */
+function hasExcludeEntry(lines, entry) {
+    for (var i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === entry) return true;
+    }
+    return false;
+}
+
 /**
  * Ensure `entry` (e.g. 'outputs/', '.codegraph/') is listed in the target
  * repo's .git/info/exclude — local-only, never committed, idempotent.
@@ -135,18 +143,12 @@ function ensureGitInfoExclude(entry, commentLine, warnMessage) {
     try {
         var content = '';
         try { content = file_read({ path: '.git/info/exclude' }) || ''; } catch (e) { content = ''; }
-        var lines = content.split('\n');
-        var alreadyPresent = false;
-        for (var i = 0; i < lines.length; i++) {
-            if (lines[i].trim() === entry) { alreadyPresent = true; break; }
-        }
-        if (!alreadyPresent) {
-            var sep = content && content.charAt(content.length - 1) !== '\n' ? '\n' : '';
-            file_write({
-                path: '.git/info/exclude',
-                content: content + sep + '\n' + commentLine + '\n' + entry + '\n'
-            });
-        }
+        if (hasExcludeEntry(content.split('\n'), entry)) return;
+        var sep = content && content.charAt(content.length - 1) !== '\n' ? '\n' : '';
+        file_write({
+            path: '.git/info/exclude',
+            content: content + sep + '\n' + commentLine + '\n' + entry + '\n'
+        });
     } catch (e) {
         console.warn(warnMessage, e);
     }

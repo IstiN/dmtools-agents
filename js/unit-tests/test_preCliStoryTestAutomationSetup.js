@@ -211,6 +211,19 @@ suite('preCliStoryTestAutomationSetup', function() {
         assert.ok(mergeCalled, 'merge conflicts check was called');
     });
 
+    // ── gh-1247: shared TS-213 git mock ─────────────────────────────────────
+    // Exact-command response table for the TS-213 conflict scenario. Replaces
+    // the previous cloned 3-branch if-chain pair (one clone per loadModule
+    // call site) — one helper keeps both CRAP and the duplication gate low.
+    function ts213CliMock(opts) {
+        var responses = {
+            'git branch --list "test/TS-213"': '  test/TS-213',
+            'git ls-remote --heads origin test/TS-213': 'abc refs/heads/test/TS-213',
+            'git rev-list -1 HEAD --not origin/main': 'somecommit'
+        };
+        return responses[opts.command] || '';
+    }
+
     test('writes conflict files when merging main into test branch produces conflicts', function() {
         var written = {};
         var module = loadPreCliStoryTestAutomationSetup({
@@ -230,12 +243,7 @@ suite('preCliStoryTestAutomationSetup', function() {
             trimLargeTextForInput: function(text) { return text || ''; }
         };
 
-        var outerMocks = { jira_search_by_jql: function() { return []; }, cli_execute_command: function(opts) {
-                if (opts.command === 'git branch --list "test/TS-213"') return '  test/TS-213';
-                if (opts.command.indexOf('git ls-remote --heads origin test/TS-213') === 0) return 'abc refs/heads/test/TS-213';
-                if (opts.command.indexOf('git rev-list -1 HEAD --not origin/main') === 0) return 'somecommit';
-                return '';
-            }, file_write: function(args) { written[args.path] = args.content; } };
+        var outerMocks = { jira_search_by_jql: function() { return []; }, cli_execute_command: ts213CliMock, file_write: function(args) { written[args.path] = args.content; } };
         module = loadModule(
             'js/preCliStoryTestAutomationSetup.js',
             makeRequire({
@@ -262,12 +270,7 @@ suite('preCliStoryTestAutomationSetup', function() {
                 './common/githubHelpers.js': githubHelpers,
                 './common/scm.js': { createScm: function() { return {}; } }
             }),
-            { jira_search_by_jql: function() { return []; }, cli_execute_command: function(opts) {
-                if (opts.command === 'git branch --list "test/TS-213"') return '  test/TS-213';
-                if (opts.command.indexOf('git ls-remote --heads origin test/TS-213') === 0) return 'abc refs/heads/test/TS-213';
-                if (opts.command.indexOf('git rev-list -1 HEAD --not origin/main') === 0) return 'somecommit';
-                return '';
-            }, file_write: outerMocks.file_write }
+            { jira_search_by_jql: function() { return []; }, cli_execute_command: ts213CliMock, file_write: outerMocks.file_write }
         );
 
         module.action({
