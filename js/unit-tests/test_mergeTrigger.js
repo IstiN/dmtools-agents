@@ -15,19 +15,53 @@ function prPayload(a, st) {
     return { number: a.pullRequestId, mergeable: st.mergeable, mergeStateStatus: st.state };
 }
 
+// gh-1200 CRAP refactor: the per-tool mock bodies extracted into named
+// builders — identical behavior, each unit its own CRAP entry; the
+// getIssueThrows branch (never driven before) is pinned by the
+// 'fixture builders (characterization)' suite.
+function fixturePrEntry(p) {
+    return {
+        number: p.number,
+        labels: (p.labels || []).map(function (n) { return { name: n }; }),
+        body: p.body || '',
+        headRefName: p.headRefName || ''
+    };
+}
+
+function fixtureGetIssue(opts, issueStates, calls, a) {
+    calls.issueGets.push(a);
+    if (opts.getIssueThrows === a.number) throw new Error('boom issue ' + a.number);
+    var state = issueStates.hasOwnProperty(a.number) ? issueStates[a.number] : 'OPEN';
+    if (state === null) {
+        // Sync-bridge 404 reality: the error BODY comes back, no throw.
+        return JSON.stringify({ message: 'Not Found', status: '404' });
+    }
+    return JSON.stringify({ number: a.number, state: state });
+}
+
+function fixtureGetPr(opts, prStates, calls, a) {
+    calls.gets.push(a);
+    if (opts.getPrThrows === a.pullRequestId) {
+        throw new Error('boom pr ' + a.pullRequestId);
+    }
+    var st = prStates[a.pullRequestId] || { mergeable: true, state: 'CLEAN' };
+    return JSON.stringify(prPayload(a, st));
+}
+
+function fixtureMergePr(opts, calls, m) {
+    calls.merges.push(m);
+    if (opts.mergeRefusals && opts.mergeRefusals[m.pullRequestId]) {
+        return JSON.stringify({ message: opts.mergeRefusals[m.pullRequestId] });
+    }
+    return JSON.stringify({ merged: true });
+}
+
 function fixture(opts) {
     opts = opts || {};
     var calls = { merges: [], removes: [], comments: [], gets: [], issueGets: [] };
     var labeledIssues = opts.labeledIssues || [];      // numbers returned by the label search
     var issueStates = opts.issueStates || {};          // number -> 'OPEN' | 'CLOSED' | null (404 body)
-    var prs = (opts.prs || []).map(function (p) {
-        return {
-            number: p.number,
-            labels: (p.labels || []).map(function (n) { return { name: n }; }),
-            body: p.body || '',
-            headRefName: p.headRefName || ''
-        };
-    });
+    var prs = (opts.prs || []).map(fixturePrEntry);
     var prStates = opts.prStates || {};                // number -> {mergeable, state}
     var mods = {
         github_search_issues: function (a) {
@@ -37,29 +71,13 @@ function fixture(opts) {
         },
         github_list_prs: function () { return JSON.stringify(prs); },
         github_get_issue: function (a) {
-            calls.issueGets.push(a);
-            if (opts.getIssueThrows === a.number) throw new Error('boom issue ' + a.number);
-            var state = issueStates.hasOwnProperty(a.number) ? issueStates[a.number] : 'OPEN';
-            if (state === null) {
-                // Sync-bridge 404 reality: the error BODY comes back, no throw.
-                return JSON.stringify({ message: 'Not Found', status: '404' });
-            }
-            return JSON.stringify({ number: a.number, state: state });
+            return fixtureGetIssue(opts, issueStates, calls, a);
         },
         github_get_pr: function (a) {
-            calls.gets.push(a);
-            if (opts.getPrThrows === a.pullRequestId) {
-                throw new Error('boom pr ' + a.pullRequestId);
-            }
-            var st = prStates[a.pullRequestId] || { mergeable: true, state: 'CLEAN' };
-            return JSON.stringify(prPayload(a, st));
+            return fixtureGetPr(opts, prStates, calls, a);
         },
         github_merge_pr: function (m) {
-            calls.merges.push(m);
-            if (opts.mergeRefusals && opts.mergeRefusals[m.pullRequestId]) {
-                return JSON.stringify({ message: opts.mergeRefusals[m.pullRequestId] });
-            }
-            return JSON.stringify({ merged: true });
+            return fixtureMergePr(opts, calls, m);
         },
         github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
         github_create_comment: function (c) { calls.comments.push(c); return '{}'; }
@@ -350,6 +368,62 @@ suite('mergeTrigger', function () {
         run(fx, { label: 'ship_it', ciRunUrl: 'https://ci/run/1' });
         assert.equal(fx.calls.removes[0].label, 'ship_it');
         assert.ok(fx.calls.comments[0].body.indexOf('https://ci/run/1') !== -1);
+    });
+});
+
+// ── gh-1200: fixture-builder characterization (covers the never-driven
+// getIssueThrows branch and pins each extracted builder's shape) ─────────────
+
+suite('mergeTrigger: fixture builders (characterization, gh-1200)', function () {
+
+    test('github_get_issue throws for the pinned issue number (getIssueThrows)', function () {
+        var calls = { merges: [], removes: [], comments: [], gets: [], issueGets: [] };
+        var fn = function (a) { return fixtureGetIssue({ getIssueThrows: 7 }, {}, calls, a); };
+        var thrown = null;
+        try { fn({ number: 7 }); } catch (e) { thrown = e; }
+        assert.ok(thrown, 'the pinned issue lookup throws');
+        assert.contains(String(thrown && thrown.message), 'boom issue 7');
+        assert.equal(calls.issueGets.length, 1, 'the probe is recorded before the throw');
+    });
+
+    test('github_get_issue: OPEN default, explicit state, and the 404-body shape', function () {
+        var calls = { merges: [], removes: [], comments: [], gets: [], issueGets: [] };
+        var states = { 3: 'CLOSED', 4: null };
+        assert.deepEqual(JSON.parse(fixtureGetIssue({}, states, calls, { number: 2 })),
+            { number: 2, state: 'OPEN' }, 'default OPEN');
+        assert.deepEqual(JSON.parse(fixtureGetIssue({}, states, calls, { number: 3 })),
+            { number: 3, state: 'CLOSED' });
+        assert.deepEqual(JSON.parse(fixtureGetIssue({}, states, calls, { number: 4 })),
+            { message: 'Not Found', status: '404' }, 'null state → the sync-bridge 404 body');
+    });
+
+    test('github_get_pr: CLEAN default, REST vs GraphQL payload shapes, throws', function () {
+        var calls = { merges: [], removes: [], comments: [], gets: [], issueGets: [] };
+        var graphql = JSON.parse(fixtureGetPr({}, {}, calls, { pullRequestId: 5 }));
+        assert.equal(graphql.mergeStateStatus, 'CLEAN');
+        var rest = JSON.parse(fixtureGetPr({}, { prStates: {} }, calls, { pullRequestId: 6 }));
+        assert.deepEqual(rest, { number: 6, mergeable: true, mergeStateStatus: 'CLEAN' },
+            'GraphQL default: CLEAN verbatim (lowercasing is REST-only)');
+        var restState = JSON.parse(fixtureGetPr({}, { 9: { mergeable: false, state: 'DIRTY', rest: true } },
+            calls, { pullRequestId: 9 }));
+        assert.deepEqual(restState, { number: 9, mergeable: false, mergeable_state: 'dirty' },
+            'rest: true → mergeable_state snake case');
+        var thrown = null;
+        try { fixtureGetPr({ getPrThrows: 10 }, {}, calls, { pullRequestId: 10 }); } catch (e) { thrown = e; }
+        assert.ok(thrown, 'the pinned pr lookup throws');
+        assert.contains(String(thrown && thrown.message), 'boom pr 10');
+    });
+
+    test('github_merge_pr: refusal body vs merged:true; fixturePrEntry shape', function () {
+        var calls = { merges: [], removes: [], comments: [], gets: [], issueGets: [] };
+        assert.deepEqual(JSON.parse(fixtureMergePr({ mergeRefusals: { 12: 'Head branch is out of date' } },
+            calls, { pullRequestId: 12 })), { message: 'Head branch is out of date' });
+        assert.deepEqual(JSON.parse(fixtureMergePr({}, calls, { pullRequestId: 13 })), { merged: true });
+        assert.equal(calls.merges.length, 2, 'merges recorded');
+        assert.deepEqual(fixturePrEntry({ number: 4, labels: ['a', 'b'], body: 'b', headRefName: 'ai/x' }),
+            { number: 4, labels: [{ name: 'a' }, { name: 'b' }], body: 'b', headRefName: 'ai/x' });
+        assert.deepEqual(fixturePrEntry({ number: 5 }),
+            { number: 5, labels: [], body: '', headRefName: '' }, 'label/body/head defaults');
     });
 });
 

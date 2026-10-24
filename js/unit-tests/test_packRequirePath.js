@@ -155,47 +155,115 @@ var ALLOWED_DEFERRED = {
 
 var ROOT = null; // repo root, resolved lazily from file_list('.')
 
-/** Repo-relative 'js/**.js' paths (the packable tree, unit-tests excluded). */
-function packedJsFiles() {
-    if (!ROOT) {
-        var top = file_list('.');
-        if (typeof top === 'string') top = JSON.parse(top);
-        var entries = ((top && top.entries) || []).map(function (e) {
-            return String(e).replace(/\\/g, '/');
-        });
-        for (var i = 0; i < entries.length; i++) {
-            var cut = entries[i].lastIndexOf('/');
-            if (cut > 0) { ROOT = entries[i].slice(0, cut); break; }
-        }
-        if (!ROOT) ROOT = '.';
+/** file_list payload → posix-normalized entry paths (json-or-object tolerant). */
+function fileListEntries(raw) {
+    if (typeof raw === 'string') raw = JSON.parse(raw);
+    return ((raw && raw.entries) || []).map(function (e) {
+        return String(e).replace(/\\/g, '/');
+    });
+}
+
+/** Memoized pack root: the first '.' entry carrying a parent directory. */
+function resolvePackRoot(list) {
+    if (ROOT) return ROOT;
+    var entries = fileListEntries(list('.'));
+    for (var i = 0; i < entries.length; i++) {
+        var cut = entries[i].lastIndexOf('/');
+        if (cut > 0) { ROOT = entries[i].slice(0, cut); break; }
     }
+    if (!ROOT) ROOT = '.';
+    return ROOT;
+}
+
+/** Depth-first walk of <root>/<dir>, collecting repo-relative .js file paths. */
+function walkJsFiles(list, root, dir, acc) {
+    var out = fileListEntries(list(root + '/' + dir));
+    for (var i = 0; i < out.length; i++) {
+        var abs = out[i];
+        var name = abs.slice(abs.lastIndexOf('/') + 1);
+        if (name.charAt(0) === '.') continue;
+        // file_list succeeds only on a directory — the probe tells
+        // files (null/error) from subdirectories (entries), since
+        // file_exists reports directories as existing too.
+        var childEntries = [];
+        try { childEntries = fileListEntries(list(abs)); } catch (e2) { childEntries = []; }
+        if (childEntries.length > 0) {
+            walkJsFiles(list, root, dir + '/' + name, acc);
+        } else if (/\.js$/.test(name)) {
+            acc.push(abs.slice(root.length + 1));
+        }
+    }
+}
+
+/**
+ * Repo-relative 'js/**.js' paths (the packable tree, unit-tests excluded).
+ * `lister` is injectable for characterization tests; production passes none
+ * and uses the file_list global (unchanged behavior).
+ */
+function packedJsFiles(lister) {
+    var list = lister || file_list;
+    var root = resolvePackRoot(list);
     var acc = [];
-    var acc = [];
-    (function walk(dir) {
-        var out = file_list(ROOT + '/' + dir);
-        if (typeof out === 'string') out = JSON.parse(out);
-        ((out && out.entries) || []).forEach(function (e) {
-            var abs = String(e).replace(/\\/g, '/');
-            var name = abs.slice(abs.lastIndexOf('/') + 1);
-            if (name.charAt(0) === '.') return;
-            // file_list succeeds only on a directory — the probe tells
-            // files (null/error) from subdirectories (entries), since
-            // file_exists reports directories as existing too.
-            var sub = null;
-            try { sub = file_list(abs); } catch (e2) { sub = null; }
-            if (sub && typeof sub === 'string') sub = JSON.parse(sub);
-            var childEntries = (sub && sub.entries) || [];
-            if (childEntries.length > 0) {
-                walk(dir + '/' + name);
-            } else if (/\.js$/.test(name)) {
-                acc.push(abs.slice(ROOT.length + 1));
-            }
-        });
-    })('js');
+    walkJsFiles(list, root, 'js', acc);
     return acc.filter(function (p) { return p.indexOf('js/unit-tests/') !== 0; });
 }
 
 suite('pack-runtime require resolution: repo-wide deferred pin (all packed js/ code)', function () {
+
+    test('characterization: the walk yields repo-relative js/ paths, unit-tests excluded (gh-1200)', function () {
+        var files = packedJsFiles();
+        assert.ok(files.length > 130, 'real packable tree seen (saw ' + files.length + ')');
+        var bad = [];
+        files.forEach(function (p) {
+            if (p.indexOf('js/') !== 0) bad.push('not js/-relative: ' + p);
+            if (p.indexOf('js/unit-tests/') === 0) bad.push('unit-tests leaked: ' + p);
+        });
+        assert.deepEqual(bad, [], 'every walked path is repo-relative js/ and never unit-tests');
+        assert.ok(files.indexOf('js/smAgent.js') !== -1, 'js/smAgent.js in the packable set');
+        assert.ok(files.indexOf('js/common/scm.js') !== -1, 'js/common/scm.js in the packable set');
+    });
+
+    test('characterization: synthetic-tree walk semantics — dirs recurse, dot-entries and non-js skip, files probe null, lister errors tolerated', function () {
+        var DIRS = {
+            '/repo': { entries: ['/repo/.hidden', '/repo/js'] },
+            '/repo/js': { entries: ['/repo/js/leaf.js', '/repo/js/sub', '/repo/js/.git', '/repo/js/notes.md', '/repo/js/empty'] },
+            '/repo/js/sub': { entries: ['/repo/js/sub/deep.js'] },
+            '/repo/js/sub/deep.js': null,          // a file: file_list returns null (not a directory)
+            '/repo/js/.git': { entries: ['/repo/js/.git/config'] }, // dot-entry: never probed
+            '/repo/js/empty': null,                // empty dir entry list → leaf, but not .js
+            '/repo/js/notes.md': null              // non-js leaf
+        };
+        var probed = [];
+        var list = function (p) {
+            probed.push(p);
+            if (p === '/repo/js/sub/deep.js') throw new Error('lister boom'); // error path → treated as file
+            var hit = DIRS[p.replace(/\\/g, '/')];
+            return hit === undefined ? null : JSON.stringify(hit);
+        };
+        // Direct walk against a fixed root: ROOT memo is bypassed via resolvePackRoot's own memo state —
+        // this suite only pins walkJsFiles semantics, so call packedJsFiles's parts exactly as it does.
+        var acc = [];
+        walkJsFiles(list, '/repo', 'js', acc);
+        assert.deepEqual(acc, ['js/leaf.js', 'js/sub/deep.js'],
+            'posix-normalized repo-relative .js leaves in walk order, dot-dirs and non-js skipped');
+        assert.ok(probed.indexOf('/repo/js/.git') === -1, 'dot-entries are never probed');
+    });
+
+    test('characterization: resolvePackRoot probes the listing at most once (memoized)', function () {
+        var rootProbes = 0;
+        var list = function (p) {
+            if (p === '.') {
+                rootProbes++;
+                return JSON.stringify({ entries: ['/workdir/js', '/workdir/README.md'] });
+            }
+            return null;
+        };
+        var first = resolvePackRoot(list);
+        var afterFirst = rootProbes;
+        var second = resolvePackRoot(list); // memoized: no additional '.' probe
+        assert.equal(rootProbes, afterFirst, 'no new root probe after memoization');
+        assert.equal(second, first, 'the memoized root is stable');
+    });
 
     test('every packed .js outside unit-tests carries zero deferred requires — except the pinned cycle-breaker', function () {
         var files = packedJsFiles();
