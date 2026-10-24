@@ -304,6 +304,100 @@ suite('agentWorkflowGraph', function() {
 
 });
 
+// ── gh-1227 CRAP — generate() branch characterization ────────────────────────
+// Locks every rule-shape branch (status in / status =, issuetype in / =,
+// no jql, targetStatus, skipIfLabel / skipIfLabels, addLabel, flat
+// params.rules) before the table/edge helpers are extracted.
+
+suite('agentWorkflowGraph — branch characterization (gh-1227)', function() {
+
+    function graphFor(rules, smShape) {
+        var sm = smShape || { params: { jobParams: { rules: rules } } };
+        var mock = makeMockFs({ 'agents/sm.json': JSON.stringify(sm) });
+        var generator = loadModule(
+            'js/agentWorkflowGraph.js',
+            makeRequire({ 'fs': mock.fs, 'path': makeMockPath() }),
+            {}
+        );
+        var result = generator.generate();
+        return { result: result, content: mock.calls.write[0].content };
+    }
+
+    test('status in (...) + issuetype in (...) parse into cells, nodes and edges', function() {
+        var out = graphFor([{
+            description: 'multi',
+            jql: "project = TS AND issuetype in ('Story', 'Bug') AND status in ('Ready For Development', 'In Rework')",
+            configFile: 'agents/story_development.json',
+            targetStatus: 'In Review',
+            skipIfLabel: 'sm_story_development_triggered',
+            addLabel: 'sm_story_development_triggered'
+        }]);
+        assert.equal(out.result.success, true);
+        assert.contains(out.content, 'Story, Bug');
+        assert.contains(out.content, 'Ready For Development, In Rework');
+        assert.contains(out.content,
+            'S_Ready_For_Development["Ready For Development"] --> A0_["story_development"]');
+        assert.contains(out.content,
+            'S_In_Rework["In Rework"] --> A0_["story_development"]');
+        assert.contains(out.content,
+            'A0_["story_development"] --> S_In_Review["In Review"]');
+        assert.contains(out.content, '`sm_story_development_triggered`');
+    });
+
+    test('status = ... / issuetype = ... single-value forms parse', function() {
+        var out = graphFor([{
+            description: 'single',
+            jql: "project = TS AND issuetype = 'Task' AND status = 'In Progress'",
+            configFile: 'agents/story_questions.json'
+        }]);
+        assert.contains(out.content, 'Task');
+        assert.contains(out.content, 'In Progress');
+        assert.contains(out.content, 'S_In_Progress["In Progress"]');
+    });
+
+    test('rule without jql renders empty type/status cells', function() {
+        var out = graphFor([{
+            description: 'nojql',
+            configFile: 'agents/nojql.json'
+        }]);
+        assert.contains(out.content, '| nojql |  |  |');
+    });
+
+    test('skipIfLabels array renders quoted, comma-joined', function() {
+        var out = graphFor([{
+            description: 'labels',
+            jql: "status = 'In Progress'",
+            configFile: 'agents/a.json',
+            skipIfLabels: ['lbl_one', 'lbl_two']
+        }]);
+        assert.contains(out.content, '`lbl_one`, `lbl_two`');
+    });
+
+    test('flat params.rules (legacy sm shape) still drives the graph', function() {
+        var out = graphFor([{
+            description: 'flat',
+            jql: "status = 'In Progress'",
+            configFile: 'agents/flat.json'
+        }], { params: { rules: [{
+            description: 'flat',
+            jql: "status = 'In Progress'",
+            configFile: 'agents/flat.json'
+        }] } });
+        assert.equal(out.result.rules, 1);
+        assert.contains(out.content, 'flat');
+    });
+
+    test('rule fields missing (no targetStatus/skip labels/addLabel) render empty cells', function() {
+        var out = graphFor([{
+            description: 'plain',
+            jql: "status = 'In Progress'",
+            configFile: 'agents/plain.json'
+        }]);
+        assert.ok(out.content.indexOf('--> S_In_Progress["In Progress"]') === -1,
+            'no target edge without targetStatus');
+    });
+});
+
 suite('collectArtifacts', function() {
     function generator() {
         var mock = makeMockFs({ 'agents/js/agentDocGenerator.js': '// probe' });

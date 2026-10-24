@@ -64,11 +64,55 @@ function escapeMdCell(text) {
     return String(text || '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
 }
 
+// ── gh-1227 CRAP extraction — pure per-rule pieces of generate() ─────────────
+
+// SM rules of a parsed sm config: jobParams.rules (canonical) or the flat
+// legacy params.rules — [] when neither link exists.
+function rulesOfSm(sm) {
+    var params = (sm && sm.params) || {};
+    return (params.jobParams && params.jobParams.rules) || params.rules || [];
+}
+
+// One rule's diagram edges: every source status feeds the agent, and the
+// agent feeds the target status when the rule declares one.
+function appendRuleEdges(diagramEdges, usedStatuses, rule, agent, sourceStatuses) {
+    sourceStatuses.forEach(function(status) {
+        usedStatuses[status] = true;
+        diagramEdges.push('    ' + statusNode(status) + ' --> ' + agent);
+    });
+
+    if (rule.targetStatus) {
+        usedStatuses[rule.targetStatus] = true;
+        diagramEdges.push('    ' + agent + ' --> ' + statusNode(rule.targetStatus));
+    }
+}
+
+// The Skip labels cell: single label first, then the list form.
+function skipLabelsCell(rule) {
+    if (rule.skipIfLabel) return '`' + rule.skipIfLabel + '`';
+    if (rule.skipIfLabels && rule.skipIfLabels.length) {
+        return rule.skipIfLabels.map(function(l) { return '`' + l + '`'; }).join(', ');
+    }
+    return '';
+}
+
+// One rule's markdown table row (the cells stay space-padded by the join).
+function ruleTableRow(rule, idx, issueTypes, sourceStatuses) {
+    return [
+        idx + 1,
+        escapeMdCell(rule.description),
+        issueTypes.join(', '),
+        sourceStatuses.join(', '),
+        '`' + rule.configFile + '`',
+        skipLabelsCell(rule),
+        rule.addLabel ? '`' + rule.addLabel + '`' : '',
+        rule.targetStatus || '—'
+    ].join(' | ');
+}
+
 function generate() {
     var sm = readJson(SM_JSON);
-    var rules = ((sm && sm.params && sm.params.jobParams && sm.params.jobParams.rules) ||
-                 (sm && sm.params && sm.params.rules) ||
-                 []);
+    var rules = rulesOfSm(sm);
 
     var lines = [];
     lines.push('# dmtools-agents workflow (generated)');
@@ -94,32 +138,8 @@ function generate() {
         var agent = agentNode(rule.configFile, idx);
         usedAgents[agent] = true;
 
-        sourceStatuses.forEach(function(status) {
-            usedStatuses[status] = true;
-            diagramEdges.push('    ' + statusNode(status) + ' --> ' + agent);
-        });
-
-        if (rule.targetStatus) {
-            usedStatuses[rule.targetStatus] = true;
-            diagramEdges.push('    ' + agent + ' --> ' + statusNode(rule.targetStatus));
-        }
-
-        var skipLabels = '';
-        if (rule.skipIfLabel) skipLabels = '`' + rule.skipIfLabel + '`';
-        else if (rule.skipIfLabels && rule.skipIfLabels.length) {
-            skipLabels = rule.skipIfLabels.map(function(l) { return '`' + l + '`'; }).join(', ');
-        }
-
-        lines.push([
-            idx + 1,
-            escapeMdCell(rule.description),
-            issueTypes.join(', '),
-            sourceStatuses.join(', '),
-            '`' + rule.configFile + '`',
-            skipLabels,
-            rule.addLabel ? '`' + rule.addLabel + '`' : '',
-            rule.targetStatus || '—'
-        ].join(' | '));
+        appendRuleEdges(diagramEdges, usedStatuses, rule, agent, sourceStatuses);
+        lines.push(ruleTableRow(rule, idx, issueTypes, sourceStatuses));
     });
 
     lines.push('');
@@ -149,7 +169,13 @@ function generate() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { generate };
+    module.exports = {
+        generate: generate,
+        rulesOfSm: rulesOfSm,
+        appendRuleEdges: appendRuleEdges,
+        skipLabelsCell: skipLabelsCell,
+        ruleTableRow: ruleTableRow
+    };
 }
 
 if (require.main === module) {
