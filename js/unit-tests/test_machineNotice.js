@@ -65,7 +65,7 @@ function loadGithubHelpers(mocks) {
             './reviewThreadInventory.js': loadReviewThreadInventory(),
             './ci.js': loadModule('js/common/ci.js'),
             './ciViolations.js': loadModule('js/common/ciViolations.js'),
-            './githubReviewFetch.js': githubReviewFetchReal(),
+            './githubReviewFetch.js': githubReviewFetchReal(mocks),
         }),
         mocks || {}
     );

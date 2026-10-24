@@ -345,7 +345,7 @@ function scmReal(mocks) {
         makeRequire({
             './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js',
                 makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })),
-            './githubReviewFetch.js': githubReviewFetchReal(),
+            './githubReviewFetch.js': githubReviewFetchReal(mocks),
             './pullRequest.js': pullRequestReal(),
             './loseJson.js': loseJsonReal()
         }), mocks);
@@ -447,19 +447,19 @@ var pullRequestReal = function () {
     return loadModule('js/common/pullRequest.js',
         makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js', makeRequire({}), {}) }), {});
 };
-var githubReviewFetchReal = function () {
+var githubReviewFetchReal = function (mocks) {
     var machineNotice = loadModule('js/common/machineNotice.js', makeRequire({}), {});
     return loadModule('js/common/githubReviewFetch.js',
         makeRequire({ './machineNotice.js': machineNotice,
                       './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js',
-                          makeRequire({ './machineNotice.js': machineNotice }), {}) }), {});
+                          makeRequire({ './machineNotice.js': machineNotice }), {}) }), mocks || {});
 };
 var scmReal = function (mocks) {
     return loadModule('js/common/scm.js',
         makeRequire({
             './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js',
                 makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js', makeRequire({}), {}) }), {}),
-            './githubReviewFetch.js': githubReviewFetchReal(),
+            './githubReviewFetch.js': githubReviewFetchReal(mocks),
             './pullRequest.js': pullRequestReal(),
             './loseJson.js': loseJsonReal()
         }), mocks);

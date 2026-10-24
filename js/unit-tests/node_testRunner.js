@@ -347,12 +347,13 @@ function reviewVerdictsReal() {
         makeRequire({ './machineAuthor.js': machineAuthorReal() }));
 }
 
-function githubReviewFetchReal() {
+function githubReviewFetchReal(mocks) {
     var machineNotice = loadModule('agents/js/common/machineNotice.js');
     return loadModule('agents/js/common/githubReviewFetch.js',
         makeRequire({ './machineNotice.js': machineNotice,
                       './reviewThreadInventory.js': loadModule('agents/js/common/reviewThreadInventory.js',
-                          makeRequire({ './machineNotice.js': machineNotice })) }));
+                          makeRequire({ './machineNotice.js': machineNotice })) }),
+        mocks || {});
 }
 
 function pullRequestReal() {
@@ -366,7 +367,7 @@ function scmReal(mocks) {
         makeRequire({
             './reviewThreadInventory.js': loadModule('agents/js/common/reviewThreadInventory.js',
                 makeRequire({ './machineNotice.js': loadModule('agents/js/common/machineNotice.js') })),
-            './githubReviewFetch.js': githubReviewFetchReal(),
+            './githubReviewFetch.js': githubReviewFetchReal(mocks),
             './pullRequest.js': pullRequestReal(),
             './loseJson.js': loseJsonReal()
         }), mocks);
