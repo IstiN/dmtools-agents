@@ -187,9 +187,8 @@ function linkToSource(createdKey, sourceKey, relationship) {
     tracker.linkIssues(createdKey, sourceKey, relationship);
 }
 
-function linkStory(createdKey, params, config, isExisting) {
-    if (!createdKey) return;
-
+/** Build the configured link list: source-ticket link first, then additionalLinks. */
+function collectStoryLinks(config) {
     var links = [];
 
     if (config.linkToSourceRelationship) {
@@ -204,19 +203,32 @@ function linkStory(createdKey, params, config, isExisting) {
         links = links.concat(config.additionalLinks);
     }
 
+    return links;
+}
+
+/** Apply one configured link; invalid/inapplicable links are skipped, failures logged. */
+function applyStoryLink(createdKey, link, params, isExisting) {
+    link = link || {};
+    if (!link.relationship) return;
+    if (isExisting && link.includeExisting === false) return;
+
+    var targetKey = link.targetKey || resolveTargetKey(link.target, params);
+    if (!targetKey) return;
+
+    try {
+        linkToSource(createdKey, targetKey, link.relationship);
+    } catch (error) {
+        console.warn('Failed to create link from ' + createdKey + ' to ' + targetKey + ':', error);
+    }
+}
+
+function linkStory(createdKey, params, config, isExisting) {
+    if (!createdKey) return;
+
+    var links = collectStoryLinks(config);
+
     for (var i = 0; i < links.length; i++) {
-        var link = links[i] || {};
-        if (!link.relationship) continue;
-        if (isExisting && link.includeExisting === false) continue;
-
-        var targetKey = link.targetKey || resolveTargetKey(link.target, params);
-        if (!targetKey) continue;
-
-        try {
-            linkToSource(createdKey, targetKey, link.relationship);
-        } catch (error) {
-            console.warn('Failed to create link from ' + createdKey + ' to ' + targetKey + ':', error);
-        }
+        applyStoryLink(createdKey, links[i], params, isExisting);
     }
 }
 
@@ -680,5 +692,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action: action };
+    module.exports = { action: action, linkStory: linkStory, collectStoryLinks: collectStoryLinks, applyStoryLink: applyStoryLink };
 }
