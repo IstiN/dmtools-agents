@@ -638,34 +638,79 @@ function _normalizeGitLabState(state) {
     return state || 'opened';
 }
 
+// gh-1194: the branch ladder became a lookup table (CRAP ratchet) — same
+// mapping, unmapped statuses keep the ORIGINAL spelling (not lowercased).
+var GITLAB_PIPELINE_STATUS_MAP = {
+    failure: 'failed',
+    failed: 'failed',
+    success: 'success',
+    succeeded: 'success',
+    in_progress: 'running',
+    queued: 'pending',
+    pending: 'pending',
+    waiting: 'manual'
+};
+
 function _normalizeGitLabPipelineStatus(status) {
     if (!status) return null;
     var s = String(status).toLowerCase();
-    if (s === 'failure' || s === 'failed') return 'failed';
-    if (s === 'success' || s === 'succeeded') return 'success';
-    if (s === 'in_progress') return 'running';
-    if (s === 'queued' || s === 'pending') return 'pending';
-    if (s === 'waiting') return 'manual';
+    // hasOwnProperty guard: status strings like 'constructor' must pass
+    // through unchanged, never resolve through Object.prototype.
+    if (Object.prototype.hasOwnProperty.call(GITLAB_PIPELINE_STATUS_MAP, s)) {
+        return GITLAB_PIPELINE_STATUS_MAP[s];
+    }
     return status;
+}
+
+// gh-1194: _normalizeGitLabMr field mappers (CRAP ratchet) — pure reads of
+// one MR payload, tolerant of both the GitLab-native and the GitHub-ported
+// shapes. Order of the || chains preserved exactly.
+function _mrSourceBranch(mr) {
+    return mr.source_branch || (mr.head && mr.head.ref) || '';
+}
+
+function _mrTargetBranch(mr) {
+    return mr.target_branch || (mr.base && mr.base.ref) || '';
+}
+
+function _mrNumber(mr) {
+    return mr.iid || mr.number || mr.id;
+}
+
+function _mrHtmlUrl(mr) {
+    return mr.web_url || mr.html_url || null;
+}
+
+function _mrMergeableState(mr) {
+    return mr.detailed_merge_status || mr.merge_status || null;
+}
+
+function _mrHeadSha(mr) {
+    return mr.sha || (mr.diff_refs && mr.diff_refs.head_sha);
+}
+
+function _mrHead(mr, ref) {
+    return Object.assign({}, mr.head || {}, { ref: ref, sha: _mrHeadSha(mr) });
+}
+
+function _mrBase(mr, ref) {
+    return Object.assign({}, mr.base || {}, { ref: ref, sha: mr.diff_refs && mr.diff_refs.base_sha });
 }
 
 function _normalizeGitLabMr(mr) {
     if (!mr) return mr;
-    var sourceBranch = mr.source_branch || (mr.head && mr.head.ref) || '';
-    var targetBranch = mr.target_branch || (mr.base && mr.base.ref) || '';
-    var id = mr.iid || mr.number || mr.id;
-    var htmlUrl = mr.web_url || mr.html_url || null;
-    var labels = mr.labels || [];
+    var sourceBranch = _mrSourceBranch(mr);
+    var targetBranch = _mrTargetBranch(mr);
     return Object.assign({}, mr, {
-        number: id,
-        html_url: htmlUrl,
+        number: _mrNumber(mr),
+        html_url: _mrHtmlUrl(mr),
         state: mr.state,
         merged_at: mr.merged_at || null,
         mergeable: !(mr.has_conflicts === true),
-        mergeable_state: mr.detailed_merge_status || mr.merge_status || null,
-        head: Object.assign({}, mr.head || {}, { ref: sourceBranch, sha: mr.sha || (mr.diff_refs && mr.diff_refs.head_sha) }),
-        base: Object.assign({}, mr.base || {}, { ref: targetBranch, sha: mr.diff_refs && mr.diff_refs.base_sha }),
-        labels: labels
+        mergeable_state: _mrMergeableState(mr),
+        head: _mrHead(mr, sourceBranch),
+        base: _mrBase(mr, targetBranch),
+        labels: mr.labels || []
     });
 }
 
@@ -1435,58 +1480,87 @@ function _createAdoProvider(repository) {
     };
 }
 
+// gh-1194: remote-URL line selection + per-provider parsers (CRAP ratchet) —
+// the same match order per provider, split into pure helpers.
+function _remoteUrlLine(rawUrl) {
+    return rawUrl.split('\n')
+        .map(function(l) { return l.trim(); })
+        .filter(function(l) {
+            return l.indexOf('github.com') !== -1 ||
+                l.indexOf('gitlab') !== -1 ||
+                l.indexOf('gitlab.example.com') !== -1 ||
+                l.indexOf('dev.azure.com') !== -1 ||
+                l.indexOf('ssh.dev.azure.com') !== -1;
+        })[0] || '';
+}
+
+function _adoRepoFromRemote(remoteUrl) {
+    var match = remoteUrl.match(/dev\.azure\.com[/:]([^/]+)\/([^/]+)\/_git\/([^/]+)/);
+    if (match) return { owner: match[1], repo: match[3] };
+    match = remoteUrl.match(/ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+)/);
+    if (match) return { owner: match[1], repo: match[3] };
+    return null;
+}
+
+function _gitlabRepoFromRemote(remoteUrl) {
+    var normalized = remoteUrl
+        .replace(/^git@([^:]+):/, 'https://$1/')
+        .replace(/^ssh:\/\/git@([^/]+)\//, 'https://$1/');
+    var glMatch = normalized.match(/https?:\/\/[^/]+\/(.+)\/([^/?#\s]+?)(?:\.git)?(?:[?#].*)?$/);
+    if (glMatch) return { owner: glMatch[1], repo: glMatch[2].replace(/\.git$/, '') };
+    return null;
+}
+
+function _githubRepoFromRemote(remoteUrl) {
+    var ghMatch = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/?#\s]+)/);
+    if (ghMatch) return { owner: ghMatch[1], repo: ghMatch[2].replace(/\.git$/, '') };
+    return null;
+}
+
 function _detectRepoFromGitRemote(provider) {
     try {
         var rawUrl = cli_execute_command({ command: 'git config --get remote.origin.url' }) || '';
-        var remoteUrl = rawUrl.split('\n')
-            .map(function(l) { return l.trim(); })
-            .filter(function(l) {
-                return l.indexOf('github.com') !== -1 ||
-                    l.indexOf('gitlab') !== -1 ||
-                    l.indexOf('gitlab.example.com') !== -1 ||
-                    l.indexOf('dev.azure.com') !== -1 ||
-                    l.indexOf('ssh.dev.azure.com') !== -1;
-            })[0] || '';
-        if (provider === 'ado') {
-            var match = remoteUrl.match(/dev\.azure\.com[/:]([^/]+)\/([^/]+)\/_git\/([^/]+)/);
-            if (match) return { owner: match[1], repo: match[3] };
-            match = remoteUrl.match(/ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+)/);
-            if (match) return { owner: match[1], repo: match[3] };
-        } else if (provider === 'gitlab') {
-            var normalized = remoteUrl
-                .replace(/^git@([^:]+):/, 'https://$1/')
-                .replace(/^ssh:\/\/git@([^/]+)\//, 'https://$1/');
-            var glMatch = normalized.match(/https?:\/\/[^/]+\/(.+)\/([^/?#\s]+?)(?:\.git)?(?:[?#].*)?$/);
-            if (glMatch) return { owner: glMatch[1], repo: glMatch[2].replace(/\.git$/, '') };
-        } else {
-            var ghMatch = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/?#\s]+)/);
-            if (ghMatch) return { owner: ghMatch[1], repo: ghMatch[2].replace(/\.git$/, '') };
-        }
+        var remoteUrl = _remoteUrlLine(rawUrl);
+        if (provider === 'ado') return _adoRepoFromRemote(remoteUrl);
+        if (provider === 'gitlab') return _gitlabRepoFromRemote(remoteUrl);
+        return _githubRepoFromRemote(remoteUrl);
     } catch (e) {}
     return null;
 }
 
-function createScm(config) {
-    var provider = (config && config.scm && config.scm.provider) || 'github';
-    var repo  = (config && config.repository && config.repository.repo)  || '';
-    var owner = (config && config.repository && config.repository.owner) || '';
+// gh-1194: createScm config readers + detect merge (CRAP ratchet).
+function _scmProviderOf(config) {
+    return (config && config.scm && config.scm.provider) || 'github';
+}
 
-    // Auto-detect from git remote when not explicitly configured
-    if (!owner || !repo) {
-        var detected = _detectRepoFromGitRemote(provider);
-        if (detected) {
-            if (!owner) owner = detected.owner;
-            if (!repo)  repo  = detected.repo;
-        }
-    }
+function _scmOwnerOf(config) {
+    return (config && config.repository && config.repository.owner) || '';
+}
+
+function _scmRepoOf(config) {
+    return (config && config.repository && config.repository.repo) || '';
+}
+
+// Auto-detect from git remote when not explicitly configured — only the
+// missing side is filled; a failed detection leaves the input untouched.
+function _applyDetectedRepo(owner, repo, provider) {
+    if (owner && repo) return { owner: owner, repo: repo };
+    var detected = _detectRepoFromGitRemote(provider);
+    if (!detected) return { owner: owner, repo: repo };
+    return { owner: owner || detected.owner, repo: repo || detected.repo };
+}
+
+function createScm(config) {
+    var provider = _scmProviderOf(config);
+    var resolved = _applyDetectedRepo(_scmOwnerOf(config), _scmRepoOf(config), provider);
 
     if (provider === 'ado') {
-        return _createAdoProvider(repo);
+        return _createAdoProvider(resolved.repo);
     }
     if (provider === 'gitlab') {
-        return _createGitLabProvider(owner, repo);
+        return _createGitLabProvider(resolved.owner, resolved.repo);
     }
-    return _createGithubProvider(owner, repo);
+    return _createGithubProvider(resolved.owner, resolved.repo);
 }
 
 module.exports = {
@@ -1500,6 +1574,25 @@ module.exports = {
     _normalizeGithubCommitStatus: _normalizeGithubCommitStatus,
     _getLegacyGithubCommitStatuses: _getLegacyGithubCommitStatuses,
     _unwrapGithubCheckRuns: _unwrapGithubCheckRuns,
+    // gh-1194: normalize/detect internals exposed as testable pure helpers
+    _normalizeGitLabPipelineStatus: _normalizeGitLabPipelineStatus,
+    _normalizeGitLabMr: _normalizeGitLabMr,
+    _mrSourceBranch: _mrSourceBranch,
+    _mrTargetBranch: _mrTargetBranch,
+    _mrNumber: _mrNumber,
+    _mrHtmlUrl: _mrHtmlUrl,
+    _mrMergeableState: _mrMergeableState,
+    _mrHead: _mrHead,
+    _mrBase: _mrBase,
+    _remoteUrlLine: _remoteUrlLine,
+    _adoRepoFromRemote: _adoRepoFromRemote,
+    _gitlabRepoFromRemote: _gitlabRepoFromRemote,
+    _githubRepoFromRemote: _githubRepoFromRemote,
+    _detectRepoFromGitRemote: _detectRepoFromGitRemote,
+    _scmProviderOf: _scmProviderOf,
+    _scmOwnerOf: _scmOwnerOf,
+    _scmRepoOf: _scmRepoOf,
+    _applyDetectedRepo: _applyDetectedRepo,
     // gh-981: GitHub/GitLab provider internals exposed as testable pure helpers
     _githubGetDiffText: _githubGetDiffText,
     _githubReplyToThread: _githubReplyToThread,

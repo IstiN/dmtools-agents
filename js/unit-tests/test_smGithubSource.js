@@ -3676,3 +3676,367 @@ suite('sm github source — matchesGuards guard table (direct, provider-free)', 
             'crossRepo: a fork head passes inside matchesGuards');
     });
 });
+
+// ── gh-1194 CRAP characterization: queryIssues / queryPrs split helpers ──────
+// Direct tests of the pure stage helpers the gh-1194 extraction introduces
+// (same pattern as the gh-1009 / gh-1000 helper suites above). The end-to-end
+// paths through query() are pinned by the suites above; these pin the branch
+// tables of each extracted stage so the split cannot move a decision.
+suite('sm github source — gh-1194 query split helpers', function () {
+
+    function srcLoad(tools) {
+        // Standalone loader (suites above keep their own twins): the real
+        // smAsync so the fan-out test can drive the mocked runAsync, and a
+        // provider stub the helpers under test never call.
+        var providerStub = { createSmProvider: function () { return {}; } };
+        var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
+            './common/smProvider.js': providerStub
+        }), tools || {});
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': Object.assign({ createSmProvider: function () { return {}; } }, {
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
+            }),
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+        }), tools || {});
+    }
+
+    // Sync fake of the Dart runAsync (same trick as the batching suite above):
+    // the eval'd worker runs in THIS scope with the mocked tools visible.
+    function fakeRunAsync(tools, requireFn) {
+        var decl = 'var require = _r_;\n';
+        Object.keys(tools).forEach(function (k) {
+            decl += 'var ' + k + ' = _t_["' + k + '"];\n';
+        });
+        var factory = eval(
+            '(function(_t_, _r_) {\n' + decl +
+            '    var fake = function (fn, args) {\n' +
+            '        return { wait: function () { return fn(args); } };\n' +
+            '    };\n' +
+            "    fake.all = function (jobs) {\n" +
+            '        return { wait: function () { return jobs.map(function (j) { return j.wait(); }); } };\n' +
+            '    };\n' +
+            '    return fake;\n' +
+            '})'
+        );
+        return factory(tools, requireFn);
+    }
+
+    test('_issueSearchDescriptors: labels in rule order + assignee descriptor', function () {
+        var gt = srcLoad();
+        var out = gt._issueSearchDescriptors({ labels: ['a', 'b'] }, 'the-bot');
+        assert.deepEqual(out.descriptors, [
+            { kind: 'label', label: 'a' },
+            { kind: 'label', label: 'b' }
+        ]);
+        assert.equal(out.assigneeQuery, null);
+
+        out = gt._issueSearchDescriptors({ labels: ['a'], assignee: 'the-bot' }, 'the-bot');
+        assert.deepEqual(out.descriptors, [
+            { kind: 'label', label: 'a' },
+            { kind: 'assignee' }
+        ]);
+        assert.equal(out.assigneeQuery, 'the-bot');
+    });
+
+    test('_issueSearchDescriptors: no labels + {machineAuthor} knob (gh-944)', function () {
+        var gt = srcLoad();
+        var out = gt._issueSearchDescriptors({ assignee: '{machineAuthor}' }, 'deploy-bot');
+        assert.deepEqual(out.descriptors, [{ kind: 'assignee' }]);
+        assert.equal(out.assigneeQuery, 'deploy-bot');
+
+        // Fail-closed: unresolvable knob → no descriptor, no assignee scan.
+        out = gt._issueSearchDescriptors({ assignee: '{machineAuthor}' }, null);
+        assert.deepEqual(out.descriptors, []);
+        assert.equal(out.assigneeQuery, null);
+
+        out = gt._issueSearchDescriptors({}, 'deploy-bot');
+        assert.deepEqual(out.descriptors, []);
+    });
+
+    test('_runIssueSearch: single descriptor keeps the sequential path (searchOne)', function () {
+        var gt = srcLoad();
+        var seen = [];
+        var searchOne = function (d) { seen.push(d); return { descriptor: d, items: [] }; };
+        var out = gt._runIssueSearch([{ kind: 'label', label: 'a' }], searchOne,
+            { owner: 'o', repo: 'r' }, null);
+        assert.deepEqual(seen, [{ kind: 'label', label: 'a' }]);
+        assert.deepEqual(out, [{ descriptor: { kind: 'label', label: 'a' }, items: [] }]);
+    });
+
+    test('_runIssueSearch: 2+ descriptors fan out through smAsync with repo+assignee args', function () {
+        var tools = {
+            github_search_issues: function (args) {
+                return { items: [{ number: 1, labels: [] }] };
+            }
+        };
+        var fake = fakeRunAsync(tools, makeRequire({
+            './common/smProvider.js': { createSmProvider: function () { return {}; } }
+        }));
+        var gt = srcLoad(Object.assign({ runAsync: fake }, tools));
+        var out = gt._runIssueSearch(
+            [{ kind: 'label', label: 'a' }, { kind: 'assignee' }],
+            function (d) { throw new Error('sequential path must not run'); },
+            { owner: 'o', repo: 'r' }, 'bot');
+        assert.deepEqual(out, [
+            { descriptor: { kind: 'label', label: 'a' }, items: [{ number: 1, labels: [] }] },
+            { descriptor: { kind: 'assignee' }, items: [{ number: 1, labels: [] }] }
+        ]);
+    });
+
+    test('_collectIssueItems: dedupe by number, first descriptor wins, _raw only for labels', function () {
+        var gt = srcLoad();
+        var items = gt._collectIssueItems([
+            { descriptor: { kind: 'label', label: 'a' },
+              items: [{ number: 7, labels: [{ name: 'a' }] }, { number: 8, labels: [] }] },
+            { descriptor: { kind: 'assignee' },
+              items: [{ number: 8, labels: [] }, { number: 9, labels: [] }] }
+        ]);
+        assert.deepEqual(items, [
+            { key: 'gh-7', labels: ['a'], pr: null, issueNumber: 7, prNumber: null,
+              _raw: { number: 7, labels: [{ name: 'a' }] } },
+            { key: 'gh-8', labels: [], pr: null, issueNumber: 8, prNumber: null,
+              _raw: { number: 8, labels: [] } },
+            { key: 'gh-9', labels: [], pr: null, issueNumber: 9, prNumber: null }
+        ]);
+    });
+
+    test('_applyIssuePrRef: OPEN item carries the live status; other state gets the closed stub', function () {
+        var gt = srcLoad();
+        var open = gt._applyIssuePrRef(
+            { key: 'gh-7', pr: null, issueNumber: 7, prNumber: null },
+            { number: 12, state: 'OPEN' },
+            { number: 12, state: 'open', checks: 'ok', branch: 'ai/gh-7' });
+        assert.deepEqual(open, { key: 'gh-7', pr: { number: 12, state: 'open', checks: 'ok', branch: 'ai/gh-7' },
+                                 issueNumber: 7, prNumber: 12, branch: 'ai/gh-7' });
+
+        // A status payload without a branch → branch: '' (still set).
+        var noBranch = gt._applyIssuePrRef(
+            { issueNumber: 8, prNumber: null, pr: null }, { number: 13, state: 'OPEN' }, { number: 13 });
+        assert.equal(noBranch.branch, '');
+
+        var closed = gt._applyIssuePrRef(
+            { issueNumber: 9, prNumber: null, pr: null }, { number: 14, state: 'MERGED' }, null);
+        assert.deepEqual(closed, { issueNumber: 9, prNumber: 14,
+            pr: { number: 14, state: 'MERGED', checks: 'none', mergeState: 'UNKNOWN', mergeable: null } });
+
+        var none = gt._applyIssuePrRef({ issueNumber: 10, prNumber: null, pr: null }, null, null);
+        assert.deepEqual(none, { issueNumber: 10, prNumber: null, pr: null });
+    });
+
+    test('_enrichIssueItemsSequential: findPr/prStatus per item, stub for non-OPEN', function () {
+        var calls = [];
+        var provider = {
+            findPr: function (n, prefix) {
+                calls.push(['findPr', n, prefix]);
+                return n === 7 ? { number: 12, state: 'OPEN' } : (n === 8 ? { number: 13, state: 'CLOSED' } : null);
+            },
+            prStatus: function (n) { calls.push(['prStatus', n]); return { number: n, branch: 'b' + n }; }
+        };
+        var gt = srcLoad();
+        var out = gt._enrichIssueItemsSequential(
+            [{ issueNumber: 7, pr: null }, { issueNumber: 8, pr: null }, { issueNumber: 9, pr: null }],
+            provider, 'ai/');
+        assert.deepEqual(calls, [['findPr', 7, 'ai/'], ['prStatus', 12], ['findPr', 8, 'ai/'], ['findPr', 9, 'ai/']]);
+        assert.equal(out[0].branch, 'b12');
+        assert.deepEqual(out[1].pr, { number: 13, state: 'CLOSED', checks: 'none', mergeState: 'UNKNOWN', mergeable: null });
+        assert.deepEqual(out[2].pr, null, 'no linked PR → status untouched');
+    });
+
+    test('_visiblePrItems: blocked hold hides parked items unless the rule opts in (gh-1140)', function () {
+        var gt = srcLoad();
+        var parked = [
+            { prNumber: 1, labels: [] },
+            { prNumber: 2, labels: ['blocked', 'ai_dev'] }
+        ];
+        assert.deepEqual(gt._visiblePrItems({}, parked), [parked[0]],
+            'default freeze: parked items are invisible to every rule');
+        assert.deepEqual(gt._visiblePrItems({ allowBlockedItems: true }, parked), [parked[0], parked[1]],
+            'gh-1140 opt-in: the guest-transplant lane sees its parked sources');
+        var clean = [{ prNumber: 1, labels: ['x'] }];
+        assert.deepEqual(gt._visiblePrItems({}, clean), clean);
+    });
+
+    test('_prLabelWanted / _prLabelForbidden / _prBranchPrefixOk branch tables', function () {
+        var gt = srcLoad();
+        assert.equal(gt._prLabelWanted({}, ['x']), true, 'no labels filter → keep');
+        assert.equal(gt._prLabelWanted({ labels: ['a'] }, ['a', 'b']), true);
+        assert.equal(gt._prLabelWanted({ labels: ['a'] }, ['b']), false);
+        assert.equal(gt._prLabelForbidden({}, []), false, 'no notLabels → keep');
+        assert.equal(gt._prLabelForbidden({ notLabels: ['a'] }, ['b']), false);
+        assert.equal(gt._prLabelForbidden({ notLabels: ['a'] }, ['a']), true);
+        assert.equal(gt._prBranchPrefixOk({}, { branch: 'x' }), true, 'no prefix → keep');
+        assert.equal(gt._prBranchPrefixOk({ branchPrefix: 'ai/' }, { branch: 'ai/gh-1' }), true);
+        assert.equal(gt._prBranchPrefixOk({ branchPrefix: 'ai/' }, { branch: 'bug/x' }), false);
+        assert.equal(gt._prBranchPrefixOk({ branchPrefix: 'ai/' }, {}), false, 'missing branch fails the prefix');
+    });
+
+    test('_prQueryGuardsFail: the cheap chain rejects in order (characterization)', function () {
+        var gt = srcLoad();
+        var item = { labels: ['lanes'], draft: false, branch: 'ai/gh-1' };
+        assert.equal(gt._prQueryGuardsFail(item, {}), false, 'empty query never fails');
+        assert.equal(gt._prQueryGuardsFail(item, { labels: ['lanes'] }), false);
+        assert.equal(gt._prQueryGuardsFail(item, { labels: ['other'] }), true, 'label miss fails');
+        assert.equal(gt._prQueryGuardsFail(item, { notLabels: ['nope'] }), false);
+        assert.equal(gt._prQueryGuardsFail(item, { notLabels: ['lanes'] }), true, 'forbidden label fails');
+        assert.equal(gt._prQueryGuardsFail(item, { draft: false }), false);
+        assert.equal(gt._prQueryGuardsFail({ labels: [], draft: true }, { draft: false }), true, 'draft fails');
+        assert.equal(gt._prQueryGuardsFail(item, { branchPrefix: 'ai/' }), false);
+        assert.equal(gt._prQueryGuardsFail(item, { branchPrefix: 'bug/' }), true, 'prefix mismatch fails');
+        // 'blocked' DOES fail the cheap chain (the parked freeze is total —
+        // fa #939); the gh-1140 opt-in lets the guest-transplant lane through.
+        assert.equal(gt._prQueryGuardsFail({ labels: ['blocked'] }, {}), true,
+            'parked item fails the cheap chain');
+        assert.equal(gt._prQueryGuardsFail({ labels: ['blocked', 'ai_dev'] }, { allowBlockedItems: true }), false,
+            'gh-1140 opt-in keeps the parked sources visible');
+    });
+
+    test('_applyQueryMutex: inert without q.mutex, global form below cap keeps items', function () {
+        var gt = srcLoad();
+        var items = [{ prNumber: 1, labels: [] }];
+        assert.equal(gt._applyQueryMutex({}, items), items, 'no mutex → untouched list');
+        // Global form (the defer path is _applyMutexFilter's job) — holders below cap change nothing.
+        var armed = [{ prNumber: 1, labels: ['ai_validating'] }, { prNumber: 2, labels: [] }];
+        assert.deepEqual(gt._applyQueryMutex({ mutex: 'ai_validating' }, armed), armed);
+    });
+
+    test('_applyQueryMutex: exclude-self re-filters through the same helper (idempotent 2nd pass)', function () {
+        var gt = srcLoad();
+        var q = { mutex: 'ai_validating', mutexExcludeSelf: true };
+        // Candidates 1+2 self-hold (kept — a leaked stack drains oldest-first);
+        // candidate 3 does not hold and others do → deferred.
+        var items = [
+            { prNumber: 1, labels: ['ai_validating'] },
+            { prNumber: 2, labels: ['ai_validating'] },
+            { prNumber: 3, labels: [] }
+        ];
+        var out = gt._applyQueryMutex(q, items);
+        assert.deepEqual(out, [items[0], items[1]],
+            'self-holders survive; the non-holder defers while the stack holds');
+    });
+
+    test('_fifoSliceIssues: FIFO by issue number then limit slice', function () {
+        var gt = srcLoad();
+        var out = gt._fifoSliceIssues(
+            [{ issueNumber: 30 }, { issueNumber: 10 }, { issueNumber: 20 }], 2);
+        assert.deepEqual(out, [{ issueNumber: 10 }, { issueNumber: 20 }]);
+        assert.deepEqual(gt._fifoSliceIssues([{ issueNumber: 1 }], 5).length, 1);
+        assert.deepEqual(gt._fifoSliceIssues([], 5), []);
+        // missing numbers sort as 0
+        var missing = gt._fifoSliceIssues([{ issueNumber: 1 }, {}], 2);
+        assert.deepEqual(missing, [{}, { issueNumber: 1 }]);
+    });
+});
+
+// gh-1194: the parallel issue-enrichment absorb — snapshot shipped to every
+// worker, OPEN statuses written back through the provider's memo hook when
+// present (and skipped without it), closed stubs absorbed in place.
+suite('sm github source — gh-1194 parallel issue enrichment', function () {
+
+    function srcLoad(tools) {
+        // The enrichment worker (ISSUE_ENRICH_WORKER_SOURCE) requires
+        // './common/smProvider.js' against THIS module's require map — the
+        // stub must carry findPr (the suite never wires a resolvable PR).
+        var providerStub = { createSmProvider: function () {
+            return { findPr: function () { return null; } };
+        } };
+        var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
+            './common/smProvider.js': providerStub
+        }), tools || {});
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
+                './machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+            }), {}),
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': Object.assign({ createSmProvider: function () { return {}; } }, {
+                ghPrHeadRepoFull: smProviderReal().ghPrHeadRepoFull,
+                ghPrMaintainerCanModify: smProviderReal().ghPrMaintainerCanModify
+            }),
+            '../../common/smAsync.js': smAsyncMod,
+            '../../common/mutexRegistry.js': loadModule('js/common/mutexRegistry.js', makeRequire({}), {})
+        }), tools || {});
+    }
+
+    function fakeRunAsync(tools, requireFn) {
+        var decl = 'var require = _r_;\n';
+        Object.keys(tools).forEach(function (k) {
+            decl += 'var ' + k + ' = _t_["' + k + '"];\n';
+        });
+        var factory = eval(
+            '(function(_t_, _r_) {\n' + decl +
+            '    var fake = function (fn, args) {\n' +
+            '        return { wait: function () { return fn(args); } };\n' +
+            '    };\n' +
+            "    fake.all = function (jobs) {\n" +
+            '        return { wait: function () { return jobs.map(function (j) { return j.wait(); }); } };\n' +
+            '    };\n' +
+            '    return fake;\n' +
+            '})'
+        );
+        return factory(tools, requireFn);
+    }
+
+    test('batch enrichment: memoPrStatus write-back when present, skipped without it', function () {
+        var memos = [];
+        var snapshotFetched = 0;
+        var withMemo = {
+            snapshot: function () { snapshotFetched++; return { preseed: true }; },
+            memoPrStatus: function (n, pr) { memos.push([n, pr]); }
+        };
+        var tools = {
+            github_get_issue: function () { return null; }
+        };
+        var fake = fakeRunAsync(tools, makeRequire({
+            './common/smProvider.js': { createSmProvider: function () {
+                return { findPr: function () { return null; } };
+            } }
+        }));
+        var gt = srcLoad(Object.assign({ runAsync: fake }, tools));
+        var items = [
+            { issueNumber: 7, pr: null, prNumber: null },
+            { issueNumber: 8, pr: null, prNumber: null }
+        ];
+        var out = gt._enrichIssueItemsParallel(items, withMemo, { owner: 'o', repo: 'r' }, 'ai/');
+        assert.equal(snapshotFetched, 1, 'ONE snapshot fetch for the whole batch');
+        assert.equal(out[0].prNumber, null, 'no resolvable PR ref → item unchanged');
+        assert.deepEqual(memos, [], 'worker resolver finds no PR (no linked issue) → no memo');
+
+        // OPEN statuses memo through the provider (cross-rule cache contract).
+        memos.length = 0;
+        var memoProvider = {
+            snapshot: function () { return {}; },
+            memoPrStatus: function (n, pr) { memos.push([n, pr]); }
+        };
+        var enrichTools = {
+            github_get_issue: function (args) {
+                // ISSUE_ENRICH_WORKER_SOURCE: findPr equivalent — the worker
+                // asks for the linked PR by branch prefix; OPEN only.
+                return null;
+            }
+        };
+        var gt2 = srcLoad(Object.assign({ runAsync: fakeRunAsync(enrichTools, makeRequire({
+            './common/smProvider.js': { createSmProvider: function () {
+                return { findPr: function () { return null; } };
+            } }
+        })) }, enrichTools));
+        gt2._enrichIssueItemsParallel(
+            [{ issueNumber: 9, pr: null, prNumber: null }], memoProvider, { owner: 'o', repo: 'r' }, 'ai/');
+        assert.deepEqual(memos, [], 'still no memo without a resolvable PR ref');
+
+        // A provider WITHOUT the memo hook never crashes (typeof guard).
+        var bareProvider = { snapshot: function () { return {}; } };
+        var gt3 = srcLoad(Object.assign({ runAsync: fakeRunAsync(enrichTools, makeRequire({
+            './common/smProvider.js': { createSmProvider: function () {
+                return { findPr: function () { return null; } };
+            } }
+        })) }, enrichTools));
+        var out3 = gt3._enrichIssueItemsParallel(
+            [{ issueNumber: 11, pr: null, prNumber: null }], bareProvider, { owner: 'o', repo: 'r' }, 'ai/');
+        assert.deepEqual(out3[0].pr, null, 'no PR ref → item untouched, no write-back attempt');
+    });
+});
