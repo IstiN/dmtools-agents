@@ -18,6 +18,7 @@ const configLoader = require('./configLoader.js');
 const outputFiles = require('./common/outputFiles.js');
 const trackersModule = require('./common/trackers.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const reviewHelpers = require('./postStoryTestAutomationReviewHelpers.js');
 
 function readFile(path) {
     return outputFiles.readOutputFile(path, {});
@@ -304,27 +305,8 @@ function postInlineComment(repoInfo, prNumber, inlineComment) {
 }
 
 function triggerReworkIfConfigured(ticketKey, config, customParams) {
-    if (!customParams || !customParams.autoStartRework || !customParams.autoStartReworkConfigFile) {
-        return false;
-    }
-
-    try {
-        return autoStart.triggerConfiguredWorkflowForTicket({
-            ticketKey: ticketKey,
-            customParams: customParams,
-            config: config,
-            configFile: customParams.autoStartReworkConfigFile,
-            label: 'pr_test_automation_rework',
-            stripKeys: [
-                'removeLabel',
-                'autoStartRework',
-                'autoStartReworkConfigFile'
-            ]
-        });
-    } catch (e) {
-        console.warn('⚠️ autoStartRework trigger failed:', e.message || e);
-        return false;
-    }
+    // Canonical trigger in postStoryTestAutomationReviewHelpers.js (gh-1246).
+    return reviewHelpers.triggerConfiguredReworkWorkflow(autoStart, ticketKey, config, customParams);
 }
 
 function markForSmTestRework(ticketKey, tracker) {
@@ -339,22 +321,8 @@ function markForSmTestRework(ticketKey, tracker) {
 }
 
 function resolveCustomParams(params, config) {
-    var merged = {};
-    var patch = configLoader.resolveInstructions(
-        'pr_test_automation_review',
-        null,
-        config
-    ).jobParamPatch;
-    if (patch && patch.customParams) {
-        Object.assign(merged, patch.customParams);
-    }
-    Object.assign(
-        merged,
-        (params.jobParams && params.jobParams.customParams) ||
-            params.customParams ||
-            {}
-    );
-    return merged;
+    // Canonical merge in postStoryTestAutomationReviewHelpers.js (gh-1246).
+    return reviewHelpers.resolveCustomParams(configLoader, params, config, 'pr_test_automation_review');
 }
 
 // Normalize recommendation: LLM may return "PASS"/"PASED" or "APPROVED" instead of "APPROVE",

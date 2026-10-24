@@ -26,6 +26,7 @@ var gh = require('./common/githubHelpers.js');
 const commentMarkup = require('./common/commentMarkup.js');
 var reviewVerdicts = require('./common/reviewVerdicts.js');
 var reviewSpecClaims = require('./common/reviewSpecClaims.js');
+var reviewHelpers = require('./postStoryTestAutomationReviewHelpers.js');
 // The runtime's input folder name for a ticket (input/gh-N for a GitHub key): the Java runtime
 // passes params.inputFolderPath to pre-CLI actions only, so a post-action derives it.
 var ticketKeyShapes = require('./common/ticketKeyShapes.js');
@@ -132,22 +133,8 @@ function markForSmStoryRework(tracker, ticketKey) {
 }
 
 function resolveCustomParams(params, config) {
-    var merged = {};
-    var patch = configLoader.resolveInstructions(
-        'pr_review',
-        null,
-        config
-    ).jobParamPatch;
-    if (patch && patch.customParams) {
-        Object.assign(merged, patch.customParams);
-    }
-    Object.assign(
-        merged,
-        (params.jobParams && params.jobParams.customParams) ||
-            params.customParams ||
-            {}
-    );
-    return merged;
+    // Canonical merge in postStoryTestAutomationReviewHelpers.js (gh-1246).
+    return reviewHelpers.resolveCustomParams(configLoader, params, config, 'pr_review');
 }
 
 /**
@@ -722,16 +709,10 @@ function postInlineComment(scm, pullRequestId, inlineComment, ticketKey, working
 }
 
 function postResolvedInlineComment(scm, pullRequestId, inlineComment, filePath, commentText, ticketKey, workingDir) {
-    if (!commentText) {
-        console.warn('No comment content found for inline comment on', filePath);
+    // Guard + target log shared with the story review poster (gh-1246).
+    if (!reviewHelpers.validateInlineCommentTarget(filePath, inlineComment.line, commentText)) {
         return false;
     }
-    if (!filePath) {
-        console.warn('No file path found for inline comment');
-        return false;
-    }
-
-    console.log('Posting inline comment on ' + filePath + ':' + inlineComment.line);
     return dispatchInlineComment(scm, pullRequestId, inlineComment, filePath, commentText, ticketKey, workingDir);
 }
 

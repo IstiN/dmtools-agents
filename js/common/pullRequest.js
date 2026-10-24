@@ -910,6 +910,8 @@ module.exports = {
     remoteBranchSha: remoteBranchSha,
     remoteBranchExists: remoteBranchExists,
     readTrackedStatus: readTrackedStatus,
+    // gh-1246: canonical submodule probe, reused by postTestReworkResults.
+    isSubmodulePath: isSubmodulePath,
     readStagedDiffStat: readStagedDiffStat,
     syncBranchWithBase: syncBranchWithBase,
     createPullRequest: createPullRequest,

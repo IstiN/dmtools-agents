@@ -35,7 +35,8 @@ function loadPostTestReworkResults(cliMock) {
             './common/pullRequest.js': prHelperRealForRework,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './mergeState.js': loadModule('js/common/mergeState.js'),
-            './common/mergeState.js': loadModule('js/common/mergeState.js')
+            './common/mergeState.js': loadModule('js/common/mergeState.js'),
+            './postStoryTestAutomationShared.js': loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), { cli_execute_command: cliMock })
         }),
         { cli_execute_command: cliMock }
     );
@@ -457,7 +458,11 @@ function loadReworkActionHarness(deps) {
                 createTracker: function(config, customParams) { return tracker; }
             },
             './common/commentMarkup.js': loadModule('js/common/commentMarkup.js',
-                makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }))
+                makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') })),
+            './postStoryTestAutomationShared.js': loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), {
+                cli_execute_command: deps.cliWrapper ? deps.cliWrapper(makeReworkCliMock(recorded, deps)) : makeReworkCliMock(recorded, deps),
+                file_read: makeReworkFileReadMock(files)
+            })
         }),
         {
             cli_execute_command: deps.cliWrapper ? deps.cliWrapper(makeReworkCliMock(recorded, deps)) : makeReworkCliMock(recorded, deps),

@@ -245,7 +245,8 @@ function loadPostTestReworkResults() {
             './common/commentMarkup.js': commentMarkupModule,
             './common/trackers.js': makeTrackersModule({}),
             './mergeState.js': loadModule('js/common/mergeState.js'),
-            './common/mergeState.js': loadModule('js/common/mergeState.js')
+            './common/mergeState.js': loadModule('js/common/mergeState.js'),
+            './postStoryTestAutomationShared.js': loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), {})
         }),
         {}
     );

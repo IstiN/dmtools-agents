@@ -246,7 +246,8 @@ suite('wave2d4 tracker — postTestReworkResults', function() {
             './common/trackers.js': d4Trackers(mocks),
             './common/pullRequest.js': {},
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
-            './common/mergeState.js': loadModule('js/common/mergeState.js')
+            './common/mergeState.js': loadModule('js/common/mergeState.js'),
+            './postStoryTestAutomationShared.js': loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), mocks)
         }), mocks);
         var r = mod.action({
             ticket: { key: '42' },

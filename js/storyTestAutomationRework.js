@@ -15,6 +15,7 @@ var mergeState = require('./common/mergeState.js');
 const { LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var trackersModule = require('./common/trackers.js');
+var shared = require('./postStoryTestAutomationShared.js');
 
 function smLabelForContext(contextId) {
     if (!contextId) return null;
@@ -32,13 +33,8 @@ function cleanCommandOutput(output) {
 }
 
 function readFile(path) {
-    try {
-        const content = file_read({ path: path });
-        return (content && content.trim()) ? content : null;
-    } catch (e) {
-        console.warn('Could not read file ' + path + ':', e);
-        return null;
-    }
+    // Canonical file_read-based reader in postStoryTestAutomationShared.js (gh-1246).
+    return shared.readFileOrNull(path);
 }
 
 function runInRepo(command, workingDir) {
@@ -50,12 +46,9 @@ function runInRepo(command, workingDir) {
 // ── gh-1006: pure parse/build/decide helpers extracted from mergeMain ──
 
 function configureGitAuthor(runInRepoFn, config, workingDir) {
-    try {
-        runInRepoFn('git config user.name "' + config.git.authorName + '"', workingDir);
-        runInRepoFn('git config user.email "' + config.git.authorEmail + '"', workingDir);
-    } catch (e) {
-        console.warn('Could not configure git author:', e);
-    }
+    // Canonical copy in postStoryTestAutomationShared.js (gh-1246) — same
+    // commands, same warn line ('Failed to configure git author:').
+    shared.configureGitAuthor(runInRepoFn, config, workingDir);
 }
 
 function parseConflictedFiles(statusOutput) {
@@ -422,21 +415,7 @@ function action(params) {
     // Step 5: Trigger review
     function triggerReworkReview() {
         releaseLock();
-        var autoStarted = false;
-        if (customParams.autoStartReview && customParams.autoStartReviewConfigFile) {
-            try {
-                autoStarted = autoStart.triggerConfiguredWorkflowForTicket({
-                    ticketKey: storyKey,
-                    customParams: customParams,
-                    config: config,
-                    configFile: customParams.autoStartReviewConfigFile,
-                    label: 'pr_story_test_automation_review',
-                    stripKeys: ['removeLabel', 'autoStartReview', 'autoStartReviewConfigFile']
-                });
-            } catch (e) {
-                console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
-            }
-        }
+        var autoStarted = shared.triggerAutoStartReviewWorkflow(autoStart, storyKey, customParams, config, 'pr_story_test_automation_review');
         if (!autoStarted) {
             autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
         }

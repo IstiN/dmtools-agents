@@ -198,16 +198,9 @@ function postInlineComment(scm, prNumber, inlineComment, storyKey, readFile, prR
     const commentText = resolveCommentText(inlineComment, readFile);
 
     try {
-        if (!commentText) {
-            console.warn('No comment content found for inline comment on', filePath);
+        if (!validateInlineCommentTarget(filePath, inlineComment.line, commentText)) {
             return false;
         }
-        if (!filePath) {
-            console.warn('No file path found for inline comment');
-            return false;
-        }
-
-        console.log('Posting inline comment on ' + filePath + ':' + inlineComment.line);
 
         var diffText = scm.getPrDiff(prNumber);
         var anchor = resolveInlineAnchor(diffText, inlineComment, prReviewComments);
