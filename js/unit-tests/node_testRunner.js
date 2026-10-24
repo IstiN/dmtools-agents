@@ -217,19 +217,25 @@ function withModuleCompat(mock) {
 function withTokenUsageCompat(mock) {
     if (mock && typeof mock === 'object' && typeof mock.postTokenUsageComments === 'function' &&
         typeof mock.postTokenUsageSafely !== 'function') {
-        mock.postTokenUsageSafely = function (ticketKey, params, overrides) {
-            try {
-                var options = {
-                    initiator: (overrides && overrides.initiator) || (params && params.initiator),
-                    customParams: tokenUsageCustomParamsOf(mock, params)
-                };
-                mock.postTokenUsageComments(ticketKey, tokenUsageSafelyOverrides(options, overrides));
-            } catch (e) {
-                console.warn('Failed to post token usage comments:', e);
-            }
-        };
+        mock.postTokenUsageSafely = makeTokenUsageSafely(mock);
     }
     return mock;
+}
+
+// The best-effort wrapper itself: failures are swallowed with a warning so a
+// provider error never fails the calling action (pure option shape above).
+function makeTokenUsageSafely(mock) {
+    return function (ticketKey, params, overrides) {
+        try {
+            var options = {
+                initiator: (overrides && overrides.initiator) || (params && params.initiator),
+                customParams: tokenUsageCustomParamsOf(mock, params)
+            };
+            mock.postTokenUsageComments(ticketKey, tokenUsageSafelyOverrides(options, overrides));
+        } catch (e) {
+            console.warn('Failed to post token usage comments:', e);
+        }
+    };
 }
 
 // customParamsOf(params) when the mock provides it, {} otherwise — mirrors

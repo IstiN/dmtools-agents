@@ -262,18 +262,23 @@ function postTokenUsageComments(ticketKey, options) {
  */
 function postTokenUsageSafely(ticketKey, params, overrides) {
     try {
-        var options = {
-            initiator: (overrides && overrides.initiator) || (params && params.initiator),
-            customParams: customParamsOf(params)
-        };
-        if (overrides) {
-            if (overrides.tracker) options.tracker = overrides.tracker;
-            if (overrides.config) options.config = overrides.config;
-        }
-        postTokenUsageComments(ticketKey, options);
+        postTokenUsageComments(ticketKey, tokenUsageSafelyOptions(params, overrides));
     } catch (e) {
         console.warn('Failed to post token usage comments:', e);
     }
+}
+
+// Option bag for postTokenUsageSafely (pure): initiator from the override or
+// the params, customParams via customParamsOf, tracker/config overrides win.
+function tokenUsageSafelyOptions(params, overrides) {
+    var options = {
+        initiator: (overrides && overrides.initiator) || (params && params.initiator),
+        customParams: customParamsOf(params)
+    };
+    if (!overrides) return options;
+    if (overrides.tracker) options.tracker = overrides.tracker;
+    if (overrides.config) options.config = overrides.config;
+    return options;
 }
 
 if (typeof module !== 'undefined' && module.exports) {
