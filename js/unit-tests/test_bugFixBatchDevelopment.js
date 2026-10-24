@@ -180,6 +180,43 @@ function loadFinalizeBugFixBatchMerge(mocks) {
     };
 }
 
+suite('common/bugFixBatchContext require paths (gh-823)', function() {
+
+    // gh-1250 review (broken require path): the module once required
+    // './configLoader.js', which from js/common/ resolves to the nonexistent
+    // js/common/configLoader.js at load time (gh-823: top-level requires are
+    // file-relative; `dmtools compile` closes the pack file-relative too).
+    // makeRequire maps the literal spec string, so it can never catch this —
+    // record the real specs instead.
+    test('requires ../configLoader.js — one directory up, where the file lives', function() {
+        var specs = [];
+        var requireFn = function(id) {
+            specs.push(id);
+            if (id.indexOf('configLoader') !== -1) return configLoaderModule;
+            if (id.indexOf('pullRequest') !== -1) {
+                return loadModule('js/common/pullRequest.js',
+                    makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
+            }
+            if (id.indexOf('trackers') !== -1) {
+                return loadModule('js/common/trackers.js', makeRequire({
+                    '../config.js': configModule,
+                    './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+                }));
+            }
+            throw new Error('unexpected require: ' + id);
+        };
+        loadModule('js/common/bugFixBatchContext.js', requireFn, {});
+
+        var cfgSpecs = specs.filter(function(s) { return s.indexOf('configLoader') !== -1; });
+        assert.deepEqual(cfgSpecs, ['../configLoader.js'],
+            'configLoader must be required one directory up, saw: ' + JSON.stringify(specs));
+        assert.ok(!file_read({ path: 'js/common/configLoader.js' }),
+            'js/common/configLoader.js must not exist (the spec must point one directory up)');
+        assert.ok(file_read({ path: 'js/configLoader.js' }),
+            'js/configLoader.js must exist at the resolved location');
+    });
+});
+
 suite('prepareBugFixBatchContext', function() {
 
     test('writes batch_bugs.md and fetches per-bug context', function() {

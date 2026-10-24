@@ -7,7 +7,7 @@
  * thin local delegates so their module.exports surfaces stay unchanged.
  */
 
-var configLoader = require('./configLoader.js');
+var configLoader = require('../configLoader.js');
 var trackersModule = require('./trackers.js');
 var prHelper = require('./pullRequest.js');
 
