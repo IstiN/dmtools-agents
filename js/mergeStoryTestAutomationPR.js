@@ -368,29 +368,20 @@ function attemptMerge(params) {
         return { success: false, reason: 'missing_key' };
     }
 
-    var config = configLoader.loadProjectConfig(params.jobParams || params);
-    var jiraConfig = config.jira;
-    var scm = scmModule.createScm(config);
-    var customParams = resolveCustomParams(params);
-    initTracker(config, customParams);
-    var testCaseType = jiraConfig.issueTypes.TEST_CASE || 'Test Case';
-    var issueType = params.ticket && params.ticket.fields &&
-        params.ticket.fields.issuetype && params.ticket.fields.issuetype.name;
-
-    const repoInfo = scm.getRemoteRepoInfo();
-    if (!repoInfo) {
+    var ctx = resolveMergeContext(params, storyKey);
+    if (!ctx.repoInfo) {
         console.error('Could not determine owner/repo');
         return { success: false, reason: 'no_repo' };
     }
 
-    const found = findPRForStory(scm, storyKey);
+    const found = findPRForStory(ctx.scm, storyKey);
     if (!found) {
         console.log('No open or merged PR found for', storyKey, '— nothing to merge');
         return { success: true, noPr: true };
     }
 
     if (found.merged) {
-        finalizeAlreadyMergedPR(params, scm, storyKey, found.pr, testCaseType, customParams, jiraConfig);
+        finalizeAlreadyMergedPR(params, ctx.scm, storyKey, found.pr, ctx.testCaseType, ctx.customParams, ctx.jiraConfig);
         return {
             success: true,
             alreadyMerged: true,
@@ -401,66 +392,206 @@ function attemptMerge(params) {
     }
 
     const pr = found.pr;
-    const prNumber = pr.number;
-    const prUrl = pr.html_url;
-    console.log('Found PR #' + prNumber + ' for story ' + storyKey);
+    console.log('Found PR #' + pr.number + ' for story ' + storyKey);
 
-    var prDetail = readPrMergeDetail(scm, prNumber);
-    var mergeable = prDetail.mergeable;
-    var mergeableState = prDetail.mergeableState;
-    var headSha = prDetail.headSha;
+    var prDetail = readPrMergeDetail(ctx.scm, pr.number);
 
-    if (isUndeterminedMergeState(mergeable, mergeableState)) {
-        const ci = checkCiStatus(scm, headSha);
-        const block = decideCiBlock(ci);
-        if (block === 'ci_failed') {
-            console.log('PR #' + prNumber + ' CI checks failed');
-            return { success: false, reason: 'ci_failed', prNumber, prUrl, failedNames: ci.failedNames };
-        }
-        if (block === 'ci_running') {
-            console.log('PR not ready to merge (' + mergeableState + ') — checks still running or unknown — will retry');
-            return { success: false, reason: 'ci_running', prNumber, prUrl };
-        }
-        console.log('PR not ready to merge (' + mergeableState + ') — will retry');
-        return { success: false, reason: 'not_ready', prNumber, prUrl };
+    if (isUndeterminedMergeState(prDetail.mergeable, prDetail.mergeableState)) {
+        return undeterminedMergeOutcome(ctx.scm, pr, prDetail);
     }
 
-    if (mergeableState === 'behind') {
+    var staticOutcome = staticMergeStateOutcome(ctx.scm, ctx.repoInfo, pr, prDetail);
+    if (staticOutcome) return staticOutcome;
+
+    return mergePrOrHandleFailure(params, ctx, pr, prDetail.headSha);
+}
+
+// ── gh-1186: merge-context and outcome helpers (extracted from attemptMerge/action) ──
+
+// Issue type of the ticket, or undefined when any link of the chain is missing.
+function issueTypeNameOf(params) {
+    return params.ticket && params.ticket.fields &&
+        params.ticket.fields.issuetype && params.ticket.fields.issuetype.name;
+}
+
+/**
+ * One attemptMerge run's resolved collaborators, in the original order:
+ * project config → jira section → SCM → custom params → tracker init, then
+ * the derived testCaseType/issueType and the remote repo coordinates.
+ */
+function resolveMergeContext(params, storyKey) {
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var jiraConfig = config.jira;
+    var scm = scmModule.createScm(config);
+    var customParams = resolveCustomParams(params);
+    initTracker(config, customParams);
+    var testCaseType = jiraConfig.issueTypes.TEST_CASE || 'Test Case';
+    var issueType = issueTypeNameOf(params);
+    return {
+        storyKey: storyKey,
+        config: config,
+        jiraConfig: jiraConfig,
+        scm: scm,
+        customParams: customParams,
+        testCaseType: testCaseType,
+        issueType: issueType,
+        repoInfo: scm.getRemoteRepoInfo()
+    };
+}
+
+/**
+ * Outcome of the "GitHub has not finished computing the mergeable state"
+ * branch: the CI check-run gate decides between ci_failed / ci_running /
+ * not_ready (all three are retryable).
+ */
+function undeterminedMergeOutcome(scm, pr, prDetail) {
+    const ci = checkCiStatus(scm, prDetail.headSha);
+    const block = decideCiBlock(ci);
+    if (block === 'ci_failed') {
+        console.log('PR #' + pr.number + ' CI checks failed');
+        return { success: false, reason: 'ci_failed', prNumber: pr.number, prUrl: pr.html_url, failedNames: ci.failedNames };
+    }
+    if (block === 'ci_running') {
+        console.log('PR not ready to merge (' + prDetail.mergeableState + ') — checks still running or unknown — will retry');
+        return { success: false, reason: 'ci_running', prNumber: pr.number, prUrl: pr.html_url };
+    }
+    console.log('PR not ready to merge (' + prDetail.mergeableState + ') — will retry');
+    return { success: false, reason: 'not_ready', prNumber: pr.number, prUrl: pr.html_url };
+}
+
+/**
+ * Outcome of the two static (non-CI) blockers: a behind PR gets a best-effort
+ * branch update and reports 'behind' so the SM retries; a conflicting PR
+ * reports 'conflict'. Returns null when neither applies and the merge should
+ * proceed.
+ */
+function staticMergeStateOutcome(scm, repoInfo, pr, prDetail) {
+    if (prDetail.mergeableState === 'behind') {
         console.log('PR branch is behind base — requesting branch update');
-        requestBranchUpdate(scm, prNumber, repoInfo);
-        return { success: false, reason: 'behind', prNumber, prUrl };
+        requestBranchUpdate(scm, pr.number, repoInfo);
+        return { success: false, reason: 'behind', prNumber: pr.number, prUrl: pr.html_url };
     }
-
-    if (isConflictMergeState(mergeable, mergeableState)) {
-        console.log('PR #' + prNumber + ' has merge conflict');
-        return { success: false, reason: 'conflict', prNumber, prUrl };
+    if (isConflictMergeState(prDetail.mergeable, prDetail.mergeableState)) {
+        console.log('PR #' + pr.number + ' has merge conflict');
+        return { success: false, reason: 'conflict', prNumber: pr.number, prUrl: pr.html_url };
     }
+    return null;
+}
 
+/**
+ * Re-check decision after a failed merge: 'ci_failed' / 'ci_running' results
+ * when the error looks CI-blocked and the check runs agree; null leaves the
+ * decision to the caller (plain merge failure or conflict).
+ */
+function ciRetryOutcome(scm, headSha, errInfo, prNumber, prUrl) {
+    if (errInfo.isConflict) return null;
+    if (!(errInfo.isCIBlocking || errInfo.errMsg === '')) return null;
+    const ci = checkCiStatus(scm, headSha);
+    const block = decideCiBlock(ci);
+    if (block === 'ci_failed') {
+        return { success: false, reason: 'ci_failed', prNumber: prNumber, prUrl: prUrl, failedNames: ci.failedNames };
+    }
+    if (block === 'ci_running') {
+        console.log('Merge blocked temporarily — checks still running or unknown — will retry');
+        return { success: false, reason: 'ci_running', prNumber: prNumber, prUrl: prUrl };
+    }
+    return null;
+}
+
+/** Terminal merge-failure outcome: conflict vs plain merge_failed. */
+function mergeFailureOutcome(errInfo, prNumber, prUrl) {
+    return {
+        success: false,
+        reason: errInfo.isConflict ? 'conflict' : 'merge_failed',
+        prNumber: prNumber,
+        prUrl: prUrl,
+        error: errInfo.errMsg
+    };
+}
+
+/**
+ * The merge itself plus its failure handling. Success finalizes the merged
+ * PR; failure classifies the error, retries the CI gate when the error looks
+ * CI-blocked, and otherwise reports conflict / merge_failed.
+ */
+function mergePrOrHandleFailure(params, ctx, pr, headSha) {
     try {
-        scm.mergePr(prNumber, 'squash');
-        return finalizeMergedPR(params, scm, storyKey, prNumber, prUrl, testCaseType, jiraConfig, issueType);
+        ctx.scm.mergePr(pr.number, 'squash');
+        return finalizeMergedPR(params, ctx.scm, ctx.storyKey, pr.number, pr.html_url, ctx.testCaseType, ctx.jiraConfig, ctx.issueType);
     } catch (mergeErr) {
         console.warn('Merge failed:', mergeErr);
         const errInfo = classifyMergeError(mergeErr);
-
-        if (!errInfo.isConflict && (errInfo.isCIBlocking || errInfo.errMsg === '')) {
-            const ci = checkCiStatus(scm, headSha);
-            const block = decideCiBlock(ci);
-            if (block === 'ci_failed') {
-                return { success: false, reason: 'ci_failed', prNumber, prUrl, failedNames: ci.failedNames };
-            }
-            if (block === 'ci_running') {
-                console.log('Merge blocked temporarily — checks still running or unknown — will retry');
-                return { success: false, reason: 'ci_running', prNumber, prUrl };
-            }
-        }
-
-        return { success: false, reason: errInfo.isConflict ? 'conflict' : 'merge_failed', prNumber, prUrl, error: errInfo.errMsg };
+        var retry = ciRetryOutcome(ctx.scm, headSha, errInfo, pr.number, pr.html_url);
+        if (retry) return retry;
+        return mergeFailureOutcome(errInfo, pr.number, pr.html_url);
     }
 }
 
+// ── gh-1186: action-level decision helpers (extracted from action) ──────────
+
+// Retryable merge failures: the SM keeps the lock and retries next cycle.
+function isRetryPendingReason(reason) {
+    return reason === 'ci_running' || reason === 'behind' || reason === 'not_ready';
+}
+
+// Failures before any PR state was involved: nothing to rework, release the lock.
+function isMissingPrerequisiteReason(reason) {
+    return reason === 'missing_key' || reason === 'no_repo';
+}
+
+/** Best-effort PR label cleanup; missing PR numbers and provider errors are ignored. */
+function removePrLabelSafe(scm, prNumber) {
+    if (!prNumber) return;
+    try { scm.removeLabel(prNumber, LABELS.PR_APPROVED); } catch (e) {}
+}
+
+// The rework skip label differs for bugs and stories.
+function reworkSkipLabelOf(issueType, jiraConfig) {
+    return issueType === jiraConfig.issueTypes.BUG ? 'sm_bug_test_rework_triggered' : 'sm_story_test_rework_triggered';
+}
+
+// Human-readable cause of the rework, naming the failed checks when known.
+function reworkFailureReason(mergeResult) {
+    var isConflict = mergeResult.reason === 'conflict';
+    var reasonText = isConflict ? 'merge conflict' : 'CI checks failing or PR not mergeable';
+    if (mergeResult.reason === 'ci_failed' && mergeResult.failedNames) {
+        var checksList = mergeResult.failedNames && mergeResult.failedNames.length ? mergeResult.failedNames.join(', ') : 'unknown';
+        return 'required checks failed: ' + checksList;
+    }
+    return reasonText;
+}
+
+// The rework panel comment posted to the ticket.
+function reworkFailureComment(mergeResult) {
+    var isConflict = mergeResult.reason === 'conflict';
+    var panelTitle = isConflict ? 'MERGE CONFLICT' : 'MERGE FAILED';
+    var prLink = mergeResult.prUrl ? '[View PR|' + mergeResult.prUrl + ']' : '';
+    return '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *' + panelTitle + '* — Could not merge PR #' +
+        (mergeResult.prNumber || 'unknown') + ': ' + reworkFailureReason(mergeResult) + '.\n' + prLink + '{panel}';
+}
+
+/**
+ * The conflict / CI-failure / merge-failure tail of action(): PR and ticket
+ * label cleanup, lock release, the rework panel comment and the ticket move
+ * to In Rework.
+ */
+function triggerTestRework(params, customParams, scm, jiraConfig, mergeResult) {
+    var storyKey = params.ticket && params.ticket.key;
+
+    console.log('Test-automation PR merge failed (' + mergeResult.reason + ') — moving ticket to In Rework');
+
+    removePrLabelSafe(scm, mergeResult.prNumber);
+    try { getTracker().removeLabel(storyKey, LABELS.PR_APPROVED); } catch (e) {}
+    try { getTracker().addLabel(storyKey, LABELS.TEST_PR_REWORK_NEEDED); } catch (e) {}
+    try { getTracker().removeLabel(storyKey, reworkSkipLabelOf(issueTypeNameOf(params), jiraConfig)); } catch (e) {}
+
+    releaseLock(storyKey, customParams);
+
+    getTracker().postComment(storyKey, reworkFailureComment(mergeResult));
+    getTracker().moveToStatus(storyKey, jiraConfig.statuses.IN_REWORK);
+}
+
 function action(params) {
-    const storyKey = params.ticket && params.ticket.key;
     var customParams = resolveCustomParams(params);
     var config = configLoader.loadProjectConfig(params.jobParams || params);
     initTracker(config, customParams);
@@ -473,14 +604,13 @@ function action(params) {
         return attemptMerge(params);
     }
 
+    const storyKey = params.ticket && params.ticket.key;
     if (!storyKey) {
         console.error('No storyKey provided');
         return false;
     }
 
-    var issueType = params.ticket && params.ticket.fields &&
-        params.ticket.fields.issuetype && params.ticket.fields.issuetype.name;
-
+    var issueType = issueTypeNameOf(params);
     var jiraConfig = config.jira;
     var scm = scmModule.createScm(config);
 
@@ -491,41 +621,18 @@ function action(params) {
         return true;
     }
 
-    const prNumber = mergeResult.prNumber;
-    const prUrl = mergeResult.prUrl;
-
-    if (mergeResult.reason === 'ci_running' || mergeResult.reason === 'behind' || mergeResult.reason === 'not_ready') {
+    if (isRetryPendingReason(mergeResult.reason)) {
         // Keep lock; SM will retry on the next cycle.
         return false;
     }
 
-    if (mergeResult.reason === 'missing_key' || mergeResult.reason === 'no_repo') {
+    if (isMissingPrerequisiteReason(mergeResult.reason)) {
         releaseLock(storyKey, customParams);
         return false;
     }
 
     // Conflict, CI failure, or other merge failure — move ticket to test-automation rework.
-    console.log('Test-automation PR merge failed (' + mergeResult.reason + ') — moving ticket to In Rework');
-
-    if (prNumber) {
-        try { scm.removeLabel(prNumber, LABELS.PR_APPROVED); } catch (e) {}
-    }
-    try { getTracker().removeLabel(storyKey, LABELS.PR_APPROVED); } catch (e) {}
-    try { getTracker().addLabel(storyKey, LABELS.TEST_PR_REWORK_NEEDED); } catch (e) {}
-    var reworkSkipLabel = issueType === jiraConfig.issueTypes.BUG ? 'sm_bug_test_rework_triggered' : 'sm_story_test_rework_triggered';
-    try { getTracker().removeLabel(storyKey, reworkSkipLabel); } catch (e) {}
-
-    releaseLock(storyKey, customParams);
-
-    var checksList = mergeResult.failedNames && mergeResult.failedNames.length ? mergeResult.failedNames.join(', ') : 'unknown';
-    var isConflict = mergeResult.reason === 'conflict';
-    var panelTitle = isConflict ? 'MERGE CONFLICT' : 'MERGE FAILED';
-    var reasonText = isConflict ? 'merge conflict' : 'CI checks failing or PR not mergeable';
-    if (mergeResult.reason === 'ci_failed' && mergeResult.failedNames) {
-        reasonText = 'required checks failed: ' + checksList;
-    }
-    getTracker().postComment(storyKey, '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *' + panelTitle + '* — Could not merge PR #' + (prNumber || 'unknown') + ': ' + reasonText + '.\n\n' + (prUrl ? '[View PR|' + prUrl + ']' : '') + '{panel}');
-    getTracker().moveToStatus(storyKey, jiraConfig.statuses.IN_REWORK);
+    triggerTestRework(params, customParams, scm, jiraConfig, mergeResult);
     return true;
 }
 
@@ -548,6 +655,17 @@ if (typeof module !== 'undefined' && module.exports) {
         classifyMergeError: classifyMergeError,
         isUndeterminedMergeState: isUndeterminedMergeState,
         isConflictMergeState: isConflictMergeState,
-        resolveCustomParams: resolveCustomParams
+        resolveCustomParams: resolveCustomParams,
+        // gh-1186: merge-outcome and action-decision helpers — additive surface.
+        undeterminedMergeOutcome: undeterminedMergeOutcome,
+        staticMergeStateOutcome: staticMergeStateOutcome,
+        ciRetryOutcome: ciRetryOutcome,
+        mergeFailureOutcome: mergeFailureOutcome,
+        issueTypeNameOf: issueTypeNameOf,
+        isRetryPendingReason: isRetryPendingReason,
+        isMissingPrerequisiteReason: isMissingPrerequisiteReason,
+        reworkSkipLabelOf: reworkSkipLabelOf,
+        reworkFailureComment: reworkFailureComment,
+        removePrLabelSafe: removePrLabelSafe
     };
 }
