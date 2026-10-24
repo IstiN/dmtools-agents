@@ -128,3 +128,108 @@ suite('restoreFromReleases', function() {
     });
 
 });
+
+// ─── gh-119 CRAP: uncovered branches + extracted pure helpers ────────────────
+
+suite('restoreFromReleases — uncovered branches (gh-119 characterization)', function() {
+
+    test('jobParams-shaped params (no ticket at top level) still resolve the ticket', function() {
+        var mod = loadRestoreFromReleases({});
+        var ok = mod.action({
+            jobParams: {
+                ticket: { key: 'TK-2' },
+                customParams: {
+                    artefactRepository: { owner: 'acme', repo: 'artefacts' },
+                    restoreFromReleases: { assets: [{ name: 'copilot-session', toFolder: '.copilot/s/{ticketKey}' }] }
+                }
+            }
+        });
+        assert.equal(ok, true);
+        assert.equal(mod._downloadArtefactCalls.length, 1);
+    });
+
+    test('skips when assets missing / not an array / empty (all three shapes)', function() {
+        var shapes = [
+            { artefactRepository: { owner: 'a', repo: 'b' }, restoreFromReleases: {} },
+            { artefactRepository: { owner: 'a', repo: 'b' }, restoreFromReleases: { assets: 'nope' } },
+            { artefactRepository: { owner: 'a', repo: 'b' }, restoreFromReleases: { assets: [] } }
+        ];
+        for (var i = 0; i < shapes.length; i++) {
+            var mod = loadRestoreFromReleases({});
+            assert.equal(mod.action({ ticket: { key: 'TK-3' }, customParams: shapes[i] }), true);
+            assert.equal(mod._downloadArtefactCalls.length, 0, 'shape ' + i + ' must not download');
+        }
+    });
+
+    test('skips when no artefact repository is configured', function() {
+        var mod = loadRestoreFromReleases({});
+        var ok = mod.action({
+            ticket: { key: 'TK-4' },
+            customParams: { restoreFromReleases: { assets: [{ name: 'n', toFolder: 'f' }] } }
+        });
+        assert.equal(ok, true);
+        assert.equal(mod._downloadArtefactCalls.length, 0);
+    });
+
+    test('assets missing name or toFolder are skipped, valid ones still restore (2+ items)', function() {
+        var mod = loadRestoreFromReleases({});
+        var ok = mod.action({
+            ticket: { key: 'TK-5' },
+            customParams: {
+                artefactRepository: { owner: 'a', repo: 'b' },
+                restoreFromReleases: {
+                    assets: [
+                        { toFolder: 'no-name' },
+                        { name: 'no-folder' },
+                        { name: 'good-one', toFolder: 'f1' },
+                        { name: 'good-two', toFolder: 'f2' }
+                    ]
+                }
+            }
+        });
+        assert.equal(ok, true);
+        assert.equal(mod._downloadArtefactCalls.length, 2);
+        assert.equal(mod._downloadArtefactCalls[0].asset.name, 'good-one');
+        assert.equal(mod._downloadArtefactCalls[1].asset.name, 'good-two');
+    });
+
+    test('a not-restored-but-successful download logs and continues (non-fatal)', function() {
+        var mod = loadRestoreFromReleases({
+            downloadArtefactImpl: function() { return { success: true, restored: false, error: null }; }
+        });
+        var ok = mod.action({
+            ticket: { key: 'TK-6' },
+            customParams: {
+                artefactRepository: { owner: 'a', repo: 'b' },
+                restoreFromReleases: { assets: [{ name: 'n', toFolder: 'f' }] }
+            }
+        });
+        assert.equal(ok, true);
+        assert.equal(mod._downloadArtefactCalls.length, 1);
+    });
+});
+
+suite('restoreFromReleases — pure helpers (gh-119)', function() {
+    var mod = loadRestoreFromReleases({});
+
+    test('resolveActualParams: ticket params win, jobParams fallback, params fallback', function() {
+        assert.deepEqual(mod.resolveActualParams({ ticket: { key: 'K' }, jobParams: {} }), { ticket: { key: 'K' }, jobParams: {} });
+        assert.deepEqual(mod.resolveActualParams({ jobParams: { ticket: { key: 'J' } } }), { ticket: { key: 'J' } });
+        assert.deepEqual(mod.resolveActualParams({}), {});
+    });
+
+    test('configuredAssets: null unless a non-empty array', function() {
+        assert.equal(mod.configuredAssets(undefined), null);
+        assert.equal(mod.configuredAssets({}), null);
+        assert.equal(mod.configuredAssets({ assets: null }), null);
+        assert.equal(mod.configuredAssets({ assets: 'x' }), null);
+        assert.equal(mod.configuredAssets({ assets: [] }), null);
+        assert.deepEqual(mod.configuredAssets({ assets: [{ name: 'n' }] }), [{ name: 'n' }]);
+    });
+
+    test('scmProviderOf: projectConfig.scm.provider with github default', function() {
+        assert.equal(mod.scmProviderOf({ scm: { provider: 'gitlab' } }), 'gitlab');
+        assert.equal(mod.scmProviderOf({ scm: {} }), 'github');
+        assert.equal(mod.scmProviderOf({}), 'github');
+    });
+});

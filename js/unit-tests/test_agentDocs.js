@@ -409,3 +409,193 @@ suite('collectArtifacts', function() {
         assert.deepEqual(out, { reads: [], writes: [] });
     });
 });
+
+// ─── gh-119 CRAP: renderActionSection / renderAgentDoc characterization ──────
+
+var GH119_ACTION_SRC = [
+    '/**',
+    ' * Do the thing — preCLI setup helper.',
+    ' */',
+    'function setup(params) {',
+    "    var raw = file_read('input/ticket.json');",
+    "    file_write('outputs/result.md', raw);",
+    "    jira_post_comment({ key: params.ticketKey, comment: 'x' });",
+    '    return params.customParams.removeLabel;',
+    '}'
+].join('\n');
+
+function loadRenderHarness(files) {
+    var mock = makeMockFs(Object.assign({ 'agents/js/agentDocGenerator.js': '// probe' }, files || {}));
+    var mod = loadModule(
+        'js/agentDocGenerator.js',
+        makeRequire({ 'fs': mock.fs, 'path': makeMockPath() }),
+        {}
+    );
+    return mod;
+}
+
+suite('agentDocGenerator.renderActionSection (gh-119 characterization)', function() {
+
+    test('empty filePath renders nothing', function() {
+        var mod = loadRenderHarness({});
+        assert.equal(mod.renderActionSection('preJSAction', '', 'pre'), '');
+        assert.equal(mod.renderActionSection('preJSAction', null, 'pre'), '');
+    });
+
+    test('full analysis: description, reads, writes, side effects, params (2+ items each)', function() {
+        var mod = loadRenderHarness({ 'agents/js/doThing.js': GH119_ACTION_SRC.replace(
+            "file_read('input/ticket.json')",
+            "file_read('input/ticket.json'); file_read('input/extra.json')"
+        ) });
+        var md = mod.renderActionSection('preCliJSAction', 'agents/js/doThing.js', 'pre');
+        assert.equal(md, [
+            '### preCliJSAction: `doThing.js`',
+            '',
+            '_Do the thing — preCLI setup helper._',
+            '',
+            '- Source: `agents/js/doThing.js`',
+            '- Reads:',
+            '  - `input/extra.json`',
+            '  - `input/ticket.json`',
+            '- Writes:',
+            '  - `outputs/result.md`',
+            '- Side effects:',
+            '  - post Jira comment',
+            '- Parameters (customParams):',
+            '  - `removeLabel`',
+            ''
+        ].join('\n'));
+    });
+
+    test('an action with no detected artifacts gets the placeholder line', function() {
+        var mod = loadRenderHarness({ 'agents/js/empty.js': '// no artifacts here' });
+        var md = mod.renderActionSection('postJSAction', 'agents/js/empty.js', 'post');
+        assert.equal(md, [
+            '### postJSAction: `empty.js`',
+            '',
+            '- Source: `agents/js/empty.js`',
+            '- No detected file I/O or side effects.',
+            ''
+        ].join('\n'));
+    });
+
+    test('params-only analysis: Parameters group without the placeholder line', function() {
+        var mod = loadRenderHarness({ 'agents/js/paramsOnly.js': 'var x = params.customParams.onlyParam;' });
+        var md = mod.renderActionSection('timerJSAction', 'agents/js/paramsOnly.js', 'post');
+        assert.equal(md, [
+            '### timerJSAction: `paramsOnly.js`',
+            '',
+            '- Source: `agents/js/paramsOnly.js`',
+            '- Parameters (customParams):',
+            '  - `onlyParam`',
+            ''
+        ].join('\n'));
+    });
+
+    test('a missing action file renders the placeholder section (no throw)', function() {
+        var mod = loadRenderHarness({});
+        var md = mod.renderActionSection('postCliJSAction', 'agents/js/missing.js', 'post');
+        assert.contains(md, '### postCliJSAction: `missing.js`');
+        assert.contains(md, '- No detected file I/O or side effects.');
+    });
+});
+
+suite('agentDocGenerator.renderAgentDoc (gh-119 characterization)', function() {
+
+    function configWith(params) {
+        return { name: 'Teammate', params: params };
+    }
+
+    var FULL_PARAMS = {
+        metadata: { contextId: 'my_ctx' },
+        outputType: 'mark',
+        skipAIProcessing: true,
+        preJSAction: 'agents/js/doThing.js',
+        customParams: { removeLabel: 'x', flags: { a: 1 } },
+        outputSchemas: { 'outputs/out.json': { required: ['r1', 'r2'] } }
+    };
+
+    test('full document: title, attributes, actions, LLM step, schemas, custom params, footer', function() {
+        var mod = loadRenderHarness({ 'agents/js/doThing.js': GH119_ACTION_SRC });
+        var doc = mod.renderAgentDoc('my_agent.json', configWith(FULL_PARAMS));
+
+        assert.contains(doc, '# My Agent\n');
+        assert.contains(doc, '| Job | `Teammate` |');
+        assert.contains(doc, '| Config | `my_agent.json` |');
+        assert.contains(doc, '| ContextId | `my_ctx` |');
+        assert.contains(doc, '| outputType | `mark` |');
+        assert.contains(doc, '| skipAIProcessing | `true` |');
+        assert.contains(doc, '## Actions');
+        assert.contains(doc, '### preJSAction: `doThing.js`');
+        assert.contains(doc, '- Reads:\n  - `input/ticket.json`');
+        assert.contains(doc, '## LLM step');
+        assert.contains(doc, '- outputType: `mark`');
+        assert.contains(doc, '### Output schemas');
+        assert.contains(doc, '- `outputs/out.json`\n  - required: `r1`, `r2`');
+        assert.contains(doc, '## Custom params');
+        assert.contains(doc, '- `removeLabel`: `"x"`');
+        assert.contains(doc, '  ```json');
+        assert.contains(doc, '_Generated by js/agentDocGenerator.js_');
+        // jsParamsUsed 'removeLabel' shares the root key with customParams — no duplicate row.
+        assert.equal(doc.indexOf('(used by JS action)'), -1);
+        // No snapshot when none exists.
+        assert.equal(doc.indexOf('Prompt snapshot'), -1);
+        // The four absent action slots render empty (no stray headings).
+        assert.equal(doc.indexOf('### preCliJSAction'), -1);
+        assert.equal(doc.indexOf('### postJSAction'), -1);
+    });
+
+    test('defaults hold when metadata/customParams/outputSchemas are absent', function() {
+        var mod = loadRenderHarness({});
+        var doc = mod.renderAgentDoc('bare.json', configWith({}));
+        assert.contains(doc, '# Bare\n');
+        assert.contains(doc, '| Job | `Teammate` |');
+        assert.contains(doc, '| ContextId | `—` |');
+        assert.contains(doc, '| outputType | `—` |');
+        assert.contains(doc, '| skipAIProcessing | `false` |');
+        assert.contains(doc, '- outputType: `none`');
+        assert.equal(doc.indexOf('## Custom params'), -1);
+    });
+
+    test('human doc is embedded (title dropped) and referenced', function() {
+        var mod = loadRenderHarness({
+            'agents/docs/agents/my_agent.md': '# My own title\n\nBody of the human doc.\n'
+        });
+        var doc = mod.renderAgentDoc('my_agent.json', configWith({}));
+        assert.contains(doc, 'Body of the human doc.');
+        assert.contains(doc, '_Human doc: [`agents/docs/agents/my_agent.md`](agents/docs/agents/my_agent.md)_');
+        assert.equal(doc.indexOf('# My own title'), -1, 'the human doc title is dropped');
+    });
+
+    test('prompt snapshot renders both the section and the LM-step bullet', function() {
+        var mod = loadRenderHarness({
+            'agents/snapshots/my_agent.md': '# snapshot'
+        });
+        var doc = mod.renderAgentDoc('my_agent.json', configWith({}));
+        assert.contains(doc, '## Prompt snapshot');
+        assert.contains(doc, '[`agents/snapshots/my_agent.md`](agents/snapshots/my_agent.md)');
+        assert.contains(doc, '- Prompt snapshot: `agents/snapshots/my_agent.md`');
+    });
+
+    test('jsParamsUsed merge: JS-only params get their own row, one per path', function() {
+        var mod = loadRenderHarness({
+            'agents/js/doThing.js': GH119_ACTION_SRC + '\nvar y = params.customParams.jsOnlyFlag;'
+        });
+        var doc = mod.renderAgentDoc('my_agent.json', configWith({
+            preJSAction: 'agents/js/doThing.js',
+            customParams: { removeLabel: 'x' }
+        }));
+        assert.contains(doc, '- `jsOnlyFlag` _(used by JS action)_');
+        assert.equal(doc.indexOf('- `removeLabel` _(used by JS action)_'), -1, 'root keys already documented are skipped');
+    });
+
+    test('empty customParams object with JS usage still renders the section', function() {
+        var mod = loadRenderHarness({ 'agents/js/doThing.js': GH119_ACTION_SRC });
+        var doc = mod.renderAgentDoc('my_agent.json', configWith({
+            preJSAction: 'agents/js/doThing.js',
+            customParams: {}
+        }));
+        assert.contains(doc, '## Custom params');
+        assert.contains(doc, '- `removeLabel` _(used by JS action)_');
+    });
+});
