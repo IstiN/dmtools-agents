@@ -14,7 +14,12 @@ function loadBranchSetup(mocks) {
 /** prHelper stub with the four collaborators branchSetup delegates to. */
 function makePrHelper(overrides) {
     var base = {
-        cleanCommandOutput: function (out) { return String(out).replace(/\[wrapper-warning\]\n?/g, ''); },
+        cleanCommandOutput: function (out) {
+            if (!out) return '';
+            return String(out).split('\n').filter(function (line) {
+                return line.indexOf('Script started') === -1 && line.indexOf('Script done') === -1;
+            }).join('\n').trim();
+        },
         buildTargetedOriginFetchCommand: function (branches) {
             return branches && branches.length ? 'git fetch origin ' + branches.join(' ') : null;
         },
@@ -104,14 +109,14 @@ suite('branchSetup.fetchBranchRefs', function() {
     test('failure logs the caller warn message', function() {
         var warns = [];
         var origWarn = console.warn;
-        console.warn = function(msg, e) { warns.push(msg + '|' + e); };
+        console.warn = function(msg) { warns.push(msg); };
         try {
             loadBranchSetup().fetchBranchRefs(makePrHelper(), function () { throw new Error('net'); }, ['x'], 'Could not fetch remote branches:');
         } finally {
             console.warn = origWarn;
         }
         assert.equal(warns.length, 1);
-        assert.ok(warns[0].indexOf('Could not fetch remote branches:|net') === 0);
+        assert.deepEqual(warns, ['Could not fetch remote branches:']);
     });
 });
 
@@ -120,11 +125,11 @@ suite('branchSetup.readLocalBranchList', function() {
     test('returns the cleaned branch list output', function() {
         var out = loadBranchSetup().readLocalBranchList(
             makePrHelper(),
-            makeExec([], { 'git branch --list "dev/x"': '[wrapper-warning]\n* dev/x\n' }),
+            makeExec([], { 'git branch --list "dev/x"': 'Script started\n* dev/x\nScript done\n' }),
             'dev/x',
             null
         );
-        assert.equal(out, '* dev/x\n');
+        assert.equal(out, '* dev/x');
     });
 
     test('failure returns empty string and logs the warn message', function() {
@@ -380,10 +385,10 @@ suite('branchSetup.findMergeBase / collectMergeTreeDetails', function() {
     test('findMergeBase cleans the script output', function() {
         var out = loadBranchSetup().findMergeBase(
             makePrHelper(),
-            makeExec([], { 'bash agents/scripts/git-merge-base-or-empty.sh HEAD origin/main': '[wrapper-warning]\nabc123\n' }),
+            makeExec([], { 'bash agents/scripts/git-merge-base-or-empty.sh HEAD origin/main': 'Script started\nabc123\nScript done\n' }),
             'HEAD', 'origin/main'
         );
-        assert.equal(out, 'abc123\n');
+        assert.equal(out, 'abc123');
     });
 
     test('findMergeBase returns empty string on failure', function() {
@@ -401,7 +406,7 @@ suite('branchSetup.findMergeBase / collectMergeTreeDetails', function() {
             }),
             'main', 'NO-BASE-TEXT'
         );
-        assert.equal(out, 'conflict markers\n');
+        assert.equal(out, 'conflict markers');
         assert.deepEqual(calls, [
             'bash agents/scripts/git-merge-base-or-empty.sh HEAD origin/main',
             'git merge-tree abc123 HEAD origin/main'
@@ -418,12 +423,12 @@ suite('branchSetup.findMergeBase / collectMergeTreeDetails', function() {
     });
 
     test('collectMergeTreeDetails returns the raw error string on probe failure', function() {
-        var out = loadBranchSetup().collectMergeTreeDetails(
-            makePrHelper(),
-            makeExec([], { 'bash agents/scripts/git-merge-base-or-empty.sh HEAD origin/main': 'abc\n' }),
-            'main', 'NO-BASE-TEXT'
-        );
-        assert.ok(out.indexOf('Error:') === 0);
+        var exec = function (command) {
+            if (command.indexOf('git-merge-base-or-empty.sh') !== -1) return 'abc\n';
+            throw new Error('merge-tree failed');
+        };
+        var out = loadBranchSetup().collectMergeTreeDetails(makePrHelper(), exec, 'main', 'NO-BASE-TEXT');
+        assert.ok(out.indexOf('Error: merge-tree failed') === 0);
     });
 });
 

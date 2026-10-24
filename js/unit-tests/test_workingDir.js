@@ -115,18 +115,18 @@ function loadPreCli(workingDir) {
     );
 
 
-    var mod = var __wdMocks1 = {
+    var modMocks = {
             cli_execute_command: mockCli,
             file_read: fileReadMock,
             file_write: function() {},
             jira_search_by_jql: function() { return JSON.stringify({ issues: [] }); },
             jira_transition_issue: function() {}
         };
-    var mod = var __bs1 = loadModule('js/common/branchSetup.js', null, __wdMocks1);
-    var mod =     var mod = loadModule(
+    var bs = loadModule('js/common/branchSetup.js', null, modMocks);
+    var mod = loadModule(
         'js/preCliDevelopmentSetup.js',
         makeRequire({
-                'branchSetup.js': __bs1,
+                'branchSetup.js': bs,
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
             './common/pullRequest.js': PR_HELPER_REAL,
@@ -139,7 +139,7 @@ function loadPreCli(workingDir) {
             './common/commentMarkup.js': commentMarkupModule,
             './common/trackers.js': trackersModuleReal
         }),
-        __wdMocks1
+        modMocks
     );
 
     return { mod: mod, calls: calls };
@@ -230,7 +230,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
         );
 
 
-        mod = var __wdMocks2 = {
+        var modMocks = {
                 cli_execute_command: mockCli,
                 file_read: function(opts) {
                     try { return file_read(opts); } catch (e) { return null; }
@@ -239,11 +239,11 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 jira_move_to_status: function() {},
                 jira_search_by_jql: function() { return []; }
             };
-        mod = var __bs2 = loadModule('js/common/branchSetup.js', null, __wdMocks2);
-        mod =         mod = loadModule(
+        var bs = loadModule('js/common/branchSetup.js', null, modMocks);
+        mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
-                'branchSetup.js': __bs2,
+                'branchSetup.js': bs,
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,
@@ -257,7 +257,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
         }),
-            __wdMocks2
+            modMocks
         );
 
         mod.action({
@@ -300,7 +300,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
         );
 
 
-        var mod = var __wdMocks3 = {
+        var modMocks = {
                 cli_execute_command: mockCli,
                 file_read: function(opts) {
                     try { return file_read(opts); } catch (e) { return null; }
@@ -309,11 +309,11 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 jira_move_to_status: function() {},
                 jira_search_by_jql: function() { return []; }
             };
-        var mod = var __bs3 = loadModule('js/common/branchSetup.js', null, __wdMocks3);
-        var mod =         var mod = loadModule(
+        var bs = loadModule('js/common/branchSetup.js', null, modMocks);
+        var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
-                'branchSetup.js': __bs3,
+                'branchSetup.js': bs,
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,
@@ -327,7 +327,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
         }),
-            __wdMocks3
+            modMocks
         );
 
         mod.action({
@@ -374,7 +374,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
         );
 
 
-        var mod = var __wdMocks4 = {
+        var modMocks = {
                 cli_execute_command: mockCli,
                 file_read: function(opts) {
                     try { return file_read(opts); } catch (e) { return null; }
@@ -383,11 +383,11 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 jira_move_to_status: function() {},
                 jira_search_by_jql: function() { return []; }
             };
-        var mod = var __bs4 = loadModule('js/common/branchSetup.js', null, __wdMocks4);
-        var mod =         var mod = loadModule(
+        var bs = loadModule('js/common/branchSetup.js', null, modMocks);
+        var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
-                'branchSetup.js': __bs4,
+                'branchSetup.js': bs,
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,
@@ -401,7 +401,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
         }),
-            __wdMocks4
+            modMocks
         );
 
         mod.action({
