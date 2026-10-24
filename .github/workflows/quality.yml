@@ -21,10 +21,15 @@
 # Coverage comes from the unit suite run in the same job (instrumented tree), so the
 # ratchet is evaluated with the unit-test results of the head.
 #
-# Duplication gate (gh-1251): a second, independent hard gate fails PRs and main when
-# any production JS file (js/ + ci/, js/unit-tests/** excluded) exceeds 1% duplicated
-# lines (crap4js duplicates, token-level clone detection). Its clones-mode report also
-# feeds the README `duplication` endpoint badge published from the same run.
+# Duplication gate (gh-1251): a second, independent gate fails PRs and main on
+# NEW or GROWING JS duplication. The measurement is
+# `crap4js duplicates --threshold 1 --exclude "js/unit-tests/**" js ci`; 85
+# production files already exceed 1% today (pre-existing debt owned by the
+# gh-1244…gh-1250 dedup tickets), so the gate is a RATCHET against
+# duplication-baseline.json, not an absolute bar — it fails only when a file
+# over threshold is not pinned or a pinned percentage grew
+# (ci/duplicationRatchet.js). Its clones-mode report also feeds the README
+# `duplication` endpoint badge published from the same run.
 #
 # Tool pin: IstiN/crap4js by commit SHA (fork of vabhzw17eg2qu4m9-bit/crap4js v0.15.0 +
 # --baseline / --update-baseline, pipe-safe exit). Installed from GitHub — the npm 'crap4js'
