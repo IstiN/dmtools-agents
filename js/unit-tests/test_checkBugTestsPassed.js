@@ -27,7 +27,12 @@ function checkBugTestsPassedRequireMap(mocks) {
                 }
             }
         }),
-        './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {}),
+        './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({
+            // gh-1249: the helpers require the real prLookup module.
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
+        }), {}),
+        // gh-1249: the module under test requires the real prLookup module.
+        './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
         './common/tokenUsageComment.js': checkBugTestsPassedTokenUsageMock(),
         './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
         './common/smLock.js': loadModule('js/common/smLock.js', makeRequire({}), {}),
@@ -579,7 +584,10 @@ suite('checkBugTestsPassed: stage-label fallback (gh-916)', function() {
 suite('checkBugTestsPassedHelpers', function() {
 
     function loadHelpers() {
-        return loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {});
+        return loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({
+            // gh-1249: the helpers require the real prLookup module.
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
+        }), {});
     }
 
     test('decidePostFixRoute: not finalized keeps waiting', function() {

@@ -22,12 +22,16 @@ function jiraBoom(name) {
 function loadRecoverStuck(mocks, scm) {
     return loadModule('js/recoverStuckDevelopment.js', makeRequire({
                                                                      'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
+        './common/trackerSession.js': loadModule('js/common/trackerSession.js',
+            makeRequire({ './trackers.js': trackersWithMocks(mocks) }), {}),
         './configLoader.js': {
             loadProjectConfig: function() { return { jira: {} }; },
             createScm: function() { return scm; }
         },
         './config.js': configModule,
-        './common/trackers.js': trackersWithMocks(mocks)
+        './common/trackers.js': trackersWithMocks(mocks),
+        // gh-1249: the module requires the real prLookup module.
+        './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
     }), mocks);
 }
 

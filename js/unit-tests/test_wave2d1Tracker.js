@@ -83,7 +83,10 @@ suite('wave2d1 tracker — checkBugTestsPassed / checkBugToFixReady', function()
         var mod = loadModule('js/checkBugTestsPassed.js', makeRequire({
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock(),
-            './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {}),
+            './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({
+                // gh-1249: the helpers require the real prLookup module.
+                './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
+            }), {}),
             './common/tokenUsageComment.js': {
                 postTokenUsageComments: function() {},
                 postTokenUsageCommentsSafely: function() {},
@@ -92,7 +95,9 @@ suite('wave2d1 tracker — checkBugTestsPassed / checkBugToFixReady', function()
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/smLock.js': loadModule('js/common/smLock.js', makeRequire({}), {}),
             './common/trackers.js': d1Trackers(rec.mocks),
-            './common/scm.js': { createScm: function() { return { listPrs: function() { return []; } }; } }
+            './common/scm.js': { createScm: function() { return { listPrs: function() { return []; } }; } },
+            // gh-1249: the module under test requires the real prLookup module.
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
         }), rec.mocks);
         var r = mod.action({ ticket: { key: '10' }, jobParams: { customParams: { trackerProvider: 'ado', removeLabel: 'sm_x' } } });
         assert.equal(r.action, 'no_test_cases');
