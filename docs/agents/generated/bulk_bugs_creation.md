@@ -66,6 +66,8 @@ _Prepare Bulk Bugs Creation Context (preCliJSAction for bulk_bugs_creation agent
 _Post Bulk Bugs Creation Action (postJSAction for bulk_bugs_creation agent)_
 
 - Source: `agents/js/postBulkBugsCreation.js`
+- Side effects:
+  - post ticket comment (via tracker)
 - Parameters (customParams):
   - `adoTextFormat`
   - `branchCreateFnPath`

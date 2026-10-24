@@ -18,7 +18,7 @@ function loadPreCli(mocks) {
 
     var freshConfigLoader = loadModule(
         'js/configLoader.js',
-        makeRequire({ './config.js': configModule }),
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), './config.js': configModule }),
         { file_read: fileReadMock }
     );
 
@@ -33,7 +33,7 @@ function loadPreCli(mocks) {
 
     var m = loadModule(
         'js/preCliMobileTestAutomationSetup.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
