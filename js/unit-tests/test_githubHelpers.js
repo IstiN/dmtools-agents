@@ -1799,6 +1799,70 @@ suite('githubHelpers.findMergedPRForTicket', function() {
 
         assert.ok(!result, 'errors should be swallowed and null returned');
     });
+
+    // gh-1226 characterization: ranking tiebreak + prSearchFn hook contract.
+    test('a better-scoring merged PR wins over a more recently merged one', function() {
+        var gh = loadGithubHelpers();
+        // title-only match scores 100; title + head-branch match scores 180 —
+        // the score order must beat the newer merged_at of the weaker PR.
+        var scm = scmWithClosedPrs([
+            { number: 1, title: 'ABC-123: newer but weaker', merged_at: '2026-03-01T00:00:00Z' },
+            { number: 2, title: 'ABC-123: older but stronger', head: { ref: 'feature/ABC-123-cleanup' }, merged_at: '2026-01-01T00:00:00Z' }
+        ]);
+
+        var result = gh.findMergedPRForTicket(scm, 'ABC-123');
+
+        assert.equal(result.number, 2, 'score desc ranks before merged_at recency');
+    });
+
+    test('a project prSearchFn hook selects the merged PR it returns', function() {
+        var gh = loadGithubHelpers();
+        var winner = { number: 9, title: 'ABC-123: hook pick', merged_at: '2026-02-01T00:00:00Z' };
+        var seen;
+        var scm = scmWithClosedPrs([
+            { number: 9, title: 'ABC-123: hook pick', merged_at: '2026-02-01T00:00:00Z' },
+            { number: 8, title: 'ABC-123: other', merged_at: '2026-01-01T00:00:00Z' }
+        ]);
+
+        var result = gh.findMergedPRForTicket(scm, 'ABC-123', {
+            prSearchFn: function(candidates, ticketKey, options) {
+                seen = { candidates: candidates, ticketKey: ticketKey, options: options };
+                return winner;
+            }
+        });
+
+        assert.equal(result, winner, 'the hook answer is returned as-is');
+        assert.deepEqual(seen.candidates.map(function(c) { return c.number; }), [9, 8],
+            'the hook receives the ranked merged candidates');
+        assert.equal(seen.ticketKey, 'ABC-123');
+        assert.ok(seen.options && typeof seen.options.prSearchFn === 'function', 'options ride along');
+    });
+
+    test('a prSearchFn hook returning nothing falls through to the ranked default', function() {
+        var gh = loadGithubHelpers();
+        var scm = scmWithClosedPrs([
+            { number: 4, title: 'ABC-123: first', merged_at: '2026-01-01T00:00:00Z' }
+        ]);
+
+        var result = gh.findMergedPRForTicket(scm, 'ABC-123', { prSearchFn: function() { return null; } });
+
+        assert.ok(result, 'fallthrough still answers with a merged PR');
+        assert.equal(result.number, 4);
+    });
+
+    test('a throwing prSearchFn hook is non-fatal — the ranked default answers', function() {
+        var gh = loadGithubHelpers();
+        var scm = scmWithClosedPrs([
+            { number: 4, title: 'ABC-123: first', merged_at: '2026-01-01T00:00:00Z' }
+        ]);
+
+        var result = gh.findMergedPRForTicket(scm, 'ABC-123', {
+            prSearchFn: function() { throw new Error('hook exploded'); }
+        });
+
+        assert.ok(result, 'hook failure must not lose the merged PR');
+        assert.equal(result.number, 4);
+    });
 });
 
 suite('scm.getDiffText', function() {
