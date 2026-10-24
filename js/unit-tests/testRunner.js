@@ -423,3 +423,16 @@ function action(params) {
 if (typeof module !== 'undefined') {
     module.exports = { action: action };
 }
+
+// gh-1248: shared real-dependency loaders for modules that now require
+// machineAuthor / reviewVerdicts / legRunVocab at module scope.
+global.machineAuthorReal = function () {
+    return loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+};
+global.reviewVerdictsReal = function () {
+    return loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': global.machineAuthorReal() }), {});
+};
+global.legRunVocabReal = function () {
+    return loadModule('js/common/legRunVocab.js', makeRequire({}), {});
+};

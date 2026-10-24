@@ -179,7 +179,7 @@ suite('reviewVerdicts — newest wins per head (gh-807 AC1)', function () {
     test('the AC1 WARN names the head, both verdicts and newest-wins', function () {
         var logs = [];
         var fakeConsole = { log: function () {}, warn: function () { logs.push(Array.prototype.map.call(arguments, String).join(' ')); }, error: function () {} };
-        var rvC = loadModule('js/common/reviewVerdicts.js', makeRequire({}), { console: fakeConsole });
+        var rvC = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), { console: fakeConsole });
         var records = rvC.parseVerdictRecords([
             marker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z'),
             marker(HEAD, 'REQUEST_CHANGES', '2026-10-09T05:47:40.000Z')
@@ -202,7 +202,7 @@ suite('reviewVerdicts — newest wins per head (gh-807 AC1)', function () {
     test('the AC1 WARN de-duplicates per head+verdict-pair (one line per tick, not one per guard call)', function () {
         var logs = [];
         var fakeConsole = { log: function () {}, warn: function () { logs.push(Array.prototype.map.call(arguments, String).join(' ')); }, error: function () {} };
-        var rvC = loadModule('js/common/reviewVerdicts.js', makeRequire({}), { console: fakeConsole });
+        var rvC = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), { console: fakeConsole });
         var records = rvC.parseVerdictRecords([
             marker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z'),
             marker(HEAD, 'REQUEST_CHANGES', '2026-10-09T05:47:40.000Z')

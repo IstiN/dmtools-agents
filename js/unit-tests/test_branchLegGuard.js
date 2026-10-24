@@ -22,7 +22,7 @@
 
 var assert = globalThis.assert;
 
-var guard = loadModule('js/common/branchLegGuard.js', makeRequire({}), {});
+var guard = loadModule('js/common/branchLegGuard.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {});
 
 var LEG_PATH = '.github/workflows/ai-teammate.yml';
 var OTHER_PATH = '.github/workflows/quality.yml';

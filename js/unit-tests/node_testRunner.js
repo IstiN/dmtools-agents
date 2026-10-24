@@ -373,6 +373,7 @@ function scmReal(mocks) {
 }
 
 global.machineAuthorReal = machineAuthorReal;
+
 global.loseJsonReal = loseJsonReal;
 global.legRunVocabReal = legRunVocabReal;
 global.publishParamsReal = publishParamsReal;

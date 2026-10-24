@@ -59,7 +59,10 @@ function makeOutputFiles(fileMap) {
     return loadModule('js/common/outputFiles.js', makeRequire({
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': reviewVerdictsReal()
+            })),
             './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }), {
         file_read: function(opts) {
@@ -144,7 +147,10 @@ function loadPushReworkChangesModule(fileMap, opts) {
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': reviewVerdictsReal()
+            })),
             './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         {
@@ -555,7 +561,10 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': reviewVerdictsReal()
+            })),
             './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         Object.assign({
@@ -956,7 +965,10 @@ function loadPushReworkChangesForAction(mocks, opts) {
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': reviewVerdictsReal()
+            })),
             './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         mergedMocks
@@ -1319,7 +1331,10 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': reviewVerdictsReal()
+            })),
             './common/ciViolations.js': loadModule('js/common/ciViolations.js')
         }),
         mergedMocks
@@ -3484,7 +3499,10 @@ suite('pushReworkChanges.readInputViolations (gh-1119)', function() {
                 './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
                 './common/ticketKeyShapes.js': ticketKeyShapesModule,
                 './common/commentMarkup.js': commentMarkupModule,
-                './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+                './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': reviewVerdictsReal()
+            })),
                 './common/ciViolations.js': loadModule('js/common/ciViolations.js')
             }),
             {
@@ -3549,7 +3567,10 @@ suite('pushReworkChanges.runOwnedViolationsGate (gh-1119 AC6b / UT-8 wiring)', f
                 './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
                 './common/ticketKeyShapes.js': ticketKeyShapesModule,
                 './common/commentMarkup.js': commentMarkupModule,
-                './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+                './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': reviewVerdictsReal()
+            })),
                 './common/ciViolations.js': loadModule('js/common/ciViolations.js')
             }),
             {
@@ -3671,7 +3692,10 @@ function loadCommitAndPush1082(mocks, moduleOverrides) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': reviewVerdictsReal()
+            }))
         }, moduleOverrides || {})),
         Object.assign({
             cli_execute_command: function() { return ''; },
