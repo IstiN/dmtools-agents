@@ -319,6 +319,7 @@ suite('factoryMarkJobDone — entry action (mark_job_done_publish.js)', function
   var writtenStr = {};
 
   var entryModule = loadModule('js/factory/mark_job_done_publish.js', makeRequire({
+    './publishParams.js': publishParamsReal(),
     './mark_job_done.js': mjdModule
   }), {});
 
@@ -466,6 +467,7 @@ suite('factoryMarkJobDone — entry action edge branches (gh-1225)', function ()
 
   test('envValue degrades to empty string without a java env bridge', function () {
     var entryModule = loadModule('js/factory/mark_job_done_publish.js', makeRequire({
+    './publishParams.js': publishParamsReal(),
       './mark_job_done.js': mjdModule
     }), {});
     assert.equal(entryModule.envValue('NUMBER'), '');
@@ -476,6 +478,7 @@ suite('factoryMarkJobDone — entry action edge branches (gh-1225)', function ()
     var transport = bodyExec();
     var written = null;
     var entryModule = loadModule('js/factory/mark_job_done_publish.js', makeRequire({
+    './publishParams.js': publishParamsReal(),
       './mark_job_done.js': mjdModule
     }), {
       cli_execute_command: transport.exec,
@@ -490,6 +493,7 @@ suite('factoryMarkJobDone — entry action edge branches (gh-1225)', function ()
   test('action throws when neither deps nor the file_write global is available', function () {
     var transport = bodyExec();
     var entryModule = loadModule('js/factory/mark_job_done_publish.js', makeRequire({
+    './publishParams.js': publishParamsReal(),
       './mark_job_done.js': mjdModule
     }), { cli_execute_command: transport.exec, file_write: null });
     assert.throws(function () {
@@ -499,6 +503,7 @@ suite('factoryMarkJobDone — entry action edge branches (gh-1225)', function ()
 
   test('action unwraps a null transport result to an empty body (no silent [object Object])', function () {
     var entryModule = loadModule('js/factory/mark_job_done_publish.js', makeRequire({
+    './publishParams.js': publishParamsReal(),
       './mark_job_done.js': mjdModule
     }), {});
     var seen = [];
@@ -517,6 +522,7 @@ suite('factoryMarkJobDone — entry action edge branches (gh-1225)', function ()
 
   test('resolveParams: pick() degrades null/undefined customParams values to env/defaults', function () {
     var entryModule = loadModule('js/factory/mark_job_done_publish.js', makeRequire({
+    './publishParams.js': publishParamsReal(),
       './mark_job_done.js': mjdModule
     }), {});
     var p = entryModule.resolveParams(

@@ -1,6 +1,8 @@
 # crap4dart configuration for the dmtools-agents instruction corpus (gh-1147).
 # Only the file-level `similarity` gate is used here (invoked via
-# `crap4dart check --only similarity --baseline`).
+# `crap4dart check --only similarity --baseline`). It scans markdown and
+# JavaScript sources (gh-1251); `js/unit-tests/**` is excluded because the
+# unit-test tree legitimately repeats fixture/boilerplate shapes.
 # `snapshots/**` and `docs/agents/generated/**` are generated aggregations
 # verified by `node generate_agent_snapshots.js` and `node js/agentDocGenerator.js`
 # in `.github/workflows/agent-docs.yml`, so they are excluded from similarity.
@@ -15,7 +17,7 @@ gates:
     enabled: true
     severity: error
     dirs: ['.']
-    include: ['**/*.md']
+    include: ['**/*.md', '**/*.js']
     min_shingles: 50
     jaccard: 0.5
     containment: 0.85
@@ -25,3 +27,4 @@ gates:
       - 'node_modules/**'
       - 'snapshots/**'
       - 'docs/agents/generated/**'
+      - 'js/unit-tests/**'

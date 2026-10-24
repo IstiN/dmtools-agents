@@ -184,7 +184,7 @@ function prReviewRequireMap(overrides) {
         './common/trackers.js': makeTrackersModule({}),
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './common/commentMarkup.js': commentMarkupModule,
-        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
         './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
     };
     return Object.assign(map, overrides || {});
@@ -479,7 +479,7 @@ suite('postPRReviewComments', function() {
                     './common/trackers.js': makeTrackersModule(mergedMocks),
                     './common/tokenUsageComment.js': opts.tokenUsage || { postTokenUsageComments: function() {} },
                     './common/commentMarkup.js': commentMarkupModule,
-                    './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+                    './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
                     './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
                 }),
                 mergedMocks
@@ -731,7 +731,7 @@ suite('postPRReviewComments', function() {
                     './common/trackers.js': makeTrackersModule(formalMocks),
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
                     './common/commentMarkup.js': commentMarkupModule,
-                    './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+                    './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
                     './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
                 }),
                 formalMocks
@@ -1042,7 +1042,7 @@ suite('postPRReviewComments', function() {
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
                 ,
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
         }),
                 {
@@ -1423,7 +1423,7 @@ function gh926LoadActionModule(opts, scm, autoStartMock, outputFilesMock, merged
                 postTokenUsageComments: function(key, o) { rec('tokenUsage', { key: key, initiator: o && o.initiator }); }
             },
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
         }),
         merged
@@ -2117,7 +2117,7 @@ suite('postPRReviewComments — gh-926 coverage on pre-existing helpers', functi
             './common/trackers.js': makeTrackersModule({}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
         }), {});
 
@@ -2206,7 +2206,7 @@ function gh926ResumeRequire(opts) {
         './common/trackers.js': makeTrackersModule({}),
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './common/commentMarkup.js': commentMarkupModule,
-        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
         './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
     });
 }
@@ -2540,7 +2540,7 @@ function loadForPrSearch(foundPr) {
             './common/trackers.js': makeTrackersModule({}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/commentMarkup.js': commentMarkupModule,
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
         }),
         {

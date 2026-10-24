@@ -29,7 +29,7 @@ function loadPrReviewComments() {
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, customParamsOf: function() { return {}; } },
         './common/githubHelpers.js': { findPRForTicket: function() { return null; }, findMergedPRForTicket: function() { return null; } },
         './common/commentMarkup.js': commentMarkupModule,
-        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
         './common/reviewSpecClaims.js': loadModule('js/common/reviewSpecClaims.js', makeRequire({}), {})
     }), {});
 }

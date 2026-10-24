@@ -590,6 +590,7 @@ suite('factoryTokenUsage — publishTokenUsage', function () {
 suite('factoryTokenUsage — entry action (token_usage_publish.js)', function () {
 
   var entry = loadModule('js/factory/token_usage_publish.js', makeRequire({
+    './publishParams.js': publishParamsReal(),
     './token_usage.js': tuModule
   }), {});
 

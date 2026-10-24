@@ -5,7 +5,7 @@
 // gh-1108: the reporter now requires two pure siblings at the top (hoisted
 // per the pack-require rule) — map them to the REAL modules so every
 // loadReporter call below exercises the production wiring.
-var dedupModule = loadModule('js/common/teammateEventDedup.js', makeRequire({}), {});
+var dedupModule = loadModule('js/common/teammateEventDedup.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {});
 var tokenUsageModule = loadModule('js/factory/token_usage.js', makeRequire({}), {});
 
 function loadReporter(overrides, projectConfig) {
@@ -1523,7 +1523,7 @@ suite('aiTeammateTokenUsageReporter publishTokensMap (gh-1108 IT-pub-1)', functi
 
     test('AC1: the published map fed to buildFactoryState lands on cards in the normTokenRow contract shape', function() {
         var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
-        var reworkLatchModule = loadModule('js/common/reworkLatch.js', makeRequire({}), {});
+        var reworkLatchModule = loadModule('js/common/reworkLatch.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {});
         var fsModule = loadModule('js/factoryState.js',
             makeRequire({
                 './common/machineAuthor.js': machineAuthorModule,

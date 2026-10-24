@@ -34,6 +34,9 @@
  */
 'use strict';
 
+var machineAuthor = require('./machineAuthor.js');
+var reviewVerdicts = require('./reviewVerdicts.js');
+
 // gh-957: consecutive no-op rework laps on one head before the arm is
 // withheld. Deployment-tunable via jobParams.noopLapMax (same shape as
 // redHeadCap / emptyLapMax).
@@ -99,11 +102,7 @@ function buildEscalationComment(headSha, laps, maxLaps, atIso) {
 }
 
 function commentAuthorLogin(item) {
-    if (!item) return null;
-    var u = item.user || item.author;
-    if (!u) return null;
-    var login = u.login || u.name;
-    return login ? String(login).toLowerCase() : null;
+    return machineAuthor.commentAuthorLogin(item);
 }
 
 /**
@@ -113,9 +112,9 @@ function commentAuthorLogin(item) {
 function isTrustedAuthor(item, allow) {
     // gh-1025 review: normalize ONE trailing '[bot]' on both sides —
     // App-authored lap/escalation markers are trusted under the bare knob.
-    var who = String(commentAuthorLogin(item) || '').replace(/\[bot\]$/i, '');
+    var who = machineAuthor.trustedLogin(commentAuthorLogin(item));
     for (var a = 0; a < allow.length; a++) {
-        if (who && who === String(allow[a] || '').toLowerCase().replace(/\[bot\]$/i, '')) return true;
+        if (who && who === machineAuthor.trustedLogin(allow[a])) return true;
     }
     return false;
 }
@@ -125,16 +124,7 @@ function isTrustedAuthor(item, allow) {
  * the prefix/suffix are absent or the payload is not an object.
  */
 function extractMarker(body, prefix) {
-    var text = String(body || '');
-    var start = text.indexOf(prefix);
-    if (start === -1) return null;
-    start += prefix.length;
-    var end = text.indexOf(MARKER_SUFFIX, start);
-    if (end === -1) return null;
-    var parsed;
-    try { parsed = JSON.parse(text.substring(start, end).trim()); } catch (e) { return null; }
-    if (!parsed || typeof parsed !== 'object') return null;
-    return parsed;
+    return reviewVerdicts.extractMarkerJson(body, prefix, MARKER_SUFFIX);
 }
 
 /**

@@ -14,15 +14,7 @@
 suite('scm normalize + detect (gh-1194)', function () {
 
     function loadScm(mocks) {
-        return loadModule(
-            'js/common/scm.js',
-            makeRequire({
-                './machineNotice.js': loadModule('js/common/machineNotice.js'),
-                './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js',
-                    makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') }))
-            }),
-            mocks || {}
-        );
+        return scmReal(mocks || {});
     }
 
     // A git remote that the github parser resolves, for detection-driven tests.

@@ -1,0 +1,316 @@
+{
+  "version": 2,
+  "threshold": 1,
+  "tool": "crap4js duplicates --threshold 1 --exclude \"js/unit-tests/**\" js ci (IstiN/crap4js@83ee6201)",
+  "note": "Pre-existing duplicated-line debt pinned by the gh-1251 ratchet gate. Regression = a pinned file gained ABSOLUTE duplicated lines (pct shifts from file shrinkage are informational, not failures). Regeneration is part of every gh-1244..gh-1250 dedup ticket DoD: after merging such a PR, run the tool on the merged head and rewrite \"pinned\" with each reported file { pct, lines }, where lines = recoverDupLines(pct, <file line count>).",
+  "pinned": {
+    "ci/release_packs.mjs": {
+      "pct": 2.3,
+      "lines": 15
+    },
+    "js/aiTeammateTokenUsageReporter.js": {
+      "pct": 2.35,
+      "lines": 45
+    },
+    "js/checkBugTestsPassed.js": {
+      "pct": 1.72,
+      "lines": 7
+    },
+    "js/checkBugTestsPassedHelpers.js": {
+      "pct": 5.21,
+      "lines": 5
+    },
+    "js/checkBugToFixReady.js": {
+      "pct": 2.44,
+      "lines": 7
+    },
+    "js/checkSubtasksDoneForBA.js": {
+      "pct": 9.33,
+      "lines": 14
+    },
+    "js/checkTaskStoriesDone.js": {
+      "pct": 15.05,
+      "lines": 14
+    },
+    "js/checkoutBranch.js": {
+      "pct": 11.21,
+      "lines": 24
+    },
+    "js/common/autoStart.js": {
+      "pct": 4.37,
+      "lines": 22
+    },
+    "js/common/baseBranchMarker.js": {
+      "pct": 15.85,
+      "lines": 13
+    },
+    "js/common/branchLegGuard.js": {
+      "pct": 12.65,
+      "lines": 31
+    },
+    "js/common/ciViolations.js": {
+      "pct": 3.01,
+      "lines": 21
+    },
+    "js/common/contentOutput.js": {
+      "pct": 3.27,
+      "lines": 19
+    },
+    "js/common/gitOps.js": {
+      "pct": 1.48,
+      "lines": 9
+    },
+    "js/common/githubHelpers.js": {
+      "pct": 2.4,
+      "lines": 29
+    },
+    "js/common/jiraHelpers.js": {
+      "pct": 7.92,
+      "lines": 8
+    },
+    "js/common/outputFiles.js": {
+      "pct": 11.88,
+      "lines": 12
+    },
+    "js/common/pullRequest.js": {
+      "pct": 2.44,
+      "lines": 23
+    },
+    "js/common/reviewVerdicts.js": {
+      "pct": 1.02,
+      "lines": 6
+    },
+    "js/common/reworkConsumption.js": {
+      "pct": 4.42,
+      "lines": 14
+    },
+    "js/common/reworkLatch.js": {
+      "pct": 2.26,
+      "lines": 7
+    },
+    "js/common/reworkLoopGuard.js": {
+      "pct": 4.98,
+      "lines": 14
+    },
+    "js/common/scm.js": {
+      "pct": 2.82,
+      "lines": 47
+    },
+    "js/common/teammateEventDedup.js": {
+      "pct": 2.31,
+      "lines": 14
+    },
+    "js/common/trackers.js": {
+      "pct": 2.12,
+      "lines": 33
+    },
+    "js/createIntakeTickets.js": {
+      "pct": 1.28,
+      "lines": 11
+    },
+    "js/createQuestionsAndAssignForReview.js": {
+      "pct": 3.31,
+      "lines": 19
+    },
+    "js/createRepoTasks.js": {
+      "pct": 16.85,
+      "lines": 62
+    },
+    "js/createRepoTasksMulti.js": {
+      "pct": 12.16,
+      "lines": 62
+    },
+    "js/createSolutionDesignTicketsAndAssignForReview.js": {
+      "pct": 2.17,
+      "lines": 7
+    },
+    "js/developBugFixBatchAndCreatePR.js": {
+      "pct": 7.61,
+      "lines": 14
+    },
+    "js/enhanceSDAPIDescriptionAndAssess.js": {
+      "pct": 7.34,
+      "lines": 16
+    },
+    "js/enhanceSolutionDesignDescriptionAndAssess.js": {
+      "pct": 11.37,
+      "lines": 24
+    },
+    "js/factory/mark_job_done_publish.js": {
+      "pct": 5.26,
+      "lines": 6
+    },
+    "js/factory/review_verdict_publish.js": {
+      "pct": 2.78,
+      "lines": 6
+    },
+    "js/factory/token_usage_publish.js": {
+      "pct": 4.92,
+      "lines": 6
+    },
+    "js/fetchConfluenceOutputContext.js": {
+      "pct": 2.25,
+      "lines": 5
+    },
+    "js/fetchEpicsToInput.js": {
+      "pct": 8.49,
+      "lines": 18
+    },
+    "js/finishTestCasesGeneration.js": {
+      "pct": 9.09,
+      "lines": 8
+    },
+    "js/intakePreAction.js": {
+      "pct": 10.53,
+      "lines": 18
+    },
+    "js/mergeStoryTestAutomationPR.js": {
+      "pct": 3.58,
+      "lines": 24
+    },
+    "js/mergeTrigger.js": {
+      "pct": 1.01,
+      "lines": 5
+    },
+    "js/moveToDone.js": {
+      "pct": 12.5,
+      "lines": 7
+    },
+    "js/moveToInTesting.js": {
+      "pct": 9.64,
+      "lines": 8
+    },
+    "js/moveToReadyForTesting.js": {
+      "pct": 17.07,
+      "lines": 7
+    },
+    "js/postBulkBugsCreation.js": {
+      "pct": 2.5,
+      "lines": 18
+    },
+    "js/postMobileTestAutomationResults.js": {
+      "pct": 2.74,
+      "lines": 22
+    },
+    "js/postStoryTestAutomationResults.js": {
+      "pct": 5.63,
+      "lines": 44
+    },
+    "js/postStoryTestAutomationReview.js": {
+      "pct": 4.55,
+      "lines": 14
+    },
+    "js/postStoryTestAutomationReviewHelpers.js": {
+      "pct": 2.62,
+      "lines": 10
+    },
+    "js/postStoryTestAutomationShared.js": {
+      "pct": 19.75,
+      "lines": 64
+    },
+    "js/postTestAutomationResults.js": {
+      "pct": 14.38,
+      "lines": 112
+    },
+    "js/postTestReviewComments.js": {
+      "pct": 4.61,
+      "lines": 30
+    },
+    "js/postTestReworkResults.js": {
+      "pct": 4.13,
+      "lines": 41
+    },
+    "js/preCliDevelopmentSetup.js": {
+      "pct": 5.81,
+      "lines": 49
+    },
+    "js/preCliMobileTestAutomationSetup.js": {
+      "pct": 2.08,
+      "lines": 13
+    },
+    "js/preCliSnapshotSetup.js": {
+      "pct": 3.02,
+      "lines": 6
+    },
+    "js/preCliStoryTestAutomationSetup.js": {
+      "pct": 5.83,
+      "lines": 31
+    },
+    "js/preCliTestAutomationSetup.js": {
+      "pct": 17.84,
+      "lines": 43
+    },
+    "js/preCliTestReworkSetup.js": {
+      "pct": 2.03,
+      "lines": 8
+    },
+    "js/prepareBugFixBatchContext.js": {
+      "pct": 5.62,
+      "lines": 14
+    },
+    "js/prepareDiscoveryContext.js": {
+      "pct": 3.33,
+      "lines": 10
+    },
+    "js/prepareTestPRForReview.js": {
+      "pct": 3.33,
+      "lines": 18
+    },
+    "js/publishDiscoveryToConfluence.js": {
+      "pct": 5.43,
+      "lines": 21
+    },
+    "js/recoverDirtyReviewTestCase.js": {
+      "pct": 3.57,
+      "lines": 8
+    },
+    "js/recoverMergedPRTicket.js": {
+      "pct": 8.67,
+      "lines": 17
+    },
+    "js/recoverStuckDevelopment.js": {
+      "pct": 5.31,
+      "lines": 6
+    },
+    "js/recoverStuckTestCase.js": {
+      "pct": 3.13,
+      "lines": 6
+    },
+    "js/retryMergePR.js": {
+      "pct": 3.98,
+      "lines": 17
+    },
+    "js/smAgent.js": {
+      "pct": 2.7,
+      "lines": 261
+    },
+    "js/storyTestAutomationRework.js": {
+      "pct": 4.85,
+      "lines": 24
+    },
+    "js/triggerBitriseIosBuild.js": {
+      "pct": 6.62,
+      "lines": 18
+    },
+    "js/triggerBitriseTestAutomation.js": {
+      "pct": 3.94,
+      "lines": 18
+    },
+    "js/triggerBugTestAutomation.js": {
+      "pct": 18.18,
+      "lines": 18
+    },
+    "js/triggerStoryTestAutomation.js": {
+      "pct": 16.67,
+      "lines": 18
+    },
+    "js/workflowFailureReporter.js": {
+      "pct": 2.15,
+      "lines": 7
+    },
+    "js/writeSolutionAndLabels.js": {
+      "pct": 6.51,
+      "lines": 22
+    }
+  }
+}

@@ -11,7 +11,8 @@
  */
 
 function loadGuard() {
-    return loadModule('js/common/reworkLoopGuard.js');
+    return loadModule('js/common/reworkLoopGuard.js',
+        makeRequire({ './machineAuthor.js': machineAuthorReal(), './reviewVerdicts.js': reviewVerdictsReal() }));
 }
 
 function machineComment(body) {
