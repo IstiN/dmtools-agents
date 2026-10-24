@@ -2130,3 +2130,44 @@ suite('trackers.js toIssueView branch coverage (gh-119 characterization)', funct
         assert.equal(t('jira').toIssueView('42'), null);
     });
 });
+
+// ── gh-1244: createTrackerHolder ─────────────────────────────────────────────
+
+suite('trackers.createTrackerHolder (gh-124)', function() {
+
+    test('creates the tracker lazily on first getTracker and caches it', function() {
+        var mod = loadTrackers({});
+        var holder = mod.createTrackerHolder();
+
+        holder.initTracker({ jira: {} }, { trackerProvider: 'jira' });
+        var t1 = holder.getTracker();
+        var t2 = holder.getTracker();
+
+        assert.equal(t1, t2, 'same instance returned');
+        assert.equal(t1.provider(), 'jira');
+    });
+
+    test('re-init discards the cached tracker and passes the new context through', function() {
+        var mod = loadTrackers({});
+        var holder = mod.createTrackerHolder();
+
+        holder.initTracker({ jira: { project: 'A' } }, { trackerProvider: 'jira' });
+        var first = holder.getTracker();
+
+        holder.initTracker({ jira: { project: 'B' } }, { trackerProvider: 'ado' });
+        var second = holder.getTracker();
+
+        assert.notEqual(first, second, 're-init creates a fresh tracker');
+        assert.equal(second.provider(), 'ado');
+    });
+
+    test('initTracker tolerates missing config/customParams (null config, {} customParams)', function() {
+        var mod = loadTrackers({});
+        var holder = mod.createTrackerHolder();
+
+        holder.initTracker();
+        var tracker = holder.getTracker();
+
+        assert.equal(tracker.provider(), 'jira', 'falls back to the jira default');
+    });
+});

@@ -20,16 +20,9 @@ var trackersModule = require('./common/trackers.js');
 // Load-time require (gh-823): a deferred require would resolve against the
 // pack js/ root only — hoist every require to the top of the module.
 var configLoader = require('./configLoader.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
-function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
-}
-function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
-}
+var trackerHolder = trackersModule.createTrackerHolder();
+var initTracker = trackerHolder.initTracker;
+var getTracker = trackerHolder.getTracker;
 
 // ── Pure param/matrix builders (extracted from action, gh-929) ───────────────
 

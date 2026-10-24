@@ -24,16 +24,9 @@ var toolchainSummary = require('./common/toolchainSummary.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
-function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
-}
-function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
-}
+var trackerHolder = trackersModule.createTrackerHolder();
+var initTracker = trackerHolder.initTracker;
+var getTracker = trackerHolder.getTracker;
 
 function hasPrApprovedLabel(ticket) {
     var labels = (ticket && ticket.fields && ticket.fields.labels) ? ticket.fields.labels : [];
