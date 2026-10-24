@@ -12,57 +12,10 @@ function loadTokenUsageComment(mocks) {
 }
 
 suite('tokenUsageComment', function() {
-    // gh-1249: postRunTokenUsageSafely is the single try/catch transport shared
-    // by pushReworkChanges.postCompletionTokenUsage and
-    // recoverMergedPRTicket.postRunTokenUsage.
-    test('postRunTokenUsageSafely posts with initiator and custom params (gh-1249)', function() {
-        var posted = [];
-        var mod = loadTokenUsageComment({
-            createTracker: function() {
-                return {
-                    provider: function() { return 'jira'; },
-                    postComment: function(key, comment) { posted.push({ key: key, comment: comment }); }
-                };
-            },
-            file_read: function(opts) {
-                if (opts.path === 'outputs/token_usage_files.json') return JSON.stringify(['outputs/kimi_usage.json']);
-                if (opts.path === 'outputs/kimi_usage.json') return JSON.stringify({ total_tokens: 7 });
-                return null;
-            }
-        });
-        mod.postRunTokenUsageSafely({ initiator: 'user-9', customParams: { trackerProvider: 'jira' } }, 'TS-1');
-        assert.equal(posted.length, 1);
-        assert.equal(posted[0].key, 'TS-1');
-        assert.contains(posted[0].comment, '[kimi]: {"total_tokens":7}');
-        assert.contains(posted[0].comment, 'Initiator: [~accountid:user-9]');
-    });
-
-    test('postRunTokenUsageSafely swallows post failures instead of throwing (gh-1249)', function() {
-        var warnings = [];
-        var origWarn = console.warn;
-        var origLog = console.log;
-        console.warn = function (msg) { warnings.push(String(msg)); };
-        // Force an exception to escape postTokenUsageComments: the no-usage-files
-        // path console.logs before returning, so a throwing console.log is the
-        // realistic escape hatch the wrapper's catch must contain.
-        console.log = function () { throw new Error('logger down'); };
-        var mod = loadTokenUsageComment({
-            file_read: function() { return null; }
-        });
-        var threw = false;
-        try {
-            mod.postRunTokenUsageSafely({ initiator: 'user-9' }, 'TS-1');
-        } catch (e) {
-            threw = true;
-        } finally {
-            console.warn = origWarn;
-            console.log = origLog;
-        }
-        assert.equal(threw, false);
-        assert.equal(warnings.length, 1);
-        assert.contains(warnings[0], 'Failed to post token usage comments:');
-    });
-
+    // gh-1249: the shared try/catch transport for pushReworkChanges.postCompletionTokenUsage
+    // and recoverMergedPRTicket.postRunTokenUsage is main's canonical
+    // postTokenUsageSafely (gh-1244) — the temporary postRunTokenUsageSafely was dropped
+    // in the main-merge resolution. The canonical suite below covers the transport.
     test('findUsageFiles reads manifest and filters *_usage.json entries', function() {
         var mod = loadTokenUsageComment({
             file_read: function(opts) {
@@ -504,5 +457,80 @@ suite('tokenUsageComment — postTokenUsageComments edge branches (gh-1225)', fu
         assert.equal(r.posted, 1);
         assert.equal(calls.length, 1);
         assert.contains(calls[0][1], '[a]: {"total_tokens":5}');
+    });
+});
+
+suite('tokenUsageComment.postTokenUsageSafely (gh-124)', function() {
+
+    function usageFileMocks(posted, commentImpl) {
+        return {
+            file_read: function(opts) {
+                if (opts.path === 'outputs/token_usage_files.json') {
+                    return JSON.stringify(['outputs/story_solution_usage.json']);
+                }
+                if (opts.path === 'outputs/story_solution_usage.json') {
+                    return JSON.stringify({ provider: 'kimi', total_tokens: 123 });
+                }
+                return null;
+            },
+            jira_post_comment: function(args) {
+                posted.push(args);
+                if (commentImpl) return commentImpl(args);
+            }
+        };
+    }
+
+    test('params form posts with params.initiator and customParamsOf(params)', function() {
+        var posted = [];
+        var mod = loadTokenUsageComment(usageFileMocks(posted));
+
+        mod.postTokenUsageSafely('TS-1', { initiator: 'user-1', jobParams: { customParams: { trackerProvider: 'jira' } } });
+
+        assert.equal(posted.length, 1);
+        assert.equal(posted[0].key, 'TS-1');
+        assert.contains(posted[0].comment, '[story_solution]:');
+        assert.contains(posted[0].comment, 'Initiator: [~accountid:user-1]');
+    });
+
+    test('overrides win: explicit initiator and tracker are used, params may be null', function() {
+        var posted = [];
+        var mod = loadTokenUsageComment(usageFileMocks(posted));
+        var fakeTracker = {
+            provider: function() { return 'jira'; },
+            postComment: function(key, comment) {
+                posted.push({ key: key, comment: comment });
+            }
+        };
+
+        mod.postTokenUsageSafely('TS-2', { initiator: 'user-from-params' }, { initiator: 'user-override', tracker: fakeTracker });
+
+        assert.equal(posted.length, 1);
+        assert.equal(posted[0].key, 'TS-2');
+        assert.contains(posted[0].comment, 'Initiator: [~accountid:user-override]');
+        assert.notContains(posted[0].comment, 'user-from-params');
+    });
+
+    test('never throws: a posting failure is logged and swallowed', function() {
+        var mod = loadTokenUsageComment(usageFileMocks([], function() {
+            throw new Error('provider down');
+        }));
+
+        var threw = false;
+        try {
+            mod.postTokenUsageSafely('TS-3', { initiator: 'user-1' });
+        } catch (e) {
+            threw = true;
+        }
+        assert.notOk(threw, 'postTokenUsageSafely must not propagate provider failures');
+    });
+
+    test('tolerates null params and missing overrides (posting still works)', function() {
+        var posted = [];
+        var mod = loadTokenUsageComment(usageFileMocks(posted));
+
+        mod.postTokenUsageSafely('TS-4', null);
+
+        assert.equal(posted.length, 1);
+        assert.equal(posted[0].key, 'TS-4');
     });
 });

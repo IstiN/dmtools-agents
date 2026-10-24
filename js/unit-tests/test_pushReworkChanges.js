@@ -21,13 +21,13 @@ var stubToolchainLine = function (t) { return t; };
 
 // gh-1249 rework (crap-ratchet fix): ONE file-scope tokenUsageComment stub
 // shared by every loader's require map. The gh-1249 dedup initially inlined
-// `postRunTokenUsageSafely`/`customParamsOf` closures per loader — nested
+// `postTokenUsageSafely`/`customParamsOf` closures per loader — nested
 // closures count towards the enclosing loader's CC, pushing five of them
 // over the CRAP ratchet (CI: 6 NEW > 8). The named stub is a separate
 // coverage unit (customParamsOf CC 3, exercised by many suites).
 var stubTokenUsageComment = {
     postTokenUsageComments: function () {},
-    postRunTokenUsageSafely: function () { return undefined; },
+    postTokenUsageSafely: function () { return undefined; },
     customParamsOf: function (p) { return (p && p.customParams) || {}; }
 };
 
@@ -43,8 +43,8 @@ suite('pushReworkChanges test harness — shared tokenUsageComment stub (gh-1249
         assert.deepEqual(stubTokenUsageComment.customParamsOf(null), {});
     });
 
-    test('postRunTokenUsageSafely and postTokenUsageComments are quiet no-ops', function () {
-        assert.equal(stubTokenUsageComment.postRunTokenUsageSafely(), undefined);
+    test('postTokenUsageSafely and postTokenUsageComments are quiet no-ops', function () {
+        assert.equal(stubTokenUsageComment.postTokenUsageSafely(), undefined);
         assert.equal(stubTokenUsageComment.postTokenUsageComments(), undefined);
     });
 });

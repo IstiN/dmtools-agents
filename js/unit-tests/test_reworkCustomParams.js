@@ -87,7 +87,7 @@ function loadPushReworkChanges() {
                     return readOutputFileFrom(mocks, path);
                 }
             },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() {}, customParamsOf: function(p) { return (p && p.customParams) || {}; } },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageSafely: function() {}, customParamsOf: function(p) { return (p && p.customParams) || {}; } },
             './cacheToReleases.js': {}
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
@@ -217,7 +217,7 @@ function loadPushReworkChangesForAction(mocks) {
                     return readOutputFileFrom(mocks, path);
                 }
             },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() {}, customParamsOf: function(p) { return (p && p.customParams) || {}; } },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageSafely: function() {}, customParamsOf: function(p) { return (p && p.customParams) || {}; } },
             './common/trackers.js': makeTrackersModule(toolMocks),
             './cacheToReleases.js': { action: function() {} }
         ,

@@ -15,16 +15,9 @@ const tokenUsageComment = require('./common/tokenUsageComment.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
-function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
-}
-function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
-}
+var trackerHolder = trackersModule.createTrackerHolder();
+var initTracker = trackerHolder.initTracker;
+var getTracker = trackerHolder.getTracker;
 
 /**
  * Find the bug fix development comment from Jira comments.
@@ -177,11 +170,7 @@ function removeSmLabel(ticketKey, params) {
  * failure here must never fail the merge notification.
  */
 function postTokenUsageSafely(ticketKey, projectConfig, params) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, config: projectConfig, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    tokenUsageComment.postTokenUsageSafely(ticketKey, params, { config: projectConfig });
 }
 
 function action(params) {

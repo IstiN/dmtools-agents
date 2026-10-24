@@ -11,16 +11,9 @@ var tokenUsageComment = require('./common/tokenUsageComment.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
-function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
-}
-function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
-}
+var trackerHolder = trackersModule.createTrackerHolder();
+var initTracker = trackerHolder.initTracker;
+var getTracker = trackerHolder.getTracker;
 
 function prMatchesTicket(pr, ticketKey) {
     return prLookup.prMentionsTicket(pr, ticketKey);
@@ -145,10 +138,10 @@ function postRecoveryComment(ticketKey, prNumber, prUrl, mergedStatus) {
  * Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
  * wrote outputs/*_usage.json during the agent run (non-fatal on failure).
  * gh-1249: the try/catch transport is shared with pushReworkChanges.js via
- * tokenUsageComment.postRunTokenUsageSafely.
+ * tokenUsageComment.postTokenUsageSafely (gh-1244 canonical helper).
  */
 function postRunTokenUsage(params, ticketKey) {
-    tokenUsageComment.postRunTokenUsageSafely(params, ticketKey);
+    tokenUsageComment.postTokenUsageSafely(ticketKey, params);
 }
 
 function action(params) {

@@ -15,23 +15,13 @@
 
 /**
  * Tracker-agnostic ticket operations holder (jira / ado / github): creates
- * the tracker lazily per action() run and resets on re-init, replacing the
- * module-level _trackerCtx/_trackerInst singletons both post-actions used to
- * duplicate.
+ * the tracker lazily per action() run and resets on re-init. gh-1244: the
+ * canonical implementation lives in common/trackers.js (createTrackerHolder);
+ * this delegate keeps the trackersModule argument so call sites and unit
+ * tests keep injecting the module they use.
  */
 function createTrackerHolder(trackersModule) {
-    var ctx = { config: null, customParams: {} };
-    var inst = null;
-    return {
-        initTracker: function(config, customParams) {
-            ctx = { config: config || null, customParams: customParams || {} };
-            inst = null;
-        },
-        getTracker: function() {
-            if (!inst) inst = trackersModule.createTracker(ctx.config, ctx.customParams);
-            return inst;
-        }
-    };
+    return trackersModule.createTrackerHolder();
 }
 
 function readAttemptMarker(markerPath) {
