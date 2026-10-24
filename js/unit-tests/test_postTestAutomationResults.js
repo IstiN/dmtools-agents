@@ -81,6 +81,11 @@ function loadPostTestAutomation(mocks) {
                 'js/postTestAutomationResultsHelpers.js',
                 makeRequire({}),
                 {}
+            ),
+            './postStoryTestAutomationShared.js': loadModule(
+                'js/postStoryTestAutomationShared.js',
+                makeRequire({}),
+                allMocks
             )
         }),
         allMocks

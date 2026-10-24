@@ -27,6 +27,7 @@ const { GIT_CONFIG, LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var trackersModule = require('./common/trackers.js');
 var commentMarkup = require('./common/commentMarkup.js');
+var shared = require('./postStoryTestAutomationShared.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var _trackerCtx = { config: null, customParams: {} };
@@ -64,20 +65,15 @@ function buildTestReworkResultComment(flavor, ctx) {
     return comment;
 }
 
-// Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
+// cleanCommandOutput: the warning:/note: line filter lives in
 // common/pullRequest.js once — this delegate keeps every local call site.
 function cleanCommandOutput(output) {
     return prHelper.cleanCommandOutput(output);
 }
 
 function readFile(path) {
-    try {
-        const content = file_read({ path: path });
-        return (content && content.trim()) ? content : null;
-    } catch (e) {
-        console.warn('Could not read file ' + path + ':', e);
-        return null;
-    }
+    // Canonical file_read-based reader in postStoryTestAutomationShared.js (gh-1246).
+    return shared.readFileOrNull(path);
 }
 
 function readResultJson() {
@@ -487,16 +483,11 @@ function isMergeInProgress() {
 }
 
 function isSubmodulePath(path) {
-    try {
-        const stageOutput = cleanCommandOutput(
-            cli_execute_command({ command: 'git ls-files --stage -- "' + path + '"' }) || ''
-        );
-        return stageOutput.split('\n').some(function(line) {
-            return line.trim().indexOf('160000 ') !== -1;
-        });
-    } catch (e) {
-        return false;
-    }
+    // Canonical probe in common/pullRequest.js (gh-1246) — kept as a local
+    // wrapper because this module runs commands without a workingDir.
+    return prHelper.isSubmodulePath(function(command) {
+        return cli_execute_command({ command: command });
+    }, null, path);
 }
 
 // ── gh-981 pure path classification + thin git executors ─────────────────────
@@ -836,25 +827,7 @@ function resumeOrReport(ticketKey, customParams, config, stage, title, error) {
 
 /** autoStartReview configured-workflow trigger, falling back to the SM idle trigger. */
 function triggerAutoStart(ticketKey, customParams, config) {
-    var autoStarted = false;
-    if (customParams && customParams.autoStartReview && customParams.autoStartReviewConfigFile) {
-        try {
-            autoStarted = autoStart.triggerConfiguredWorkflowForTicket({
-                ticketKey: ticketKey,
-                customParams: customParams,
-                config: config,
-                configFile: customParams.autoStartReviewConfigFile,
-                label: 'pr_test_automation_review',
-                stripKeys: [
-                    'removeLabel',
-                    'autoStartReview',
-                    'autoStartReviewConfigFile'
-                ]
-            });
-        } catch (e) {
-            console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
-        }
-    }
+    var autoStarted = shared.triggerAutoStartReviewWorkflow(autoStart, ticketKey, customParams, config, 'pr_test_automation_review');
     if (!autoStarted) {
         autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
     }

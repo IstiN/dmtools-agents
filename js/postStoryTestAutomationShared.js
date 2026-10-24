@@ -283,7 +283,13 @@ function createGitOps(prHelper) {
 
         var localSha = revParse('HEAD', workingDir);
         var remoteSha = revParse('origin/' + branchName, workingDir);
-        var mergeBase = (localSha && remoteSha) ? findMergeBase('HEAD', 'origin/' + branchName, workingDir) : '';
+
+        // The identical check must stay BEFORE the merge-base call: when the
+        // branch is already in sync no `git merge-base` command may run.
+        var mergeBase = '';
+        if (localSha && remoteSha && localSha !== remoteSha) {
+            mergeBase = findMergeBase('HEAD', 'origin/' + branchName, workingDir);
+        }
 
         var decision = syncDecision(localSha, remoteSha, mergeBase);
 

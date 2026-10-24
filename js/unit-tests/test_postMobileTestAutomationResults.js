@@ -55,6 +55,11 @@ function loadPostCli(mocks) {
         makeRequire({}),
         {}
     );
+    var shared = loadModule(
+        'js/postStoryTestAutomationShared.js',
+        makeRequire({}),
+        allMocks
+    );
 
     return loadModule(
         'js/postMobileTestAutomationResults.js',
@@ -63,6 +68,7 @@ function loadPostCli(mocks) {
             './config.js': configModule,
             './common/pullRequest.js': prHelper,
             './postMobileTestAutomationResultsHelpers.js': mobileHelpers,
+            './postStoryTestAutomationShared.js': shared,
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
                 '../config.js': configModule,
                 './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')

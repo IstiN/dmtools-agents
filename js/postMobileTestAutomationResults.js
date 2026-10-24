@@ -34,6 +34,7 @@ var prHelper = require('./common/pullRequest.js');
 var outputFiles = require('./common/outputFiles.js');
 var trackersModule = require('./common/trackers.js');
 var mobileHelpers = require('./postMobileTestAutomationResultsHelpers.js');
+var shared = require('./postStoryTestAutomationShared.js');
 // Tracker-agnostic ticket ops; created inside action() (never at module load).
 var tracker = null;
 
@@ -162,17 +163,9 @@ function cleanCommandOutput(output) {
     return prHelper.cleanCommandOutput(output);
 }
 
-function readFile(path) {
-    return outputFiles.readOutputFile(path, {});
-}
-
-/** Read an output file from normalized paths (root outputs, ticket subdir, and workingDir variants). */
-function readOutputFile(relativePath, workingDir, ticketKey) {
-    return outputFiles.readOutputFile(relativePath, {
-        workingDir: workingDir,
-        ticketKey: ticketKey
-    });
-}
+var outputReaders = shared.makeOutputFileReaders(outputFiles);
+var readFile = outputReaders.readFile;
+var readOutputFile = outputReaders.readOutputFile;
 
 function readResultJson(workingDir, ticketKey) {
     var raw = readOutputFile('test_automation_result.json', workingDir, ticketKey);
@@ -312,12 +305,10 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
 
         commitAndPush(branchName, commitMessage, workingDir);
 
-        console.log('✅ Git operations completed');
-        return { success: true, branchName: branchName };
+        return shared.gitOperationsSuccess(branchName);
 
     } catch (error) {
-        console.error('Git operations failed:', error);
-        return { success: false, error: error.toString() };
+        return shared.gitOperationsFailure(error);
     }
 }
 
@@ -532,12 +523,7 @@ function configureGitAuthor(config, workingDir) {
     if (!workingDir) {
         return;
     }
-    try {
-        runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
-        runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
-    } catch (e) {
-        console.warn('Failed to configure git author:', e);
-    }
+    shared.configureGitAuthor(runInRepo, config, workingDir);
 }
 
 /** Step 2: Get current branch in automation repo (null without workingDir). */

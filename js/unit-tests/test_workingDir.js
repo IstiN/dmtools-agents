@@ -678,6 +678,11 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
                 makeRequire({}),
                 {}
             ),
+            './postStoryTestAutomationShared.js': loadModule(
+                'js/postStoryTestAutomationShared.js',
+                makeRequire({}),
+                allMocks
+            ),
         }),
         allMocks
     );

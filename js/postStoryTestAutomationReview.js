@@ -25,13 +25,9 @@ const reviewHelpers = require('./postStoryTestAutomationReviewHelpers.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
-var trackerHolder = shared.createTrackerHolder(trackersModule);
-function initTracker(config, customParams) {
-    trackerHolder.initTracker(config, customParams);
-}
-function getTracker() {
-    return trackerHolder.getTracker();
-}
+var trackerOps = shared.createTrackerHolder(trackersModule);
+var initTracker = trackerOps.initTracker;
+var getTracker = trackerOps.getTracker;
 
 function readFile(path) {
     return outputFiles.readOutputFile(path, {});
@@ -52,15 +48,8 @@ function readReviewJson(storyKey, workingDir) {
 }
 
 function resolveCustomParams(params, config) {
-    var merged = {};
-    var patch = configLoader.resolveInstructions('pr_story_test_automation_review', null, config).jobParamPatch;
-    if (patch && patch.customParams) {
-        Object.assign(merged, patch.customParams);
-    }
-    Object.assign(merged,
-        (params.jobParams && params.jobParams.customParams) || params.customParams || {}
-    );
-    return merged;
+    // Canonical merge in postStoryTestAutomationReviewHelpers.js (gh-1246).
+    return reviewHelpers.resolveCustomParams(configLoader, params, config, 'pr_story_test_automation_review');
 }
 
 function getRepoInfo(config) {
