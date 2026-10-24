@@ -353,15 +353,10 @@ function _githubGetCommitCheckRuns(workspace, repository, sha) {
     return _githubMergeLegacyStatuses(checkRuns, legacyStatuses);
 }
 
-// The 'Discussions: …' census log line, verbatim from the former closure.
+// The 'Discussions: …' census log line — canonical in githubReviewFetch
+// (gh-1248: one copy shared with githubHelpers' fetchDiscussionsAndRawData).
 function _githubLogInventoryCounts(inv, rawThreads) {
-    var c = inv.counts;
-    console.log('Discussions: ' + c.total + ' threads (' + c.open + ' open, ' + c.resolved + ' resolved, ' + c.bot + ' bot, ' + c.notices + ' machine notices),',
-        rawThreads.filter(function(t) { return t.rootCommentId; }).length + ' reply IDs,',
-        rawThreads.filter(function(t) { return t.threadId; }).length + ' resolve IDs' +
-        (inv.census.graphqlUnresolved !== null
-            ? ' — GraphQL census: ' + inv.census.graphqlUnresolved + ' unresolved (arm-rule count)'
-            : ''));
+    githubReviewFetch.logInventoryCounts(inv, rawThreads);
 }
 
 // Review-thread inventory (gh-957): GraphQL-first — enumerated from the SAME
@@ -373,7 +368,6 @@ function _githubLogInventoryCounts(inv, rawThreads) {
 // GraphQL census carries open threads — the live dart #424 shape — must still
 // produce the full inventory, otherwise the rework leg can never see what the
 // armer counted and the no-op loop never converges).
-function _githubFetchReviewThreadInventory(workspace, repository, prIdStr) {
 function _githubFetchReviewThreadInventory(workspace, repository, prIdStr) {
     var conversations = githubReviewFetch.fetchPrConversations(workspace, repository, prIdStr);
     var graphqlRaw = githubReviewFetch.fetchPrReviewThreadsRaw(workspace, repository, prIdStr);
