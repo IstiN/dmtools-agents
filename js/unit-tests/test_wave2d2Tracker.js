@@ -53,7 +53,8 @@ suite('wave2d2 ado — checkStoryTestsPassed', function() {
             './configLoader.js': makeDefaultConfigLoaderMock({ jira: { issueTypes: { TEST_CASE: 'Test Case', BUG: 'Bug' } } }),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
-            './common/trackers.js': w2Trackers(rec.mocks)
+            './common/trackers.js': w2Trackers(rec.mocks),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
         }), rec.mocks);
         var r = mod.action({ ticket: { key: '10' }, jobParams: { customParams: { trackerProvider: 'ado', removeLabel: 'sm_x' } } });
         assert.equal(r.action, 'moved_to_done');

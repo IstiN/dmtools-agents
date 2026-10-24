@@ -2,6 +2,10 @@
  * Unit tests for js/common/autoStart.js
  */
 
+// gh-1249: autoStart shares the real workflowRuns helpers (the pure
+// timestamp/age/fan-out module) — load the genuine module, not a stub.
+var workflowRunsReal = loadModule('js/common/workflowRuns.js', makeRequire({}), {});
+
 function makeBuildEncodedConfigMock() {
     return {
         extractAgentName: function(configFile) {
@@ -53,7 +57,8 @@ function loadAutoStartHelper(scmMocks, builderMock, extraMocks) {
     var buildEncodedConfig = builderMock || makeBuildEncodedConfigMock();
     return loadModule(
         'js/common/autoStart.js',
-        makeRequire({ './scm.js': scm, './buildEncodedConfig.js': buildEncodedConfig }),
+        makeRequire({ './scm.js': scm, './buildEncodedConfig.js': buildEncodedConfig,
+            './workflowRuns.js': workflowRunsReal }),
         extraMocks || {}
     );
 }
@@ -1245,7 +1250,8 @@ function autoStartModule() {
         'js/common/autoStart.js',
         makeRequire({
             './scm.js': {},
-            './buildEncodedConfig.js': makeBuildEncodedConfigMock()
+            './buildEncodedConfig.js': makeBuildEncodedConfigMock(),
+            './workflowRuns.js': workflowRunsReal
         }),
         {}
     );
@@ -1346,6 +1352,39 @@ suite('autoStart — parseWorkflowRuns', function() {
         assert.equal(runs[0].id, 3);
         assert.deepEqual(autoStart.parseWorkflowRuns({ other: true }), [],
             'object without workflow_runs → empty list');
+    });
+
+    // gh-1249 (review thread TD): autoStart delegates to the shared
+    // workflowRuns.parseWorkflowRuns — the { runs } envelope now parses here
+    // too (previously it silently read as []), removing the parse-flavor
+    // drift with the smAgent path.
+    test('{ runs } envelope parses on both string and object payloads (shared parser parity)', function() {
+        var autoStart = loadAutoStartHelper();
+        var runs = autoStart.parseWorkflowRuns('{"runs":[{"id":20},{"id":21}]}');
+        assert.equal(runs.length, 2);
+        assert.equal(runs[1].id, 21);
+        var objRuns = autoStart.parseWorkflowRuns({ runs: [{ id: 22 }] });
+        assert.equal(objRuns.length, 1);
+        assert.equal(objRuns[0].id, 22);
+    });
+
+    test('warn contract: malformed JSON string warns once and returns []; valid payloads never warn', function() {
+        var autoStart = loadAutoStartHelper();
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(msg) { warns.push(String(msg)); };
+        try {
+            assert.deepEqual(autoStart.parseWorkflowRuns('not-json{'), []);
+            assert.equal(warns.length, 1);
+            assert.contains(warns[0], 'autoStart: failed to parse workflow runs:');
+            warns.length = 0;
+            assert.deepEqual(autoStart.parseWorkflowRuns('{"workflow_runs":[]}'), []);
+            assert.deepEqual(autoStart.parseWorkflowRuns('{"runs":[]}'), []);
+            assert.deepEqual(autoStart.parseWorkflowRuns(null), []);
+            assert.equal(warns.length, 0, 'valid/empty payloads must stay silent (byte-compatible warn scope)');
+        } finally {
+            console.warn = origWarn;
+        }
     });
 
 });

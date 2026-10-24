@@ -12,6 +12,10 @@ function loadTokenUsageComment(mocks) {
 }
 
 suite('tokenUsageComment', function() {
+    // gh-1249: the shared try/catch transport for pushReworkChanges.postCompletionTokenUsage
+    // and recoverMergedPRTicket.postRunTokenUsage is main's canonical
+    // postTokenUsageSafely (gh-1244) — the temporary postRunTokenUsageSafely was dropped
+    // in the main-merge resolution. The canonical suite below covers the transport.
     test('findUsageFiles reads manifest and filters *_usage.json entries', function() {
         var mod = loadTokenUsageComment({
             file_read: function(opts) {

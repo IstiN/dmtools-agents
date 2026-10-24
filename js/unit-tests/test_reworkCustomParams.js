@@ -74,6 +74,8 @@ function loadPushReworkChanges() {
         'js/pushReworkChanges.js',
         makeRequire({
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
+            './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -90,7 +92,7 @@ function loadPushReworkChanges() {
                     return readOutputFileFrom(mocks, path);
                 }
             },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageSafely: function() {}, customParamsOf: function(p) { return (p && p.customParams) || {}; } },
             './cacheToReleases.js': {}
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
@@ -187,6 +189,8 @@ function loadPushReworkChangesForAction(mocks) {
         'js/pushReworkChanges.js',
         makeRequire({
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
+            './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -219,7 +223,7 @@ function loadPushReworkChangesForAction(mocks) {
                     return readOutputFileFrom(mocks, path);
                 }
             },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageSafely: function() {}, customParamsOf: function(p) { return (p && p.customParams) || {}; } },
             './common/trackers.js': makeTrackersModule(toolMocks),
             './cacheToReleases.js': { action: function() {} }
         ,

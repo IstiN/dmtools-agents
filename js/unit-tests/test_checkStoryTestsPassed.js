@@ -18,7 +18,7 @@ function loadCheckStoryTestsPassed(mocks) {
         makeRequire({
             './config.js': configModule,
             './configLoader.js': configLoaderMock,
-            './common/tokenUsageComment.js': mocks.tokenUsage || { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': mocks.tokenUsage || { postTokenUsageComments: function() {}, postTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; } },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
                 '../config.js': configModule,

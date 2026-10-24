@@ -83,11 +83,14 @@ suite('wave2d1 tracker — checkBugTestsPassed / checkBugToFixReady', function()
         var mod = loadModule('js/checkBugTestsPassed.js', makeRequire({
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock(),
-            './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({ }), {}),
+            './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({
+                './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
+            }), {}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': d1Trackers(rec.mocks),
-            './common/scm.js': { createScm: function() { return { listPrs: function() { return []; } }; } }
+            './common/scm.js': { createScm: function() { return { listPrs: function() { return []; } }; } },
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
         }), rec.mocks);
         var r = mod.action({ ticket: { key: '10' }, jobParams: { customParams: { trackerProvider: 'ado', removeLabel: 'sm_x' } } });
         assert.equal(r.action, 'no_test_cases');

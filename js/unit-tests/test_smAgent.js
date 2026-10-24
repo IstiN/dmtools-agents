@@ -8,6 +8,21 @@
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// gh-1249: the REAL smProvider module, loaded once, for the shared pure
+// helpers that smAgent now delegates to (reviewThreadNodesOf — the GraphQL
+// reviewThreads envelope nav). Stubs reference the REAL implementation
+// instead of re-declaring the envelope chain (a verbatim stub copy would
+// re-form the clone window this rework removed).
+var smProviderRealModCache = null;
+function smProviderRealForGh1249() {
+    if (smProviderRealModCache) return smProviderRealModCache;
+    smProviderRealModCache = loadModule('js/common/smProvider.js', makeRequire({
+        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+        './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
+    }), {});
+    return smProviderRealModCache;
+}
+
 /**
  * Create a smAgent instance with full mock injection.
  *
@@ -415,7 +430,10 @@ function makeSmAgent(opts) {
             // gh-1059: pin the REAL shared head-repo resolver (githubSource
             // consumes it on the PR-list path).
             ghPrHeadRepoFull: smProviderRealMod.ghPrHeadRepoFull,
-            ghPrMaintainerCanModify: smProviderRealMod.ghPrMaintainerCanModify };
+            ghPrMaintainerCanModify: smProviderRealMod.ghPrMaintainerCanModify,
+            // gh-1249: the shared GraphQL reviewThreads envelope nav
+            // (smAgent.fetchPrReviewThreadNodes delegates to it).
+            reviewThreadNodesOf: smProviderRealMod.reviewThreadNodesOf };
         var smAsyncForSource = loadModule(
             'js/common/smAsync.js',
             makeRequire({ './common/smProvider.js': smProviderStub }),
@@ -472,6 +490,9 @@ function makeSmAgent(opts) {
             })),
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
+            // gh-1249: the shared workflow-run probe family — pure leaf, loaded real.
+            './common/workflowRuns.js': loadModule('js/common/workflowRuns.js', makeRequire({}), {}),
+            './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
             // gh-1107: the check-run stamp transport (temp-file JSON body).
             './common/checkRunStamp.js': loadModule('js/common/checkRunStamp.js',
                 makeRequire({
@@ -516,7 +537,10 @@ function makeSmAgent(opts) {
                 // cached open-PR list after mutating labels.
                 ioCacheDrop: function (o, r, kind, id) {
                     capturedIoCacheDrops.push({ owner: o, repo: r, kind: kind, id: id });
-                }
+                },
+                // gh-1249: smAgent.fetchPrReviewThreadNodes delegates to the
+                // shared envelope nav — stubs must serve the real one.
+                reviewThreadNodesOf: smProviderRealForGh1249().reviewThreadNodesOf
             },
             './factoryState.js': loadModule('js/factoryState.js',
                 makeRequire({
