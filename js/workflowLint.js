@@ -297,9 +297,13 @@ function contentContext(content, indent) {
 }
 
 // One raw line's structural context for the duplicate scan: null when the
-// line carries no mapping structure (blank, comment, scalar body), else
-// the content classification stamped with whether the line leaves an open
-// block scalar (dedent ends the scalar; the line is still processed).
+// line carries no mapping structure AND stays inside an open scalar (blank,
+// scalar body), else the content classification stamped with whether the
+// line leaves an open block scalar (dedent ends the scalar). A dedent with
+// no mapping structure (comment, "- main") still returns { leavesScalar:
+// true } — the scalar must close even though the line itself is skipped,
+// matching the pre-extraction inline behaviour (any dedented non-blank line
+// reset scalarIndent before content classification).
 function lineContext(raw, scalarIndent) {
     if (raw.trim() === '') return null;
     var indent = indentOf(raw);
@@ -310,7 +314,7 @@ function lineContext(raw, scalarIndent) {
         leavesScalar = true;
     }
     var ctx = contentContext(raw.slice(indent), indent);
-    if (!ctx) return null;
+    if (!ctx) return leavesScalar ? { leavesScalar: true } : null;
     ctx.leavesScalar = leavesScalar;
     return ctx;
 }
@@ -331,6 +335,7 @@ function findDuplicateKeys(text) {
             stack = [];
             continue;
         }
+        if (!ctx.match) continue; // no-structure dedent: only the scalar reset applies
         applyKeyLine(stack, ctx.match, ctx.indent, dups, i + 1);
         if (opensBlockScalar(ctx.match)) {
             scalarIndent = ctx.indent;

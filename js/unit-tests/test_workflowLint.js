@@ -720,6 +720,16 @@ suite('workflowLint findDuplicateKeys helpers (gh-1198 extraction)', function ()
             assert.equal(ctx.reset, true);
             assert.equal(ctx.leavesScalar, true);
         });
+        test('a NO-STRUCTURE dedent (comment / list item) still leaves the scalar', function () {
+            // The scalar-end signal must survive even when the line carries no
+            // mapping structure — the caller closes the scalar on leavesScalar.
+            var comment = lint.lineContext('# comment at indent 0', 0);
+            assert.deepEqual(comment, { leavesScalar: true },
+                'dedented full-line comment: ends the scalar, no structure');
+            var listItem = lint.lineContext('- main', 0);
+            assert.deepEqual(listItem, { leavesScalar: true },
+                'dedented non-key list item: ends the scalar, no structure');
+        });
         test('outside a scalar, nothing leaves anything', function () {
             assert.equal(lint.lineContext('permissions:', -1).leavesScalar, false);
             assert.equal(lint.lineContext('# comment', -1), null);
@@ -859,6 +869,30 @@ suite('workflowLint findDuplicateKeys helpers (gh-1198 extraction)', function ()
                 '  schedule:'
             ].join('\n');
             assert.deepEqual(lint.findDuplicateKeys(yml), []);
+        });
+
+        test('a dedented COMMENT closes an open block scalar (comment-dedent corner)', function () {
+            // gh-676 guard: after the scalar ends at the dedented comment, the
+            // duplicate pair at the former scalar depth must be scanned again.
+            var yml = [
+                'a: |',
+                '  text',
+                '# comment at indent 0',
+                '  dupkey: v1',
+                '  dupkey: v2'
+            ].join('\n');
+            assert.deepEqual(lint.findDuplicateKeys(yml), [{ key: 'dupkey', line: 5 }]);
+        });
+
+        test('a dedented LIST ITEM closes an open block scalar (list-item-dedent corner)', function () {
+            var yml = [
+                'a: |',
+                '  text',
+                '- main',
+                '  dupkey: v1',
+                '  dupkey: v2'
+            ].join('\n');
+            assert.deepEqual(lint.findDuplicateKeys(yml), [{ key: 'dupkey', line: 5 }]);
         });
     });
 });
