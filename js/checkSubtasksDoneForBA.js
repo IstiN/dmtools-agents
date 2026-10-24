@@ -64,11 +64,7 @@ function moveStoryToBaAnalysis(tracker, ticketKey, baAnalysisStatus, commentBody
 }
 
 function postTokenUsageSafely(ticketKey, initiator, tracker) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: initiator, tracker: tracker });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    tokenUsageComment.postTokenUsageSafely(ticketKey, null, { initiator: initiator, tracker: tracker });
 }
 
 function runBaReadinessCheck(tracker, projectConfig, ticketKey, removeLabel, initiator) {

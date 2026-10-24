@@ -24,9 +24,9 @@ const outputFiles = require('./common/outputFiles.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
-var lazyTracker = require('./common/lazyTracker.js').createLazyTracker(trackersModule);
-var initTracker = lazyTracker.initTracker;
-var getTracker = lazyTracker.getTracker;
+var trackerHolder = trackersModule.createTrackerHolder();
+var initTracker = trackerHolder.initTracker;
+var getTracker = trackerHolder.getTracker;
 
 /**
  * Ensure summary starts with [Q] prefix
@@ -500,7 +500,7 @@ function action(params) {
         var stageOutcome = moveToPoReview(ticketKey, jiraConfig.statuses.PO_REVIEW);
         removeWipLabel(ticketKey, wipLabel);
         triggerAutoStartQuestionAnswer(customParams, projectConfig, createdTickets);
-        tokenUsageComment.postTokenUsageCommentsSafe(ticketKey, params);
+        tokenUsageComment.postTokenUsageSafely(ticketKey, params);
 
         return {
             success: true,

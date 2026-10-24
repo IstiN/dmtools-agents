@@ -67,9 +67,8 @@ function loadCreateQuestionsModule(fileMap, extraGlobals, requireOverrides) {
         './configLoader.js': configLoaderModule,
         './common/scm.js': { createScm: function () { return {}; } },
         './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function (opts) { autoStarts.push(opts); return false; } },
-        './common/tokenUsageComment.js': { postTokenUsageComments: function () { }, postTokenUsageCommentsSafe: function () { } },
+        './common/tokenUsageComment.js': { postTokenUsageComments: function () { }, postTokenUsageSafely: function () { } },
         './common/outputFiles.js': outputFiles,
-        './common/lazyTracker.js': loadModule('js/common/lazyTracker.js'),
         './common/trackers.js': d2Trackers(globals)
     };
     Object.assign(requireMap, requireOverrides || {});

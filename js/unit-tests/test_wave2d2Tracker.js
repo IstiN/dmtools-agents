@@ -217,9 +217,8 @@ suite('wave2d2 ado — createQuestionsAndAssignForReview', function() {
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageCommentsSafe: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageSafely: function() {} },
             './common/outputFiles.js': outputFiles,
-            './common/lazyTracker.js': loadModule('js/common/lazyTracker.js'),
             './common/trackers.js': w2Trackers(rec.mocks)
         }), Object.assign({ file_read: function() { return null; } }, rec.mocks));
         var r = mod.action({ ticket: { key: '829' }, metadata: { contextId: 'story_questions' }, initiator: 'a@b.c', jobParams: W2_ADO });
