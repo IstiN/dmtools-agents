@@ -11,16 +11,12 @@ const { GIT_CONFIG, STATUSES } = require('./config.js');
 const fetchLinkedBugsToInput = require('./fetchLinkedBugsToInput.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
-var trackersModule = require('./common/trackers.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
+var trackerHolder = require('./common/trackerHolder.js').create(require('./common/trackers.js'));
 function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
+    trackerHolder.initTracker(config, customParams);
 }
 function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
+    return trackerHolder.getTracker();
 }
 
 function runGit(command, workingDir) {

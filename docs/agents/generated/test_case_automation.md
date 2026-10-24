@@ -51,11 +51,8 @@ _Check WIP Label Pre-Action_
 _Pre-CLI Test Automation Setup Action (preCliJSAction for test_case_automation)_
 
 - Source: `agents/js/preCliTestAutomationSetup.js`
-- Writes:
-  - `input/<KEY>/merge_conflicts.md`
 - Side effects:
   - git checkout
-  - git merge
 - Parameters (customParams):
   - `adoTextFormat`
   - `branchCreateFnPath`

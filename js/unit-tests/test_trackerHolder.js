@@ -21,7 +21,7 @@ suite('trackerHolder', function() {
 
     test('getTracker lazily creates ONE tracker and caches it', function() {
         var calls = [];
-        var holder = loadModule('js/common/trackerHolder.js')(makeTrackersModule(calls));
+        var holder = loadModule('js/common/trackerHolder.js').create(makeTrackersModule(calls));
 
         var cfg = { jira: {} };
         var params = { customParams: { a: 1 } };
@@ -31,48 +31,48 @@ suite('trackerHolder', function() {
         var t2 = holder.getTracker();
 
         assert.equal(calls.length, 1, 'createTracker called exactly once');
-        assert.strictEqual(calls[0].config, cfg, 'config passed through');
-        assert.strictEqual(calls[0].customParams, params, 'customParams passed through');
-        assert.strictEqual(t1, t2, 'same cached instance returned');
+        assert.equal(calls[0].config, cfg, 'config passed through');
+        assert.equal(calls[0].customParams, params, 'customParams passed through');
+        assert.equal(t1, t2, 'same cached instance returned');
         assert.equal(t1.id, 1, 'returns the created tracker');
     });
 
     test('initTracker resets the cached instance — next getTracker re-creates', function() {
         var calls = [];
-        var holder = loadModule('js/common/trackerHolder.js')(makeTrackersModule(calls));
+        var holder = loadModule('js/common/trackerHolder.js').create(makeTrackersModule(calls));
 
         holder.initTracker({ v: 1 }, {});
         var first = holder.getTracker();
 
         var cfg2 = { v: 2 };
-        holder.initTracker(cfg2, null);
+        holder.initTracker(cfg2, undefined);
         var second = holder.getTracker();
         var again = holder.getTracker();
 
         assert.equal(calls.length, 2, 're-created after re-init');
-        assert.notStrictEqual(first, second, 'fresh instance after re-init');
-        assert.strictEqual(second, again, 'new instance cached too');
-        assert.strictEqual(calls[1].config, cfg2, 'new config used');
-        assert.strictEqual(calls[1].customParams, null, 'null customParams passed through');
+        assert.notEqual(first, second, 'fresh instance after re-init');
+        assert.equal(second, again, 'new instance cached too');
+        assert.equal(calls[1].config, cfg2, 'new config used');
+        assert.deepEqual(calls[1].customParams, {}, 'undefined customParams normalized to {}');
     });
 
     test('initTracker defaults config and customParams to null', function() {
         var calls = [];
-        var holder = loadModule('js/common/trackerHolder.js')(makeTrackersModule(calls));
+        var holder = loadModule('js/common/trackerHolder.js').create(makeTrackersModule(calls));
 
         holder.initTracker();
         holder.getTracker();
 
-        assert.strictEqual(calls[0].config, null, 'config defaults to null');
-        assert.strictEqual(calls[0].customParams, null, 'customParams defaults to null');
+        assert.equal(calls[0].config, null, 'config defaults to null');
+        assert.deepEqual(calls[0].customParams, {}, 'customParams defaults to {}');
     });
 
     test('two holders are independent — no shared state', function() {
         var callsA = [];
         var callsB = [];
         var load = loadModule('js/common/trackerHolder.js');
-        var holderA = load(makeTrackersModule(callsA));
-        var holderB = load(makeTrackersModule(callsB));
+        var holderA = load.create(makeTrackersModule(callsA));
+        var holderB = load.create(makeTrackersModule(callsB));
 
         holderA.initTracker({ name: 'a' }, {});
         holderB.initTracker({ name: 'b' }, {});

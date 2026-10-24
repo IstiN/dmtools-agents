@@ -52,7 +52,6 @@ _Pre-CLI Story Test Automation Setup Action_
 
 - Source: `agents/js/preCliStoryTestAutomationSetup.js`
 - Writes:
-  - `input/<KEY>/merge_conflicts.md`
   - `outputs/review_replies.json`
 - Side effects:
   - git push

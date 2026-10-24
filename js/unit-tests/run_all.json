@@ -16,6 +16,7 @@
         "js/unit-tests/test_checkWipLabel.js",
         "js/unit-tests/test_baseBranchMarker.js",
         "js/unit-tests/test_branchSetup.js",
+        "js/unit-tests/test_trackerHolder.js",
         "js/unit-tests/test_configLoader.js",
         "js/unit-tests/test_config.js",
         "js/unit-tests/test_fetchQuestionsToInput.js",

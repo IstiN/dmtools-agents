@@ -15,17 +15,9 @@ var branchSetup = require('./common/branchSetup.js');
 const { LABELS } = require('./config.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
-var trackersModule = require('./common/trackers.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
-function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
-}
-function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
-}
+var trackerHolder = require('./common/trackerHolder.js').create(require('./common/trackers.js'));
+var initTracker = trackerHolder.initTracker;
+var getTracker = trackerHolder.getTracker;
 
 
 
