@@ -816,7 +816,7 @@ suite('machineSm executeAction', function () {
         return loadModule('js/machineSmAgent.js', makeRequire({
             './configLoader.js': { loadProjectConfig: function () { return {}; } },
             './common/smProvider.js': { createSmProvider: function () { return {}; } },
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
         }), {
             cli_execute_command: function () { return '{}'; }
