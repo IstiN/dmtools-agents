@@ -181,7 +181,8 @@ function buildTaskSubTaskPlans(tasks, saKey, parentKey, baseUrl) {
     });
 }
 
-function createSubTasks(tracker, tasks, projectKey, parentKey, saKey, baseUrl, ticketLabels, existingSummaries) {
+function createSubTasks(tracker, tasks, projectKey, parentKey, parentSummary, saKey, baseUrl, ticketLabels, existingSummaries) {
+    // parentSummary is unused here: task summaries come from task titles, not the parent summary.
     var plans = buildTaskSubTaskPlans(tasks, saKey, parentKey, baseUrl);
     var options = {
         projectKey: projectKey,
