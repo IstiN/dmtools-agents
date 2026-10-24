@@ -177,6 +177,35 @@ suite('setupCommands helper', function() {
         assert.equal(loaded.mod.truncateSetupError('short message'), 'short message');
         assert.equal(loaded.mod.truncateSetupError(undefined), undefined);
     });
+
+    test('a non-Error throw is stringified into the recorded failure (gh-1197 characterization)', function() {
+        var loaded = loadSetupCommands({
+            cli_execute_command: function() { throw 'plain-text-boom'; }
+        });
+
+        var result = loaded.mod.runSetupCommands({
+            setupCommands: ['flaky-plain-throw']
+        }, './dependencies/repo');
+
+        assert.equal(result.ran, 1);
+        assert.equal(result.results[0].success, false);
+        assert.equal(result.results[0].error, 'plain-text-boom', 'non-Error throw lands as String(e)');
+
+        var fatal = loadSetupCommands({
+            cli_execute_command: function() { throw null; }
+        });
+        var threw = false;
+        try {
+            fatal.mod.runSetupCommands({
+                setupCommands: [{ name: 'strict', command: 'never-passes', allowFailure: false }]
+            }, './dependencies/repo');
+        } catch (e) {
+            threw = true;
+            assert.ok(e.message.indexOf('strict') !== -1, 'thrown message names the step');
+            assert.ok(e.message.indexOf('null') !== -1, 'null throw stringifies into the thrown message');
+        }
+        assert.equal(threw, true, 'allowFailure:false still escalates a non-Error throw');
+    });
 });
 
 suite('setupCommands buildSetupWarningsMarkdown', function() {
