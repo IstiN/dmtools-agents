@@ -38,92 +38,155 @@ function findPRForTicket(scm, ticketKey) {
     }
 }
 
-function action(params) {
+// ── gh-1186: pure/decide helpers (extracted from action) ────────────────────
+
+/**
+ * Resolves the recovery context from params: ticket key, project config and
+ * the tracker instance. Pure over params apart from the config/tracker loads.
+ */
+function resolveRecoveryContext(params) {
     var ticketKey = params.ticket && params.ticket.key;
     var config = configLoader.loadProjectConfig(params.jobParams || params || {});
-    var jiraConfig = config.jira;
     var tracker = trackersModule.createTracker(config, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+    return { ticketKey: ticketKey, config: config, jiraConfig: config.jira, tracker: tracker };
+}
 
-    if (!ticketKey) {
+/**
+ * PR details tolerant of provider errors: on failure the list PR itself is
+ * used, so classification downstream still has the mergeable fields (missing
+ * ones read as a clean PR).
+ */
+function fetchPrDetailSafe(scm, pr) {
+    try {
+        return scm.getPr(pr.number);
+    } catch (e) {
+        console.error('Failed to get PR details:', e);
+        return pr;
+    }
+}
+
+/**
+ * Mergeable state as a string: snake_case (github) first, camelCase (ado)
+ * fallback, '' when neither is present; null only without any PR detail.
+ */
+function mergeableStateOf(prDetail) {
+    return prDetail && (prDetail.mergeable_state || prDetail.mergeableState || '');
+}
+
+/**
+ * Pure conflict decision: the state names a conflict, or the provider
+ * explicitly answered mergeable=false.
+ */
+function isConflictingPrState(mergeable, mergeableState) {
+    return mergeableState === 'dirty' || mergeableState === 'conflicting' || mergeable === false;
+}
+
+// ── gh-1186: recovery outcomes (one per recovery branch) ────────────────────
+
+/** No open PR — back to Backlog, automation label off so the SM re-triggers. */
+function recoverWithoutOpenPr(ctx) {
+    console.log('No open PR found for', ctx.ticketKey, '— moving back to Backlog');
+    try {
+        ctx.tracker.moveToStatus(ctx.ticketKey, ctx.jiraConfig.statuses.BACKLOG);
+        console.log('✅ Moved', ctx.ticketKey, 'to Backlog');
+    } catch (e) {
+        console.error('Failed to move to Backlog:', e);
+    }
+    // Remove automation label so SM can re-trigger
+    try { ctx.tracker.removeLabel(ctx.ticketKey, 'sm_test_automation_triggered'); } catch (e) {}
+    ctx.tracker.postComment(ctx.ticketKey, '🔄 *Recovery*: Test Case was stuck in "In Development" with no open PR. Moved back to Backlog for re-automation.'
+    );
+    return { success: true, action: 'moved_to_backlog', ticketKey: ctx.ticketKey };
+}
+
+/** Conflicting PR — to In Rework so pr_test_automation_rework resolves it. */
+function moveToReworkRecovery(ctx, pr) {
+    console.log('PR has conflicts — moving ticket to In Rework');
+    try {
+        ctx.tracker.moveToStatus(ctx.ticketKey, ctx.jiraConfig.statuses.IN_REWORK);
+        console.log('✅ Moved', ctx.ticketKey, 'to In Rework');
+    } catch (e) {
+        console.error('Failed to move to In Rework:', e);
+    }
+    // Remove stale labels so rework agent can pick it up
+    try { ctx.tracker.removeLabel(ctx.ticketKey, 'sm_test_rework_triggered'); } catch (e) {}
+    try { ctx.tracker.removeLabel(ctx.ticketKey, 'sm_test_automation_triggered'); } catch (e) {}
+    ctx.tracker.postComment(ctx.ticketKey, '🔄 *Recovery*: Test Case was stuck in "In Development" with a conflicting PR #' + pr.number + '. Moved to In Rework for conflict resolution.'
+    );
+    return { success: true, action: 'moved_to_rework', ticketKey: ctx.ticketKey, prNumber: pr.number };
+}
+
+/**
+ * Clean PR — to In Review - Passed (gh-916: tag-only stage fallback) for
+ * code review, plus the token usage summary comments when any provider
+ * wrote outputs/*_usage.json during the agent run.
+ */
+function moveToReviewRecovery(params, ctx, pr) {
+    console.log('PR looks clean — moving ticket to In Review - Passed');
+    try {
+        // gh-916: IN_REVIEW_PASSED can be tag-only (restricted ADO workflows) — stage-label fallback.
+        var moveResult = ctx.tracker.moveToStatusOrMark(ctx.ticketKey, ctx.jiraConfig.statuses.IN_REVIEW_PASSED, 'IN_REVIEW_PASSED');
+        if (moveResult.moved || moveResult.marked) {
+            console.log('✅ Moved', ctx.ticketKey, 'to In Review - Passed');
+        }
+    } catch (e) {
+        console.error('Failed to move to In Review - Passed:', e);
+    }
+    try { ctx.tracker.removeLabel(ctx.ticketKey, 'sm_test_automation_triggered'); } catch (e) {}
+    ctx.tracker.postComment(ctx.ticketKey, '🔄 *Recovery*: Test Case was stuck in "In Development" with clean PR #' + pr.number + '. Moved to In Review - Passed for code review.'
+    );
+
+    try {
+        tokenUsageComment.postTokenUsageComments(ctx.ticketKey, { initiator: params.initiator, tracker: ctx.tracker });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+
+    return { success: true, action: 'moved_to_review', ticketKey: ctx.ticketKey, prNumber: pr.number };
+}
+
+function action(params) {
+    var ctx = resolveRecoveryContext(params);
+
+    if (!ctx.ticketKey) {
         console.error('No ticket key found');
         return { success: false, error: 'missing ticket key' };
     }
 
-    console.log('Recovering stuck Test Case:', ticketKey);
+    console.log('Recovering stuck Test Case:', ctx.ticketKey);
 
-    var scm = scmModule.createScm(config);
-    var pr = findPRForTicket(scm, ticketKey);
+    var scm = scmModule.createScm(ctx.config);
+    var pr = findPRForTicket(scm, ctx.ticketKey);
 
     if (!pr) {
-        console.log('No open PR found for', ticketKey, '— moving back to Backlog');
-        try {
-            tracker.moveToStatus(ticketKey, jiraConfig.statuses.BACKLOG);
-            console.log('✅ Moved', ticketKey, 'to Backlog');
-        } catch (e) {
-            console.error('Failed to move to Backlog:', e);
-        }
-        // Remove automation label so SM can re-trigger
-        try { tracker.removeLabel(ticketKey, 'sm_test_automation_triggered'); } catch (e) {}
-        tracker.postComment(ticketKey, '🔄 *Recovery*: Test Case was stuck in "In Development" with no open PR. Moved back to Backlog for re-automation.'
-        );
-        return { success: true, action: 'moved_to_backlog', ticketKey: ticketKey };
+        return recoverWithoutOpenPr(ctx);
     }
 
     console.log('Found open PR #' + pr.number + ': ' + pr.title);
 
     // Get detailed PR info to check merge state
-    var prDetail;
-    try {
-        prDetail = scm.getPr(pr.number);
-    } catch (e) {
-        console.error('Failed to get PR details:', e);
-        prDetail = pr;
-    }
+    var prDetail = fetchPrDetailSafe(scm, pr);
 
-    var mergeableState = prDetail && (prDetail.mergeable_state || prDetail.mergeableState || '');
+    var mergeableState = mergeableStateOf(prDetail);
     var mergeable = prDetail && prDetail.mergeable;
     console.log('PR #' + pr.number + ' mergeable=' + mergeable + ' state=' + mergeableState);
 
-    if (mergeableState === 'dirty' || mergeableState === 'conflicting' || mergeable === false) {
-        console.log('PR has conflicts — moving ticket to In Rework');
-        try {
-            tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
-            console.log('✅ Moved', ticketKey, 'to In Rework');
-        } catch (e) {
-            console.error('Failed to move to In Rework:', e);
-        }
-        // Remove stale labels so rework agent can pick it up
-        try { tracker.removeLabel(ticketKey, 'sm_test_rework_triggered'); } catch (e) {}
-        try { tracker.removeLabel(ticketKey, 'sm_test_automation_triggered'); } catch (e) {}
-        tracker.postComment(ticketKey, '🔄 *Recovery*: Test Case was stuck in "In Development" with a conflicting PR #' + pr.number + '. Moved to In Rework for conflict resolution.'
-        );
-        return { success: true, action: 'moved_to_rework', ticketKey: ticketKey, prNumber: pr.number };
+    if (isConflictingPrState(mergeable, mergeableState)) {
+        return moveToReworkRecovery(ctx, pr);
     }
 
     // PR is clean/mergeable — move to In Review - Passed for review
-    console.log('PR looks clean — moving ticket to In Review - Passed');
-    try {
-        // gh-916: IN_REVIEW_PASSED can be tag-only (restricted ADO workflows) — stage-label fallback.
-        var moveResult = tracker.moveToStatusOrMark(ticketKey, jiraConfig.statuses.IN_REVIEW_PASSED, 'IN_REVIEW_PASSED');
-        if (moveResult.moved || moveResult.marked) {
-            console.log('✅ Moved', ticketKey, 'to In Review - Passed');
-        }
-    } catch (e) {
-        console.error('Failed to move to In Review - Passed:', e);
-    }
-    try { tracker.removeLabel(ticketKey, 'sm_test_automation_triggered'); } catch (e) {}
-    tracker.postComment(ticketKey, '🔄 *Recovery*: Test Case was stuck in "In Development" with clean PR #' + pr.number + '. Moved to In Review - Passed for code review.'
-    );
-
-    // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-    // wrote outputs/*_usage.json during the agent run.
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
-
-    return { success: true, action: 'moved_to_review', ticketKey: ticketKey, prNumber: pr.number };
+    return moveToReviewRecovery(params, ctx, pr);
 }
 
-module.exports = { action };
+module.exports = {
+    action: action,
+    // gh-1186: helpers extracted from action — additive surface for unit tests.
+    resolveRecoveryContext: resolveRecoveryContext,
+    fetchPrDetailSafe: fetchPrDetailSafe,
+    mergeableStateOf: mergeableStateOf,
+    isConflictingPrState: isConflictingPrState,
+    recoverWithoutOpenPr: recoverWithoutOpenPr,
+    moveToReworkRecovery: moveToReworkRecovery,
+    moveToReviewRecovery: moveToReviewRecovery
+};

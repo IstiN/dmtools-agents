@@ -616,3 +616,141 @@ suite('prepareTestPRForReview isWip — extracted pure helpers (gh-1077)', funct
         assert.equal(m.isWip(undefined, undefined), false);
     });
 });
+
+// ── gh-1186: CRAP-reduction — ticket-key resolution & review-step helpers ────
+
+suite('prepareTestPRForReview: ticket key resolution (gh-1186)', function() {
+
+    test('getTicketKey: ticket.key wins, then inputFolderPath, then jobParams.inputFolderPath', function() {
+        var m = loadPrepareTestPRForReview({});
+        assert.equal(m.getTicketKey({ ticket: { key: 'TS-1' }, inputFolderPath: 'input/TS-2' }), 'TS-1');
+        assert.equal(m.getTicketKey({ inputFolderPath: 'input/TS-2' }), 'TS-2');
+        assert.equal(m.getTicketKey({ inputFolderPath: 'a/b/TS-3' }), 'TS-3');
+        assert.equal(m.getTicketKey({ jobParams: { inputFolderPath: 'input/TS-4' } }), 'TS-4');
+        assert.throws(function() { m.getTicketKey({}); });
+        assert.throws(function() { m.getTicketKey({ ticket: {} }); });
+    });
+});
+
+suite('prepareTestPRForReview: review-step helpers (gh-1186)', function() {
+
+    test('branchRefOf / staleBranchRef / diffHeadRef', function() {
+        var m = loadPrepareTestPRForReview({});
+        assert.equal(m.branchRefOf({ head: { ref: 'test/X' } }), 'test/X');
+        assert.equal(m.branchRefOf({ head: null }), null);
+        assert.equal(m.branchRefOf({}), null);
+        assert.equal(m.staleBranchRef('test/X', 'TS-1'), 'test/X');
+        assert.equal(m.staleBranchRef(null, 'TS-1'), 'test/TS-1');
+        assert.equal(m.diffHeadRef('test/X', { head: { ref: 'y' } }), 'test/X');
+        assert.equal(m.diffHeadRef(null, { head: { ref: 'y' } }), 'y');
+        assert.equal(m.diffHeadRef(null, { head: null }), null);
+    });
+
+    test('reviewStartedComment renders PR number, branch fallback and changed-file count', function() {
+        var m = loadPrepareTestPRForReview({});
+        var c = m.reviewStartedComment({ number: 56, html_url: 'u', changed_files: 2 }, 'test/TS-91');
+        assert.contains(c, '[PR #56|u]');
+        assert.contains(c, '{code}test/TS-91{code}');
+        assert.contains(c, '*Files Changed*: 2');
+        var fallback = m.reviewStartedComment({ number: 57, html_url: 'u2' }, null);
+        assert.contains(fallback, '{code}unknown{code}');
+        assert.contains(fallback, '*Files Changed*: 0');
+    });
+
+    test('reviewOutcome builds the success payload', function() {
+        var m = loadPrepareTestPRForReview({});
+        assert.deepEqual(
+            m.reviewOutcome({ owner: 'IstiN', repo: 'trackstate' }, { number: 56, html_url: 'u' }, 'test/TS-91'),
+            { success: true, prNumber: 56, prUrl: 'u', branchName: 'test/TS-91', owner: 'IstiN', repo: 'trackstate' });
+    });
+});
+
+suite('prepareTestPRForReview: action error paths (gh-1186)', function() {
+
+    test('unresolvable remote → setup-failed comment, returns false', function() {
+        var comments = [];
+        var module = loadPrepareTestPRForReview({
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            scmMock: {
+                getRemoteRepoInfo: function() { return null; }
+            }
+        });
+        var result = module.action({
+            inputFolderPath: 'input/TS-100',
+            ticket: { key: 'TS-100', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: {} }
+        });
+        assert.equal(result, false);
+        assert.ok(comments.some(function(c) { return c.indexOf('Could not determine repository') !== -1; }));
+    });
+
+    test('unexpected failure mid-review → error comment with the cause, returns false', function() {
+        var comments = [];
+        var module = loadPrepareTestPRForReview({
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            scmMock: {
+                getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'trackstate' }; },
+                listPrs: function() {
+                    return [{ number: 66, head: { ref: 'test/TS-101' }, html_url: 'u' }];
+                }
+            },
+            githubHelpers: {
+                getPRDetails: function() { throw new Error('SCM exploded'); }
+            }
+        });
+        var result = module.action({
+            inputFolderPath: 'input/TS-101',
+            ticket: { key: 'TS-101', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: {} }
+        });
+        assert.equal(result, false);
+        assert.ok(comments.some(function(c) { return c.indexOf('Test PR Review Setup Error') !== -1; }));
+        assert.ok(comments.some(function(c) { return c.indexOf('SCM exploded') !== -1; }));
+    });
+
+    test('params without ticket key or input folder abort through the catch guard', function() {
+        var module = loadPrepareTestPRForReview({});
+        assert.equal(module.action({ jobParams: {} }), false);
+    });
+
+    test('checkout failure is logged and the review continues', function() {
+        var contextWritten = false;
+        var module = loadPrepareTestPRForReview({
+            gitOpsMock: {
+                checkoutPRBranch: function() { throw new Error('cannot checkout'); },
+                writePRContext: function() { contextWritten = true; }
+            },
+            githubHelpers: {
+                getPRDetails: function() {
+                    return { number: 65, changed_files: 1, head: { ref: 'test/TS-102' }, base: { ref: 'main' }, html_url: 'u' };
+                }
+            },
+            scmMock: {
+                listPrs: function(state) {
+                    if (state === 'open') return [{ number: 65, head: { ref: 'test/TS-102' }, html_url: 'u' }];
+                    return [];
+                }
+            }
+        });
+        var result = module.action({
+            inputFolderPath: 'input/TS-102',
+            ticket: { key: 'TS-102', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: {} }
+        });
+        assert.equal(result.success, true);
+        assert.equal(contextWritten, true);
+    });
+
+    test('jobParams.inputFolderPath resolves the ticket key when ticket.key is absent', function() {
+        var comments = [];
+        var module = loadPrepareTestPRForReview({
+            jira_post_comment: function(args) { comments.push(args.comment); },
+            scmMock: {
+                getRemoteRepoInfo: function() { return null; }
+            }
+        });
+        var result = module.action({ jobParams: { inputFolderPath: 'input/TS-103', customParams: {} } });
+        assert.equal(result, false);
+        assert.ok(comments.some(function(c) { return c.indexOf('Could not determine repository') !== -1; }));
+    });
+});

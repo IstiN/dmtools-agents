@@ -27,18 +27,6 @@ function getTracker() {
 }
 
 
-function getTicketKey(params) {
-    if (params.ticket && params.ticket.key) {
-        return params.ticket.key;
-    }
-    if (params.inputFolderPath) {
-        return params.inputFolderPath.split('/').pop();
-    }
-    if (params.jobParams && params.jobParams.inputFolderPath) {
-        return params.jobParams.inputFolderPath.split('/').pop();
-    }
-    throw new Error('Cannot determine ticket key from params.ticket.key or params.inputFolderPath');
-}
 
 function getInputFolder(params, ticketKey) {
     if (params.inputFolderPath) {
@@ -324,117 +312,217 @@ function finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType, jiraCon
     }
 }
 
-function action(params) {
+// ── gh-1186: review-setup helpers (extracted from action) ───────────────────
+
+/**
+ * Pure ticket-key resolution: params.ticket.key first, then the input folder
+ * (params or jobParams) leaf name. Throws when nothing identifies the ticket.
+ */
+function getTicketKey(params) {
+    if (params.ticket && params.ticket.key) {
+        return params.ticket.key;
+    }
+    if (params.inputFolderPath) {
+        return params.inputFolderPath.split('/').pop();
+    }
+    if (params.jobParams && params.jobParams.inputFolderPath) {
+        return params.jobParams.inputFolderPath.split('/').pop();
+    }
+    throw new Error('Cannot determine ticket key from params.ticket.key or params.inputFolderPath');
+}
+
+/**
+ * Everything action() needs before touching git: ticket key, input folder,
+ * issue type, project config, tracker init and the SCM — resolved in the
+ * original order.
+ */
+function resolveReviewSetup(params) {
+    const ticketKey = getTicketKey(params);
+    const inputFolder = getInputFolder(params, ticketKey);
+    const issueType = getIssueType(params);
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    initTracker(config, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+    return {
+        ticketKey: ticketKey,
+        inputFolder: inputFolder,
+        ticket: params.ticket,
+        issueType: issueType,
+        config: config,
+        jiraConfig: config.jira,
+        scm: configLoader.createScm(config)
+    };
+}
+
+/**
+ * The "which PR is under review" resolution: find the open/merged test PR,
+ * create one when only the branch exists, and short-circuit the two states
+ * that must not be reviewed (already merged, WIP/draft). Returns
+ * { found } to proceed or { abort: true, result } to return from action().
+ */
+function resolveTestPr(setup) {
+    var found = findTestPRForTicket(setup.scm, setup.ticketKey);
+    if (!found) {
+        // No open/merged PR — re-automate, or create a review PR for the existing branch
+        var ensured = ensureReviewPrExists(setup.scm, setup.ticketKey, setup.config, setup.jiraConfig, setup.issueType);
+        if (ensured.result !== undefined) return { abort: true, result: ensured.result };
+        found = ensured.found;
+    }
+
+    // If PR is already merged — move ticket to final status without re-reviewing
+    if (found.merged) {
+        handleAlreadyMergedPr(setup.ticketKey, found.pr, setup.issueType, setup.jiraConfig);
+        return { abort: true, result: false };
+    }
+
+    const pr = found.pr;
+
+    // Skip WIP / draft PRs
+    if (isWip(pr, setup.ticket)) {
+        console.log('PR #' + pr.number + ' is WIP/draft — skipping review for', setup.ticketKey);
+        try {
+            getTracker().postComment(setup.ticketKey, 'h3. ⏸️ Test PR Review Skipped\n\nPR [#' + pr.number + '|' + (pr.html_url || '') + '] is WIP/draft. Review will run once it is ready.');
+        } catch (e) {}
+        return { abort: true, result: false };
+    }
+
+    return { found: found };
+}
+
+/** Head branch of the PR details, or null when the shape is unexpected. */
+function branchRefOf(prDetails) {
+    return prDetails.head ? prDetails.head.ref : null;
+}
+
+// The stale test branch name, derived from the ticket when the PR has no head.
+function staleBranchRef(branchName, ticketKey) {
+    return branchName || ('test/' + ticketKey);
+}
+
+// Diff target: the PR's branch when known, else whatever the PR details offer.
+function diffHeadRef(branchName, prDetails) {
+    return branchName || (prDetails.head && prDetails.head.ref);
+}
+
+/**
+ * Step 4 of the original flow: checkout the test branch; a missing branch or
+ * a failed checkout is logged and never aborts the review setup.
+ */
+function checkoutTestBranch(gitOps, branchName, config) {
+    try {
+        if (branchName) {
+            gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
+        }
+    } catch (e) {
+        console.warn('Could not checkout test branch:', e);
+    }
+}
+
+/**
+ * Steps 5-6 of the original flow: diff against the PR base, fetch the PR
+ * discussions and write the review context files into the input folder.
+ */
+function writeReviewContext(gh, gitOps, scm, config, inputFolder, prDetails, branchName) {
+    const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
+    const diff = gitOps.getPRDiff(baseBranch, diffHeadRef(branchName, prDetails));
+
+    console.log('Fetching PR discussions...');
+    const discussionData = gh.fetchDiscussionsAndRawData(scm, prDetails.number);
+
+    gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
+}
+
+// The "review started" ticket comment body.
+function reviewStartedComment(prDetails, branchName) {
+    return 'h3. 🧪 Automated Test PR Review Started\n\n' +
+        '*Pull Request*: [PR #' + prDetails.number + '|' + prDetails.html_url + ']\n' +
+        '*Branch*: {code}' + (branchName || 'unknown') + '{code}\n' +
+        '*Files Changed*: ' + (prDetails.changed_files || 0) + '\n\n' +
+        '_Test code review results will be posted shortly..._';
+}
+
+/** Step 7: announce the started review on the ticket; provider errors logged. */
+function postReviewStartedComment(ticketKey, prDetails, branchName) {
+    try {
+        getTracker().postComment(ticketKey, reviewStartedComment(prDetails, branchName));
+    } catch (e) {
+        console.warn('Failed to post Jira comment:', e);
+    }
+}
+
+/** The success payload returned to the CLI-agent runner. */
+function reviewOutcome(repoInfo, prDetails, branchName) {
+    return {
+        success: true,
+        prNumber: prDetails.number,
+        prUrl: prDetails.html_url,
+        branchName: branchName,
+        owner: repoInfo.owner,
+        repo: repoInfo.repo
+    };
+}
+
+/** Best-effort setup-error report on the ticket; failures are swallowed. */
+function postReviewSetupError(params, error) {
     try {
         const ticketKey = getTicketKey(params);
-        const inputFolder = getInputFolder(params, ticketKey);
-        const issueType = getIssueType(params);
-        var config = configLoader.loadProjectConfig(params.jobParams || params);
-        initTracker(config, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
-        var jiraConfig = config.jira;
-        var scm = configLoader.createScm(config);
+        getTracker().postComment(ticketKey, 'h3. ❌ Test PR Review Setup Error\n\n{code}' + error.toString() + '{code}');
+    } catch (e) {}
+}
 
-        console.log('=== Preparing test PR for review:', ticketKey, '===');
+function action(params) {
+    try {
+        const setup = resolveReviewSetup(params);
 
-        ensureInputFolder(inputFolder);
+        console.log('=== Preparing test PR for review:', setup.ticketKey, '===');
+
+        ensureInputFolder(setup.inputFolder);
         clearStaleReviewOutputs();
 
         // Step 1: GitHub repo info
-        var repoInfo = scm.getRemoteRepoInfo();
+        var repoInfo = setup.scm.getRemoteRepoInfo();
         if (!repoInfo) {
-            postReviewSetupFailed(ticketKey, 'Could not determine repository from git remote', '_Review cancelled._');
+            postReviewSetupFailed(setup.ticketKey, 'Could not determine repository from git remote', '_Review cancelled._');
             return false;
         }
 
-        // Step 2: Find PR on test/{KEY} branch specifically
-        var found = findTestPRForTicket(scm, ticketKey);
-        if (!found) {
-            // No open/merged PR — re-automate, or create a review PR for the existing branch
-            var ensured = ensureReviewPrExists(scm, ticketKey, config, jiraConfig, issueType);
-            if (ensured.result !== undefined) return ensured.result;
-            found = ensured.found;
-        }
-
-        // If PR is already merged — move ticket to final status without re-reviewing
-        if (found.merged) {
-            handleAlreadyMergedPr(ticketKey, found.pr, issueType, jiraConfig);
-            return false;
-        }
-
-        const pr = found.pr;
-
-        // Skip WIP / draft PRs
-        if (isWip(pr, params.ticket)) {
-            console.log('PR #' + pr.number + ' is WIP/draft — skipping review for', ticketKey);
-            try {
-                getTracker().postComment(ticketKey, 'h3. ⏸️ Test PR Review Skipped\n\nPR [#' + pr.number + '|' + (pr.html_url || '') + '] is WIP/draft. Review will run once it is ready.');
-            } catch (e) {}
-            return false;
-        }
+        // Step 2: Find PR on test/{KEY} branch specifically (create one when only
+        // the branch exists; abort on already-merged / WIP states)
+        var resolved = resolveTestPr(setup);
+        if (resolved.abort) return resolved.result;
+        const pr = resolved.found.pr;
 
         // Step 3: PR details
-        const prDetails = gh.getPRDetails(scm, pr.number);
+        const prDetails = gh.getPRDetails(setup.scm, pr.number);
         if (!prDetails) {
-            postReviewSetupFailed(ticketKey, 'Could not fetch details for PR #' + pr.number + '.', '_Review cancelled._');
+            postReviewSetupFailed(setup.ticketKey, 'Could not fetch details for PR #' + pr.number + '.', '_Review cancelled._');
             return false;
         }
 
-        const branchName = prDetails.head ? prDetails.head.ref : null;
+        const branchName = branchRefOf(prDetails);
 
         // If the PR has no actual changes, the test code is already in main. Finalize and skip review.
         if (hasNoChanges(prDetails)) {
             console.log('PR #' + pr.number + ' has 0 changed files — test code is already in main');
-            finalizeAlreadyMergedTestCase(ticketKey, branchName || ('test/' + ticketKey), issueType, jiraConfig);
+            finalizeAlreadyMergedTestCase(setup.ticketKey, staleBranchRef(branchName, setup.ticketKey), setup.issueType, setup.jiraConfig);
             return false;
         }
 
         // Step 4: Checkout test branch
-        try {
-            if (branchName) {
-                gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
-            }
-        } catch (e) {
-            console.warn('Could not checkout test branch:', e);
-        }
+        checkoutTestBranch(gitOps, branchName, setup.config);
 
-        // Step 5: Diff + discussions
-        const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
-        const diff = gitOps.getPRDiff(baseBranch, branchName || (prDetails.head && prDetails.head.ref));
-
-        console.log('Fetching PR discussions...');
-        const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);
-
-        // Step 6: Write context files
-        gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
+        // Step 5 + 6: Diff + discussions, then write context files
+        writeReviewContext(gh, gitOps, setup.scm, setup.config, setup.inputFolder, prDetails, branchName);
 
         // Step 7: Jira comment
-        try {
-            getTracker().postComment(ticketKey, 'h3. 🧪 Automated Test PR Review Started\n\n' +
-                    '*Pull Request*: [PR #' + prDetails.number + '|' + prDetails.html_url + ']\n' +
-                    '*Branch*: {code}' + (branchName || 'unknown') + '{code}\n' +
-                    '*Files Changed*: ' + (prDetails.changed_files || 0) + '\n\n' +
-                    '_Test code review results will be posted shortly..._');
-        } catch (e) {
-            console.warn('Failed to post Jira comment:', e);
-        }
+        postReviewStartedComment(setup.ticketKey, prDetails, branchName);
 
         console.log('✅ Test PR review setup complete — PR #' + prDetails.number);
 
-        return {
-            success: true,
-            prNumber: prDetails.number,
-            prUrl: prDetails.html_url,
-            branchName: branchName,
-            owner: repoInfo.owner,
-            repo: repoInfo.repo
-        };
+        return reviewOutcome(repoInfo, prDetails, branchName);
 
     } catch (error) {
         console.error('❌ Error in prepareTestPRForReview:', error);
-        try {
-            const ticketKey = getTicketKey(params);
-            getTracker().postComment(ticketKey, 'h3. ❌ Test PR Review Setup Error\n\n{code}' + error.toString() + '{code}');
-        } catch (e) {}
+        postReviewSetupError(params, error);
         return false;
     }
 }
@@ -447,6 +535,13 @@ if (typeof module !== 'undefined' && module.exports) {
         isWipPrTitle: isWipPrTitle,
         ticketLabels: ticketLabels,
         isWipLabel: isWipLabel,
-        hasWipTicketLabel: hasWipTicketLabel
+        hasWipTicketLabel: hasWipTicketLabel,
+        // gh-1186: ticket-key resolution and review-step helpers — additive surface.
+        getTicketKey: getTicketKey,
+        branchRefOf: branchRefOf,
+        staleBranchRef: staleBranchRef,
+        diffHeadRef: diffHeadRef,
+        reviewStartedComment: reviewStartedComment,
+        reviewOutcome: reviewOutcome
     };
 }
