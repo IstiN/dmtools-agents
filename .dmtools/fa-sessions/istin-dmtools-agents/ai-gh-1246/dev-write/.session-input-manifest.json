@@ -1,0 +1,203 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-24T21:05:10.319Z",
+  "ticketKey": "gh-1246",
+  "headSha": "27d67f0aa3ee7ba09e3abae062d055f03a3d04fc",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:322b878d3c3c2465",
+      "size": 288
+    },
+    "merge_conflicts.md": {
+      "hash": "fnv1a64:0b250e7fcb5430db",
+      "size": 657
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:2988cb27aaa139a6",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:ccd405de1a4bc12b",
+      "size": 16548
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:3cc175febe69215f",
+      "size": 113
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:75ee90691e4cd9c2",
+      "size": 3058
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:7eed40bef4b17114",
+      "size": 517
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:561e0fdac9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:97ec0178deb7c769",
+      "size": 2437
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:05aa8e0bbbf2179f",
+      "size": 2364
+    }
+  },
+  "comments": [
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:71705633",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: cannot merge with main — duplicates gh-1244's `postTokenUsageSafely`**\n\nThis wrapper was already canonicalized on main while this branch was in flight. gh-1244 (PR #1253, commit `5e46da6a`, now the tip of `origin/main`) added to this exact file:\n\n```javascript\nfunction postTokenUsageSafely(ticketKey, params, overrides) { ... }\nfunction tokenUsageSafelyOptions(params, overrides) { ... }\n```\n\n— a swallow-all `postTokenUsageComments` guard with the same `initiator` + `customParamsOf(params)` bag, plus tracker/config overrides, and converted the post-action callers.\n\nVerified locally on the checked-out branch:\n\n```bash\ngit merge-tree --write-tree --name-only origin/main HEAD\n# CONFLICT (content): Merge conflict in js/common/tokenUsageComment.js\n# CONFLICT (content): Merge conflict in js/postTestReworkResults.js\n```\n\nSo the PR is unmergeable as-is, and a textual conflict resolution that keeps both functions leaves **two canonical swallow-all wrappers side by side in the same module** — the exact duplication class gh-1246 is meant to eliminate, which will also trip the ticket's own 1% duplication gate.\n\n**Fix**: merge `origin/main` and delete `postUsageSummariesSafely`; delegate its three call sites (`postTestAutomationResults.js:454`, `postTestReviewComments.js:488`, `postTestReworkResults.js:319`) to `tokenUsageComment.postTokenUsageSafely(ticketKey, params)`. Update the test mocks that stub `postUsageSummariesSafely` to stub `postTokenUsageSafely` instead."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:9b0cf0ed",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: this hunk content-conflicts with main — resolve by adopting gh-1244's holder**\n\nWhile this PR was in flight, gh-1244 (PR #1253, commit `5e46da6a`, now the tip of `origin/main`) landed and canonicalized the lazy tracker holder in `js/common/trackers.js` (`createTrackerHolder()`), converting ~24 post-actions to:\n\n```javascript\nvar trackerHolder = trackersModule.createTrackerHolder();\nvar initTracker = trackerHolder.initTracker;\nvar getTracker = trackerHolder.getTracker;\n```\n\nThis PR switches `postTestReworkResults` to `shared.createTrackerHolder(trackersModule)` instead — the same seam main touched. Verified on the checked-out branch:\n\n```bash\ngit merge-tree --write-tree --name-only origin/main HEAD\n# CONFLICT (content): Merge conflict in js/postTestReworkResults.js\n# CONFLICT (content): Merge conflict in js/common/tokenUsageComment.js\n```\n\nthe conflict hunk here is exactly `var trackerOps = shared.createTrackerHolder(trackersModule)` (HEAD) vs `var trackerHolder = trackersModule.createTrackerHolder()` (main). Note `postStoryTestAutomationShared.js` auto-merges to main's delegate (`return trackersModule.createTrackerHolder();`), so after the merge the shared indirection this line relies on reduces to the trackers.js canonical anyway.\n\n**Fix**: merge `origin/main` and take main's shape here (direct `trackersModule.createTrackerHolder()` destructuring), matching the pattern every other post-action now uses. Keep the `shared` require — `readFileOrNull` and `triggerAutoStartReviewWorkflow` still delegate to it."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:ed35e5f7",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: inconsistent parameter order with the review-flavor sibling**\n\n`triggerAutoStartReviewWorkflow(autoStart, ticketKey, customParams, config, label)` takes `customParams` before `config`, but this rework variant takes `(autoStart, ticketKey, config, customParams)` — same names, swapped positions. Both are thin pass-throughs, so a caller copying the review-flavor call shape onto this one (or vice versa) would swap `config` and `customParams` with no runtime error and confusing trigger behavior.\n\nConsider aligning the order (`customParams` before `config`) across both triggers; the extra trailing `label` on the review variant is fine."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:d8f5d9ec",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: broken sentence in the module header**\n\nThe extended gh-1246 sentence runs into the pre-existing one without a break:\n\n> …previously duplicated across those post-actions. the tracker lazy-init holder, resume-attempt markers…\n\nCapitalize/re-punctuate after the edit (e.g. \"…post-actions. The tracker lazy-init holder, …\") so the module doc reads cleanly — it's the first thing reviewers of this shared module see."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:d6f35195",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Fixed. Merged `origin/main` (gh-1244, `5e46da6a`) and resolved the `js/common/tokenUsageComment.js` conflict by **deleting** `postUsageSummariesSafely` entirely — gh-1244's `postTokenUsageSafely(ticketKey, params, overrides)` (+ `tokenUsageSafelyOptions`) is the single canonical swallow-all wrapper now, so no parallel copies remain and the duplication gate is not tripped.\n\nAll three call sites delegate to it:\n\n- `js/postTestAutomationResults.js:454` → `tokenUsageComment.postTokenUsageSafely(ticketKey, params)`\n- `js/postTestReviewComments.js:488` → same\n- `js/postTestReworkResults.js:325` → same\n\nTest mocks that stubbed `postUsageSummariesSafely` were switched to `postTokenUsageSafely` (`test_postTestAutomationResults.js:79`, `test_postTestReviewComments.js:65`, `test_postTestReworkResults.js:36,467`, `test_workingDir.js:669`). gh-1244's existing `tokenUsageComment.postTokenUsageSafely (gh-124)` suite plus the full unit suite (7340 passed, 1 known env-dependent `sessionDelta UT-3` failure) verify the delegation; the merge-tree of the pushed head against `origin/main` is conflict-free."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:1dbd92de",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Fixed. Resolved the `js/postTestReworkResults.js` conflict hunk by adopting main's gh-1244 shape exactly:\n\n```javascript\nvar trackerHolder = trackersModule.createTrackerHolder();\nvar initTracker = trackerHolder.initTracker;\nvar getTracker = trackerHolder.getTracker;\n```\n\nThe `shared` require stays — `readFileOrNull` and `triggerAutoStartReviewWorkflow` still delegate to `postStoryTestAutomationShared` (whose `createTrackerHolder` is itself now a thin delegate to `trackers.js`, so both paths converge on the same canonical). Pushed as the merge commit `271f04bb`; `git merge-tree` against `origin/main` reports no conflicts, and `test_postTestReworkResults` (full suite) passes."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:b00a9693",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Fixed. Aligned the parameter order — `triggerAutoStartReworkWorkflow(autoStart, ticketKey, customParams, config)` now takes `customParams` before `config`, matching the review-flavor `triggerAutoStartReviewWorkflow(autoStart, ticketKey, customParams, config, label)`; the doc comment notes the alignment.\n\nTDD: added a suite in `js/unit-tests/test_postStoryTestAutomationShared.js` (\"autoStart trigger parameter order\") that calls the rework trigger with the review-flavor shape and pins `customParams`/`config` into their correct slots in the trigger options bag — it **failed** against the old swapped signature (trigger never fired) and passes after the swap. The only caller (`js/postTestReviewComments.js:310`) was updated to the aligned order; behavior is unchanged (both arguments were already forwarded to the same slots inside `triggerConfiguredAutoStartWorkflow`)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:f45ad982",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "Fixed. The module header in `js/postStoryTestAutomationShared.js` now reads:\n\n> …output-file readers, git-author config, autoStart-review trigger and test-PR creation previously duplicated across those post-actions. The tracker lazy-init holder, resume-attempt markers, …\n\n(sentence break + capitalized \"The\"), so the extended gh-1246 sentence no longer runs into the pre-existing one."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:316817ef",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 4f6103c86f66321528b8ff85318ee3243000c990 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:6ca49281",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## 🔧 Rework Complete — pr-1255\n\nAll PR review comments have been addressed. See fix summary below."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:af412acc",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `cd3b8bb90176a2f90248a39f16a348ec2d155437`) Rework re-queued (linked issue #1246 re-armed): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:2073e00f",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## Automated Code Review — REQUEST_CHANGES\n\n**Summary**: The dedup itself is well-executed — delegation wrappers are behaviorally faithful (verified `isSubmodulePath`, merge-base skip, autoStart triggers), targeted unit tests pass (490/490 across the touched suites) and the docs-freshness gate regenerates clean. However, the branch merged an older main (`489cc105`) while `origin/main` has since landed gh-1244 (#1253, commit `5e46da6a`), which canonicalized the *same* seams this PR deduplicates: `postTokenUsageSafely`/`tokenUsageSafelyOptions` in `js/common/tokenUsageComment.js` and `createTrackerHolder` in `js/common/trackers.js` (~24 callers converted). Verified with `git merge-tree --write-tree --name-only origin/main HEAD`: **content conflicts in `js/common/tokenUsageComment.js` and `js/postTestReworkResults.js`** — the PR cannot merge as-is, and a textual conflict resolution that keeps both token-usage wrappers would recreate the duplication this ticket exists to eliminate.\n\n**Key Issues**:\n- 🚨 Merge main and drop `postUsageSummariesSafely` in favor of gh-1244's `postTokenUsageSafely` (same swallow-all semantics, plus tracker/config overrides) — `js/common/tokenUsageComment.js` content-conflicts.\n- 🚨 Resolve the `js/postTestReworkResults.js` content-conflict hunk by adopting gh-1244's `trackersModule.createTrackerHolder()` destructuring instead of the new `shared.createTrackerHolder(trackersModule)` indirection (the shared module auto-merges to main's delegate anyway, so both end up at the same canonical).\n- ⚠️ Dead code left behind: `decidePublishStrategy` in `js/postTestAutomationResultsHelpers.js:129` now has zero production callers (only its own test) after the git-ops move to the shared module — remove it or reduce it to a delegate of the shared `syncDecision`.\n\n**Next Steps**:\n1. `git merge origin/main` (or rebase), resolve the two conflicted files by adopting gh-1244's canonical helpers rather than keeping parallel copies.\n2. Delete the residual dead `decidePublishStrategy` (and its test) or keep it as a thin delegate.\n3. Re-run the full suite + duplication gate; the targeted suites (490 tests) and docs-freshness were re-verified locally and pass."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:c9f70137",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "📍 **`js/storyTestAutomationRework.js:51`**\n\n💡 **SUGGESTION: warn line changed — the \"byte-identical\" claim is not quite exact here**\n\nThe original wrapper in this file logged:\n\n```javascript\nconsole.warn('Could not configure git author:', e);\n```\n\nThe shared `configureGitAuthor` (postStoryTestAutomationShared.js:134) logs `'Failed to configure git author:'`, so this delegation silently changes the console output, and the PR's own comment above this line (\"same warn line ('Failed to configure git author:')\") describes the shared copy, not the line it replaced. The PR description also claims posted strings stay byte-identical.\n\nOnly a diagnostic log (no test pins it), so this is cosmetic — but either restore the original wording in the shared function's message or drop the \"same warn line\" claim from the comment to keep the characterization notes truthful."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:7218e17a",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed (ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: agent:rework is armed on this PR and the rework runner will work through the threads and push. Validation re-runs automatically afterwards, and once the threads are resolved a fresh re-review is armed (review-threads-resolved)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:152cd5fb",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `27d67f0aa3ee7ba09e3abae062d055f03a3d04fc`) Rework re-queued (linked issue #1246 re-armed): resolve the conflicts and push — validation re-runs automatically. (approval latch kept — no re-review after the fix)"
+    }
+  ]
+}
