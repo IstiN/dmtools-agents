@@ -14,17 +14,31 @@ function loadBugFixBatchContext(mocks) {
     };
     var g = Object.assign({}, defaults, mocks || {});
     var tracker = g.__tracker;
+    var cli = g.cli_execute_command;
+    var configLoaderMock = g.__configLoader || { loadProjectConfig: function() {
+        return { jira: { statuses: { IN_DEVELOPMENT: 'In Development' } } };
+    } };
+    // gh-1250: the shared runtime helper is the real module, loaded with its
+    // own requires mapped; cli dispatches to the per-test mock.
+    var shared = loadModule(
+        'js/common/bugFixBatchContext.js',
+        makeRequire({
+            './pullRequest.js': { cleanCommandOutput: function(output) { return output; } },
+            './configLoader.js': configLoaderMock,
+            './trackers.js': { createTracker: function(config, customParams) { return tracker; } }
+        }),
+        { cli_execute_command: function(args) { return cli(args); } }
+    );
     return loadModule(
         'js/prepareBugFixBatchContext.js',
         makeRequire({
-            './configLoader.js': g.__configLoader || { loadProjectConfig: function() {
-                return { jira: { statuses: { IN_DEVELOPMENT: 'In Development' } } };
-            } },
+            './configLoader.js': configLoaderMock,
             './common/pullRequest.js': { cleanCommandOutput: function(output) { return output; } },
             './fetchQuestionsToInput.js': g.__fetchQuestions || { action: function() {} },
             './fetchLinkedTestsToInput.js': g.__fetchTests || { action: function() {} },
             './config.js': configModule,
-            './common/trackers.js': { createTracker: function(config, customParams) { return tracker; } }
+            './common/trackers.js': { createTracker: function(config, customParams) { return tracker; } },
+            './common/bugFixBatchContext.js': shared
         }),
         g
     );
@@ -320,5 +334,134 @@ suite('prepareBugFixBatchContext — extracted step helpers', function() {
             { inputFolderPath: 'input/x', jobParams: {} }
         );
         assert.deepEqual(fetched.sort(), ['q:PROJ-2', 'q:PROJ-3'], 'both bugs fetched');
+    });
+});
+
+// ── Shared runtime helper (gh-1250): every branch of js/common/bugFixBatchContext.js ──
+
+function loadSharedHelper(cli) {
+    var tracker = batchTracker();
+    var shared = loadModule(
+        'js/common/bugFixBatchContext.js',
+        makeRequire({
+            './pullRequest.js': { cleanCommandOutput: function(output) { return output; } },
+            './configLoader.js': { loadProjectConfig: function() {
+                return { workingDir: null, jira: { statuses: { IN_DEVELOPMENT: 'In Development' } } };
+            } },
+            './trackers.js': { createTracker: function(config, customParams) { return tracker; } }
+        }),
+        { cli_execute_command: cli || function() { return ''; } }
+    );
+    return { shared: shared, tracker: tracker };
+}
+
+suite('common/bugFixBatchContext — runCmd and cleanCommandOutput', function() {
+
+    test('runCmd wraps a bare string command and calls cli_execute_command', function() {
+        var calls = [];
+        var ctx = loadSharedHelper(function(args) { calls.push(args); return 'out'; });
+        var out = ctx.shared.runCmd('git status');
+        assert.equal(out, 'out', 'cli output returned');
+        assert.deepEqual(calls, [{ command: 'git status' }], 'string wrapped into a command arg');
+    });
+
+    test('runCmd passes an object arg through unchanged when no workingDir is set', function() {
+        var calls = [];
+        var ctx = loadSharedHelper(function(args) { calls.push(args); return ''; });
+        ctx.shared.runCmd({ command: 'ls', other: 1 });
+        assert.deepEqual(calls, [{ command: 'ls', other: 1 }], 'object arg untouched');
+    });
+
+    test('setWorkingDir applies workingDirectory to subsequent commands; null resets it', function() {
+        var calls = [];
+        var ctx = loadSharedHelper(function(args) { calls.push(args); return ''; });
+        ctx.shared.setWorkingDir('/tmp/ws');
+        ctx.shared.runCmd('pwd');
+        ctx.shared.setWorkingDir(null);
+        ctx.shared.runCmd('pwd');
+        assert.deepEqual(calls, [
+            { command: 'pwd', workingDirectory: '/tmp/ws' },
+            { command: 'pwd' }
+        ], 'workingDirectory applied only while set');
+    });
+
+    test('cleanCommandOutput delegates to the pullRequest helper', function() {
+        var seen = [];
+        var tracker = batchTracker();
+        var shared = loadModule(
+            'js/common/bugFixBatchContext.js',
+            makeRequire({
+                './pullRequest.js': { cleanCommandOutput: function(output) { seen.push(output); return '<cleaned>'; } },
+                './configLoader.js': { loadProjectConfig: function() { return {}; } },
+                './trackers.js': { createTracker: function() { return tracker; } }
+            }),
+            { cli_execute_command: function() { return ''; } }
+        );
+        var out = shared.cleanCommandOutput('warn: x\nreal');
+        assert.equal(out, '<cleaned>', 'helper result returned');
+        assert.deepEqual(seen, ['warn: x\nreal'], 'raw output passed through');
+    });
+});
+
+suite('common/bugFixBatchContext — resolveBatchActionContext', function() {
+
+    test('top-level params: config, tracker, epic folder/key/epic all resolved', function() {
+        var ctx = loadSharedHelper();
+        var epic = { key: 'PROJ-1', fields: { summary: 'loaded' } };
+        var params = { inputFolderPath: 'input/PROJ-1', ticket: epic, customParams: {} };
+        var out = ctx.shared.resolveBatchActionContext(params);
+        assert.equal(out.actualParams, params, 'top-level params used as-is');
+        assert.equal(out.tracker, ctx.tracker, 'tracker created via trackers module');
+        assert.equal(out.epicFolder, 'input/PROJ-1', 'epic folder taken from params');
+        assert.equal(out.epicKey, 'PROJ-1', 'epic key derived from the folder');
+        assert.equal(out.epic, epic, 'ticket with fields used without a fetch');
+        assert.equal(ctx.tracker.calls.getIssue.length, 0, 'no epic fetch');
+    });
+
+    test('jobParams form is unwrapped before resolution', function() {
+        var ctx = loadSharedHelper();
+        var job = { jobParams: { inputFolderPath: 'input/PROJ-9', ticket: { key: 'PROJ-9', fields: {} } } };
+        var out = ctx.shared.resolveBatchActionContext(job);
+        assert.equal(out.actualParams, job.jobParams, 'jobParams unwrapped');
+        assert.equal(out.epicKey, 'PROJ-9', 'epic key from nested params');
+    });
+
+    test('epic without fields is fetched; a failed fetch degrades to a key-only epic', function() {
+        var fetched = loadSharedHelper();
+        var out = fetched.shared.resolveBatchActionContext({ inputFolderPath: 'input/PROJ-1', ticket: { key: 'PROJ-1' } });
+        assert.deepEqual(fetched.tracker.calls.getIssue,
+            [{ key: 'PROJ-1', fields: ['summary', 'description', 'status', 'labels'] }], 'epic fetched');
+        assert.equal(out.epic.fields.summary, 'Epic summary', 'fetched epic returned');
+
+        var failing = batchTracker({ getIssue: function() { throw new Error('down'); } });
+        var tracker = failing;
+        var shared = loadModule(
+            'js/common/bugFixBatchContext.js',
+            makeRequire({
+                './pullRequest.js': { cleanCommandOutput: function(o) { return o; } },
+                './configLoader.js': { loadProjectConfig: function() { return {}; } },
+                './trackers.js': { createTracker: function() { return tracker; } }
+            }),
+            { cli_execute_command: function() { return ''; } }
+        );
+        var out2 = shared.resolveBatchActionContext({ inputFolderPath: 'input/PROJ-1', ticket: { key: 'PROJ-1' } });
+        assert.deepEqual(out2.epic, { key: 'PROJ-1', fields: {} }, 'key-only fallback epic');
+    });
+
+    test('config workingDir is applied to commands issued after resolution', function() {
+        var calls = [];
+        var tracker = batchTracker();
+        var shared = loadModule(
+            'js/common/bugFixBatchContext.js',
+            makeRequire({
+                './pullRequest.js': { cleanCommandOutput: function(o) { return o; } },
+                './configLoader.js': { loadProjectConfig: function() { return { workingDir: '/tmp/epic-ws' }; } },
+                './trackers.js': { createTracker: function() { return tracker; } }
+            }),
+            { cli_execute_command: function(args) { calls.push(args); return ''; } }
+        );
+        shared.resolveBatchActionContext({ inputFolderPath: 'input/PROJ-1', ticket: { key: 'PROJ-1', fields: {} } });
+        shared.runCmd('ls');
+        assert.deepEqual(calls, [{ command: 'ls', workingDirectory: '/tmp/epic-ws' }], 'workingDir applied');
     });
 });

@@ -23,10 +23,14 @@ var quotaBreaker = require('./common/quotaCircuitBreaker.js');
 var toolchainSummary = require('./common/toolchainSummary.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
-var trackersModule = require('./common/trackers.js');
-var trackerHolder = trackersModule.createTrackerHolder();
-var initTracker = trackerHolder.initTracker;
-var getTracker = trackerHolder.getTracker;
+// gh-1250: the lazy-tracker boilerplate lives in the shared trackerSlot module.
+var trackerSlot = require('./common/trackerSlot.js');
+function initTracker(config, customParams) {
+    trackerSlot.initTracker(config, customParams);
+}
+function getTracker() {
+    return trackerSlot.getTracker();
+}
 
 function hasPrApprovedLabel(ticket) {
     var labels = (ticket && ticket.fields && ticket.fields.labels) ? ticket.fields.labels : [];
@@ -129,11 +133,12 @@ function configureGitAuthor(config) {
 }
 
 /**
- * Push already-committed changes to remote (used when CLI agent committed its own work).
+ * gh-1250: shared syncBranchWithBase invocation — merges the ticket branch
+ * into its base (default 'main') via prHelper, honoring the module's
+ * working-directory state (_workingDir).
  */
-function performPushOnly(branchName, baseBranch) {
-    console.log('Pushing pre-committed changes to remote...');
-    var syncResult = prHelper.syncBranchWithBase({
+function syncBranchWithBaseUsingRunCmd(branchName, baseBranch) {
+    return prHelper.syncBranchWithBase({
         branchName: branchName,
         baseBranch: baseBranch || 'main',
         workingDir: _workingDir,
@@ -143,6 +148,14 @@ function performPushOnly(branchName, baseBranch) {
             return cli_execute_command(args);
         }
     });
+}
+
+/**
+ * Push already-committed changes to remote (used when CLI agent committed its own work).
+ */
+function performPushOnly(branchName, baseBranch) {
+    console.log('Pushing pre-committed changes to remote...');
+    var syncResult = syncBranchWithBaseUsingRunCmd(branchName, baseBranch);
     if (!syncResult.success) {
         return { success: false, isMergeSyncFailure: true, error: syncResult.error };
     }
@@ -408,16 +421,7 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
             command: 'git commit -m "' + safeMessage + '"'
         });
 
-        var syncResult = prHelper.syncBranchWithBase({
-            branchName: branchName,
-            baseBranch: baseBranch || 'main',
-            workingDir: _workingDir,
-            runCommand: function (command, workingDir) {
-                var args = { command: command };
-                if (workingDir) args.workingDirectory = workingDir;
-                return cli_execute_command(args);
-            }
-        });
+        var syncResult = syncBranchWithBaseUsingRunCmd(branchName, baseBranch);
         if (!syncResult.success) {
             return {
                 success: false,
@@ -1844,6 +1848,9 @@ if (typeof module !== 'undefined' && module.exports) {
         isHardPushRejection, retryForcePushAfterRejection, performPushOnly,
         prepareDevelopmentGitStage, stageOutcomeOf, runPublishPipeline,
         createDevelopmentPr, finalizeDevelopmentSuccess, concludeActionFailure,
+        // gh-1250: shared sync wrapper extracted from the two syncBranchWithBase
+        // call sites — exported for direct characterization tests.
+        syncBranchWithBaseUsingRunCmd,
         // gh-1229: landing-guard decomposition — exported for direct tests.
         branchCarriesWork, hasCommitsAheadOfBase, workingTreeCarriesWork, statusLineIndicatesWork
     };

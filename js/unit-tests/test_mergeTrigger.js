@@ -2,6 +2,15 @@
  * from awf factory-merge-trigger.yml (bash → structured github_* bridge). */
 /* global loadModule, assert, test, suite, makeRequire */
 
+// gh-1250: parseMcp/asList normalize through js/common/mcpParse.js — every
+// loadModule of js/mergeTrigger.js must map the helper in makeRequire (it
+// throws on unmapped ids).
+var mcpParseModule = loadModule('js/common/mcpParse.js', makeRequire({}), {});
+function loadMergeTrigger(mods) {
+    return loadModule('js/mergeTrigger.js',
+        makeRequire({ './common/mcpParse.js': mcpParseModule }), mods);
+}
+
 /* REST-vs-GraphQL get_pr payload shapes (gh-1081): kept out of fixture()
  * so its complexity stays at its baseline value. */
 function prPayload(a, st) {
@@ -85,7 +94,7 @@ function fixture(opts) {
     // ghRepo is injected unconditionally: when absent it lands as undefined,
     // which keeps typeof-GH_REPO paths exactly where they were.
     mods.GH_REPO = opts.ghRepo;
-    var mod = loadModule('js/mergeTrigger.js', makeRequire({}), mods);
+    var mod = loadMergeTrigger(mods);
     return { mod: mod, calls: calls };
 }
 
@@ -428,7 +437,7 @@ suite('mergeTrigger: fixture builders (characterization, gh-1200)', function () 
 });
 
 suite('mergeTrigger: pure link helpers', function () {
-    var mod = loadModule('js/mergeTrigger.js', makeRequire({}), {});
+    var mod = loadMergeTrigger({});
 
     test('extractLinkedIssueNumber: body keyword wins over branch digits', function () {
         assert.equal(mod.extractLinkedIssueNumber({ body: 'Fixes #9', headRefName: '12-x' }), 9);
@@ -581,12 +590,12 @@ suite('mergeTrigger: action wiring characterization (gh-1081)', function () {
 
 // ── gh-1081: direct tests of the extracted pure parse/build/decide helpers.
 suite('mergeTrigger: extracted helpers (gh-1081)', function () {
-    var mod = loadModule('js/mergeTrigger.js', makeRequire({}), {});
+    var mod = loadMergeTrigger({});
 
     test('resolveRepo: owner/name split, GH_REPO fallback, errors', function () {
         assert.deepEqual(mod.resolveRepo({ repo: 'a/b' }), { owner: 'a', name: 'b' });
         assert.deepEqual(mod.resolveRepo({ repo: 'a/b/c' }), { owner: 'a', name: 'b/c' });
-        var withGh = loadModule('js/mergeTrigger.js', makeRequire({}), { GH_REPO: 'g/h' });
+        var withGh = loadMergeTrigger({ GH_REPO: 'g/h' });
         assert.deepEqual(withGh.resolveRepo({}), { owner: 'g', name: 'h' },
             'GH_REPO wins when jobParams.repo is absent');
         assert.deepEqual(mod.resolveRepo({ repo: 'job/r' }), { owner: 'job', name: 'r' },
@@ -686,7 +695,7 @@ suite('mergeTrigger: extracted helpers (gh-1081)', function () {
 
     test('squashMerge: merged/ok/refusal/throw outcomes', function () {
         function loadWith(mergeImpl) {
-            return loadModule('js/mergeTrigger.js', makeRequire({}), {
+            return loadMergeTrigger({
                 github_merge_pr: mergeImpl
             });
         }
@@ -711,7 +720,7 @@ suite('mergeTrigger: extracted helpers (gh-1081)', function () {
 
     test('tryRemoveLabel/tryComment: failures land in the log as non-fatal', function () {
         var log = [];
-        var mod2 = loadModule('js/mergeTrigger.js', makeRequire({}), {
+        var mod2 = loadMergeTrigger({
             github_remove_label: function (a) {
                 if (a.number === 13) throw new Error('label boom');
                 return '{}';
@@ -751,7 +760,7 @@ suite('mergeTrigger: extracted helpers (gh-1081)', function () {
     test('scanLabeledPrs: open issue maps back, closed/absent/unresolvable are orphans', function () {
         function scanWith(issueStates, prs, opts) {
             opts = opts || {};
-            var m = loadModule('js/mergeTrigger.js', makeRequire({}), {
+            var m = loadMergeTrigger({
                 github_get_issue: function (a) {
                     if (opts.throwOn === a.number) throw new Error('boom issue');
                     var st = issueStates.hasOwnProperty(a.number) ? issueStates[a.number] : 'OPEN';
@@ -810,7 +819,7 @@ suite('mergeTrigger: extracted helpers (gh-1081)', function () {
 
     test('isIssueOpen: OPEN true, CLOSED/404-body/throw false', function () {
         function loadWith(getIssue) {
-            return loadModule('js/mergeTrigger.js', makeRequire({}), { github_get_issue: getIssue });
+            return loadMergeTrigger({ github_get_issue: getIssue });
         }
         assert.equal(loadWith(function () { return JSON.stringify({ state: 'OPEN' }); })
             .isIssueOpen('o', 'n', 1), true);

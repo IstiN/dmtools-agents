@@ -31,8 +31,12 @@ var W1A_CFG = { jira: { statuses: { DONE: 'Done', IN_TESTING: 'In Testing', READ
 function w1aLoad(file, rec) {
     return loadModule('js/' + file, makeRequire({
         './configLoader.js': { loadProjectConfig: function() { return W1A_CFG; } },
-        './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
-        './common/trackers.js': w1aTrackers(rec.mocks)
+        './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageCommentsSafely: function() {} },
+        './common/trackers.js': w1aTrackers(rec.mocks),
+        './common/actionTicketContext.js': loadModule('js/common/actionTicketContext.js', makeRequire({
+            '../configLoader.js': { loadProjectConfig: function() { return W1A_CFG; } },
+            './trackers.js': w1aTrackers(rec.mocks)
+        }), rec.mocks)
     }), rec.mocks);
 }
 function w1aParams(key, ado) {
@@ -99,9 +103,14 @@ suite('wave1a tracker migration — moveToReadyForTesting', function() {
 suite('wave1a tracker migration — triggerStoryTestAutomation (ado)', function() {
     test('ado removes SM label via ado tool only', function() {
         var rec = w1aRecorder();
+        var autoStartMock = { triggerConfiguredWorkflowForTicket: function() { return false; }, triggerSmIfIdle: function() {} };
         var m = loadModule('js/triggerStoryTestAutomation.js', makeRequire({
-            './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; }, triggerSmIfIdle: function() {} },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/autoStart.js': autoStartMock,
+            './common/autoStartTrigger.js': loadModule('js/common/autoStartTrigger.js', makeRequire({
+                './autoStart.js': autoStartMock,
+                './tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageCommentsSafely: function() {} }
+            }), {}),
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageCommentsSafely: function() {} },
             './common/trackers.js': w1aTrackers(rec.mocks)
         }), rec.mocks);
         var r = m.action({ ticket: { key: '12' }, jobParams: { customParams: { trackerProvider: 'ado' } } });

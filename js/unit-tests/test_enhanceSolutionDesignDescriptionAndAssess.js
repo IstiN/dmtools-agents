@@ -8,20 +8,37 @@
 
 /** Token-usage double for the module under test; g.__tokenUsage overrides the poster. */
 function tokenUsageMock(g) {
+    var inner = g.__tokenUsage || { postTokenUsageComments: function() {} };
     return Object.assign({ customParamsOf: function(params) {
         return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
-    } }, g.__tokenUsage || { postTokenUsageComments: function() {} });
+    }, postTokenUsageCommentsSafely: function(ticketKey, options) {
+        try { inner.postTokenUsageComments(ticketKey, options); } catch (e) {
+            console.warn('Failed to post token usage comments:', e);
+        }
+    } }, inner);
 }
 
 /** Require-spec map for enhanceSolutionDesignDescriptionAndAssess; g.__* keys inject doubles. */
 function enhanceSDRequireMap(g, outputFilesMock) {
+    // One shared trackerSlot instance so the action's getTracker() and the
+    // helper's initEnhancementTracker() operate on the same lazy slot.
+    var trackerSlotMod = loadModule('js/common/trackerSlot.js', makeRequire({
+        './trackers.js': { createTracker: function(config, customParams) { return g.__tracker; } }
+    }));
+    var enhancementPostMod = loadModule('js/common/enhancementPost.js', makeRequire({
+        './trackerSlot.js': trackerSlotMod,
+        '../config.js': configModule,
+        '../configLoader.js': g.__configLoader || { loadProjectConfig: function() { return {}; } }
+    }));
     return {
         './common/jiraHelpers.js': { extractTicketKey: function() { return null; } },
         './config.js': configModule,
         './configLoader.js': g.__configLoader || { loadProjectConfig: function() { return {}; } },
         './common/outputFiles.js': outputFilesMock,
         './common/tokenUsageComment.js': tokenUsageMock(g),
-        './common/trackers.js': { createTracker: function(config, customParams) { return g.__tracker; } }
+        './common/trackers.js': { createTracker: function(config, customParams) { return g.__tracker; } },
+        './common/trackerSlot.js': trackerSlotMod,
+        './common/enhancementPost.js': enhancementPostMod
     };
 }
 

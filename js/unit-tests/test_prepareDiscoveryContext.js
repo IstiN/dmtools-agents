@@ -22,7 +22,7 @@ function loadPrepareDiscoveryContext(mocks, discoveryConfig) {
         makeRequire({
             './configLoader.js': configLoaderMock,
             './common/contentOutput.js': loadModule('js/common/contentOutput.js',
-                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock() }),
+                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock(), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }),
                 globals)
         }),
         globals
@@ -285,7 +285,7 @@ function loadPrepareDiscoveryContextWithConfigLoader(configLoaderMock, globals) 
         makeRequire({
             './configLoader.js': configLoaderMock,
             './common/contentOutput.js': loadModule('js/common/contentOutput.js',
-                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock() }),
+                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock(), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }),
                 g)
         }),
         g
@@ -532,5 +532,43 @@ suite('prepareDiscoveryContext — snapshotPageTree failure paths', function() {
         mod.snapshotPageTree({ id: 'root', title: 'PROJ-2 root' }, 'outputs/discovery', []);
 
         assert.equal(writes['outputs/discovery/index.md'], '_(existing page had no body)_', 'placeholder written');
+    });
+});
+
+// ── gh-1250 dedup wrappers: thin delegations to contentOutput ───────────────
+
+suite('prepareDiscoveryContext — gh-1250 contentOutput delegations', function() {
+
+    test('sanitizeFileName / findTicketPage delegate to contentOutput unchanged', function() {
+        var mod = loadPrepareDiscoveryContext({});
+        assert.equal(mod.sanitizeFileName('A/B:C*D?'), 'A-B-C-D-');
+        assert.equal(mod.sanitizeFileName(null), 'untitled');
+        assert.equal(mod.findTicketPage([{ id: '1', title: 'PROJ-2 Summary' }, { id: '2', title: 'X PROJ-2' }], 'PROJ-2').id, '1');
+        assert.equal(mod.findTicketPage(null, 'PROJ-2'), null);
+        assert.equal(mod.findTicketPage([], 'PROJ-2'), null);
+    });
+
+    test('injectCommentAnchors: a failing storage lookup warns and returns the body unchanged', function() {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warns.push(String(m)); };
+        var mod;
+        try {
+            mod = loadPrepareDiscoveryContext({
+                confluence_content_by_id: function() { throw new Error('storage down'); }
+            }, { space: 'DISC', parentPageId: '123' });
+            var result = mod.injectCommentAnchors('page-9', '# Original body');
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(result, '# Original body', 'body kept unchanged on lookup failure');
+        assert.ok(warns.some(function(m) { return m.indexOf('inline comment anchor extraction failed for page page-9') !== -1; }));
+    });
+
+    test('injectCommentAnchors: no anchors on the page returns the body unchanged', function() {
+        var mod = loadPrepareDiscoveryContext({
+            confluence_content_by_id: function() { return { body: { storage: { value: '<p>no markers</p>' } } }; }
+        }, { space: 'DISC', parentPageId: '123' });
+        assert.equal(mod.injectCommentAnchors('page-9', '# Original body'), '# Original body');
     });
 });

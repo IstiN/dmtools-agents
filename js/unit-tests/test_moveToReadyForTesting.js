@@ -5,11 +5,23 @@
  * 'label' mode marks the stage instead of failing; 'none' mode keeps the exact old move.
  */
 
+function loadActionTicketContext(mocks) {
+    mocks = mocks || {};
+    return loadModule('js/common/actionTicketContext.js', makeRequire({
+        '../configLoader.js': makeDefaultConfigLoaderMock(),
+        './trackers.js': loadModule('js/common/trackers.js', makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }), mocks)
+    }), mocks);
+}
+
 function loadMoveToReadyForTesting(mocks) {
     mocks = mocks || {};
     return (function (_m) { return loadModule('js/moveToReadyForTesting.js', makeRequire(Object.assign({}, {
         './config.js': configModule,
-        './configLoader.js': makeDefaultConfigLoaderMock()
+        './configLoader.js': makeDefaultConfigLoaderMock(),
+        './common/actionTicketContext.js': loadActionTicketContext(_m)
     }, { './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
         '../config.js': configModule,
         './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')

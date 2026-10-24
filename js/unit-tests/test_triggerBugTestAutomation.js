@@ -1,6 +1,61 @@
 /**
- * Unit tests for js/triggerBugTestAutomation.js
+ * Unit tests for js/triggerBugTestAutomation.js and the shared
+ * js/common/autoStartTrigger.js helper it delegates to (gh-1250).
  */
+
+function loadAutoStartTrigger(mocks) {
+    var autoStartMock = {
+        triggerConfiguredWorkflowForTicket: function(opts) {
+            return (mocks && mocks.triggerConfiguredWorkflowForTicket)
+                ? mocks.triggerConfiguredWorkflowForTicket(opts)
+                : false;
+        },
+        triggerSmIfIdle: function(opts) {
+            return (mocks && mocks.triggerSmIfIdle)
+                ? mocks.triggerSmIfIdle(opts)
+                : { success: true };
+        }
+    };
+    return loadModule(
+        'js/common/autoStartTrigger.js',
+        makeRequire({
+            './autoStart.js': autoStartMock,
+            './tokenUsageComment.js': makeTokenUsageMock(mocks)
+        }),
+        {}
+    );
+}
+
+function postTokenUsageCommentsMock(mocks) {
+    return function(key, opts) {
+        if (mocks && mocks.postTokenUsageComments) mocks.postTokenUsageComments(key, opts);
+    };
+}
+
+function customParamsOfMock(params) {
+    if (params && params.jobParams && params.jobParams.customParams) {
+        return params.jobParams.customParams;
+    }
+    if (params && params.customParams) {
+        return params.customParams;
+    }
+    return {};
+}
+
+function makeTokenUsageMock(mocks) {
+    var tokenUsageMock = {
+        postTokenUsageComments: postTokenUsageCommentsMock(mocks),
+        customParamsOf: customParamsOfMock
+    };
+    tokenUsageMock.postTokenUsageCommentsSafely = function(key, opts) {
+        try {
+            tokenUsageMock.postTokenUsageComments(key, opts);
+        } catch (e) {
+            console.warn('Failed to post token usage comments:', e);
+        }
+    };
+    return tokenUsageMock;
+}
 
 function loadTriggerBugTestAutomation(mocks) {
     var defaults = {
@@ -11,23 +66,8 @@ function loadTriggerBugTestAutomation(mocks) {
     return loadModule(
         'js/triggerBugTestAutomation.js',
         makeRequire({
-            './common/autoStart.js': {
-                triggerConfiguredWorkflowForTicket: function(opts) {
-                    return (mocks && mocks.triggerConfiguredWorkflowForTicket)
-                        ? mocks.triggerConfiguredWorkflowForTicket(opts)
-                        : false;
-                },
-                triggerSmIfIdle: function(opts) {
-                    return (mocks && mocks.triggerSmIfIdle)
-                        ? mocks.triggerSmIfIdle(opts)
-                        : { success: true };
-                }
-            },
-            './common/tokenUsageComment.js': {
-                postTokenUsageComments: function(key, opts) {
-                    if (mocks && mocks.postTokenUsageComments) mocks.postTokenUsageComments(key, opts);
-                }
-            }
+            './common/autoStartTrigger.js': loadAutoStartTrigger(mocks),
+            './common/tokenUsageComment.js': makeTokenUsageMock(mocks)
         }),
         Object.assign({}, defaults, mocks)
     );
@@ -135,6 +175,148 @@ suite('triggerBugTestAutomation', function() {
         assert.deepEqual(m.configOf({ jobParams: { config: { c: 3 } } }), { c: 3 });
         assert.deepEqual(m.configOf({ config: { d: 4 } }), { d: 4 });
         assert.deepEqual(m.configOf({}), {});
+    });
+
+});
+
+// ── gh-1250: direct coverage of the shared autoStartTrigger branches ──
+
+suite('autoStartTrigger (shared, via bug test suite)', function() {
+
+    function baseOpts(customParams) {
+        return {
+            ticketKey: 'TP-300',
+            config: { c: 1 },
+            customParams: customParams,
+            label: 'bug_test_automation'
+        };
+    }
+
+    test('flag set and workflow triggered: fires autoStart and skips SM', function() {
+        var smCalled = false;
+        var module = loadAutoStartTrigger({
+            triggerConfiguredWorkflowForTicket: function(opts) {
+                assert.equal(opts.ticketKey, 'TP-300');
+                assert.equal(opts.configFile, 'agents/bug_test_automation.json');
+                assert.equal(opts.label, 'bug_test_automation');
+                assert.deepEqual(opts.stripKeys, ['removeLabel', 'autoStartBugTestAutomation', 'autoStartBugTestAutomationConfigFile']);
+                return true;
+            },
+            triggerSmIfIdle: function() { smCalled = true; }
+        });
+
+        var triggered = module.triggerWorkflowOrAskSm(baseOpts({
+            autoStartBugTestAutomation: true,
+            autoStartBugTestAutomationConfigFile: 'agents/bug_test_automation.json'
+        }));
+
+        assert.equal(triggered, true);
+        assert.equal(smCalled, false);
+    });
+
+    test('flag set but workflow not triggered: asks SM to re-evaluate', function() {
+        var smCalled = false;
+        var module = loadAutoStartTrigger({
+            triggerConfiguredWorkflowForTicket: function() { return false; },
+            triggerSmIfIdle: function(opts) {
+                smCalled = true;
+                assert.deepEqual(opts.config, { c: 1 });
+            }
+        });
+
+        var triggered = module.triggerWorkflowOrAskSm(baseOpts({
+            autoStartBugTestAutomation: true,
+            autoStartBugTestAutomationConfigFile: 'agents/bug_test_automation.json'
+        }));
+
+        assert.equal(triggered, false);
+        assert.equal(smCalled, true);
+    });
+
+    test('flag missing: never calls autoStart and asks SM to re-evaluate', function() {
+        var workflowCalled = false;
+        var smCalled = false;
+        var module = loadAutoStartTrigger({
+            triggerConfiguredWorkflowForTicket: function() { workflowCalled = true; return true; },
+            triggerSmIfIdle: function() { smCalled = true; }
+        });
+
+        var triggered = module.triggerWorkflowOrAskSm(baseOpts({}));
+
+        assert.equal(triggered, false);
+        assert.equal(workflowCalled, false);
+        assert.equal(smCalled, true);
+    });
+
+    test('runTriggerAction: posts token usage via postTokenUsageCommentsSafely and reports the keyed result', function() {
+        var usageCalls = [];
+        var module = loadAutoStartTrigger({
+            triggerConfiguredWorkflowForTicket: function() { return true; },
+            postTokenUsageComments: function(key, opts) { usageCalls.push({ key: key, opts: opts }); }
+        });
+
+        var result = module.runTriggerAction({
+            params: {
+                ticket: { key: 'TP-301' },
+                initiator: 'sm',
+                jobParams: { customParams: { autoStartBugTestAutomation: true, autoStartBugTestAutomationConfigFile: 'agents/bug_test_automation.json' } }
+            },
+            label: 'bug_test_automation',
+            keyName: 'bugKey',
+            errorPrefix: 'err:',
+            logHeader: function() {},
+            afterTrigger: function() {},
+            tokenUsageOptions: function(params) {
+                return { initiator: params.initiator, customParams: module.customParamsOf(params) };
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.triggered, true);
+        assert.equal(result.bugKey, 'TP-301');
+        assert.equal(usageCalls.length, 1);
+        assert.equal(usageCalls[0].key, 'TP-301');
+        assert.deepEqual(usageCalls[0].opts.customParams, { autoStartBugTestAutomation: true, autoStartBugTestAutomationConfigFile: 'agents/bug_test_automation.json' });
+    });
+
+    test('runTriggerAction: a throwing token-usage post is swallowed and the action still succeeds', function() {
+        var module = loadAutoStartTrigger({
+            triggerSmIfIdle: function() {},
+            postTokenUsageComments: function() { throw new Error('usage api down'); }
+        });
+
+        var result = module.runTriggerAction({
+            params: { ticket: { key: 'TP-302' }, initiator: 'sm' },
+            label: 'bug_test_automation',
+            keyName: 'bugKey',
+            errorPrefix: 'err:',
+            logHeader: function() {},
+            afterTrigger: function() {},
+            tokenUsageOptions: function() { return {}; }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.triggered, false);
+        assert.equal(result.bugKey, 'TP-302');
+    });
+
+    test('runTriggerAction: action-level failure returns the structured error contract', function() {
+        var module = loadAutoStartTrigger({
+            triggerSmIfIdle: function() { throw new Error('sm exploded'); }
+        });
+
+        var result = module.runTriggerAction({
+            params: { ticket: { key: 'TP-303' }, jobParams: { customParams: {} } },
+            label: 'bug_test_automation',
+            keyName: 'bugKey',
+            errorPrefix: 'err:',
+            logHeader: function() {},
+            afterTrigger: function() {},
+            tokenUsageOptions: function() { return {}; }
+        });
+
+        assert.equal(result.success, false);
+        assert.ok(result.error.indexOf('sm exploded') !== -1);
     });
 
 });

@@ -41,10 +41,10 @@ function loadPublishDiscovery(mocks, discoveryConfig) {
         makeRequire({
             './configLoader.js': configLoaderMock,
             './common/trackers.js': loadTrackersPd(globals),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageCommentsSafely: function() {} },
             './common/feedbackLoop.js': (mocks && mocks.__feedbackLoop) || { resumeAgent: function() { return { attempted: false, reason: 'disabled' }; } },
             './common/contentOutput.js': loadModule('js/common/contentOutput.js',
-                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock() }),
+                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock(), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }),
                 globals)
         }),
         globals
@@ -468,14 +468,25 @@ function loadPublishDiscoveryWithRepliesModule(repliesModuleMock, extraGlobals, 
     for (var k in extraGlobals) {
         globals[k] = extraGlobals[k];
     }
+    var realContentOutput = loadModule('js/common/contentOutput.js',
+        makeRequire({
+            '../configLoader.js': { loadProjectConfig: function() { return {}; } },
+            './trackers.js': trackersMock(),
+            './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({}))
+        }),
+        globals);
+    // Overlay only the behavior under test (a throwing publishCommentReplies);
+    // everything else the action delegates to (findTicketPage, buildPageUrl,
+    // resolvePageUrl, publishCommentReplies) comes from the real module.
+    var contentOutputMock = Object.assign({}, realContentOutput, repliesModuleMock);
     return loadModule(
         'js/publishDiscoveryToConfluence.js',
         makeRequire({
             './configLoader.js': { loadProjectConfig: function() { return { discovery: discoveryConfig }; } },
             './common/trackers.js': loadTrackersPd(globals),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageCommentsSafely: function() {} },
             './common/feedbackLoop.js': { resumeAgent: function() { return { attempted: false }; } },
-            './common/contentOutput.js': repliesModuleMock
+            './common/contentOutput.js': contentOutputMock
         }),
         globals
     );
@@ -650,3 +661,75 @@ suite('publishDiscoveryToConfluence — gh-1187 extracted helpers', function() {
 });
 
 
+
+// ── gh-1250 dedup wrappers: thin delegations to contentOutput / tokenUsageComment ──
+
+suite('publishDiscoveryToConfluence — gh-1250 delegations', function() {
+
+    test('findTicketPage / buildPageUrl delegate to contentOutput unchanged', function() {
+        var mod = loadPublishDiscovery({});
+        assert.equal(mod.findTicketPage([{ id: '1', title: 'PROJ-2 Summary' }], 'PROJ-2').id, '1');
+        assert.equal(mod.findTicketPage('not-an-array', 'PROJ-2'), null);
+        assert.equal(mod.buildPageUrl({ _links: { webui: '/wiki/x', base: 'https://c.example.com' } }), 'https://c.example.com/wiki/x');
+        assert.equal(mod.buildPageUrl({ _links: { webui: '/wiki/x' } }), null);
+        assert.equal(mod.buildPageUrl(null), null);
+    });
+
+    test('resolvePageUrl: direct _links win without a follow-up lookup', function() {
+        var lookups = 0;
+        var mod = loadPublishDiscovery({
+            confluence_content_by_id: function() { lookups += 1; return {}; }
+        }, { space: 'DISC', parentPageId: '123' });
+        var url = mod.resolvePageUrl({ id: '456', _links: { webui: '/wiki/x', base: 'https://c.example.com' } });
+        assert.equal(url, 'https://c.example.com/wiki/x');
+        assert.equal(lookups, 0, 'no follow-up GET when _links.base is present');
+    });
+
+    test('resolvePageUrl: a failing follow-up lookup warns (historical behavior) and returns null', function() {
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warns.push(String(m)); };
+        var mod;
+        try {
+            mod = loadPublishDiscovery({
+                confluence_content_by_id: function() { throw new Error('lookup down'); }
+            }, { space: 'DISC', parentPageId: '123' });
+            var url = mod.resolvePageUrl({ id: '456', _links: { webui: '/wiki/x' } });
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(url, null);
+        assert.ok(warns.some(function(m) { return m.indexOf('follow-up confluence_content_by_id lookup failed') !== -1; }));
+    });
+
+    test('postTokenUsageQuietly delegates to tokenUsageComment.postTokenUsageCommentsSafely', function() {
+        var calls = [];
+        var globals = {
+            confluence_get_children_by_id: function() { return []; },
+            jira_post_comment: function() {}
+        };
+        var mod = loadModule(
+            'js/publishDiscoveryToConfluence.js',
+            makeRequire({
+                './configLoader.js': { loadProjectConfig: function() { return { discovery: { space: 'DISC', parentPageId: '123' } }; } },
+                './common/trackers.js': loadTrackersPd(globals),
+                './common/tokenUsageComment.js': {
+                    postTokenUsageComments: function() {},
+                    postTokenUsageCommentsSafely: function(ticketKey, options) { calls.push({ ticketKey: ticketKey, options: options }); }
+                },
+                './common/feedbackLoop.js': { resumeAgent: function() { return { attempted: false }; } },
+                './common/contentOutput.js': loadModule('js/common/contentOutput.js',
+                    makeRequire({
+                        '../configLoader.js': { loadProjectConfig: function() { return {}; } },
+                        './trackers.js': trackersMock(),
+                        './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({}))
+                    }),
+                    globals)
+            }),
+            globals
+        );
+        var tracker = { postComment: function() {} };
+        mod.postTokenUsageQuietly(tracker, 'PROJ-2', { initiator: 'user-1' });
+        assert.deepEqual(calls, [{ ticketKey: 'PROJ-2', options: { initiator: 'user-1', tracker: tracker } }]);
+    });
+});

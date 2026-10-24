@@ -231,17 +231,26 @@ suite('tokenUsageComment call sites pass the job context (agents#854)', function
     test('every action call passes a tracker or customParams, so ADO/GitHub runs never fall back to Jira', function() {
         var offenders = [];
         var seen = 0;
+        // gh-1250: direct postTokenUsageComments call sites dropped (24 → 19)
+        // as callers moved to the shared postTokenUsageCommentsSafely wrapper,
+        // so the corpus guard counts both call shapes (each must still carry a
+        // tracker or customParams).
+        var patterns = [
+            /tokenUsageComment\.postTokenUsageComments\(([^;]*?)\);/g,
+            /tokenUsageComment\.postTokenUsageCommentsSafely\(([^;]*?)\);/g
+        ];
         jsFiles().forEach(function(path) {
             var src = file_read({ path: path });
             if (!src) return;
-            var re = /tokenUsageComment\.postTokenUsageComments\(([^;]*?)\);/g;
-            var m;
-            while ((m = re.exec(src)) !== null) {
-                seen++;
-                if (m[1].indexOf('tracker') === -1 && m[1].indexOf('customParams') === -1) {
-                    offenders.push(path + ': ' + m[0].substring(0, 100));
+            patterns.forEach(function(re) {
+                var m;
+                while ((m = re.exec(src)) !== null) {
+                    seen++;
+                    if (m[1].indexOf('tracker') === -1 && m[1].indexOf('customParams') === -1) {
+                        offenders.push(path + ': ' + m[0].substring(0, 100));
+                    }
                 }
-            }
+            });
         });
         assert.ok(seen > 20, 'expected many call sites, saw ' + seen);
         assert.deepEqual(offenders, [], 'call sites without tracker/customParams:\n' + offenders.join('\n'));
@@ -457,6 +466,63 @@ suite('tokenUsageComment — postTokenUsageComments edge branches (gh-1225)', fu
         assert.equal(r.posted, 1);
         assert.equal(calls.length, 1);
         assert.contains(calls[0][1], '[a]: {"total_tokens":5}');
+    });
+});
+
+suite('tokenUsageComment.postTokenUsageCommentsSafely (gh-1250)', function() {
+    function safeManifestMocks(manifest, files) {
+        return {
+            file_read: function(opts) {
+                if (opts.path === 'outputs/token_usage_files.json') {
+                    return JSON.stringify(manifest);
+                }
+                return files && files[opts.path] !== undefined ? files[opts.path] : null;
+            }
+        };
+    }
+
+    test('happy path: forwards ticketKey and options, posts normally', function() {
+        var calls = [];
+        var mod = loadTokenUsageComment(safeManifestMocks(['outputs/a_usage.json'], {
+            'outputs/a_usage.json': JSON.stringify({ total_tokens: 7 })
+        }));
+        var warned = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warned.push(String(m)); };
+        try {
+            mod.postTokenUsageCommentsSafely('PROJ-1', {
+                initiator: 'user-1',
+                tracker: { postComment: function(k, c) { calls.push([k, c]); } }
+            });
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(calls.length, 1, 'one comment posted');
+        assert.equal(calls[0][0], 'PROJ-1', 'ticketKey forwarded');
+        assert.contains(calls[0][1], '[a]: {"total_tokens":7}');
+        assert.equal(warned.length, 0, 'no warning on success');
+    });
+
+    test('a throw from the posting call is swallowed and warned about', function() {
+        var mod = loadTokenUsageComment({});
+        var warned = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warned.push(String(m)); };
+        var threw = false;
+        var options = {};
+        Object.defineProperty(options, 'outputsDir', {
+            get: function() { throw new Error('provider down'); }
+        });
+        try {
+            mod.postTokenUsageCommentsSafely('PROJ-2', options);
+        } catch (e) {
+            threw = true;
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(threw, false, 'failure never propagates');
+        assert.equal(warned.length, 1, 'exactly one warning');
+        assert.contains(warned[0], 'Failed to post token usage comments');
     });
 });
 

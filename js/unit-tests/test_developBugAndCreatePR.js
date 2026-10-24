@@ -28,6 +28,17 @@ function trackersWith(mocks) {
     );
 }
 
+// gh-1250: the shared trackerSlot module loaded against the same trackers
+// layer (mirrors the production require chain: developTicketAndCreatePR.js
+// -> common/trackerSlot.js -> common/trackers.js).
+function trackerSlotWith(mocks) {
+    return loadModule(
+        'js/common/trackerSlot.js',
+        makeRequire({ './trackers.js': trackersWith(mocks) }),
+        mocks || {}
+    );
+}
+
 // gh-1188: recorded CLI stub — hoisted out of the loader so the loader keeps
 // its baseline complexity; responses keyed by command prefix.
 function recordCliCommand1188(commands, args) {
@@ -100,7 +111,7 @@ var developTicketRealModule = (function (_m) { return loadModule('js/developTick
         './config.js': configModule,
         './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
         './common/commentMarkup.js': commentMarkupModule
-    }, { './common/trackers.js': trackersWith(_m) })), _m); })({});
+    }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })({});
 
     var requireMap = {
         './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
@@ -806,7 +817,7 @@ function loadBugForMissingResponseResume(opts) {
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
             './common/commentMarkup.js': commentMarkupModuleLocal
-        }, { './common/trackers.js': trackersWith(_m) })), _m); })({
+        }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })({
             jira_post_comment: function (args) { comments.push(args); },
             jira_move_to_status: function (args) { moves.push(args); },
             jira_remove_label: function (args) { removed.push(args); }

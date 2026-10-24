@@ -34,9 +34,13 @@ function loadBaCheck(mocks) {
         'js/checkSubtasksDoneForBA.js',
         makeRequire({
             './configLoader.js': configLoaderMock,
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': {
+                postTokenUsageComments: function() {},
+                postTokenUsageCommentsSafely: function() {}
+            },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
-            './common/trackers.js': baTrackers(mocks)
+            './common/trackers.js': baTrackers(mocks),
+            './common/smDoneCheck.js': loadModule('js/common/smDoneCheck.js', makeRequire({}))
         }),
         mocks
     );

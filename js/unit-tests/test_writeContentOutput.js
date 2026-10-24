@@ -13,7 +13,8 @@ function loadContentOutputLib(mocks, projectConfig) {
             './trackers.js': loadModule('js/common/trackers.js', makeRequire({
                 '../config.js': configModule,
                 './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
-            }), Object.assign({}, mocks || {}))
+            }), Object.assign({}, mocks || {})),
+            './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({}))
         }),
         Object.assign({}, mocks || {})
     );

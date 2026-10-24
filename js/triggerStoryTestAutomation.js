@@ -4,53 +4,21 @@
  * Keeps the Story in Ready For Testing and immediately triggers story_test_automation.
  */
 
-var autoStart = require('./common/autoStart.js');
+var autoStartTrigger = require('./common/autoStartTrigger.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var trackersModule = require('./common/trackers.js');
 
-// ── gh-1229: small helpers extracted from action so it stays well under the
-//    CRAP gate; behavior is byte-identical to the previous inline flow. ──
+// ── gh-1229/gh-1250: helpers delegate to the shared autoStartTrigger module
+//    (single parameterized copy of the former inline flow). ──
 
 /** Config: jobParams wins (Teammate path), then top-level, then {}. */
 function configOf(params) {
-    return params.jobParams && params.jobParams.config
-        ? params.jobParams.config
-        : (params.config || {});
+    return autoStartTrigger.configOf(params);
 }
 
 /** Custom params: jobParams wins (Teammate path), then top-level, then {}. */
 function customParamsOf(params) {
-    return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
-}
-
-/**
- * Trigger story_test_automation via autoStart when fully configured;
- * otherwise ask the SM to re-evaluate. Returns whether the workflow fired.
- */
-function triggerWorkflowOrAskSm(storyKey, config, customParams) {
-    var triggered = false;
-    if (customParams.autoStartStoryTestAutomation && customParams.autoStartStoryTestAutomationConfigFile) {
-        triggered = autoStart.triggerConfiguredWorkflowForTicket({
-            ticketKey: storyKey,
-            customParams: customParams,
-            config: config,
-            configFile: customParams.autoStartStoryTestAutomationConfigFile,
-            label: 'story_test_automation',
-            stripKeys: [
-                'removeLabel',
-                'autoStartStoryTestAutomation',
-                'autoStartStoryTestAutomationConfigFile'
-            ]
-        });
-    }
-
-    if (!triggered) {
-        console.log('Story test automation not triggered via autoStart; asking SM to re-evaluate.');
-        autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
-    } else {
-        console.log('✅ Triggered story_test_automation for', storyKey);
-    }
-    return triggered;
+    return autoStartTrigger.customParamsOf(params);
 }
 
 /** The SM trigger label must go so test_cases_generator does not re-run. */
@@ -64,39 +32,27 @@ function removeSmTriggerLabelQuietly(tracker, storyKey, customParams) {
     }
 }
 
-/** Token-usage comments are a nice-to-have — never fail the action on them. */
-function postTokenUsageQuietly(storyKey, params, tracker) {
-    try {
-        tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator, tracker: tracker });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
-}
-
 function action(params) {
-    try {
-        const storyKey = params.ticket.key;
-        const config = configOf(params);
-        const customParams = customParamsOf(params);
-
-        var tracker = trackersModule.createTracker(config, customParams);
-
-        console.log('=== Triggering story test automation for', storyKey, '===');
-
-        var triggered = triggerWorkflowOrAskSm(storyKey, config, customParams);
-
-        // Remove the SM trigger label so test_cases_generator does not keep re-running
-        removeSmTriggerLabelQuietly(tracker, storyKey, customParams);
-
-        // Post token usage summary comments from the test-case generation run
-        postTokenUsageQuietly(storyKey, params, tracker);
-
-        return { success: true, triggered: triggered, storyKey: storyKey };
-
-    } catch (error) {
-        console.error('❌ Error in triggerStoryTestAutomation:', error);
-        return { success: false, error: error.toString() };
-    }
+    return autoStartTrigger.runTriggerAction({
+        params: params,
+        label: 'story_test_automation',
+        keyName: 'storyKey',
+        errorPrefix: '❌ Error in triggerStoryTestAutomation:',
+        logHeader: function(storyKey) {
+            console.log('=== Triggering story test automation for', storyKey, '===');
+        },
+        beforeHeader: function(config, customParams) {
+            return trackersModule.createTracker(config, customParams);
+        },
+        afterTrigger: function(storyKey, config, customParams, tracker) {
+            // Remove the SM trigger label so test_cases_generator does not keep re-running
+            removeSmTriggerLabelQuietly(tracker, storyKey, customParams);
+        },
+        tokenUsageOptions: function(params, tracker) {
+            // Token-usage comments are a nice-to-have — never fail the action on them.
+            return { initiator: params.initiator, tracker: tracker };
+        }
+    });
 }
 
 if (typeof module !== 'undefined' && module.exports) {

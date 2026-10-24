@@ -3,20 +3,17 @@
  * Moves the ticket to "Ready For Testing" status after test cases are generated.
  */
 
-const configLoader = require('./configLoader.js');
-const trackersModule = require('./common/trackers.js');
+var actionTicketContext = require('./common/actionTicketContext.js');
 
 function action(params) {
     try {
-        const ticketKey = params.ticket ? params.ticket.key : null;
-        if (!ticketKey) {
-            return { success: false, error: 'No ticket key found in params' };
+        var ctx = actionTicketContext.resolveTicketContext(params, { statusKey: 'READY_FOR_TESTING' });
+        if (!ctx.ok) {
+            return ctx.failure;
         }
-        const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-        const jiraConfig = projectConfig.jira;
-        var tracker = trackersModule.createTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
-
-        console.log('Moving ' + ticketKey + ' to ' + jiraConfig.statuses.READY_FOR_TESTING);
+        const ticketKey = ctx.ticketKey;
+        const jiraConfig = ctx.jiraConfig;
+        var tracker = ctx.tracker;
 
         // gh-916: READY_FOR_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback in 'label' mode.
         var moveResult = tracker.moveToStatusOrMark(ticketKey, jiraConfig.statuses.READY_FOR_TESTING, 'READY_FOR_TESTING');

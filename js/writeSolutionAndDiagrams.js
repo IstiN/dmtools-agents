@@ -28,6 +28,7 @@ const scmModule = require('./common/scm.js');
 const autoStart = require('./common/autoStart.js');
 const outputFiles = require('./common/outputFiles.js');
 const trackersModule = require('./common/trackers.js');
+const trackerFieldValue = require('./common/trackerFieldValue.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const contentOutput = require('./common/contentOutput.js');
 
@@ -161,9 +162,7 @@ function buildConfluenceCommentText(pageUrl, published) {
 // Document Format) value cannot be reliably converted to wiki markup — the caller
 // falls back to replace behavior to avoid corrupting the field.
 function readExistingSolutionValue(tracker, ticketKey, solutionField) {
-    var freshTicket = tracker.getIssue(ticketKey, [solutionField]);
-    var freshFields = (freshTicket && freshTicket.fields) ? freshTicket.fields : freshTicket;
-    var rawValue = freshFields ? freshFields[solutionField] : null;
+    var rawValue = trackerFieldValue.readRawFieldValue(tracker, ticketKey, solutionField);
     if (rawValue && typeof rawValue === 'object') {
         console.warn('Existing value of "' + solutionField + '" is in ADF format (Jira v3). Cannot merge with wiki markup — falling back to replace mode for this run.');
         return '';

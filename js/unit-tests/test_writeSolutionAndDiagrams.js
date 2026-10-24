@@ -2,6 +2,17 @@
  * Unit tests for js/writeSolutionAndDiagrams.js module loading.
  */
 
+// gh-1250 shared helpers: pure modules with no requires of their own, so the
+// real implementation is loaded everywhere (no mocks needed). Both
+// writeSolutionAndDiagrams.js (trackerFieldValue) and the lazily-required
+// writeSolutionAndLabels.js (trackerFieldValue + affectedReposSection) use them.
+function wd3TrackerFieldValue() {
+    return loadModule('js/common/trackerFieldValue.js', makeRequire({}), {});
+}
+function wd3AffectedReposSection() {
+    return loadModule('js/common/affectedReposSection.js', makeRequire({}), {});
+}
+
 // Shared full-fidelity loader for the gh-978 characterization suites: wires the
 // module against jira globals with per-test failure switches, and exposes the
 // call log so tests can assert side-effect order and partial-failure behaviour.
@@ -112,6 +123,7 @@ function wd3LoadFull(opts) {
         makeRequire({
             './common/trackers.js': wd3Trackers(globals),
             './config.js': configModule,
+            './common/trackerFieldValue.js': wd3TrackerFieldValue(),
             './configLoader.js': configLoaderMock,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/autoStart.js': autoStartMock,
@@ -120,7 +132,8 @@ function wd3LoadFull(opts) {
             './common/contentOutput.js': loadModule('js/common/contentOutput.js',
                 makeRequire({
                     '../configLoader.js': configLoaderMock,
-                    './trackers.js': trackersMock()
+                    './trackers.js': trackersMock(),
+                    './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({}))
                 }),
                 globals)
         }),
@@ -145,12 +158,13 @@ suite('writeSolutionAndDiagrams — module export', function() {
             makeRequire({
                 './common/trackers.js': wd3Trackers({}),
                 './config.js': configModule,
+                './common/trackerFieldValue.js': wd3TrackerFieldValue(),
                 './configLoader.js': configLoaderModule,
                 './common/scm.js': { createScm: function() { return {}; } },
                 './common/autoStart.js': {},
                 './common/outputFiles.js': outputFiles,
                 './common/tokenUsageComment.js': tokenUsageComment,
-                './common/contentOutput.js': loadModule('js/common/contentOutput.js', makeRequire({ '../configLoader.js': configLoaderModule, './trackers.js': trackersMock() }), {})
+                './common/contentOutput.js': loadModule('js/common/contentOutput.js', makeRequire({ '../configLoader.js': configLoaderModule, './trackers.js': trackersMock(), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }), {})
             }),
             {}
         );
@@ -218,6 +232,7 @@ suite('writeSolutionAndDiagrams — diagram handling for Confluence targets', fu
             makeRequire({
                 './common/trackers.js': wd3Trackers(globals),
                 './config.js': configModule,
+                './common/trackerFieldValue.js': wd3TrackerFieldValue(),
                 './configLoader.js': { loadProjectConfig: function() { return {}; } },
                 './common/scm.js': { createScm: function() { return {}; } },
                 './common/autoStart.js': {
@@ -227,13 +242,15 @@ suite('writeSolutionAndDiagrams — diagram handling for Confluence targets', fu
                 './common/outputFiles.js': outputFilesMock,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
                 './common/contentOutput.js': loadModule('js/common/contentOutput.js',
-                    makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock() }),
+                    makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock(), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }),
                     globals),
                 './writeSolutionAndLabels.js': loadModule('js/writeSolutionAndLabels.js',
                     makeRequire({
                         './writeSolutionAndDiagrams.js': { action: function() { return { success: true }; } },
                         './common/outputFiles.js': outputFilesMock,
                         './config.js': configModule,
+                        './common/trackerFieldValue.js': wd3TrackerFieldValue(),
+                        './common/affectedReposSection.js': wd3AffectedReposSection(),
                         './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), globals)
                     }),
                     globals)
@@ -405,12 +422,13 @@ suite('writeSolutionAndDiagrams — required outputs', function() {
             makeRequire({
                 './common/trackers.js': wd3Trackers({ file_read: function(opts) { var path = opts && (opts.path || opts); if (path === 'outputs/response.md') return 'h2. Solution'; throw new Error('not found: ' + path); } }),
                 './config.js': configModule,
+                './common/trackerFieldValue.js': wd3TrackerFieldValue(),
                 './configLoader.js': configLoaderModule,
                 './common/scm.js': { createScm: function() { return {}; } },
                 './common/autoStart.js': {},
                 './common/outputFiles.js': outputFiles,
                 './common/tokenUsageComment.js': tokenUsageComment,
-                './common/contentOutput.js': loadModule('js/common/contentOutput.js', makeRequire({ '../configLoader.js': configLoaderModule, './trackers.js': trackersMock() }), {})
+                './common/contentOutput.js': loadModule('js/common/contentOutput.js', makeRequire({ '../configLoader.js': configLoaderModule, './trackers.js': trackersMock(), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }), {})
             }),
             {
                 file_read: function(opts) {
@@ -462,13 +480,14 @@ suite('writeSolutionAndDiagrams — ado tracker (wave2d3)', function() {
         var module = loadModule('js/writeSolutionAndDiagrams.js', makeRequire({
             './common/trackers.js': wd3Trackers(globals),
             './config.js': configModule,
+            './common/trackerFieldValue.js': wd3TrackerFieldValue(),
             './configLoader.js': { loadProjectConfig: function() { return { jira: { statuses: { READY_FOR_DEVELOPMENT: 'Ready' } } }; } },
             './common/scm.js': { createScm: function() { return {}; } },
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; }, triggerSmIfIdle: function() {} },
             './common/outputFiles.js': outputFilesMock,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/contentOutput.js': loadModule('js/common/contentOutput.js',
-                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': wd3Trackers(globals) }), globals)
+                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': wd3Trackers(globals), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }), globals)
         }), globals);
         var result = module.action({
             ticket: { key: '55', fields: { summary: 's' } },
@@ -818,6 +837,7 @@ function gh1187LoadWithOutputs(outputs) {
         makeRequire({
             './common/trackers.js': wd3Trackers(globals),
             './config.js': configModule,
+            './common/trackerFieldValue.js': wd3TrackerFieldValue(),
             './configLoader.js': { loadProjectConfig: function() { return { jira: { statuses: { READY_FOR_DEVELOPMENT: 'Ready' } } }; } },
             './common/scm.js': { createScm: function() { return {}; } },
             './common/autoStart.js': {
@@ -827,7 +847,7 @@ function gh1187LoadWithOutputs(outputs) {
             './common/outputFiles.js': { readOutputFile: function(name) { return outputs[name] === undefined ? null : outputs[name]; } },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/contentOutput.js': loadModule('js/common/contentOutput.js',
-                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock() }),
+                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock(), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }),
                 globals)
         }),
         globals

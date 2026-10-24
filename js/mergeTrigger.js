@@ -40,18 +40,14 @@
    github_get_pr, github_merge_pr, github_remove_label,
    github_create_comment, GH_REPO */
 
-function parseMcp(raw) {
-    if (raw === null || raw === undefined) return {};
-    if (typeof raw === 'object') return raw;
-    try { return JSON.parse(String(raw)); } catch (e) { return {}; }
-}
+// gh-1250: the MCP-bridge payload normalizers live in common/mcpParse.js
+// (mergeTrigger's copies were byte-identical to sm/mergeBot.js's).
+var mcpParse = require('./common/mcpParse.js');
 
-function asList(parsed) {
-    if (Array.isArray(parsed)) return parsed;
-    if (parsed && Array.isArray(parsed.items)) return parsed.items;
-    if (parsed && Array.isArray(parsed.pullRequests)) return parsed.pullRequests;
-    return [];
-}
+// Thin wrappers keep every call site and module.exports entry unchanged.
+function parseMcp(raw) { return mcpParse.parseMcp(raw); }
+
+function asList(parsed) { return mcpParse.payloadList(parsed); }
 
 function asBool(value, dflt) {
     if (value === undefined || value === null || value === '') return dflt;

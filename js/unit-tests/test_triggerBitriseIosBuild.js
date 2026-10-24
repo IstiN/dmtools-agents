@@ -55,9 +55,17 @@ function loadIosModule(mocks) {
         if (mocks.bitriseTriggerBuild) return mocks.bitriseTriggerBuild(args);
         return { build_number: 4, build_url: 'http://bitrise/b4' };
     };
+    // gh-1250: the action adopts js/common/trackerSlot.js (lazy tracker slot)
+    // and js/common/bitriseTrigger.js (shared JQL/PR-match helpers) — load the
+    // real modules here, mapping their own requires.
+    var trackerSlot = loadModule('js/common/trackerSlot.js', makeRequire({
+        './trackers.js': trackers
+    }));
+    var bitriseTrigger = loadModule('js/common/bitriseTrigger.js', makeRequire({}));
     return loadModule('js/triggerBitriseIosBuild.js', makeRequire({
         './configLoader.js': configLoader,
-        './common/trackers.js': trackers
+        './common/trackerSlot.js': trackerSlot,
+        './common/bitriseTrigger.js': bitriseTrigger
     }), globals);
 }
 
@@ -346,6 +354,26 @@ suite('triggerBitriseIosBuild — characterization', function() {
         });
         assert.equal(r.success, true);
         assert.equal(iosCalls(rec, 'getIssue')[0].key, 'IOS-13');
+    });
+
+    test('tracker slot re-init: two action() runs create two trackers with their own configs', function() {
+        var rec = makeIosRecorder();
+        var mod = loadIosModule({
+            rec: rec,
+            projectConfig: { scm: 'github' },
+            trackerApi: { getIssue: function(k) { return { key: k, fields: {} }; } }
+        });
+        var r1 = mod.action({ jobParams: { inputJql: 'key = IOS-14', bitriseBuild: { appSlug: 'a' }, customParams: { run: 1 } } });
+        var r2 = mod.action({ jobParams: { inputJql: 'key = IOS-15', bitriseBuild: { appSlug: 'a' }, customParams: { run: 2 } } });
+        assert.equal(r1.success, true);
+        assert.equal(r2.success, true);
+        var creations = iosCalls(rec, 'createTracker');
+        assert.equal(creations.length, 2, 'slot re-init forces a fresh tracker per run');
+        assert.equal(creations[0].customParams.run, 1);
+        assert.equal(creations[1].customParams.run, 2);
+        assert.deepEqual(creations[1].config, { scm: 'github' });
+        assert.equal(iosCalls(rec, 'getIssue')[0].key, 'IOS-14');
+        assert.equal(iosCalls(rec, 'getIssue')[1].key, 'IOS-15');
     });
 });
 

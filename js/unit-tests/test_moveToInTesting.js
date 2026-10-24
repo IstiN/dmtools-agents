@@ -10,7 +10,7 @@ function loadMoveToInTesting(mocks) {
     return (function (_m) { return loadModule('js/moveToInTesting.js', makeRequire(Object.assign({}, {
         './config.js': configModule,
         './configLoader.js': makeDefaultConfigLoaderMock(),
-        './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageCommentsSafely: function() {} }
     }, { './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
         '../config.js': configModule,
         './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
@@ -122,5 +122,63 @@ suite('moveToInTesting', function() {
         assert.deepEqual(m.customParamsOf({ jobParams: { customParams: { a: 1 } } }), { a: 1 });
         assert.deepEqual(m.customParamsOf({ customParams: { b: 2 } }), { b: 2 });
         assert.deepEqual(m.customParamsOf({}), {});
+    });
+});
+
+// ── gh-1250: token usage goes through the shared safe wrapper ───────────────
+
+suite('moveToInTesting — gh-1250 token usage delegation', function() {
+
+    test('action posts token usage via postTokenUsageCommentsSafely with the tracker and initiator', function() {
+        var calls = [];
+        var mod = (function (_m) { return loadModule('js/moveToInTesting.js', makeRequire(Object.assign({}, {
+            './config.js': configModule,
+            './configLoader.js': makeDefaultConfigLoaderMock(),
+            './common/tokenUsageComment.js': {
+                postTokenUsageComments: function() {},
+                postTokenUsageCommentsSafely: function(ticketKey, options) { calls.push({ ticketKey: ticketKey, options: options }); }
+            }
+        }, { './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }), _m) })), _m); })({
+            jira_move_to_status: function() {},
+            jira_remove_label: function() {}
+        });
+
+        var result = mod.action({ ticket: { key: 'TS-310' }, initiator: 'user-9' });
+
+        assert.equal(result.success, true);
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].ticketKey, 'TS-310');
+        assert.equal(calls[0].options.initiator, 'user-9');
+        assert.ok(calls[0].options.tracker, 'the built tracker is handed over');
+    });
+
+    test('a throwing token usage post is contained by the shared safe wrapper — action still succeeds', function() {
+        var warns = [];
+        var mod = (function (_m) { return loadModule('js/moveToInTesting.js', makeRequire(Object.assign({}, {
+            './config.js': configModule,
+            './configLoader.js': makeDefaultConfigLoaderMock(),
+            './common/tokenUsageComment.js': {
+                postTokenUsageComments: function() { throw new Error('usage api down'); },
+                postTokenUsageCommentsSafely: function(ticketKey, options) {
+                    try { this.postTokenUsageComments(ticketKey, options); } catch (e) {
+                        warns.push('Failed to post token usage comments: ' + e.message);
+                    }
+                }
+            }
+        }, { './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }), _m) })), _m); })({
+            jira_move_to_status: function() {},
+            jira_remove_label: function() {}
+        });
+
+        var result = mod.action({ ticket: { key: 'TS-311' } });
+
+        assert.equal(result.success, true, 'token usage failure must not fail the move');
+        assert.ok(warns.some(function(l) { return l.indexOf('Failed to post token usage comments') !== -1; }));
     });
 });

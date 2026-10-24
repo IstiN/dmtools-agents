@@ -5,6 +5,15 @@
  * affected-repository labels from outputs/affected_repos.json.
  */
 
+// gh-1250 shared helpers: pure modules with no requires of their own, so the
+// real implementation is loaded everywhere (no mocks needed).
+function labelsTrackerFieldValue() {
+    return loadModule('js/common/trackerFieldValue.js', makeRequire({}), {});
+}
+function labelsAffectedReposSection() {
+    return loadModule('js/common/affectedReposSection.js', makeRequire({}), {});
+}
+
 function makeOutputFiles(fileMap) {
     return loadModule('js/common/outputFiles.js', makeRequire({}), {
         // The suite only reads via `file_read({ path })` (see js/common/outputFiles.js::readRaw).
@@ -43,6 +52,8 @@ function makeLabelsModule(fileMap, extraGlobals) {
             './writeSolutionAndDiagrams.js': baseModule,
             './common/outputFiles.js': outputFiles,
             './config.js': configModule,
+            './common/trackerFieldValue.js': labelsTrackerFieldValue(),
+            './common/affectedReposSection.js': labelsAffectedReposSection(),
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/autoStart.js': { triggerSmIfIdle: function() {}, triggerConfiguredWorkflowForTicket: function() { return false; } },
@@ -116,6 +127,24 @@ suite('writeSolutionAndLabels — buildJiraSection', function() {
         var mod = makeLabelsModule({});
         var section = mod.buildJiraSection([{ name: 'repo-a', reason: 'standalone' }]);
         assert.equal(section.indexOf('{code:mermaid}'), -1, 'no mermaid when no edges');
+    });
+});
+
+suite('writeSolutionAndLabels — buildConfluenceMarkdownSection', function() {
+    test('produces a GFM table whose delimiter row matches the 4-column header', function() {
+        var mod = makeLabelsModule({});
+        var repos = [
+            { name: 'core-db', reason: 'DB migration' },
+            { name: 'service-api', reason: 'API', depends_on: ['core-db'] }
+        ];
+        var section = mod.buildConfluenceMarkdownSection(repos);
+        var lines = section.split('\n');
+        var headerIdx = -1;
+        lines.forEach(function(l, i) { if (l.indexOf('| # | Repository | Reason | Depends On |') !== -1) headerIdx = i; });
+        assert.notEqual(headerIdx, -1, '4-column header present');
+        var delimiter = lines[headerIdx + 1];
+        assert.equal(delimiter, '|---|---|---|---|', 'delimiter row must match the header column count (GFM table rule)');
+        assert.equal((delimiter.match(/\|/g) || []).length, 5, 'delimiter has 5 pipes like the header');
     });
 });
 
@@ -519,6 +548,8 @@ suite('writeSolutionAndLabels — repo label flow', function() {
                 './writeSolutionAndDiagrams.js': failingBase,
                 './common/outputFiles.js': outputFiles,
                 './config.js': configModule,
+                './common/trackerFieldValue.js': labelsTrackerFieldValue(),
+                './common/affectedReposSection.js': labelsAffectedReposSection(),
                 './configLoader.js': configLoaderModule,
                 './common/scm.js': { createScm: function() { return {}; } },
                 './common/autoStart.js': {},

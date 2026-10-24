@@ -22,14 +22,15 @@ function jiraBoom(name) {
 function loadRecoverStuck(mocks, scm) {
     return loadModule('js/recoverStuckDevelopment.js', makeRequire({
                                                                      'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
+        './common/trackerSession.js': loadModule('js/common/trackerSession.js',
+            makeRequire({ './trackers.js': trackersWithMocks(mocks) }), {}),
         './configLoader.js': {
             loadProjectConfig: function() { return { jira: {} }; },
             createScm: function() { return scm; }
         },
         './config.js': configModule,
         './common/trackers.js': trackersWithMocks(mocks),
-        './common/trackerSession.js': loadModule('js/common/trackerSession.js',
-            makeRequire({ './trackers.js': trackersWithMocks(mocks) }), {}),
+        // gh-1249: the module requires the real prLookup module.
         './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
     }), mocks);
 }
@@ -68,14 +69,22 @@ suite('recoverStuckDevelopment: tracker layer', function() {
 });
 
 function loadEnhanceSD(mocks) {
+    var trackers = trackersWithMocks(mocks);
+    // One shared trackerSlot instance so the action's getTracker() and the
+    // helper's initEnhancementTracker() operate on the same lazy slot.
+    var trackerSlot = loadModule('js/common/trackerSlot.js', makeRequire({ './trackers.js': trackers }));
+    var enhancementPost = loadModule('js/common/enhancementPost.js', makeRequire({
+        './trackerSlot.js': trackerSlot,
+        '../config.js': configModule
+    }));
     return loadModule('js/enhanceSDAPIDescriptionAndAssess.js', makeRequire({
                                                                               'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
         './common/jiraHelpers.js': { extractTicketKey: function(k) { return k; } },
         './config.js': configModule,
         './common/aiResponseParser.js': loadModule('js/common/aiResponseParser.js', makeRequire({ '../config.js': configModule }), {}),
-        './common/trackers.js': trackersWithMocks(mocks),
-        './common/trackerSession.js': loadModule('js/common/trackerSession.js',
-            makeRequire({ './trackers.js': trackersWithMocks(mocks) }), {})
+        './common/trackerSlot.js': trackerSlot,
+        './common/enhancementPost.js': enhancementPost,
+        './common/trackers.js': trackers
     }), mocks);
 }
 

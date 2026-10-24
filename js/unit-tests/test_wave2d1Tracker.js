@@ -84,12 +84,19 @@ suite('wave2d1 tracker — checkBugTestsPassed / checkBugToFixReady', function()
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock(),
             './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({
+                // gh-1249: the helpers require the real prLookup module.
                 './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
             }), {}),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': {
+                postTokenUsageComments: function() {},
+                postTokenUsageCommentsSafely: function() {},
+                customParamsOf: function() { return {}; }
+            },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
+            './common/smLock.js': loadModule('js/common/smLock.js', makeRequire({}), {}),
             './common/trackers.js': d1Trackers(rec.mocks),
             './common/scm.js': { createScm: function() { return { listPrs: function() { return []; } }; } },
+            // gh-1249: the module under test requires the real prLookup module.
             './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
         }), rec.mocks);
         var r = mod.action({ ticket: { key: '10' }, jobParams: { customParams: { trackerProvider: 'ado', removeLabel: 'sm_x' } } });
@@ -109,8 +116,13 @@ suite('wave2d1 tracker — checkBugTestsPassed / checkBugToFixReady', function()
         var mod = loadModule('js/checkBugToFixReady.js', makeRequire({
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock(),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': {
+                postTokenUsageComments: function() {},
+                postTokenUsageCommentsSafely: function() {},
+                customParamsOf: function() { return {}; }
+            },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
+            './common/smLock.js': loadModule('js/common/smLock.js', makeRequire({}), {}),
             './common/trackers.js': d1Trackers(rec.mocks)
         }), rec.mocks);
         var r = mod.action({
@@ -168,7 +180,7 @@ suite('wave2d1 tracker — fetchLinkedBugsToInput / prepareBulkBugsCreationConte
         });
         var written = {};
         var mocks = Object.assign({ file_write: function(p, c) { written[p] = c; } }, rec.mocks);
-        var mod = loadModule('js/fetchLinkedBugsToInput.js', makeRequire({ './common/trackers.js': d1Trackers(mocks), './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),}), {}) }), mocks);
+        var mod = loadModule('js/fetchLinkedBugsToInput.js', makeRequire({ './common/trackers.js': d1Trackers(mocks), './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js', makeRequire({}), {}), './common/mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }), mocks);
         mod.action({ inputFolderPath: 'input/30', customParams: D1_ADO });
         var md = written['input/30/linked_bugs.md'];
         assert.contains(md, '## 31: Bug one');
@@ -215,7 +227,9 @@ suite('wave2d1 tracker — preCli setups / writeSolutionAndLabels', function() {
             file_read: function() { return null; },
             cli_execute_command: function() { return ''; }
         }, rec.mocks);
-        var mod = loadModule('js/preCliMobileTestAutomationSetup.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+        var mod = loadModule('js/preCliMobileTestAutomationSetup.js', makeRequire({
+            // gh-1247: the module now routes branch setup through common/branchSetup.js.
+            'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './configLoader.js': makeDefaultConfigLoaderMock(),
             './config.js': configModule,
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
@@ -240,7 +254,9 @@ suite('wave2d1 tracker — preCli setups / writeSolutionAndLabels', function() {
             file_read: function() { return null; },
             cli_execute_command: function() { return ''; }
         }, rec.mocks);
-        var mod = loadModule('js/preCliStoryTestAutomationSetup.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+        var mod = loadModule('js/preCliStoryTestAutomationSetup.js', makeRequire({
+            // gh-1247: the module now routes branch setup through common/branchSetup.js.
+            'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './config.js': configModule,
             './common/trackers.js': d1Trackers(mocks),
             './configLoader.js': makeDefaultConfigLoaderMock(),
@@ -264,8 +280,10 @@ suite('wave2d1 tracker — preCli setups / writeSolutionAndLabels', function() {
         var mocks = Object.assign({ file_read: function(o) { var p = o && (o.path || o); return files[p] !== undefined ? files[p] : null; } }, rec.mocks);
         var mod = loadModule('js/writeSolutionAndLabels.js', makeRequire({
             './writeSolutionAndDiagrams.js': { action: function() { return { success: true }; } },
-            './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({ }), mocks),
+            './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), mocks),
             './config.js': configModule,
+            './common/trackerFieldValue.js': loadModule('js/common/trackerFieldValue.js', makeRequire({}), {}),
+            './common/affectedReposSection.js': loadModule('js/common/affectedReposSection.js', makeRequire({}), {}),
             './common/trackers.js': d1Trackers(mocks)
         }), mocks);
         var r = mod.action({ ticket: { key: '40' }, customParams: { trackerProvider: 'ado', solutionField: 'description' } });
@@ -290,7 +308,7 @@ suite('wave2d1 tracker — fetchParentContextToInput', function() {
         });
         var written = {};
         var mocks = Object.assign({ file_write: function(p, c) { written[p] = c; } }, rec.mocks);
-        var mod = loadModule('js/fetchParentContextToInput.js', makeRequire({ './common/trackers.js': d1Trackers(mocks), './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),}), {}) }), mocks);
+        var mod = loadModule('js/fetchParentContextToInput.js', makeRequire({ './common/trackers.js': d1Trackers(mocks), './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js', makeRequire({}), {}), './common/mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }), mocks);
         mod.action({
             inputFolderPath: 'input/51',
             ticket: { key: '51', fields: { parent: { key: '50' }, summary: 's', status: { name: 'New' } } },
@@ -314,7 +332,7 @@ suite('wave2d1 tracker — fetchParentContextToInput', function() {
         });
         var written = {};
         var mocks = Object.assign({ file_write: function(p, c) { written[p] = c; } }, rec.mocks);
-        var mod = loadModule('js/fetchParentContextToInput.js', makeRequire({ './common/trackers.js': d1Trackers(mocks), './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),}), {}) }), mocks);
+        var mod = loadModule('js/fetchParentContextToInput.js', makeRequire({ './common/trackers.js': d1Trackers(mocks), './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js', makeRequire({}), {}), './common/mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }), mocks);
         mod.action({
             inputFolderPath: 'input/P-51',
             ticket: { key: 'P-51', fields: { parent: { key: 'P-50' }, summary: 's' } },
@@ -338,7 +356,8 @@ suite('wave2d1 tracker — triggerBitriseTestAutomation', function() {
         var mod = loadModule('js/triggerBitriseTestAutomation.js', makeRequire({
             './configLoader.js': makeDefaultConfigLoaderMock(),
             './config.js': configModule,
-            './common/trackers.js': d1Trackers(mocks)
+            './common/trackers.js': d1Trackers(mocks),
+            './common/bitriseTrigger.js': loadModule('js/common/bitriseTrigger.js', makeRequire({}), {})
         }), mocks);
         var r = mod.action({
             ticket: { key: '15', fields: { summary: 's' } },

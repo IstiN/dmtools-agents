@@ -29,15 +29,6 @@ function removeSmTriggerLabelQuietly(tracker, ticketKey) {
     }
 }
 
-/** Token-usage comments are a nice-to-have — never fail the action on them. */
-function postTokenUsageQuietly(tracker, ticketKey, params) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
-}
-
 function action(params) {
     try {
         const ticketKey = ticketKeyOf(params);
@@ -60,8 +51,9 @@ function action(params) {
         }
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-        // wrote outputs/*_usage.json during the agent run.
-        postTokenUsageQuietly(tracker, ticketKey, params);
+        // wrote outputs/*_usage.json during the agent run. gh-1250: the shared
+        // try/catch wrapper lives in tokenUsageComment.postTokenUsageCommentsSafely.
+        tokenUsageComment.postTokenUsageCommentsSafely(ticketKey, { initiator: params.initiator, tracker: tracker });
 
         return {
             success: true,

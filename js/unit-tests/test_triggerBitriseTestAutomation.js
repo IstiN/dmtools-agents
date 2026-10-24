@@ -81,10 +81,14 @@ function makeTaGlobals(rec, mocks) {
 }
 
 function loadTaModule(mocks) {
+    // gh-1250: the action delegates JQL parsing and PR matching to
+    // js/common/bitriseTrigger.js — load the real module (it has no requires).
+    var bitriseTrigger = loadModule('js/common/bitriseTrigger.js', makeRequire({}));
     return loadModule('js/triggerBitriseTestAutomation.js', makeRequire({
         './configLoader.js': makeTaConfigLoader(mocks.rec, mocks),
         './config.js': configModule,
-        './common/trackers.js': makeTaTracker(mocks.rec, mocks.trackerApi)
+        './common/trackers.js': makeTaTracker(mocks.rec, mocks.trackerApi),
+        './common/bitriseTrigger.js': bitriseTrigger
     }), makeTaGlobals(mocks.rec, mocks));
 }
 

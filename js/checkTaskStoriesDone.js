@@ -14,20 +14,7 @@ const configLoader = require('./configLoader.js');
 const trackersModule = require('./common/trackers.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const linkedIssuesReport = require('./common/linkedIssuesReport.js');
-
-function releaseSmLock(tracker, ticketKey, removeLabel) {
-    if (!ticketKey || !removeLabel) return;
-    try {
-        tracker.removeLabel(ticketKey, removeLabel);
-        console.log('Released SM label — will re-check next cycle');
-    } catch (e) {
-        console.warn('Failed to remove SM label:', e);
-    }
-}
-
-function postTokenUsageSafely(ticketKey, initiator, tracker) {
-    tokenUsageComment.postTokenUsageSafely(ticketKey, null, { initiator: initiator, tracker: tracker });
-}
+const smDoneCheck = require('./common/smDoneCheck.js');
 
 function moveTaskToReadyForTesting(tracker, jiraConfig, ticketKey, totalItems) {
     var moveResult = tracker.moveToStatusOrMark(ticketKey, jiraConfig.statuses.READY_FOR_TESTING, 'READY_FOR_TESTING');
@@ -49,7 +36,7 @@ function runTaskDoneCheck(tracker, jiraConfig, ticketKey, removeLabel, initiator
 
     if (totalItems === 0) {
         console.log('No linked Stories or Bugs found — releasing lock, will re-check next cycle');
-        releaseSmLock(tracker, ticketKey, removeLabel);
+        smDoneCheck.releaseSmLock(tracker, ticketKey, removeLabel);
         return { success: true, action: 'no_stories', ticketKey: ticketKey };
     }
 
@@ -59,33 +46,26 @@ function runTaskDoneCheck(tracker, jiraConfig, ticketKey, removeLabel, initiator
     console.log('Stories/Bugs not yet Done:', notDoneCount, '/', totalItems);
 
     if (notDoneCount > 0) {
-        console.log('Not all Stories/Bugs done — releasing lock, will re-check next cycle');
-        releaseSmLock(tracker, ticketKey, removeLabel);
-        return { success: true, action: 'waiting', total: totalItems, notDone: notDoneCount, ticketKey: ticketKey };
+        return smDoneCheck.waitingResult(
+            tracker,
+            ticketKey,
+            removeLabel,
+            'Not all Stories/Bugs done — releasing lock, will re-check next cycle',
+            totalItems,
+            notDoneCount
+        );
     }
 
     console.log('All', totalItems, 'Story/Bug(s) done — moving', ticketKey, 'to Ready For Testing');
     moveTaskToReadyForTesting(tracker, jiraConfig, ticketKey, totalItems);
-    postTokenUsageSafely(ticketKey, initiator, tracker);
+    tokenUsageComment.postTokenUsageCommentsSafely(ticketKey, { initiator: initiator, tracker: tracker });
     return { success: true, action: 'moved_to_ready_for_testing', total: totalItems, ticketKey: ticketKey };
 }
 
 function action(params) {
-    const ticketKey = params.ticket && params.ticket.key;
-    const customParams = params.jobParams && params.jobParams.customParams;
-    const removeLabel = customParams && customParams.removeLabel;
-    const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-    const jiraConfig = projectConfig.jira;
-    const tracker = trackersModule.createTracker(projectConfig, customParams || {});
-
-    try {
-        if (!ticketKey) throw new Error('params.ticket.key is missing');
-        return runTaskDoneCheck(tracker, jiraConfig, ticketKey, removeLabel, params.initiator);
-    } catch (error) {
-        console.error('❌ Error in checkTaskStoriesDone:', error);
-        releaseSmLock(tracker, ticketKey, removeLabel);
-        return { success: false, error: error.toString() };
-    }
+    return smDoneCheck.runDoneCheckAction(params, function(tracker, projectConfig, ticketKey, removeLabel, initiator) {
+        return runTaskDoneCheck(tracker, projectConfig.jira, ticketKey, removeLabel, initiator);
+    }, 'checkTaskStoriesDone', configLoader, trackersModule);
 }
 
 if (typeof module !== 'undefined' && module.exports) {

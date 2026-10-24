@@ -191,8 +191,21 @@ suite('duplicationRatchet — compareWithBaseline', function() {
 });
 
 // ── main (CLI) ───────────────────────────────────────────────────────────────
+// Node-only: this suite drives the CLI against real tmp files (fs/os/path),
+// which do not exist under the dmtools GraalJS runner — where a suite-level
+// require fails the WHOLE test file at load time. Register it only when Node's
+// fs is available; GraalJS coverage of duplicationRatchet's pure functions is
+// provided by the suites above (the pure compareWithBaseline/main-argv logic
+// stays covered here through the node harness, CI's canonical green gate).
+var HAS_NODE_FS = (function() {
+    try {
+        return typeof process !== 'undefined' && !!require('fs');
+    } catch (e) {
+        return false;
+    }
+})();
 
-suite('duplicationRatchet — main CLI', function() {
+if (HAS_NODE_FS) suite('duplicationRatchet — main CLI', function() {
 
     var fs = require('fs');
     var os = require('os');

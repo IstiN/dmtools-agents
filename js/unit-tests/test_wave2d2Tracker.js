@@ -11,6 +11,11 @@ function w2Trackers(mocks) {
     }), mocks);
 }
 
+// The shared epic/story intake helper has no requires of its own.
+function w2EpicIntakeFetch() {
+    return loadModule('js/common/epicIntakeFetch.js', makeRequire({}));
+}
+
 function w2Rec(extra) {
     var calls = [];
     var mocks = {};
@@ -110,6 +115,7 @@ suite('wave2d2 ado — fetchEpicsToInput', function() {
             ado_get_work_item: function(a) { return w2Wi(Number(a.id), 'Item ' + a.id, 'New'); }
         });
         var mod = loadModule('js/fetchEpicsToInput.js', makeRequire({ './common/trackers.js': w2Trackers(rec.mocks),
+                './common/epicIntakeFetch.js': w2EpicIntakeFetch(),
                 './configLoader.js': { loadProjectConfig: function() { return {}; } } }),
             Object.assign({ file_write: function(p, c) { writes[p] = c; } }, rec.mocks));
         mod.action({ inputFolderPath: 'input/TS-1', jobParams: W2_ADO });
@@ -134,6 +140,7 @@ suite('github — fetchEpicsToInput', function() {
         };
         var mod = loadModule('js/fetchEpicsToInput.js', makeRequire({
             './common/trackers.js': w2Trackers(mocks),
+            './common/epicIntakeFetch.js': w2EpicIntakeFetch(),
             './configLoader.js': { loadProjectConfig: function() { return { repository: { owner: 'acme', repo: 'widgets' } }; } }
         }), Object.assign({ file_write: function(p, c) { writes[p] = c; } }, mocks));
         mod.action({ inputFolderPath: 'input/gh-12', jobParams: { customParams: { trackerProvider: 'github' } } });
@@ -151,6 +158,7 @@ suite('github — fetchEpicsToInput', function() {
         var mocks = { cli_execute_command: function() { return 'gh: command not found'; } };
         var mod = loadModule('js/fetchEpicsToInput.js', makeRequire({
             './common/trackers.js': w2Trackers(mocks),
+            './common/epicIntakeFetch.js': w2EpicIntakeFetch(),
             './configLoader.js': { loadProjectConfig: function() { return { repository: { owner: 'acme', repo: 'widgets' } }; } }
         }), Object.assign({ file_write: function(p, c) { writes[p] = c; } }, mocks));
         mod.action({ inputFolderPath: 'input/gh-12', jobParams: { customParams: { trackerProvider: 'github' } } });
@@ -247,12 +255,14 @@ suite('wave2d2 ado — postBulkBugsCreation', function() {
             }
         });
         var cfgLoader = loadModule('js/configLoader.js', makeRequire({ './config.js': configModule, './common/scm.js': { createScm: function() { return {}; } } }), { file_read: function() { return null; } });
+        var trackers = w2Trackers(rec.mocks);
         var mod = loadModule('js/postBulkBugsCreation.js', makeRequire({
             './config.js': configModule, './configLoader.js': cfgLoader,
             './common/feedbackLoop.js': { resumeAgent: function() { return { attempted: false }; } },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
-            './common/trackers.js': w2Trackers(rec.mocks)
+            './common/trackers.js': trackers,
+            './common/trackerSlot.js': loadModule('js/common/trackerSlot.js', makeRequire({ './trackers.js': trackers }))
         }), Object.assign({}, rec.mocks, { file_read: rec.mocks.file_read }));
         var r = mod.action({ jobParams: { customParams: { trackerProvider: 'ado', removeLabel: 'sm_a', smTriggerLabel: 'sm_b' } } });
         assert.equal(r.success, true);
@@ -307,15 +317,25 @@ suite('wave2d2 ado — prepareBugFixBatchContext', function() {
             ado_get_work_item: function(a) { return w2Wi(Number(a.id), 'Epic', 'New', { 'System.WorkItemType': 'Epic' }); }
         });
         var stub = { action: function() {} };
+        var trackers = w2Trackers(rec.mocks);
+        var configLoaderMock = makeDefaultConfigLoaderMock();
+        // gh-1250: shared batch runtime helper — real module, requires mapped.
+        var sharedBatchCtx = loadModule('js/common/bugFixBatchContext.js', makeRequire({
+            './pullRequest.js': loadModule('js/common/pullRequest.js',
+                makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
+            './configLoader.js': configLoaderMock,
+            './trackers.js': trackers
+        }), Object.assign({ file_write: function() {}, cli_execute_command: function() { return ''; } }, rec.mocks));
         var mod = loadModule('js/prepareBugFixBatchContext.js', makeRequire({
             './config.js': configModule,
-            './configLoader.js': makeDefaultConfigLoaderMock(),
+            './configLoader.js': configLoaderMock,
             './fetchQuestionsToInput.js': stub, './fetchLinkedTestsToInput.js': stub,
             // Real PR helper (gh-912): prepareBugFixBatchContext delegates
             // cleanCommandOutput to it — canonical implementation required.
             './common/pullRequest.js': loadModule('js/common/pullRequest.js',
                 makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
-            './common/trackers.js': w2Trackers(rec.mocks)
+            './common/trackers.js': trackers,
+            './common/bugFixBatchContext.js': sharedBatchCtx
         }), Object.assign({ file_write: function() {}, cli_execute_command: function() { return ''; } }, rec.mocks));
         mod.action({ inputFolderPath: 'input/20', customParams: { trackerProvider: 'ado' } });
         assert.equal(w2Args(rec.calls, 'ado_search_by_wiql').length, 1);

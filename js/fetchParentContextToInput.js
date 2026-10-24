@@ -55,6 +55,7 @@
 var configLoader = null;
 try { configLoader = require('./configLoader.js'); } catch (e) { /* optional in unit tests */ }
 var trackersModule = require('./common/trackers.js');
+var mergeObjectsShared = require('./common/mergeObjects.js');
 
 // Note: "[" / "]" are Lucene range-query metacharacters, so inside a JQL quoted
 // string they must be escaped with a literal backslash (\\[ / \\]) to be treated
@@ -88,16 +89,11 @@ var DEFAULT_CONTEXTS = [
     }
 ];
 
+// gh-1250: single shared copy of the shallow-merge loop (was duplicated in
+// contentOutput.js). Legacy semantics here: an explicit `undefined` override
+// value IS copied verbatim (behavior parity with the original inline copy).
 function mergeObjects(base, override) {
-    var result = {};
-    var key;
-    for (key in (base || {})) {
-        if (Object.prototype.hasOwnProperty.call(base, key)) result[key] = base[key];
-    }
-    for (key in (override || {})) {
-        if (Object.prototype.hasOwnProperty.call(override, key)) result[key] = override[key];
-    }
-    return result;
+    return mergeObjectsShared.mergeObjects(base, override, false);
 }
 
 /** jira.fields map of the project config ({} when absent). */

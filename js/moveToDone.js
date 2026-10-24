@@ -4,21 +4,18 @@
  * If tests fail later, AI creates a new bug instead of re-opening this one.
  */
 
-const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
-const trackersModule = require('./common/trackers.js');
+var actionTicketContext = require('./common/actionTicketContext.js');
 
 function action(params) {
     try {
-        const ticketKey = params.ticket ? params.ticket.key : null;
-        if (!ticketKey) {
-            return { success: false, error: 'No ticket key found in params' };
+        var ctx = actionTicketContext.resolveTicketContext(params, { statusKey: 'DONE', logNote: ' (bug with test cases generated)' });
+        if (!ctx.ok) {
+            return ctx.failure;
         }
-        const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-        const jiraConfig = projectConfig.jira;
-        var tracker = trackersModule.createTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
-
-        console.log('Moving ' + ticketKey + ' to ' + jiraConfig.statuses.DONE + ' (bug with test cases generated)');
+        const ticketKey = ctx.ticketKey;
+        const jiraConfig = ctx.jiraConfig;
+        var tracker = ctx.tracker;
 
         tracker.moveToStatus(ticketKey, jiraConfig.statuses.DONE);
 

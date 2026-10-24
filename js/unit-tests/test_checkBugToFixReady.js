@@ -4,23 +4,45 @@
 
 function loadCheckBugToFixReady(mocks, requireOverrides) {
     mocks = mocks || {};
-    var requireMap = {
-        './config.js': configModule,
-        './configLoader.js': makeDefaultConfigLoaderMock(),
-        './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
-        './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
-        './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks)
-    };
-    if (requireOverrides) {
-        for (var k in requireOverrides) {
-            if (requireOverrides.hasOwnProperty(k)) requireMap[k] = requireOverrides[k];
-        }
-    }
+    var requireMap = checkBugToFixReadyRequireMap(mocks);
+    applyCheckBugToFixReadyOverrides(requireMap, requireOverrides);
     return loadModule(
         'js/checkBugToFixReady.js',
         makeRequire(requireMap),
         mocks
     );
+}
+
+// gh-1250: build the makeRequire map in named steps so the loader stays under
+// the CRAP gate; the module mapping itself is unchanged.
+function checkBugToFixReadyRequireMap(mocks) {
+    return {
+        './config.js': configModule,
+        './configLoader.js': makeDefaultConfigLoaderMock(),
+        './common/tokenUsageComment.js': checkBugToFixReadyTokenUsageMock(),
+        './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
+        './common/smLock.js': loadModule('js/common/smLock.js', makeRequire({}), {}),
+        './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks)
+    };
+}
+
+function applyCheckBugToFixReadyOverrides(requireMap, requireOverrides) {
+    if (!requireOverrides) return;
+    for (var k in requireOverrides) {
+        if (requireOverrides.hasOwnProperty(k)) requireMap[k] = requireOverrides[k];
+    }
+}
+
+function checkBugToFixReadyTokenUsageMock() {
+    return {
+        postTokenUsageComments: function() {},
+        postTokenUsageCommentsSafely: function() {},
+        customParamsOf: checkBugToFixReadyCustomParamsOf
+    };
+}
+
+function checkBugToFixReadyCustomParamsOf(params) {
+    return (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {};
 }
 
 function makeTicket(key, issueType) {
@@ -31,6 +53,25 @@ function makeTicket(key, issueType) {
             issuetype: { name: issueType }
         }
     };
+}
+
+// gh-1250: JQL-dispatch condition helpers — hoisted named functions keep the
+// jira_search_by_jql mock closures under the CRAP gate; the routing logic and
+// the returned data are unchanged.
+function storyDirectBugsJql(jql) {
+    return jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = Bug') !== -1;
+}
+
+function storyLinkedTestCasesJql(jql) {
+    return jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = "Test Case"') !== -1;
+}
+
+function tc1LinkedBugsJql(jql) {
+    return jql.indexOf('linkedIssues("TS-TC-1")') !== -1 && jql.indexOf('issuetype = Bug') !== -1;
+}
+
+function notDoneBugsFilterJql(jql) {
+    return jql.indexOf('status != "Done"') !== -1;
 }
 
 suite('checkBugToFixReady', function() {
@@ -132,19 +173,19 @@ suite('checkBugToFixReady', function() {
             jira_search_by_jql: function(args) {
                 var jql = args.jql;
                 // Direct linked bugs of the Story: one Done bug.
-                if (jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = Bug') !== -1) {
-                    if (jql.indexOf('status != "Done"') !== -1) {
+                if (storyDirectBugsJql(jql)) {
+                    if (notDoneBugsFilterJql(jql)) {
                         return [];
                     }
                     return [{ key: 'TS-92', fields: { summary: 's', status: { name: 'Done' } } }];
                 }
                 // Linked Test Cases of the Story.
-                if (jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = "Test Case"') !== -1) {
+                if (storyLinkedTestCasesJql(jql)) {
                     return [{ key: 'TS-TC-1', fields: { summary: 's', status: { name: 'Bug To Fix' } } }];
                 }
                 // Bugs linked to the Test Case: one not-Done bug.
-                if (jql.indexOf('linkedIssues("TS-TC-1")') !== -1 && jql.indexOf('issuetype = Bug') !== -1) {
-                    if (jql.indexOf('status != "Done"') !== -1) {
+                if (tc1LinkedBugsJql(jql)) {
+                    if (notDoneBugsFilterJql(jql)) {
                         return [{ key: 'TS-95', fields: { summary: 's', status: { name: 'Ready For Testing' } } }];
                     }
                     return [
@@ -186,17 +227,17 @@ suite('checkBugToFixReady', function() {
         var module = loadCheckBugToFixReady({
             jira_search_by_jql: function(args) {
                 var jql = args.jql;
-                if (jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = Bug') !== -1) {
-                    if (jql.indexOf('status != "Done"') !== -1) {
+                if (storyDirectBugsJql(jql)) {
+                    if (notDoneBugsFilterJql(jql)) {
                         return [];
                     }
                     return [hostIssue('TS-92', 'Done')];
                 }
-                if (jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = "Test Case"') !== -1) {
+                if (storyLinkedTestCasesJql(jql)) {
                     return [hostIssue('TS-TC-1', 'Bug To Fix')];
                 }
-                if (jql.indexOf('linkedIssues("TS-TC-1")') !== -1 && jql.indexOf('issuetype = Bug') !== -1) {
-                    if (jql.indexOf('status != "Done"') !== -1) {
+                if (tc1LinkedBugsJql(jql)) {
+                    if (notDoneBugsFilterJql(jql)) {
                         return [hostIssue('TS-95', 'Ready For Testing')];
                     }
                     return [hostIssue('TS-95', 'Ready For Testing')];
@@ -440,24 +481,48 @@ suite('checkBugToFixReady — gh-1188 extracted step helpers', function() {
         assert.deepEqual(removed, ['sm_l']);
     });
 
-    test('postTokenUsageSafely: delegates to the token usage comment module; failure swallowed', function() {
-        var posted = [];
+    test('postTokenUsageSafely: delegates to postTokenUsageCommentsSafely with initiator + customParams', function() {
+        var calls = [];
         var mod = loadCheckBugToFixReady({}, {
             './common/tokenUsageComment.js': {
-                postTokenUsageComments: function(key, ctx) { posted.push([key, ctx.initiator]); },
-                customParamsOf: function() { return { removeLabel: 'x' }; }
+                postTokenUsageCommentsSafely: function(key, options) { calls.push([key, options]); },
+                customParamsOf: function() { return { trackerProvider: 'github' }; }
             }
         });
         mod.postTokenUsageSafely('TS-1', { initiator: 'sm' });
-        assert.deepEqual(posted, [['TS-1', 'sm']]);
+        assert.equal(calls.length, 1, 'delegated exactly once');
+        assert.equal(calls[0][0], 'TS-1', 'ticketKey forwarded');
+        assert.equal(calls[0][1].initiator, 'sm', 'initiator forwarded');
+        assert.deepEqual(calls[0][1].customParams, { trackerProvider: 'github' }, 'customParamsOf result forwarded');
+    });
 
-        var failingMod = loadCheckBugToFixReady({}, {
-            './common/tokenUsageComment.js': {
-                postTokenUsageComments: function() { throw new Error('boom'); },
-                customParamsOf: function() { return {}; }
-            }
+    test('postTokenUsageCommentsSafely: a provider failure is logged and swallowed (gh-1250 contract)', function() {
+        // Load the real shared wrapper — the module under test relies on it never throwing.
+        var realTuc = loadModule('js/common/tokenUsageComment.js', makeRequire({
+            './trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), {})
+        }), { file_read: function() { return null; } });
+
+        var warned = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warned.push(String(m)); };
+        var threw = false;
+        var options = {};
+        Object.defineProperty(options, 'outputsDir', {
+            get: function() { throw new Error('provider down'); }
         });
-        failingMod.postTokenUsageSafely('TS-1', {});
+        try {
+            realTuc.postTokenUsageCommentsSafely('TS-2', options);
+        } catch (e) {
+            threw = true;
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(threw, false, 'failure never propagates');
+        assert.equal(warned.length, 1, 'exactly one warning');
+        assert.contains(warned[0], 'Failed to post token usage comments');
     });
 
     test('action: missing ticket key → failure result and lock release attempt', function() {
