@@ -50,7 +50,9 @@ function loadMergeStoryTestAutomationPR(mocks) {
             './common/tokenUsageComment.js': {
                 postTokenUsageComments: function() {}
             },
-            './common/trackers.js': d4TrackersWith(allMocks)
+            './common/trackers.js': d4TrackersWith(allMocks),
+            './common/trackerSession.js': loadModule('js/common/trackerSession.js',
+                makeRequire({ './trackers.js': d4TrackersWith(allMocks) }), {})
         }),
         allMocks
     );

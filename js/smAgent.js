@@ -6459,10 +6459,9 @@ function fetchPrReviewThreadNodes(repoInfo, prNumber) {
         pullRequestId: String(prNumber)
     });
     var res = (typeof raw === 'string') ? JSON.parse(raw) : raw;
-    return (res && res.data && res.data.repository &&
-        res.data.repository.pullRequest &&
-        res.data.repository.pullRequest.reviewThreads &&
-        res.data.repository.pullRequest.reviewThreads.nodes) || [];
+    // gh-1249: the envelope nav lives in smProvider.reviewThreadNodesOf —
+    // one copy instead of the verbatim chain this function used to carry.
+    return smProviderModule.reviewThreadNodesOf(res);
 }
 
 function unresolvedThreadCount(repoInfo, prNumber) {

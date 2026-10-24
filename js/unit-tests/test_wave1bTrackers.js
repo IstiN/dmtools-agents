@@ -26,6 +26,8 @@ function loadRecoverStuck(mocks, scm) {
         },
         './config.js': configModule,
         './common/trackers.js': trackersWithMocks(mocks),
+        './common/trackerSession.js': loadModule('js/common/trackerSession.js',
+            makeRequire({ './trackers.js': trackersWithMocks(mocks) }), {}),
         './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
     }), mocks);
 }
@@ -68,7 +70,9 @@ function loadEnhanceSD(mocks) {
         './common/jiraHelpers.js': { extractTicketKey: function(k) { return k; } },
         './config.js': configModule,
         './common/aiResponseParser.js': loadModule('js/common/aiResponseParser.js', makeRequire({ '../config.js': configModule }), {}),
-        './common/trackers.js': trackersWithMocks(mocks)
+        './common/trackers.js': trackersWithMocks(mocks),
+        './common/trackerSession.js': loadModule('js/common/trackerSession.js',
+            makeRequire({ './trackers.js': trackersWithMocks(mocks) }), {})
     }), mocks);
 }
 

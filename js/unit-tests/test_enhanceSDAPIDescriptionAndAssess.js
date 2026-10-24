@@ -53,7 +53,9 @@ function loadEnhanceSDAPI(fileMap, extraGlobals, trackerMockOverrides) {
                     };
                 }
             },
-            './common/trackers.js': d2Trackers(globals)
+            './common/trackers.js': d2Trackers(globals),
+            './common/trackerSession.js': loadModule('js/common/trackerSession.js',
+                makeRequire({ './trackers.js': d2Trackers(globals) }), {})
         }),
         globals
     );

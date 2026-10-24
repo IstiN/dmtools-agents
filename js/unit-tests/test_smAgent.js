@@ -415,7 +415,10 @@ function makeSmAgent(opts) {
             // gh-1059: pin the REAL shared head-repo resolver (githubSource
             // consumes it on the PR-list path).
             ghPrHeadRepoFull: smProviderRealMod.ghPrHeadRepoFull,
-            ghPrMaintainerCanModify: smProviderRealMod.ghPrMaintainerCanModify };
+            ghPrMaintainerCanModify: smProviderRealMod.ghPrMaintainerCanModify,
+            // gh-1249: the shared GraphQL reviewThreads envelope nav
+            // (smAgent.fetchPrReviewThreadNodes delegates to it).
+            reviewThreadNodesOf: smProviderRealMod.reviewThreadNodesOf };
         var smAsyncForSource = loadModule(
             'js/common/smAsync.js',
             makeRequire({ './common/smProvider.js': smProviderStub }),
