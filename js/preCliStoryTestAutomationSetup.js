@@ -72,7 +72,8 @@ function isAncestorRef(ancestor, descendant, workingDir) {
     }
 }
 
-function alignBranchWithBase(storyKey, branchName, baseBranch, workingDir, inputFolder) {
+/** Fetch fresh remote refs for the branch and its base (non-fatal, targeted). */
+function refreshTestBranchRemoteRefs(branchName, baseBranch, workingDir) {
     // Make sure remote refs are fresh before any merge/ancestor decision —
     // targeted: just this branch and its base (owner rule 2026-10-03).
     try {
@@ -81,28 +82,17 @@ function alignBranchWithBase(storyKey, branchName, baseBranch, workingDir, input
     } catch (e) {
         console.warn('Could not fetch remote branches during align:', e);
     }
+}
 
-    var localExists = cleanCommandOutput(
-        runGit('git branch --list "' + branchName + '"', workingDir) || ''
-    ).trim() !== '';
-    var remoteExists = false;
-    try {
-        // gh-912: decide on a real refs/heads/<branch> ref line — a
-        // warning-only capture (central-mode insteadOf origin, git ≥ 2.54)
-        // must classify as "branch absent".
-        remoteExists = prHelper.remoteBranchExists(runGit, workingDir, branchName);
-    } catch (e) {
-        console.warn('Error checking remote branches:', e);
-    }
+/** Create a fresh test branch from the base branch. */
+function createTestBranchFromBase(branchName, baseBranch, workingDir) {
+    runGit('git checkout ' + baseBranch, workingDir);
+    runGit('git pull origin ' + baseBranch, workingDir);
+    runGit('git checkout -b ' + branchName, workingDir);
+}
 
-    if (!localExists && !remoteExists) {
-        console.log('Creating new test branch from', baseBranch + ':', branchName);
-        runGit('git checkout ' + baseBranch, workingDir);
-        runGit('git pull origin ' + baseBranch, workingDir);
-        runGit('git checkout -b ' + branchName, workingDir);
-        return;
-    }
-
+/** Check out the branch that already exists (remotely or locally). */
+function checkoutExistingTestBranch(localExists, remoteExists, branchName, workingDir) {
     if (!localExists && remoteExists) {
         console.log('Checking out remote test branch:', branchName);
         runGit('git checkout -b ' + branchName + ' origin/' + branchName, workingDir);
@@ -110,29 +100,40 @@ function alignBranchWithBase(storyKey, branchName, baseBranch, workingDir, input
         console.log('Switching to existing local test branch:', branchName);
         runGit('git checkout ' + branchName, workingDir);
     }
+}
 
-    // Case 1: the test branch has already been merged into main.
-    // Drop the stale branch (local + remote) and create a fresh one from main.
-    if (isAncestorRef('HEAD', 'origin/' + baseBranch, workingDir)) {
-        console.log('Test branch ' + branchName + ' is already merged into origin/' + baseBranch + '; recreating from fresh ' + baseBranch);
-        runGit('git checkout ' + baseBranch, workingDir);
-        try {
-            runGit('git branch -D ' + branchName, workingDir);
-        } catch (e) {
-            console.warn('Could not delete local test branch:', e);
-        }
-        try {
-            runGit('git push origin --delete ' + branchName, workingDir);
-        } catch (e) {
-            console.warn('Could not delete remote test branch:', e);
-        }
-        runGit('git pull origin ' + baseBranch, workingDir);
-        runGit('git checkout -b ' + branchName, workingDir);
-        return;
+/**
+ * Case 1: the test branch has already been merged into main.
+ * Drop the stale branch (local + remote) and create a fresh one from main.
+ * Returns true when the branch was recreated (caller is done).
+ */
+function recreateTestBranchIfMerged(branchName, baseBranch, workingDir) {
+    if (!isAncestorRef('HEAD', 'origin/' + baseBranch, workingDir)) {
+        return false;
     }
+    console.log('Test branch ' + branchName + ' is already merged into origin/' + baseBranch + '; recreating from fresh ' + baseBranch);
+    runGit('git checkout ' + baseBranch, workingDir);
+    try {
+        runGit('git branch -D ' + branchName, workingDir);
+    } catch (e) {
+        console.warn('Could not delete local test branch:', e);
+    }
+    try {
+        runGit('git push origin --delete ' + branchName, workingDir);
+    } catch (e) {
+        console.warn('Could not delete remote test branch:', e);
+    }
+    runGit('git pull origin ' + baseBranch, workingDir);
+    runGit('git checkout -b ' + branchName, workingDir);
+    return true;
+}
 
-    // Case 2: branch has unmerged test work — always pull main into it.
-    console.log('Merging origin/' + baseBranch + ' into test branch ' + branchName);
+/**
+ * Case 2 tail: branch has unmerged test work — main was pulled into it.
+ * On merge conflicts write merge_conflicts.md + pr_diff.txt so the agent
+ * can resolve them.
+ */
+function resolveTestBranchConflicts(storyKey, branchName, baseBranch, inputFolder, workingDir) {
     var conflictFiles = gh.detectMergeConflicts(baseBranch, inputFolder, workingDir);
     if (conflictFiles.length > 0) {
         console.warn('⚠️ Merge conflicts detected after pulling origin/' + baseBranch + ':', conflictFiles.join(', '));
@@ -159,6 +160,39 @@ function alignBranchWithBase(storyKey, branchName, baseBranch, workingDir, input
     } else {
         console.log('✅ Merged origin/' + baseBranch + ' cleanly into test branch ' + branchName);
     }
+}
+
+function alignBranchWithBase(storyKey, branchName, baseBranch, workingDir, inputFolder) {
+    refreshTestBranchRemoteRefs(branchName, baseBranch, workingDir);
+
+    var localExists = cleanCommandOutput(
+        runGit('git branch --list "' + branchName + '"', workingDir) || ''
+    ).trim() !== '';
+    var remoteExists = false;
+    try {
+        // gh-912: decide on a real refs/heads/<branch> ref line — a
+        // warning-only capture (central-mode insteadOf origin, git ≥ 2.54)
+        // must classify as "branch absent".
+        remoteExists = prHelper.remoteBranchExists(runGit, workingDir, branchName);
+    } catch (e) {
+        console.warn('Error checking remote branches:', e);
+    }
+
+    if (!localExists && !remoteExists) {
+        console.log('Creating new test branch from', baseBranch + ':', branchName);
+        createTestBranchFromBase(branchName, baseBranch, workingDir);
+        return;
+    }
+
+    checkoutExistingTestBranch(localExists, remoteExists, branchName, workingDir);
+
+    if (recreateTestBranchIfMerged(branchName, baseBranch, workingDir)) {
+        return;
+    }
+
+    // Case 2: branch has unmerged test work — always pull main into it.
+    console.log('Merging origin/' + baseBranch + ' into test branch ' + branchName);
+    resolveTestBranchConflicts(storyKey, branchName, baseBranch, inputFolder, workingDir);
 }
 
 function checkoutBranch(storyKey, config, inputFolder) {

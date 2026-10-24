@@ -601,3 +601,218 @@ suite('preCliStoryTestAutomationSetup.removeIrrelevantTestCode (gh-1192)', funct
         assert.equal(result.success, false);
     });
 });
+
+// ── Suite: gh-1223 characterization: alignBranchWithBase gaps ───────────────
+// Pins the remote-only checkout path and the failure-tolerance of the
+// recreate/conflict branches ahead of the gh-1223 helper extraction. These
+// tests must keep passing unchanged through the refactor.
+
+suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchWithBase gaps', function() {
+
+    // Mirrors the inline loadModule pattern used by the conflict suites above,
+    // allowing the githubHelpers (conflict probe) to be overridden per test.
+    function loadStoryWithConflicts(githubHelpers, cliMock) {
+        return loadModule(
+            'js/preCliStoryTestAutomationSetup.js',
+            makeRequire({
+                './config.js': configModule,
+                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
+                './configLoader.js': loadModule(
+                    'js/configLoader.js',
+                    makeRequire({
+                        './config.js': configModule,
+                        './common/scm.js': { createScm: function() { return {}; } }
+                    }),
+                    { file_read: function() { return null; } }
+                ),
+                './common/pullRequest.js': loadModule(
+                    'js/common/pullRequest.js',
+                    makeRequire({
+                        './config.js': configModule,
+                        './mergeState.js': loadModule('js/common/mergeState.js'),
+                        './common/mergeState.js': loadModule('js/common/mergeState.js')
+                    }),
+                    { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function() {} }
+                ),
+                './common/githubHelpers.js': githubHelpers,
+                './common/scm.js': { createScm: function() { return {}; } }
+            }),
+            { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function() {} }
+        );
+    }
+
+    var NO_CONFLICTS_HELPERS = {
+        detectMergeConflicts: function() { return []; },
+        getPRDiff: function() { return ''; },
+        trimLargeTextForInput: function(text) { return text || ''; }
+    };
+
+    test('remote-only branch is checked out with -b from origin', function() {
+        var commands = [];
+
+        var module = loadPreCliStoryTestAutomationSetup({
+            jira_search_by_jql: function() { return []; },
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command === 'git branch --list "test/TS-220"') return '';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-220') === 0) {
+                    return 'abc1234567890abcdef1234567890abcdef1234\trefs/heads/test/TS-220\n';
+                }
+                if (opts.command.indexOf('git rev-list -1 HEAD --not origin/main') === 0) return 'somecommit';
+                return '';
+            },
+            file_write: function() {}
+        });
+
+        module.action({
+            inputFolderPath: 'input/TS-220',
+            jobParams: { customParams: {} }
+        });
+
+        assert.ok(commands.some(function(c) { return c === 'git checkout -b test/TS-220 origin/test/TS-220'; }),
+            'remote-only branch must be checked out tracking origin');
+        assert.equal(commands.filter(function(c) { return c === 'git checkout -b test/TS-220'; }).length, 0,
+            'must not create a fresh branch when origin already has one');
+    });
+
+    test('recreate path tolerates local branch deletion failure', function() {
+        var commands = [];
+
+        var module = loadPreCliStoryTestAutomationSetup({
+            jira_search_by_jql: function() { return []; },
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command === 'git branch --list "test/TS-221"') return '  test/TS-221';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-221') === 0) {
+                    return 'abc1234567890abcdef1234567890abcdef1234\trefs/heads/test/TS-221\n';
+                }
+                if (opts.command.indexOf('git rev-list -1 HEAD --not origin/main') === 0) return '';
+                if (opts.command.indexOf('git branch -D ') === 0) throw new Error('local delete refused');
+                return '';
+            },
+            file_write: function() {}
+        });
+
+        module.action({
+            inputFolderPath: 'input/TS-221',
+            jobParams: { customParams: {} }
+        });
+
+        assert.ok(commands.some(function(c) { return c === 'git push origin --delete test/TS-221'; }),
+            'remote deletion must still be attempted after a local delete failure');
+        assert.ok(commands.some(function(c) { return c === 'git checkout -b test/TS-221'; }),
+            'branch must still be recreated from fresh main');
+    });
+
+    test('recreate path tolerates remote branch deletion failure', function() {
+        var commands = [];
+
+        var module = loadPreCliStoryTestAutomationSetup({
+            jira_search_by_jql: function() { return []; },
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command === 'git branch --list "test/TS-222"') return '  test/TS-222';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-222') === 0) {
+                    return 'abc1234567890abcdef1234567890abcdef1234\trefs/heads/test/TS-222\n';
+                }
+                if (opts.command.indexOf('git rev-list -1 HEAD --not origin/main') === 0) return '';
+                if (opts.command.indexOf('git push origin --delete ') === 0) throw new Error('remote delete refused');
+                return '';
+            },
+            file_write: function() {}
+        });
+
+        module.action({
+            inputFolderPath: 'input/TS-222',
+            jobParams: { customParams: {} }
+        });
+
+        assert.ok(commands.some(function(c) { return c === 'git checkout -b test/TS-222'; }),
+            'branch must still be recreated when the remote deletion fails');
+    });
+
+    test('conflict guidance still written when the PR diff is empty', function() {
+        var written = {};
+        var githubHelpers = {
+            detectMergeConflicts: function() { return ['testing/tests/TS-223/test_ts_223.py']; },
+            getPRDiff: function() { return ''; },
+            trimLargeTextForInput: function(text) { return text || ''; }
+        };
+
+        var cliMock = function(opts) {
+            if (opts.command === 'git branch --list "test/TS-223"') return '  test/TS-223';
+            if (opts.command.indexOf('git ls-remote --heads origin test/TS-223') === 0) {
+                return 'abc1234567890abcdef1234567890abcdef1234\trefs/heads/test/TS-223\n';
+            }
+            if (opts.command.indexOf('git rev-list -1 HEAD --not origin/main') === 0) return 'somecommit';
+            return '';
+        };
+
+        var module = loadStoryWithConflicts(githubHelpers, cliMock);
+        // Re-load with a capturing file_write on the top-level globals.
+        module = loadModule(
+            'js/preCliStoryTestAutomationSetup.js',
+            makeRequire({
+                './config.js': configModule,
+                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
+                './configLoader.js': loadModule('js/configLoader.js', makeRequire({ './config.js': configModule, './common/scm.js': { createScm: function() { return {}; } } }), { file_read: function() { return null; } }),
+                './common/pullRequest.js': loadModule('js/common/pullRequest.js', makeRequire({ './config.js': configModule, './mergeState.js': loadModule('js/common/mergeState.js'), './common/mergeState.js': loadModule('js/common/mergeState.js') }), { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function() {} }),
+                './common/githubHelpers.js': githubHelpers,
+                './common/scm.js': { createScm: function() { return {}; } }
+            }),
+            { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function(args) { written[args.path] = args.content; } }
+        );
+
+        module.action({
+            inputFolderPath: 'input/TS-223',
+            jobParams: { customParams: {} }
+        });
+
+        assert.ok(written.hasOwnProperty('input/TS-223/merge_conflicts.md'),
+            'conflict guidance must be written even without a PR diff');
+        assert.ok(!written.hasOwnProperty('input/TS-223/pr_diff.txt'),
+            'no pr_diff.txt when the diff probe returns nothing');
+    });
+
+    test('conflict guidance still written when the PR diff probe throws', function() {
+        var written = {};
+        var githubHelpers = {
+            detectMergeConflicts: function() { return ['testing/tests/TS-224/test_ts_224.py']; },
+            getPRDiff: function() { throw new Error('diff probe failed'); },
+            trimLargeTextForInput: function(text) { return text || ''; }
+        };
+
+        var cliMock = function(opts) {
+            if (opts.command === 'git branch --list "test/TS-224"') return '  test/TS-224';
+            if (opts.command.indexOf('git ls-remote --heads origin test/TS-224') === 0) {
+                return 'abc1234567890abcdef1234567890abcdef1234\trefs/heads/test/TS-224\n';
+            }
+            if (opts.command.indexOf('git rev-list -1 HEAD --not origin/main') === 0) return 'somecommit';
+            return '';
+        };
+
+        var module = loadModule(
+            'js/preCliStoryTestAutomationSetup.js',
+            makeRequire({
+                './config.js': configModule,
+                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
+                './configLoader.js': loadModule('js/configLoader.js', makeRequire({ './config.js': configModule, './common/scm.js': { createScm: function() { return {}; } } }), { file_read: function() { return null; } }),
+                './common/pullRequest.js': loadModule('js/common/pullRequest.js', makeRequire({ './config.js': configModule, './mergeState.js': loadModule('js/common/mergeState.js'), './common/mergeState.js': loadModule('js/common/mergeState.js') }), { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function() {} }),
+                './common/githubHelpers.js': githubHelpers,
+                './common/scm.js': { createScm: function() { return {}; } }
+            }),
+            { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function(args) { written[args.path] = args.content; } }
+        );
+
+        module.action({
+            inputFolderPath: 'input/TS-224',
+            jobParams: { customParams: {} }
+        });
+
+        assert.ok(written.hasOwnProperty('input/TS-224/merge_conflicts.md'),
+            'conflict guidance must survive a failing PR diff probe');
+        assert.ok(!written.hasOwnProperty('input/TS-224/pr_diff.txt'),
+            'no pr_diff.txt when the diff probe throws');
+    });
+
+});
