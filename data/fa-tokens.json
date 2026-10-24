@@ -5008,6 +5008,15 @@
       "total": 31526,
       "cacheRead": 740122,
       "model": "kimi-for-coding"
+    },
+    {
+      "leg": "review",
+      "at": "2026-10-24T20:06:55Z",
+      "prompt": 79618,
+      "completion": 24920,
+      "total": 104538,
+      "cacheRead": 4087703,
+      "model": "kimi-for-coding"
     }
   ],
   "pr-1256": [
