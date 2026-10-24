@@ -1216,3 +1216,243 @@ suite('preCliDevelopmentSetup — extracted helpers (gh-1042)', function() {
     });
 
 });
+
+// ── gh-1190: checkoutBranch seam split — helper characterization ─────────────
+
+suite('preCliDevelopmentSetup.checkoutBranch — seam helpers (gh-1190)', function() {
+
+    test('configureSetupAuthor issues user.name then user.email; failures are warnings', function() {
+        var calls = [];
+        var mod = loadPreCliDevelopmentSetup(makeConfigLoaderStub({}, 'master'), {
+            cli_execute_command: function(opts) {
+                calls.push(opts.command);
+                if (calls.length === 1) throw new Error('git boom');
+                return '';
+            }
+        });
+        var warnings = [];
+        var originalWarn = console.warn;
+        console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            mod.configureSetupAuthor(makeConfig());
+            assert.deepEqual(calls, ['git config user.name "AI Teammate"'], 'only user.name ran before the failure');
+            assert.equal(warnings.length, 1, 'failure is a warning, not a throw');
+            assert.contains(warnings[0], 'Failed to configure git author');
+        } finally {
+            console.warn = originalWarn;
+        }
+    });
+
+    test('fetchDevBranchRefs uses the targeted two-branch refspec and swallows failures', function() {
+        var calls = [];
+        var mod = loadPreCliDevelopmentSetup(makeConfigLoaderStub({}, 'master'), {
+            cli_execute_command: function(opts) { calls.push(opts.command); return ''; }
+        });
+        mod.fetchDevBranchRefs('ai/PROJ-1', 'master');
+        assert.deepEqual(calls, [
+            'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/ai/PROJ-1:refs/remotes/origin/ai/PROJ-1 +refs/heads/master:refs/remotes/origin/master'
+        ], 'exactly the dev + rebase-base branches, forced refspecs, no blanket fetch');
+
+        var failing = loadPreCliDevelopmentSetup(makeConfigLoaderStub({}, 'master'), {
+            cli_execute_command: function() { throw new Error('network down'); }
+        });
+        var warnings = [];
+        var originalWarn = console.warn;
+        console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            assert.doesNotThrow(function() { failing.fetchDevBranchRefs('ai/PROJ-1', 'master'); },
+                'a fetch failure must not throw out of setup');
+            assert.equal(warnings.length, 1);
+            assert.contains(warnings[0], 'Could not fetch remote branches');
+        } finally {
+            console.warn = originalWarn;
+        }
+    });
+
+    test('readLocalBranchList cleans the capture, warns only when told to', function() {
+        var responses = {};
+        responses['git branch --list "ai/PROJ-1"'] = '  ai/PROJ-1\nScript done\n';
+        var mod = loadPreCliDevelopmentSetup(makeConfigLoaderStub({}, 'master'), {
+            cli_execute_command: makeCliMock([], responses)
+        });
+        var warnings = [];
+        var originalWarn = console.warn;
+        console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            assert.equal(mod.readLocalBranchList('ai/PROJ-1', 'Error checking local branches:'), 'ai/PROJ-1');
+            assert.deepEqual(warnings, [], 'no warning on a succeeding probe');
+
+            var failing = loadPreCliDevelopmentSetup(makeConfigLoaderStub({}, 'master'), {
+                cli_execute_command: function() { throw new Error('git down'); }
+            });
+            assert.equal(failing.readLocalBranchList('ai/PROJ-1', 'Error checking local branches:'), '');
+            assert.equal(warnings.length, 1);
+            assert.contains(warnings[0], 'Error checking local branches:');
+            assert.equal(failing.readLocalBranchList('ai/PROJ-1', null), '', 'silent probe stays silent');
+            assert.equal(warnings.length, 1);
+        } finally {
+            console.warn = originalWarn;
+        }
+    });
+
+    test('probeRemoteBranch classifies on the strict ref line; failures are warnings', function() {
+        var mod = loadPreCliDevelopmentSetup(makeConfigLoaderStub({}, 'master'), {
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git ls-remote --heads origin ai/PROJ-1') {
+                    return '0123456789abcdef0123456789abcdef01234567\trefs/heads/ai/PROJ-1\n';
+                }
+                return 'warning: redirecting to https://example.com/\n';
+            }
+        });
+        assert.equal(mod.probeRemoteBranch('ai/PROJ-1', 'Error checking remote branches:'), true);
+        assert.equal(mod.probeRemoteBranch('absent-branch', 'Error checking remote branches:'), false,
+            'a warning-only capture classifies as absent (gh-912)');
+
+        var failing = loadPreCliDevelopmentSetup(makeConfigLoaderStub({}, 'master'), {
+            cli_execute_command: function() { throw new Error('network down'); }
+        });
+        var warnings = [];
+        var originalWarn = console.warn;
+        console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            assert.equal(failing.probeRemoteBranch('ai/PROJ-1', 'Error checking remote branches:'), false);
+            assert.equal(warnings.length, 1);
+            assert.equal(failing.probeRemoteBranch('ai/PROJ-1', null), false);
+            assert.equal(warnings.length, 1, 'silent probe stays silent');
+        } finally {
+            console.warn = originalWarn;
+        }
+    });
+
+    test('establishFeatureBranch: local-only → plain checkout, no creation', function() {
+        var calls = [];
+        var hookLoadCalls = [];
+        var config = makeConfig();
+        var configLoaderStub = makeConfigLoaderStub(
+            { development: 'ai/PROJ-1', feature: 'release/rc' },
+            'master',
+            null,
+            hookLoadCalls
+        );
+        var responses = {};
+        responses['git branch --list "release/rc"'] = 'release/rc';
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: makeCliMock(calls, responses)
+        });
+
+        var feature = mod.establishFeatureBranch(config, {}, TICKET);
+        assert.equal(feature, 'release/rc');
+        assert.deepEqual(calls, [
+            'git branch --list "release/rc"',
+            'git ls-remote --heads origin release/rc',
+            'git checkout release/rc'
+        ]);
+        assert.equal(hookLoadCalls.length, 0);
+    });
+
+    test('createNewDevBranch: feature branch becomes the base; explicit refspec before checkout', function() {
+        var calls = [];
+        var hookLoadCalls = [];
+        var config = makeConfig();
+        var configLoaderStub = makeConfigLoaderStub(
+            { development: 'ai/PROJ-1', feature: 'release/rc' },
+            'master',
+            null,
+            hookLoadCalls
+        );
+        var responses = {};
+        responses['git branch --list "release/rc"'] = 'release/rc';
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: makeCliMock(calls, responses)
+        });
+
+        mod.createNewDevBranch(config, {}, TICKET, 'ai/PROJ-1');
+        assert.deepEqual(calls, [
+            'git branch --list "release/rc"',
+            'git ls-remote --heads origin release/rc',
+            'git checkout release/rc',
+            'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/release/rc:refs/remotes/origin/release/rc',
+            'git checkout -B release/rc origin/release/rc',
+            'git checkout -b ai/PROJ-1'
+        ], 'two-branch base resolution, then the explicit-refspec ensure + hard checkout + dev-branch create');
+    });
+
+    test('checkoutExistingRemoteBranch aligns with base after fetch+checkout; falls back to hard reset', function() {
+        var calls = [];
+        var responses = {};
+        responses['git -c fetch.recurseSubmodules=no fetch origin ai/PROJ-1:ai/PROJ-1'] = '';
+        var mod = loadPreCliDevelopmentSetup(makeConfigLoaderStub({}, 'master'), {
+            cli_execute_command: function(opts) {
+                var command = opts && opts.command;
+                calls.push(command);
+                if (command === 'git merge-base --is-ancestor HEAD origin/master') throw new Error('not ancestor');
+                if (command === 'git cherry origin/master HEAD') return '-commit1\n';
+                if (responses[command] !== undefined) return responses[command];
+                return '';
+            }
+        });
+        mod.checkoutExistingRemoteBranch('PROJ-1', 'ai/PROJ-1', 'master');
+        assert.ok(calls.indexOf('git -c fetch.recurseSubmodules=no fetch origin ai/PROJ-1:ai/PROJ-1') !== -1,
+            'explicit branch fetch first');
+        assert.ok(calls.indexOf('git checkout ai/PROJ-1') !== -1);
+        assert.ok(calls.indexOf('git cherry origin/master HEAD') !== -1, 'alignment ran after checkout');
+        assert.ok(calls.indexOf('git reset --hard origin/master') !== -1,
+            'no unique patches → branch resets onto the base (alignment decision)');
+    });
+
+    test('checkoutExistingRemoteBranch falls back to ensureRemoteBranchRef + checkout -B on fetch failure', function() {
+        // Fallback: fetch+checkout throws → ensureRemoteBranchRef + checkout -B from origin.
+        var fallbackCalls = [];
+        var failing = loadPreCliDevelopmentSetup(makeConfigLoaderStub({}, 'master'), {
+            cli_execute_command: function(opts) {
+                var command = opts && opts.command;
+                fallbackCalls.push(command);
+                if (command.indexOf('git -c fetch.recurseSubmodules=no fetch origin ai/PROJ-1:ai/PROJ-1') === 0) {
+                    throw new Error('fetch failed');
+                }
+                return '';
+            }
+        });
+        var warnings = [];
+        var originalWarn = console.warn;
+        console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            failing.checkoutExistingRemoteBranch('PROJ-1', 'ai/PROJ-1', 'master');
+            assert.ok(fallbackCalls.indexOf('git checkout -B ai/PROJ-1 origin/ai/PROJ-1') !== -1,
+                'hard reset from origin when fetch+checkout fails');
+            assert.contains(warnings.join('\n'), 'fetch+checkout failed, resetting local branch from origin');
+        } finally {
+            console.warn = originalWarn;
+        }
+    });
+
+    test('checkoutLocalBranchWithAlign checks out then aligns with base', function() {
+        var calls = [];
+        var mod = loadPreCliDevelopmentSetup(makeConfigLoaderStub({}, 'master'), {
+            cli_execute_command: function(opts) {
+                var command = opts && opts.command;
+                calls.push(command);
+                if (command === 'git merge-base --is-ancestor HEAD origin/master') throw new Error('not ancestor');
+                if (command === 'git cherry origin/master HEAD') return '+uniquepatch\n';
+                if (command === 'git merge-base --is-ancestor origin/master HEAD') throw new Error('diverged');
+                if (command === 'git merge-tree <base> HEAD origin/master') return '';
+                return '';
+            }
+        });
+        var warnings = [];
+        var writes = [];
+        var originalWarn = console.warn;
+        console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            mod.checkoutLocalBranchWithAlign('PROJ-1', 'ai/PROJ-1', 'master');
+            assert.equal(calls[0], 'git checkout ai/PROJ-1', 'checkout runs first');
+            assert.ok(calls.indexOf('git cherry origin/master HEAD') !== -1, 'alignment follows the checkout');
+            assert.ok(calls.indexOf('git reset --hard origin/master') === -1,
+                'a unique-patch diverged branch is NOT reset');
+            assert.contains(warnings.join('\n'), 'Keeping divergent branch ai/PROJ-1');
+        } finally {
+            console.warn = originalWarn;
+        }
+    });
+
+});

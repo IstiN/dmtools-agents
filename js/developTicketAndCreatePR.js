@@ -154,48 +154,58 @@ function performPushOnly(branchName, baseBranch) {
         return { success: false, isMergeSyncFailure: true, error: syncResult.error };
     }
 
-    var pushOutput = '';
-    var pushThrewException = false;
-    try {
-        pushOutput = runCmd({ command: 'git push -u origin ' + branchName }) || '';
-    } catch (pushErr) {
-        pushOutput = String(pushErr);
-        pushThrewException = true;
-    }
-
-    var pushFailed = pushThrewException ||
-        pushOutput.indexOf('remote rejected') !== -1 ||
-        pushOutput.indexOf('GH013') !== -1 ||
-        pushOutput.indexOf('error: failed to push') !== -1 ||
-        pushOutput.indexOf('push declined') !== -1 ||
-        pushOutput.indexOf('non-fast-forward') !== -1 ||
-        pushOutput.indexOf('rejected') !== -1;
-
-    if (pushFailed) {
-        // Try force push (branch may have diverged from a previous interrupted run)
-        console.log('Push rejected — retrying with --force...');
-        var forceOutput = '';
-        try {
-            forceOutput = runCmd({ command: 'git push -u origin ' + branchName + ' --force' }) || '';
-        } catch (forceErr) {
-            forceOutput = String(forceErr);
-        }
-        var forceFailed = forceOutput.indexOf('remote rejected') !== -1 ||
-            forceOutput.indexOf('GH013') !== -1 ||
-            forceOutput.indexOf('error: failed to push') !== -1 ||
-            forceOutput.indexOf('push declined') !== -1;
-        if (forceFailed) {
-            return { success: false, isPushFailure: true, error: 'Push still rejected after force: ' + forceOutput.substring(0, 300) };
-        }
+    // gh-1190: the push attempt + failure detection reuse the gh-1003
+    // helpers (pushBranchToRemote / detectPushFailure) — identical soft-
+    // rejection markers and exception handling as the original inline chain.
+    var pushAttempt = pushBranchToRemote(function (command) { return runCmd({ command: command }); }, branchName);
+    if (detectPushFailure(pushAttempt.output, pushAttempt.threw)) {
+        var forceRetry = retryForcePushAfterRejection(branchName);
+        if (forceRetry) return forceRetry;
     }
 
     var lsRemote = runCmd({ command: 'git ls-remote --heads origin ' + branchName }) || '';
-    if (lsRemote.indexOf('refs/heads/' + branchName) === -1) {
+    if (branchMissingOnRemote(lsRemote, branchName)) {
         return { success: false, isPushFailure: true, error: 'Branch not found on remote after push' };
     }
 
     console.log('✅ Push-only git operations completed successfully');
     return { success: true, branchName: branchName };
+}
+
+/**
+ * gh-1190: the hard-rejection markers shared by the --force retry check in
+ * performPushOnly — detectPushFailure's marker list minus the two soft
+ * signals ('non-fast-forward' and the generic 'rejected') a force push is
+ * allowed to produce on a legitimately diverged branch.
+ */
+function isHardPushRejection(output) {
+    var markers = ['remote rejected', 'GH013', 'error: failed to push', 'push declined'];
+    for (var i = 0; i < markers.length; i++) {
+        if (output.indexOf(markers[i]) !== -1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * gh-1190: the --force retry after a rejected push in performPushOnly (the
+ * branch may have diverged from a previous interrupted run). Returns the
+ * failure result when the force push is still hard-rejected, null when the
+ * retry went through (the caller proceeds to the remote verification).
+ */
+function retryForcePushAfterRejection(branchName) {
+    console.log('Push rejected — retrying with --force...');
+    var forceOutput = '';
+    try {
+        forceOutput = runCmd({ command: 'git push -u origin ' + branchName + ' --force' }) || '';
+    } catch (forceErr) {
+        forceOutput = String(forceErr);
+    }
+    if (isHardPushRejection(forceOutput)) {
+        return { success: false, isPushFailure: true, error: 'Push still rejected after force: ' + forceOutput.substring(0, 300) };
+    }
+    return null;
 }
 
 /**
@@ -1610,6 +1620,152 @@ function recoverUnexpectedError(params, error) {
     return null;
 }
 
+// ── gh-1190: action() seam split — same calls in the same order ─────────────
+// The publish pipeline and the success/failure tails moved into named
+// clusters so the orchestration function stays under the CRAP gate. Log
+// lines, tracker/SCM/git call order and return shapes are unchanged
+// (characterization tests: js/unit-tests/test_developTicketAndCreatePR.js).
+
+/** Git author + expected-branch checkout; a failure returns the gate-reset terminal. */
+function prepareDevelopmentGitStage(ctx) {
+    if (!configureGitAuthor(ctx.config)) {
+        return gateResetResult(ctx, 'Git Configuration', 'Failed to configure git author');
+    }
+
+    // Always use the expected branch (ai/<ticketKey>), computed from ticket key.
+    // Do NOT trust git branch --show-current — the CLI agent may have switched branches.
+    // Force checkout to the expected branch before committing to prevent pushing to develop/main.
+    var checkoutError = ensureExpectedBranchCheckedOut(ctx.expectedBranch);
+    if (checkoutError) {
+        return gateResetResult(ctx, 'Git Branch Checkout', checkoutError);
+    }
+    return null;
+}
+
+/** A stage outcome: { resume: true } recurses into action(), anything else is the terminal. */
+function stageOutcomeOf(params, outcome) {
+    if (outcome.resume) return action(params);
+    return outcome.result;
+}
+
+/**
+ * The publish pipeline: initial push → quality gates → policy gates →
+ * gate-fix push → post-publish gates. Returns the terminal value to return
+ * from action(), or null when the leg continues to PR creation.
+ */
+function runPublishPipeline(params, ctx, branchName, commitMessage) {
+    // Push the agent's work before running quality gates.
+    // If the gate feedback loop fails and cannot resume, the branch is already on remote
+    // and a retry can continue from the pushed state instead of losing all changes.
+    var initialOutcome = recoverGitOutcome(params, ctx,
+        performGitOperations(branchName, commitMessage, ctx.prTarget, ctx.config, ctx.customParams, ctx.ticketKey),
+        INITIAL_GIT_STAGES);
+    if (initialOutcome) {
+        return stageOutcomeOf(params, initialOutcome);
+    }
+
+    var gateResult = feedbackLoop.runQualityGates({
+        ticketKey: ctx.ticketKey,
+        customParams: ctx.customParams,
+        section: 'qualityGates'
+    });
+    if (!gateResult.success) {
+        return gateResetResult(ctx, 'Quality Gate', 'Quality gate failed before development publish: ' + gateResult.failedGate + '\n' + gateResult.error);
+    }
+    var policyResult = feedbackLoop.runPolicyGates({
+        ticketKey: ctx.ticketKey,
+        customParams: ctx.customParams,
+        section: 'policyGates'
+    });
+    if (!policyResult.success) {
+        return gateResetResult(ctx, 'Policy Gate', 'Policy gate failed before development publish: ' + policyResult.failedGate + '\n' + policyResult.error);
+    }
+
+    // Push any fixes the gate feedback loop applied to the working tree.
+    var gateFixOutcome = recoverGitOutcome(params, ctx,
+        performGitOperations(branchName, commitMessage + ' (quality gate fixes)', ctx.prTarget, ctx.config, ctx.customParams, ctx.ticketKey),
+        GATE_FIX_GIT_STAGES);
+    if (gateFixOutcome) {
+        return stageOutcomeOf(params, gateFixOutcome);
+    }
+
+    var postPublishGateResult = feedbackLoop.runPostPublishGates({
+        ticketKey: ctx.ticketKey,
+        customParams: ctx.customParams,
+        section: 'postPublishGates',
+        workingDir: _workingDir
+    });
+    if (!postPublishGateResult.success) {
+        if (postPublishGateResult.resumeAttempted) {
+            return action(params);
+        }
+        return gateResetResult(ctx, 'Post-Publish Quality Gate', 'Post-publish quality gate failed: ' +
+            postPublishGateResult.failedGate + '\n' + postPublishGateResult.error);
+    }
+    return null;
+}
+
+/** PR creation with the gh-729 failure recovery; recurses on a successful resume. */
+function createDevelopmentPr(params, ctx, branchName) {
+    var prTitle = configLoader.formatTemplate(ctx.config.formats.prTitle.development, { ticketKey: ctx.ticketKey, ticketSummary: ctx.ticketSummary });
+    var prResult = createPullRequest(prTitle, branchName, ctx.prTarget, ctx.ticketKey);
+
+    if (!prResult.success) {
+        var prOutcome = recoverPrCreationFailure(params, ctx, prResult);
+        if (prOutcome.resume) return action(params);
+    }
+    return prResult;
+}
+
+/** Assign → In Review → PR comment → labels → auto-start review → telemetry → success result. */
+function finalizeDevelopmentSuccess(params, ctx, branchName, prResult, prApprovedCleaned) {
+    assignAndMoveToReview(ctx);
+
+    // Post comment with PR details
+    postPRCommentToJira(ctx.ticketKey, prResult.prUrl, branchName);
+
+    applyDevelopmentOutcomeLabels(ctx);
+
+    console.log('✅ Development workflow completed successfully — PR: ' + (prResult.prUrl || '(URL not captured — PR was created)'));
+
+    if (!maybeAutoStartReview(ctx, prApprovedCleaned)) {
+        autoStart.triggerSmIfIdle({ config: ctx.config, customParams: ctx.customParams });
+    }
+
+    postDevelopmentTelemetry(params, ctx);
+
+    return {
+        success: true,
+        message: 'Ticket ' + ctx.ticketKey + ' developed, committed, and PR created',
+        branchName: branchName,
+        prUrl: prResult.prUrl
+    };
+}
+
+/**
+ * The outer-catch recovery: marked failures rethrow (dead letters already
+ * did their tracker side effects), an attempted resume recurses into
+ * action(), anything else is the reset-for-retry "success" result.
+ */
+function concludeActionFailure(params, error) {
+    console.error('❌ Error in development workflow:', error);
+
+    if (rethrownAsIs(error)) {
+        throw error;
+    }
+
+    var recovery = recoverUnexpectedError(params, error);
+    if (recovery && recovery.resume) {
+        return action(params);
+    }
+
+    return {
+        success: true,
+        path: 'development-reset-for-retry',
+        error: error.toString()
+    };
+}
+
 /**
  * Main action function - orchestrates the entire workflow
  *
@@ -1635,18 +1791,9 @@ function action(params) {
         // cycle starts clean and onApproved triggers don't fire prematurely.
         var prApprovedCleaned = cleanStalePrApprovedLabel(ctx);
 
-        // Configure git author
-        if (!configureGitAuthor(ctx.config)) {
-            return gateResetResult(ctx, 'Git Configuration', 'Failed to configure git author');
-        }
-
-        // Always use the expected branch (ai/<ticketKey>), computed from ticket key.
-        // Do NOT trust git branch --show-current — the CLI agent may have switched branches.
-        // Force checkout to the expected branch before committing to prevent pushing to develop/main.
-        var checkoutError = ensureExpectedBranchCheckedOut(ctx.expectedBranch);
-        if (checkoutError) {
-            return gateResetResult(ctx, 'Git Branch Checkout', checkoutError);
-        }
+        // Configure git author and force-checkout the expected branch.
+        var prepFailure = prepareDevelopmentGitStage(ctx);
+        if (prepFailure) return prepFailure;
         var branchName = ctx.expectedBranch;
         ctx.branchName = branchName;
         console.log('Using branch:', branchName);
@@ -1655,108 +1802,18 @@ function action(params) {
         var commitMessage = configLoader.formatTemplate(ctx.config.formats.commitMessage.development, { ticketKey: ctx.ticketKey, ticketSummary: ctx.ticketSummary });
         ctx.prTarget = configLoader.resolvePRTargetBranch(ctx.config, params.ticket || ctx.ticket);
 
-        // Push the agent's work before running quality gates.
-        // If the gate feedback loop fails and cannot resume, the branch is already on remote
-        // and a retry can continue from the pushed state instead of losing all changes.
-        var initialOutcome = recoverGitOutcome(params, ctx,
-            performGitOperations(branchName, commitMessage, ctx.prTarget, ctx.config, ctx.customParams, ctx.ticketKey),
-            INITIAL_GIT_STAGES);
-        if (initialOutcome) {
-            if (initialOutcome.resume) return action(params);
-            return initialOutcome.result;
-        }
-
-        var gateResult = feedbackLoop.runQualityGates({
-            ticketKey: ctx.ticketKey,
-            customParams: ctx.customParams,
-            section: 'qualityGates'
-        });
-        if (!gateResult.success) {
-            return gateResetResult(ctx, 'Quality Gate', 'Quality gate failed before development publish: ' + gateResult.failedGate + '\n' + gateResult.error);
-        }
-        var policyResult = feedbackLoop.runPolicyGates({
-            ticketKey: ctx.ticketKey,
-            customParams: ctx.customParams,
-            section: 'policyGates'
-        });
-        if (!policyResult.success) {
-            return gateResetResult(ctx, 'Policy Gate', 'Policy gate failed before development publish: ' + policyResult.failedGate + '\n' + policyResult.error);
-        }
-
-        // Push any fixes the gate feedback loop applied to the working tree.
-        var gateFixOutcome = recoverGitOutcome(params, ctx,
-            performGitOperations(branchName, commitMessage + ' (quality gate fixes)', ctx.prTarget, ctx.config, ctx.customParams, ctx.ticketKey),
-            GATE_FIX_GIT_STAGES);
-        if (gateFixOutcome) {
-            if (gateFixOutcome.resume) return action(params);
-            return gateFixOutcome.result;
-        }
-
-        var postPublishGateResult = feedbackLoop.runPostPublishGates({
-            ticketKey: ctx.ticketKey,
-            customParams: ctx.customParams,
-            section: 'postPublishGates',
-            workingDir: _workingDir
-        });
-        if (!postPublishGateResult.success) {
-            if (postPublishGateResult.resumeAttempted) {
-                return action(params);
-            }
-            return gateResetResult(ctx, 'Post-Publish Quality Gate', 'Post-publish quality gate failed: ' +
-                postPublishGateResult.failedGate + '\n' + postPublishGateResult.error);
-        }
+        var publishTerminal = runPublishPipeline(params, ctx, branchName, commitMessage);
+        if (publishTerminal) return publishTerminal;
 
         var responseContent = ensureResponseForPrBody(ctx);
         console.log('Using outputs/response.md as PR body (' + responseContent.length + ' characters)');
 
-        // Create Pull Request
-        var prTitle = configLoader.formatTemplate(ctx.config.formats.prTitle.development, { ticketKey: ctx.ticketKey, ticketSummary: ctx.ticketSummary });
-        var prResult = createPullRequest(prTitle, branchName, ctx.prTarget, ctx.ticketKey);
+        var prResult = createDevelopmentPr(params, ctx, branchName);
 
-        if (!prResult.success) {
-            var prOutcome = recoverPrCreationFailure(params, ctx, prResult);
-            if (prOutcome.resume) return action(params);
-        }
-
-        assignAndMoveToReview(ctx);
-
-        // Post comment with PR details
-        postPRCommentToJira(ctx.ticketKey, prResult.prUrl, branchName);
-
-        applyDevelopmentOutcomeLabels(ctx);
-
-        console.log('✅ Development workflow completed successfully — PR: ' + (prResult.prUrl || '(URL not captured — PR was created)'));
-
-        if (!maybeAutoStartReview(ctx, prApprovedCleaned)) {
-            autoStart.triggerSmIfIdle({ config: ctx.config, customParams: ctx.customParams });
-        }
-
-        postDevelopmentTelemetry(params, ctx);
-
-        return {
-            success: true,
-            message: 'Ticket ' + ctx.ticketKey + ' developed, committed, and PR created',
-            branchName: branchName,
-            prUrl: prResult.prUrl
-        };
+        return finalizeDevelopmentSuccess(params, ctx, branchName, prResult, prApprovedCleaned);
 
     } catch (error) {
-        console.error('❌ Error in development workflow:', error);
-
-        if (rethrownAsIs(error)) {
-            throw error;
-        }
-
-        var recovery = recoverUnexpectedError(params, error);
-        if (recovery && recovery.resume) {
-            return action(params);
-        }
-
-        return {
-            success: true,
-            path: 'development-reset-for-retry',
-            error: error.toString()
-        };
+        return concludeActionFailure(params, error);
     }
 }
 // Export for dmtools standalone execution
@@ -1769,6 +1826,11 @@ if (typeof module !== 'undefined' && module.exports) {
         // gh-1003: pure helpers extracted from performGitOperations — exported
         // for direct characterization tests.
         sanitizeCommitMessage, parseAheadCount, hasStagedChanges, detectPushFailure,
-        branchMissingOnRemote, pushBranchToRemote, probeCommitsAhead, resolveNothingStagedOutcome
+        branchMissingOnRemote, pushBranchToRemote, probeCommitsAhead, resolveNothingStagedOutcome,
+        // gh-1190: performPushOnly/action seam helpers — exported for direct
+        // characterization tests.
+        isHardPushRejection, retryForcePushAfterRejection, performPushOnly,
+        prepareDevelopmentGitStage, stageOutcomeOf, runPublishPipeline,
+        createDevelopmentPr, finalizeDevelopmentSuccess, concludeActionFailure
     };
 }

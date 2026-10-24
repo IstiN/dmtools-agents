@@ -952,3 +952,198 @@ suite('postTestAutomationResults: error catch path', function() {
     });
 
 });
+// ── gh-1190: performGitOperations seam split — cluster characterization ──────
+
+suite('postTestAutomationResults: performGitOperations seam clusters (gh-1190)', function() {
+
+    function loadGitOpsModule(cliMock) {
+        return loadPostTestAutomation({
+            file_read: function(opts) {
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            cli_execute_command: cliMock
+        });
+    }
+
+    function lsRemoteRefResponse(branch) {
+        return '0123456789abcdef0123456789abcdef01234567\trefs/heads/' + branch + '\n';
+    }
+
+    test('performGitOperations: full commit+push path keeps the exact command sequence', function() {
+        var calls = [];
+        var mod = loadGitOpsModule(function(opts) {
+            var command = opts.command;
+            calls.push(command);
+            if (command === 'git branch --show-current') return 'test/DMC-1';
+            if (command === 'git diff --cached --stat') return ' testing/x.py | 1 +\n 1 file changed, 1 insertion(+)';
+            if (command === 'git ls-remote --heads origin test/DMC-1') return lsRemoteRefResponse('test/DMC-1');
+            return '';
+        });
+        var result = mod.performGitOperations('test/DMC-1', 'Test changes', null, 'testing/');
+
+        assert.equal(result.success, true);
+        assert.deepEqual(calls, [
+            'git status --short -- testing',
+            'git add testing/',
+            'git diff --cached --stat',
+            'git commit -m "Test changes"',
+            'git fetch origin test/DMC-1',
+            'git push -u origin test/DMC-1',
+            'git ls-remote --heads origin test/DMC-1'
+        ], 'diagnostics → add → staged check → commit → fetch → push → verify, in order');
+    });
+
+    test('performGitOperations: push retry chain escalates to force-with-lease, then plain force', function() {
+        var calls = [];
+        var mod = loadGitOpsModule(function(opts) {
+            var command = opts.command;
+            calls.push(command);
+            if (command === 'git diff --cached --stat') return '1 file changed';
+            if (command === 'git push -u origin test/DMC-1') { throw new Error('non-fast-forward'); }
+            if (command === 'git push -u origin test/DMC-1 --force-with-lease') { throw new Error('stale lease'); }
+            if (command === 'git ls-remote --heads origin test/DMC-1') return lsRemoteRefResponse('test/DMC-1');
+            return '';
+        });
+        var result = mod.performGitOperations('test/DMC-1', 'Test changes', null, null);
+
+        assert.equal(result.success, true, 'the plain-force retry still lands the branch');
+        assert.ok(calls.indexOf('git push -u origin test/DMC-1 --force-with-lease') !== -1,
+            'force-with-lease runs after the normal push fails');
+        assert.ok(calls.indexOf('git push -u origin test/DMC-1 --force') !== -1,
+            'plain force runs after force-with-lease fails');
+    });
+
+    test('performGitOperations: nothing staged + remote branch absent → push current state', function() {
+        var calls = [];
+        var mod = loadGitOpsModule(function(opts) {
+            var command = opts.command;
+            calls.push(command);
+            if (command === 'git diff --cached --stat') return '';
+            return '';
+        });
+        var result = mod.performGitOperations('test/DMC-2', 'Test changes', null, 'testing/');
+
+        assert.deepEqual(result, { success: true, branchName: 'test/DMC-2', noNewCommit: true });
+        assert.ok(calls.indexOf('git push -u origin test/DMC-2') !== -1,
+            'pushes the current branch state when the remote branch is absent');
+        assert.ok(calls.indexOf('git reset --hard origin/test/DMC-2') === -1,
+            'must never reset on this path');
+    });
+
+    test('performGitOperations: nothing staged + remote branch present → publishExistingBranch sync', function() {
+        var calls = [];
+        var mod = loadGitOpsModule(function(opts) {
+            var command = opts.command;
+            calls.push(command);
+            if (command === 'git diff --cached --stat') return '';
+            if (command === 'git ls-remote --heads origin test/DMC-3') return lsRemoteRefResponse('test/DMC-3');
+            if (command === 'git rev-parse HEAD') return 'local-sha';
+            if (command === 'git rev-parse origin/test/DMC-3') return 'remote-sha';
+            if (command === 'git merge-base HEAD origin/test/DMC-3') return 'base-sha';
+            return '';
+        });
+        var result = mod.performGitOperations('test/DMC-3', 'Test changes', null, 'testing/');
+
+        assert.equal(result.success, true);
+        assert.equal(result.noNewCommit, true);
+        assert.ok(calls.indexOf('git push -u origin test/DMC-3') !== -1, 'diverged branch falls back to push');
+        assert.ok(calls.indexOf('git fetch origin test/DMC-3') !== -1, 'remote ref refreshed before the decision');
+    });
+
+    test('performGitOperations: nothing staged + push failure yields the no-test-files error', function() {
+        var mod = loadGitOpsModule(function(opts) {
+            var command = opts.command;
+            if (command === 'git diff --cached --stat') return '';
+            if (command.indexOf('git push -u origin test/DMC-4') === 0) { throw new Error('remote rejected'); }
+            return '';
+        });
+        var result = mod.performGitOperations('test/DMC-4', 'Test changes', null, 'testing/');
+        assert.deepEqual(result, {
+            success: false,
+            error: 'No test files were written and could not push branch'
+        });
+    });
+
+    test('performGitOperations: post-push verify throws into the catch when the ref is absent', function() {
+        var mod = loadGitOpsModule(function(opts) {
+            var command = opts.command;
+            if (command === 'git diff --cached --stat') return '1 file changed';
+            return '';
+        });
+        var result = mod.performGitOperations('test/DMC-5', 'Test changes', null, 'testing/');
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'Branch not found on remote after push');
+    });
+
+    test('commitAndPushTestChanges sanitizes the commit message and keeps the fetch before push', function() {
+        var calls = [];
+        var mod = loadGitOpsModule(function(opts) {
+            calls.push(opts.command);
+            return '';
+        });
+        mod.commitAndPushTestChanges('test/DMC-6', 'Fix "quoted" <angle> | pipe', 'repo');
+        assert.deepEqual(calls, [
+            'git commit -m "Fix \\"quoted\\" angle pipe"',
+            'git fetch origin test/DMC-6',
+            'git push -u origin test/DMC-6'
+        ], 'commit → fetch → push, with the sanitized message (pipe → space, quotes escaped)');
+    });
+
+    test('logStagingDiagnostics warns (never throws) when the listing fails', function() {
+        var mod = loadGitOpsModule(function() { throw new Error('git down'); });
+        var warnings = [];
+        var originalWarn = console.warn;
+        console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            mod.logStagingDiagnostics('testing', null);
+            assert.equal(warnings.length, 1);
+            assert.contains(warnings[0], 'Could not list testing:');
+        } finally {
+            console.warn = originalWarn;
+        }
+    });
+
+    test('verifyBranchOnRemoteAfterPush throws exactly when the strict probe finds no real ref line', function() {
+        var mod = loadGitOpsModule(function(opts) {
+            if (opts.command === 'git ls-remote --heads origin test/DMC-7') {
+                return 'warning: redirecting to https://example.com/\n';
+            }
+            return '';
+        });
+        assert.throws(function() { mod.verifyBranchOnRemoteAfterPush('test/DMC-7', null); },
+            'a warning-only capture must throw the not-on-remote error (gh-912)');
+
+        var okMod = loadGitOpsModule(function(opts) {
+            if (opts.command === 'git ls-remote --heads origin test/DMC-7') return lsRemoteRefResponse('test/DMC-7');
+            return '';
+        });
+        assert.doesNotThrow(function() { okMod.verifyBranchOnRemoteAfterPush('test/DMC-7', null); },
+            'a real ref line verifies the push');
+    });
+
+    test('publishNoStagedChanges warns with the add path and returns the noNewCommit success', function() {
+        var calls = [];
+        var warnings = [];
+        var originalWarn = console.warn;
+        console.warn = function() { warnings.push(Array.prototype.slice.call(arguments).join(' ')); };
+        var mod = loadGitOpsModule(function(opts) {
+            calls.push(opts.command);
+            if (opts.command === 'git ls-remote --heads origin test/DMC-8') return lsRemoteRefResponse('test/DMC-8');
+            if (opts.command === 'git rev-parse HEAD') return 'same-sha';
+            if (opts.command === 'git rev-parse origin/test/DMC-8') return 'same-sha';
+            return '';
+        });
+        try {
+            var result = mod.publishNoStagedChanges('test/DMC-8', 'testing/', null);
+            assert.deepEqual(result, { success: true, branchName: 'test/DMC-8', noNewCommit: true });
+            assert.ok(warnings.join('\n').indexOf('No new staged changes in testing/') !== -1,
+                'the warn names the staged path');
+            assert.ok(calls.indexOf('git reset --hard origin/test/DMC-8') === -1,
+                'identical shas must not trigger a reset (gh-1043 order)');
+        } finally {
+            console.warn = originalWarn;
+        }
+    });
+
+});
