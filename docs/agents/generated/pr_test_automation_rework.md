@@ -86,8 +86,6 @@ _Post Test Rework Results Action (postJSAction for pr_test_automation_rework)_
 - Parameters (customParams):
   - `adoTextFormat`
   - `aiRepository`
-  - `autoStartReview`
-  - `autoStartReviewConfigFile`
   - `branchCreateFnPath`
   - `branchNamingFnPath`
   - `commentMarkup`
@@ -135,8 +133,6 @@ _Post Test Rework Results Action (postJSAction for pr_test_automation_rework)_
 - `jql` _(used by JS action)_
 - `parentContextFetch` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
-- `autoStartReview` _(used by JS action)_
-- `autoStartReviewConfigFile` _(used by JS action)_
 - `commentMarkup` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_

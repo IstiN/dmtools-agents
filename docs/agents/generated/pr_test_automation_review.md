@@ -63,8 +63,6 @@ _Post Test Automation Review Comments Action (postJSAction for pr_test_automatio
 - Parameters (customParams):
   - `adoTextFormat`
   - `aiRepository`
-  - `autoStartRework`
-  - `autoStartReworkConfigFile`
   - `branchCreateFnPath`
   - `branchNamingFnPath`
   - `configPath`
@@ -103,8 +101,6 @@ _Post Test Automation Review Comments Action (postJSAction for pr_test_automatio
 - `targetRepository` _(used by JS action)_
 - `trackerProvider` _(used by JS action)_
 - `aiRepository` _(used by JS action)_
-- `autoStartRework` _(used by JS action)_
-- `autoStartReworkConfigFile` _(used by JS action)_
 - `contentOutput` _(used by JS action)_
 - `contentOutput.target` _(used by JS action)_
 - `localTeammate` _(used by JS action)_
