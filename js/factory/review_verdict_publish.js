@@ -34,49 +34,12 @@
 
 var reviewVerdict = require('./review_verdict.js');
 var shellQuote = require('./token_usage.js').shellQuote;
+// gh-1248: the env reader + pick closure are canonical in publishParams.js
+// (one copy shared by the three *_publish entries).
+var publishParams = require('./publishParams.js');
 
-/**
- * Env reader for the fallback path (guarded — no java bridge on QuickJS).
- */
-// The java.lang.System env bridge when this runtime has one, else null.
-// Guarded on purpose: QuickJS has no java bridge, so every access is
-// wrapped and missing env simply yields '' (the caller defaults take over).
-function _envBridge() {
-    try {
-        if (typeof java !== 'undefined' && java && java.lang &&
-            java.lang.System && typeof java.lang.System.getenv === 'function') {
-            return java.lang.System;
-        }
-    } catch (e) { /* no env bridge on this runtime */ }
-    return null;
-}
-
-function envValue(name) {
-    var system = _envBridge();
-    if (!system) return '';
-    var v = system.getenv(name);
-    return (v === null || v === undefined) ? '' : String(v);
-}
-
-function _isBlank(v) {
-    return v === undefined || v === null || v === '';
-}
-
-/**
- * customParams > env > sh-step defaults. envMap is a test seam.
- */
 function resolveParams(params, envMap) {
-    var custom = (params && params.jobParams && params.jobParams.customParams) || {};
-    function env(name) {
-        if (envMap && Object.prototype.hasOwnProperty.call(envMap, name)) return envMap[name];
-        return envValue(name);
-    }
-    function pick(key, envName, dflt) {
-        var v = custom[key];
-        if (_isBlank(v)) v = env(envName);
-        if (_isBlank(v)) v = dflt;
-        return v === undefined || v === null ? '' : String(v);
-    }
+    var pick = publishParams.makePicker(params, envMap);
     return {
         repo: pick('repo', 'GITHUB_REPOSITORY', ''),
         number: pick('number', 'NUMBER', ''),
@@ -223,7 +186,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
         resolveParams: resolveParams,
-        envValue: envValue,
+        envValue: publishParams.envValue,
         productionSleepMs: productionSleepMs
     };
 }

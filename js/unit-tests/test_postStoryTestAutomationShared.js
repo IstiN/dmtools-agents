@@ -502,3 +502,55 @@ suite('postStoryTestAutomationShared: git ops', function() {
     });
 
 });
+
+suite('postStoryTestAutomationShared: autoStart trigger parameter order (gh-1246 review)', function() {
+
+    // gh-1246 review: triggerAutoStartReworkWorkflow must take
+    // (autoStart, ticketKey, customParams, config) — customParams BEFORE
+    // config — matching the review-flavor sibling triggerAutoStartReviewWorkflow.
+    // A caller copying the review-flavor call shape must not silently swap
+    // config and customParams.
+    function recordingAutoStart(recorded) {
+        return {
+            triggerConfiguredWorkflowForTicket: function(options) {
+                recorded.push(options);
+                return { success: true };
+            }
+        };
+    }
+
+    test('triggerAutoStartReworkWorkflow takes customParams before config', function() {
+        var recorded = [];
+        var customParams = { autoStartRework: true, autoStartReworkConfigFile: 'agents/pr_test_automation_rework.json' };
+        var config = { git: {} };
+
+        var result = loadShared({}).triggerAutoStartReworkWorkflow(
+            recordingAutoStart(recorded), 'TS-1', customParams, config);
+
+        assert.equal(recorded.length, 1, 'the configured workflow was triggered');
+        assert.equal(recorded[0].customParams, customParams, 'customParams landed in the customParams slot');
+        assert.equal(recorded[0].config, config, 'config landed in the config slot');
+        assert.equal(recorded[0].configFile, 'agents/pr_test_automation_rework.json');
+        assert.equal(recorded[0].label, 'pr_test_automation_rework');
+        assert.equal(recorded[0].stripKeys.length, 3);
+        assert.deepEqual(recorded[0].stripKeys, ['removeLabel', 'autoStartRework', 'autoStartReworkConfigFile']);
+        assert.deepEqual(result, { success: true });
+    });
+
+    test('triggerAutoStartReworkWorkflow without the flags does not trigger', function() {
+        var recorded = [];
+        var result = loadShared({}).triggerAutoStartReworkWorkflow(
+            recordingAutoStart(recorded), 'TS-1', {}, { git: {} });
+        assert.equal(recorded.length, 0);
+        assert.equal(result, false);
+    });
+
+    test('triggerAutoStartReworkWorkflow swallows trigger failures', function() {
+        var throwing = {
+            triggerConfiguredWorkflowForTicket: function() { throw new Error('boom'); }
+        };
+        var customParams = { autoStartRework: true, autoStartReworkConfigFile: 'agents/pr_test_automation_rework.json' };
+        var result = loadShared({}).triggerAutoStartReworkWorkflow(throwing, 'TS-1', customParams, {});
+        assert.equal(result, false);
+    });
+});
