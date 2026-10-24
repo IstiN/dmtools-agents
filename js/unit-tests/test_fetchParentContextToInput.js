@@ -1400,3 +1400,128 @@ suite('fetchParentContextToInput — action decomposition (gh-1184)', function()
     });
 
 });
+
+// ── resolveFieldName (gh-1228 CRAP characterization) ────────────────────────
+
+suite('fetchParentContextToInput — resolveFieldName', function() {
+
+    function loadResolver(tracker, makeTrackerThrow) {
+        return loadModule(
+            'js/fetchParentContextToInput.js',
+            makeRequire({
+                './configLoader.js': { loadProjectConfig: function() { return {}; } },
+                './common/trackers.js': { createTracker: function() {
+                    if (makeTrackerThrow) { throw new Error('tracker creation failed'); }
+                    return tracker;
+                } }
+            }),
+            { file_read: function() { return null; }, file_write: function() {} }
+        );
+    }
+
+    function fieldCodeTracker(behavior) {
+        var calls = [];
+        return {
+            calls: calls,
+            fieldCode: function(projectKey, fieldName) {
+                calls.push({ projectKey: projectKey, fieldName: fieldName });
+                if (behavior.throw) { throw new Error(behavior.throw); }
+                return behavior.returns;
+            }
+        };
+    }
+
+    test('falsy field name passes through without consulting the tracker', function() {
+        var tracker = fieldCodeTracker({});
+        var mod = loadResolver(tracker);
+        var labels = {};
+        assert.equal(mod.resolveFieldName('', 'PROJ', labels, true, tracker), '', 'empty string passthrough');
+        assert.equal(mod.resolveFieldName(null, 'PROJ', labels, true, tracker), null, 'null passthrough');
+        assert.equal(tracker.calls.length, 0, 'tracker never consulted');
+    });
+
+    test('system fields pass through unresolved', function() {
+        var tracker = fieldCodeTracker({});
+        var mod = loadResolver(tracker);
+        var labels = {};
+        ['key', 'summary', 'description', 'status', 'comment'].forEach(function(f) {
+            assert.equal(mod.resolveFieldName(f, 'PROJ', labels, true, tracker), f, f + ' passthrough');
+        });
+        assert.equal(tracker.calls.length, 0, 'tracker never consulted');
+    });
+
+    test('already-resolved customfield_* names pass through unmodified', function() {
+        var tracker = fieldCodeTracker({});
+        var mod = loadResolver(tracker);
+        var labels = {};
+        assert.equal(mod.resolveFieldName('customfield_10397', 'PROJ', labels, true, tracker), 'customfield_10397', 'customfield passthrough');
+        assert.equal(tracker.calls.length, 0, 'tracker never consulted');
+    });
+
+    test('resolution disabled — field returned as provided, tracker untouched', function() {
+        var tracker = fieldCodeTracker({});
+        var mod = loadResolver(tracker);
+        var labels = {};
+        assert.equal(mod.resolveFieldName('Story Points', 'PROJ', labels, false, tracker), 'Story Points', 'passthrough when resolve disabled');
+        assert.equal(tracker.calls.length, 0, 'tracker never consulted');
+    });
+
+    test('missing tracker — field returned as provided', function() {
+        var mod = loadResolver(fieldCodeTracker({}));
+        var labels = {};
+        assert.equal(mod.resolveFieldName('Story Points', 'PROJ', labels, true, null), 'Story Points', 'passthrough without tracker');
+    });
+
+    test('tracker fieldCode returning a customfield_* string records the label and returns the code', function() {
+        var tracker = fieldCodeTracker({ returns: 'customfield_10397' });
+        var mod = loadResolver(tracker);
+        var labels = {};
+        var resolved = mod.resolveFieldName('Story Points', 'PROJ', labels, true, tracker);
+        assert.equal(resolved, 'customfield_10397', 'resolved code returned');
+        assert.equal(labels['customfield_10397'], 'Story Points', 'label recorded for rendering');
+        assert.deepEqual(tracker.calls, [{ projectKey: 'PROJ', fieldName: 'Story Points' }], 'fieldCode consulted once');
+    });
+
+    test('tracker fieldCode returning a {result: code} wrapper is unwrapped', function() {
+        var tracker = fieldCodeTracker({ returns: { result: 'customfield_9' } });
+        var mod = loadResolver(tracker);
+        var labels = {};
+        var resolved = mod.resolveFieldName('Story Points', 'PROJ', labels, true, tracker);
+        assert.equal(resolved, 'customfield_9', 'unwrapped code returned');
+        assert.equal(labels['customfield_9'], 'Story Points', 'label recorded for the unwrapped code');
+    });
+
+    test('non-customfield resolution result is ignored — original field name returned', function() {
+        var tracker = fieldCodeTracker({ returns: 'Story Points' });
+        var mod = loadResolver(tracker);
+        var labels = {};
+        var resolved = mod.resolveFieldName('Story Points', 'PROJ', labels, true, tracker);
+        assert.equal(resolved, 'Story Points', 'original name kept');
+        var seen = false;
+        for (var k in labels) { seen = true; }
+        assert.equal(seen, false, 'no label recorded');
+    });
+
+    test('null resolution result is ignored — original field name returned', function() {
+        var tracker = fieldCodeTracker({ returns: null });
+        var mod = loadResolver(tracker);
+        var labels = {};
+        assert.equal(mod.resolveFieldName('Story Points', 'PROJ', labels, true, tracker), 'Story Points', 'original name kept');
+    });
+
+    test('tracker fieldCode failure falls back to the provided name without throwing', function() {
+        var tracker = fieldCodeTracker({ throw: 'field lookup down' });
+        var mod = loadResolver(tracker);
+        var labels = {};
+        var resolved = mod.resolveFieldName('Story Points', 'PROJ', labels, true, tracker);
+        assert.equal(resolved, 'Story Points', 'original name kept on failure');
+    });
+
+    test('resolveFetchFields dedupes and preserves order', function() {
+        var tracker = fieldCodeTracker({ returns: 'customfield_1' });
+        var mod = loadResolver(tracker);
+        var labels = {};
+        var resolved = mod.resolveFetchFields(['Story Points', 'key', 'Story Points', 'customfield_1'], 'PROJ', labels, true, tracker);
+        assert.deepEqual(resolved, ['customfield_1', 'key'], 'deduped, first-seen order, customfield passthrough not duplicated');
+    });
+});

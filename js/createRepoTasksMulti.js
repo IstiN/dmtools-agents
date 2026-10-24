@@ -76,75 +76,95 @@ function parseAffectedRepos(description) {
 // ---------------------------------------------------------------------------
 // Flatten repo entries (with optional `tasks`) into a flat list of tasks,
 // each carrying a globally-unique key "repo:id" and resolved depends_on keys.
+// (gh-1228 CRAP split: normalising, per-repo flattening and dependency
+// resolution live in small pure helpers below.)
 // ---------------------------------------------------------------------------
 
-function flattenTasks(repos) {
-    var normalised = repos.map(function(r) {
-        return typeof r === 'string' ? { name: r } : r;
-    });
+function normaliseRepoEntry(repo) {
+    return typeof repo === 'string' ? { name: repo } : repo;
+}
 
+/** Emit one flat task per explicit `tasks` entry, registering each "repo:id" key. */
+function flattenExplicitRepoTasks(repo, repoName, repoTaskKeys, flat) {
+    repoTaskKeys[repoName] = [];
+    repo.tasks.forEach(function(t) {
+        var id = t.id || t.title;
+        var key = repoName + ':' + id;
+        repoTaskKeys[repoName].push(key);
+        flat.push({
+            key: key,
+            repo: repoName,
+            title: t.title || id,
+            reason: t.reason || '',
+            rawDependsOn: Array.isArray(t.depends_on) ? t.depends_on : [],
+            repoLevelDependsOn: Array.isArray(repo.depends_on) ? repo.depends_on : []
+        });
+    });
+}
+
+/** Emit the implicit single task for a repo with no `tasks` — identical to createRepoTasks.js behaviour. */
+function flattenImplicitRepoTask(repo, repoName, repoTaskKeys, flat) {
+    var implicitKey = repoName + ':' + repoName;
+    repoTaskKeys[repoName] = [implicitKey];
+    flat.push({
+        key: implicitKey,
+        repo: repoName,
+        title: repo.reason || repoName,
+        reason: repo.reason || '',
+        rawDependsOn: [],
+        repoLevelDependsOn: Array.isArray(repo.depends_on) ? repo.depends_on : []
+    });
+}
+
+function hasFlatTaskKey(flat, key) {
+    return flat.some(function(f) { return f.key === key; });
+}
+
+/** Resolve one depends_on reference into the concrete task key(s) it points at. */
+function resolveDepRef(ref, ownRepo, repoTaskKeys, flat) {
+    if (ref.indexOf(':') !== -1) {
+        // Already a fully-qualified "repo:id" reference
+        return repoTaskKeys[ref.split(':')[0]] && hasFlatTaskKey(flat, ref) ? [ref] : [];
+    }
+    if (repoTaskKeys[ref]) {
+        // Bare repo name → depends on all of that repo's tasks
+        return repoTaskKeys[ref].slice();
+    }
+    // Bare task id within the same repo
+    var sameRepoKey = ownRepo + ':' + ref;
+    return hasFlatTaskKey(flat, sameRepoKey) ? [sameRepoKey] : [];
+}
+
+/** Resolve a task's rawDependsOn + repoLevelDependsOn into a deduped key list. */
+function resolveTaskDependsOn(task, repoTaskKeys, flat) {
+    var resolved = {};
+    task.rawDependsOn.concat(task.repoLevelDependsOn).forEach(function(ref) {
+        resolveDepRef(ref, task.repo, repoTaskKeys, flat).forEach(function(k) {
+            if (k !== task.key) resolved[k] = true;
+        });
+    });
+    return Object.keys(resolved);
+}
+
+function flattenTasks(repos) {
     // repoName -> array of task keys ("repo:id"), used to expand bare-repo-name deps
     var repoTaskKeys = {};
     var flat = [];
 
-    normalised.forEach(function(repo) {
+    repos.map(normaliseRepoEntry).forEach(function(repo) {
         var repoName = repo.name;
         if (!repoName) return;
 
         if (Array.isArray(repo.tasks) && repo.tasks.length > 0) {
-            repoTaskKeys[repoName] = [];
-            repo.tasks.forEach(function(t) {
-                var id = t.id || t.title;
-                var key = repoName + ':' + id;
-                repoTaskKeys[repoName].push(key);
-                flat.push({
-                    key: key,
-                    repo: repoName,
-                    title: t.title || id,
-                    reason: t.reason || '',
-                    rawDependsOn: Array.isArray(t.depends_on) ? t.depends_on : [],
-                    repoLevelDependsOn: Array.isArray(repo.depends_on) ? repo.depends_on : []
-                });
-            });
+            flattenExplicitRepoTasks(repo, repoName, repoTaskKeys, flat);
         } else {
-            // Implicit single task for this repo — identical to createRepoTasks.js behaviour
-            var implicitKey = repoName + ':' + repoName;
-            repoTaskKeys[repoName] = [implicitKey];
-            flat.push({
-                key: implicitKey,
-                repo: repoName,
-                title: repo.reason || repoName,
-                reason: repo.reason || '',
-                rawDependsOn: [],
-                repoLevelDependsOn: Array.isArray(repo.depends_on) ? repo.depends_on : []
-            });
+            flattenImplicitRepoTask(repo, repoName, repoTaskKeys, flat);
         }
     });
 
     // Resolve depends_on references into concrete task keys.
-    function resolveRef(ref, ownRepo) {
-        if (ref.indexOf(':') !== -1) {
-            // Already a fully-qualified "repo:id" reference
-            return repoTaskKeys[ref.split(':')[0]] && flat.some(function(f) { return f.key === ref; })
-                ? [ref] : [];
-        }
-        if (repoTaskKeys[ref]) {
-            // Bare repo name → depends on all of that repo's tasks
-            return repoTaskKeys[ref].slice();
-        }
-        // Bare task id within the same repo
-        var sameRepoKey = ownRepo + ':' + ref;
-        return flat.some(function(f) { return f.key === sameRepoKey; }) ? [sameRepoKey] : [];
-    }
-
     flat.forEach(function(t) {
-        var resolved = {};
-        t.rawDependsOn.concat(t.repoLevelDependsOn).forEach(function(ref) {
-            resolveRef(ref, t.repo).forEach(function(k) {
-                if (k !== t.key) resolved[k] = true;
-            });
-        });
-        t.depends_on = Object.keys(resolved);
+        t.depends_on = resolveTaskDependsOn(t, repoTaskKeys, flat);
     });
 
     return flat;
