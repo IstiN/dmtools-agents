@@ -16,12 +16,9 @@ function d2Trackers(mocks) {
  *    a fallback warning comment is posted instead of silently skipping.
  */
 
-function makeOutputFiles(fileMap, fileReadOverride) {
+function makeOutputFiles(fileReadImpl) {
     return loadModule('js/common/outputFiles.js', makeRequire({}), {
-        file_read: fileReadOverride || function (opts) {
-            var path = opts && (opts.path || opts);
-            return fileMap[path] !== undefined ? fileMap[path] : null;
-        }
+        file_read: fileReadImpl
     });
 }
 
@@ -53,7 +50,7 @@ function loadCreateQuestionsModule(fileMap, extraGlobals, requireOverrides) {
 
     // gh-1245: description files are read through the shared outputFiles
     // module, so its file_read mock must see the same overrides as the module.
-    var outputFiles = makeOutputFiles(fileMap, globals.file_read);
+    var outputFiles = makeOutputFiles(globals.file_read);
 
     var requireMap = {
         './common/jiraHelpers.js': {
