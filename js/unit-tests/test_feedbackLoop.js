@@ -533,6 +533,82 @@ suite('feedbackLoop > resumeOnceForMissingResponse (gh-775)', function() {
 
 });
 
+// ── gh-122: resumeOnceForMissingResponse characterization ────────────────────
+// Pins the remaining gate/error branches BEFORE the helper extraction — these
+// must stay green across the refactor verbatim.
+
+suite('feedbackLoop > resumeOnceForMissingResponse characterization (gh-122)', function() {
+
+    test('no arguments at all → disabled, nothing executed', function() {
+        var loaded = loadFeedbackLoop();
+        var result = loaded.mod.resumeOnceForMissingResponse();
+
+        assert.deepEqual(result, { attempted: false, reason: 'disabled' });
+        assert.deepEqual(loaded.commands, []);
+        assert.deepEqual(Object.keys(loaded.files), []);
+    });
+
+    test('force bypasses the generic enablement switch', function() {
+        var loaded = loadFeedbackLoop();
+        var result = loaded.mod.resumeOnceForMissingResponse({
+            ticketKey: 'TS-F1',
+            customParams: {},
+            force: true
+        });
+
+        assert.equal(result.attempted, true, 'an outage resume must not depend on feedbackLoop being configured');
+        var wrapper = loaded.commands.filter(function(c) { return c.indexOf('run-agent.sh') !== -1; });
+        assert.equal(wrapper.length, 1);
+        assert.contains(wrapper[0], 'timeout -k 60 2400 ', 'default 2400s hard cap without an override');
+    });
+
+    test('section-level enabled:false wins even over force', function() {
+        var loaded = loadFeedbackLoop();
+        var result = loaded.mod.resumeOnceForMissingResponse({
+            ticketKey: 'TS-F2',
+            customParams: { feedbackLoop: { missingResponse: { enabled: false } } },
+            force: true
+        });
+
+        assert.deepEqual(result, { attempted: false, reason: 'disabled' });
+        assert.deepEqual(loaded.commands, []);
+    });
+
+    test('invalid timeoutSeconds values fall back to the default hard cap', function() {
+        var badValues = ['abc', 0, -5, null];
+        for (var i = 0; i < badValues.length; i++) {
+            var loaded = loadFeedbackLoop();
+            loaded.mod.resumeOnceForMissingResponse({
+                ticketKey: 'TS-F3',
+                customParams: { feedbackLoop: { enabled: true, missingResponse: { timeoutSeconds: badValues[i] } } }
+            });
+            var wrapper = loaded.commands.filter(function(c) { return c.indexOf('run-agent.sh') !== -1; });
+            assert.contains(wrapper[0], 'timeout -k 60 2400 ',
+                'timeoutSeconds=' + JSON.stringify(badValues[i]) + ' must fall back to the default');
+        }
+    });
+
+    test('a thrown non-Error is reported as failed with String(error)', function() {
+        var loaded = loadFeedbackLoop({
+            cli_execute_command: function(args) {
+                if (args.command.indexOf('run-agent.sh') !== -1) {
+                    throw 'raw failure'; // eslint-disable-line no-throw-literal
+                }
+                return '';
+            }
+        });
+        var result = loaded.mod.resumeOnceForMissingResponse({
+            ticketKey: 'TS-F4',
+            customParams: { feedbackLoop: { enabled: true } }
+        });
+
+        assert.equal(result.attempted, true);
+        assert.equal(result.failed, true);
+        assert.equal(result.error, 'raw failure');
+    });
+
+});
+
 // ── gh-1079: runConfiguredGates characterization ─────────────────────────────
 // Pins every branch of the gate runner (skip rules, name indexing, command
 // interpolation, workingDir precedence, maxAttempts parsing, the

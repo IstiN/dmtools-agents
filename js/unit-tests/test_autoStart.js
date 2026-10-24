@@ -1033,6 +1033,155 @@ suite('autoStart — extracted pure helpers (gh-1183)', function() {
 
 });
 
+// ── gh-122: characterization of formatWorkflowRunSummary / collectActiveWorkflowRuns ──
+// Pins every fallback chain BEFORE the helper extraction — these must stay green
+// across the refactor verbatim.
+
+suite('autoStart — formatWorkflowRunSummary characterization (gh-122)', function() {
+
+    test('a null run renders the workflow-run title, active status and ? age/id', function() {
+        assert.equal(autoStartModule().formatWorkflowRunSummary(null, undefined),
+            'workflow run [active, age ?, id ?]');
+    });
+
+    test('fallbackStatus fills in when the run carries no status of its own', function() {
+        assert.equal(autoStartModule().formatWorkflowRunSummary({ run_number: 7 }, 'queued'),
+            'workflow run [queued, age ?, id 7]');
+        assert.equal(autoStartModule().formatWorkflowRunSummary({ run_number: 7 }),
+            'workflow run [active, age ?, id 7]', 'no fallback status at all → active');
+    });
+
+    test('id chain prefers id, then databaseId, then run_number, then runNumber, then ?', function() {
+        assert.equal(autoStartModule().formatWorkflowRunSummary({ id: 1, databaseId: 2, run_number: 3, runNumber: 4 }, 'queued'),
+            'workflow run [queued, age ?, id 1]', 'id wins');
+        assert.equal(autoStartModule().formatWorkflowRunSummary({ databaseId: 2, run_number: 3, runNumber: 4 }, 'queued'),
+            'workflow run [queued, age ?, id 2]', 'databaseId is next');
+        assert.equal(autoStartModule().formatWorkflowRunSummary({ run_number: 3, runNumber: 4 }, 'queued'),
+            'workflow run [queued, age ?, id 3]', 'run_number is next');
+        assert.equal(autoStartModule().formatWorkflowRunSummary({ runNumber: 4 }, 'queued'),
+            'workflow run [queued, age ?, id 4]', 'runNumber is next');
+        assert.equal(autoStartModule().formatWorkflowRunSummary({}, 'queued'),
+            'workflow run [queued, age ?, id ?]', 'nothing set renders ?');
+    });
+
+    test('title chain prefers display_title, then displayTitle, then name, then the default', function() {
+        assert.equal(autoStartModule().formatWorkflowRunSummary(
+            { display_title: 'T', displayTitle: 'T2', name: 'N', id: 9 }, 'queued'), 'T [queued, age ?, id 9]');
+        assert.equal(autoStartModule().formatWorkflowRunSummary(
+            { displayTitle: 'T2', name: 'N', id: 9 }, 'queued'), 'T2 [queued, age ?, id 9]');
+        assert.equal(autoStartModule().formatWorkflowRunSummary(
+            { name: 'N', id: 9 }, 'queued'), 'N [queued, age ?, id 9]');
+    });
+
+    test('url is appended when any alias is present and omitted otherwise', function() {
+        assert.equal(autoStartModule().formatWorkflowRunSummary({ id: 9, html_url: 'https://x/1' }, 'queued'),
+            'workflow run [queued, age ?, id 9] https://x/1', 'html_url wins');
+        assert.equal(autoStartModule().formatWorkflowRunSummary({ id: 9, htmlUrl: 'https://x/2' }, 'queued'),
+            'workflow run [queued, age ?, id 9] https://x/2', 'htmlUrl is next');
+        assert.equal(autoStartModule().formatWorkflowRunSummary({ id: 9, url: 'https://x/3' }, 'queued'),
+            'workflow run [queued, age ?, id 9] https://x/3', 'url is last');
+        assert.equal(autoStartModule().formatWorkflowRunSummary({ id: 9 }, 'queued'),
+            'workflow run [queued, age ?, id 9]', 'no url → no trailing space');
+    });
+
+    test('unparseable timestamps render age ?', function() {
+        assert.equal(autoStartModule().formatWorkflowRunSummary(
+            { id: 9, updated_at: 'not-a-date' }, 'queued'),
+            'workflow run [queued, age ?, id 9]');
+    });
+
+    test('fresh timestamps render minute and hour+minute ages', function() {
+        var minutesAgo = function(m) { return new Date(Date.now() - m * 60000).toISOString(); };
+        assert.equal(autoStartModule().formatWorkflowRunSummary({ id: 9, updated_at: minutesAgo(5) }, 'queued'),
+            'workflow run [queued, age 5m, id 9]');
+        assert.equal(autoStartModule().formatWorkflowRunSummary({ id: 9, updated_at: minutesAgo(125) }, 'queued'),
+            'workflow run [queued, age 2h 5m, id 9]');
+        assert.equal(autoStartModule().formatWorkflowRunSummary({ id: 9, updated_at: minutesAgo(120) }, 'queued'),
+            'workflow run [queued, age 2h, id 9]', 'a whole hour renders without minutes');
+    });
+
+});
+
+suite('autoStart — collectActiveWorkflowRuns characterization (gh-122)', function() {
+
+    var FRESH = function() { return new Date(Date.now() - 60000).toISOString(); };
+
+    function scmReturningRuns(perStatus) {
+        return {
+            listWorkflowRuns: function(status) {
+                if (perStatus[status] === 'throw') throw new Error('rate limited');
+                return JSON.stringify({ workflow_runs: perStatus[status] || [] });
+            }
+        };
+    }
+
+    test('collects one summary per run across all four statuses', function() {
+        var result = autoStartModule().collectActiveWorkflowRuns(scmReturningRuns({
+            queued: [{ id: 1, display_title: 'a.json : TS-1', status: 'queued', updated_at: FRESH() }],
+            in_progress: [{ id: 2, display_title: 'b.json : TS-2', status: 'in_progress', updated_at: FRESH() }],
+            waiting: [{ id: 3, display_title: 'c.json : TS-3', status: 'waiting', updated_at: FRESH() }],
+            pending: [{ id: 4, display_title: 'd.json : TS-4', status: 'pending', updated_at: FRESH() }]
+        }), 'ai-teammate.yml', 'o', 'r');
+
+        assert.equal(result.count, 4);
+        assert.deepEqual(result.summaries, [
+            'a.json : TS-1 [queued, age 1m, id 1]',
+            'b.json : TS-2 [in_progress, age 1m, id 2]',
+            'c.json : TS-3 [waiting, age 1m, id 3]',
+            'd.json : TS-4 [pending, age 1m, id 4]'
+        ]);
+    });
+
+    test('deduplicates the same run id re-listed under multiple statuses', function() {
+        var run = { id: 42, display_title: 'a.json : TS-1', status: 'queued', updated_at: FRESH() };
+        var result = autoStartModule().collectActiveWorkflowRuns(scmReturningRuns({
+            queued: [run], in_progress: [run]
+        }), 'ai-teammate.yml', 'o', 'r');
+
+        assert.equal(result.count, 1, 'the second sighting of the same id is ignored');
+        assert.equal(result.summaries.length, 1);
+    });
+
+    test('skips stale non-running runs; null entries become anonymous counted runs', function() {
+        var stale = { id: 1, display_title: 'a.json : TS-1', status: 'queued', updated_at: '2020-01-01T00:00:00Z' };
+        var result = autoStartModule().collectActiveWorkflowRuns(scmReturningRuns({
+            queued: [stale, null, { id: 2, display_title: 'live', status: 'queued', updated_at: FRESH() }],
+            in_progress: [{ id: 3, display_title: 'old-but-running', status: 'in_progress', updated_at: '2020-01-01T00:00:00Z' }]
+        }), 'ai-teammate.yml', 'o', 'r');
+
+        assert.equal(result.count, 3, 'stale queued skipped; null entry counted as an anonymous run');
+        assert.contains(result.summaries[0], ' [queued, age ?, id ?]',
+            'the null entry renders with every fallback and comes first');
+        assert.contains(result.summaries[1], 'live [queued');
+        assert.contains(result.summaries[2], 'old-but-running [in_progress',
+            'an old in_progress run is never stale');
+    });
+
+    test('listing failures for some statuses are skipped, the rest still counted', function() {
+        var result = autoStartModule().collectActiveWorkflowRuns(scmReturningRuns({
+            queued: 'throw',
+            waiting: 'throw',
+            in_progress: [{ id: 8, display_title: 'b.json : TS-2', status: 'in_progress', updated_at: FRESH() }],
+            pending: []
+        }), 'ai-teammate.yml', 'o', 'r');
+
+        assert.equal(result.count, 1, 'failed listings contribute zero, not a crash');
+    });
+
+    test('runs without ids get distinct display-title:index:status identities', function() {
+        var result = autoStartModule().collectActiveWorkflowRuns(scmReturningRuns({
+            queued: [
+                { display_title: 'no-id-a', status: 'queued', updated_at: FRESH() },
+                { display_title: 'no-id-b', status: 'queued', updated_at: FRESH() },
+                { status: 'queued', updated_at: FRESH() }
+            ]
+        }), 'ai-teammate.yml', 'o', 'r');
+
+        assert.equal(result.count, 3, 'title-less fallback keys stay unique via index:status');
+    });
+
+});
+
 // ── gh-1183 test scaffolding ──
 
 function autoStartModule() {

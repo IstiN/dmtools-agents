@@ -462,6 +462,7 @@ module.exports = {
     resolveTriggerContext: resolveTriggerContext,
     workflowRunDisplayName: workflowRunDisplayName,
     workflowRunMatchesTicket: workflowRunMatchesTicket,
+    formatWorkflowRunSummary: formatWorkflowRunSummary,
     duplicateRunNotice: duplicateRunNotice,
     findActiveTargetRun: findActiveTargetRun,
     buildWorkflowDispatchPayload: buildWorkflowDispatchPayload,

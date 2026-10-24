@@ -2218,3 +2218,129 @@ suite('configLoader.resolveDefaultWorkflowRef (epam/dm.ai#765)', function() {
         );
     });
 });
+
+// ── gh-122: deepMerge / mergeProjectConfig characterization ──────────────────
+// Pins the merge semantics (null guards, recursion, array replacement and the
+// full-replacement sections) BEFORE the helper extraction — these must stay
+// green across the refactor verbatim.
+
+suite('configLoader.deepMerge characterization (gh-122)', function() {
+
+    test('returns target untouched when source is null or undefined', function() {
+        var target = { a: 1 };
+        assert.equal(configLoaderModule.deepMerge(target, null), target);
+        assert.equal(configLoaderModule.deepMerge(target, undefined), target);
+    });
+
+    test('returns source when target is null or undefined', function() {
+        var source = { a: 1 };
+        assert.equal(configLoaderModule.deepMerge(null, source), source);
+        assert.equal(configLoaderModule.deepMerge(undefined, source), source);
+    });
+
+    test('nested plain objects merge recursively, source scalars win', function() {
+        var result = configLoaderModule.deepMerge(
+            { a: { x: 1, y: 2 }, keep: 't' },
+            { a: { y: 3, z: 4 } }
+        );
+        assert.deepEqual(result, { a: { x: 1, y: 3, z: 4 }, keep: 't' });
+    });
+
+    test('arrays are replaced entirely, never merged element-wise', function() {
+        var result = configLoaderModule.deepMerge(
+            { list: ['a', 'b', 'c'] },
+            { list: ['x'] }
+        );
+        assert.deepEqual(result.list, ['x']);
+    });
+
+    test('a source object replaces a scalar target value without recursion', function() {
+        var source = { a: { nested: true } };
+        var result = configLoaderModule.deepMerge({ a: 'scalar' }, source);
+        assert.deepEqual(result.a, { nested: true });
+    });
+
+    test('a source scalar replaces an object target value', function() {
+        var result = configLoaderModule.deepMerge({ a: { nested: true } }, { a: 'scalar' });
+        assert.equal(result.a, 'scalar');
+    });
+
+    test('an explicit null source value replaces the target value', function() {
+        var result = configLoaderModule.deepMerge({ a: { x: 1 }, b: 2 }, { a: null });
+        assert.equal(result.a, null);
+        assert.equal(result.b, 2);
+    });
+
+    test('mutating the result never touches the inputs (fresh containers)', function() {
+        var target = { a: { x: 1 } };
+        var source = { a: { y: 2 } };
+        var result = configLoaderModule.deepMerge(target, source);
+        result.a.z = 3;
+        assert.deepEqual(target.a, { x: 1 }, 'target nested object untouched');
+        assert.deepEqual(source.a, { y: 2 }, 'source nested object untouched');
+    });
+
+    test('multi-level nesting merges at every depth', function() {
+        var result = configLoaderModule.deepMerge(
+            { l1: { l2: { l3: { a: 1, b: 2 } } } },
+            { l1: { l2: { l3: { b: 3, c: 4 } } } }
+        );
+        assert.deepEqual(result, { l1: { l2: { l3: { a: 1, b: 3, c: 4 } } } });
+    });
+
+});
+
+suite('configLoader.mergeProjectConfig full-replacement contract (gh-122)', function() {
+
+    var defaults = configLoaderModule.DEFAULTS;
+
+    test('an explicit null smRules is a full replacement, not an ignore', function() {
+        var result = configLoaderModule.mergeProjectConfig(defaults, { smRules: null });
+        assert.equal(result.smRules, null, 'smRules uses !== undefined semantics');
+    });
+
+    test('an explicit null smMergeRules is a full replacement, not an ignore', function() {
+        var result = configLoaderModule.mergeProjectConfig(defaults, { smMergeRules: null });
+        assert.equal(result.smMergeRules, null, 'smMergeRules uses !== undefined semantics');
+    });
+
+    test('undefined smMergeRules keeps the default (null)', function() {
+        var result = configLoaderModule.mergeProjectConfig(defaults, { jira: { project: 'X' } });
+        assert.equal(result.smMergeRules, null);
+    });
+
+    test('jira.questions is fully replaced when provided', function() {
+        var customQuestions = { fetchJql: 'custom jql', answerField: 'Reply' };
+        var result = configLoaderModule.mergeProjectConfig(defaults, {
+            jira: { questions: customQuestions }
+        });
+        assert.deepEqual(result.jira.questions, customQuestions, 'no deep merge — full replacement');
+    });
+
+    test('per-agent map sections replace entirely when provided', function() {
+        var result = configLoaderModule.mergeProjectConfig(defaults, {
+            additionalInstructions: { story_development: ['x.md'] },
+            instructionOverrides: { pr_review: ['y.md'] },
+            cliPrompts: { story_solution: ['z.md'] },
+            cliPromptOverrides: { intake: ['w.md'] },
+            cliPromptsByTracker: { ado: ['v.md'] },
+            agentParamPatches: { story_questions: { a: 1 } },
+            jobParamPatches: { wiki_publisher: { b: 2 } }
+        });
+        assert.deepEqual(result.additionalInstructions, { story_development: ['x.md'] });
+        assert.deepEqual(result.instructionOverrides, { pr_review: ['y.md'] });
+        assert.deepEqual(result.cliPrompts, { story_solution: ['z.md'] });
+        assert.deepEqual(result.cliPromptOverrides, { intake: ['w.md'] });
+        assert.deepEqual(result.cliPromptsByTracker, { ado: ['v.md'] });
+        assert.deepEqual(result.agentParamPatches, { story_questions: { a: 1 } });
+        assert.deepEqual(result.jobParamPatches, { wiki_publisher: { b: 2 } });
+    });
+
+    test('unmentioned full-replacement sections keep their defaults', function() {
+        var result = configLoaderModule.mergeProjectConfig(defaults, { labels: { ONLY: 'one' } });
+        assert.deepEqual(result.additionalInstructions, {});
+        assert.deepEqual(result.cliPrompts, {});
+        assert.equal(result.smRules, null);
+    });
+
+});
