@@ -89,9 +89,19 @@ function decideDuplicate(existingSummaries, needle) {
     });
 }
 
+function tryParseCreatedResult(result) {
+    if (typeof result !== 'string') return result;
+    if (/^[A-Za-z0-9_-]+$/.test(result)) return { key: result };
+    try {
+        return JSON.parse(result);
+    } catch (e) {
+        return null;
+    }
+}
+
 function extractCreatedKey(result) {
     try {
-        var parsed = typeof result === 'string' ? (/^[A-Za-z0-9_-]+$/.test(result) ? { key: result } : JSON.parse(result)) : result;
+        var parsed = tryParseCreatedResult(result);
         return parsed && (parsed.key || parsed.id) ? (parsed.key || parsed.id) : null;
     } catch (e) {
         // key extraction failed — non-critical
@@ -119,10 +129,18 @@ function buildSummaryComment(created, skipped, baseUrl, labelField) {
 // Tracker-backed helpers — each failure mode is non-fatal by design
 // ---------------------------------------------------------------------------
 
+function resolveTrackerProvider(tracker) {
+    return tracker && typeof tracker.provider === 'function' ? tracker.provider() : 'jira';
+}
+
+function summaryOf(t) {
+    return t.fields && t.fields.summary ? t.fields.summary : (t.summary || '');
+}
+
 function loadExistingSummaries(tracker, parentKey) {
     var existingSummaries = [];
     try {
-        var provider = tracker && typeof tracker.provider === 'function' ? tracker.provider() : 'jira';
+        var provider = resolveTrackerProvider(tracker);
         var existing = tracker.searchIssues(
             // JQL text: provider-specific query (WIQL on ado)
             linkedIssuesReport.buildChildrenQuery(provider, parentKey, 'parent = ' + parentKey + ' AND issuetype = Sub-task', 'Sub-task'), {
@@ -130,8 +148,7 @@ function loadExistingSummaries(tracker, parentKey) {
         });
         if (Array.isArray(existing)) {
             existing.forEach(function(t) {
-                var s = t.fields && t.fields.summary ? t.fields.summary : (t.summary || '');
-                existingSummaries.push(s);
+                existingSummaries.push(summaryOf(t));
             });
         }
     } catch (e) {
