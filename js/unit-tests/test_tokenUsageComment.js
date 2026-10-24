@@ -455,3 +455,60 @@ suite('tokenUsageComment — postTokenUsageComments edge branches (gh-1225)', fu
         assert.contains(calls[0][1], '[a]: {"total_tokens":5}');
     });
 });
+
+suite('tokenUsageComment.postTokenUsageCommentsSafely (gh-1250)', function() {
+    function safeManifestMocks(manifest, files) {
+        return {
+            file_read: function(opts) {
+                if (opts.path === 'outputs/token_usage_files.json') {
+                    return JSON.stringify(manifest);
+                }
+                return files && files[opts.path] !== undefined ? files[opts.path] : null;
+            }
+        };
+    }
+
+    test('happy path: forwards ticketKey and options, posts normally', function() {
+        var calls = [];
+        var mod = loadTokenUsageComment(safeManifestMocks(['outputs/a_usage.json'], {
+            'outputs/a_usage.json': JSON.stringify({ total_tokens: 7 })
+        }));
+        var warned = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warned.push(String(m)); };
+        try {
+            mod.postTokenUsageCommentsSafely('PROJ-1', {
+                initiator: 'user-1',
+                tracker: { postComment: function(k, c) { calls.push([k, c]); } }
+            });
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(calls.length, 1, 'one comment posted');
+        assert.equal(calls[0][0], 'PROJ-1', 'ticketKey forwarded');
+        assert.contains(calls[0][1], '[a]: {"total_tokens":7}');
+        assert.equal(warned.length, 0, 'no warning on success');
+    });
+
+    test('a throw from the posting call is swallowed and warned about', function() {
+        var mod = loadTokenUsageComment({});
+        var warned = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warned.push(String(m)); };
+        var threw = false;
+        var options = {};
+        Object.defineProperty(options, 'outputsDir', {
+            get: function() { throw new Error('provider down'); }
+        });
+        try {
+            mod.postTokenUsageCommentsSafely('PROJ-2', options);
+        } catch (e) {
+            threw = true;
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(threw, false, 'failure never propagates');
+        assert.equal(warned.length, 1, 'exactly one warning');
+        assert.contains(warned[0], 'Failed to post token usage comments');
+    });
+});

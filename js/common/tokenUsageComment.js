@@ -248,9 +248,27 @@ function postTokenUsageComments(ticketKey, options) {
     return { posted: posted, files: files, errors: errors };
 }
 
+/**
+ * Post token usage comments for the given ticket; a provider failure here is
+ * logged and swallowed — token-usage comments are a nice-to-have and must
+ * never fail the surrounding action (gh-1250: single shared copy of the
+ * try/catch wrapper that used to be re-declared in several action scripts).
+ *
+ * @param {string} ticketKey - Jira ticket key to comment on.
+ * @param {object} options - Same options as postTokenUsageComments.
+ */
+function postTokenUsageCommentsSafely(ticketKey, options) {
+    try {
+        postTokenUsageComments(ticketKey, options);
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         postTokenUsageComments: postTokenUsageComments,
+        postTokenUsageCommentsSafely: postTokenUsageCommentsSafely,
         resolvePostTracker: resolvePostTracker,
         customParamsOf: customParamsOf,
         findUsageFiles: findUsageFiles,
