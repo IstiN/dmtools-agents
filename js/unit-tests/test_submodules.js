@@ -575,22 +575,36 @@ suite('submodule helper', function() {
     function stashPopConflictRun(commands, responses, statusSequence) {
         var statusCalls = 0;
         var statuses = statusSequence || [' M README.md', ''];
+        var table = [
+            {
+                match: /^git config --file \.gitmodules/,
+                respond: function() { return 'submodule.trackstate-setup.path trackstate-setup'; }
+            },
+            {
+                match: /^git -C trackstate-setup status --porcelain$/,
+                respond: function() {
+                    var value = statuses[Math.min(statusCalls, statuses.length - 1)];
+                    statusCalls++;
+                    return value;
+                }
+            },
+            {
+                match: /^git -C trackstate-setup rev-list --count/,
+                respond: function() { return '0'; }
+            },
+            {
+                match: /^git -C trackstate-setup stash pop$/,
+                respond: function() {
+                    throw new Error('CONFLICT (content): Merge conflict in README.md');
+                }
+            }
+        ].concat((responses || []).map(function(response) {
+            return { match: response.match, respond: function() { return response.returnValue; } };
+        }));
         return function(command) {
             commands.push(command);
-            if (/^git config --file \.gitmodules/.test(command)) {
-                return 'submodule.trackstate-setup.path trackstate-setup';
-            }
-            if (/^git -C trackstate-setup status --porcelain$/.test(command)) {
-                var value = statuses[Math.min(statusCalls, statuses.length - 1)];
-                statusCalls++;
-                return value;
-            }
-            if (/^git -C trackstate-setup rev-list --count/.test(command)) return '0';
-            if (/^git -C trackstate-setup stash pop$/.test(command)) {
-                throw new Error('CONFLICT (content): Merge conflict in README.md');
-            }
-            for (var i = 0; i < (responses || []).length; i++) {
-                if (responses[i].match.test(command)) return responses[i].returnValue;
+            for (var i = 0; i < table.length; i++) {
+                if (table[i].match.test(command)) return table[i].respond();
             }
             return '';
         };
