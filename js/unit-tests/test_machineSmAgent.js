@@ -803,3 +803,129 @@ suite('machineSm pure helpers (gh-980)', function () {
             ['unknown', 2, 3], 'orphan released; unknown, live and probe-error runs kept');
     });
 });
+
+// ---------------------------------------------------------------------------
+// gh-1242: executeAction — every switch arm incl. the gh-828 resolution leg
+// ---------------------------------------------------------------------------
+
+suite('machineSm executeAction', function () {
+
+    var EXEC_HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function loadExecAgent() {
+        return loadModule('js/machineSmAgent.js', makeRequire({
+            './configLoader.js': { loadProjectConfig: function () { return {}; } },
+            './common/smProvider.js': { createSmProvider: function () { return {}; } },
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+        }), {
+            cli_execute_command: function () { return '{}'; }
+        });
+    }
+
+    function approveRecord() {
+        return { head: EXEC_HEAD, verdict: 'APPROVE', blocking: 0, important: 1, suggestions: 1,
+                 at: '2026-10-10T05:47:30.000Z', source: 'pr_review.json' };
+    }
+
+    function suggestionThread(id) {
+        return { threadId: id, rootCommentId: 1, resolved: false,
+                 author: 'ai-teammate', body: '💡 SUGGESTION: rename for clarity' };
+    }
+
+    function execCfg(over) {
+        return Object.assign({ workflowFile: 'ai-teammate.yml', closeComment: 'done',
+                               machineLogins: ['ai-teammate'] }, over || {});
+    }
+
+    test('dispatch / label / updateBranch / merge / closeIssue delegate to the provider primitives', function () {
+        var calls = [];
+        var provider = {
+            dispatchLeg: function (n, leg, reason, wf) { calls.push(['dispatchLeg', n, leg, reason, wf]); return 'd'; },
+            addIssueLabel: function (n, label) { calls.push(['addIssueLabel', n, label]); return 'l'; },
+            updateBranch: function (n) { calls.push(['updateBranch', n]); return 'u'; },
+            merge: function (n) { calls.push(['merge', n]); return 'm'; },
+            closeIssue: function (n, comment) { calls.push(['closeIssue', n, comment]); return 'c'; }
+        };
+        var agent = loadExecAgent();
+        var issue = { number: 42 };
+
+        agent.executeAction(provider, { type: 'dispatch', leg: 'dev', reason: 'r', prNumber: 1 }, issue, execCfg());
+        agent.executeAction(provider, { type: 'label', label: 'ai_dev' }, issue, execCfg());
+        agent.executeAction(provider, { type: 'updateBranch', prNumber: 2 }, issue, execCfg());
+        agent.executeAction(provider, { type: 'merge', prNumber: 3 }, issue, execCfg());
+        agent.executeAction(provider, { type: 'closeIssue' }, issue, execCfg());
+
+        assert.deepEqual(calls, [
+            ['dispatchLeg', 42, 'dev', 'r', 'ai-teammate.yml'],
+            ['addIssueLabel', 42, 'ai_dev'],
+            ['updateBranch', 2],
+            ['merge', 3],
+            ['closeIssue', 42, 'done']
+        ]);
+    });
+
+    test('unknown action type → null, provider untouched', function () {
+        var agent = loadExecAgent();
+        var provider = {
+            dispatchLeg: function () { throw new Error('must not be called'); }
+        };
+        assert.equal(agent.executeAction(provider, { type: 'wat' }, { number: 1 }, execCfg()), null);
+    });
+
+    test('resolveSuggestionThreads: APPROVE gate resolves + acks every selected machine thread', function () {
+        var resolved = [];
+        var replies = [];
+        var provider = {
+            verdictRecords: function (n, opts) {
+                assert.equal(n, 5);
+                assert.deepEqual(opts.authorLogins, ['ai-teammate']);
+                return [approveRecord()];
+            },
+            reviewThreadList: function (n) {
+                return [suggestionThread('RT_1'), suggestionThread('RT_2')];
+            },
+            resolveThread: function (n, t) { resolved.push(t.threadId); },
+            replyToThread: function (n, t, ack) { replies.push({ id: t.threadId, ack: ack }); }
+        };
+        var agent = loadExecAgent();
+        var out = agent.executeAction(provider,
+            { type: 'resolveSuggestionThreads', prNumber: 5, headSha: EXEC_HEAD },
+            { number: 5 }, execCfg());
+        assert.equal(out.resolved, 2, 'both non-blocking machine threads resolved');
+        assert.deepEqual(resolved, ['RT_1', 'RT_2']);
+        assert.equal(replies.length, 2, 'an ack reply follows each resolve');
+        assert.ok(replies[0].ack.indexOf('gh-828') !== -1, 'the ack carries the gh-828 wording');
+    });
+
+    test('resolveSuggestionThreads: a failing resolve skips the ack for that thread only', function () {
+        var replies = [];
+        var provider = {
+            verdictRecords: function () { return [approveRecord()]; },
+            reviewThreadList: function () { return [suggestionThread('RT_1'), suggestionThread('RT_2')]; },
+            resolveThread: function (n, t) { if (t.threadId === 'RT_1') throw new Error('graphql down'); },
+            replyToThread: function (n, t, ack) { replies.push(t.threadId); }
+        };
+        var agent = loadExecAgent();
+        var out = agent.executeAction(provider,
+            { type: 'resolveSuggestionThreads', prNumber: 5, headSha: EXEC_HEAD },
+            { number: 5 }, execCfg());
+        assert.equal(out.resolved, 1, 'only the second thread resolved');
+        assert.deepEqual(replies, ['RT_2'], 'no ack for the thread whose resolve failed');
+    });
+
+    test('resolveSuggestionThreads: a failing ack after a successful resolve is non-fatal', function () {
+        var provider = {
+            verdictRecords: function () { return [approveRecord()]; },
+            reviewThreadList: function () { return [suggestionThread('RT_1')]; },
+            resolveThread: function () {},
+            replyToThread: function () { throw new Error('reply down'); }
+        };
+        var agent = loadExecAgent();
+        var out = agent.executeAction(provider,
+            { type: 'resolveSuggestionThreads', prNumber: 5, headSha: EXEC_HEAD },
+            { number: 5 }, execCfg());
+        assert.equal(out.resolved, 1, 'the resolve is still credited when the ack fails');
+    });
+
+});

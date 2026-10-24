@@ -3072,3 +3072,52 @@ suite('githubHelpers.findPRForTicket — gh-1194 split helpers', function() {
         }), null, 'hook failure → null (non-fatal)');
     });
 });
+
+// ---------------------------------------------------------------------------
+// gh-1242: getPRDetails — both calling conventions + both failure paths
+// ---------------------------------------------------------------------------
+
+suite('githubHelpers — getPRDetails', function() {
+
+    test('scm-object form: delegates to scm.getPr(prId) and returns the PR', function() {
+        var got = [];
+        var pr = { number: 7, title: 'feature PR' };
+        var scm = {
+            listPrs: function() { return []; },
+            getPr: function(id) { got.push(id); return pr; }
+        };
+        var gh = loadGithubHelpers({});
+        var result = gh.getPRDetails(scm, 7);
+        assert.deepEqual(got, [7], 'scm.getPr receives the PR id');
+        assert.equal(result, pr, 'the fetched PR is returned');
+    });
+
+    test('scm-object form: a getPr failure resolves to null', function() {
+        var scm = {
+            listPrs: function() { return []; },
+            getPr: function() { throw new Error('graphql down'); }
+        };
+        var gh = loadGithubHelpers({});
+        assert.equal(gh.getPRDetails(scm, 7), null, 'failure → null, never throws');
+    });
+
+    test('legacy string form: calls github_get_pr with stringified pullRequestId', function() {
+        var got = [];
+        var pr = { number: 9, title: 'legacy PR' };
+        var gh = loadGithubHelpers({
+            github_get_pr: function(args) { got.push(args); return pr; }
+        });
+        var result = gh.getPRDetails('acme', 'widgets', 9);
+        assert.deepEqual(got, [{ workspace: 'acme', repository: 'widgets', pullRequestId: '9' }],
+            'workspace/repository/pr-id passed through, pr id stringified');
+        assert.equal(result, pr, 'the fetched PR is returned');
+    });
+
+    test('legacy string form: a github_get_pr failure resolves to null', function() {
+        var gh = loadGithubHelpers({
+            github_get_pr: function() { throw new Error('api down'); }
+        });
+        assert.equal(gh.getPRDetails('acme', 'widgets', 9), null, 'failure → null, never throws');
+    });
+
+});
