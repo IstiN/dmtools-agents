@@ -491,9 +491,7 @@ function isSubmodulePath(path) {
         const stageOutput = cleanCommandOutput(
             cli_execute_command({ command: 'git ls-files --stage -- "' + path + '"' }) || ''
         );
-        return stageOutput.split('\n').some(function(line) {
-            return line.trim().indexOf('160000 ') !== -1;
-        });
+        return prHelper.stageOutputHasSubmodule(stageOutput);
     } catch (e) {
         return false;
     }

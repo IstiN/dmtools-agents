@@ -34,13 +34,15 @@
 
 'use strict';
 
+var legRunVocab = require('./legRunVocab.js');
+
 // gh-806 AC3: N = 45 minutes. A rework leg that produced no run within this
 // window is treated as silently dead and the (pr, head) becomes re-armable.
 var DEFAULT_STALE_MS = 45 * 60 * 1000;
 
 // The rework/review leg workflow (smAgent dispatches it via workflowRef={branch}).
 // Configurable per call so a deployment that renames the workflow stays exact.
-var DEFAULT_LEG_WORKFLOW = 'ai-teammate.yml';
+var DEFAULT_LEG_WORKFLOW = legRunVocab.DEFAULT_LEG_WORKFLOW;
 
 var ACTIVE_RUN_STATES = ['queued', 'in_progress', 'waiting', 'pending', 'requested'];
 
@@ -161,14 +163,11 @@ function entryFor(map, prNumber, headSha) {
  * True when the run belongs to the rework/review LEG workflow (path ends
  * with '/<workflowFile>') — the same shape hasActiveLegRun matches in
  * smAgent. Validation CI or kicker runs on the same head must never
- * influence the latch.
+ * influence the latch. Canonical in legRunVocab (gh-1248, shared with
+ * branchLegGuard/teammateEventDedup).
  */
 function isLegRun(run, workflowFile) {
-    if (!run) return false;
-    var suffix = '/' + String(workflowFile || DEFAULT_LEG_WORKFLOW);
-    var path = String(run.path || '');
-    return path.length >= suffix.length &&
-        path.slice(path.length - suffix.length) === suffix;
+    return legRunVocab.isLegRun(run, workflowFile);
 }
 
 function isActiveStatus(status) {

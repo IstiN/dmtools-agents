@@ -64,6 +64,8 @@
 
 'use strict';
 
+var legRunVocab = require('./legRunVocab.js');
+
 // The leg workflow this dedup guards — the same default branchLegGuard and
 // the SM dispatch side use. NOTE: the consumer-repo copies of
 // workflows/ai-teammate.yml.template point at the same default workflow
@@ -280,18 +282,12 @@ function isActiveStatus(status) {
 }
 
 function runTimestampMs(run) {
-    var value = run && (run.updated_at || run.created_at);
-    if (!value) return null;
-    var ms = Date.parse(String(value));
-    return isNaN(ms) ? null : ms;
+    return legRunVocab.runTimestampMs(run);
 }
 
 /** gh-1028 zombie parity: non-in_progress active state past the stale bound. */
 function isStaleNonRunning(run, nowMs, staleMs) {
-    if (run && run.status === 'in_progress') return false;
-    var ts = runTimestampMs(run);
-    if (ts === null || nowMs === null) return false;
-    return (nowMs - ts) > staleMs;
+    return legRunVocab.isStaleNonRunning(run, nowMs, staleMs);
 }
 
 /**
@@ -444,10 +440,7 @@ function hasRuns(runs) {
 }
 
 function isInFlightRun(run, nowMs, staleMs) {
-    if (!run || !isActiveStatus(run.status)) return false;
-    if (run.status !== 'in_progress' && nowMs !== null &&
-        isStaleNonRunning(run, nowMs, staleMs)) return false;
-    return true;
+    return legRunVocab.isFreshActiveRun(run, ACTIVE_RUN_STATES, nowMs, staleMs);
 }
 
 function runMatchesDispatchAnchor(run, ctx) {

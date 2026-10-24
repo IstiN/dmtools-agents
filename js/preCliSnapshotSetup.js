@@ -22,8 +22,9 @@
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
 
-// Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
-// common/pullRequest.js once — this delegate keeps every local call site.
+// Canonical copy (gh-823/gh-912 + gh-1248): the output scrubbing and
+// last-non-empty-line helpers live in common/pullRequest.js once — these
+// delegates keep every local call site.
 function cleanCommandOutput(output) {
     return prHelper.cleanCommandOutput(output);
 }
@@ -35,10 +36,7 @@ function runCommand(command, workingDir) {
 }
 
 function lastNonEmptyLine(output) {
-    var lines = cleanCommandOutput(output || '').split(/\r?\n/)
-        .map(function(line) { return line.trim(); })
-        .filter(function(line) { return line; });
-    return lines[lines.length - 1] || '';
+    return prHelper.lastNonEmptyLine(output);
 }
 
 function currentBranch(workingDir) {
