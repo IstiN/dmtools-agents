@@ -66,6 +66,7 @@ function loadEnhanceSD(mocks) {
     return loadModule('js/enhanceSDAPIDescriptionAndAssess.js', makeRequire({
         './common/jiraHelpers.js': { extractTicketKey: function(k) { return k; } },
         './config.js': configModule,
+        './common/aiResponseParser.js': loadModule('js/common/aiResponseParser.js', makeRequire({ '../config.js': configModule }), {}),
         './common/trackers.js': trackersWithMocks(mocks)
     }), mocks);
 }
