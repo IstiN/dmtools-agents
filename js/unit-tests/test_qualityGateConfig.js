@@ -10,8 +10,9 @@
  *      `crap4js duplicates --threshold 1 --exclude "js/unit-tests/**" js ci`
  *      and evaluate it as a RATCHET via ci/duplicationRatchet.js against
  *      duplication-baseline.json (fails PRs and main on a NEW over-threshold
- *      file or an INCREASED percentage; the 85 pinned pre-existing debt
- *      files owned by gh-1244…gh-1250 do not fail it), and publish an
+ *      file or a pinned file that gained ABSOLUTE duplicated lines; the
+ *      pinned pre-existing debt owned by gh-1244…gh-1250 — see the baseline
+ *      for the current set — does not fail it), and publish an
  *      overall-duplication `duplication.json` badge from the same measurement
  *      in the "Publish README badges" step.
  *   3. README.md — must render the duplication endpoint badge.
@@ -88,7 +89,7 @@ suite('quality.yml — gh-1251 duplication gate and badge contract', function() 
             'the gate step must capture the tool exit code with set +e (exit 2 is expected while debt is pinned)');
     });
 
-    test('duplication baseline pins every currently-over-threshold file', function() {
+    test('duplication baseline pins the over-threshold files without a magic count', function() {
         var raw = file_read({ path: 'duplication-baseline.json' });
         var baseline = JSON.parse(String(raw));
         assert.ok(baseline && typeof baseline === 'object', 'duplication-baseline.json must parse as an object');
@@ -96,12 +97,20 @@ suite('quality.yml — gh-1251 duplication gate and badge contract', function() 
         assert.ok(baseline.pinned && typeof baseline.pinned === 'object',
             'baseline must carry a pinned file map');
         var files = Object.keys(baseline.pinned);
-        assert.ok(files.length >= 85, 'baseline must pin all pre-existing debt files (85 at gh-1251), got ' + files.length);
+        // Non-drifting invariants only: the count moves with every dedup
+        // landing (gh-1244..gh-1250), so never pin a point-in-time number.
+        assert.ok(files.length > 0, 'baseline must pin the current debt files');
+        assert.ok(files.length <= 85, 'baseline must never exceed the gh-1251 historical maximum of 85 files');
         files.forEach(function(f) {
             assert.ok(/\.(js|mjs|cjs)$/.test(f), 'pinned entry must be a production JS file: ' + f);
-            assert.ok(typeof baseline.pinned[f] === 'number' && baseline.pinned[f] > 1,
-                'pinned percentage must be a number above the 1% threshold: ' + f);
             assert.ok(file_read({ path: f }) !== null, 'pinned file must exist in the repo: ' + f);
+            var entry = baseline.pinned[f];
+            assert.ok(entry && typeof entry === 'object',
+                'pinned entry must be a { pct, lines } object (absolute-lines ratchet): ' + f);
+            assert.ok(typeof entry.pct === 'number' && entry.pct > 1,
+                'pinned pct must be a number above the 1% threshold: ' + f);
+            assert.ok(typeof entry.lines === 'number' && entry.lines >= 1 && entry.lines % 1 === 0,
+                'pinned lines must be a positive integer duplicated-line count: ' + f);
         });
     });
 

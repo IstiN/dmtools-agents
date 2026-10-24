@@ -23,12 +23,14 @@
 #
 # Duplication gate (gh-1251): a second, independent gate fails PRs and main on
 # NEW or GROWING JS duplication. The measurement is
-# `crap4js duplicates --threshold 1 --exclude "js/unit-tests/**" js ci`; 85
-# production files already exceed 1% today (pre-existing debt owned by the
-# gh-1244…gh-1250 dedup tickets), so the gate is a RATCHET against
-# duplication-baseline.json, not an absolute bar — it fails only when a file
-# over threshold is not pinned or a pinned percentage grew
-# (ci/duplicationRatchet.js). Its clones-mode report also feeds the README
+# `crap4js duplicates --threshold 1 --exclude "js/unit-tests/**" js ci`; a
+# pinned set of production files already exceeds 1% today (pre-existing debt
+# owned by the gh-1244…gh-1250 dedup tickets — see duplication-baseline.json
+# for the current pinned set), so the gate is a RATCHET against that
+# baseline, not an absolute bar — it fails only when a file over threshold is
+# not pinned or a pinned file gained ABSOLUTE duplicated lines
+# (ci/duplicationRatchet.js; percentage shifts from file shrinkage are
+# informational, not failures). Its clones-mode report also feeds the README
 # `duplication` endpoint badge published from the same run.
 #
 # Tool pin: IstiN/crap4js by commit SHA (fork of vabhzw17eg2qu4m9-bit/crap4js v0.15.0 +
@@ -170,16 +172,19 @@ jobs:
           exit $code
 
       - name: Duplication gate (production JS duplicated lines <= 1%, ratcheted)
-        # Ratchet, not an absolute bar: 85 production JS files already exceed
-        # 1% duplicated lines — pre-existing debt owned by the gh-1244…gh-1250
-        # dedup tickets — so the measurement's exit 2 is expected for now.
-        # duplication-baseline.json pins each over-threshold file with its
-        # measured percentage; the gate FAILS only on a NEW over-threshold
-        # file or an INCREASED percentage (ci/duplicationRatchet.js), keeping
-        # the absolute 1% bar as the end state once the debt lands. A crashed
-        # measurement (tool exit other than 0/2) never passes. js/unit-tests/**
-        # stays excluded; the badge step below reparses the same measurement
-        # for the README endpoint.
+        # Ratchet, not an absolute bar: a pinned set of production JS files
+        # already exceeds 1% duplicated lines — pre-existing debt owned by the
+        # gh-1244…gh-1250 dedup tickets (see duplication-baseline.json for the
+        # current pinned set) — so the measurement's exit 2 is expected for
+        # now. The baseline pins each over-threshold file with its measured
+        # percentage and absolute duplicated-line count; the gate FAILS only
+        # on a NEW over-threshold file or a pinned file that gained ABSOLUTE
+        # duplicated lines (ci/duplicationRatchet.js) — a percentage shift
+        # caused by file shrinkage passes and is logged as informational —
+        # keeping the absolute 1% bar as the end state once the debt lands.
+        # A crashed measurement (tool exit other than 0/2) never passes.
+        # js/unit-tests/** stays excluded; the badge step below reparses the
+        # same measurement for the README endpoint.
         run: |
           set +e
           "$RUNNER_TEMP/tools/node_modules/.bin/crap4js" duplicates --threshold 1 --exclude "js/unit-tests/**" js ci > "$RUNNER_TEMP/dup-gate.txt" 2>&1
@@ -295,7 +300,7 @@ jobs:
             const dupColor = dupPct < 1.0 ? 'brightgreen' : dupPct < 2.0 ? 'green' : dupPct < 5.0 ? 'yellow' : dupPct < 10.0 ? 'orange' : 'red';
             w('duplication.json', 'duplication', `${dupPct}% (${dupGroups} groups)`, dupColor);
           }
-          console.log(`badges: max=${max} over=${over} coverage=${pct}% duplication=${dupPct}%`);
+          console.log(`badges: max=${max} over=${over} coverage=${pct}% duplication=${dupPct === null ? 'skipped' : dupPct + '%'}`);
           JS
           cd "$RUNNER_TEMP/badges"
           git init -q && git checkout -q -b badges
