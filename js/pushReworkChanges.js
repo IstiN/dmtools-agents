@@ -19,6 +19,7 @@ var feedbackLoop = require('./common/feedbackLoop.js');
 var autoStart = require('./common/autoStart.js');
 var outputFiles = require('./common/outputFiles.js');
 var gitStaging = require('./common/gitStaging.js');
+var labelListModule = require('./common/labelList.js');
 var forkCheckout = require('./common/forkCheckout.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 var cacheToReleases = require('./cacheToReleases.js');
@@ -193,19 +194,8 @@ function prHasApproved(pr, ticket) {
     return hasPrApprovedLabel(ticket);
 }
 
-function normalizeLabels(singleLabel, labelList) {
-    var labels = [];
-    if (singleLabel) labels.push(singleLabel);
-    if (Array.isArray(labelList)) {
-        labelList.forEach(function(label) {
-            if (label && labels.indexOf(label) === -1) labels.push(label);
-        });
-    }
-    return labels;
-}
-
 function removeConfiguredLabels(tracker, ticketKey, customParams) {
-    normalizeLabels(customParams && customParams.removeLabel, customParams && customParams.removeLabels)
+    labelListModule.normalizeLabels(customParams && customParams.removeLabel, customParams && customParams.removeLabels)
         .forEach(function(label) {
             try {
                 tracker.removeLabel(ticketKey, label);

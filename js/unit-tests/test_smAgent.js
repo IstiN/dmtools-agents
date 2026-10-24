@@ -466,6 +466,9 @@ function makeSmAgent(opts) {
             './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
+            // gh-1249: the shared workflow-run probe family — pure leaf, loaded real.
+            './common/workflowRuns.js': loadModule('js/common/workflowRuns.js', makeRequire({}), {}),
+            './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
             // gh-1107: the check-run stamp transport (temp-file JSON body).
             './common/checkRunStamp.js': loadModule('js/common/checkRunStamp.js',
                 makeRequire({

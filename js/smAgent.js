@@ -143,6 +143,9 @@ var validationLivenessModule = require('./common/validationLiveness.js');
 // run is gone/cancelled/stale (check-RUN zombies); the run-level gh-821
 // twin cannot see them while a green run still exists on the head.
 var checkRunZombiesModule = require('./common/checkRunZombies.js');
+// gh-1249: the label-list normalization shared with pushReworkChanges.js
+// (two verbatim normalizeLabels copies deduplicated into one leaf module).
+var labelListModule = require('./common/labelList.js');
 // gh-1107: the check-run stamp transport — temp-file JSON body, zero
 // untrusted bytes in the shell string; also re-exports the ONE shellQuote
 // helper every converted call site shares.
@@ -712,12 +715,7 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
 
     // Resolve project_key: explicit rule field takes priority, then auto-derive from configPath
     // e.g. ".dmtools/configs/myproject.js" → "myproject", ".dmtools/configs/bice.js" → "bice"
-    var projectKey = rule.projectKey || '';
-    if (!projectKey && effectiveConfig && effectiveConfig._configPath) {
-        var cp = effectiveConfig._configPath;
-        var base = cp.substring(cp.lastIndexOf('/') + 1).replace(/\.js$/, '');
-        if (base && base !== 'config') projectKey = base;
-    }
+    var projectKey = buildEncodedConfigModule.resolveProjectKey(rule, effectiveConfig);
 
     try {
         var scm = createTargetScm(effectiveConfig, repoInfo);
@@ -1075,12 +1073,7 @@ function runTeammateLocally(ticketKey, rule, effectiveConfig) {
     // a GitHub Actions workflow_dispatch that can't see this checkout's in-flight state.
     var encodedConfig = buildEncodedConfigModule.buildEncodedConfig(ticketKey, rule, effectiveConfig, true);
 
-    var projectKey = rule.projectKey || '';
-    if (!projectKey && effectiveConfig && effectiveConfig._configPath) {
-        var cp = effectiveConfig._configPath;
-        var base = cp.substring(cp.lastIndexOf('/') + 1).replace(/\.js$/, '');
-        if (base && base !== 'config') projectKey = base;
-    }
+    var projectKey = buildEncodedConfigModule.resolveProjectKey(rule, effectiveConfig);
 
     var scriptPath = rule.localTeammateScript || 'agents/scripts/run-teammate-local.sh';
     // Write the encoded config to a temp file rather than inlining it as a CLI argument —
@@ -1233,16 +1226,6 @@ function hasLabel(ticket, label) {
     return labels.indexOf(label) !== -1;
 }
 
-function normalizeLabels(singleLabel, labelList) {
-    var labels = [];
-    if (singleLabel) labels.push(singleLabel);
-    if (Array.isArray(labelList)) {
-        labelList.forEach(function(label) {
-            if (label && labels.indexOf(label) === -1) labels.push(label);
-        });
-    }
-    return labels;
-}
 
 function firstMatchingLabel(ticket, labels) {
     for (var i = 0; i < labels.length; i++) {
@@ -1252,7 +1235,7 @@ function firstMatchingLabel(ticket, labels) {
 }
 
 function addRuleLabels(ticketKey, rule, repoInfo) {
-    normalizeLabels(rule.addLabel, rule.addLabels).forEach(function(label) {
+    labelListModule.normalizeLabels(rule.addLabel, rule.addLabels).forEach(function(label) {
         try {
             if (rule.source === 'github') {
                 var n = /(\d+)$/.exec(String(ticketKey));
@@ -1281,13 +1264,13 @@ function addRuleLabels(ticketKey, rule, repoInfo) {
 // lifecycle (add is implied by dispatch, remove happens on its own completion) and
 // smAgent must not re-add it afterward. See processRule()'s localTeammate handling.
 function ruleTargetSelfManagesLabel(rule) {
-    var addLabels = normalizeLabels(rule.addLabel, rule.addLabels);
+    var addLabels = labelListModule.normalizeLabels(rule.addLabel, rule.addLabels);
     if (!addLabels.length || !rule.configFile) return false;
     try {
         var raw = file_read({ path: rule.configFile });
         var targetConfig = JSON.parse(raw);
         var customParams = (targetConfig.params && targetConfig.params.customParams) || {};
-        var removeLabels = normalizeLabels(customParams.removeLabel, customParams.removeLabels);
+        var removeLabels = labelListModule.normalizeLabels(customParams.removeLabel, customParams.removeLabels);
         return addLabels.some(function(label) { return removeLabels.indexOf(label) !== -1; });
     } catch (e) {
         return false;
@@ -1430,6 +1413,31 @@ function runLocalAction(jsPath, ticket, agentParams) {
     return exported.action({ ticket: ticket, jobParams: agentParams });
 }
 
+// The rule-query log header shared by the dispatch (processRule) and the
+// local (processRuleLocally) rule processors — byte-identical console
+// lines, one copy (gh-1249 dedup).
+function logRuleQuery(rule, interpolatedJql) {
+    if (rule.source && rule.source !== 'jira') {
+        console.log('   Query[' + rule.source + ']: ' + JSON.stringify(rule.query || {}) +
+            (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
+    } else {
+        console.log('   JQL: ' + interpolatedJql + (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
+    }
+}
+
+// ONE state-query call shape for both rule processors (gh-1249 dedup).
+// THROWS on source/query failure — both callers log and rethrow exactly
+// like the inline copies did.
+function queryRuleTickets(rule, effectiveConfig, effectiveRepoInfo, interpolatedJql) {
+    var sourceMod = smSource.resolve(rule);
+    return sourceMod.query(rule, {
+        config: effectiveConfig, repoInfo: effectiveRepoInfo, jql: interpolatedJql,
+        machineAuthor: machineAuthorModule.resolveMachineAuthor(
+            RUN_JOB_PARAMS, effectiveConfig),
+        priorityLabels: PRIORITY_LABELS
+    }) || [];
+}
+
 function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
     if (DRY) {
         console.log('\n══ [LOCAL·DRY] ' + (rule.description || ('Rule #' + (ruleIndex + 1))) + ' ══');
@@ -1446,12 +1454,7 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
 
     var label = rule.description || ('Rule #' + (ruleIndex + 1));
     console.log('\n══ [LOCAL] ' + label + ' ══');
-    if (rule.source && rule.source !== 'jira') {
-        console.log('   Query[' + rule.source + ']: ' + JSON.stringify(rule.query || {}) +
-            (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
-    } else {
-        console.log('   JQL: ' + interpolatedJql + (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
-    }
+    logRuleQuery(rule, interpolatedJql);
 
     if (rule.enabled === false) {
         console.log('  ⏸️  Rule disabled — skipping');
@@ -1501,13 +1504,7 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
 
     var tickets = [];
     try {
-        var sourceMod = smSource.resolve(rule);
-        tickets = sourceMod.query(rule, {
-            config: effectiveConfig, repoInfo: effectiveRepoInfo, jql: interpolatedJql,
-            machineAuthor: machineAuthorModule.resolveMachineAuthor(
-                RUN_JOB_PARAMS, effectiveConfig),
-            priorityLabels: PRIORITY_LABELS
-        }) || [];
+        tickets = queryRuleTickets(rule, effectiveConfig, effectiveRepoInfo, interpolatedJql);
     } catch (e) {
         console.error('  ❌ state query failed: ' + (e.message || e));
         throw e;
@@ -1541,7 +1538,7 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
             return;
         }
 
-        var skipLabel = firstMatchingLabel(ticket, normalizeLabels(rule.skipIfLabel, rule.skipIfLabels));
+        var skipLabel = firstMatchingLabel(ticket, labelListModule.normalizeLabels(rule.skipIfLabel, rule.skipIfLabels));
         if (skipLabel) {
             // Local execution is synchronous — there is never an in-flight
             // workflow run between ticks, so a surviving lock label means the
@@ -1661,12 +1658,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
 
     var label = rule.description || ('Rule #' + (ruleIndex + 1));
     console.log('\n══ ' + label + ' ══');
-    if (rule.source && rule.source !== 'jira') {
-        var qdesc = JSON.stringify(rule.query || {});
-        console.log('   Query[' + rule.source + ']: ' + qdesc + (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
-    } else {
-        console.log('   JQL: ' + interpolatedJql + (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
-    }
+    logRuleQuery(rule, interpolatedJql);
 
     if (rule.enabled === false) {
         console.log('  ⏸️  Rule disabled — skipping');
@@ -1710,13 +1702,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
     }
     try {
-        var sourceMod = smSource.resolve(rule);
-        tickets = sourceMod.query(rule, {
-            config: effectiveConfig, repoInfo: effectiveRepoInfo, jql: interpolatedJql,
-            machineAuthor: machineAuthorModule.resolveMachineAuthor(
-                RUN_JOB_PARAMS, effectiveConfig),
-            priorityLabels: PRIORITY_LABELS
-        }) || [];
+        tickets = queryRuleTickets(rule, effectiveConfig, effectiveRepoInfo, interpolatedJql);
     } catch (e) {
         console.error('  ❌ state query failed: ' + (e.message || e));
         throw e;
@@ -1795,7 +1781,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             continue;
         }
 
-        var skipLabel = firstMatchingLabel(ticket, normalizeLabels(rule.skipIfLabel, rule.skipIfLabels));
+        var skipLabel = firstMatchingLabel(ticket, labelListModule.normalizeLabels(rule.skipIfLabel, rule.skipIfLabels));
         if (skipLabel) {
             // Stale-label recovery is based on inspecting active GitHub Actions runs — not
             // meaningful for localTeammate (there is no async run to inspect); just skip.
@@ -5268,7 +5254,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // customParams.removeLabels only reaches the ISSUE's labels, never
         // the PR's. Reuses the stale-label removal primitive (no-op in DRY).
         if (triggered && rule.consumeLabels) {
-            normalizeLabels(null, rule.consumeLabels).forEach(function (label) {
+            labelListModule.normalizeLabels(null, rule.consumeLabels).forEach(function (label) {
                 removeRuleLabel(key, label, rule, effectiveRepoInfo);
                 auditReworkConsumption(effectiveRepoInfo, ticket, label, 'dispatch');
             });
@@ -5279,7 +5265,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // the label is consumed exactly as if the dispatch had
             // happened; otherwise it outlives the run and re-fires a
             // duplicate leg on the next quiet tick.
-            normalizeLabels(null, rule.consumeLabels).forEach(function (label) {
+            labelListModule.normalizeLabels(null, rule.consumeLabels).forEach(function (label) {
                 removeRuleLabel(key, label, rule, effectiveRepoInfo);
                 auditReworkConsumption(effectiveRepoInfo, ticket, label, 'cross-anchor');
             });
@@ -5882,6 +5868,44 @@ function waitForRunMaterialized(repoInfo, runId, timeoutMs, pollMs) {
     }
 }
 
+// ── Checks-API write transport helpers (gh-1249 dedup) ─────────────────────
+//
+// The check-run PATCH helpers used to inline the token swap/restore in
+// every copy (gh-848 belt, gh-998 sweep, gh-857 conclusion — three
+// identical blocks). The check-runs belong to the github-actions App, so
+// each PATCH rides the checks-app token with checks:write; the tick PAT
+// would 403 (verified live). swapToChecksToken returns the state the
+// matching restoreChecksToken() needs; warnPrefix is the full
+// 'token swap failed …' line prefix each site logged before.
+
+function swapToChecksToken(warnPrefix) {
+    var appToken = checksAppToken();
+    var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
+    var swapped = false;
+    if (appToken) {
+        try {
+            set_env_variable('GH_TOKEN', appToken);
+            swapped = true;
+        } catch (eSwap) {
+            console.warn(warnPrefix + (eSwap.message || eSwap));
+        }
+    }
+    return { sourceTok: sourceTok, swapped: swapped };
+}
+
+function restoreChecksToken(swapped, sourceTok) {
+    if (swapped && sourceTok) {
+        try { set_env_variable('GH_TOKEN', sourceTok); } catch (e3) {}
+    }
+}
+
+// The PATCH-loop catch contract shared by the gh-998/857 transports:
+// the FIRST failure message wins in out.rejected; a rejection is a
+// degradation retried next tick, never a silent leak.
+function recordFirstRejection(out, err) {
+    if (!out.rejected) out.rejected = (err && err.message) || String(err);
+}
+
 // gh-848 belt: conclude the cancelled run's check-runs that are still
 // pending (queued/in_progress, no conclusion) on its head, so no ghost
 // can survive the cancel path. The head's check-run rollup is the
@@ -5913,7 +5937,6 @@ function concludeOrphanedCheckRuns(repoInfo, cancelledRun) {
                 String(cancelledRun.head_sha).slice(0, 7) +
                 ' — concluding them cancelled');
     var tok = swapToChecksToken('  ⚠️  gh-848 token swap failed, belt uses the PAT (will 403): ');
-    }
     var concluded = 0;
     try {
         orphans.forEach(function (cr) {
@@ -5943,6 +5966,20 @@ function concludeOrphanedCheckRuns(repoInfo, cancelledRun) {
 // read failure posts anyway (a duplicate marker is audit noise; a
 // swallowed defer record would leave operators blind). Bookkeeping-only
 // (gh-755 parity): no tick-side machinery consumes these markers.
+// ONE fetch of the PR's raw comment list — the github_get_pr_comments
+// payload normalization (string | object | {comments|items} envelope)
+// shared by every marker/verdict reader (gh-1249: the third verbatim
+// copy lives in the naked-PR sweep). THROWS on read failure: each caller
+// owns its fail-open/fail-closed catch.
+function fetchPrCommentList(repoInfo, prNumber) {
+    var raw = github_get_pr_comments({
+        workspace: repoInfo.owner, repository: repoInfo.repo,
+        pullRequestId: String(prNumber)
+    });
+    var obj = (typeof raw === 'string') ? JSON.parse(raw) : (raw || []);
+    return Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+}
+
 function postGhostGuardAudit(repoInfo, prNumber, cancelResult) {
     if (DRY || !prNumber || !cancelResult) return;
     var wanted = [];
@@ -5966,12 +6003,7 @@ function postGhostGuardAudit(repoInfo, prNumber, cancelResult) {
     if (!wanted.length) return;
     var marks = { deferred: {}, cleaned: {} };
     try {
-        var raw = github_get_pr_comments({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            pullRequestId: prNumber
-        });
-        var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
-        var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+        var list = fetchPrCommentList(repoInfo, prNumber);
         var bodies = list.map(function (c) { return String((c && c.body) || ''); });
         marks = validationLivenessModule.ghostGuardMarks(bodies);
     } catch (e) {
@@ -6167,12 +6199,7 @@ function failMarkerState(repoInfo, prNumber) {
                 placeholderParked: false, reworkWithheld: {} };
     var bodies = [];
     try {
-        var raw = github_get_pr_comments({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            pullRequestId: prNumber
-        });
-        var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
-        var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+        var list = fetchPrCommentList(repoInfo, prNumber);
         list.forEach(function (c) {
             var body = String((c && c.body) || '');
             bodies.push(body);
@@ -6292,12 +6319,7 @@ function verdictMachineLogins(effectiveConfig) {
 // guards to their no-records fail-open behavior.
 function readVerdictRecords(repoInfo, prNumber, machineLogins) {
     try {
-        var raw = github_get_pr_comments({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            pullRequestId: String(prNumber)
-        });
-        var obj = (typeof raw === 'string') ? JSON.parse(raw) : (raw || []);
-        var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+        var list = fetchPrCommentList(repoInfo, prNumber);
         return reviewVerdictsModule.parseVerdictRecords(list,
             { authorLogins: Array.isArray(machineLogins) ? machineLogins : [] });
     } catch (e) {
@@ -6373,12 +6395,7 @@ function reworkArmGate(repoInfo, ticket, machineLogins, probeOverride) {
 // duplicate rework leg).
 function prCommentList(repoInfo, prNumber) {
     try {
-        var raw = github_get_pr_comments({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            pullRequestId: String(prNumber)
-        });
-        var obj = (typeof raw === 'string') ? JSON.parse(raw) : (raw || []);
-        return Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+        return fetchPrCommentList(repoInfo, prNumber);
     } catch (e) {
         console.warn('  ⚠️ gh-840: comment read failed (fail-closed): ' + (e.message || e));
         return [];
@@ -6432,18 +6449,26 @@ function auditReworkConsumption(repoInfo, ticket, label, path) {
 // threads tool is unavailable or the read fails — the no-op-guard
 // false-positive suppression requires POSITIVE evidence of an empty
 // census, so an unknown census keeps the legacy escalation.
+// ONE fetch of the PR's review-thread nodes — the GraphQL envelope
+// normalization shared by the gh-990 census and the gh-840 machine
+// census (gh-1249 dedup). THROWS on read failure: each caller owns its
+// catch (both censuses fail closed to -1).
+function fetchPrReviewThreadNodes(repoInfo, prNumber) {
+    var raw = github_get_pr_review_threads({
+        workspace: repoInfo.owner, repository: repoInfo.repo,
+        pullRequestId: String(prNumber)
+    });
+    var res = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+    return (res && res.data && res.data.repository &&
+        res.data.repository.pullRequest &&
+        res.data.repository.pullRequest.reviewThreads &&
+        res.data.repository.pullRequest.reviewThreads.nodes) || [];
+}
+
 function unresolvedThreadCount(repoInfo, prNumber) {
     if (typeof github_get_pr_review_threads !== 'function') return -1;
     try {
-        var raw = github_get_pr_review_threads({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            pullRequestId: String(prNumber)
-        });
-        var res = (typeof raw === 'string') ? JSON.parse(raw) : raw;
-        var nodes = (res && res.data && res.data.repository &&
-            res.data.repository.pullRequest &&
-            res.data.repository.pullRequest.reviewThreads &&
-            res.data.repository.pullRequest.reviewThreads.nodes) || [];
+        var nodes = fetchPrReviewThreadNodes(repoInfo, prNumber);
         var n = 0;
         nodes.forEach(function (t) {
             if (t && t.isResolved !== true) n++;
@@ -6469,14 +6494,9 @@ function noopGuardHeadIsRed(repoInfo, headSha) {
     try {
         var rollup = headCheckRunsSafe(repoInfo, headSha);
         if (rollup === null || rollup === undefined) return true;
-        var latest = latestCheckRunConclusions(rollup);
-        var names = Object.keys(latest);
-        for (var i = 0; i < names.length; i++) {
-            if (isBookkeepingCheckName(names[i])) continue;
-            var concl = latest[names[i]].concl;
-            if (concl === 'FAILURE' || concl === 'TIMED_OUT') return true;
-        }
-        return false;
+        return eachNonBookkeepingConclusion(rollup, function (concl) {
+            return concl === 'FAILURE' || concl === 'TIMED_OUT';
+        });
     } catch (eRed) {
         console.warn('  ⚠️ gh-990: head red probe failed (fail closed): ' + (eRed.message || eRed));
         return true;
@@ -6495,15 +6515,7 @@ function unresolvedMachineThreadCount(repoInfo, prNumber, machineLogins) {
     });
     if (!lower.length) return 0; // the machineAuthor doctrine: no identity, no trusted machine threads
     try {
-        var raw = github_get_pr_review_threads({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            pullRequestId: String(prNumber)
-        });
-        var res = (typeof raw === 'string') ? JSON.parse(raw) : raw;
-        var nodes = (res && res.data && res.data.repository &&
-            res.data.repository.pullRequest &&
-            res.data.repository.pullRequest.reviewThreads &&
-            res.data.repository.pullRequest.reviewThreads.nodes) || [];
+        var nodes = fetchPrReviewThreadNodes(repoInfo, prNumber);
         var n = 0;
         nodes.forEach(function (t) {
             if (!t || t.isResolved === true) return;
@@ -7499,7 +7511,6 @@ function sweepZombieCheckRunsNeutral(repoInfo, zombies, headSha) {
         ' concluding it. Closed as neutral: a dead cycle carries no verdict' +
         ' about its head. The PR re-validates through the normal dispatch path.';
     var tok = swapToChecksToken('  ⚠️  gh-998 token swap failed, sweep uses the PAT (may 403): ');
-    }
     try {
         zombies.forEach(function (z) {
             if (!z || z.id === null || z.id === undefined) {
@@ -7587,7 +7598,6 @@ function concludePlaceholderCheckRuns(repoInfo, placeholders, coverRun) {
         (coverUrl ? (': ' + coverUrl) : '') +
         '. The gh-852 fresh-sha reset is the fallback cure.';
     var tok = swapToChecksToken('  ⚠️  gh-857 token swap failed, conclusion uses the PAT (may 403): ');
-    }
     try {
         placeholders.forEach(function (ph) {
             if (!ph || ph.id === null || ph.id === undefined) {
@@ -7869,6 +7879,22 @@ function isBookkeepingCheckName(name) {
     return false;
 }
 
+// Walks the rollup's LATEST-per-context conclusions, bookkeeping
+// contexts folded out (the kicker / wake-up / merge machine stamps carry
+// no verdict about the code — #628 bookkeeping parity). Returning truthy
+// from visit(conclusion, contextName) stops the walk early; the helper
+// returns true iff it was stopped early. The gh-990 noop-guard red probe
+// and headHasRealFailure used to inline this loop verbatim (gh-1249).
+function eachNonBookkeepingConclusion(rollup, visit) {
+    var latest = latestCheckRunConclusions(rollup);
+    var names = Object.keys(latest);
+    for (var i = 0; i < names.length; i++) {
+        if (isBookkeepingCheckName(names[i])) continue;
+        if (visit(latest[names[i]].concl, names[i])) return true;
+    }
+    return false;
+}
+
 function headHasRealFailure(repoInfo, headSha) {
     // gh-755 (owner directive 2026-10-05): the arm-time verdict check
     // for fail_validation and the sweep failure side. The rule query
@@ -7888,14 +7914,9 @@ function headHasRealFailure(repoInfo, headSha) {
     try {
         var rollup = headCheckRunsSafe(repoInfo, headSha);
         if (!rollup || !rollup.length) return true;
-        var latest = latestCheckRunConclusions(rollup);
-        var names = Object.keys(latest);
-        for (var i = 0; i < names.length; i++) {
-            if (isBookkeepingCheckName(names[i])) continue;
-            var concl = latest[names[i]].concl;
-            if (concl === 'FAILURE' || concl === 'TIMED_OUT') return true;
-        }
-        return false;
+        return eachNonBookkeepingConclusion(rollup, function (concl) {
+            return concl === 'FAILURE' || concl === 'TIMED_OUT';
+        });
     } catch (e) {
         console.warn('  ⚠️  red-verdict probe failed: ' + (e.message || e));
         return true;
@@ -9545,5 +9566,15 @@ if (typeof module !== 'undefined' && module.exports) {
         restoreReworkArm: restoreReworkArm,
         auditReworkConsumption: auditReworkConsumption,
         runLocalAction: runLocalAction,
-        ruleBudgetRemaining: ruleBudgetRemaining };
+        ruleBudgetRemaining: ruleBudgetRemaining,
+        // gh-1249 dedup helpers — additive surface for direct unit tests
+        // (per-function CRAP ratchet).
+        swapToChecksToken: swapToChecksToken,
+        restoreChecksToken: restoreChecksToken,
+        recordFirstRejection: recordFirstRejection,
+        fetchPrCommentList: fetchPrCommentList,
+        fetchPrReviewThreadNodes: fetchPrReviewThreadNodes,
+        eachNonBookkeepingConclusion: eachNonBookkeepingConclusion,
+        logRuleQuery: logRuleQuery,
+        queryRuleTickets: queryRuleTickets };
 }
