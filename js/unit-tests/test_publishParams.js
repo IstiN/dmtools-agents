@@ -27,8 +27,8 @@ suite('publishParams — makePicker', function () {
         var pick = pp.makePicker({ jobParams: { customParams: { k: 'custom' } } },
             { ENV_K: 'env' });
         assert.equal(pick('k', 'ENV_K', 'dflt'), 'custom');
-        assert.equal(pp.makePicker({}, { ENV_K: 'env' }).pick('k', 'ENV_K', 'dflt'), 'env');
-        assert.equal(pp.makePicker({}).pick('k', 'ENV_K', 'dflt'), 'dflt');
+        assert.equal(pp.makePicker({}, { ENV_K: 'env' })('k', 'ENV_K', 'dflt'), 'env');
+        assert.equal(pp.makePicker({})('k', 'ENV_K', 'dflt'), 'dflt');
     });
 
     test('empty-string customParams fall through to env (unchanged semantics)', function () {
@@ -42,9 +42,9 @@ suite('publishParams — makePicker', function () {
     });
 
     test('still-unset answers the empty string, and everything is stringified', function () {
-        var pick = pp.makePicker({}).pick;
+        var pick = pp.makePicker({});
         assert.equal(pick('k', 'ENV_K'), '');
-        assert.equal(pp.makePicker({ jobParams: { customParams: { n: 42 } } }).pick('n', 'ENV_N', ''), '42');
+        assert.equal(pp.makePicker({ jobParams: { customParams: { n: 42 } } })('n', 'ENV_N', ''), '42');
     });
 
     test('envMap values win over the java bridge without mutating params', function () {
