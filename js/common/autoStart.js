@@ -457,6 +457,8 @@ module.exports = {
     resolveAiTargetOrWarn: resolveAiTargetOrWarn,
     resolveTriggerContext: resolveTriggerContext,
     workflowRunDisplayName: workflowRunDisplayName,
+    // gh-1242: exported for unit tests (branch coverage of the parse paths).
+    parseWorkflowRuns: parseWorkflowRuns,
     workflowRunMatchesTicket: workflowRunMatchesTicket,
     formatWorkflowRunSummary: formatWorkflowRunSummary,
     workflowRunTitle: workflowRunTitle,

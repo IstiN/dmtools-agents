@@ -608,7 +608,10 @@ if (typeof module !== 'undefined' && module.exports) {
         action: action,
         decideActions: decideActions,
         issueFromRunTitle: issueFromRunTitle,
+        // gh-1242: exported for unit tests (every switch arm incl. the
+        // gh-828 thread-resolution leg).
         resolveSuggestionThreads: resolveSuggestionThreads,
+        executeAction: executeAction,
         resolveMachineSmConfig: resolveMachineSmConfig,
         resolveRepoCfg: resolveRepoCfg,
         probeOrphanRun: probeOrphanRun,
