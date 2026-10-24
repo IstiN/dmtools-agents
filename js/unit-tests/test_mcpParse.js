@@ -75,5 +75,9 @@ suite('mcpParse: payloadList', function () {
         assert.deepEqual(mod.payloadList({ message: 'Not Found' }), []);
         assert.deepEqual(mod.payloadList('a string'), []);
         assert.deepEqual(mod.payloadList(5), []);
+        // gh-1258: preferPullRequests set while pullRequests is NOT an array —
+        // the option must not suppress the items/default fallbacks.
+        assert.deepEqual(mod.payloadList({ pullRequests: 'not-an-array', items: [7] }, { preferPullRequests: true }), [7]);
+        assert.deepEqual(mod.payloadList({ pullRequests: 'not-an-array' }, { preferPullRequests: true }), []);
     });
 });

@@ -37,13 +37,20 @@ function parseMcp(raw) {
     try { return JSON.parse(String(raw)); } catch (e) { return {}; }
 }
 
+function listOf(v) {
+    return Array.isArray(v) ? v : null;
+}
+
 function payloadList(parsed, options) {
     if (Array.isArray(parsed)) return parsed;
-    var preferPullRequests = options && options.preferPullRequests;
-    if (parsed && Array.isArray(parsed.pullRequests) && preferPullRequests) return parsed.pullRequests;
-    if (parsed && Array.isArray(parsed.items)) return parsed.items;
-    if (parsed && Array.isArray(parsed.pullRequests)) return parsed.pullRequests;
-    return [];
+    if (!parsed) return [];
+    // Hoist the pullRequests-array probe (listOf) so the precedence branches
+    // below stay single-condition (keeps cyclomatic complexity within the
+    // CRAP threshold — gh-1258 ratchet).
+    var prs = listOf(parsed.pullRequests);
+    if (prs && options && options.preferPullRequests) return prs;
+    if (listOf(parsed.items)) return parsed.items;
+    return prs || [];
 }
 
 if (typeof module !== 'undefined' && module.exports) {
