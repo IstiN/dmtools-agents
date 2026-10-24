@@ -2900,3 +2900,96 @@ suite('factoryState — buildFactoryState input defaults (gh-1227 characterizati
     assert.ok(!all.some(function (c) { return c.issue === 2; }), 'devIssues item ignored');
   });
 });
+
+suite('factoryState — gh-1227 extracted helpers (pure units)', function () {
+  test('tokenRowKey: pr wins, issue next, neither → null', function () {
+    assert.equal(fsModule.tokenRowKey({ pr: 1, issue: 2 }), 'pr-1');
+    assert.equal(fsModule.tokenRowKey({ issue: 2 }), 'issue-2');
+    assert.equal(fsModule.tokenRowKey({}), null);
+    assert.equal(fsModule.tokenRowKey({ pr: null, issue: null }), null);
+  });
+
+  test('tokenRowAtAsc: ascending at, missing at sorts first', function () {
+    assert.equal(fsModule.tokenRowAtAsc({ at: 'a' }, { at: 'b' }) < 0, true);
+    assert.equal(fsModule.tokenRowAtAsc({ at: 'b' }, { at: 'a' }) > 0, true);
+    assert.equal(fsModule.tokenRowAtAsc({ at: 'a' }, { at: 'a' }), 0);
+    assert.equal(fsModule.tokenRowAtAsc({}, { at: 'a' }) < 0, true, 'missing at first');
+    assert.equal(fsModule.tokenRowAtAsc({ at: 'a' }, {}) > 0, true);
+  });
+
+  test('priceRowInPlace: skips null / model-less / unknown-model rows, prices the rest', function () {
+    var pricing = (function () {
+      var rates = Object.create(null);
+      rates['claude-sonnet-4-5'] = { input: 3, output: 15, cacheRead: 0.3 };
+      return { rates: rates, defaultRates: null, models: 1 };
+    })();
+    assert.equal(fsModule.priceRowInPlace(null, pricing), false);
+    assert.equal(fsModule.priceRowInPlace({ model: null }, pricing), false);
+    var unknown = { model: 'mystery', prompt: 1, completion: 1 };
+    assert.equal(fsModule.priceRowInPlace(unknown, pricing), false);
+    assert.equal('cost' in unknown, false);
+    var priced = { model: 'claude-sonnet-4-5', prompt: 1000000, completion: 0 };
+    assert.equal(fsModule.priceRowInPlace(priced, pricing), true);
+    assert.equal(priced.cost, 3);
+  });
+
+  test('inCostWindow: undated, unparsable, stale → false; fresh → true', function () {
+    var NOW_MS = Date.parse('2026-10-03T13:10:00Z');
+    assert.equal(fsModule.inCostWindow({ at: null }, NOW_MS), false);
+    assert.equal(fsModule.inCostWindow({}, NOW_MS), false);
+    assert.equal(fsModule.inCostWindow({ at: 'not-a-date' }, NOW_MS), false);
+    assert.equal(fsModule.inCostWindow({ at: '2026-09-10T07:00:00Z' }, NOW_MS), false, '>14d');
+    assert.equal(fsModule.inCostWindow({ at: '2026-10-03T07:00:00Z' }, NOW_MS), true);
+  });
+
+  test('indexLaneCards / indexBacklogCards mirror prevIndex (direct)', function () {
+    var ix = { pr: {}, issue: {}, prLane: {}, issueState: {} };
+    var card = { pr: 1, issue: 2 };
+    fsModule.indexLaneCards(ix, { review: [card], junk: null });
+    assert.equal(ix.pr[1], card);
+    assert.equal(ix.prLane[1], 'review');
+    assert.equal(ix.issue[2], card);
+    assert.equal(ix.issueState[2], 'review');
+
+    var twin = { issue: 3 };
+    fsModule.indexBacklogCards(ix, { backlog: { blocked: [twin], queued: [null, {}] } });
+    assert.equal(ix.issue[3], twin);
+    assert.equal(ix.issueState[3], 'blocked');
+  });
+
+  test('boardInputs: every optional list degrades, overrides win', function () {
+    var defaults = fsModule.boardInputs({});
+    assert.deepEqual(defaults.prs, []);
+    assert.deepEqual(defaults.mergedPrs, []);
+    assert.deepEqual(defaults.issues, []);
+    assert.deepEqual(defaults.runs, []);
+    assert.deepEqual(defaults.checkNames, []);
+    assert.ok(!isNaN(Date.parse(defaults.now)), 'now defaults to the wall clock');
+
+    var custom = fsModule.boardInputs({
+      prs: [{ number: 1 }], mergedPrs: [{ number: 2 }],
+      devIssues: [{ number: 3 }], runs: [{ id: 4 }],
+      checkNames: ['ci'], now: '2026-10-03T13:10:00Z'
+    });
+    assert.equal(custom.prs.length, 1);
+    assert.equal(custom.mergedPrs.length, 1);
+    assert.equal(custom.issues.length, 1, 'devIssues is the issues source');
+    assert.equal(custom.runs.length, 1);
+    assert.deepEqual(custom.checkNames, ['ci']);
+    assert.equal(custom.now, '2026-10-03T13:10:00Z');
+  });
+
+  test('carryReworkLatch: merges the prev carry with the live map, prunes stale', function () {
+    var HEAD = '23dacd10deadbeefcafe0123456789abcdef0123';
+    var NOW_MS = Date.parse('2026-10-03T13:10:00Z');
+    var ARMED_AT = NOW_MS - 10 * 60 * 1000;   // armed 10 min ago — inside the 45m window
+    var latched = fsModule.carryReworkLatch({
+      prev: { reworkInFlight: {} },
+      reworkInFlight: { ['pr-1@' + HEAD]: { head: HEAD, at: ARMED_AT } }
+    }, NOW_MS, []);
+    assert.ok(latched['pr-1@' + HEAD], 'fresh latch survives');
+
+    var empty = fsModule.carryReworkLatch({ reworkInFlight: {} }, NOW_MS, []);
+    assert.deepEqual(empty, {}, 'no prev → live map only');
+  });
+});

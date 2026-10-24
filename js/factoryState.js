@@ -313,26 +313,48 @@ function normTokenRow(r) {
  * pr/issue fields. Bad shapes degrade to an empty map — tokens are
  * decorative, never fatal.
  */
+// ── gh-1227 CRAP extraction — pure pieces of normalizeTokens ─────────────────
+
+// Ledger key of one raw token row: 'pr-N' wins over 'issue-N', null when the
+// row carries neither (the row is then skipped).
+function tokenRowKey(r) {
+    return r.pr != null ? 'pr-' + r.pr
+        : (r.issue != null ? 'issue-' + r.issue : null);
+}
+
+// Array-form ledger (rows carrying pr/issue fields) → append into the map.
+function normalizeTokenArray(input, map) {
+    input.forEach(function (r) {
+        if (!r) return;
+        var key = tokenRowKey(r);
+        if (!key) return;
+        (map[key] = map[key] || []).push(normTokenRow(r));
+    });
+}
+
+// Map-form ledger (what the factory-published tokens file holds): only
+// array values survive; each is row-normalized in place.
+function normalizeTokenMap(input, map) {
+    Object.keys(input).forEach(function (k) {
+        if (!Array.isArray(input[k])) return;
+        map[k] = input[k].map(normTokenRow);
+    });
+}
+
+// Ascending `at` comparator — a missing at sorts as '' (first).
+function tokenRowAtAsc(a, b) {
+    return String(a.at || '').localeCompare(String(b.at || ''));
+}
+
 function normalizeTokens(input) {
     var map = {};
     if (Array.isArray(input)) {
-        input.forEach(function (r) {
-            if (!r) return;
-            var key = r.pr != null ? 'pr-' + r.pr
-                : (r.issue != null ? 'issue-' + r.issue : null);
-            if (!key) return;
-            (map[key] = map[key] || []).push(normTokenRow(r));
-        });
+        normalizeTokenArray(input, map);
     } else if (input && typeof input === 'object') {
-        Object.keys(input).forEach(function (k) {
-            if (!Array.isArray(input[k])) return;
-            map[k] = input[k].map(normTokenRow);
-        });
+        normalizeTokenMap(input, map);
     }
     Object.keys(map).forEach(function (k) {
-        map[k].sort(function (a, b) {
-            return String(a.at || '').localeCompare(String(b.at || ''));
-        });
+        map[k].sort(tokenRowAtAsc);
     });
     return map;
 }
@@ -514,22 +536,36 @@ function rowCost(row, rates) {
  * Rows with no parsable `at` price per-row but stay out of the window —
  * an undated row must not silently inflate or vanish from the header.
  */
+// ── gh-1227 CRAP extraction — pure pieces of priceTokens ─────────────────────
+
+// True when the row gained a $cost: model reported AND known to the table.
+// Mutates the row in place — rows are shared by reference with the cards.
+// (rowCost's null return needs a null arg; both are guarded here.)
+function priceRowInPlace(row, pricing) {
+    if (!row || row.model == null) return false;
+    var rates = ratesFor(pricing, row.model);
+    if (!rates) return false;
+    row.cost = rowCost(row, rates);
+    return true;
+}
+
+// The row's leg priced inside the global Σ$ window (14d): dated, parsable
+// and fresh. Undated rows price per-row but never inflate the rollup.
+function inCostWindow(row, nowMs) {
+    var t = row.at ? Date.parse(row.at) : NaN;
+    return !isNaN(t) && nowMs - t < COST_WINDOW_MS;
+}
+
 function priceTokens(tmap, pricing, nowMs) {
     if (!pricing) return null;
     var summary = { usd14d: 0, pricedLegs: 0, windowDays: COST_WINDOW_DAYS };
     var any = false;   // at least one row priced → pricing is live AND matching
     Object.keys(tmap || {}).forEach(function (k) {
         (tmap[k] || []).forEach(function (row) {
-            if (!row || row.model == null) return;
-            var rates = ratesFor(pricing, row.model);
-            if (!rates) return;
-            var cost = rowCost(row, rates);
-            if (cost == null) return;
-            row.cost = cost;
+            if (!priceRowInPlace(row, pricing)) return;
             any = true;
-            var t = row.at ? Date.parse(row.at) : NaN;
-            if (!isNaN(t) && nowMs - t < COST_WINDOW_MS) {
-                summary.usd14d += cost;
+            if (inCostWindow(row, nowMs)) {
+                summary.usd14d += row.cost;
                 summary.pricedLegs += 1;
             }
         });
@@ -577,9 +613,12 @@ function fetchTokensFromBranch(repo, cfg, exec) {
  * The parallel *Lane/*State maps record WHICH state key each card sat in —
  * the v3 history accumulator appends on key change.
  */
-function prevIndex(prev) {
-    var ix = { pr: {}, issue: {}, prLane: {}, issueState: {} };
-    var lanes = (prev && prev.lanes) || {};
+// ── gh-1227 CRAP extraction — pure pieces of prevIndex ───────────────────────
+
+// Lane cards into the pr/issue indexes: pr cards remember their lane
+// (prLane); issue entries are last-lane-wins while issueState is
+// first-writer-wins (the earliest lane that owned the issue).
+function indexLaneCards(ix, lanes) {
     Object.keys(lanes).forEach(function (laneId) {
         (lanes[laneId] || []).forEach(function (c) {
             if (!c) return;
@@ -590,6 +629,11 @@ function prevIndex(prev) {
             }
         });
     });
+}
+
+// Backlog cards into the issue indexes — a backlog card WINS over any lane
+// card (it owns the issue-state history), the state key being the bucket.
+function indexBacklogCards(ix, prev) {
     var backlog = (prev && prev.backlog) || {};
     BACKLOG_BUCKETS.forEach(function (bucket) {
         (backlog[bucket] || []).forEach(function (c) {
@@ -598,6 +642,12 @@ function prevIndex(prev) {
             ix.issueState[c.issue] = bucket;   // the issue-state history
         });
     });
+}
+
+function prevIndex(prev) {
+    var ix = { pr: {}, issue: {}, prLane: {}, issueState: {} };
+    indexLaneCards(ix, (prev && prev.lanes) || {});
+    indexBacklogCards(ix, prev);
     return ix;
 }
 
@@ -858,13 +908,47 @@ function headVerdict(runs, ciWorkflow, sha) {
     return out;
 }
 
+// ── gh-1227 CRAP extraction — pure pieces of buildFactoryState ───────────────
+
+// The list/clock defaults of one tick: every optional input degrades to an
+// empty list (or the wall clock) — the builder never sees undefined lists.
+function boardInputs(input) {
+    return {
+        prs: input.prs || [],
+        mergedPrs: input.mergedPrs || [],
+        issues: input.issues || input.devIssues || [],
+        runs: input.runs || [],
+        checkNames: input.checkNames || [],
+        now: input.now || new Date().toISOString()
+    };
+}
+
+// gh-806: the rework in-flight latch persists next to tick.processed —
+// the previous snapshot's map is the carry source, this tick's live map
+// (arms + clears that already happened mid-tick) merges over it, then
+// stale (AC3: >45 min, no matching active run) and terminated (AC2: the
+// leg's ai-teammate run concluded at/after the arm) entries are pruned so
+// the snapshot never wedges the armer on a dead leg. A leg run still
+// ACTIVE survives even past the stale window — a queued run on a jammed
+// runner must not invite a duplicate. Additive; schema stays 2.
+function carryReworkLatch(input, nowMs, runs) {
+    return reworkLatchModule.pruneStale(
+        reworkLatchModule.normalizeMap(mergeLatchCarry(
+            input.prev && input.prev.reworkInFlight, input.reworkInFlight)), {
+            now: nowMs,
+            runs: runs,
+            workflowFile: input.legWorkflow
+        }).map;
+}
+
 function buildFactoryState(input) {
-    var prs = input.prs || [];
-    var mergedPrs = input.mergedPrs || [];
-    var issues = input.issues || input.devIssues || [];
-    var runs = input.runs || [];
-    var checkNames = input.checkNames || [];
-    var now = input.now || new Date().toISOString();
+    var inputs = boardInputs(input);
+    var prs = inputs.prs;
+    var mergedPrs = inputs.mergedPrs;
+    var issues = inputs.issues;
+    var runs = inputs.runs;
+    var checkNames = inputs.checkNames;
+    var now = inputs.now;
     var nowMs = Date.parse(now);
     var hasPrev = !!(input.prev && input.prev.lanes);
     var pix = prevIndex(input.prev);
@@ -911,21 +995,7 @@ function buildFactoryState(input) {
 
     stampQueuePositions(lanes);
 
-    // gh-806: the rework in-flight latch persists next to tick.processed —
-    // the previous snapshot's map is the carry source, this tick's live map
-    // (arms + clears that already happened mid-tick) merges over it, then
-    // stale (AC3: >45 min, no matching active run) and terminated (AC2: the
-    // leg's ai-teammate run concluded at/after the arm) entries are pruned so
-    // the snapshot never wedges the armer on a dead leg. A leg run still
-    // ACTIVE survives even past the stale window — a queued run on a jammed
-    // runner must not invite a duplicate. Additive; schema stays 2.
-    var reworkInFlight = reworkLatchModule.pruneStale(
-        reworkLatchModule.normalizeMap(mergeLatchCarry(
-            input.prev && input.prev.reworkInFlight, input.reworkInFlight)), {
-            now: nowMs,
-            runs: runs,
-            workflowFile: input.legWorkflow
-        }).map;
+    var reworkInFlight = carryReworkLatch(input, nowMs, runs);
 
     // gh-998 (I5): cumulative zombie-swept leak counter — see zombiesSweptTotal.
     var sweptTotal = zombiesSweptTotal(input);
@@ -1477,11 +1547,17 @@ module.exports = {
     isValidationWorkflowPath: isValidationWorkflowPath,
     WORKFLOW_PATH_PREFIX: WORKFLOW_PATH_PREFIX,
     prevIndex: prevIndex,
+    indexLaneCards: indexLaneCards,
+    indexBacklogCards: indexBacklogCards,
     mergeLabelTimestamps: mergeLabelTimestamps,
     carryTimestamps: carryTimestamps,
     backlogBucket: backlogBucket,
     nextHistory: nextHistory,
     normalizeTokens: normalizeTokens,
+    tokenRowKey: tokenRowKey,
+    normalizeTokenArray: normalizeTokenArray,
+    normalizeTokenMap: normalizeTokenMap,
+    tokenRowAtAsc: tokenRowAtAsc,
     normalizeMutexSnapshot: normalizeMutexSnapshot,
     readTokensFile: readTokensFile,
     fetchTokensFromBranch: fetchTokensFromBranch,
@@ -1492,6 +1568,10 @@ module.exports = {
     ratesFor: ratesFor,
     rowCost: rowCost,
     priceTokens: priceTokens,
+    priceRowInPlace: priceRowInPlace,
+    inCostWindow: inCostWindow,
+    boardInputs: boardInputs,
+    carryReworkLatch: carryReworkLatch,
     contentsOf: contentsOf,
     LANE_ORDER: LANE_ORDER,
     LANE_ORDER_V1: LANE_ORDER_V1,
