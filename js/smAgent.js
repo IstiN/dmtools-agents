@@ -147,6 +147,12 @@ var checkRunZombiesModule = require('./common/checkRunZombies.js');
 // untrusted bytes in the shell string; also re-exports the ONE shellQuote
 // helper every converted call site shares.
 var checkRunStampModule = require('./common/checkRunStamp.js');
+// gh-1249: the shared workflow-run probe family — the active-status
+// fan-out the in-flight guards used to inline, the ONE dispatched-CI
+// `gh api .../runs?head_sha` round the five dispatched guards each fired,
+// and the run-time/order/index helpers both sides share
+// (js/common/workflowRuns.js).
+var workflowRunsModule = require('./common/workflowRuns.js');
 var invisibleRequiredModule = require('./common/invisibleRequiredChecks.js');
 var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
@@ -337,15 +343,7 @@ function loadRuleConfig(rule) {
 }
 
 function parseWorkflowRuns(raw) {
-    if (!raw) return [];
-    var parsed = raw;
-    if (typeof raw === 'string') {
-        try { parsed = JSON.parse(raw); } catch (e) { return []; }
-    }
-    if (Array.isArray(parsed)) return parsed;
-    if (parsed && Array.isArray(parsed.workflow_runs)) return parsed.workflow_runs;
-    if (parsed && Array.isArray(parsed.runs)) return parsed.runs;
-    return [];
+    return workflowRunsModule.parseWorkflowRuns(raw);
 }
 
 function labelList(value) {
@@ -447,44 +445,37 @@ function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
 
     var expectedRunName = configFile + ' : ' + ticketKey;
     var expectedRunNameSuffix = ' : ' + ticketKey;
-    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
 
-    for (var i = 0; i < statuses.length; i++) {
-        var runs = [];
-        try {
-            runs = parseWorkflowRuns(scm.listWorkflowRuns(statuses[i], workflowFile, 50));
-        } catch (e) {
-            console.warn('  ⚠️  Could not inspect active workflow runs (' + statuses[i] + '): ' + (e.message || e));
-            continue;
-        }
-
-        for (var j = 0; j < runs.length; j++) {
-            var run = runs[j] || {};
-            if (isStaleNonRunningWorkflowRun(run, statuses[i])) continue;
-            // GitHub REST carries BOTH fields: `name` is the workflow name
-            // ('AI Teammate') while `display_title` is the per-run title
-            // ('▶ review (SM) · gh-702'). Name-first made the stub-title
-            // match dead code — every SM-dispatched run slipped the
-            // in-flight guard and duplicated (live: gh-702 review ×2).
-            var runName = run.display_title || run.displayTitle || run.name || '';
-            var matchesOldName = runName === expectedRunName;
-            var matchesDisplayName = runName.indexOf(configFile + ' : ') === 0 &&
-                runName.substring(runName.length - expectedRunNameSuffix.length) === expectedRunNameSuffix;
-            // Stub-title match (#687): the caller-side stub names its runs
-            // '▶ <leg> (SM) · gh-<key>' / '· pr-<key>' — recognize the
-            // ticket key token so PR-anchored dispatches are not re-fired
-            // on every tick while the review is still running. gh-744:
-            // whole-token match — a key PREFIX inside a longer neighbor
-            // key ('gh-1274' vs 'gh-12749') must not suppress.
-            var matchesStubName = stubAnchorMatches(runName, ticketKey);
-            if (matchesOldName || matchesDisplayName || matchesStubName) {
-                console.log('  ⏭️  ' + ticketKey + ' skipped (active workflow already exists: ' + expectedRunName + ')');
-                return true;
+    return workflowRunsModule.eachActiveStatusRun(scm, workflowFile,
+        '  ⚠️  Could not inspect active workflow runs', [],
+        function (status, runsRaw) {
+            var runs = workflowRunsModule.parseWorkflowRuns(runsRaw);
+            for (var j = 0; j < runs.length; j++) {
+                var run = runs[j] || {};
+                if (isStaleNonRunningWorkflowRun(run, status)) continue;
+                // GitHub REST carries BOTH fields: `name` is the workflow name
+                // ('AI Teammate') while `display_title` is the per-run title
+                // ('▶ review (SM) · gh-702'). Name-first made the stub-title
+                // match dead code — every SM-dispatched run slipped the
+                // in-flight guard and duplicated (live: gh-702 review ×2).
+                var runName = run.display_title || run.displayTitle || run.name || '';
+                var matchesOldName = runName === expectedRunName;
+                var matchesDisplayName = runName.indexOf(configFile + ' : ') === 0 &&
+                    runName.substring(runName.length - expectedRunNameSuffix.length) === expectedRunNameSuffix;
+                // Stub-title match (#687): the caller-side stub names its runs
+                // '▶ <leg> (SM) · gh-<key>' / '· pr-<key>' — recognize the
+                // ticket key token so PR-anchored dispatches are not re-fired
+                // on every tick while the review is still running. gh-744:
+                // whole-token match — a key PREFIX inside a longer neighbor
+                // key ('gh-1274' vs 'gh-12749') must not suppress.
+                var matchesStubName = stubAnchorMatches(runName, ticketKey);
+                if (matchesOldName || matchesDisplayName || matchesStubName) {
+                    console.log('  ⏭️  ' + ticketKey + ' skipped (active workflow already exists: ' + expectedRunName + ')');
+                    return true;
+                }
             }
-        }
-    }
-
-    return false;
+            return false;
+        });
 }
 
 // gh-1028: the branch-keyed in-flight leg probe (transport half — the
@@ -496,24 +487,16 @@ function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
 // case the title guards already accept on a broken read.
 function hasActiveLegRunOnBranch(scm, workflowFile, branch) {
     if (!scm || typeof scm.listWorkflowRuns !== 'function' || !branch) return false;
-    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
-    for (var i = 0; i < statuses.length; i++) {
-        var runs = [];
-        try {
-            runs = parseWorkflowRuns(scm.listWorkflowRuns(statuses[i], workflowFile, 50));
-        } catch (eBranchLeg) {
-            console.warn('  ⚠️  Could not inspect active workflow runs (' + statuses[i] + '): ' + (eBranchLeg.message || eBranchLeg));
-            continue;
-        }
-        if (branchLegGuardModule.hasActiveLegRunOnBranch(runs, branch, {
+    return workflowRunsModule.eachActiveStatusRun(scm, workflowFile,
+        '  ⚠️  Could not inspect active workflow runs', [],
+        function (status, runsRaw) {
+            var runs = workflowRunsModule.parseWorkflowRuns(runsRaw);
+            return branchLegGuardModule.hasActiveLegRunOnBranch(runs, branch, {
                 workflowFile: workflowFile,
                 staleNonRunningMs: STALE_NON_RUNNING_WORKFLOW_MS,
                 nowMs: Date.now()
-            })) {
-            return true;
-        }
-    }
-    return false;
+            });
+        });
 }
 
 // gh-1075 fork reroute: the pull-keyed twin of hasActiveLegRunOnBranch
@@ -523,31 +506,20 @@ function hasActiveLegRunOnBranch(scm, workflowFile, branch) {
 // per-PR discriminator is the run-title pr anchor (see branchLegGuard).
 function hasActiveLegRunForPull(scm, workflowFile, prNumber) {
     if (!scm || typeof scm.listWorkflowRuns !== 'function' || !prNumber) return false;
-    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
-    for (var i = 0; i < statuses.length; i++) {
-        var runs = [];
-        try {
-            runs = parseWorkflowRuns(scm.listWorkflowRuns(statuses[i], workflowFile, 50));
-        } catch (ePullLeg) {
-            console.warn('  ⚠️  Could not inspect active workflow runs (' + statuses[i] + '): ' + (ePullLeg.message || ePullLeg));
-            continue;
-        }
-        if (branchLegGuardModule.hasActiveLegRunForPull(runs, prNumber, {
+    return workflowRunsModule.eachActiveStatusRun(scm, workflowFile,
+        '  ⚠️  Could not inspect active workflow runs', [],
+        function (status, runsRaw) {
+            var runs = workflowRunsModule.parseWorkflowRuns(runsRaw);
+            return branchLegGuardModule.hasActiveLegRunForPull(runs, prNumber, {
                 workflowFile: workflowFile,
                 staleNonRunningMs: STALE_NON_RUNNING_WORKFLOW_MS,
                 nowMs: Date.now()
-            })) {
-            return true;
-        }
-    }
-    return false;
+            });
+        });
 }
 
 function workflowRunTimestamp(run) {
-    var value = run && (run.updated_at || run.updatedAt || run.created_at || run.createdAt);
-    if (!value) return null;
-    var timestamp = Date.parse(value);
-    return isNaN(timestamp) ? null : timestamp;
+    return workflowRunsModule.workflowRunTimestamp(run);
 }
 
 function isStaleNonRunningWorkflowRun(run, status) {
@@ -558,14 +530,7 @@ function isStaleNonRunningWorkflowRun(run, status) {
 }
 
 function workflowRunAge(run) {
-    var timestamp = workflowRunTimestamp(run);
-    if (!timestamp) return '';
-
-    var ageMinutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
-    if (ageMinutes < 60) return ageMinutes + 'm';
-    var ageHours = Math.floor(ageMinutes / 60);
-    var remainingMinutes = ageMinutes % 60;
-    return ageHours + 'h' + (remainingMinutes ? ' ' + remainingMinutes + 'm' : '');
+    return workflowRunsModule.workflowRunAge(run);
 }
 
 function formatWorkflowRunSummary(run, fallbackStatus) {
@@ -581,31 +546,26 @@ function formatWorkflowRunSummary(run, fallbackStatus) {
 function collectActiveWorkflowRuns(scm, workflowFile) {
     if (!scm || typeof scm.listWorkflowRuns !== 'function') return { count: 0, summaries: [] };
 
-    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
     var seen = {};
     var count = 0;
     var summaries = [];
 
-    for (var i = 0; i < statuses.length; i++) {
-        var runs = [];
-        try {
-            runs = parseWorkflowRuns(scm.listWorkflowRuns(statuses[i], workflowFile, 50));
-        } catch (e) {
-            console.warn('  ⚠️  Could not count active workflow runs (' + statuses[i] + '): ' + (e.message || e));
-            continue;
-        }
-
-        for (var j = 0; j < runs.length; j++) {
-            var run = runs[j] || {};
-            if (isStaleNonRunningWorkflowRun(run, statuses[i])) continue;
-            var id = run.id || run.databaseId || run.run_number || ((run.name || run.display_title || '') + ':' + j + ':' + statuses[i]);
-            if (!seen[id]) {
-                seen[id] = true;
-                count += 1;
-                summaries.push(formatWorkflowRunSummary(run, statuses[i]));
+    workflowRunsModule.eachActiveStatusRun(scm, workflowFile,
+        '  ⚠️  Could not count active workflow runs', [],
+        function (status, runsRaw) {
+            var runs = workflowRunsModule.parseWorkflowRuns(runsRaw);
+            for (var j = 0; j < runs.length; j++) {
+                var run = runs[j] || {};
+                if (isStaleNonRunningWorkflowRun(run, status)) continue;
+                var id = run.id || run.databaseId || run.run_number || ((run.name || run.display_title || '') + ':' + j + ':' + status);
+                if (!seen[id]) {
+                    seen[id] = true;
+                    count += 1;
+                    summaries.push(formatWorkflowRunSummary(run, status));
+                }
             }
-        }
-    }
+            return false;
+        });
 
     return { count: count, summaries: summaries };
 }
@@ -5952,17 +5912,7 @@ function concludeOrphanedCheckRuns(repoInfo, cancelledRun) {
                 ' still pending on head ' +
                 String(cancelledRun.head_sha).slice(0, 7) +
                 ' — concluding them cancelled');
-    var appToken = checksAppToken();
-    var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
-    var swapped = false;
-    if (appToken) {
-        try {
-            set_env_variable('GH_TOKEN', appToken);
-            swapped = true;
-        } catch (eSwap) {
-            console.warn('  ⚠️  gh-848 token swap failed, belt uses the PAT ' +
-                         '(will 403): ' + (eSwap.message || eSwap));
-        }
+    var tok = swapToChecksToken('  ⚠️  gh-848 token swap failed, belt uses the PAT (will 403): ');
     }
     var concluded = 0;
     try {
@@ -5980,9 +5930,7 @@ function concludeOrphanedCheckRuns(repoInfo, cancelledRun) {
             }
         });
     } finally {
-        if (swapped && sourceTok) {
-            try { set_env_variable('GH_TOKEN', sourceTok); } catch (e3) {}
-        }
+        restoreChecksToken(tok.swapped, tok.sourceTok);
     }
     return concluded;
 }
@@ -7373,16 +7321,7 @@ function recentlyConcludedNonGreen(probe) {
 
 function hasActiveDispatchedRun(repoInfo, ciWorkflow, headSha) {
     try {
-        var res = cli_execute_command({
-            command: 'gh api "repos/' + repoInfo.owner + '/' +
-                     repoInfo.repo +
-                     '/actions/workflows/' + ciWorkflow +
-                     '/runs?head_sha=' + headSha +
-                     '&event=workflow_dispatch&per_page=5"'
-        });
-        var runs = mcpParse((res || {}).output ||
-                            (res || {}).stdout || res);
-        var list = (runs && runs.workflow_runs) || [];
+        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha);
         // gh-1101: a CONCLUDED run is a verdict, never "in flight" — the
         // old 15-min post-conclusion grace made a green run on an approved
         // head skip the latch+merge for 15 min (live dart #435). The
@@ -7489,10 +7428,7 @@ function headCheckRunZombies(repoInfo, headSha) {
     if (!checkRuns.length) return { zombies: [], live: 0, settled: 0, unresolvable: 0 };
     var runs = headWorkflowRunsSafe(repoInfo, headSha);
     if (runs === null) return null;
-    var byId = {};
-    runs.forEach(function (r) {
-        if (r && r.id !== undefined && r.id !== null) byId[String(r.id)] = r;
-    });
+    var byId = workflowRunsModule.indexRunsById(runs);
     return checkRunZombiesModule.classify(checkRuns, function (runId) {
         var hit = byId[String(runId)];
         return hit === undefined ? null : hit;
@@ -7533,10 +7469,7 @@ function headOrphanedRunChecks(repoInfo, headSha) {
     if (!checkRuns.length) return [];
     var runs = headWorkflowRunsSafe(repoInfo, headSha);
     if (runs === null) return null;
-    var byId = {};
-    runs.forEach(function (r) {
-        if (r && r.id !== undefined && r.id !== null) byId[String(r.id)] = r;
-    });
+    var byId = workflowRunsModule.indexRunsById(runs);
     return checkRunZombiesModule.orphanedRunChecks(checkRuns, function (runId) {
         var hit = byId[String(runId)];
         return hit === undefined ? null : hit;
@@ -7565,17 +7498,7 @@ function sweepZombieCheckRunsNeutral(repoInfo, zombies, headSha) {
         ' validation cycle — the owning workflow run terminated without' +
         ' concluding it. Closed as neutral: a dead cycle carries no verdict' +
         ' about its head. The PR re-validates through the normal dispatch path.';
-    var appToken = checksAppToken();
-    var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
-    var swapped = false;
-    if (appToken) {
-        try {
-            set_env_variable('GH_TOKEN', appToken);
-            swapped = true;
-        } catch (eSwap) {
-            console.warn('  ⚠️  gh-998 token swap failed, sweep uses the PAT' +
-                         ' (may 403): ' + (eSwap.message || eSwap));
-        }
+    var tok = swapToChecksToken('  ⚠️  gh-998 token swap failed, sweep uses the PAT (may 403): ');
     }
     try {
         zombies.forEach(function (z) {
@@ -7605,13 +7528,11 @@ function sweepZombieCheckRunsNeutral(repoInfo, zombies, headSha) {
                 out.concluded++;
                 console.log('  ' + checkRunZombiesModule.zombieSweptLine(z.id, headSha));
             } catch (ePatch) {
-                if (!out.rejected) out.rejected = (ePatch && ePatch.message) || String(ePatch);
+                recordFirstRejection(out, ePatch);
             }
         });
     } finally {
-        if (swapped && sourceTok) {
-            try { set_env_variable('GH_TOKEN', sourceTok); } catch (e3) {}
-        }
+        restoreChecksToken(tok.swapped, tok.sourceTok);
     }
     return out;
 }
@@ -7635,23 +7556,12 @@ function sweepZombieCheckRunsNeutral(repoInfo, zombies, headSha) {
 // no conclusion.
 function greenCoverRun(repoInfo, ciWorkflow, headSha) {
     try {
-        var res = cli_execute_command({
-            command: 'gh api "repos/' + repoInfo.owner + '/' +
-                     repoInfo.repo +
-                     '/actions/workflows/' + ciWorkflow +
-                     '/runs?head_sha=' + headSha +
-                     '&event=workflow_dispatch&per_page=5"'
-        });
-        var runs = mcpParse((res || {}).output ||
-                            (res || {}).stdout || res);
-        var list = ((runs && runs.workflow_runs) || []).filter(function (r) {
-            return r.status === 'completed' && r.conclusion === 'success';
-        });
+        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha)
+            .filter(function (r) {
+                return r.status === 'completed' && r.conclusion === 'success';
+            });
         if (!list.length) return null;
-        list.sort(function (a, b) {
-            return new Date(b.updated_at || b.created_at).getTime() -
-                   new Date(a.updated_at || a.created_at).getTime();
-        });
+        workflowRunsModule.sortRunsNewestFirst(list);
         return list[0];
     } catch (e) {
         console.warn('  ⚠️  green-cover probe failed: ' + (e.message || e));
@@ -7676,17 +7586,7 @@ function concludePlaceholderCheckRuns(repoInfo, placeholders, coverRun) {
         ' dispatched validation run concluded success' +
         (coverUrl ? (': ' + coverUrl) : '') +
         '. The gh-852 fresh-sha reset is the fallback cure.';
-    var appToken = checksAppToken();
-    var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
-    var swapped = false;
-    if (appToken) {
-        try {
-            set_env_variable('GH_TOKEN', appToken);
-            swapped = true;
-        } catch (eSwap) {
-            console.warn('  ⚠️  gh-857 token swap failed, conclusion uses the' +
-                         ' PAT (may 403): ' + (eSwap.message || eSwap));
-        }
+    var tok = swapToChecksToken('  ⚠️  gh-857 token swap failed, conclusion uses the PAT (may 403): ');
     }
     try {
         placeholders.forEach(function (ph) {
@@ -7714,13 +7614,11 @@ function concludePlaceholderCheckRuns(repoInfo, placeholders, coverRun) {
                 });
                 out.concluded++;
             } catch (ePatch) {
-                if (!out.rejected) out.rejected = (ePatch && ePatch.message) || String(ePatch);
+                recordFirstRejection(out, ePatch);
             }
         });
     } finally {
-        if (swapped && sourceTok) {
-            try { set_env_variable('GH_TOKEN', sourceTok); } catch (e3) {}
-        }
+        restoreChecksToken(tok.swapped, tok.sourceTok);
     }
     return out;
 }
@@ -8064,24 +7962,13 @@ function latestDispatchedVerdict(repoInfo, ciWorkflow, headSha) {
     // conclusions are skipped here. Fail CLOSED (null) on probe errors:
     // callers must only PARK on an explicitly observed red verdict.
     try {
-        var res = cli_execute_command({
-            command: 'gh api "repos/' + repoInfo.owner + '/' +
-                     repoInfo.repo +
-                     '/actions/workflows/' + ciWorkflow +
-                     '/runs?head_sha=' + headSha +
-                     '&event=workflow_dispatch&per_page=5"'
-        });
-        var runs = mcpParse((res || {}).output ||
-                            (res || {}).stdout || res);
-        var list = ((runs && runs.workflow_runs) || []).filter(function (r) {
-            return r.status === 'completed' && r.conclusion &&
-                r.conclusion !== 'cancelled';
-        });
+        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha)
+            .filter(function (r) {
+                return r.status === 'completed' && r.conclusion &&
+                    r.conclusion !== 'cancelled';
+            });
         if (!list.length) return null;
-        list.sort(function (a, b) {
-            return new Date(b.updated_at || b.created_at).getTime() -
-                   new Date(a.updated_at || a.created_at).getTime();
-        });
+        workflowRunsModule.sortRunsNewestFirst(list);
         return list[0].conclusion;
     } catch (e) {
         console.warn('  ⚠️  verdict probe failed: ' + (e.message || e));
@@ -8099,16 +7986,7 @@ function hasSuccessfulDispatchedRun(repoInfo, ciWorkflow, headSha) {    // Green
     // no verdict (concurrency-cancel on racing dispatches is exactly how
     // an armed head loses its CI — live: fa pr-922, 2026-09-26).
     try {
-        var res = cli_execute_command({
-            command: 'gh api "repos/' + repoInfo.owner + '/' +
-                     repoInfo.repo +
-                     '/actions/workflows/' + ciWorkflow +
-                     '/runs?head_sha=' + headSha +
-                     '&event=workflow_dispatch&per_page=5"'
-        });
-        var runs = mcpParse((res || {}).output ||
-                            (res || {}).stdout || res);
-        var list = (runs && runs.workflow_runs) || [];
+        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha);
         return list.some(function (r) {
             return r.status === 'completed' && r.conclusion === 'success';
         });
@@ -8794,21 +8672,9 @@ function newestDispatchedRun(repoInfo, ciWorkflow, headSha) {
     // or null. Stale-arm sweeper probe — must FAIL CLOSED (null): an
     // unwarranted unarm tears a live arm; a missed sweep retries next tick.
     try {
-        var res = cli_execute_command({
-            command: 'gh api "repos/' + repoInfo.owner + '/' +
-                     repoInfo.repo +
-                     '/actions/workflows/' + ciWorkflow +
-                     '/runs?head_sha=' + headSha +
-                     '&event=workflow_dispatch&per_page=5"'
-        });
-        var runs = mcpParse((res || {}).output ||
-                            (res || {}).stdout || res);
-        var list = (runs && runs.workflow_runs) || [];
+        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha);
         if (!list.length) return null;
-        list.sort(function (a, b) {
-            return Date.parse(b.updated_at || b.created_at || 0) -
-                   Date.parse(a.updated_at || a.created_at || 0);
-        });
+        workflowRunsModule.sortRunsNewestFirst(list);
         return list[0];
     } catch (e) {
         console.warn('  ⚠️  stale-arm probe failed: ' + (e.message || e));

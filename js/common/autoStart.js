@@ -1,5 +1,6 @@
 var scmModule = require('./scm.js');
 var buildEncodedConfigModule = require('./buildEncodedConfig.js');
+var workflowRunsModule = require('./workflowRuns.js');
 var STALE_NON_RUNNING_WORKFLOW_MS = 6 * 60 * 60 * 1000;
 
 function deriveProjectKey(customParams) {
@@ -54,30 +55,15 @@ function findActiveTargetRun(runs, configFile, ticketKey, status) {
 }
 
 function hasActiveTargetRun(scm, configFile, ticketKey, workflowFile, owner, repo) {
-    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
-
-    for (var i = 0; i < statuses.length; i++) {
-        var runsRaw = null;
-        try {
-            runsRaw = scm.listWorkflowRuns(statuses[i], workflowFile, 50, owner, repo);
-        } catch (e) {
-            console.warn('autoStart: could not list ' + statuses[i] + ' workflow runs:', e.message || e);
-            continue;
-        }
-
-        if (findActiveTargetRun(parseWorkflowRuns(runsRaw), configFile, ticketKey, statuses[i])) {
-            return true;
-        }
-    }
-
-    return false;
+    return workflowRunsModule.eachActiveStatusRun(scm, workflowFile,
+        'autoStart: could not list workflow runs', [owner, repo],
+        function (status, runsRaw) {
+            return !!findActiveTargetRun(parseWorkflowRuns(runsRaw), configFile, ticketKey, status);
+        });
 }
 
 function workflowRunTimestamp(run) {
-    var value = run && (run.updated_at || run.updatedAt || run.created_at || run.createdAt);
-    if (!value) return null;
-    var timestamp = Date.parse(value);
-    return isNaN(timestamp) ? null : timestamp;
+    return workflowRunsModule.workflowRunTimestamp(run);
 }
 
 function isStaleNonRunningWorkflowRun(run, status) {
@@ -88,14 +74,7 @@ function isStaleNonRunningWorkflowRun(run, status) {
 }
 
 function workflowRunAge(run) {
-    var timestamp = workflowRunTimestamp(run);
-    if (!timestamp) return '';
-
-    var ageMinutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
-    if (ageMinutes < 60) return ageMinutes + 'm';
-    var ageHours = Math.floor(ageMinutes / 60);
-    var remainingMinutes = ageMinutes % 60;
-    return ageHours + 'h' + (remainingMinutes ? ' ' + remainingMinutes + 'm' : '');
+    return workflowRunsModule.workflowRunAge(run);
 }
 
 function workflowRunTitle(run) {
@@ -150,21 +129,16 @@ function collectActiveRunsForStatus(runs, status, seen, summaries) {
 }
 
 function collectActiveWorkflowRuns(scm, workflowFile, owner, repo) {
-    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
     var seen = {};
     var count = 0;
     var summaries = [];
 
-    for (var i = 0; i < statuses.length; i++) {
-        var runsRaw = null;
-        try {
-            runsRaw = scm.listWorkflowRuns(statuses[i], workflowFile, 50, owner, repo);
-        } catch (e) {
-            console.warn('autoStart: could not count ' + statuses[i] + ' workflow runs:', e.message || e);
-            continue;
-        }
-        count += collectActiveRunsForStatus(parseWorkflowRuns(runsRaw), statuses[i], seen, summaries);
-    }
+    workflowRunsModule.eachActiveStatusRun(scm, workflowFile,
+        'autoStart: could not count workflow runs', [owner, repo],
+        function (status, runsRaw) {
+            count += collectActiveRunsForStatus(parseWorkflowRuns(runsRaw), status, seen, summaries);
+            return false;
+        });
 
     return { count: count, summaries: summaries };
 }
@@ -410,14 +384,12 @@ function resolveSmFallbackOptions(options) {
 
 function countListedWorkflowRuns(scm, workflowFile, owner, repo) {
     var activeCount = 0;
-    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
-    for (var i = 0; i < statuses.length; i++) {
-        try {
-            activeCount += parseWorkflowRuns(scm.listWorkflowRuns(statuses[i], workflowFile, 50, owner, repo)).length;
-        } catch (e) {
-            console.warn('SM fallback: could not list ' + statuses[i] + ' runs:', e.message || e);
-        }
-    }
+    workflowRunsModule.eachActiveStatusRun(scm, workflowFile,
+        'SM fallback: could not list runs', [owner, repo],
+        function (status, runsRaw) {
+            activeCount += parseWorkflowRuns(runsRaw).length;
+            return false;
+        });
     return activeCount;
 }
 

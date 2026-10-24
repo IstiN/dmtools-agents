@@ -2,6 +2,10 @@
  * Unit tests for js/common/autoStart.js
  */
 
+// gh-1249: autoStart shares the real workflowRuns helpers (the pure
+// timestamp/age/fan-out module) — load the genuine module, not a stub.
+var workflowRunsReal = loadModule('js/common/workflowRuns.js', makeRequire({}), {});
+
 function makeBuildEncodedConfigMock() {
     return {
         extractAgentName: function(configFile) {
@@ -58,7 +62,8 @@ function loadAutoStartHelper(scmMocks, builderMock, extraMocks) {
     var buildEncodedConfig = builderMock || makeBuildEncodedConfigMock();
     return loadModule(
         'js/common/autoStart.js',
-        makeRequire({ './scm.js': scm, './buildEncodedConfig.js': buildEncodedConfig }),
+        makeRequire({ './scm.js': scm, './buildEncodedConfig.js': buildEncodedConfig,
+            './workflowRuns.js': workflowRunsReal }),
         extraMocks || {}
     );
 }
@@ -1250,7 +1255,8 @@ function autoStartModule() {
         'js/common/autoStart.js',
         makeRequire({
             './scm.js': {},
-            './buildEncodedConfig.js': makeBuildEncodedConfigMock()
+            './buildEncodedConfig.js': makeBuildEncodedConfigMock(),
+            './workflowRuns.js': workflowRunsReal
         }),
         {}
     );
