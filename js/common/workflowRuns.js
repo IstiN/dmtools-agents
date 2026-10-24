@@ -106,9 +106,16 @@ function parseProbeResult(res) {
  * guards used to fire independently. THROWS on cli failure: every caller
  * owns its fail-open/fail-closed catch (the per-guard probe comments pin
  * which side each one fails). Unparseable bodies read as an empty list.
+ *
+ * execute: the cli_execute_command implementation to ride — callers pass
+ * their in-scope reference (the SM's worker/mocked engines inject it),
+ * falling back to the runtime global when omitted.
  */
-function dispatchedRuns(repoInfo, ciWorkflow, headSha) {
-    var res = cli_execute_command({
+function dispatchedRuns(repoInfo, ciWorkflow, headSha, execute) {
+    var execCmd = execute ||
+        (typeof cli_execute_command === 'function' ? cli_execute_command : null);
+    if (!execCmd) throw new Error('dispatchedRuns: cli_execute_command unavailable');
+    var res = execCmd({
         command: 'gh api "repos/' + repoInfo.owner + '/' +
                  repoInfo.repo +
                  '/actions/workflows/' + ciWorkflow +

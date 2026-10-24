@@ -7333,7 +7333,7 @@ function recentlyConcludedNonGreen(probe) {
 
 function hasActiveDispatchedRun(repoInfo, ciWorkflow, headSha) {
     try {
-        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha);
+        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha, cli_execute_command);
         // gh-1101: a CONCLUDED run is a verdict, never "in flight" — the
         // old 15-min post-conclusion grace made a green run on an approved
         // head skip the latch+merge for 15 min (live dart #435). The
@@ -7567,7 +7567,7 @@ function sweepZombieCheckRunsNeutral(repoInfo, zombies, headSha) {
 // no conclusion.
 function greenCoverRun(repoInfo, ciWorkflow, headSha) {
     try {
-        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha)
+        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha, cli_execute_command)
             .filter(function (r) {
                 return r.status === 'completed' && r.conclusion === 'success';
             });
@@ -7983,7 +7983,7 @@ function latestDispatchedVerdict(repoInfo, ciWorkflow, headSha) {
     // conclusions are skipped here. Fail CLOSED (null) on probe errors:
     // callers must only PARK on an explicitly observed red verdict.
     try {
-        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha)
+        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha, cli_execute_command)
             .filter(function (r) {
                 return r.status === 'completed' && r.conclusion &&
                     r.conclusion !== 'cancelled';
@@ -8007,7 +8007,7 @@ function hasSuccessfulDispatchedRun(repoInfo, ciWorkflow, headSha) {    // Green
     // no verdict (concurrency-cancel on racing dispatches is exactly how
     // an armed head loses its CI — live: fa pr-922, 2026-09-26).
     try {
-        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha);
+        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha, cli_execute_command);
         return list.some(function (r) {
             return r.status === 'completed' && r.conclusion === 'success';
         });
@@ -8693,7 +8693,7 @@ function newestDispatchedRun(repoInfo, ciWorkflow, headSha) {
     // or null. Stale-arm sweeper probe — must FAIL CLOSED (null): an
     // unwarranted unarm tears a live arm; a missed sweep retries next tick.
     try {
-        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha);
+        var list = workflowRunsModule.dispatchedRuns(repoInfo, ciWorkflow, headSha, cli_execute_command);
         if (!list.length) return null;
         workflowRunsModule.sortRunsNewestFirst(list);
         return list[0];
