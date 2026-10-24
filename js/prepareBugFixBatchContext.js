@@ -179,24 +179,52 @@ function writeBatchBugsMarkdown(epicFolder, epic, bugs) {
     console.log('Wrote batch_bugs.md for', epic.key, '(' + bugs.length + ' bug(s))');
 }
 
+// ── Extracted action-step helpers (gh-1228 CRAP split): each step keeps the
+// exact non-fatal guard of the inline code it replaced.
+
+/** Pre-CLI params carry the input folder at the top level; jobs nest them under jobParams. */
+function resolveBatchParams(params) {
+    return params.inputFolderPath ? params : (params.jobParams || params);
+}
+
+/** Re-fetch the epic when the ticket payload carries no fields; a failed fetch degrades to key-only. */
+function resolveBatchEpic(tracker, epicKey, epic) {
+    if (epic.fields) return epic;
+    try {
+        return tracker.getIssue(epicKey, ['summary', 'description', 'status', 'labels']);
+    } catch (e) {
+        console.warn('Could not fetch Epic details (non-fatal):', e);
+        return { key: epicKey, fields: {} };
+    }
+}
+
+/** Fetch per-bug input folders for every batch bug (questions + linked tests). */
+function fetchBatchBugContexts(bugs, jobParams) {
+    for (var i = 0; i < bugs.length; i++) {
+        fetchBugContext(bugs[i], jobParams);
+    }
+}
+
+/** Move the epic to In Development; a failed transition is logged, not fatal. */
+function moveEpicToInDevelopment(tracker, epicKey, statuses) {
+    try {
+        tracker.moveToStatus(epicKey, statuses.IN_DEVELOPMENT);
+        console.log('Moved Epic ' + epicKey + ' to ' + statuses.IN_DEVELOPMENT);
+    } catch (e) {
+        console.warn('Failed to move Epic to In Development (non-fatal):', e);
+    }
+}
+
 function action(params) {
     try {
-        var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
+        var actualParams = resolveBatchParams(params);
         var config = configLoader.loadProjectConfig(actualParams);
         _workingDir = config.workingDir || null;
 
         var tracker = trackersModule.createTracker(config, actualParams.customParams || {});
         var epicFolder = actualParams.inputFolderPath;
         var epicKey = epicFolder.split('/').pop();
-        var epic = actualParams.ticket || { key: epicKey, fields: {} };
-        if (!epic.fields) {
-            try {
-                epic = tracker.getIssue(epicKey, ['summary', 'description', 'status', 'labels']);
-            } catch (e) {
-                console.warn('Could not fetch Epic details (non-fatal):', e);
-                epic = { key: epicKey, fields: {} };
-            }
-        }
+        var epic = resolveBatchEpic(tracker, epicKey, actualParams.ticket || { key: epicKey, fields: {} });
 
         var customParams = actualParams.customParams || {};
         var statuses = resolveStatuses(customParams);
@@ -204,19 +232,11 @@ function action(params) {
         var bugs = findBugsInEpic(epicKey, tracker);
         console.log('Found', bugs.length, 'bug(s) in batch Epic', epicKey);
 
-        for (var i = 0; i < bugs.length; i++) {
-            fetchBugContext(bugs[i], actualParams.jobParams || actualParams);
-        }
+        fetchBatchBugContexts(bugs, actualParams.jobParams || actualParams);
 
         writeBatchBugsMarkdown(epicFolder, epic, bugs);
 
-        // Move Epic to In Development
-        try {
-            tracker.moveToStatus(epicKey, statuses.IN_DEVELOPMENT);
-            console.log('Moved Epic ' + epicKey + ' to ' + statuses.IN_DEVELOPMENT);
-        } catch (e) {
-            console.warn('Failed to move Epic to In Development (non-fatal):', e);
-        }
+        moveEpicToInDevelopment(tracker, epicKey, statuses);
 
     } catch (error) {
         console.error('Error in prepareBugFixBatchContext:', error);
@@ -225,5 +245,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, findBugsInEpic, writeBatchBugsMarkdown };
+    module.exports = { action, findBugsInEpic, writeBatchBugsMarkdown, resolveBatchParams, resolveBatchEpic, fetchBatchBugContexts, moveEpicToInDevelopment };
 }

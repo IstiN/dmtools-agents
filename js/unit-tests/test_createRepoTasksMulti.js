@@ -772,3 +772,104 @@ suite('createRepoTasksMulti — action-phase helpers', function() {
         assert.contains(t2.calls.comment[0].comment, '_Skipped (already exist): [b] S_');
     });
 });
+
+// ---------------------------------------------------------------------------
+// flattenTasks edge paths (gh-1228 CRAP characterization)
+// ---------------------------------------------------------------------------
+
+suite('createRepoTasksMulti — flattenTasks edge paths', function() {
+
+    test('string repo entries are normalised to name-only repos', function() {
+        var mod = makeModule();
+        var flat = mod.flattenTasks(['repo-a', { name: 'repo-b', reason: 'R' }]);
+        assert.equal(flat.length, 2, 'both entries flattened');
+        assert.deepEqual(flat.map(function(t) { return t.repo; }), ['repo-a', 'repo-b'], 'repo names kept');
+        assert.equal(flat[0].title, 'repo-a', 'string entry title falls back to the repo name');
+        assert.equal(flat[0].reason, '', 'string entry has no reason');
+    });
+
+    test('repo with an EMPTY tasks array produces the implicit single task', function() {
+        var mod = makeModule();
+        var flat = mod.flattenTasks([{ name: 'repo-a', reason: 'Do it', tasks: [] }]);
+        assert.equal(flat.length, 1, 'one implicit task');
+        assert.equal(flat[0].key, 'repo-a:repo-a', 'implicit key shape');
+        assert.equal(flat[0].title, 'Do it', 'repo reason used as title');
+    });
+
+    test('repo without a name is skipped entirely', function() {
+        var mod = makeModule();
+        var flat = mod.flattenTasks([{ reason: 'no name' }, { name: 'repo-a' }]);
+        assert.equal(flat.length, 1, 'only the named repo produced a task');
+        assert.equal(flat[0].repo, 'repo-a', 'named repo kept');
+    });
+
+    test('qualified reference to an unknown repo is dropped', function() {
+        var mod = makeModule();
+        var flat = mod.flattenTasks([{ name: 'repo-a', tasks: [{ id: 't1', title: 'T1', depends_on: ['ghost:task'] }] }]);
+        assert.deepEqual(flat[0].depends_on, [], 'unknown-repo qualified ref dropped');
+    });
+
+    test('qualified reference to a known repo but unknown task id is dropped', function() {
+        var mod = makeModule();
+        var flat = mod.flattenTasks([
+            { name: 'backend', tasks: [{ id: 't1', title: 'T1' }] },
+            { name: 'repo-a', tasks: [{ id: 't2', title: 'T2', depends_on: ['backend:ghost'] }] }
+        ]);
+        assert.deepEqual(flat[1].depends_on, [], 'known repo, unknown task id dropped');
+    });
+
+    test('unknown bare repo-name reference is dropped', function() {
+        var mod = makeModule();
+        var flat = mod.flattenTasks([{ name: 'repo-a', tasks: [{ id: 't1', title: 'T1', depends_on: ['ghost-repo'] }] }]);
+        assert.deepEqual(flat[0].depends_on, [], 'unknown bare ref dropped');
+    });
+
+    test('same-repo bare task id resolves to the qualified key', function() {
+        var mod = makeModule();
+        var flat = mod.flattenTasks([
+            { name: 'repo-a', tasks: [
+                { id: 't2', title: 'T2', depends_on: ['t1'] },
+                { id: 't1', title: 'T1' }
+            ] }
+        ]);
+        assert.deepEqual(flat[0].depends_on, ['repo-a:t1'], 'same-repo bare id qualified');
+    });
+
+    test('self-dependency is excluded from the resolved depends_on', function() {
+        var mod = makeModule();
+        var flat = mod.flattenTasks([{ name: 'repo-a', tasks: [{ id: 't1', title: 'T1', depends_on: ['repo-a:t1'] }] }]);
+        assert.deepEqual(flat[0].depends_on, [], 'self-reference removed');
+    });
+
+    test('task-level and repo-level deps overlap is deduplicated', function() {
+        var mod = makeModule();
+        var flat = mod.flattenTasks([
+            { name: 'backend', tasks: [{ id: 't1', title: 'T1' }, { id: 't2', title: 'T2' }] },
+            { name: 'repo-a', depends_on: ['backend'], tasks: [{ id: 'x', title: 'X', depends_on: ['backend'] }] }
+        ]);
+        var repoATask = flat.filter(function(t) { return t.repo === 'repo-a'; })[0];
+        assert.deepEqual(repoATask.depends_on.sort(), ['backend:t1', 'backend:t2'], 'union deduped to one entry per key');
+    });
+
+    test('repo-level deps on multi-task repos expand to every task (2+ repos, 2+ tasks)', function() {
+        var mod = makeModule();
+        var flat = mod.flattenTasks([
+            { name: 'backend', tasks: [{ id: 'api', title: 'API' }, { id: 'db', title: 'DB' }] },
+            { name: 'worker', tasks: [{ id: 'queue', title: 'Queue' }] },
+            { name: 'frontend', depends_on: ['backend', 'worker'] }
+        ]);
+        var frontend = flat.filter(function(t) { return t.repo === 'frontend'; })[0];
+        assert.deepEqual(frontend.depends_on.sort(), ['backend:api', 'backend:db', 'worker:queue'], 'every dependency task included');
+        assert.equal(frontend.title, 'frontend', 'implicit task title');
+    });
+
+    test('task without depends_on gets an empty resolved array (never undefined)', function() {
+        var mod = makeModule();
+        var flat = mod.flattenTasks([{ name: 'repo-a', tasks: [{ id: 't1', title: 'T1' }] }]);
+        assert.deepEqual(flat[0].depends_on, [], 'empty depends_on normalised');
+        assert.equal(flat[0].reason, '', 'missing reason normalised');
+        assert.equal(flat[0].title, 'T1', 'title falls back to id when title missing');
+        assert.deepEqual(flat[0].rawDependsOn, [], 'rawDependsOn normalised');
+        assert.deepEqual(flat[0].repoLevelDependsOn, [], 'repoLevelDependsOn normalised');
+    });
+});

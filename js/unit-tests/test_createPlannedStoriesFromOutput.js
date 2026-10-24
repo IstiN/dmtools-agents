@@ -501,3 +501,142 @@ suite('createPlannedStoriesFromOutput — reuse and guards', function() {
         assert.equal(linkCalls.length, 1, 'created story linked to source');
     });
 });
+
+// ── linkStory (gh-1228 CRAP characterization) ───────────────────────────────
+
+suite('createPlannedStoriesFromOutput — linkStory', function() {
+
+    function loadLinkStory() {
+        var linkCalls = [];
+        var tracker = {
+            linkIssues: function(sourceKey, targetKey, relationship) {
+                linkCalls.push({ sourceKey: sourceKey, targetKey: targetKey, relationship: relationship });
+            }
+        };
+        var mod = loadModule(
+            'js/createPlannedStoriesFromOutput.js',
+            makeRequire({
+                './config.js': configModule,
+                './common/trackers.js': { createTracker: function() { return tracker; } },
+                './common/jiraHelpers.js': loadModule(
+                    'js/common/jiraHelpers.js',
+                    makeRequire({ '../config.js': configModule, './trackers.js': { createTracker: function() { return tracker; } } }),
+                    {}
+                ),
+                './common/aiResponseParser.js': loadModule('js/common/aiResponseParser.js', makeRequire({ '../config.js': configModule }), {}),
+                './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js')
+            }),
+            {
+                jira_set_priority: function() {},
+                file_read: function() { return null; },
+                file_write: function() {}
+            }
+        );
+        // Bind the module-global tracker (action() creates it before any early return).
+        mod.action({ ticket: { key: 'SRC-BOOT' }, jobParams: { customParams: { storyPlanCreation: { enabled: false } } } });
+        return { mod: mod, linkCalls: linkCalls, tracker: tracker };
+    }
+
+    var LINK_PARAMS = {
+        ticket: { key: 'SRC-101', fields: { parent: { key: 'PARENT-100' } } }
+    };
+
+    test('missing created key is a no-op', function() {
+        var ctx = loadLinkStory();
+        ctx.mod.linkStory(null, LINK_PARAMS, { linkToSourceRelationship: 'Relates' }, false);
+        assert.equal(ctx.linkCalls.length, 0, 'no link without a created key');
+    });
+
+    test('linkToSourceRelationship links the created story to the source ticket', function() {
+        var ctx = loadLinkStory();
+        ctx.mod.linkStory('PROJ-1', LINK_PARAMS, { linkToSourceRelationship: 'Relates' }, false);
+        assert.deepEqual(ctx.linkCalls, [{ sourceKey: 'PROJ-1', targetKey: 'SRC-101', relationship: 'Relates' }], 'source ticket linked');
+    });
+
+    test('additionalLinks are applied after the source link (multiple links, order kept)', function() {
+        var ctx = loadLinkStory();
+        ctx.mod.linkStory('PROJ-1', LINK_PARAMS, {
+            linkToSourceRelationship: 'Relates',
+            additionalLinks: [
+                { targetKey: 'X-1', relationship: 'Blocks' },
+                { target: 'sourceParent', relationship: 'Implements' }
+            ]
+        }, false);
+        assert.deepEqual(ctx.linkCalls, [
+            { sourceKey: 'PROJ-1', targetKey: 'SRC-101', relationship: 'Relates' },
+            { sourceKey: 'PROJ-1', targetKey: 'X-1', relationship: 'Blocks' },
+            { sourceKey: 'PROJ-1', targetKey: 'PARENT-100', relationship: 'Implements' }
+        ], 'all three links applied in order');
+    });
+
+    test('no configuration produces no links', function() {
+        var ctx = loadLinkStory();
+        ctx.mod.linkStory('PROJ-1', LINK_PARAMS, {}, false);
+        assert.equal(ctx.linkCalls.length, 0, 'no links without config');
+    });
+
+    test('link without a relationship is skipped', function() {
+        var ctx = loadLinkStory();
+        ctx.mod.linkStory('PROJ-1', LINK_PARAMS, {
+            additionalLinks: [{ targetKey: 'X-1' }, { targetKey: 'X-2', relationship: 'Blocks' }]
+        }, false);
+        assert.deepEqual(ctx.linkCalls, [{ sourceKey: 'PROJ-1', targetKey: 'X-2', relationship: 'Blocks' }], 'relationship-less link skipped');
+    });
+
+    test('existing story skips links flagged includeExisting:false but keeps others', function() {
+        var ctx = loadLinkStory();
+        ctx.mod.linkStory('PROJ-1', LINK_PARAMS, {
+            linkToSourceRelationship: 'Relates',
+            additionalLinks: [
+                { targetKey: 'X-1', relationship: 'Blocks', includeExisting: false },
+                { targetKey: 'X-2', relationship: 'Blocks' }
+            ]
+        }, true);
+        assert.deepEqual(ctx.linkCalls, [
+            { sourceKey: 'PROJ-1', targetKey: 'SRC-101', relationship: 'Relates' },
+            { sourceKey: 'PROJ-1', targetKey: 'X-2', relationship: 'Blocks' }
+        ], 'includeExisting:false skipped on reuse, others kept');
+    });
+
+    test('includeExisting:false links ARE applied for freshly created stories', function() {
+        var ctx = loadLinkStory();
+        ctx.mod.linkStory('PROJ-1', LINK_PARAMS, {
+            additionalLinks: [{ targetKey: 'X-1', relationship: 'Blocks', includeExisting: false }]
+        }, false);
+        assert.deepEqual(ctx.linkCalls, [{ sourceKey: 'PROJ-1', targetKey: 'X-1', relationship: 'Blocks' }], 'applied for new stories');
+    });
+
+    test('explicit targetKey wins over the target resolver', function() {
+        var ctx = loadLinkStory();
+        ctx.mod.linkStory('PROJ-1', LINK_PARAMS, {
+            additionalLinks: [{ targetKey: 'EXPLICIT-1', target: 'sourceTicket', relationship: 'Relates' }]
+        }, false);
+        assert.deepEqual(ctx.linkCalls, [{ sourceKey: 'PROJ-1', targetKey: 'EXPLICIT-1', relationship: 'Relates' }], 'explicit targetKey used');
+    });
+
+    test('link whose target resolves to nothing is skipped', function() {
+        var ctx = loadLinkStory();
+        ctx.mod.linkStory('PROJ-1', LINK_PARAMS, {
+            additionalLinks: [
+                { target: 'unknownTarget', relationship: 'Relates' },
+                { target: 'sourceParent', relationship: 'Relates' }
+            ]
+        }, false);
+        assert.deepEqual(ctx.linkCalls, [{ sourceKey: 'PROJ-1', targetKey: 'PARENT-100', relationship: 'Relates' }], 'unresolvable target skipped, parent linked');
+    });
+
+    test('failing link does not stop the remaining links', function() {
+        var ctx = loadLinkStory();
+        ctx.tracker.linkIssues = function(sourceKey, targetKey) {
+            if (targetKey === 'BAD-1') { throw new Error('link rejected'); }
+            ctx.linkCalls.push({ sourceKey: sourceKey, targetKey: targetKey });
+        };
+        ctx.mod.linkStory('PROJ-1', LINK_PARAMS, {
+            additionalLinks: [
+                { targetKey: 'BAD-1', relationship: 'Blocks' },
+                { targetKey: 'GOOD-1', relationship: 'Blocks' }
+            ]
+        }, false);
+        assert.deepEqual(ctx.linkCalls, [{ sourceKey: 'PROJ-1', targetKey: 'GOOD-1' }], 'link after the failure still applied');
+    });
+});
