@@ -446,46 +446,46 @@ suite('preCliTestAutomationSetup — checkoutBranch (gh-1242)', function() {
 
 });
 
+function loadCheckoutFallback(mocks) {
+    var allMocks = Object.assign({
+        jira_move_to_status: function() {},
+        jira_search_by_jql: function() { return []; },
+        jira_get_ticket: function(opts) { return { key: opts.key || opts, fields: {} }; },
+        file_write: function() {},
+        file_read: function() { return null; },
+        cli_execute_command: function() { return ''; }
+    }, mocks);
+    return loadModule(
+        'js/preCliTestAutomationSetup.js',
+        makeRequire({
+            './configLoader.js': {
+                loadProjectConfig: function() { return {}; },
+                formatBranchName: function(prefix, key) { return prefix + '/' + key; }
+            },
+            './config.js': configModule,
+            './fetchLinkedBugsToInput.js': { action: function() {} },
+            './common/trackers.js': loadModule(
+                'js/common/trackers.js',
+                makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }),
+                allMocks
+            ),
+            './common/pullRequest.js': loadModule(
+                'js/common/pullRequest.js',
+                makeRequire({
+                    './config.js': configModule,
+                    './mergeState.js': loadModule('js/common/mergeState.js'),
+                    './common/mergeState.js': loadModule('js/common/mergeState.js')
+                }),
+                allMocks
+            )
+        }),
+        allMocks
+    );
+}
+
 suite('preCliTestAutomationSetup — checkoutBranch baseBranch fallback (gh-1242)', function() {
 
-    function loadCheckoutFallback(mocks) {
-        var allMocks = Object.assign({
-            jira_move_to_status: function() {},
-            jira_search_by_jql: function() { return []; },
-            jira_get_ticket: function(opts) { return { key: opts.key || opts, fields: {} }; },
-            file_write: function() {},
-            file_read: function() { return null; },
-            cli_execute_command: function() { return ''; }
-        }, mocks);
-        return loadModule(
-            'js/preCliTestAutomationSetup.js',
-            makeRequire({
-                './configLoader.js': {
-                    loadProjectConfig: function() { return {}; },
-                    formatBranchName: function(prefix, key) { return prefix + '/' + key; }
-                },
-                './config.js': configModule,
-                './fetchLinkedBugsToInput.js': { action: function() {} },
-                './common/trackers.js': loadModule(
-                    'js/common/trackers.js',
-                    makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }),
-                    allMocks
-                ),
-                './common/pullRequest.js': loadModule(
-                    'js/common/pullRequest.js',
-                    makeRequire({
-                        './config.js': configModule,
-                        './mergeState.js': loadModule('js/common/mergeState.js'),
-                        './common/mergeState.js': loadModule('js/common/mergeState.js')
-                    }),
-                    allMocks
-                )
-            }),
-            allMocks
-        );
-    }
-
-    test('config without git.baseBranch falls back to main for fetch + alignment', function() {
+        test('config without git.baseBranch falls back to main for fetch + alignment', function() {
         var calls = [];
         var mod = loadCheckoutFallback({
             cli_execute_command: function(opts) {
@@ -504,6 +504,56 @@ suite('preCliTestAutomationSetup — checkoutBranch baseBranch fallback (gh-1242
         }), 'the fetch refspec targets the main fallback');
         assert.ok(calls.some(function(c) { return c.indexOf('git reset --hard origin/') !== -1; }),
             'alignment still runs after the fallback fetch');
+    });
+
+});
+
+suite('preCliTestAutomationSetup — checkoutBranch unsafe ref (gh-1242)', function() {
+
+    test('an unsafe branch name AND unsafe base skip the targeted fetch entirely', function() {
+        var calls = [];
+        var mod = loadCheckoutFallback({
+            cli_execute_command: function(opts) {
+                calls.push(opts.command);
+                if (opts.command.indexOf('git branch --list') !== -1) return '';
+                return '';
+            }
+        });
+        mod.checkoutBranch('TS 45', {
+            git: { baseBranch: 'bad..branch', branchPrefix: { test: 'test' }, authorName: 'Test Agent', authorEmail: 'agent@example.com' },
+            workingDir: null
+        });
+        assert.ok(!calls.some(function(c) { return c.indexOf('fetch origin') !== -1; }),
+            'no targeted fetch when every ref name is unsafe');
+        assert.ok(calls.some(function(c) { return c === 'git checkout -b test/TS 45'; }),
+            'the branch is still created from the base');
+    });
+
+});
+
+suite('preCliTestAutomationSetup — checkoutBranch failure tolerance (gh-1242)', function() {
+
+    test('a throwing targeted fetch and a throwing remote probe are both non-fatal', function() {
+        var calls = [];
+        var mod = loadCheckoutFallback({
+            cli_execute_command: function(opts) {
+                calls.push(opts.command);
+                if (opts.command.indexOf('fetch origin') !== -1) throw new Error('fetch exploded');
+                if (opts.command.indexOf('git ls-remote') !== -1) throw new Error('ls-remote exploded');
+                if (opts.command.indexOf('git branch --list') !== -1) return '';
+                return '';
+            }
+        });
+        mod.checkoutBranch('TS-46', {
+            git: { baseBranch: 'main', branchPrefix: { test: 'test' }, authorName: 'Test Agent', authorEmail: 'agent@example.com' },
+            workingDir: null
+        });
+        assert.ok(calls.some(function(c) { return c.indexOf('fetch origin') !== -1; }),
+            'the targeted fetch was attempted');
+        assert.ok(calls.some(function(c) { return c.indexOf('git ls-remote') !== -1; }),
+            'the remote probe was attempted');
+        assert.ok(calls.some(function(c) { return c === 'git checkout -b test/TS-46'; }),
+            'the branch is still created from the base after both failures');
     });
 
 });
