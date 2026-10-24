@@ -107,6 +107,7 @@
         "js/unit-tests/test_checkBugToFixReady.js",
         "js/unit-tests/test_finishTestCasesGeneration.js",
         "js/unit-tests/test_preCliStoryTestAutomationSetup.js",
+        "js/unit-tests/test_preCliTestAutomationSetup.js",
         "js/unit-tests/test_postStoryTestAutomationResults.js",
         "js/unit-tests/test_postStoryTestAutomationShared.js",
         "js/unit-tests/test_postStoryTestAutomationReviewHelpers.js",

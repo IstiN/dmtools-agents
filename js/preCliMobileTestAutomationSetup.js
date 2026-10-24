@@ -40,6 +40,84 @@ function runInRepo(command, workingDir) {
 }
 
 /**
+ * Sync an existing branch with origin/<baseBranch> via rebase, falling back
+ * to merge. gh-1223: extracted from checkoutAutomationBranch (was nested).
+ */
+function syncWithBase(runInRepo, workingDir, baseBranch) {
+    // gh-761: never start a rebase or merge on top of an unconcluded
+    // merge (MERGE_HEAD present — e.g. the agent left a conflicted
+    // base-branch merge unresolved). The rebase would fail, and the
+    // merge fallback below would then fail with "You have not concluded
+    // your merge" and SILENTLY `git merge --abort` the agent's in-flight
+    // resolution — destroying work this setup step did not start. Leave
+    // the tree exactly as the agent left it; the agent concludes (or
+    // aborts) the merge itself.
+    if (mergeState.isMergeInProgress(runInRepo, workingDir)) {
+        console.warn('⚠️ MERGE_HEAD exists in ' + workingDir +
+            ' — a merge is already in progress; skipping base-branch sync (rebase/merge on top of it would finalize or abort the in-flight merge)');
+        return;
+    }
+    try {
+        runInRepo('git rebase origin/' + baseBranch, workingDir);
+        console.log('✅ Rebase succeeded');
+    } catch (rebaseErr) {
+        console.warn('Rebase failed, falling back to merge:', rebaseErr);
+        try { runInRepo('git rebase --abort', workingDir); } catch (_) {}
+        try {
+            runInRepo('git merge origin/' + baseBranch + ' --no-edit', workingDir);
+            console.log('✅ Merged base into branch');
+        } catch (mergeErr) {
+            console.warn('Merge also failed:', mergeErr);
+            try { runInRepo('git merge --abort', workingDir); } catch (_) {}
+        }
+    }
+}
+
+/** Configure the git author for automation commits (non-fatal). */
+function configureAutomationGitAuthor(config, workingDir) {
+    try {
+        runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
+        runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
+    } catch (e) {
+        console.warn('Failed to configure git author:', e);
+    }
+}
+
+/** Targeted fetch of the automation branch and its base (non-fatal). */
+function fetchAutomationBranchRefs(branchName, baseBranch, workingDir) {
+    try {
+        var targetedFetch = prHelper.buildTargetedOriginFetchCommand([branchName, baseBranch]);
+        if (targetedFetch) runInRepo(targetedFetch, workingDir);
+    } catch (e) {
+        console.warn('Could not fetch remote branches:', e);
+    }
+}
+
+/** Checkout a remote-only branch (and sync it), or create one from the base. */
+function ensureAutomationBranchFromRemote(branchName, baseBranch, workingDir) {
+    var remoteBranchExists = false;
+    try {
+        // gh-912: decide on a real refs/heads/<branch> ref line — a
+        // warning-only capture (central-mode insteadOf origin, git ≥
+        // 2.54) must classify as "branch absent".
+        remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
+    } catch (e) {
+        console.warn('Error checking remote branches:', e);
+    }
+
+    if (remoteBranchExists) {
+        console.log('Branch exists on remote, checking out:', branchName);
+        runInRepo('git checkout -b ' + branchName + ' origin/' + branchName, workingDir);
+        syncWithBase(runInRepo, workingDir, baseBranch);
+    } else {
+        console.log('Creating new branch from', baseBranch + ':', branchName);
+        runInRepo('git checkout ' + baseBranch, workingDir);
+        runInRepo('git pull origin ' + baseBranch, workingDir);
+        runInRepo('git checkout -b ' + branchName, workingDir);
+    }
+}
+
+/**
  * Checkout (or create) test/{ticketKey} branch in the automation repo.
  * Syncs existing branch from origin/<baseBranch> via rebase, falling back to merge.
  */
@@ -50,80 +128,19 @@ function checkoutAutomationBranch(ticketKey, config) {
 
     console.log('Setting up automation repo branch:', branchName, 'in', workingDir);
 
-    try {
-        runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
-        runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
-    } catch (e) {
-        console.warn('Failed to configure git author:', e);
-    }
-
-    try {
-        var targetedFetch = prHelper.buildTargetedOriginFetchCommand(
-            [branchName, (config.git && config.git.baseBranch) || 'main']);
-        if (targetedFetch) runInRepo(targetedFetch, workingDir);
-    } catch (e) {
-        console.warn('Could not fetch remote branches:', e);
-    }
+    configureAutomationGitAuthor(config, workingDir);
+    fetchAutomationBranchRefs(branchName, baseBranch, workingDir);
 
     var localBranches = cleanCommandOutput(
         runInRepo('git branch --list "' + branchName + '"', workingDir) || ''
     );
 
-    function syncWithBase() {
-        // gh-761: never start a rebase or merge on top of an unconcluded
-        // merge (MERGE_HEAD present — e.g. the agent left a conflicted
-        // base-branch merge unresolved). The rebase would fail, and the
-        // merge fallback below would then fail with "You have not concluded
-        // your merge" and SILENTLY `git merge --abort` the agent's in-flight
-        // resolution — destroying work this setup step did not start. Leave
-        // the tree exactly as the agent left it; the agent concludes (or
-        // aborts) the merge itself.
-        if (mergeState.isMergeInProgress(runInRepo, workingDir)) {
-            console.warn('⚠️ MERGE_HEAD exists in ' + workingDir +
-                ' — a merge is already in progress; skipping base-branch sync (rebase/merge on top of it would finalize or abort the in-flight merge)');
-            return;
-        }
-        try {
-            runInRepo('git rebase origin/' + baseBranch, workingDir);
-            console.log('✅ Rebase succeeded');
-        } catch (rebaseErr) {
-            console.warn('Rebase failed, falling back to merge:', rebaseErr);
-            try { runInRepo('git rebase --abort', workingDir); } catch (_) {}
-            try {
-                runInRepo('git merge origin/' + baseBranch + ' --no-edit', workingDir);
-                console.log('✅ Merged base into branch');
-            } catch (mergeErr) {
-                console.warn('Merge also failed:', mergeErr);
-                try { runInRepo('git merge --abort', workingDir); } catch (_) {}
-            }
-        }
-    }
-
     if (localBranches.trim()) {
         console.log('Branch exists locally, syncing from', baseBranch + ':', branchName);
         runInRepo('git checkout ' + branchName, workingDir);
-        syncWithBase();
+        syncWithBase(runInRepo, workingDir, baseBranch);
     } else {
-        var remoteBranchExists = false;
-        try {
-            // gh-912: decide on a real refs/heads/<branch> ref line — a
-            // warning-only capture (central-mode insteadOf origin, git ≥
-            // 2.54) must classify as "branch absent".
-            remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
-        } catch (e) {
-            console.warn('Error checking remote branches:', e);
-        }
-
-        if (remoteBranchExists) {
-            console.log('Branch exists on remote, checking out:', branchName);
-            runInRepo('git checkout -b ' + branchName + ' origin/' + branchName, workingDir);
-            syncWithBase();
-        } else {
-            console.log('Creating new branch from', baseBranch + ':', branchName);
-            runInRepo('git checkout ' + baseBranch, workingDir);
-            runInRepo('git pull origin ' + baseBranch, workingDir);
-            runInRepo('git checkout -b ' + branchName, workingDir);
-        }
+        ensureAutomationBranchFromRemote(branchName, baseBranch, workingDir);
     }
 
     console.log('✅ Automation branch ready:', branchName);
@@ -490,74 +507,112 @@ function installAppOnSimulator(appPath, folder, appId) {
 }
 
 
+/** Everything the setup steps need, resolved once, in the original order. */
+function resolveMobileSetupInputs(params) {
+    var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
+    var folder = actualParams.inputFolderPath;
+    var ticketKey = folder.split('/').pop();
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var customParams = (params.jobParams || params).customParams || {};
+    return {
+        actualParams: actualParams,
+        folder: folder,
+        ticketKey: ticketKey,
+        config: config,
+        customParams: customParams,
+        tracker: trackersModule.createTracker(config, customParams)
+    };
+}
+
+/** Step 1: move the trigger ticket to In Development (non-fatal). */
+function moveTicketToInDevelopment(tracker, ticketKey) {
+    try {
+        tracker.moveToStatus(ticketKey, STATUSES.IN_DEVELOPMENT);
+        console.log('✅ Moved', ticketKey, 'to In Development');
+    } catch (e) {
+        console.warn('Failed to move ticket to In Development:', e);
+    }
+}
+
+/** Step 2: fetch linked Test Cases into the input folder (non-fatal). */
+function fetchLinkedTestCasesSafely(ticketKey, folder, tracker) {
+    try {
+        fetchLinkedTestCases(ticketKey, folder, tracker);
+    } catch (e) {
+        console.error('Failed to fetch linked test cases:', e);
+    }
+}
+
+/** Step 3: checkout test/{KEY} in the automation repo (non-fatal). */
+function checkoutAutomationBranchSafely(ticketKey, config) {
+    if (!config.workingDir) {
+        console.warn('No workingDir configured — skipping branch checkout');
+        return;
+    }
+    try {
+        checkoutAutomationBranch(ticketKey, config);
+    } catch (e) {
+        console.error('Branch checkout failed (non-fatal):', e);
+    }
+}
+
+/**
+ * Step 4: resolve the environment-specific build config (writing
+ * environment.md when one is active) and download the Bitrise artifact.
+ * Returns the .app path (or a falsy value). No-op without bitriseBuild.
+ */
+function downloadBitriseAppIfNeeded(ticketKey, folder, customParams, config) {
+    if (!customParams.bitriseBuild) {
+        return null;
+    }
+
+    var featureBranch = findFeatureBranch(ticketKey, customParams.featurePR);
+
+    // Resolve environment-specific config if available
+    var envResolution = setupHelpers.resolveEnvironmentBuildConfig(
+        customParams.bitriseBuild, customParams.testEnvironment || 'prod');
+    var buildConfig = envResolution.buildConfig;
+    if (envResolution.active) {
+        console.log('🌍 Using environment:', envResolution.environment);
+        // Write environment info for the agent prompt
+        var envLines = setupHelpers.buildEnvironmentMarkdown(
+            envResolution.environment, buildConfig.workflowId, envResolution.envConfig);
+        file_write(folder + '/environment.md', envLines.join('\n'));
+        console.log('✅ Written environment.md for', envResolution.environment);
+    }
+
+    return downloadBitriseApp(ticketKey, folder, buildConfig, featureBranch, config.workingDir);
+}
+
 function action(params) {
     try {
-        var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
-        var folder = actualParams.inputFolderPath;
-        var ticketKey = folder.split('/').pop();
-        var config = configLoader.loadProjectConfig(params.jobParams || params);
-        var customParams = (params.jobParams || params).customParams || {};
-        var tracker = trackersModule.createTracker(config, customParams);
+        var inputs = resolveMobileSetupInputs(params);
 
-        console.log('=== Mobile test automation setup for:', ticketKey, '===');
+        console.log('=== Mobile test automation setup for:', inputs.ticketKey, '===');
 
         // Step 1: Move trigger ticket to In Development
-        try {
-            tracker.moveToStatus(ticketKey, STATUSES.IN_DEVELOPMENT);
-            console.log('✅ Moved', ticketKey, 'to In Development');
-        } catch (e) {
-            console.warn('Failed to move ticket to In Development:', e);
-        }
+        moveTicketToInDevelopment(inputs.tracker, inputs.ticketKey);
 
         // Step 2: Fetch linked Test Cases and write to input folder
-        try {
-            fetchLinkedTestCases(ticketKey, folder, tracker);
-        } catch (e) {
-            console.error('Failed to fetch linked test cases:', e);
-        }
+        fetchLinkedTestCasesSafely(inputs.ticketKey, inputs.folder, inputs.tracker);
 
         // Step 3: Checkout test/{KEY} branch in automation repo
-        if (config.workingDir) {
-            try {
-                checkoutAutomationBranch(ticketKey, config);
-            } catch (e) {
-                console.error('Branch checkout failed (non-fatal):', e);
-            }
-        } else {
-            console.warn('No workingDir configured — skipping branch checkout');
-        }
+        checkoutAutomationBranchSafely(inputs.ticketKey, inputs.config);
 
         // Step 4: Download Bitrise iOS simulator build artifact
-        var appPath = null;
-        if (customParams.bitriseBuild) {
-            var featureBranch = findFeatureBranch(ticketKey, customParams.featurePR);
-
-            // Resolve environment-specific config if available
-            var envResolution = setupHelpers.resolveEnvironmentBuildConfig(
-                customParams.bitriseBuild, customParams.testEnvironment || 'prod');
-            var buildConfig = envResolution.buildConfig;
-            if (envResolution.active) {
-                console.log('🌍 Using environment:', envResolution.environment);
-                // Write environment info for the agent prompt
-                var envLines = setupHelpers.buildEnvironmentMarkdown(
-                    envResolution.environment, buildConfig.workflowId, envResolution.envConfig);
-                file_write(folder + '/environment.md', envLines.join('\n'));
-                console.log('✅ Written environment.md for', envResolution.environment);
-            }
-
-            appPath = downloadBitriseApp(ticketKey, folder, buildConfig, featureBranch, config.workingDir);
-        }
+        var appPath = downloadBitriseAppIfNeeded(
+            inputs.ticketKey, inputs.folder, inputs.customParams, inputs.config);
 
         // Resolve appId from environment config
         var resolvedAppId = setupHelpers.decideAppId(
-            customParams.bitriseBuild, customParams.testEnvironment || 'prod');
+            inputs.customParams.bitriseBuild, inputs.customParams.testEnvironment || 'prod');
 
         // Step 5: Install app on the already-booted simulator
         if (appPath) {
-            installAppOnSimulator(appPath, folder, resolvedAppId);
+            installAppOnSimulator(appPath, inputs.folder, resolvedAppId);
         }
 
-        console.log('✅ Mobile test automation setup complete for', ticketKey);
+        console.log('✅ Mobile test automation setup complete for', inputs.ticketKey);
 
     } catch (error) {
         console.error('❌ Error in preCliMobileTestAutomationSetup:', error);

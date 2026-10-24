@@ -1409,3 +1409,135 @@ suite('preCliMobileTestAutomationSetup — gh-1189 characterization: Bitrise dow
     });
 
 });
+
+// ── Suite: gh-1223 characterization: base-branch sync & remote checkout ─────
+// Pins the behavior of the syncWithBase fallback chain and the remote-only
+// branch checkout ahead of the gh-1223 helper extraction. These tests must
+// keep passing unchanged through the refactor.
+
+suite('preCliMobileTestAutomationSetup — gh-1223 characterization: base sync & remote checkout', function() {
+
+    test('rebase failure falls back to merge with the base branch', function() {
+        var commands = [];
+
+        var m = loadPreCli({
+            jira_search_by_jql: function() { return []; },
+            file_write: function() {},
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command.indexOf('git branch --list') !== -1) return '  test/PROJ-8100';
+                if (opts.command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
+                    throw new Error('no merge in progress');
+                }
+                if (opts.command.indexOf('git rebase origin/main') === 0) {
+                    throw new Error('rebase conflict');
+                }
+                return '';
+            }
+        });
+
+        m.action(makeParams('PROJ-8100', '/tmp/automation-repo'));
+
+        assert.ok(commands.some(function(c) { return c === 'git rebase --abort'; }),
+            'failed rebase must be aborted before falling back');
+        assert.ok(commands.some(function(c) { return c === 'git merge origin/main --no-edit'; }),
+            'merge fallback must pull origin/main into the branch');
+        assert.equal(commands.filter(function(c) { return c === 'git merge --abort'; }).length, 0,
+            'a successful fallback merge must NOT be aborted');
+    });
+
+    test('rebase and merge both fail — merge is aborted, action still completes', function() {
+        var commands = [];
+        var writtenFiles = {};
+
+        var m = loadPreCli({
+            jira_search_by_jql: function() { return []; },
+            file_write: function(path, content) { writtenFiles[path] = content; },
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command.indexOf('git branch --list') !== -1) return '  test/PROJ-8101';
+                if (opts.command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
+                    throw new Error('no merge in progress');
+                }
+                if (opts.command.indexOf('git rebase origin/main') === 0 ||
+                    opts.command.indexOf('git merge origin/main') === 0) {
+                    throw new Error('diverged');
+                }
+                return '';
+            }
+        });
+
+        // Must not throw even when both sync strategies fail
+        m.action(makeParams('PROJ-8101', '/tmp/automation-repo'));
+
+        assert.ok(commands.some(function(c) { return c === 'git rebase --abort'; }),
+            'failed rebase must be aborted');
+        assert.ok(commands.some(function(c) { return c === 'git merge --abort'; }),
+            'failed merge fallback must also be aborted');
+        assert.ok(writtenFiles.hasOwnProperty('input/PROJ-8101/linked_test_cases.md'),
+            'setup continues after a failed base-branch sync');
+    });
+
+    test('remote-only branch is checked out with -b from origin and synced', function() {
+        var commands = [];
+
+        var m = loadPreCli({
+            jira_search_by_jql: function() { return []; },
+            file_write: function() {},
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command.indexOf('git branch --list') !== -1) return '';
+                if (opts.command.indexOf('git ls-remote') !== -1) {
+                    return 'abc1234567890abcdef1234567890abcdef1234\trefs/heads/test/PROJ-8102\n';
+                }
+                if (opts.command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
+                    throw new Error('no merge in progress');
+                }
+                return '';
+            }
+        });
+
+        m.action(makeParams('PROJ-8102', '/tmp/automation-repo'));
+
+        assert.ok(commands.some(function(c) {
+            return c === 'git checkout -b test/PROJ-8102 origin/test/PROJ-8102';
+        }), 'remote-only branch must be checked out tracking origin');
+        assert.ok(commands.some(function(c) { return c === 'git rebase origin/main'; }),
+            'the checked-out remote branch must still be synced with the base branch');
+        assert.equal(commands.filter(function(c) {
+            return c === 'git checkout -b test/PROJ-8102';
+        }).length, 0, 'must not create a fresh branch when origin already has one');
+    });
+
+    test('action accepts jobParams-only params (no top-level inputFolderPath)', function() {
+        var writtenFiles = {};
+        var moves = [];
+
+        var m = loadPreCli({
+            jira_move_to_status: function(opts) { moves.push(opts); },
+            jira_search_by_jql: function() { return []; },
+            file_write: function(path) { writtenFiles[path] = true; },
+            cli_execute_command: function() { return ''; }
+        });
+
+        m.action({
+            jobParams: {
+                inputFolderPath: 'input/PROJ-8103',
+                customParams: {
+                    targetRepository: {
+                        owner: 'ExampleOrg',
+                        repo: 'example-mobile-app-automation',
+                        baseBranch: 'main',
+                        workingDir: '/tmp/automation-repo'
+                    }
+                }
+            }
+        });
+
+        assert.deepEqual(moves, [{ key: 'PROJ-8103', statusName: 'In Development' }],
+            'ticket key must be resolved from jobParams.inputFolderPath');
+        assert.ok(writtenFiles['input/PROJ-8103/linked_test_cases.md'],
+            'linked_test_cases.md still written for jobParams-only params');
+    });
+
+});
