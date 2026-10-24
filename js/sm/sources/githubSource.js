@@ -602,45 +602,50 @@ function resolveAssigneeQuery(assignee, machineAuthor) {
     return assigneeLogins.length > 0 ? assigneeLogins[0] : null;
 }
 
-function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAuthor, owner) {
-    var q = rule.query || {};
-    var full = repoInfo.owner + '/' + repoInfo.repo;
-    var seen = {};
-    var items = [];
+// gh-1194: queryIssues stage helpers (CRAP ratchet) — pure splits of the
+// former inline blocks. Same searches, calls, logs and merge order.
 
-    // Per-label OR search (GitHub ANDs multi-label queries). Collect ALL
-    // matches — the FIFO sort at the end picks the oldest, so an early
-    // per-label cut at `limit` would drop old issues behind newer ones.
-    // The scans fan out through smAsync: one runAsync worker round when
-    // parallelWorkers is wired, the identical sequential order otherwise.
-    // Merging iterates descriptor order — labels in rule order, then the
-    // assignee scan — and dedupes by number, exactly like the old inline
-    // sequence.
+// Per-label OR descriptors (GitHub ANDs multi-label queries) + the gh-944
+// assignee scan descriptor (resolveAssigneeQuery; fail-closed when the
+// {machineAuthor} knob is unresolvable).
+function _issueSearchDescriptors(q, machineAuthor) {
     var descriptors = (q.labels || []).map(function (ml) {
         return { kind: 'label', label: ml };
     });
-    // gh-944: the assignee may carry the {machineAuthor} deployment knob —
-    // the dev-on-assignment rule re-derives dev legs for issues assigned to
-    // THE MACHINE (resolveAssigneeQuery; fail-closed when unresolvable).
     var assigneeQuery = resolveAssigneeQuery(q.assignee, machineAuthor);
     if (assigneeQuery) descriptors.push({ kind: 'assignee' });
+    return { descriptors: descriptors, assigneeQuery: assigneeQuery };
+}
 
-    var searchOne = function (d) {
+// One search descriptor → { descriptor, items }. Closure-free per call site:
+// full/assigneeQuery travel as parameters (the smAsync worker twin of this
+// function is ISSUE_SEARCH_WORKER_SOURCE).
+function issueSearchOneFn(full, assigneeQuery) {
+    return function (d) {
         var queryStr = 'repo:' + full + ' is:issue is:open ' +
             (d.kind === 'label' ? 'label:"' + d.label + '"' : 'assignee:' + assigneeQuery);
         var res = parseMcp(github_search_issues({ query: queryStr }));
         return { descriptor: d, items: asList(res) };
     };
+}
 
-    var searchResults;
+// The scans fan out through smAsync: one runAsync worker round when
+// parallelWorkers is wired, the identical sequential order otherwise.
+function _runIssueSearch(descriptors, searchOne, repoInfo, assigneeQuery) {
     if (descriptors.length > 1) {
-        searchResults = smAsyncModule.map(descriptors, ISSUE_SEARCH_WORKER_SOURCE, function (d) {
+        return smAsyncModule.map(descriptors, ISSUE_SEARCH_WORKER_SOURCE, function (d) {
             return { repo: repoInfo, descriptor: d, assignee: assigneeQuery };
         });
-    } else {
-        searchResults = descriptors.map(searchOne);
     }
+    return descriptors.map(searchOne);
+}
 
+// Merge one descriptor result into the item list — dedupe by number, first
+// descriptor wins. Merging iterates descriptor order — labels in rule order,
+// then the assignee scan — exactly like the old inline sequence.
+function _collectIssueItems(searchResults) {
+    var seen = {};
+    var items = [];
     searchResults.forEach(function (r) {
         r.items.forEach(function (it) {
             if (seen[it.number]) return;
@@ -658,63 +663,98 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
             items.push(item);
         });
     });
+    return items;
+}
+
+// ONE cache snapshot fetched up front and shipped to every worker via
+// args.preseed (multi-item batches only); null when the provider cannot
+// snapshot. Single-item lists keep the sequential path with NO snapshot
+// fetch (avoids the extra github_list_branches call for the common
+// single-issue case).
+function _issueStatusSnapshot(provider) {
+    return (typeof runAsync === 'function' && provider &&
+        typeof provider.snapshot === 'function') ? provider.snapshot() : null;
+}
+
+// Shared prRef application (both enrichment paths): an OPEN ref carries the
+// live status, any other found ref gets the closed stub, no ref leaves the
+// item untouched.
+function _applyIssuePrRef(item, prRef, pr) {
+    if (prRef && prRef.state === 'OPEN') {
+        item.pr = pr;
+        item.prNumber = prRef.number;
+        item.branch = (item.pr && item.pr.branch) || '';
+    } else if (prRef) {
+        item.pr = { number: prRef.number, state: prRef.state,
+                    checks: 'none', mergeState: 'UNKNOWN', mergeable: null };
+        item.prNumber = prRef.number;
+    }
+    return item;
+}
+
+// Multi-item enrichment: workers resolve findPr + prStatus per issue against
+// the preseeded snapshot; the main isolate absorbs the results and writes
+// each OPEN status back into the provider cache (same cross-rule memo
+// contract as the queryPrs batch).
+function _enrichIssueItemsParallel(items, provider, repoInfo, branchPrefix) {
+    var snapshot = _issueStatusSnapshot(provider);
+    var enrichResults = smAsyncModule.map(items, ISSUE_ENRICH_WORKER_SOURCE, function (item) {
+        return { repo: repoInfo, n: item.issueNumber, prefix: branchPrefix, preseed: snapshot };
+    });
+    return enrichResults.map(function (r, i) {
+        var item = _applyIssuePrRef(items[i], r.prRef, r.pr);
+        if (r.prRef && r.prRef.state === 'OPEN' &&
+            provider && typeof provider.memoPrStatus === 'function') {
+            provider.memoPrStatus(r.prRef.number, r.pr);
+        }
+        return item;
+    });
+}
+
+// Single-item enrichment: today's sequential path, provider calls in place.
+function _enrichIssueItemsSequential(items, provider, branchPrefix) {
+    return items.map(function (item) {
+        var prRef = provider.findPr(item.issueNumber, branchPrefix);
+        return prRef && prRef.state === 'OPEN'
+            ? _applyIssuePrRef(item, prRef, provider.prStatus(prRef.number))
+            : _applyIssuePrRef(item, prRef, null);
+    });
+}
+
+// Engine-level guards (matchesGuards), then the FIFO: oldest issue first —
+// github_search_issues returns newest-first, which starves the oldest ticket
+// under limit:1 rules. Issue number order == creation order.
+function _guardMatchedIssues(items, rule, provider, machineAuthor, owner, repoInfo) {
+    return items.filter(function (item) {
+        return matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo);
+    });
+}
+
+function _fifoSliceIssues(matched, limit) {
+    matched.sort(function (a, b) { return (a.issueNumber || 0) - (b.issueNumber || 0); });
+    return matched.slice(0, limit);
+}
+
+function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAuthor, owner) {
+    var q = rule.query || {};
+    var full = repoInfo.owner + '/' + repoInfo.repo;
+
+    var search = _issueSearchDescriptors(q, machineAuthor);
+    var searchResults = _runIssueSearch(
+        search.descriptors, issueSearchOneFn(full, search.assigneeQuery), repoInfo, search.assigneeQuery);
+    var items = _collectIssueItems(searchResults);
 
     // Linked-PR enrichment: the issue carries the state, the PR carries
     // the CI/merge observation. Multi-item batches fan out through
     // smAsync with ONE cache snapshot fetched up front and shipped to
     // every worker via args.preseed; single-item lists keep today's
-    // sequential path with NO snapshot fetch (avoids the extra
-    // github_list_branches call for the common single-issue case).
-    var enriched;
-    if (items.length > 1) {
-        var snapshot = (typeof runAsync === 'function' && provider &&
-            typeof provider.snapshot === 'function') ? provider.snapshot() : null;
-        var enrichResults = smAsyncModule.map(items, ISSUE_ENRICH_WORKER_SOURCE, function (item) {
-            return { repo: repoInfo, n: item.issueNumber, prefix: branchPrefix, preseed: snapshot };
-        });
-        enriched = enrichResults.map(function (r, i) {
-            var item = items[i];
-            var prRef = r.prRef;
-            if (prRef && prRef.state === 'OPEN') {
-                item.pr = r.pr;
-                item.prNumber = prRef.number;
-                item.branch = (item.pr && item.pr.branch) || '';
-                // Write-back — same cross-rule memo contract as the
-                // queryPrs batch above.
-                if (provider && typeof provider.memoPrStatus === 'function') {
-                    provider.memoPrStatus(prRef.number, r.pr);
-                }
-            } else if (prRef) {
-                item.pr = { number: prRef.number, state: prRef.state,
-                            checks: 'none', mergeState: 'UNKNOWN', mergeable: null };
-                item.prNumber = prRef.number;
-            }
-            return item;
-        });
-    } else {
-        enriched = items.map(function (item) {
-            var prRef = provider.findPr(item.issueNumber, branchPrefix);
-            if (prRef && prRef.state === 'OPEN') {
-                item.pr = provider.prStatus(prRef.number);
-                item.prNumber = prRef.number;
-                item.branch = (item.pr && item.pr.branch) || '';
-            } else if (prRef) {
-                item.pr = { number: prRef.number, state: prRef.state,
-                            checks: 'none', mergeState: 'UNKNOWN', mergeable: null };
-                item.prNumber = prRef.number;
-            }
-            return item;
-        });
-    }
+    // sequential path with NO snapshot fetch.
+    var enriched = items.length > 1
+        ? _enrichIssueItemsParallel(items, provider, repoInfo, branchPrefix)
+        : _enrichIssueItemsSequential(items, provider, branchPrefix);
 
-    var matched = enriched.filter(function (item) { return matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo); });
-
-    // FIFO: oldest issue first — github_search_issues returns newest-first,
-    // which starves the oldest ticket under limit:1 rules (the oldest
-    // machine-loop PR rots at the bottom of the queue). Same starvation fix
-    // as the PR-carrier path below; issue number order == creation order.
-    matched.sort(function (a, b) { return (a.issueNumber || 0) - (b.issueNumber || 0); });
-    return matched.slice(0, limit);
+    var matched = _guardMatchedIssues(enriched, rule, provider, machineAuthor, owner, repoInfo);
+    return _fifoSliceIssues(matched, limit);
 }
 
 // Linked-issue resolution (pr-carrier → issue anchor): issue-anchored legs
@@ -1230,23 +1270,80 @@ function _blockedQueryHoldFail(q2, labels) {
     return labels.indexOf('blocked') !== -1;
 }
 
+// gh-1194: queryPrs stage helpers (CRAP ratchet) — pure splits of the former
+// inline blocks. Same calls, logs and filter order.
+
+// 'blocked' = human hold (fa #939 — documented in matchesGuards): the
+// item is invisible to EVERY rule, so it must not even act as a mutex
+// holder — a frozen PR's stale ai_validating arm would otherwise
+// serialize the whole queue forever. Filtered before the mutex scan;
+// the matchesGuards check remains the engine-level guard.
+// gh-1140 exception (q.allowBlockedItems): the guest-transplant rule
+// must SEE its own parked sources — AC4's automatic re-arm is the #633
+// head-change reset, and a parked source (parkedLabel 'blocked') is
+// otherwise invisible to every lane forever. Opt-in only: the freeze
+// stays intact for every other rule, and the transplant decision core
+// still refuses to act on a 'blocked' item that does not carry the
+// lane's own park marker (human holds are never touched).
+function _visiblePrItems(q, items) {
+    return items.filter(function (it) { return _blockedHoldVisible(q, it); });
+}
+
+// The inline gh-1009 re-application, kept call-for-call (the split's
+// _applyMutexFilter above is the first pass; this second pass is
+// behaviorally idempotent and stays to keep today's exact shape).
+function _applyQueryMutex(q, items) {
+    if (!q.mutex) return items;
+    var holders = _mutexHolders(items, q);
+    if (q.mutexExcludeSelf) {
+        items = _applyExcludeSelfMutex(q, items, holders, _mutexMaxOf(q));
+    }
+    return items;
+}
+
+// Cheap per-item guards (labels/draft/branch) — the subset of the matched
+// filter that needs no provider facts. Order preserved: blocked hold, label
+// allowlist, label blocklist, draft, branch prefix.
+function _prLabelWanted(q2, labels) {
+    return !q2.labels || q2.labels.some(function (l) { return labels.indexOf(l) !== -1; });
+}
+
+function _prLabelForbidden(q2, labels) {
+    return Boolean(q2.notLabels && q2.notLabels.some(function (l) { return labels.indexOf(l) !== -1; }));
+}
+
+function _prBranchPrefixOk(q2, item) {
+    return !q2.branchPrefix || String(item.branch || '').indexOf(q2.branchPrefix) === 0;
+}
+
+function _prQueryGuardsFail(item, q2) {
+    var labels = item.labels;
+    if (_blockedQueryHoldFail(q2, labels)) return true;
+    if (!_prLabelWanted(q2, labels)) return true;
+    if (_prLabelForbidden(q2, labels)) return true;
+    // #939: human hold — filtered pre-mutex too; see matchesGuards.
+    // gh-1140: q.allowBlockedItems opts the guest-transplant lane back
+    // in (its own AC4 park-reset needs the parked sources).
+    if (q2.draft === false && item.draft) return true;
+    if (!_prBranchPrefixOk(q2, item)) return true;
+    return false;
+}
+
+// Guards that need per-PR facts (checks/merge state) resolve lazily through
+// matchesGuards — only when the rule actually filters on them.
+function _prRuleMatches(items, rule, provider, machineAuthor, owner, repoInfo) {
+    return items.filter(function (item) {
+        var q2 = rule.query || {};
+        if (_prQueryGuardsFail(item, q2)) return false;
+        if (_prListAuthorGuardsFail(item, q2, machineAuthor, owner)) return false;
+        return matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo);
+    });
+}
+
 function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {
     var q = rule.query || {};
     var items = _buildPrItems(_openPrList(provider, repoInfo), repoInfo, branchPrefixOf(rule));
-
-    // 'blocked' = human hold (fa #939 — documented in matchesGuards): the
-    // item is invisible to EVERY rule, so it must not even act as a mutex
-    // holder — a frozen PR's stale ai_validating arm would otherwise
-    // serialize the whole queue forever. Filtered before the mutex scan;
-    // the matchesGuards check remains the engine-level guard.
-    // gh-1140 exception (q.allowBlockedItems): the guest-transplant rule
-    // must SEE its own parked sources — AC4's automatic re-arm is the #633
-    // head-change reset, and a parked source (parkedLabel 'blocked') is
-    // otherwise invisible to every lane forever. Opt-in only: the freeze
-    // stays intact for every other rule, and the transplant decision core
-    // still refuses to act on a 'blocked' item that does not carry the
-    // lane's own park marker (human holds are never touched).
-    items = items.filter(function (it) { return _blockedHoldVisible(q, it); });
+    items = _visiblePrItems(q, items);
 
     // Mutex: gh-1009 split — _applyMutexFilter owns the defer decision;
     // gh-1000's phantom-holder reconciliation (phantomHealIfFull, inside
@@ -1257,9 +1354,9 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
     // validate-fresh both arm ai_validating + dispatch CI; without the
     // mutex multiple approved PRs validate in parallel and every merge
     // (base move) re-invalidates the others: N merges = N×N validation
-    // runs. One at a time, oldest-first (FIFO sort below) = each head
-    // validates exactly once. Owner rule 2026-09-22 (live: fa #778/#779
-    // both ai_validating while older #762 waited).
+    // runs. One at a time (FIFO sort below) = each head validates exactly
+    // once. Owner rule 2026-09-22 (live: fa #778/#779 both ai_validating
+    // while older #762 waited).
     //
     // q.mutexAmong = [labels]: scope the mutex to holders that ALSO carry
     // one of these labels. Owner priority rule 2026-09-22 (live: fa #801
@@ -1267,81 +1364,19 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
     // on #831/#832/#834 — validate-armed deferred every tick while the
     // parallel dev wave re-occupied the label): the dev lane is
     // non-blocking by design, so its arms must NOT block the approved
-    // merge window. Only approved-PR arms serialize the merge window
-    // (the N×N re-validation invariant is a merge-window property).
+    // merge window.
+    //
     // q.mutexExcludeSelf = true (recovery-rule form): the rule's own target
-    // carries the mutex label by definition (it re-dispatches CI on an
-    // ALREADY armed PR), so the global scan would self-block it 100% of the
-    // time — which is exactly why the recovery rules shipped with NO mutex
-    // and leaked (live multi-arm, fa 2026-09-26: 7 approved PRs held
-    // ai_validating at once, +1 arm per tick, while their descriptions
-    // claimed validate-armed's mutex made the arm a singleton — false once
-    // heads move: silent-update / BEHIND unarm races / guest pushes keep
-    // feeding checks=none states). With exclude-self the mutex is evaluated
-    // PER CANDIDATE (#577): a candidate defers only while ANOTHER PR holds
-    // the arm AND the candidate itself does not (mutexAmong still scopes
-    // the holders). One armed approved PR = the candidate itself = fires;
-    // with several arms the self-holding candidates drain the stack
-    // oldest-first (a stack can also freeze the drain rules themselves —
-    // live: fa #1068+#1088 2026-09-30, both heads green-with-missing-CI +
-    // BLOCKED, so merge-validated/fail-validation/unarm-stale matched
-    // nothing and the old all-defer form deadlocked the queue ~40 min).
-    // Arming stays serialized: only the global (non-exclude-self) form
-    // adds the label, and it defers on ANY holder within mutexAmong.
+    // carries the mutex label by definition — with exclude-self the mutex is
+    // evaluated PER CANDIDATE (#577); a candidate defers only while ANOTHER
+    // PR holds the arm AND the candidate itself does not.
+    //
     // gh-837 (merge cadence): q.mutexMax (default 1) — how many arms the
-    // mutex admits CONCURRENTLY. The SM engine patches this onto the
-    // ai_validating/pr_approved merge-window rules when the
-    // validationConcurrency knob (repo var, default 1 = today's behavior)
-    // is raised AND the approved queue depth is at/above the watermark —
-    // N=2-3 parallel validations drain the approved FIFO at ~1 merge per
-    // validation cycle instead of one. The candidate/holder accounting is
+    // mutex admits CONCURRENTLY. The candidate/holder accounting is
     // unchanged: mutexAmong still scopes WHO counts as a holder, 'blocked'
     // holders are invisible, and mutexExcludeSelf still lets a self-holding
-    // recovery candidate drain a leaked stack — only the defer threshold
-    // moves from '>=1 other holder' to '>= mutexMax other holders'.
-    if (q.mutex) {
-        var among = q.mutexAmong;
-        var holdsMutex = function (it) {
-            if (it.labels.indexOf(q.mutex) === -1) return false;
-            if (!among) return true;
-            return among.some(function (l) { return it.labels.indexOf(l) !== -1; });
-        };
-        var mutexMax = _mutexMaxOf(q);
-        var holders = items.filter(holdsMutex);
-        if (q.mutexExcludeSelf) {
-            items = items.filter(function (candidate) {
-                // #577 (fa 2026-09-30, live #1068+#1088): a candidate that
-                // itself holds the mutex occupies its own serialization slot.
-                // The old 'another holder exists' test made two armed PRs
-                // block each other forever whenever every drain rule was
-                // inapplicable (both heads green-with-missing-CI + BLOCKED +
-                // not BEHIND: revalidate-armed and dead-zone each deferred on
-                // the other, while merge-validated / fail-validation /
-                // unarm-stale could not complete the stack — the whole queue
-                // froze ~40 min until a manual unarm). Defer only when the
-                // candidate does NOT hold the mutex itself; recovery-rule
-                // candidates always self-hold (their query carries the arm
-                // label), so a leaked stack drains oldest-first instead of
-                // deadlocking. New arms still cannot leak: only the global
-                // (non-exclude-self) form arms, and it still defers once the
-                // slot count reaches mutexMax holders within mutexAmong.
-                var selfHolds = holdsMutex(candidate);
-                var otherHolders = 0;
-                for (var hi = 0; hi < holders.length; hi++) {
-                    if (holders[hi] !== candidate && holders[hi].prNumber !== candidate.prNumber) {
-                        otherHolders++;
-                    }
-                }
-                var blocked = !selfHolds && otherHolders >= mutexMax;
-                if (blocked) {
-                    console.log('   🔒 mutex "' + q.mutex + '" slots ' + otherHolders + '/' + mutexMax +
-                        ' taken — candidate pr-' + candidate.prNumber +
-                        ' defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ', exclude-self)');
-                }
-                return !blocked;
-            });
-        }
-    }
+    // recovery candidate drain a leaked stack.
+    items = _applyQueryMutex(q, items);
 
     // PR guards that need per-PR facts (checks/merge state) resolve lazily:
     // only when the rule actually filters on them.
@@ -1349,20 +1384,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
         items = _enrichPrItemsWithStatus(items, provider, repoInfo);
     }
 
-    var matched = items.filter(function (item) {
-        var labels = item.labels;
-        var q2 = rule.query || {};
-        // #939: human hold — filtered pre-mutex too; see matchesGuards.
-        // gh-1140: q.allowBlockedItems opts the guest-transplant lane back
-        // in (its own AC4 park-reset needs the parked sources).
-        if (_blockedQueryHoldFail(q2, labels)) return false;
-        if (q2.labels && !q2.labels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
-        if (q2.notLabels && q2.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
-        if (q2.draft === false && item.draft) return false;
-        if (q2.branchPrefix && String(item.branch || '').indexOf(q2.branchPrefix) !== 0) return false;
-        if (_prListAuthorGuardsFail(item, q2, machineAuthor, owner)) return false;
-        return matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo);
-    });
+    var matched = _prRuleMatches(items, rule, provider, machineAuthor, owner, repoInfo);
 
     // gh-922 (dead-head park bench): parked candidates whose head ref the
     // provider cannot see never reach the dispatch loop. Runs before the
@@ -1380,5 +1402,22 @@ if (typeof module !== 'undefined' && module.exports) {
         linkedIssueNumber: linkedIssueNumber,
         takeMutexTickSnapshot: takeMutexTickSnapshot,
         mutexHoldersOf: mutexHoldersOf, rederiveHoldersLive: rederiveHoldersLive,
-        logPhantomHeal: logPhantomHeal };
+        logPhantomHeal: logPhantomHeal,
+        // gh-1194: query split helpers exposed as testable pure helpers
+        _issueSearchDescriptors: _issueSearchDescriptors,
+        _runIssueSearch: _runIssueSearch,
+        _collectIssueItems: _collectIssueItems,
+        _issueStatusSnapshot: _issueStatusSnapshot,
+        _applyIssuePrRef: _applyIssuePrRef,
+        _enrichIssueItemsParallel: _enrichIssueItemsParallel,
+        _enrichIssueItemsSequential: _enrichIssueItemsSequential,
+        _guardMatchedIssues: _guardMatchedIssues,
+        _fifoSliceIssues: _fifoSliceIssues,
+        _visiblePrItems: _visiblePrItems,
+        _applyQueryMutex: _applyQueryMutex,
+        _prLabelWanted: _prLabelWanted,
+        _prLabelForbidden: _prLabelForbidden,
+        _prBranchPrefixOk: _prBranchPrefixOk,
+        _prQueryGuardsFail: _prQueryGuardsFail,
+        _prRuleMatches: _prRuleMatches };
 }
