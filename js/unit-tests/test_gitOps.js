@@ -363,6 +363,78 @@ suite('gitOps.writePRContext — resolved threads filtered from pr_discussions_r
     });
 });
 
+// ── gh-1226 characterization: the pr_info.md / pr_diff.txt / pr_discussions.md
+// writes of writePRContext — exact block format, fallbacks and file set. ─────
+
+suite('gitOps.writePRContext — written file set and pr_info.md format (gh-1226)', function() {
+
+    function fullPrDetails() {
+        return {
+            number: 806, html_url: 'https://github.com/o/r/pull/806', title: 't',
+            user: { login: 'u' }, head: { ref: 'pr-806' }, base: { ref: 'main' },
+            state: 'open', changed_files: 3, additions: 10, deletions: 2,
+            created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-02T00:00:00Z',
+            body: 'Please review the PR body.'
+        };
+    }
+
+    function loadAndCapture() {
+        var writes = {};
+        var gitOps = loadGitOps({ file_write: function(call) { writes[call.path] = call.content; } });
+        return { gitOps: gitOps, writes: writes };
+    }
+
+    test('pr_info.md carries the full metadata block and the PR description', function() {
+        var ctx = loadAndCapture();
+
+        ctx.gitOps.writePRContext('input/PROJ-10', fullPrDetails(), 'the diff', null, null);
+
+        var md = ctx.writes['input/PROJ-10/pr_info.md'];
+        assert.ok(md, 'pr_info.md is written');
+        assert.ok(md.indexOf('# Pull Request Information\n') === 0, 'header line first');
+        assert.contains(md, '- **PR #**: 806\n');
+        assert.contains(md, '- **URL**: https://github.com/o/r/pull/806\n');
+        assert.contains(md, '- **Title**: t\n');
+        assert.contains(md, '- **Author**: u\n');
+        assert.contains(md, '- **Branch**: `pr-806` → `main`\n');
+        assert.contains(md, '- **State**: open\n');
+        assert.contains(md, '- **Files Changed**: 3\n');
+        assert.contains(md, '- **Additions**: +10\n');
+        assert.contains(md, '- **Deletions**: -2\n');
+        assert.contains(md, '- **Created**: 2026-01-01T00:00:00Z\n');
+        assert.contains(md, '- **Updated**: 2026-01-02T00:00:00Z\n');
+        assert.contains(md, '\n## PR Description\n\nPlease review the PR body.\n');
+        assert.contains(ctx.writes['input/PROJ-10/pr_diff.txt'], 'the diff');
+        assert.equal(ctx.writes['input/PROJ-10/pr_discussions.md'], undefined,
+            'no discussions markdown → no pr_discussions.md write');
+        assert.equal(ctx.writes['input/PROJ-10/pr_discussions_raw.json'], undefined,
+            'no raw threads → no pr_discussions_raw.json write');
+    });
+
+    test('missing author/branch/diff fall back to unknown placeholders, absent body is omitted', function() {
+        var ctx = loadAndCapture();
+        var bare = { number: 1, html_url: 'https://github.com/o/r/pull/1', title: 'bare', state: 'open' };
+
+        ctx.gitOps.writePRContext('input/PROJ-10', bare, '', null, null);
+
+        var md = ctx.writes['input/PROJ-10/pr_info.md'];
+        assert.contains(md, '- **Author**: unknown\n');
+        assert.contains(md, '- **Branch**: `unknown` → `unknown`\n');
+        assert.ok(md.indexOf('## PR Description') === -1, 'no body → no description section');
+        assert.contains(ctx.writes['input/PROJ-10/pr_diff.txt'], 'No diff available',
+            'an empty diff is replaced by the placeholder');
+    });
+
+    test('a discussions markdown string is written to pr_discussions.md as-is', function() {
+        var ctx = loadAndCapture();
+
+        ctx.gitOps.writePRContext('input/PROJ-10', fullPrDetails(), 'diff',
+            '## Review threads\n\n- thread 1', null);
+
+        assert.equal(ctx.writes['input/PROJ-10/pr_discussions.md'], '## Review threads\n\n- thread 1');
+    });
+});
+
 // ── gh-912: _switchToBranch decides on ref lines, never on stderr noise ──────
 // preCliReworkSetup.js:426-428 wraps checkoutPRBranch in failSetup — a
 // warning-only `git ls-remote` capture (central-mode insteadOf origin, git ≥
