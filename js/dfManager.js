@@ -701,6 +701,7 @@ if (typeof module !== 'undefined' && module.exports) {
         parseJsonMaybe: parseJsonMaybe,
         prNumberOf: prNumberOf,
         hasPrApproval: hasPrApproval,
+        approvedPrGapBase: approvedPrGapBase,
         approvedPrMergeGapAnomaly: approvedPrMergeGapAnomaly,
         groupFailureRuns: groupFailureRuns,
         workflowSummary: workflowSummary,
