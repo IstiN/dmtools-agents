@@ -541,9 +541,13 @@ function writeDiscussionsRawJson(inputFolder, rawThreads) {
     );
 }
 
-function writePRContext(inputFolder, prDetails, diff, markdown, rawThreads) {
-    // pr_info.md
-    let prInfo = '# Pull Request Information\n\n';
+// ── gh-1226 (CRAP ratchet): pure pr_info.md builders ─────────────────────────
+// Same block order and fallback strings as the former inline prInfo assembly —
+// pinned by the writePRContext characterization tests.
+
+// PR #/URL/title/author/branch lines plus the fork checkout line (gh-806).
+function _prInfoHeader(prDetails) {
+    var prInfo = '# Pull Request Information\n\n';
     prInfo += '- **PR #**: ' + prDetails.number + '\n';
     prInfo += '- **URL**: ' + prDetails.html_url + '\n';
     prInfo += '- **Title**: ' + prDetails.title + '\n';
@@ -551,16 +555,31 @@ function writePRContext(inputFolder, prDetails, diff, markdown, rawThreads) {
     prInfo += '- **Branch**: `' + (prDetails.head ? prDetails.head.ref : 'unknown') +
               '` → `' + (prDetails.base ? prDetails.base.ref : 'unknown') + '`\n';
     prInfo += forkCheckout.forkHeadInfoLine(prDetails);
-    prInfo += '- **State**: ' + prDetails.state + '\n';
+    return prInfo;
+}
+
+// State/change-stat/timestamp lines; absent numbers and dates render neutral.
+function _prInfoStats(prDetails) {
+    var prInfo = '- **State**: ' + prDetails.state + '\n';
     prInfo += '- **Files Changed**: ' + (prDetails.changed_files || 0) + '\n';
     prInfo += '- **Additions**: +' + (prDetails.additions || 0) + '\n';
     prInfo += '- **Deletions**: -' + (prDetails.deletions || 0) + '\n';
     prInfo += '- **Created**: ' + (prDetails.created_at || '') + '\n';
     prInfo += '- **Updated**: ' + (prDetails.updated_at || '') + '\n';
+    return prInfo;
+}
+
+function _prInfoMarkdown(prDetails) {
+    var prInfo = _prInfoHeader(prDetails) + _prInfoStats(prDetails);
     if (prDetails.body) {
         prInfo += '\n## PR Description\n\n' + prDetails.body + '\n';
     }
-    writeInputFile(inputFolder + '/pr_info.md', prInfo, 'pr_info.md');
+    return prInfo;
+}
+
+function writePRContext(inputFolder, prDetails, diff, markdown, rawThreads) {
+    // pr_info.md
+    writeInputFile(inputFolder + '/pr_info.md', _prInfoMarkdown(prDetails), 'pr_info.md');
 
     // pr_diff.txt
     var diffContext = trimLargeTextForInput(diff || 'No diff available', 'PR Diff', MAX_PR_DIFF_CONTEXT_CHARS);
