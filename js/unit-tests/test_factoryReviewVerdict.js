@@ -1133,3 +1133,71 @@ suite('factoryReviewVerdict — extracted helper contracts (gh-1079)', function 
   });
 
 });
+
+
+// ── gh-1196: entry action seam characterization ──────────────────────────────
+// Pins the deps-seam degradation contract BEFORE the deps-resolution
+// extraction: a runtime without file_write fails LOUD the moment the gather
+// stages a body; a runtime without file_read degrades to an empty
+// machineAuthor (the resolve try/catch swallows) and the leg still flips; and
+// the production wiring — dmtools globals present, no deps object at all —
+// resolves every seam from the globals. The seam fallbacks key on
+// `typeof file_write/file_read === 'function'`, so the scenarios SHADOW the
+// globals through loadModule mocks — portable across the dmtools runner (real
+// dmtools globals present) and the node harness (only file_read and
+// cli_execute_command are defined), and never touching this repo's real
+// .dmtools/config.js through a fallback.
+
+suite('factoryReviewVerdict — entry action seams (gh-1196)', function () {
+
+  function gh1196Entry(globalMocks) {
+    return loadModule('js/factory/review_verdict_publish.js', makeRequire({
+      './review_verdict.js': rvModule,
+      './token_usage.js': tokenUsageModule
+    }), globalMocks || {});
+  }
+  function scriptedExec() {
+    var inner = execStub(baseRules());
+    inner = withParser(inner, contractLines({ decision: 'rework' }));
+    return function (args) {
+      return { output: inner.exec(String((args && args.command) || args || '')) };
+    };
+  }
+  function gh1196Params() {
+    return { jobParams: { customParams: {
+      repo: REPO, number: NUMBER, maxRounds: '2', ghToken: 't',
+      config: 'factory-agents/pr_review.json', factoryRoot: STUB_DIR, home: STUB_DIR + '/home'
+    } } };
+  }
+
+  test('a runtime without file_write fails LOUD when the gather stages a body', function () {
+    var caught = null;
+    try {
+      gh1196Entry({ file_write: undefined }).action(
+        gh1196Params(), { cli_execute_command: scriptedExec(), env: {} });
+    } catch (e) { caught = e; }
+    assert.ok(caught, 'a missing file_write seam must not pass silently');
+    assert.contains(caught && caught.message, 'file_write is not available on this runtime');
+  });
+
+  test('a runtime without file_read degrades to empty machineAuthor — the leg still flips', function () {
+    var r = gh1196Entry({ file_read: undefined }).action(gh1196Params(),
+      { cli_execute_command: scriptedExec(), file_write: function () {}, env: {} });
+    assert.equal(r.status, 'rework',
+      'the resolve-machineAuthor try/catch swallows the missing seam and the verdict lands');
+  });
+
+  test('production wiring: dmtools globals with NO deps object resolve the seams', function () {
+    var inner = execStub(baseRules());
+    inner = withParser(inner, contractLines({ decision: 'rework' }));
+    var entry = gh1196Entry({
+      cli_execute_command: function (args) {
+        return { output: inner.exec(String((args && args.command) || args || '')) };
+      },
+      file_write: function () {},
+      file_read: function () { return null; }
+    });
+    var r = entry.action(gh1196Params(), {});
+    assert.equal(r.status, 'rework', 'the typeof-global seam fallbacks are the production path');
+  });
+});
