@@ -1070,8 +1070,8 @@ suite('dfManager gh-1227 extracted helpers (pure units)', function() {
 
     test('helpers exist (extraction landed)', function() {
         var df = dfm();
-        ['prNumberOf', 'hasPrApproval', 'approvedPrMergeGapAnomaly', 'groupFailureRuns',
-         'workflowSummary', 'failureLoopMessage', 'failureLoopAnomaly',
+        ['prNumberOf', 'hasPrApproval', 'approvedPrGapBase', 'approvedPrMergeGapAnomaly',
+         'groupFailureRuns', 'workflowSummary', 'failureLoopMessage', 'failureLoopAnomaly',
          'jiraProjectOf', 'requireRepoInfo', 'buildReport'].forEach(function(name) {
             assert.equal(typeof df[name], 'function', name);
         });
@@ -1112,6 +1112,59 @@ suite('dfManager gh-1227 extracted helpers (pure units)', function() {
         assert.equal(dirty.safeAction, null);
         var behind = df.approvedPrMergeGapAnomaly('K-1', 1, pr, 'behind', true);
         assert.equal(behind.safeAction, 'request-branch-update');
+    });
+
+    test('approvedPrGapBase: the four payload fields shared by both variants', function() {
+        var df = dfm();
+        assert.deepEqual(df.approvedPrGapBase('K-1', 7, { html_url: 'u' }, 'clean'),
+            { ticketKey: 'K-1', prNumber: 7, prUrl: 'u', mergeState: 'clean' });
+        assert.deepEqual(df.approvedPrGapBase('K-2', 8, {}, 'behind'),
+            { ticketKey: 'K-2', prNumber: 8, prUrl: '', mergeState: 'behind' });
+    });
+
+    test('approvedPrMergeGapAnomaly: exact serialized payload per state (byte-identical contract)', function() {
+        var df = dfm();
+        var pr = { html_url: 'u' };
+        assert.deepEqual(df.approvedPrMergeGapAnomaly('K-1', 1, pr, 'clean', true), {
+            type: 'approved-pr-not-merged',
+            severity: 'blocking',
+            ticketKey: 'K-1',
+            prNumber: 1,
+            prUrl: 'u',
+            mergeState: 'clean',
+            safeAction: 'trigger-sm-retry-merge',
+            message: 'PR is approved and clean but still open.'
+        });
+        assert.deepEqual(df.approvedPrMergeGapAnomaly('K-1', 1, pr, 'mergeable', true), {
+            type: 'approved-pr-not-merged',
+            severity: 'blocking',
+            ticketKey: 'K-1',
+            prNumber: 1,
+            prUrl: 'u',
+            mergeState: 'mergeable',
+            safeAction: 'trigger-sm-retry-merge',
+            message: 'PR is approved and clean but still open.'
+        });
+        assert.deepEqual(df.approvedPrMergeGapAnomaly('K-1', 1, pr, 'dirty', true), {
+            type: 'approved-pr-not-mergeable',
+            severity: 'warning',
+            ticketKey: 'K-1',
+            prNumber: 1,
+            prUrl: 'u',
+            mergeState: 'dirty',
+            safeAction: null,
+            message: 'PR is approved but not currently mergeable.'
+        });
+        assert.deepEqual(df.approvedPrMergeGapAnomaly('K-1', 1, pr, 'behind', true), {
+            type: 'approved-pr-not-mergeable',
+            severity: 'warning',
+            ticketKey: 'K-1',
+            prNumber: 1,
+            prUrl: 'u',
+            mergeState: 'behind',
+            safeAction: 'request-branch-update',
+            message: 'PR is approved but not currently mergeable.'
+        });
     });
 
     test('groupFailureRuns buckets by ticket key', function() {

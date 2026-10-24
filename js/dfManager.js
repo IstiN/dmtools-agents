@@ -367,34 +367,36 @@ function hasPrApproval(labels, jiraLabels) {
     return labels.indexOf('pr_approved') !== -1 || jiraLabels.indexOf('pr_approved') !== -1;
 }
 
+// The four payload fields shared by both approved-PR anomaly variants —
+// single-site so future common fields land once (review thread gh-1227).
+// Object.assign keeps the payload key order byte-identical to the former
+// inline literals.
+function approvedPrGapBase(key, number, pr, state) {
+    return { ticketKey: key, prNumber: number, prUrl: prUrl(pr), mergeState: state };
+}
+
 // The anomaly for one approved PR, or null when its merge state carries no
 // gap: clean/mergeable → still open (blocking); dirty/behind → not
 // mergeable (warning, branch update for behind); anything else → silent.
 function approvedPrMergeGapAnomaly(key, number, pr, state, hasApproval) {
     if (!hasApproval) return null;
     if (state === 'clean' || state === 'mergeable') {
-        return {
+        return Object.assign({
             type: 'approved-pr-not-merged',
-            severity: 'blocking',
-            ticketKey: key,
-            prNumber: number,
-            prUrl: prUrl(pr),
-            mergeState: state,
+            severity: 'blocking'
+        }, approvedPrGapBase(key, number, pr, state), {
             safeAction: 'trigger-sm-retry-merge',
             message: 'PR is approved and clean but still open.'
-        };
+        });
     }
     if (state === 'dirty' || state === 'behind') {
-        return {
+        return Object.assign({
             type: 'approved-pr-not-mergeable',
-            severity: 'warning',
-            ticketKey: key,
-            prNumber: number,
-            prUrl: prUrl(pr),
-            mergeState: state,
+            severity: 'warning'
+        }, approvedPrGapBase(key, number, pr, state), {
             safeAction: state === 'behind' ? 'request-branch-update' : null,
             message: 'PR is approved but not currently mergeable.'
-        };
+        });
     }
     return null;
 }
