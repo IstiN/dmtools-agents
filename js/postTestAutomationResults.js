@@ -364,12 +364,9 @@ function autoStartTestReview(ticketKey, config, customParams, noCodeChanges) {
 
 /** Steps 2+3: configure the git author and read the current branch. */
 function resolveCurrentBranch(config, workingDir) {
-    try {
-        runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
-        runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
-    } catch (e) {
-        console.warn('Failed to configure git author:', e);
-    }
+    // gh-1246: canonical author config in postStoryTestAutomationShared.js
+    // (same commands, same warn line).
+    shared.configureGitAuthor(runInRepo, config, workingDir);
 
     var rawBranch = runInRepo('git branch --show-current', workingDir) || '';
     console.log('Raw branch output length:', rawBranch.length, 'content:', JSON.stringify(rawBranch.substring(0, 200)));
@@ -453,11 +450,8 @@ function triggerReviewOrIdle(ticketKey, config, customParams, noCodeChanges) {
 
 /** Token usage summary comments (outputs/*_usage.json); failures are non-fatal. */
 function postUsageSummaryComments(ticketKey, params) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    // Canonical guarded wrapper in common/tokenUsageComment.js (gh-1246).
+    tokenUsageComment.postUsageSummariesSafely(ticketKey, params);
 }
 
 /** Outer-catch side effects: error comment + SM trigger label removal (best-effort). */

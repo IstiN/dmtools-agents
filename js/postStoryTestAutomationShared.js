@@ -136,27 +136,75 @@ function configureGitAuthor(runCommand, config, workingDir) {
 }
 
 /**
- * gh-1246: autoStartReview configured-workflow trigger shared by every
- * test-automation post/rework action. Returns the trigger result, or false
- * when not configured or the trigger threw (logged, never rethrown).
+ * gh-1246: canonical configured-workflow trigger behind the autoStartReview /
+ * autoStartRework flags. The label and stripKeys stay literal per caller so
+ * the posted options bag stays byte-identical; failures are logged, never
+ * thrown.
  */
-function triggerAutoStartReviewWorkflow(autoStart, ticketKey, customParams, config, label) {
-    if (!customParams || !customParams.autoStartReview || !customParams.autoStartReviewConfigFile) {
+function triggerConfiguredAutoStartWorkflow(autoStart, ticketKey, customParams, config, spec) {
+    var configFileKey = spec.flag + 'ConfigFile';
+    if (!customParams || !customParams[spec.flag] || !customParams[configFileKey]) {
         return false;
+    }
+    var triggerOptions = {
+        ticketKey: ticketKey,
+        customParams: customParams,
+        config: config,
+        configFile: customParams[configFileKey],
+        label: spec.label,
+        stripKeys: ['removeLabel', spec.flag, configFileKey]
+    };
+    if (spec.extra) {
+        Object.assign(triggerOptions, spec.extra);
     }
     try {
-        return autoStart.triggerConfiguredWorkflowForTicket({
-            ticketKey: ticketKey,
-            customParams: customParams,
-            config: config,
-            configFile: customParams.autoStartReviewConfigFile,
-            label: label,
-            stripKeys: ['removeLabel', 'autoStartReview', 'autoStartReviewConfigFile']
-        });
+        return autoStart.triggerConfiguredWorkflowForTicket(triggerOptions);
     } catch (e) {
-        console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
+        console.warn('⚠️ ' + spec.flag + ' trigger failed:', e.message || e);
         return false;
     }
+}
+
+/**
+ * gh-1246: autoStartReview configured-workflow trigger shared by every
+ * test-automation post/rework action. Returns the trigger result, or false
+ * when not configured or the trigger threw.
+ */
+function triggerAutoStartReviewWorkflow(autoStart, ticketKey, customParams, config, label) {
+    return triggerConfiguredAutoStartWorkflow(autoStart, ticketKey, customParams, config, {
+        flag: 'autoStartReview',
+        label: label
+    });
+}
+
+/**
+ * gh-1246: autoStartRework configured-workflow trigger
+ * (pr_test_automation_rework) shared by the test-review post-actions.
+ */
+function triggerAutoStartReworkWorkflow(autoStart, ticketKey, config, customParams) {
+    return triggerConfiguredAutoStartWorkflow(autoStart, ticketKey, customParams, config, {
+        flag: 'autoStartRework',
+        label: 'pr_test_automation_rework'
+    });
+}
+
+/**
+ * gh-1246: first open PR whose head branch matches branchName, or null
+ * (never throws — a listing failure is logged and read as "no PR").
+ */
+function findOpenPrByHeadBranch(scm, branchName) {
+    try {
+        var openPRs = scm.listPrs('open') || [];
+        for (var i = 0; i < openPRs.length; i++) {
+            var pr = openPRs[i];
+            if (pr.head && pr.head.ref && pr.head.ref === branchName) {
+                return pr;
+            }
+        }
+    } catch (e) {
+        console.error('Failed to find PR:', e);
+    }
+    return null;
 }
 
 /**
@@ -465,6 +513,8 @@ if (typeof module !== 'undefined' && module.exports) {
         readFileOrNull: readFileOrNull,
         configureGitAuthor: configureGitAuthor,
         triggerAutoStartReviewWorkflow: triggerAutoStartReviewWorkflow,
+        triggerAutoStartReworkWorkflow: triggerAutoStartReworkWorkflow,
+        findOpenPrByHeadBranch: findOpenPrByHeadBranch,
         createTestPullRequest: createTestPullRequest,
         gitOperationsSuccess: gitOperationsSuccess,
         gitOperationsFailure: gitOperationsFailure

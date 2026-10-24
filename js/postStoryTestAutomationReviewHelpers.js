@@ -388,30 +388,6 @@ function validateInlineCommentTarget(filePath, line, commentText) {
     return true;
 }
 
-/**
- * gh-1246: autoStartRework configured-workflow trigger (pr_test_automation_rework).
- * Returns the trigger result, or false when not configured or the trigger
- * threw (logged, never rethrown).
- */
-function triggerConfiguredReworkWorkflow(autoStart, ticketKey, config, customParams) {
-    if (!customParams || !customParams.autoStartRework || !customParams.autoStartReworkConfigFile) {
-        return false;
-    }
-    try {
-        return autoStart.triggerConfiguredWorkflowForTicket({
-            ticketKey: ticketKey,
-            customParams: customParams,
-            config: config,
-            configFile: customParams.autoStartReworkConfigFile,
-            label: 'pr_test_automation_rework',
-            stripKeys: ['removeLabel', 'autoStartRework', 'autoStartReworkConfigFile']
-        });
-    } catch (e) {
-        console.warn('⚠️ autoStartRework trigger failed:', e.message || e);
-        return false;
-    }
-}
-
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         parsePrInfoFields: parsePrInfoFields,
@@ -432,7 +408,6 @@ if (typeof module !== 'undefined' && module.exports) {
         buildReworkFeedback: buildReworkFeedback,
         // gh-1246 dedup exports:
         resolveCustomParams: resolveCustomParams,
-        validateInlineCommentTarget: validateInlineCommentTarget,
-        triggerConfiguredReworkWorkflow: triggerConfiguredReworkWorkflow
+        validateInlineCommentTarget: validateInlineCommentTarget
     };
 }

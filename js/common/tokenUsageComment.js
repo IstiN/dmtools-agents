@@ -248,9 +248,23 @@ function postTokenUsageComments(ticketKey, options) {
     return { posted: posted, files: files, errors: errors };
 }
 
+/**
+ * gh-1246: canonical post-action wrapper for the token-usage summary step —
+ * the initiator mention plus the customParams bag every post-action builds,
+ * with a swallow-all guard so a provider failure never fails the action.
+ */
+function postUsageSummariesSafely(ticketKey, params) {
+    try {
+        postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         postTokenUsageComments: postTokenUsageComments,
+        postUsageSummariesSafely: postUsageSummariesSafely,
         resolvePostTracker: resolvePostTracker,
         customParamsOf: customParamsOf,
         findUsageFiles: findUsageFiles,

@@ -30,16 +30,9 @@ var commentMarkup = require('./common/commentMarkup.js');
 var shared = require('./postStoryTestAutomationShared.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
-function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
-}
-function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
-}
+var trackerOps = shared.createTrackerHolder(trackersModule);
+var initTracker = trackerOps.initTracker;
+var getTracker = trackerOps.getTracker;
 
 
 /**

@@ -277,16 +277,8 @@ function postThreadReplies(scm, pullRequestId) {
 }
 
 function findStoryPR(scm, storyKey) {
-    try {
-        const branchName = 'test/' + storyKey;
-        const openPRs = scm.listPrs('open') || [];
-        return openPRs.find(function(pr) {
-            return pr.head && pr.head.ref && pr.head.ref === branchName;
-        }) || null;
-    } catch (e) {
-        console.error('Failed to find PR:', e);
-        return null;
-    }
+    // Canonical head-branch PR lookup in postStoryTestAutomationShared.js (gh-1246).
+    return shared.findOpenPrByHeadBranch(scm, 'test/' + storyKey);
 }
 
 // ── gh-1080: pure parse helper extracted from action ─────────────────────────

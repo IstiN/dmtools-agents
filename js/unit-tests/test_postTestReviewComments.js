@@ -67,7 +67,8 @@ function loadPostTestReviewComments(mocks, moduleMocks) {
                 '../config.js': configModule,
                 './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
             }), allMocks),
-            './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js')
+            './postStoryTestAutomationReviewHelpers.js': loadModule('js/postStoryTestAutomationReviewHelpers.js'),
+            './postStoryTestAutomationShared.js': loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), allMocks)
         }),
         allMocks
     );

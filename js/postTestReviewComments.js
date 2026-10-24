@@ -19,6 +19,7 @@ const outputFiles = require('./common/outputFiles.js');
 const trackersModule = require('./common/trackers.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const reviewHelpers = require('./postStoryTestAutomationReviewHelpers.js');
+const shared = require('./postStoryTestAutomationShared.js');
 
 function readFile(path) {
     return outputFiles.readOutputFile(path, {});
@@ -305,8 +306,8 @@ function postInlineComment(repoInfo, prNumber, inlineComment) {
 }
 
 function triggerReworkIfConfigured(ticketKey, config, customParams) {
-    // Canonical trigger in postStoryTestAutomationReviewHelpers.js (gh-1246).
-    return reviewHelpers.triggerConfiguredReworkWorkflow(autoStart, ticketKey, config, customParams);
+    // Canonical trigger in postStoryTestAutomationShared.js (gh-1246).
+    return shared.triggerAutoStartReworkWorkflow(autoStart, ticketKey, config, customParams);
 }
 
 function markForSmTestRework(ticketKey, tracker) {
@@ -483,11 +484,8 @@ function decideFinalStatus(isApproved, mergeSucceeded, currentStatus, statuses) 
 // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
 // wrote outputs/*_usage.json during the agent run.
 function postTokenUsageSummary(ticketKey, params) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    // Canonical guarded wrapper in common/tokenUsageComment.js (gh-1246).
+    tokenUsageComment.postUsageSummariesSafely(ticketKey, params);
 }
 
 // Outer-catch cleanup: recreate the tracker when the failure happened before
