@@ -355,7 +355,10 @@ function makeActionHarness(overides) {
             state: 'open', head: { ref: 'ai/gh-123', sha: 'sha-123' }, base: { ref: 'master' }, user: { login: 'a' }
         });
     };
-    ghStub.detectFailedChecks = function() { return def1002(overides.failedChecks, []); };
+    ghStub.detectFailedChecks = function(scm, headSha, inputFolder, jenkinsBasePath, diff) {
+        calls.detectFailedChecksArg = { headSha: headSha, inputFolder: inputFolder, jenkinsBasePath: jenkinsBasePath, diff: diff };
+        return def1002(overides.failedChecks, []);
+    };
     ghStub.fetchDiscussionsAndRawData = function() {
         return def1002(overides.discussionData, { markdown: '## d', rawThreads: null });
     };
@@ -372,12 +375,18 @@ function makeActionHarness(overides) {
             calls.checkoutPRBranch.push({ branch: branch, dir: dir, base: base });
             fail1002(overides, 'failCheckout', 'checkout failed');
         },
-        detectMergeConflicts: function() { return def1002(overides.conflictFiles, []); },
+        detectMergeConflicts: function(baseBranch, inputFolder, workingDir) {
+            calls.detectMergeConflictsArg = { baseBranch: baseBranch, inputFolder: inputFolder, workingDir: workingDir };
+            return def1002(overides.conflictFiles, []);
+        },
         getPRDiff: function() { return 'diff --git a/README.md b/README.md'; },
         writePRContext: function(inputFolder, prDetails, diff, markdown, rawThreads) {
             calls.writePRContext = { inputFolder: inputFolder, prNumber: prDetails.number, diff: diff, markdown: markdown, rawThreads: rawThreads };
         },
-        writeInputFile: function(path, content) { files[path] = content; }
+        writeInputFile: function(path, content) {
+            if (overides.failWriteInputFile) { throw new Error('input write failed'); }
+            files[path] = content;
+        }
     };
 
     var config = {
