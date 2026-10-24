@@ -2681,3 +2681,315 @@ suite('factoryState — updateHistory helpers (gh-1198 extraction)', function ()
     });
   });
 });
+
+// ── gh-1227 CRAP — branch characterization for prevIndex / normalizeTokens /
+// priceTokens / buildFactoryState input defaults, locked before the helper
+// extraction. Every assertion pins CURRENT behavior.
+
+suite('factoryState — prevIndex (gh-1227 characterization)', function () {
+  test('null / missing prev → empty index', function () {
+    var empty = { pr: {}, issue: {}, prLane: {}, issueState: {} };
+    assert.deepEqual(fsModule.prevIndex(null), empty);
+    assert.deepEqual(fsModule.prevIndex({}), empty);
+    assert.deepEqual(fsModule.prevIndex({ lanes: null }), empty);
+  });
+
+  test('null lane value is skipped', function () {
+    var ix = fsModule.prevIndex({ lanes: { review: null } });
+    assert.deepEqual(ix.pr, {});
+    assert.deepEqual(ix.issue, {});
+  });
+
+  test('null card inside a lane is skipped', function () {
+    var card = { pr: 1 };
+    var ix = fsModule.prevIndex({ lanes: { review: [null, card] } });
+    assert.equal(ix.pr[1], card);
+    assert.equal(ix.prLane[1], 'review');
+  });
+
+  test('ix.issue is last-lane-wins; issueState keeps the FIRST lane', function () {
+    var devCard = { issue: 7, dev: true };
+    var reviewCard = { issue: 7, review: true };
+    var ix = fsModule.prevIndex({
+      lanes: { development: [devCard], review: [reviewCard] }
+    });
+    assert.equal(ix.issue[7], reviewCard, 'a later lane overwrites the issue entry');
+    assert.equal(ix.issueState[7], 'development', 'issueState is first-writer-wins');
+  });
+
+  test('a card carrying both pr and issue lands in both indexes', function () {
+    var card = { pr: 5, issue: 6 };
+    var ix = fsModule.prevIndex({ lanes: { development: [card] } });
+    assert.equal(ix.pr[5], card);
+    assert.equal(ix.prLane[5], 'development');
+    assert.equal(ix.issue[6], card);
+    assert.equal(ix.issueState[6], 'development');
+  });
+
+  test('backlog card wins over the lane card and owns the issue state', function () {
+    var laneCard = { issue: 9 };
+    var backlogCard = { issue: 9 };
+    var ix = fsModule.prevIndex({
+      lanes: { review: [laneCard] },
+      backlog: { blocked: [backlogCard] }
+    });
+    assert.equal(ix.issue[9], backlogCard);
+    assert.equal(ix.issueState[9], 'blocked');
+  });
+
+  test('backlog null cards, issueless cards and missing buckets are skipped', function () {
+    var keeper = { issue: 11 };
+    var ix = fsModule.prevIndex({
+      lanes: {},
+      backlog: { blocked: [null, { nolabel: true }, keeper], in_dev: null, queued: [null] }
+    });
+    assert.equal(ix.issue[11], keeper);
+    assert.equal(ix.issueState[11], 'blocked');
+    assert.deepEqual(Object.keys(ix.issue), ['11']);
+  });
+});
+
+suite('factoryState — normalizeTokens (gh-1227 characterization)', function () {
+  test('null / undefined / primitive input → empty map', function () {
+    assert.deepEqual(fsModule.normalizeTokens(null), {});
+    assert.deepEqual(fsModule.normalizeTokens(undefined), {});
+    assert.deepEqual(fsModule.normalizeTokens(42), {});
+    assert.deepEqual(fsModule.normalizeTokens('x'), {});
+  });
+
+  test('array form: null rows and keyless rows are skipped', function () {
+    var map = fsModule.normalizeTokens([
+      { pr: 1, at: 'a', prompt: 1, completion: 1 },
+      null,
+      { issue: 2, at: 'b', prompt: 1, completion: 1 },
+      { leg: 'keyless' }
+    ]);
+    assert.deepEqual(Object.keys(map), ['pr-1', 'issue-2']);
+  });
+
+  test('a row carrying both pr and issue keys under pr', function () {
+    var map = fsModule.normalizeTokens([{ pr: 3, issue: 4, at: 'a', prompt: 0, completion: 0 }]);
+    assert.deepEqual(Object.keys(map), ['pr-3']);
+  });
+
+  test('map form: non-array values are skipped, empty arrays kept', function () {
+    var map = fsModule.normalizeTokens({
+      'pr-1': [{ at: 'a', prompt: 1, completion: 1 }],
+      junk: 'nope',
+      'pr-2': null,
+      empty: []
+    });
+    assert.deepEqual(Object.keys(map), ['pr-1', 'empty']);
+  });
+
+  test('rows sort by at ascending; a missing at sorts first', function () {
+    var map = fsModule.normalizeTokens({ 'pr-1': [
+      { at: '2026-10-02', prompt: 1, completion: 1 },
+      { prompt: 1, completion: 1 },
+      { at: '2026-10-01', prompt: 1, completion: 1 }
+    ] });
+    assert.deepEqual(map['pr-1'].map(function (r) { return r.at || null; }),
+      [null, '2026-10-01', '2026-10-02']);
+  });
+});
+
+suite('factoryState — priceTokens (gh-1227 characterization)', function () {
+  var NOW = '2026-10-03T13:10:00Z';
+  var NOW_MS = Date.parse(NOW);
+
+  function pricing(over) {
+    var rates = Object.create(null);
+    rates['claude-sonnet-4-5'] = over || { input: 3, output: 15, cacheRead: 0.3 };
+    return { rates: rates, defaultRates: null, models: 1 };
+  }
+  function row(over) {
+    return Object.assign({
+      leg: 'dev', at: '2026-10-03T07:00:00Z',
+      prompt: 1000000, completion: 1000000, total: 2000000,
+      model: 'claude-sonnet-4-5'
+    }, over || {});
+  }
+
+  test('no pricing → null', function () {
+    assert.equal(fsModule.priceTokens({ 'pr-1': [row()] }, null, NOW_MS), null);
+    assert.equal(fsModule.priceTokens({ 'pr-1': [row()] }, undefined, NOW_MS), null);
+  });
+
+  test('null tmap → null', function () {
+    assert.equal(fsModule.priceTokens(null, pricing(), NOW_MS), null);
+  });
+
+  test('non-array key value, null row and model-less row are skipped', function () {
+    var tmap = {
+      'pr-1': null,
+      'pr-2': [null, row({ model: null })],
+      'pr-3': [row()]
+    };
+    var summary = fsModule.priceTokens(tmap, pricing(), NOW_MS);
+    assert.equal(summary.pricedLegs, 1, 'only pr-3 priced');
+    assert.ok('cost' in tmap['pr-3'][0]);
+    assert.equal(tmap['pr-2'][0], null, 'null row untouched');
+    assert.equal('cost' in tmap['pr-2'][1], false, 'model-less row untouched');
+  });
+
+  test('unknown model → nothing priced → null rollup', function () {
+    var tmap = { 'pr-1': [row({ model: 'mystery-model' })] };
+    assert.equal(fsModule.priceTokens(tmap, pricing(), NOW_MS), null);
+    assert.equal('cost' in tmap['pr-1'][0], false);
+  });
+
+  test('out-of-window and undated rows price per-row but stay out of Σ$', function () {
+    var tmap = {
+      'pr-1': [
+        row({ at: '2026-09-10T07:00:00Z' }),   // >14d old
+        row({ at: null }),                      // undated
+        row()                                   // in window
+      ]
+    };
+    var summary = fsModule.priceTokens(tmap, pricing(), NOW_MS);
+    assert.equal(summary.usd14d, 18, 'only the in-window row (3+15)');
+    assert.equal(summary.pricedLegs, 1);
+    assert.equal(summary.windowDays, 14);
+    assert.ok('cost' in tmap['pr-1'][0], 'stale row still priced');
+    assert.ok('cost' in tmap['pr-1'][1], 'undated row still priced');
+  });
+
+  test('a Σ$ that rounds to $0.00 suppresses the rollup (row cost stays)', function () {
+    var tmap = { 'pr-1': [row({ prompt: 100, completion: 100, total: 200 })] };
+    var summary = fsModule.priceTokens(tmap, pricing(), NOW_MS);
+    assert.equal(summary, null, 'no lying Σ$0.00 pill');
+    assert.equal(tmap['pr-1'][0].cost, 0.0018);
+  });
+});
+
+suite('factoryState — buildFactoryState input defaults (gh-1227 characterization)', function () {
+  var NOW = '2026-10-03T13:10:00Z';
+
+  test('empty input builds an empty board (every list default applies)', function () {
+    var st = fsModule.buildFactoryState({});
+    assert.equal(st.schema, 2);
+    fsModule.LANE_ORDER.forEach(function (lane) {
+      assert.deepEqual(st.lanes[lane], [], lane + ' defaults to []');
+    });
+    fsModule.BACKLOG_BUCKETS.forEach(function (b) {
+      assert.equal(st.backlogCounts[b], 0, b + ' defaults to 0');
+    });
+    assert.equal('costs' in st, false, 'no pricing → no Σ$ rollup');
+    assert.deepEqual(st.reworkInFlight, {});
+    assert.equal(st.machineAuthor, undefined);
+  });
+
+  test('devIssues feeds the board when issues is absent', function () {
+    var st = fsModule.buildFactoryState({
+      now: NOW,
+      devIssues: [{ number: 5, title: 't', labels: [], state: 'open' }]
+    });
+    var inBoard = st.lanes.development.concat(
+      Object.keys(st.backlog).reduce(function (acc, k) { return acc.concat(st.backlog[k]); }, []));
+    assert.ok(inBoard.some(function (c) { return c.issue === 5; }), 'issue 5 boarded via devIssues');
+  });
+
+  test('issues wins over devIssues when both ride', function () {
+    var st = fsModule.buildFactoryState({
+      now: NOW,
+      issues: [{ number: 1, title: 'from issues', labels: [], state: 'open' }],
+      devIssues: [{ number: 2, title: 'from devIssues', labels: [], state: 'open' }]
+    });
+    var all = Object.keys(st.backlog).reduce(function (acc, k) { return acc.concat(st.backlog[k]); }, []);
+    assert.ok(all.some(function (c) { return c.issue === 1; }), 'issues item boarded');
+    assert.ok(!all.some(function (c) { return c.issue === 2; }), 'devIssues item ignored');
+  });
+});
+
+suite('factoryState — gh-1227 extracted helpers (pure units)', function () {
+  test('tokenRowKey: pr wins, issue next, neither → null', function () {
+    assert.equal(fsModule.tokenRowKey({ pr: 1, issue: 2 }), 'pr-1');
+    assert.equal(fsModule.tokenRowKey({ issue: 2 }), 'issue-2');
+    assert.equal(fsModule.tokenRowKey({}), null);
+    assert.equal(fsModule.tokenRowKey({ pr: null, issue: null }), null);
+  });
+
+  test('tokenRowAtAsc: ascending at, missing at sorts first', function () {
+    assert.equal(fsModule.tokenRowAtAsc({ at: 'a' }, { at: 'b' }) < 0, true);
+    assert.equal(fsModule.tokenRowAtAsc({ at: 'b' }, { at: 'a' }) > 0, true);
+    assert.equal(fsModule.tokenRowAtAsc({ at: 'a' }, { at: 'a' }), 0);
+    assert.equal(fsModule.tokenRowAtAsc({}, { at: 'a' }) < 0, true, 'missing at first');
+    assert.equal(fsModule.tokenRowAtAsc({ at: 'a' }, {}) > 0, true);
+  });
+
+  test('priceRowInPlace: skips null / model-less / unknown-model rows, prices the rest', function () {
+    var pricing = (function () {
+      var rates = Object.create(null);
+      rates['claude-sonnet-4-5'] = { input: 3, output: 15, cacheRead: 0.3 };
+      return { rates: rates, defaultRates: null, models: 1 };
+    })();
+    assert.equal(fsModule.priceRowInPlace(null, pricing), false);
+    assert.equal(fsModule.priceRowInPlace({ model: null }, pricing), false);
+    var unknown = { model: 'mystery', prompt: 1, completion: 1 };
+    assert.equal(fsModule.priceRowInPlace(unknown, pricing), false);
+    assert.equal('cost' in unknown, false);
+    var priced = { model: 'claude-sonnet-4-5', prompt: 1000000, completion: 0 };
+    assert.equal(fsModule.priceRowInPlace(priced, pricing), true);
+    assert.equal(priced.cost, 3);
+  });
+
+  test('inCostWindow: undated, unparsable, stale → false; fresh → true', function () {
+    var NOW_MS = Date.parse('2026-10-03T13:10:00Z');
+    assert.equal(fsModule.inCostWindow({ at: null }, NOW_MS), false);
+    assert.equal(fsModule.inCostWindow({}, NOW_MS), false);
+    assert.equal(fsModule.inCostWindow({ at: 'not-a-date' }, NOW_MS), false);
+    assert.equal(fsModule.inCostWindow({ at: '2026-09-10T07:00:00Z' }, NOW_MS), false, '>14d');
+    assert.equal(fsModule.inCostWindow({ at: '2026-10-03T07:00:00Z' }, NOW_MS), true);
+  });
+
+  test('indexLaneCards / indexBacklogCards mirror prevIndex (direct)', function () {
+    var ix = { pr: {}, issue: {}, prLane: {}, issueState: {} };
+    var card = { pr: 1, issue: 2 };
+    fsModule.indexLaneCards(ix, { review: [card], junk: null });
+    assert.equal(ix.pr[1], card);
+    assert.equal(ix.prLane[1], 'review');
+    assert.equal(ix.issue[2], card);
+    assert.equal(ix.issueState[2], 'review');
+
+    var twin = { issue: 3 };
+    fsModule.indexBacklogCards(ix, { backlog: { blocked: [twin], queued: [null, {}] } });
+    assert.equal(ix.issue[3], twin);
+    assert.equal(ix.issueState[3], 'blocked');
+  });
+
+  test('boardInputs: every optional list degrades, overrides win', function () {
+    var defaults = fsModule.boardInputs({});
+    assert.deepEqual(defaults.prs, []);
+    assert.deepEqual(defaults.mergedPrs, []);
+    assert.deepEqual(defaults.issues, []);
+    assert.deepEqual(defaults.runs, []);
+    assert.deepEqual(defaults.checkNames, []);
+    assert.ok(!isNaN(Date.parse(defaults.now)), 'now defaults to the wall clock');
+
+    var custom = fsModule.boardInputs({
+      prs: [{ number: 1 }], mergedPrs: [{ number: 2 }],
+      devIssues: [{ number: 3 }], runs: [{ id: 4 }],
+      checkNames: ['ci'], now: '2026-10-03T13:10:00Z'
+    });
+    assert.equal(custom.prs.length, 1);
+    assert.equal(custom.mergedPrs.length, 1);
+    assert.equal(custom.issues.length, 1, 'devIssues is the issues source');
+    assert.equal(custom.runs.length, 1);
+    assert.deepEqual(custom.checkNames, ['ci']);
+    assert.equal(custom.now, '2026-10-03T13:10:00Z');
+  });
+
+  test('carryReworkLatch: merges the prev carry with the live map, prunes stale', function () {
+    var HEAD = '23dacd10deadbeefcafe0123456789abcdef0123';
+    var NOW_MS = Date.parse('2026-10-03T13:10:00Z');
+    var ARMED_AT = NOW_MS - 10 * 60 * 1000;   // armed 10 min ago — inside the 45m window
+    var latched = fsModule.carryReworkLatch({
+      prev: { reworkInFlight: {} },
+      reworkInFlight: { ['pr-1@' + HEAD]: { head: HEAD, at: ARMED_AT } }
+    }, NOW_MS, []);
+    assert.ok(latched['pr-1@' + HEAD], 'fresh latch survives');
+
+    var empty = fsModule.carryReworkLatch({ reworkInFlight: {} }, NOW_MS, []);
+    assert.deepEqual(empty, {}, 'no prev → live map only');
+  });
+});
