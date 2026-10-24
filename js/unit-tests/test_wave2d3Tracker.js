@@ -177,6 +177,7 @@ function d3LoadIntake(mocks) {
         './configLoader.js': { loadProjectConfig: function() { return {}; } },
         './common/issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {}),
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+        './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), mocks),
         './common/trackers.js': d3Trackers(mocks)
     }), mocks);
 }

@@ -36,9 +36,6 @@ Full prompt / instruction set: [`agents/snapshots/createRepoTasks.md`](agents/sn
 _Create Repository Development Sub-tasks_
 
 - Source: `agents/js/createRepoTasks.js`
-- Side effects:
-  - post ticket comment (via tracker)
-  - move ticket to status (via tracker)
 - Parameters (customParams):
   - `adoTextFormat`
   - `blockedStatus`

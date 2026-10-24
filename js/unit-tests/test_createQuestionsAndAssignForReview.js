@@ -16,17 +16,13 @@ function d2Trackers(mocks) {
  *    a fallback warning comment is posted instead of silently skipping.
  */
 
-function makeOutputFiles(fileMap) {
+function makeOutputFiles(fileReadImpl) {
     return loadModule('js/common/outputFiles.js', makeRequire({}), {
-        file_read: function (opts) {
-            var path = opts && (opts.path || opts);
-            return fileMap[path] !== undefined ? fileMap[path] : null;
-        }
+        file_read: fileReadImpl
     });
 }
 
 function loadCreateQuestionsModule(fileMap, extraGlobals, requireOverrides) {
-    var outputFiles = makeOutputFiles(fileMap);
     var comments = [];
     var labels = [];
     var moves = [];
@@ -52,6 +48,10 @@ function loadCreateQuestionsModule(fileMap, extraGlobals, requireOverrides) {
     };
     Object.assign(globals, extraGlobals || {});
 
+    // gh-1245: description files are read through the shared outputFiles
+    // module, so its file_read mock must see the same overrides as the module.
+    var outputFiles = makeOutputFiles(globals.file_read);
+
     var requireMap = {
         './common/jiraHelpers.js': {
             extractTicketKey: function (result) {
@@ -67,7 +67,7 @@ function loadCreateQuestionsModule(fileMap, extraGlobals, requireOverrides) {
         './configLoader.js': configLoaderModule,
         './common/scm.js': { createScm: function () { return {}; } },
         './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function (opts) { autoStarts.push(opts); return false; } },
-        './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
+        './common/tokenUsageComment.js': { postTokenUsageComments: function () { }, postTokenUsageSafely: function () { } },
         './common/outputFiles.js': outputFiles,
         './common/trackers.js': d2Trackers(globals)
     };

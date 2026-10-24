@@ -22,6 +22,7 @@ const issuePlan = require('./common/issuePlan.js');
 const { buildSummary } = require('./common/aiResponseParser.js');
 const { ISSUE_TYPES, LABELS, STATUSES } = require('./config.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const outputFiles = require('./common/outputFiles.js');
 
 // Tracker for the current action() run (built inside action(), never at module load).
 var tracker = null;
@@ -65,27 +66,6 @@ function readCommentFile(ctx) {
     }
     if (ctx && ctx.github) return '### Intake Analysis\n\n_No analysis comment was generated._';
     return 'h3. *Intake Analysis*\n\n_No analysis comment was generated._';
-}
-
-/**
- * Read a description file, falling back to the entry summary
- * @param {string} filePath - Path to the description markdown file
- * @param {string} fallbackSummary - Summary to use if file can't be read
- * @returns {string} Description content
- */
-function readDescriptionFile(filePath, fallbackSummary) {
-    if (!filePath) {
-        return fallbackSummary || '';
-    }
-    try {
-        var content = file_read(filePath);
-        if (content && content.trim() !== '') {
-            return content;
-        }
-    } catch (error) {
-        console.warn('Could not read description file ' + filePath + ':', error);
-    }
-    return fallbackSummary || '';
 }
 
 /**
@@ -157,7 +137,7 @@ function setStoryPoints(key, entry) {
  */
 function createBug(entry, projectKey) {
     var summary = buildSummary(entry.summary, 0);
-    var description = readDescriptionFile(entry.description, summary);
+    var description = outputFiles.readDescriptionFile(entry.description, summary);
 
     try {
         var bugFields = {
@@ -185,7 +165,7 @@ function createBug(entry, projectKey) {
  */
 function createEpic(entry, projectKey) {
     var summary = buildSummary(entry.summary, 0);
-    var description = readDescriptionFile(entry.description, summary);
+    var description = outputFiles.readDescriptionFile(entry.description, summary);
 
     try {
         var epicFields = {
@@ -214,7 +194,7 @@ function createEpic(entry, projectKey) {
  */
 function createStory(entry, resolvedParent, projectKey) {
     var summary = buildSummary(entry.summary, 0);
-    var description = readDescriptionFile(entry.description, summary);
+    var description = outputFiles.readDescriptionFile(entry.description, summary);
 
     try {
         var storyFields = {
@@ -388,7 +368,7 @@ function createGithubItem(ctx, entry, parentKey) {
             console.log('Reusing ' + existing.key + ' for "' + summary + '" (created by a previous run)');
             return { key: existing.key, reused: true };
         }
-        var body = readDescriptionFile(entry.description, summary) + '\n\n' + issuePlan.itemMarker(entry._itemId);
+        var body = outputFiles.readDescriptionFile(entry.description, summary) + '\n\n' + issuePlan.itemMarker(entry._itemId);
         var key = tracker.createTicketWithParent(null, entry.type, summary, body, parentKey);
         if (key) ctx.children[parentKey].push({ key: key, title: summary, description: body });
         console.log('Created sub-issue ' + key + ' of ' + parentKey + ' - ' + summary);

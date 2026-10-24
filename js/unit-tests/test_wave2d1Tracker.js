@@ -142,11 +142,18 @@ suite('wave2d1 tracker — createRepoTasksMulti', function() {
             ado_search_by_wiql: function() { return { value: [] }; },
             ado_create_work_item: function() { return { id: 201 }; }
         });
+        var globals = Object.assign({ java: { lang: { System: { getenv: function() { return ''; } } } } }, rec.mocks);
+        var shared = loadModule('js/common/repoTaskShared.js', makeRequire({
+            '../config.js': configModule,
+            './trackers.js': d1Trackers(rec.mocks),
+            './linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js')
+        }), globals);
         var mod = loadModule('js/createRepoTasksMulti.js', makeRequire({
             './config.js': configModule,
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
-            './common/trackers.js': d1Trackers(rec.mocks)
-        }), Object.assign({ java: { lang: { System: { getenv: function() { return ''; } } } } }, rec.mocks));
+            './common/trackers.js': d1Trackers(rec.mocks),
+            './common/repoTaskShared.js': shared
+        }), globals);
         var r = mod.action({ ticket: { key: '100' }, jobParams: { customParams: { trackerProvider: 'ado', labels: ['development'] } } });
         assert.equal(r.success, true);
         assert.equal(r.created, 1);
