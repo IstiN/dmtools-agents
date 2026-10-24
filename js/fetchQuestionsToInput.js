@@ -26,43 +26,80 @@ function hasAnswerValue(fields, key) {
         && fields[key] !== null;
 }
 
-function getAnswerValue(fields, answerField) {
-    if (!fields || !answerField) {
-        return null;
-    }
-
-    var answerFieldLower = answerField.toLowerCase();
+/**
+ * The direct lookups: the answer field as configured, then lower-cased.
+ * @returns {Object|undefined} the stored value, or undefined when neither key holds one
+ */
+function directAnswerValue(fields, answerField) {
     if (hasAnswerValue(fields, answerField)) {
         return fields[answerField];
     }
-
-    if (hasAnswerValue(fields, answerFieldLower)) {
-        return fields[answerFieldLower];
+    if (hasAnswerValue(fields, answerField.toLowerCase())) {
+        return fields[answerField.toLowerCase()];
     }
+    return undefined;
+}
 
-    var customFieldSuffix = answerField.indexOf('customfield_') === 0
+/**
+ * The `customfield_`-prefixed answer fields match their transformed
+ * `name (customfield_xxx)` key by suffix; other names by the friendly prefix.
+ * The prefix probe runs on the ORIGINAL-case answer field (gh-1191 parity),
+ * the suffix text itself is lower-cased.
+ */
+function customFieldSuffixOf(answerField, answerFieldLower) {
+    return answerField.indexOf('customfield_') === 0
         ? '(' + answerFieldLower + ')'
         : null;
+}
+
+/**
+ * Whether one field key is a transformed variant of the answer field:
+ * case-insensitive equality, the customfield suffix, or the `name (…)` shape.
+ */
+function answerKeyMatches(keyLower, answerFieldLower, customFieldSuffix, friendlyPrefix) {
+    if (keyLower === answerFieldLower) {
+        return true;
+    }
+    if (customFieldSuffix && keyLower.slice(-customFieldSuffix.length) === customFieldSuffix) {
+        return true;
+    }
+    return keyLower.indexOf(friendlyPrefix) === 0 && keyLower.slice(-1) === ')';
+}
+
+/**
+ * Scan every own field key for a transformed variant of the answer field
+ * (insertion order decides which one wins).
+ * @returns {Object|undefined} the first stored value, or undefined when none matches
+ */
+function answerFromTransformedKeys(fields, answerField) {
+    var answerFieldLower = answerField.toLowerCase();
+    var customFieldSuffix = customFieldSuffixOf(answerField, answerFieldLower);
     var transformedFriendlyPrefix = answerFieldLower + ' (';
 
     for (var key in fields) {
         if (!Object.prototype.hasOwnProperty.call(fields, key)) {
             continue;
         }
-
-        var keyLower = key.toLowerCase();
-        if (keyLower === answerFieldLower && hasAnswerValue(fields, key)) {
-            return fields[key];
-        }
-        if (customFieldSuffix && keyLower.slice(-customFieldSuffix.length) === customFieldSuffix && hasAnswerValue(fields, key)) {
-            return fields[key];
-        }
-        if (keyLower.indexOf(transformedFriendlyPrefix) === 0 && keyLower.slice(-1) === ')' && hasAnswerValue(fields, key)) {
+        if (answerKeyMatches(key.toLowerCase(), answerFieldLower, customFieldSuffix, transformedFriendlyPrefix)
+                && hasAnswerValue(fields, key)) {
             return fields[key];
         }
     }
+    return undefined;
+}
 
-    return null;
+function getAnswerValue(fields, answerField) {
+    if (!fields || !answerField) {
+        return null;
+    }
+
+    var direct = directAnswerValue(fields, answerField);
+    if (direct !== undefined) {
+        return direct;
+    }
+
+    var transformed = answerFromTransformedKeys(fields, answerField);
+    return transformed !== undefined ? transformed : null;
 }
 
 /**
@@ -263,6 +300,10 @@ if (typeof module !== 'undefined' && module.exports) {
         action: action,
         getAnswerValue: getAnswerValue,
         hasAnswerValue: hasAnswerValue,
+        directAnswerValue: directAnswerValue,
+        customFieldSuffixOf: customFieldSuffixOf,
+        answerKeyMatches: answerKeyMatches,
+        answerFromTransformedKeys: answerFromTransformedKeys,
         questionsFetchPlan: questionsFetchPlan,
         fetchParentContextSafely: fetchParentContextSafely,
         isCommentAnswerSentinel: isCommentAnswerSentinel,
