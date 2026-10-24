@@ -13,6 +13,7 @@
 
 // Load-time require (gh-823): a deferred require would resolve against the
 // pack js/ root only — hoist every require to the top of the module.
+var epicIntakeFetch = require("./common/epicIntakeFetch.js");
 var trackersModule = require("./common/trackers.js");
 var configLoader = require("./configLoader.js");
 
@@ -66,24 +67,11 @@ function projectOf(ticketKey) {
     return ticketKey ? ticketKey.split('-')[0] : '';
 }
 
-// customParams as seen by this action: jobParams win, then the params body.
-// The project config carries the repository that GitHub issue keys resolve against.
+// Tracker for this action: jobParams win for both the project config and the
+// customParams (the project config carries the repository that GitHub issue
+// keys resolve against).
 function createTrackerFor(params) {
-    var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
-    var projectConfig = (configLoader && configLoader.loadProjectConfig && configLoader.loadProjectConfig(params.jobParams || params)) || null;
-    return trackersModule.createTracker(projectConfig, customParams);
-}
-
-function priorityNameOf(fields) {
-    return fields.priority ? fields.priority.name : '';
-}
-
-function parentKeyOf(fields) {
-    return fields.parent ? fields.parent.key : null;
-}
-
-function statusNameOf(fields) {
-    return fields.status ? fields.status.name : '';
+    return epicIntakeFetch.createTrackerFor(trackersModule, configLoader, params, params.jobParams || params);
 }
 
 // "Acceptance Criteria" first, legacy "Acceptance Criterias" spelling second.
@@ -91,33 +79,23 @@ function acceptanceCriteriaOf(fields) {
     return findField(fields, 'Acceptance Criteria') || findField(fields, 'Acceptance Criterias') || null;
 }
 
+// Jira diagrams: the customfield key first, plain "Diagrams" fallback second.
+function epicDiagramsOf(fields) {
+    return fields['Diagrams (customfield_10296)'] || fields.Diagrams || null;
+}
+
 // Epic summary shape written to existing_epics.json.
 function mapEpic(issue) {
-    var f = issue.fields || {};
-    return {
-        key: issue.key || '',
-        summary: f.summary || '',
-        description: f.description || '',
-        priority: priorityNameOf(f),
-        diagrams: f['Diagrams (customfield_10296)'] || f.Diagrams || null,
-        parent: parentKeyOf(f)
-    };
+    return epicIntakeFetch.mapEpic(issue, epicDiagramsOf);
 }
 
 // Story summary shape written to existing_stories.json.
 function mapStory(issue) {
-    var sf = issue.fields || {};
-    return {
-        key: issue.key || '',
-        summary: sf.summary || '',
-        description: sf.description || '',
-        status: statusNameOf(sf),
-        priority: priorityNameOf(sf),
-        diagrams: findField(sf, 'Diagrams') || null,
-        acceptanceCriteria: acceptanceCriteriaOf(sf),
-        solution: findField(sf, 'Solution') || null,
-        parent: parentKeyOf(sf)
-    };
+    return epicIntakeFetch.mapStory(issue, {
+        diagramsOf: function (fields) { return findField(fields, 'Diagrams') || null; },
+        acceptanceCriteriaOf: acceptanceCriteriaOf,
+        solutionOf: function (fields) { return findField(fields, 'Solution') || null; }
+    });
 }
 
 // Static-analysis hooks (docs-freshness): agentDocGenerator discovers written
@@ -143,7 +121,8 @@ function epicSpec(project) {
         fileName: 'existing_epics.json',
         writeFile: writeEpicsFile,
         plural: 'epics',
-        brokenLabel: 'Failed to fetch epic'
+        brokenLabel: 'Failed to fetch epic',
+        collect: collectRefetchedIssues
     };
 }
 
@@ -156,13 +135,14 @@ function storySpec(project) {
         fileName: 'existing_stories.json',
         writeFile: writeStoriesFile,
         plural: 'stories',
-        brokenLabel: 'Failed to fetch story'
+        brokenLabel: 'Failed to fetch story',
+        collect: collectRefetchedIssues
     };
 }
 
 // Re-fetch every found issue (full field set) and map it; one broken fetch is
 // skipped with a log line, the rest still land in the file.
-function collectMappedIssues(tracker, spec) {
+function collectRefetchedIssues(tracker, spec) {
     var rawIssues = tracker.searchIssues(spec.jql, { fields: spec.fields });
     var issues = [];
     for (var i = 0; i < rawIssues.length; i++) {
@@ -173,19 +153,6 @@ function collectMappedIssues(tracker, spec) {
         }
     }
     return issues;
-}
-
-// Search → map → write one existing_*.json payload; a fetch failure is logged
-// and the run continues without the file.
-function fetchAndWrite(tracker, folder, spec) {
-    try {
-        var issues = collectMappedIssues(tracker, spec);
-        console.log('Found ' + issues.length + ' ' + spec.plural);
-        spec.writeFile(folder, '{"' + spec.listKey + '":' + JSON.stringify(issues, null, 2) + '}');
-        console.log('Wrote ' + spec.fileName + ' to ' + folder);
-    } catch (fetchError) {
-        console.error('Failed to fetch ' + spec.plural + ', continuing without file:', fetchError);
-    }
 }
 
 function action(params) {
@@ -200,8 +167,8 @@ function action(params) {
         }
         console.log('Fetching existing epics for project ' + project + '...');
 
-        fetchAndWrite(tracker, folder, epicSpec(project));
-        fetchAndWrite(tracker, folder, storySpec(project));
+        epicIntakeFetch.fetchAndWrite(tracker, folder, epicSpec(project));
+        epicIntakeFetch.fetchAndWrite(tracker, folder, storySpec(project));
     } catch (error) {
         console.error('Error in fetchEpicsToInput:', error);
     }

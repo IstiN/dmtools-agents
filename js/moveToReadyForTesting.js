@@ -3,18 +3,17 @@
  * Moves the ticket to "Ready For Testing" status after test cases are generated.
  */
 
-const configLoader = require('./configLoader.js');
-const trackersModule = require('./common/trackers.js');
+var actionTicketContext = require('./common/actionTicketContext.js');
 
 function action(params) {
     try {
-        const ticketKey = params.ticket ? params.ticket.key : null;
-        if (!ticketKey) {
-            return { success: false, error: 'No ticket key found in params' };
+        var ctx = actionTicketContext.resolveTicketContext(params);
+        if (!ctx.ok) {
+            return ctx.failure;
         }
-        const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-        const jiraConfig = projectConfig.jira;
-        var tracker = trackersModule.createTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+        const ticketKey = ctx.ticketKey;
+        const jiraConfig = ctx.jiraConfig;
+        var tracker = ctx.tracker;
 
         console.log('Moving ' + ticketKey + ' to ' + jiraConfig.statuses.READY_FOR_TESTING);
 

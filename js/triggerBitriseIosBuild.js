@@ -15,36 +15,22 @@
  */
 
 
-// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
-var trackersModule = require('./common/trackers.js');
-// Load-time require (gh-823): a deferred require would resolve against the
+// Load-time requires (gh-823): a deferred require would resolve against the
 // pack js/ root only — hoist every require to the top of the module.
 var configLoader = require('./configLoader.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
-function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
-}
-function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
-}
+var trackerSlot = require('./common/trackerSlot.js');
+var bitriseTrigger = require('./common/bitriseTrigger.js');
+
+// Tracker-agnostic ticket operations (jira / ado / github) — lazily created
+// per action() run via the shared tracker slot (gh-1250). Local wrappers keep
+// every call site and export unchanged.
+function initTracker(config, customParams) { trackerSlot.initTracker(config, customParams); }
+function getTracker() { return trackerSlot.getTracker(); }
 
 // ── Pure param/matrix builders (extracted from action, gh-929) ───────────────
 
 function resolveJql(params, jobParams) {
     return params.inputJql || jobParams.inputJql || '';
-}
-
-function parseJqlTicketKey(jql) {
-    var keyMatch = jql.match(/key\s*=\s*([A-Z]+-\d+)/i);
-    return keyMatch ? keyMatch[1].toUpperCase() : '';
-}
-
-function parseIssueList(results) {
-    var parsed = (typeof results === 'string') ? JSON.parse(results) : results;
-    return (parsed && parsed.issues) ? parsed.issues : (Array.isArray(parsed) ? parsed : []);
 }
 
 function ticketSummaryOf(ticket, fallbackKey) {
@@ -66,7 +52,7 @@ function fetchByKeySummary(key) {
 function searchForTicket(jql) {
     console.log('Fetching ticket by JQL:', jql);
     try {
-        var issues = parseIssueList(getTracker().searchIssues(jql, { maxResults: 1 }));
+        var issues = bitriseTrigger.parseIssueList(getTracker().searchIssues(jql, { maxResults: 1 }));
         if (issues.length > 0) {
             return { key: issues[0].key, summary: ticketSummaryOf(issues[0], issues[0].key) };
         }
@@ -80,7 +66,7 @@ function searchForTicket(jql) {
 function resolveIosTicket(inputJql) {
     if (!inputJql) return { key: '', summary: '' };
     // Extract ticket key directly from JQL (e.g. "key = PROJ-6815")
-    var key = parseJqlTicketKey(inputJql);
+    var key = bitriseTrigger.parseJqlTicketKey(inputJql);
     if (key) return fetchByKeySummary(key);
     // Fallback: jira_search_by_jql
     return searchForTicket(inputJql);
@@ -103,27 +89,12 @@ function resolveFeaturePrConfig(jobParams) {
     };
 }
 
-function prHeadRef(pr) {
-    return (pr.head && pr.head.ref) || '';
-}
-
-function prViewUrl(pr) {
-    return pr.html_url || pr.url || '';
-}
-
-function prMatchesTicket(pr, ticketKey) {
-    var prBranch = prHeadRef(pr);
-    return (pr.title || '').indexOf(ticketKey) !== -1 || prBranch.indexOf(ticketKey) !== -1;
-}
-
 function findFeaturePrWithBranch(prs, ticketKey, defaultBranch) {
-    for (var i = 0; i < (prs || []).length; i++) {
-        var pr = prs[i];
-        if (prMatchesTicket(pr, ticketKey)) {
-            var branch = prHeadRef(pr) || defaultBranch;
-            console.log('✅ Found feature PR #' + pr.number + ' → branch: ' + branch);
-            return { branch: branch, url: prViewUrl(pr) };
-        }
+    var pr = bitriseTrigger.findMatchingPr(prs, ticketKey);
+    if (pr) {
+        var branch = bitriseTrigger.prHeadRef(pr) || defaultBranch;
+        console.log('✅ Found feature PR #' + pr.number + ' → branch: ' + branch);
+        return { branch: branch, url: bitriseTrigger.prViewUrl(pr) };
     }
     return null;
 }
@@ -256,17 +227,17 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
         resolveJql: resolveJql,
-        parseJqlTicketKey: parseJqlTicketKey,
-        parseIssueList: parseIssueList,
+        parseJqlTicketKey: bitriseTrigger.parseJqlTicketKey,
+        parseIssueList: bitriseTrigger.parseIssueList,
         ticketSummaryOf: ticketSummaryOf,
         fetchByKeySummary: fetchByKeySummary,
         searchForTicket: searchForTicket,
         resolveIosTicket: resolveIosTicket,
         resolveIosBitriseConfig: resolveIosBitriseConfig,
         resolveFeaturePrConfig: resolveFeaturePrConfig,
-        prHeadRef: prHeadRef,
-        prViewUrl: prViewUrl,
-        prMatchesTicket: prMatchesTicket,
+        prHeadRef: bitriseTrigger.prHeadRef,
+        prViewUrl: bitriseTrigger.prViewUrl,
+        prMatchesTicket: bitriseTrigger.prMatchesTicket,
         findFeaturePrWithBranch: findFeaturePrWithBranch,
         applyIosFeaturePr: applyIosFeaturePr,
         resolveIosFeatureBranch: resolveIosFeatureBranch,

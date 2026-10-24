@@ -17,6 +17,7 @@ var configLoader = require('./configLoader.js');
 var trackersModule = require('./common/trackers.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var linkedIssuesReport = require('./common/linkedIssuesReport.js');
+var smDoneCheck = require('./common/smDoneCheck.js');
 
 function subtaskHasStatus(item) {
     if (!item) return false;
@@ -47,28 +48,10 @@ function countNotDoneSubtasks(tracker, subtasks, allQuery, doneStatus) {
     return notDone.length;
 }
 
-function releaseSmLock(tracker, ticketKey, removeLabel) {
-    if (!ticketKey || !removeLabel) return;
-    try {
-        tracker.removeLabel(ticketKey, removeLabel);
-        console.log('Released SM label — will re-check next cycle');
-    } catch (e) {
-        console.warn('Failed to remove SM label:', e);
-    }
-}
-
 function moveStoryToBaAnalysis(tracker, ticketKey, baAnalysisStatus, commentBody, totalSubtasks, actionName) {
     tracker.moveToStatusOrMark(ticketKey, baAnalysisStatus, 'BA_ANALYSIS', 'PO_REVIEW');
     tracker.postComment(ticketKey, commentBody);
     return { success: true, action: actionName, total: totalSubtasks, ticketKey: ticketKey };
-}
-
-function postTokenUsageSafely(ticketKey, initiator, tracker) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: initiator, tracker: tracker });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
 }
 
 function runBaReadinessCheck(tracker, projectConfig, ticketKey, removeLabel, initiator) {
@@ -104,9 +87,14 @@ function runBaReadinessCheck(tracker, projectConfig, ticketKey, removeLabel, ini
     console.log('Subtasks not yet Done:', notDoneCount, '/', totalSubtasks);
 
     if (notDoneCount > 0) {
-        console.log('Not all subtasks done — releasing lock, will re-check next cycle');
-        releaseSmLock(tracker, ticketKey, removeLabel);
-        return { success: true, action: 'waiting', total: totalSubtasks, notDone: notDoneCount, ticketKey: ticketKey };
+        return smDoneCheck.waitingResult(
+            tracker,
+            ticketKey,
+            removeLabel,
+            'Not all subtasks done — releasing lock, will re-check next cycle',
+            totalSubtasks,
+            notDoneCount
+        );
     }
 
     console.log('All', totalSubtasks, 'subtask(s) done — moving', ticketKey, 'to', baAnalysisStatus);
@@ -121,7 +109,7 @@ function runBaReadinessCheck(tracker, projectConfig, ticketKey, removeLabel, ini
         'moved_to_ba_analysis'
     );
     console.log('✅ Story', ticketKey, 'moved to BA Analysis');
-    postTokenUsageSafely(ticketKey, initiator, tracker);
+    tokenUsageComment.postTokenUsageCommentsSafely(ticketKey, { initiator: initiator, tracker: tracker });
     return doneResult;
 }
 
@@ -138,7 +126,7 @@ function action(params) {
         return runBaReadinessCheck(tracker, projectConfig, ticketKey, removeLabel, params.initiator);
     } catch (error) {
         console.error('❌ Error in checkSubtasksDoneForBA:', error);
-        releaseSmLock(tracker, ticketKey, removeLabel);
+        smDoneCheck.releaseSmLock(tracker, ticketKey, removeLabel);
         return { success: false, error: error.toString() };
     }
 }

@@ -1,6 +1,15 @@
 /* Unit tests for js/sm/mergeBot.js — the event-driven merge fast path. */
 /* global loadModule, assert, test, suite, makeRequire */
 
+// gh-1250: parseMcp/listArray normalize through js/common/mcpParse.js —
+// every loadModule of js/sm/mergeBot.js must map the helper in makeRequire
+// (it throws on unmapped ids).
+var mcpParseModule = loadModule('js/common/mcpParse.js', makeRequire({}), {});
+function loadMergeBot(mods) {
+    return loadModule('js/sm/mergeBot.js',
+        makeRequire({ '../common/mcpParse.js': mcpParseModule }), mods);
+}
+
 // gh-952: state-aware list payload for the multi-PR slot-holder
 // scenarios — extracted from `fixture` so the CRAP ratchet baseline
 // (fixture ≤ 12) holds; prIndex maps state → raw REST list payload,
@@ -86,7 +95,7 @@ function fixture(opts) {
             return '';
         }
     };
-    var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+    var bot = loadMergeBot(mods);
     return { bot: bot, calls: calls, mods: mods, wfCalls: wfCalls, crCalls: crCalls, listCalls: listCalls };
 }
 
@@ -436,7 +445,7 @@ suite('mergeBot: dead FIFO head must not starve the queue (gh-766)', function ()
             github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
             cli_execute_command: function (c) { calls.cli.push(c); return ''; }
         };
-        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        var bot = loadMergeBot(mods);
         return { bot: bot, calls: calls };
     }
 
@@ -595,7 +604,7 @@ suite('mergeBot: red-holder diagnostic (owner directive 2026-10-04: red yields t
             github_add_labels: function (a) { calls.adds.push(a); return '{}'; },
             github_remove_label: function (r) { calls.removes.push(r); return '{}'; }
         };
-        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        var bot = loadMergeBot(mods);
         return { bot: bot, calls: calls };
     }
 
@@ -712,7 +721,7 @@ suite('mergeBot: externally-merged slot holder releases the merge window (gh-952
             github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
             cli_execute_command: function (c) { calls.cli.push(c); return ''; }
         };
-        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        var bot = loadMergeBot(mods);
         return { bot: bot, calls: calls, listCalls: listCalls };
     }
 
@@ -777,7 +786,7 @@ suite('mergeBot: externally-merged slot holder releases the merge window (gh-952
             github_remove_label: function () { return '{}'; },
             cli_execute_command: function (c) { calls.cli.push(c); return ''; }
         };
-        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        var bot = loadMergeBot(mods);
         var result = bot.action({ jobParams: { repo: 'o/r' } });
 
         assert.ok(result.log.some(function (l) {
@@ -893,7 +902,7 @@ suite('mergeBot: repo resolution edge paths (gh-1040 characterization)', functio
             cli_execute_command: function () { return ''; }
         };
         for (var k in (mods || {})) allMods[k] = mods[k];
-        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), allMods);
+        var bot = loadMergeBot(allMods);
         return { bot: bot, captured: captured };
     }
 
@@ -958,7 +967,7 @@ suite('mergeBot: rollupDetail evidence edge paths (gh-1040 characterization)', f
             github_get_commit_check_runs: function (a) { captured.cr.push(a); return checkRunsRaw; },
             github_list_workflow_runs: function (a) { captured.wf.push(a); return wfRaw; }
         };
-        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        var bot = loadMergeBot(mods);
         return { bot: bot, captured: captured };
     }
 
@@ -1071,7 +1080,7 @@ suite('mergeBot: hasActiveSmRun probe edge paths via the self-tick gate (gh-1040
             github_remove_label: function () { return '{}'; },
             cli_execute_command: function (c) { calls.cli.push(c); return ''; }
         };
-        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        var bot = loadMergeBot(mods);
         return { bot: bot, calls: calls };
     }
 
@@ -1197,7 +1206,7 @@ suite('mergeBot: action loop edge paths (gh-1040 characterization)', function ()
             },
             cli_execute_command: function (c) { calls.cli.push(c); return ''; }
         };
-        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        var bot = loadMergeBot(mods);
         return { bot: bot, calls: calls };
     }
 
@@ -1315,7 +1324,7 @@ suite('mergeBot: action loop edge paths (gh-1040 characterization)', function ()
             github_remove_label: function () { return '{}'; },
             cli_execute_command: function (c) { calls.cli.push(c); return ''; }
         };
-        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        var bot = loadMergeBot(mods);
         var result = bot.action({ jobParams: { repo: 'a/b' } });
         assert.equal(calls.merges.length, 2, 'one merge attempt + the single retry, both refused');
         assert.ok(result.log.some(function (l) {
@@ -1331,9 +1340,75 @@ suite('mergeBot: action loop edge paths (gh-1040 characterization)', function ()
 
 suite('mergeBot: gh-1101 invisible-required log line', function () {
     test('approved + BLOCKED names the invisible-required shape; others keep the generic line', function () {
-        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), {});
+        var bot = loadMergeBot({});
         assert.ok(bot.blockedWaitLine(435, 'BLOCKED', true).indexOf('required checks invisible to PR') !== -1);
         assert.equal(bot.blockedWaitLine(7, 'BLOCKED', false), '⏳ pr-7 mergeState=BLOCKED — waiting (checks settling)');
         assert.equal(bot.blockedWaitLine(7, 'UNSTABLE', true), '⏳ pr-7 mergeState=UNSTABLE — waiting (checks settling)');
+    });
+});
+
+suite('mergeBot: bridge payload normalization (gh-1250)', function () {
+    // parseMcp/listArray delegate to js/common/mcpParse.js (the verbatim
+    // copies in mergeTrigger.js and mergeBot.js were one helper). These
+    // tests pin the delegation branches the action() path depends on:
+    // null/invalid-JSON list payloads read as empty lists (no crash), raw
+    // object payloads pass through by reference, and wrapped
+    // { pullRequests: [...] } objects are unwrapped before iterating.
+
+    function normFixture(listPrsResult, prBody) {
+        var calls = { lists: [], merges: [] };
+        var mods = {
+            github_list_workflow_runs: function () { return JSON.stringify({ workflow_runs: [] }); },
+            github_list_prs: function (a) { calls.lists.push(a); return listPrsResult; },
+            github_get_pr: function () { return JSON.stringify(prBody); },
+            github_get_commit_check_runs: function () {
+                return JSON.stringify({ check_runs: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] });
+            },
+            github_merge_pr: function (m) { calls.merges.push(m); return JSON.stringify({ merged: true }); },
+            github_add_labels: function () { return '{}'; },
+            github_remove_label: function () { return '{}'; },
+            cli_execute_command: function () { return ''; }
+        };
+        return { bot: loadMergeBot(mods), calls: calls };
+    }
+
+    var ARMED_GREEN_BODY = {
+        number: 7, state: 'OPEN', draft: false, mergeable: true, mergeable_state: 'clean',
+        head: { sha: 's7' },
+        labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }]
+    };
+
+    test('null and invalid-JSON list payloads read as empty lists (parseMcp null + catch branches)', function () {
+        [null, 'not json at all'].forEach(function (bad) {
+            var fx = normFixture(bad, {});
+            var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+            assert.equal(result.success, true,
+                'a bad list payload never crashes the run: ' + String(bad));
+            assert.equal(result.acted, 0);
+            assert.equal(fx.calls.merges.length, 0);
+            assert.equal(fx.calls.lists.length, 1, 'the open list was still requested once');
+        });
+    });
+
+    test('a bare-array object payload passes through and the loop still merges (payloadList array branch)', function () {
+        var fx = normFixture(
+            [{ number: 7, labels: [{ name: 'pr_approved' }], head: { sha: 's7' } }],
+            ARMED_GREEN_BODY);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(result.success, true);
+        assert.equal(result.acted, 1);
+        assert.equal(fx.calls.merges.length, 1, 'the object-array list iterated and merged');
+        assert.equal(fx.calls.merges[0].pullRequestId, 7);
+    });
+
+    test('a wrapped { pullRequests: [...] } object list is unwrapped (payloadList pullRequests branch)', function () {
+        var fx = normFixture(
+            { pullRequests: [{ number: 7, labels: [{ name: 'pr_approved' }], head: { sha: 's7' } }] },
+            ARMED_GREEN_BODY);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(result.success, true);
+        assert.equal(result.acted, 1, 'the wrapped shape did not silently disable the sweep');
+        assert.equal(fx.calls.merges.length, 1);
+        assert.equal(fx.calls.merges[0].pullRequestId, 7);
     });
 });

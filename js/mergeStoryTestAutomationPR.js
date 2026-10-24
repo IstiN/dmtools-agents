@@ -10,17 +10,9 @@ var configLoader = require('./configLoader.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
-var trackersModule = require('./common/trackers.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
-function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
-}
-function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
-}
+var trackerSlot = require('./common/trackerSlot.js');
+function initTracker(config, customParams) { trackerSlot.initTracker(config, customParams); }
+function getTracker() { return trackerSlot.getTracker(); }
 
 
 /**
@@ -54,6 +46,35 @@ function releaseLock(storyKey, customParams) {
     const removeLabel = customParams && customParams.removeLabel;
     if (removeLabel && storyKey) {
         try { getTracker().removeLabel(storyKey, removeLabel); } catch (e) {}
+    }
+}
+
+/**
+ * Best-effort ticket label transition shared by both finalize paths: drop
+ * pr_approved and test_pr_merged, then add test_pr_finalized. Each provider
+ * error is logged and swallowed so a single label failure cannot abort
+ * finalization. `options.removeApprovedWarn` overrides the pr_approved
+ * failure message; `options.removedApprovedNote` logs a note after that
+ * removal succeeds.
+ */
+function finalizeTicketLabels(storyKey, options) {
+    options = options || {};
+    try {
+        getTracker().removeLabel(storyKey, LABELS.PR_APPROVED);
+        if (options.removedApprovedNote) console.log(options.removedApprovedNote);
+    } catch (e) {
+        console.warn(options.removeApprovedWarn || 'Could not remove pr_approved label:', e);
+    }
+    try {
+        getTracker().removeLabel(storyKey, LABELS.TEST_PR_MERGED);
+    } catch (e) {
+        console.warn('Could not remove test_pr_merged label:', e);
+    }
+    try {
+        getTracker().addLabel(storyKey, LABELS.TEST_PR_FINALIZED);
+        console.log('Added test_pr_finalized label to', storyKey);
+    } catch (e) {
+        console.warn('Could not add test_pr_finalized label:', e);
     }
 }
 
@@ -182,22 +203,7 @@ function finalizeAlreadyMergedPR(params, scm, storyKey, pr, testCaseType, custom
     // directly linked Test Cases are Passed. Moving it here allowed bugs to be
     // closed while their acceptance tests were still failing.
 
-    try {
-        getTracker().removeLabel(storyKey, LABELS.PR_APPROVED);
-    } catch (e) {
-        console.warn('Could not remove pr_approved label:', e);
-    }
-    try {
-        getTracker().removeLabel(storyKey, LABELS.TEST_PR_MERGED);
-    } catch (e) {
-        console.warn('Could not remove test_pr_merged label:', e);
-    }
-    try {
-        getTracker().addLabel(storyKey, LABELS.TEST_PR_FINALIZED);
-        console.log('Added test_pr_finalized label to', storyKey);
-    } catch (e) {
-        console.warn('Could not add test_pr_finalized label:', e);
-    }
+    finalizeTicketLabels(storyKey);
 
     var ticketLabel = issueType || 'Story';
     getTracker().postComment(storyKey, 'h3. ✅ ' + ticketLabel + ' Test PR Already Merged\n\n' +
@@ -325,23 +331,10 @@ function finalizeMergedPR(params, scm, storyKey, prNumber, prUrl, testCaseType, 
 
     var tcResult = moveLinkedTestCases(storyKey, testCaseType, jiraConfig);
 
-    try {
-        getTracker().removeLabel(storyKey, LABELS.PR_APPROVED);
-        console.log('Removed pr_approved label from Jira ticket');
-    } catch (e) {
-        console.warn('Could not remove pr_approved from Jira ticket:', e);
-    }
-    try {
-        getTracker().removeLabel(storyKey, LABELS.TEST_PR_MERGED);
-    } catch (e) {
-        console.warn('Could not remove test_pr_merged label:', e);
-    }
-    try {
-        getTracker().addLabel(storyKey, LABELS.TEST_PR_FINALIZED);
-        console.log('Added test_pr_finalized label to', storyKey);
-    } catch (e) {
-        console.warn('Could not add test_pr_finalized label:', e);
-    }
+    finalizeTicketLabels(storyKey, {
+        removeApprovedWarn: 'Could not remove pr_approved from Jira ticket:',
+        removedApprovedNote: 'Removed pr_approved label from Jira ticket'
+    });
 
     var ticketLabel = issueType || 'Story';
     getTracker().postComment(storyKey, 'h3. ✅ ' + ticketLabel + ' Test PR Merged\n\n' +
@@ -673,6 +666,7 @@ if (typeof module !== 'undefined' && module.exports) {
         isMissingPrerequisiteReason: isMissingPrerequisiteReason,
         reworkSkipLabelOf: reworkSkipLabelOf,
         reworkFailureComment: reworkFailureComment,
-        removePrLabelSafe: removePrLabelSafe
+        removePrLabelSafe: removePrLabelSafe,
+        finalizeTicketLabels: finalizeTicketLabels
     };
 }

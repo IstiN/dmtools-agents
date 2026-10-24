@@ -23,21 +23,16 @@ const scmModule = require('./common/scm.js');
 const trackersModule = require('./common/trackers.js');
 const checkHelpers = require('./checkBugTestsPassedHelpers.js');
 const linkedIssuesReport = require('./common/linkedIssuesReport.js');
+const smLock = require('./common/smLock.js');
 
 /**
  * Helper: remove SM label so the check re-runs on the next SM cycle.
  * gh-1188: extracted from the action closure — a removal failure is
  * swallowed (non-fatal, as before).
+ * gh-1250: shared implementation in common/smLock.js.
  */
 function releaseLock(tracker, ticketKey, removeLabel) {
-    if (ticketKey && removeLabel) {
-        try {
-            tracker.removeLabel(ticketKey, removeLabel);
-            console.log('Released SM label — will re-check next cycle');
-        } catch (e) {
-            console.warn('Failed to remove SM label:', e);
-        }
-    }
+    smLock.releaseLock(tracker, ticketKey, removeLabel);
 }
 
 function getTicketSafely(tracker, ticketKey) {
@@ -284,12 +279,9 @@ function completeBugDone(tracker, ticketKey, totalTCs, jiraConfig, params, remov
     console.log('✅ Bug', ticketKey, 'moved to Done');
 
     // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-    // wrote outputs/*_usage.json during the agent run.
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    // wrote outputs/*_usage.json during the agent run. gh-1250: the shared wrapper never throws —
+    // a provider failure here must not fail the done check.
+    tokenUsageComment.postTokenUsageCommentsSafely(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
 
     releaseLock(tracker, ticketKey, removeLabel);
     return { success: true, action: 'moved_to_done', totalTCs: totalTCs, ticketKey: ticketKey };

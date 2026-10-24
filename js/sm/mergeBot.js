@@ -33,11 +33,12 @@
    github_list_workflow_runs, github_merge_pr, github_add_labels,
    github_remove_label, cli_execute_command */
 
-function parseMcp(raw) {
-    if (raw === null || raw === undefined) return {};
-    if (typeof raw === 'object') return raw;
-    try { return JSON.parse(String(raw)); } catch (e) { return {}; }
-}
+// gh-1250: the MCP-bridge payload normalizers live in common/mcpParse.js
+// (mergeBot's copy was byte-identical to mergeTrigger.js's).
+var mcpParse = require('../common/mcpParse.js');
+
+// Thin wrapper keeps every call site unchanged.
+function parseMcp(raw) { return mcpParse.parseMcp(raw); }
 
 function labelNames(pr) {
     return (pr.labels || []).map(function (l) { return (l && l.name) || l; });
@@ -51,9 +52,13 @@ function labelNames(pr) {
  * vanishes from the log (gh-952 review: mergedSlotHolder once iterated
  * the merged list raw — a shape mismatch would have silently disabled
  * the slot release the whole PR exists for).
+ *
+ * gh-1250: the normalization itself lives in common/mcpParse.js
+ * (payloadList) — the semantics are identical, including the
+ * empty-list fallback for payloads carrying neither key.
  */
 function listArray(prs) {
-    return Array.isArray(prs) ? prs : (prs.pullRequests || prs.items || []);
+    return mcpParse.payloadList(prs);
 }
 
 /**

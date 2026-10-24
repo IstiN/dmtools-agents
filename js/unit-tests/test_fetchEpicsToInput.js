@@ -44,6 +44,7 @@ function loadFetchEpicsToInput(opts) {
     var mod = loadModule(
         'js/fetchEpicsToInput.js',
         makeRequire({
+            './common/epicIntakeFetch.js': loadEpicIntakeFetch(),
             './common/trackers.js': trackersMock,
             './configLoader.js': { loadProjectConfig: function () { return opts.projectConfig || null; } }
         }),
@@ -51,6 +52,11 @@ function loadFetchEpicsToInput(opts) {
     );
 
     return { mod: mod, calls: calls };
+}
+
+// The real shared helper (it has no requires of its own).
+function loadEpicIntakeFetch() {
+    return loadModule('js/common/epicIntakeFetch.js', makeRequire({}));
 }
 
 // Scripted searchIssues outcome for one JQL: results list, or a thrown error.
@@ -290,6 +296,145 @@ suite('fetchEpicsToInput.action', function () {
         assert.equal(loaded.mod.findField({ diagrams: 'd2' }, 'Diagrams'), null, 'substring is case-sensitive');
         assert.equal(loaded.mod.findField({ a: 1 }, 'Diagrams'), null, 'absent field is null');
         assert.equal(loaded.mod.findField({ Diagrams: 0 }, 'Diagrams'), 0, 'falsy-but-present value is returned as-is');
+    });
+
+});
+
+suite('epicIntakeFetch helper branches (via fetchEpicsToInput mapping)', function () {
+
+    test('mapEpic keeps key order and applies the injected diagrams extractor', function () {
+        var helper = loadEpicIntakeFetch();
+        var mapped = helper.mapEpic({
+            key: 'PROJ-10',
+            fields: {
+                summary: 'Epic one',
+                description: 'Desc',
+                priority: { name: 'High' },
+                'Diagrams (customfield_10296)': 'diag-url',
+                parent: { key: 'PROJ-1' }
+            }
+        }, function (fields) { return fields['Diagrams (customfield_10296)'] || fields.Diagrams || null; });
+        assert.deepEqual(mapped, {
+            key: 'PROJ-10',
+            summary: 'Epic one',
+            description: 'Desc',
+            priority: 'High',
+            diagrams: 'diag-url',
+            parent: 'PROJ-1'
+        });
+        assert.deepEqual(Object.keys(mapped), ['key', 'summary', 'description', 'priority', 'diagrams', 'parent'],
+            'JSON key order matches the established payload');
+    });
+
+    test('mapEpic defaults missing fields to empty string / null', function () {
+        var helper = loadEpicIntakeFetch();
+        var mapped = helper.mapEpic({ key: 'PROJ-11', fields: {} }, function () { return null; });
+        assert.deepEqual(mapped, {
+            key: 'PROJ-11',
+            summary: '',
+            description: '',
+            priority: '',
+            diagrams: null,
+            parent: null
+        });
+    });
+
+    test('mapStory adds optional extractors between diagrams and parent', function () {
+        var helper = loadEpicIntakeFetch();
+        var mapped = helper.mapStory({
+            key: 'PROJ-20',
+            fields: {
+                summary: 'Story one',
+                status: { name: 'In Progress' },
+                priority: { name: 'Low' },
+                parent: { key: 'PROJ-10' }
+            }
+        }, {
+            diagramsOf: function () { return null; },
+            acceptanceCriteriaOf: function () { return 'AC text'; },
+            solutionOf: function () { return 'Sol text'; }
+        });
+        assert.deepEqual(mapped, {
+            key: 'PROJ-20',
+            summary: 'Story one',
+            description: '',
+            status: 'In Progress',
+            priority: 'Low',
+            diagrams: null,
+            acceptanceCriteria: 'AC text',
+            solution: 'Sol text',
+            parent: 'PROJ-10'
+        });
+        assert.deepEqual(Object.keys(mapped),
+            ['key', 'summary', 'description', 'status', 'priority', 'diagrams', 'acceptanceCriteria', 'solution', 'parent'],
+            'extras land between diagrams and parent');
+    });
+
+    test('mapStory without optional extractors omits those keys entirely', function () {
+        var helper = loadEpicIntakeFetch();
+        var mapped = helper.mapStory({ key: 'PROJ-21', fields: { diagrams: 'd' } }, {
+            diagramsOf: function (fields) { return fields.diagrams || null; }
+        });
+        assert.deepEqual(mapped, {
+            key: 'PROJ-21',
+            summary: '',
+            description: '',
+            status: '',
+            priority: '',
+            diagrams: 'd',
+            parent: null
+        });
+        assert.equal('acceptanceCriteria' in mapped, false, 'no acceptanceCriteria key');
+        assert.equal('solution' in mapped, false, 'no solution key');
+    });
+
+    test('createTrackerFor: falsy loadProjectConfig result becomes null config', function () {
+        var helper = loadEpicIntakeFetch();
+        var created = [];
+        var trackers = { createTracker: function (config, customParams) { created.push({ config: config, customParams: customParams }); return { t: 1 }; } };
+        helper.createTrackerFor(trackers, { loadProjectConfig: function () { return undefined; } }, { customParams: { a: 1 } }, { customParams: { a: 1 } });
+        assert.deepEqual(created, [{ config: null, customParams: { a: 1 } }]);
+    });
+
+    test('createTrackerFor: missing configLoader or loadProjectConfig yields null config', function () {
+        var helper = loadEpicIntakeFetch();
+        var created = [];
+        var trackers = { createTracker: function (config, customParams) { created.push({ config: config, customParams: customParams }); return { t: 1 }; } };
+        helper.createTrackerFor(trackers, null, {}, {});
+        helper.createTrackerFor(trackers, {}, {}, {});
+        assert.deepEqual(created, [{ config: null, customParams: {} }, { config: null, customParams: {} }]);
+    });
+
+    test('fetchAndWrite writes a 2+ item payload through the spec writeFile', function () {
+        var helper = loadEpicIntakeFetch();
+        var writes = [];
+        var tracker = { searchIssues: function () { return [{ key: 'A-1' }, { key: 'A-2' }, { key: 'A-3' }] } };
+        helper.fetchAndWrite(tracker, 'input/A-9', {
+            jql: 'q',
+            fields: ['key'],
+            map: function (issue) { return { key: issue.key }; },
+            listKey: 'epics',
+            fileName: 'existing_epics.json',
+            writeFile: function (folder, payload) { writes.push({ folder: folder, payload: payload }); },
+            plural: 'epics',
+            collect: function (t, spec) { return t.searchIssues(spec.jql, { fields: spec.fields }).map(spec.map); }
+        });
+        assert.equal(writes.length, 1);
+        assert.equal(writes[0].folder, 'input/A-9');
+        assert.deepEqual(JSON.parse(writes[0].payload).epics, [{ key: 'A-1' }, { key: 'A-2' }, { key: 'A-3' }]);
+    });
+
+    test('fetchAndWrite swallows a collect failure and writes nothing', function () {
+        var helper = loadEpicIntakeFetch();
+        var writes = [];
+        helper.fetchAndWrite({}, 'input/A-9', {
+            listKey: 'epics',
+            fileName: 'existing_epics.json',
+            writeFile: function (folder, payload) { writes.push(payload); },
+            plural: 'epics',
+            collect: function () { throw new Error('search down'); }
+        });
+        assert.deepEqual(writes, [], 'no file written when the collect step fails');
     });
 
 });

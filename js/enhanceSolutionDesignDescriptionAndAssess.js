@@ -6,27 +6,18 @@
 
 // Import common helper functions
 const { extractTicketKey } = require('./common/jiraHelpers.js');
-const { STATUSES, LABELS, DIAGRAM_DEFAULTS, DIAGRAM_FORMAT, JIRA_FIELDS } = require('./config.js');
+const { STATUSES, DIAGRAM_DEFAULTS } = require('./config.js');
 const outputFiles = require('./common/outputFiles.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
-var configLoader = null;
-try { configLoader = require('./configLoader.js'); } catch (e) {}
+
+// Shared enhancement post-steps (gh-1250): tracker-slot init preamble and
+// the description + Diagrams ticket-update pair.
+var enhancementPost = require('./common/enhancementPost.js');
 
 // Tracker-agnostic ticket operations — created lazily per action() run.
-var trackersModule = require('./common/trackers.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
-function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
-}
-function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
-}
-function resolveProjectConfig(params) {
-    return configLoader ? configLoader.loadProjectConfig(params) : null;
-}
+var trackerSlot = require('./common/trackerSlot.js');
+function initTracker(config, customParams) { trackerSlot.initTracker(config, customParams); }
+function getTracker() { return trackerSlot.getTracker(); }
 
 /**
  * Read enhancement data from separate files
@@ -97,34 +88,7 @@ function parseSDCoreEnhancementResponse(ticketKey, workingDir) {
  * @returns {Object} Update result
  */
 function updateSDCoreTicket(ticketKey, enhancementData) {
-    const results = {
-        descriptionUpdated: false,
-        diagramUpdated: false,
-        errors: []
-    };
-
-    try {
-        // Update ticket description
-        getTracker().updateDescription(ticketKey, enhancementData.description);
-        results.descriptionUpdated = true;
-        console.log('✅ Updated description for ' + ticketKey);
-    } catch (error) {
-        console.error('Failed to update description for ' + ticketKey + ':', error);
-        results.errors.push('Description update failed: ' + error.toString());
-    }
-
-    try {
-        // Update Diagrams field with mermaid diagram wrapped in code tags for better visualization
-        const wrappedDiagram = DIAGRAM_FORMAT.MERMAID_WRAPPER_START + enhancementData.diagram + DIAGRAM_FORMAT.MERMAID_WRAPPER_END;
-        getTracker().updateField(ticketKey, JIRA_FIELDS.DIAGRAMS, wrappedDiagram);
-        results.diagramUpdated = true;
-        console.log('✅ Updated Diagrams field for ' + ticketKey);
-    } catch (error) {
-        console.error('Failed to update Diagrams field for ' + ticketKey + ':', error);
-        results.errors.push('Diagrams field update failed: ' + error.toString());
-    }
-
-    return results;
+    return enhancementPost.updateDescriptionAndDiagram(getTracker, ticketKey, enhancementData);
 }
 
 
@@ -148,21 +112,21 @@ function countSuccessfulUpdates(updateResults) {
            (updateResults.diagramUpdated ? 1 : 0);
 }
 
-/** Post token usage summary comments; a failure is logged and skipped.
+/** Post token usage summary comments; a failure is logged and skipped
+ *  (shared try/catch wrapper lives in tokenUsageComment.js, gh-1250).
  *  Parameter order matches closeQuestionTicket.js's same-named helper. */
 function postTokenUsageCommentsSafely(ticketKey, params) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    tokenUsageComment.postTokenUsageCommentsSafely(ticketKey, {
+        initiator: params.initiator,
+        customParams: tokenUsageComment.customParamsOf(params)
+    });
 }
 
 function action(params) {
     try {
         const ticketKey = params.ticket.key;
         const initiatorId = params.initiator;
-        initTracker(resolveProjectConfig(params), (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+        enhancementPost.initEnhancementTracker(params);
         const wipLabel = resolveWipLabel(params);
 
         console.log("Processing SD CORE enhancement for ticket:", ticketKey);

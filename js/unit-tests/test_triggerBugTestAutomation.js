@@ -1,6 +1,27 @@
 /**
- * Unit tests for js/triggerBugTestAutomation.js
+ * Unit tests for js/triggerBugTestAutomation.js and the shared
+ * js/common/autoStartTrigger.js helper it delegates to (gh-1250).
  */
+
+function loadAutoStartTrigger(mocks) {
+    var autoStartMock = {
+        triggerConfiguredWorkflowForTicket: function(opts) {
+            return (mocks && mocks.triggerConfiguredWorkflowForTicket)
+                ? mocks.triggerConfiguredWorkflowForTicket(opts)
+                : false;
+        },
+        triggerSmIfIdle: function(opts) {
+            return (mocks && mocks.triggerSmIfIdle)
+                ? mocks.triggerSmIfIdle(opts)
+                : { success: true };
+        }
+    };
+    return loadModule(
+        'js/common/autoStartTrigger.js',
+        makeRequire({ './autoStart.js': autoStartMock }),
+        {}
+    );
+}
 
 function loadTriggerBugTestAutomation(mocks) {
     var defaults = {
@@ -8,26 +29,28 @@ function loadTriggerBugTestAutomation(mocks) {
         jira_post_comment: function() {}
     };
 
+    var tokenUsageMock = {
+        postTokenUsageComments: function(key, opts) {
+            if (mocks && mocks.postTokenUsageComments) mocks.postTokenUsageComments(key, opts);
+        },
+        customParamsOf: function(params) {
+            return (params && params.jobParams && params.jobParams.customParams) ||
+                (params && params.customParams) || {};
+        }
+    };
+    tokenUsageMock.postTokenUsageCommentsSafely = function(key, opts) {
+        try {
+            tokenUsageMock.postTokenUsageComments(key, opts);
+        } catch (e) {
+            console.warn('Failed to post token usage comments:', e);
+        }
+    };
+
     return loadModule(
         'js/triggerBugTestAutomation.js',
         makeRequire({
-            './common/autoStart.js': {
-                triggerConfiguredWorkflowForTicket: function(opts) {
-                    return (mocks && mocks.triggerConfiguredWorkflowForTicket)
-                        ? mocks.triggerConfiguredWorkflowForTicket(opts)
-                        : false;
-                },
-                triggerSmIfIdle: function(opts) {
-                    return (mocks && mocks.triggerSmIfIdle)
-                        ? mocks.triggerSmIfIdle(opts)
-                        : { success: true };
-                }
-            },
-            './common/tokenUsageComment.js': {
-                postTokenUsageComments: function(key, opts) {
-                    if (mocks && mocks.postTokenUsageComments) mocks.postTokenUsageComments(key, opts);
-                }
-            }
+            './common/autoStartTrigger.js': loadAutoStartTrigger(mocks),
+            './common/tokenUsageComment.js': tokenUsageMock
         }),
         Object.assign({}, defaults, mocks)
     );
@@ -135,6 +158,77 @@ suite('triggerBugTestAutomation', function() {
         assert.deepEqual(m.configOf({ jobParams: { config: { c: 3 } } }), { c: 3 });
         assert.deepEqual(m.configOf({ config: { d: 4 } }), { d: 4 });
         assert.deepEqual(m.configOf({}), {});
+    });
+
+});
+
+// ── gh-1250: direct coverage of the shared autoStartTrigger branches ──
+
+suite('autoStartTrigger (shared, via bug test suite)', function() {
+
+    function baseOpts(customParams) {
+        return {
+            ticketKey: 'TP-300',
+            config: { c: 1 },
+            customParams: customParams,
+            label: 'bug_test_automation'
+        };
+    }
+
+    test('flag set and workflow triggered: fires autoStart and skips SM', function() {
+        var smCalled = false;
+        var module = loadAutoStartTrigger({
+            triggerConfiguredWorkflowForTicket: function(opts) {
+                assert.equal(opts.ticketKey, 'TP-300');
+                assert.equal(opts.configFile, 'agents/bug_test_automation.json');
+                assert.equal(opts.label, 'bug_test_automation');
+                assert.deepEqual(opts.stripKeys, ['removeLabel', 'autoStartBugTestAutomation', 'autoStartBugTestAutomationConfigFile']);
+                return true;
+            },
+            triggerSmIfIdle: function() { smCalled = true; }
+        });
+
+        var triggered = module.triggerWorkflowOrAskSm(baseOpts({
+            autoStartBugTestAutomation: true,
+            autoStartBugTestAutomationConfigFile: 'agents/bug_test_automation.json'
+        }));
+
+        assert.equal(triggered, true);
+        assert.equal(smCalled, false);
+    });
+
+    test('flag set but workflow not triggered: asks SM to re-evaluate', function() {
+        var smCalled = false;
+        var module = loadAutoStartTrigger({
+            triggerConfiguredWorkflowForTicket: function() { return false; },
+            triggerSmIfIdle: function(opts) {
+                smCalled = true;
+                assert.deepEqual(opts.config, { c: 1 });
+            }
+        });
+
+        var triggered = module.triggerWorkflowOrAskSm(baseOpts({
+            autoStartBugTestAutomation: true,
+            autoStartBugTestAutomationConfigFile: 'agents/bug_test_automation.json'
+        }));
+
+        assert.equal(triggered, false);
+        assert.equal(smCalled, true);
+    });
+
+    test('flag missing: never calls autoStart and asks SM to re-evaluate', function() {
+        var workflowCalled = false;
+        var smCalled = false;
+        var module = loadAutoStartTrigger({
+            triggerConfiguredWorkflowForTicket: function() { workflowCalled = true; return true; },
+            triggerSmIfIdle: function() { smCalled = true; }
+        });
+
+        var triggered = module.triggerWorkflowOrAskSm(baseOpts({}));
+
+        assert.equal(triggered, false);
+        assert.equal(workflowCalled, false);
+        assert.equal(smCalled, true);
     });
 
 });

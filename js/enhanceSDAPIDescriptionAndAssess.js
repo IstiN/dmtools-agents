@@ -6,28 +6,19 @@
 
 // Import common helper functions
 const { extractTicketKey } = require('./common/jiraHelpers.js');
-const { LABELS, DIAGRAM_DEFAULTS, DIAGRAM_FORMAT, JIRA_FIELDS } = require('./config.js');
+const { LABELS, DIAGRAM_DEFAULTS } = require('./config.js');
 // Load-time require (gh-823): hoisted to the top — JSON parsing helper shared
 // with the questions post-action (same 'Invalid JSON from AI:' contract).
 const aiResponseParser = require('./common/aiResponseParser.js');
-var configLoader = null;
-try { configLoader = require('./configLoader.js'); } catch (e) {}
+
+// Shared enhancement post-steps (gh-1250): tracker-slot init preamble and
+// the description + Diagrams ticket-update pair.
+var enhancementPost = require('./common/enhancementPost.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
-var trackersModule = require('./common/trackers.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
-function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
-}
-function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
-}
-function resolveProjectConfig(params) {
-    return configLoader ? configLoader.loadProjectConfig(params) : null;
-}
+var trackerSlot = require('./common/trackerSlot.js');
+function initTracker(config, customParams) { trackerSlot.initTracker(config, customParams); }
+function getTracker() { return trackerSlot.getTracker(); }
 
 /**
  * Parse AI response for SD API enhancement
@@ -91,36 +82,10 @@ function hasRequiredEnhancementFields(response) {
  * @returns {Object} Update result
  */
 function updateSDAPITicket(ticketKey, enhancementData) {
-    const results = {
-        descriptionUpdated: false,
-        diagramUpdated: false,
-        labelAdded: false,
-        errors: []
-    };
-    
+    const results = enhancementPost.updateDescriptionAndDiagram(getTracker, ticketKey, enhancementData);
+    results.labelAdded = false;
+
     try {
-        // Update ticket description
-        getTracker().updateDescription(ticketKey, enhancementData.description);
-        results.descriptionUpdated = true;
-        console.log('✅ Updated description for ' + ticketKey);
-    } catch (error) {
-        console.error('Failed to update description for ' + ticketKey + ':', error);
-        results.errors.push('Description update failed: ' + error.toString());
-    }
-    
-    try {
-        // Update Diagrams field with mermaid sequence diagram wrapped in code tags for better visualization
-        const wrappedDiagram = DIAGRAM_FORMAT.MERMAID_WRAPPER_START + enhancementData.diagram + DIAGRAM_FORMAT.MERMAID_WRAPPER_END;
-        getTracker().updateField(ticketKey, JIRA_FIELDS.DIAGRAMS, wrappedDiagram);
-        results.diagramUpdated = true;
-        console.log('✅ Updated Diagrams field for ' + ticketKey);
-    } catch (error) {
-        console.error('Failed to update Diagrams field for ' + ticketKey + ':', error);
-        results.errors.push('Diagrams field update failed: ' + error.toString());
-    }
-    
-    try {
-        // Add implementation assessment label if needed
         if (enhancementData.apiSubtaskCreation) {
             getTracker().addLabel(ticketKey, LABELS.NEEDS_API_IMPLEMENTATION);
             results.labelAdded = true;
@@ -165,7 +130,7 @@ function action(params) {
     try {
         const ticketKey = params.ticket.key;
         const initiatorId = params.initiator;
-        initTracker(resolveProjectConfig(params), (params.jobParams && params.jobParams.customParams) || params.customParams || {});
+        enhancementPost.initEnhancementTracker(params);
         // Dynamically generate WIP label from contextId
         const wipLabel = resolveWipLabel(params.metadata);
 

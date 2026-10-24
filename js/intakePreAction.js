@@ -5,31 +5,17 @@
  *    (file_write creates parent dirs, so this runs before dmtools creates input/<KEY>/)
  */
 
+var epicIntakeFetch = require('./common/epicIntakeFetch.js');
 var trackersModule = require('./common/trackers.js');
 var configLoader = null;
 try { configLoader = require('./configLoader.js'); } catch (e) {}
 
 // ── pure parse/build helpers (CRAP gate: each ≤ 8) ──────────────────────────
 
-// customParams as seen by this action: jobParams win, then the params body.
-function resolveProjectConfig(params) {
-    return configLoader ? configLoader.loadProjectConfig(params) : null;
-}
-
+// Tracker for this action: the project config loads from the params body and
+// the config loader is optional (absent in some packs).
 function createTrackerFor(params) {
-    return trackersModule.createTracker(resolveProjectConfig(params), (params.jobParams && params.jobParams.customParams) || params.customParams || {});
-}
-
-function priorityNameOf(fields) {
-    return fields.priority ? fields.priority.name : '';
-}
-
-function parentKeyOf(fields) {
-    return fields.parent ? fields.parent.key : null;
-}
-
-function statusNameOf(fields) {
-    return fields.status ? fields.status.name : '';
+    return epicIntakeFetch.createTrackerFor(trackersModule, configLoader, params, params);
 }
 
 // The WIP label of this agent's context when present on the ticket, null
@@ -57,30 +43,19 @@ function postSkipComment(tracker, ticketKey, wipLabel) {
     }
 }
 
+// Diagrams value as it arrives on raw search results.
+function rawDiagramsOf(fields) {
+    return fields.diagrams || null;
+}
+
 // Epic summary shape written to existing_epics.json (from raw search results).
 function mapEpic(issue) {
-    var f = issue.fields || {};
-    return {
-        key: issue.key || '',
-        summary: f.summary || '',
-        description: f.description || '',
-        priority: priorityNameOf(f),
-        diagrams: f.diagrams || null,
-        parent: parentKeyOf(f)
-    };
+    return epicIntakeFetch.mapEpic(issue, rawDiagramsOf);
 }
 
 // Story summary shape written to existing_stories.json (raw search results).
 function mapStory(issue) {
-    var sf = issue.fields || {};
-    return {
-        key: issue.key || '',
-        summary: sf.summary || '',
-        status: statusNameOf(sf),
-        priority: priorityNameOf(sf),
-        diagrams: sf.diagrams || null,
-        parent: parentKeyOf(sf)
-    };
+    return epicIntakeFetch.mapStory(issue, { diagramsOf: rawDiagramsOf });
 }
 
 // Static-analysis hooks (docs-freshness): agentDocGenerator discovers written
@@ -96,6 +71,11 @@ function writeStoriesFile(inputFolder, payload) {
     file_write(inputFolder + '/existing_stories.json', payload);
 }
 
+// Map straight off the search results — no per-issue re-fetch at intake time.
+function collectFromSearch(tracker, spec) {
+    return tracker.searchIssues(spec.jql, { fields: spec.fields }).map(spec.map);
+}
+
 // Search spec for one issue family (provider-specific query: WIQL on ado).
 function epicSpec(project) {
     return {
@@ -105,7 +85,8 @@ function epicSpec(project) {
         listKey: 'epics',
         fileName: 'existing_epics.json',
         writeFile: writeEpicsFile,
-        plural: 'epics'
+        plural: 'epics',
+        collect: collectFromSearch
     };
 }
 
@@ -117,21 +98,9 @@ function storySpec(project) {
         listKey: 'stories',
         fileName: 'existing_stories.json',
         writeFile: writeStoriesFile,
-        plural: 'stories'
+        plural: 'stories',
+        collect: collectFromSearch
     };
-}
-
-// Search → map (straight off the search results, no per-issue fetch) → write.
-// A fetch failure is logged and the run continues without the file.
-function fetchAndWrite(tracker, inputFolder, spec) {
-    try {
-        var issues = tracker.searchIssues(spec.jql, { fields: spec.fields }).map(spec.map);
-        console.log('Found ' + issues.length + ' ' + spec.plural);
-        spec.writeFile(inputFolder, '{"' + spec.listKey + '":' + JSON.stringify(issues, null, 2) + '}');
-        console.log('Wrote ' + spec.fileName + ' to ' + inputFolder);
-    } catch (fetchError) {
-        console.error('Failed to fetch ' + spec.plural + ', continuing without file:', fetchError);
-    }
 }
 
 function action(params) {
@@ -155,8 +124,8 @@ function action(params) {
         var project = ticketKey.split('-')[0];
         console.log('Fetching existing epics for ' + ticketKey + '...');
 
-        fetchAndWrite(tracker, inputFolder, epicSpec(project));
-        fetchAndWrite(tracker, inputFolder, storySpec(project));
+        epicIntakeFetch.fetchAndWrite(tracker, inputFolder, epicSpec(project));
+        epicIntakeFetch.fetchAndWrite(tracker, inputFolder, storySpec(project));
 
         return true;
 

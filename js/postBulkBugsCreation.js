@@ -31,17 +31,9 @@ var configLoader = require('./configLoader.js');
 var linkedIssuesReport = require('./common/linkedIssuesReport.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
-var trackersModule = require('./common/trackers.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
-function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
-}
-function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
-}
+var trackerSlot = require('./common/trackerSlot.js');
+function initTracker(config, customParams) { trackerSlot.initTracker(config, customParams); }
+function getTracker() { return trackerSlot.getTracker(); }
 const { JIRA_FIELDS } = require('./config.js');
 
 function readFile(path) {
@@ -418,18 +410,28 @@ function tryCreateBulkBug(summary, description, linkedTCs) {
     }
 }
 
-function linkTcToExistingBug(ctx, tcKey, bugKey, plan, source, commentText) {
+/**
+ * Safety guard + shared outcome sequence for linking a processed TC to a bulk
+ * bug (new or existing). Differences between the two flows are parameterized:
+ * the comment text, the results list key and the recorded entry. Callers own
+ * the try/catch and the error-log wording.
+ */
+function linkProcessedTcToBug(ctx, tcKey, bugKey, plan, commentText, outcomeKey, outcomeEntry) {
     if (!plan.processedSet[tcKey]) {
         console.warn('  ⚠️ TC', tcKey, 'not in processed list — skipping (safety guard)');
         return;
     }
+    linkBugToTC(tcKey, bugKey);
+    moveToBugToFix(tcKey, ctx.jiraConfig);
+    removeProcessingLabels(tcKey, [ctx.triggerLabel, ctx.smTriggerLabel]);
+    postComment(tcKey, commentText);
+    plan.results[outcomeKey].push(outcomeEntry);
+    markResolved(plan.resolvedSet, tcKey);
+}
+
+function linkTcToExistingBug(ctx, tcKey, bugKey, plan, source, commentText) {
     try {
-        linkBugToTC(tcKey, bugKey);
-        moveToBugToFix(tcKey, ctx.jiraConfig);
-        removeProcessingLabels(tcKey, [ctx.triggerLabel, ctx.smTriggerLabel]);
-        postComment(tcKey, commentText);
-        plan.results.linked.push(linkedResult(tcKey, bugKey, source));
-        markResolved(plan.resolvedSet, tcKey);
+        linkProcessedTcToBug(ctx, tcKey, bugKey, plan, commentText, 'linked', linkedResult(tcKey, bugKey, source));
     } catch (e) {
         console.error('  ❌ Failed to link', tcKey, '→', bugKey, ':', e);
         plan.results.errors.push({ tcKey: tcKey, bugKey: bugKey, error: e.toString() });
@@ -437,21 +439,12 @@ function linkTcToExistingBug(ctx, tcKey, bugKey, plan, source, commentText) {
 }
 
 function linkTcToNewBug(ctx, tcKey, bugKey, summary, plan) {
-    if (!plan.processedSet[tcKey]) {
-        console.warn('  ⚠️ TC', tcKey, 'not in processed list — skipping (safety guard)');
-        return;
-    }
+    var commentText =
+        'h3. 🐛 New Bug Created (Batch)\n\n' +
+        'Created: *' + bugKey + '*\n' +
+        '*Summary*: ' + summary;
     try {
-        linkBugToTC(tcKey, bugKey);
-        moveToBugToFix(tcKey, ctx.jiraConfig);
-        removeProcessingLabels(tcKey, [ctx.triggerLabel, ctx.smTriggerLabel]);
-        postComment(tcKey,
-            'h3. 🐛 New Bug Created (Batch)\n\n' +
-            'Created: *' + bugKey + '*\n' +
-            '*Summary*: ' + summary
-        );
-        plan.results.created.push({ tcKey: tcKey, bugKey: bugKey });
-        markResolved(plan.resolvedSet, tcKey);
+        linkProcessedTcToBug(ctx, tcKey, bugKey, plan, commentText, 'created', { tcKey: tcKey, bugKey: bugKey });
     } catch (e) {
         console.error('  ❌ Failed to process TC', tcKey, ':', e);
         plan.results.errors.push({ tcKey: tcKey, bugKey: bugKey, error: e.toString() });

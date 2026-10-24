@@ -55,7 +55,11 @@ function loadMergeStoryTestAutomationPR(mocks) {
             './common/tokenUsageComment.js': {
                 postTokenUsageComments: function() {}
             },
-            './common/trackers.js': d4TrackersWith(allMocks)
+            './common/trackers.js': d4TrackersWith(allMocks),
+            './common/trackerSlot.js': loadModule(
+                'js/common/trackerSlot.js',
+                makeRequire({ './trackers.js': d4TrackersWith(allMocks) })
+            )
         }),
         allMocks
     );
@@ -985,6 +989,66 @@ suite('mergeStoryTestAutomationPR: merge-outcome helpers (gh-1186)', function() 
         assert.deepEqual(removed, [], 'no PR number — no removal call');
 
         m.removePrLabelSafe({ removeLabel: function() { throw new Error('provider down'); } }, 42);
+    });
+
+    test('finalizeTicketLabels: full transition, custom note/warn options, and per-label error tolerance', function() {
+        var calls = [];
+        var m = loadMergeStoryTestAutomationPR({
+            jira_remove_label: function(args) { calls.push(['remove', args.key, args.label]); },
+            jira_add_label: function(args) { calls.push(['add', args.key, args.label]); }
+        });
+
+        // No options: default pr_approved warn message, no removal note.
+        m.finalizeTicketLabels('TS-9');
+        assert.deepEqual(calls, [
+            ['remove', 'TS-9', 'pr_approved'],
+            ['remove', 'TS-9', 'test_pr_merged'],
+            ['add', 'TS-9', 'test_pr_finalized']
+        ]);
+
+        // Options: same calls, removal note honored.
+        calls.length = 0;
+        m.finalizeTicketLabels('TS-9', {
+            removedApprovedNote: 'Removed pr_approved label from Jira ticket',
+            removeApprovedWarn: 'Could not remove pr_approved from Jira ticket:'
+        });
+        assert.deepEqual(calls, [
+            ['remove', 'TS-9', 'pr_approved'],
+            ['remove', 'TS-9', 'test_pr_merged'],
+            ['add', 'TS-9', 'test_pr_finalized']
+        ]);
+
+        // Per-label failures are logged with the caller's message and swallowed;
+        // the remaining labels still transition.
+        var warns = [];
+        var originalWarn = console.warn;
+        console.warn = function(msg, err) { warns.push(String(msg) + '|' + (err && err.message)); };
+        try {
+            var tolerant = loadMergeStoryTestAutomationPR({
+                jira_remove_label: function(args) {
+                    if (args.label === 'pr_approved') throw new Error('approved-gone');
+                    calls.push(['remove', args.key, args.label]);
+                },
+                jira_add_label: function(args) { throw new Error('finalized-gone'); }
+            });
+            calls.length = 0;
+            tolerant.finalizeTicketLabels('TS-10', { removeApprovedWarn: 'custom-approved-warn:' });
+            assert.deepEqual(calls, [['remove', 'TS-10', 'test_pr_merged']],
+                'pr_approved failure must not block the other transitions');
+            assert.contains(warns.join('\n'), 'custom-approved-warn:|approved-gone');
+            assert.contains(warns.join('\n'), 'Could not add test_pr_finalized label:|finalized-gone');
+
+            // Default pr_approved warn message when no override is given.
+            warns.length = 0;
+            var defaults = loadMergeStoryTestAutomationPR({
+                jira_remove_label: function() { throw new Error('boom'); },
+                jira_add_label: function() {}
+            });
+            defaults.finalizeTicketLabels('TS-11');
+            assert.contains(warns.join('\n'), 'Could not remove pr_approved label:|boom');
+        } finally {
+            console.warn = originalWarn;
+        }
     });
 });
 

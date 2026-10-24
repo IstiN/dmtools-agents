@@ -110,7 +110,8 @@ suite('wave2d4 tracker — triggerBitriseIosBuild', function() {
         });
         var mod = loadModule('js/triggerBitriseIosBuild.js', makeRequire({
             './configLoader.js': { loadProjectConfig: function() { return {}; }, createScm: function() { return { listPrs: function() { return []; } }; } },
-            './common/trackers.js': d4Trackers(mocks)
+            './common/trackerSlot.js': loadModule('js/common/trackerSlot.js', makeRequire({ './trackers.js': d4Trackers(mocks) }), {}),
+            './common/bitriseTrigger.js': loadModule('js/common/bitriseTrigger.js', makeRequire({}), {})
         }), mocks);
         var r = mod.action({ jobParams: {
             inputJql: 'SELECT [System.Id] FROM WorkItems',

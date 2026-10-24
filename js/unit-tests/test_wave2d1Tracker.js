@@ -328,7 +328,8 @@ suite('wave2d1 tracker — triggerBitriseTestAutomation', function() {
         var mod = loadModule('js/triggerBitriseTestAutomation.js', makeRequire({
             './configLoader.js': makeDefaultConfigLoaderMock(),
             './config.js': configModule,
-            './common/trackers.js': d1Trackers(mocks)
+            './common/trackers.js': d1Trackers(mocks),
+            './common/bitriseTrigger.js': loadModule('js/common/bitriseTrigger.js', makeRequire({}), {})
         }), mocks);
         var r = mod.action({
             ticket: { key: '15', fields: { summary: 's' } },

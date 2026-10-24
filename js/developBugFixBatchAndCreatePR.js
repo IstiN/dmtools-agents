@@ -8,28 +8,15 @@
  */
 
 var configLoader = require('./configLoader.js');
-var trackersModule = require('./common/trackers.js');
 var prHelper = require('./common/pullRequest.js');
 var batchContext = require('./prepareBugFixBatchContext.js');
 const { LABELS, STATUSES, resolveStatuses } = require('./config.js');
-
-var _workingDir = null;
-function runCmd(args) {
-    if (typeof args === 'string') args = { command: args };
-    if (_workingDir) args.workingDirectory = _workingDir;
-    return cli_execute_command(args);
-}
-
-// Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
-// common/pullRequest.js once — this delegate keeps every local call site.
-function cleanCommandOutput(output) {
-    return prHelper.cleanCommandOutput(output);
-}
+var bugFixBatchCtx = require('./common/bugFixBatchContext.js');
 
 function findExistingPR(branchName) {
     try {
-        var output = cleanCommandOutput(
-            runCmd('gh pr list --head ' + branchName + ' --json url --jq ".[0].url"') || ''
+        var output = bugFixBatchCtx.cleanCommandOutput(
+            bugFixBatchCtx.runCmd('gh pr list --head ' + branchName + ' --json url --jq ".[0].url"') || ''
         );
         if (output && output.startsWith('https://')) {
             return output;
@@ -122,22 +109,12 @@ function addLabels(keys, label, tracker) {
 
 function action(params) {
     try {
-        var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
-        var config = configLoader.loadProjectConfig(actualParams);
-        _workingDir = config.workingDir || null;
-        var tracker = trackersModule.createTracker(config, actualParams.customParams || {});
-
-        var epicFolder = actualParams.inputFolderPath;
-        var epicKey = epicFolder.split('/').pop();
-        var epic = actualParams.ticket || { key: epicKey, fields: {} };
-        if (!epic.fields) {
-            try {
-                epic = tracker.getIssue(epicKey, ['summary', 'description', 'status', 'labels']);
-            } catch (e) {
-                console.warn('Could not fetch Epic details (non-fatal):', e);
-                epic = { key: epicKey, fields: {} };
-            }
-        }
+        var ctx = bugFixBatchCtx.resolveBatchActionContext(params);
+        var actualParams = ctx.actualParams;
+        var config = ctx.config;
+        var tracker = ctx.tracker;
+        var epicKey = ctx.epicKey;
+        var epic = ctx.epic;
 
         var customParams = actualParams.customParams || {};
         var statuses = resolveStatuses(customParams);

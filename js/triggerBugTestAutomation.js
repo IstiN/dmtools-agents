@@ -4,22 +4,20 @@
  * Keeps the Bug in Ready For Testing and immediately triggers bug_test_automation.
  */
 
-var autoStart = require('./common/autoStart.js');
+var autoStartTrigger = require('./common/autoStartTrigger.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
-// ── gh-1229: small helpers extracted from action so it stays well under the
-//    CRAP gate; behavior is byte-identical to the previous inline flow. ──
+// ── gh-1229/gh-1250: helpers delegate to the shared autoStartTrigger module
+//    (single parameterized copy of the former inline flow). ──
 
 /** Config: jobParams wins (Teammate path), then top-level, then {}. */
 function configOf(params) {
-    return params.jobParams && params.jobParams.config
-        ? params.jobParams.config
-        : (params.config || {});
+    return autoStartTrigger.configOf(params);
 }
 
 /** Custom params: jobParams wins (Teammate path), then top-level, then {}. */
 function customParamsOf(params) {
-    return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+    return autoStartTrigger.customParamsOf(params);
 }
 
 /**
@@ -27,38 +25,12 @@ function customParamsOf(params) {
  * otherwise ask the SM to re-evaluate. Returns whether the workflow fired.
  */
 function triggerWorkflowOrAskSm(bugKey, config, customParams) {
-    var triggered = false;
-    if (customParams.autoStartBugTestAutomation && customParams.autoStartBugTestAutomationConfigFile) {
-        triggered = autoStart.triggerConfiguredWorkflowForTicket({
-            ticketKey: bugKey,
-            customParams: customParams,
-            config: config,
-            configFile: customParams.autoStartBugTestAutomationConfigFile,
-            label: 'bug_test_automation',
-            stripKeys: [
-                'removeLabel',
-                'autoStartBugTestAutomation',
-                'autoStartBugTestAutomationConfigFile'
-            ]
-        });
-    }
-
-    if (!triggered) {
-        console.log('Bug test automation not triggered via autoStart; asking SM to re-evaluate.');
-        autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
-    } else {
-        console.log('✅ Triggered bug_test_automation for', bugKey);
-    }
-    return triggered;
-}
-
-/** Token-usage comments are a nice-to-have — never fail the action on them. */
-function postTokenUsageQuietly(bugKey, params) {
-    try {
-        tokenUsageComment.postTokenUsageComments(bugKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    return autoStartTrigger.triggerWorkflowOrAskSm({
+        ticketKey: bugKey,
+        config: config,
+        customParams: customParams,
+        label: 'bug_test_automation'
+    });
 }
 
 function action(params) {
@@ -79,8 +51,9 @@ function action(params) {
         // completes, which stops the generator rule from matching.
         console.log('Keeping generator SM label sm_bug_test_cases_triggered to prevent re-run loop.');
 
-        // Post token usage summary comments from the test-case generation run
-        postTokenUsageQuietly(bugKey, params);
+        // Post token usage summary comments from the test-case generation run.
+        // Token-usage comments are a nice-to-have — never fail the action on them.
+        tokenUsageComment.postTokenUsageCommentsSafely(bugKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
 
         return { success: true, triggered: triggered, bugKey: bugKey };
 

@@ -240,12 +240,14 @@ suite('wave2d2 ado — postBulkBugsCreation', function() {
             }
         });
         var cfgLoader = loadModule('js/configLoader.js', makeRequire({ './config.js': configModule, './common/scm.js': { createScm: function() { return {}; } } }), { file_read: function() { return null; } });
+        var trackers = w2Trackers(rec.mocks);
         var mod = loadModule('js/postBulkBugsCreation.js', makeRequire({
             './config.js': configModule, './configLoader.js': cfgLoader,
             './common/feedbackLoop.js': { resumeAgent: function() { return { attempted: false }; } },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
-            './common/trackers.js': w2Trackers(rec.mocks)
+            './common/trackers.js': trackers,
+            './common/trackerSlot.js': loadModule('js/common/trackerSlot.js', makeRequire({ './trackers.js': trackers }))
         }), Object.assign({}, rec.mocks, { file_read: rec.mocks.file_read }));
         var r = mod.action({ jobParams: { customParams: { trackerProvider: 'ado', removeLabel: 'sm_a', smTriggerLabel: 'sm_b' } } });
         assert.equal(r.success, true);

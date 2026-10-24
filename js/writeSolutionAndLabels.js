@@ -14,6 +14,8 @@
 const base = require('./writeSolutionAndDiagrams.js');
 const outputFiles = require('./common/outputFiles.js');
 var trackersModule = require('./common/trackers.js');
+var trackerFieldValue = require('./common/trackerFieldValue.js');
+var affectedReposSection = require('./common/affectedReposSection.js');
 const { JIRA_FIELDS } = require('./config.js');
 var configLoader = null;
 try { configLoader = require('./configLoader.js'); } catch (e) {}
@@ -50,31 +52,19 @@ function topologicalSort(repos) {
 // Shared section builders (pure) — used by the Jira/ADO/Confluence formatters
 // ---------------------------------------------------------------------------
 
-/** 'a, b' for non-empty depends_on, em-dash otherwise. */
+/** 'a, b' for non-empty depends_on, em-dash otherwise. (thin wrapper — shared impl in common/affectedReposSection.js) */
 function formatRepoDeps(r) {
-    return (Array.isArray(r.depends_on) && r.depends_on.length > 0)
-        ? r.depends_on.join(', ')
-        : '\u2014';
+    return affectedReposSection.formatRepoDeps(r);
 }
 
 /** GFM/wiki table rows: | # | name | reason | deps | */
 function buildRepoTableRows(sorted) {
-    var rows = [];
-    sorted.forEach(function(r, idx) {
-        rows.push('| ' + (idx + 1) + ' | ' + r.name + ' | ' + (r.reason || '') + ' | ' + formatRepoDeps(r) + ' |');
-    });
-    return rows;
+    return affectedReposSection.buildRepoTableRows(sorted);
 }
 
 /** Mermaid dependency edges ('    dep --> name'), in sorted order. */
 function buildDependencyEdges(sorted) {
-    var edges = [];
-    sorted.forEach(function(r) {
-        if (Array.isArray(r.depends_on)) {
-            r.depends_on.forEach(function(dep) { edges.push('    ' + dep + ' --> ' + r.name); });
-        }
-    });
-    return edges;
+    return affectedReposSection.buildDependencyEdges(sorted);
 }
 
 function buildJiraSection(sorted) {
@@ -84,17 +74,10 @@ function buildJiraSection(sorted) {
     lines.push('');
     lines.push('|| # || Repository || Reason || Depends On ||');
 
-    buildRepoTableRows(sorted).forEach(function(row) { lines.push(row); });
+    affectedReposSection.appendRepoTableRows(lines, sorted);
 
     // Mermaid diagram (only when there are edges)
-    var edges = buildDependencyEdges(sorted);
-    if (edges.length > 0) {
-        lines.push('');
-        lines.push('{code}');
-        lines.push('graph LR');
-        edges.forEach(function(e) { lines.push(e); });
-        lines.push('{code}');
-    }
+    affectedReposSection.appendMermaidEdges(lines, sorted, '{code}', '{code}');
 
     // JSON anchor for createRepoTasks script
     lines.push('');
@@ -118,16 +101,9 @@ function buildMarkdownSection(sorted) {
     lines.push('| # | Repository | Reason | Depends On |');
     lines.push('|---|---|---|---|');
 
-    buildRepoTableRows(sorted).forEach(function(row) { lines.push(row); });
+    affectedReposSection.appendRepoTableRows(lines, sorted);
 
-    var edges = buildDependencyEdges(sorted);
-    if (edges.length > 0) {
-        lines.push('');
-        lines.push('```mermaid');
-        lines.push('graph LR');
-        edges.forEach(function(e) { lines.push(e); });
-        lines.push('```');
-    }
+    affectedReposSection.appendMermaidEdges(lines, sorted, '```mermaid', '```');
 
     lines.push('');
     lines.push('```json');
@@ -149,19 +125,12 @@ function buildConfluenceMarkdownSection(sorted) {
     lines.push('| # | Repository | Reason | Depends On |');
     lines.push('|---|---|---|---|');
 
-    buildRepoTableRows(sorted).forEach(function(row) { lines.push(row); });
+    affectedReposSection.appendRepoTableRows(lines, sorted);
 
     // Mermaid dependency diagram (only when there are edges) — a single, plain
     // (unfenced) diagram, consistent with instructions/common/diagram_output_contract.md.
     // The Confluence markdown→storage converter wraps it with the correct macro itself.
-    var edges = buildDependencyEdges(sorted);
-    if (edges.length > 0) {
-        lines.push('');
-        lines.push('```mermaid');
-        lines.push('graph LR');
-        edges.forEach(function(e) { lines.push(e); });
-        lines.push('```');
-    }
+    affectedReposSection.appendMermaidEdges(lines, sorted, '```mermaid', '```');
 
     return lines.join('\n');
 }
@@ -217,9 +186,7 @@ function resolveAppendContext(params) {
 
 /** Current value of the solution field, with the ADF guard. Empty string when absent/ADF. */
 function currentFieldValue(tracker, ticketKey, solutionField) {
-    var freshTicket = tracker.getIssue(ticketKey, [solutionField]);
-    var freshFields = (freshTicket && freshTicket.fields) ? freshTicket.fields : freshTicket;
-    var rawValue = freshFields ? freshFields[solutionField] : null;
+    var rawValue = trackerFieldValue.readRawFieldValue(tracker, ticketKey, solutionField);
     if (rawValue && typeof rawValue === 'object') {
         console.warn('Field "' + solutionField + '" is ADF — falling back to response.md as base');
         return '';

@@ -19,6 +19,7 @@ const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const trackersModule = require('./common/trackers.js');
 const linkedIssuesReport = require('./common/linkedIssuesReport.js');
+const smLock = require('./common/smLock.js');
 
 /**
  * DMTools returns issue search results as host objects. In some runtime
@@ -35,16 +36,10 @@ function toPlain(value) {
 /**
  * gh-1188: release the SM idempotency label so the check re-runs next cycle.
  * A removal failure is swallowed (non-fatal, as before).
+ * gh-1250: shared implementation in common/smLock.js.
  */
 function releaseLock(tracker, ticketKey, removeLabel) {
-    if (ticketKey && removeLabel) {
-        try {
-            tracker.removeLabel(ticketKey, removeLabel);
-            console.log('Released SM label — will re-check next cycle');
-        } catch (e) {
-            console.warn('Failed to remove SM label:', e);
-        }
-    }
+    smLock.releaseLock(tracker, ticketKey, removeLabel);
 }
 
 function findLinkedBugs(tracker, provider, entityKey) {
@@ -154,13 +149,10 @@ function moveTestCaseToBacklog(tracker, ticketKey, totalBugs, statuses, removeLa
 /**
  * gh-1188: token-usage summary step — a provider failure here must never
  * fail the ready check.
+ * gh-1250: the never-throwing wrapper is shared via common/tokenUsageComment.js.
  */
 function postTokenUsageSafely(ticketKey, params) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    tokenUsageComment.postTokenUsageCommentsSafely(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
 }
 
 /**

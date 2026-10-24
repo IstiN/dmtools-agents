@@ -21,6 +21,17 @@ function trackersWith(mocks) {
     );
 }
 
+// gh-1250: the shared trackerSlot module loaded against the same trackers
+// layer as the script under test (mirrors the production require chain:
+// developTicketAndCreatePR.js -> common/trackerSlot.js -> common/trackers.js).
+function trackerSlotWith(mocks) {
+    return loadModule(
+        'js/common/trackerSlot.js',
+        makeRequire({ './trackers.js': trackersWith(mocks) }),
+        mocks || {}
+    );
+}
+
 // Declared once at module scope — every loader below references it in its
 // makeRequire() map, so it must exist before any of them run.
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
@@ -59,7 +70,7 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
             ,
             './common/commentMarkup.js': commentMarkupModule,
-        }, { './common/trackers.js': trackersWith(_m) })), _m); })(Object.assign({
+        }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })(Object.assign({
             cli_execute_command: function () { return ''; },
             jira_post_comment: function () { },
             jira_move_to_status: function () { },
@@ -92,7 +103,7 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks, feedbackLoopOverr
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
             ,
             './common/commentMarkup.js': commentMarkupModule,
-        }, { './common/trackers.js': trackersWith(_m) })), _m); })(Object.assign({
+        }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })(Object.assign({
             cli_execute_command: function () { return ''; },
             jira_post_comment: function () { },
             jira_move_to_status: function () { },
@@ -435,7 +446,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './config.js': configModule,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
                 './common/commentMarkup.js': commentMarkupModule
-            }, { './common/trackers.js': trackersWith(_m) })), _m); })({
+            }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })({
                 cli_execute_command: function (args) {
                     commands.push(args.command);
                     if (args.command.indexOf('git check-ignore') === 0) {
@@ -512,7 +523,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './config.js': configModule,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
                 './common/commentMarkup.js': commentMarkupModule
-            }, { './common/trackers.js': trackersWith(_m) })), _m); })({
+            }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })({
                 cli_execute_command: function (args) {
                     if (args.command.indexOf('git add . --') === 0) {
                         staging = args.command;
@@ -589,7 +600,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './config.js': configModule,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
                 './common/commentMarkup.js': commentMarkupModule
-            }, { './common/trackers.js': trackersWith(_m) })), _m); })({
+            }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })({
                 cli_execute_command: function (args) {
                     if (args.command.indexOf('git ls-files -- ') === 0) {
                         cleanup = args.command;
@@ -735,7 +746,7 @@ function loadForLandingGuard(mocks, opts) {
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
             './common/commentMarkup.js': commentMarkupModule
-        }, { './common/trackers.js': trackersWith(_m) })), _m); })(Object.assign({
+        }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })(Object.assign({
             cli_execute_command: noChangesGitCommandMock('TS-20', 'ai/TS-20'),
             jira_post_comment: function () { },
             jira_move_to_status: function () { },
@@ -942,7 +953,7 @@ function loadForPrTail(mocks, opts) {
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
             './common/commentMarkup.js': commentMarkupModule
-        }, { './common/trackers.js': trackersWith(_m) })), _m); })(Object.assign({
+        }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })(Object.assign({
             cli_execute_command: opts.gitMock || function () { return ''; },
             jira_post_comment: function () { },
             jira_move_to_status: function () { },
@@ -1305,7 +1316,7 @@ function loadForMissingResponseResume(opts) {
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
             './common/commentMarkup.js': commentMarkupModule
-        }, { './common/trackers.js': trackersWith(_m) })), _m); })({
+        }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })({
             cli_execute_command: cliMock,
             file_read: sharedFileRead,
             file_write: sharedFileWrite,
@@ -1909,7 +1920,7 @@ function loadForOutcomePinning(mocks, opts) {
                 customParamsOf: function () { return {}; }
             },
             './common/commentMarkup.js': commentMarkupModule
-        }, { './common/trackers.js': trackersWith(_m) })), _m); })(Object.assign({
+        }, { './common/trackers.js': trackersWith(_m), './common/trackerSlot.js': trackerSlotWith(_m) })), _m); })(Object.assign({
             cli_execute_command: function () { return ''; },
             jira_post_comment: function () { },
             jira_move_to_status: function () { },
@@ -2665,6 +2676,37 @@ suite('developTicketAndCreatePR > push-only seam helpers (gh-1190)', function ()
         assert.equal(outcome.isPushFailure, true);
         assert.ok(outcome.error.indexOf('Push still rejected after force:') === 0, 'error names the force retry');
         assert.ok(outcome.error.indexOf('remote rejected') !== -1, 'the rejection text is carried');
+    });
+
+    test('syncBranchWithBaseUsingRunCmd defaults the base to main and routes through prHelper (gh-1250)', function () {
+        var calls = [];
+        var mod = loadWithRealPrHelper({
+            cli_execute_command: function (opts) {
+                calls.push(opts.command);
+                if (opts.command === 'git rev-parse origin/main') return 'base-sha';
+                if (opts.command === 'git merge-base origin/main HEAD') return 'old-sha';
+                if (opts.command === 'git status --porcelain --ignore-submodules=dirty') return '';
+                return '';
+            }
+        });
+        var withDefault = mod.syncBranchWithBaseUsingRunCmd('ai/PROJ-1', null);
+        assert.equal(withDefault.success, true, 'an up-to-date branch syncs cleanly');
+        assert.ok(calls.indexOf('git merge --no-edit origin/main') !== -1,
+            'a null base falls back to main');
+        calls = [];
+        var mod2 = loadWithRealPrHelper({
+            cli_execute_command: function (opts) {
+                calls.push(opts.command);
+                if (opts.command === 'git rev-parse origin/develop') return 'base-sha';
+                if (opts.command === 'git merge-base origin/develop HEAD') return 'old-sha';
+                if (opts.command === 'git status --porcelain --ignore-submodules=dirty') return '';
+                return '';
+            }
+        });
+        var withBase = mod2.syncBranchWithBaseUsingRunCmd('ai/PROJ-1', 'develop');
+        assert.equal(withBase.success, true);
+        assert.ok(calls.indexOf('git merge --no-edit origin/develop') !== -1,
+            'an explicit base branch is passed through');
     });
 
     test('performPushOnly: merge-sync failure short-circuits with isMergeSyncFailure', function () {

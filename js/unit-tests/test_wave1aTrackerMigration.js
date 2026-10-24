@@ -99,9 +99,11 @@ suite('wave1a tracker migration — moveToReadyForTesting', function() {
 suite('wave1a tracker migration — triggerStoryTestAutomation (ado)', function() {
     test('ado removes SM label via ado tool only', function() {
         var rec = w1aRecorder();
+        var autoStartMock = { triggerConfiguredWorkflowForTicket: function() { return false; }, triggerSmIfIdle: function() {} };
         var m = loadModule('js/triggerStoryTestAutomation.js', makeRequire({
-            './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; }, triggerSmIfIdle: function() {} },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/autoStart.js': autoStartMock,
+            './common/autoStartTrigger.js': loadModule('js/common/autoStartTrigger.js', makeRequire({ './autoStart.js': autoStartMock }), {}),
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageCommentsSafely: function() {} },
             './common/trackers.js': w1aTrackers(rec.mocks)
         }), rec.mocks);
         var r = m.action({ ticket: { key: '12' }, jobParams: { customParams: { trackerProvider: 'ado' } } });

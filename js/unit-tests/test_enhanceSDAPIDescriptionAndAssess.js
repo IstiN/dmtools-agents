@@ -29,6 +29,32 @@ function loadEnhanceSDAPI(fileMap, extraGlobals, trackerMockOverrides) {
     };
     for (var k in (extraGlobals || {})) { globals[k] = extraGlobals[k]; }
 
+    var trackers = d2Trackers(globals);
+    var configLoaderStub = {
+        loadProjectConfig: function () {
+            return {
+                tracker: { provider: 'jira' },
+                repository: { owner: 'acme', repo: 'demo' },
+                jira: { statuses: { PO_REVIEW: 'PO Review', IN_REVIEW: 'In Review' } },
+                labels: { AI_GENERATED: 'ai_generated' }
+            };
+        }
+    };
+    // One shared trackerSlot instance so the action's getTracker() and the
+    // helper's initEnhancementTracker() operate on the same lazy slot.
+    var trackerSlot = loadModule(
+        'js/common/trackerSlot.js',
+        makeRequire({ './trackers.js': trackers })
+    );
+    var enhancementPost = loadModule(
+        'js/common/enhancementPost.js',
+        makeRequire({
+            './trackerSlot.js': trackerSlot,
+            '../config.js': configModule,
+            '../configLoader.js': configLoaderStub
+        })
+    );
+
     return loadModule(
         'js/enhanceSDAPIDescriptionAndAssess.js',
         makeRequire({
@@ -43,17 +69,10 @@ function loadEnhanceSDAPI(fileMap, extraGlobals, trackerMockOverrides) {
                 makeRequire({ '../config.js': configModule }),
                 {}
             ),
-            './configLoader.js': {
-                loadProjectConfig: function () {
-                    return {
-                        tracker: { provider: 'jira' },
-                        repository: { owner: 'acme', repo: 'demo' },
-                        jira: { statuses: { PO_REVIEW: 'PO Review', IN_REVIEW: 'In Review' } },
-                        labels: { AI_GENERATED: 'ai_generated' }
-                    };
-                }
-            },
-            './common/trackers.js': d2Trackers(globals)
+            './configLoader.js': configLoaderStub,
+            './common/trackerSlot.js': trackerSlot,
+            './common/enhancementPost.js': enhancementPost,
+            './common/trackers.js': trackers
         }),
         globals
     );

@@ -44,11 +44,19 @@ function loadIntakePreAction(opts) {
 
     var mod = loadModule(
         'js/intakePreAction.js',
-        makeRequire({ './common/trackers.js': trackersMock }),
+        makeRequire({
+            './common/epicIntakeFetch.js': loadEpicIntakeFetch(),
+            './common/trackers.js': trackersMock
+        }),
         globalMocks
     );
 
     return { mod: mod, calls: calls };
+}
+
+// The real shared helper (it has no requires of its own).
+function loadEpicIntakeFetch() {
+    return loadModule('js/common/epicIntakeFetch.js', makeRequire({}));
 }
 
 // Scripted searchIssues outcome for one JQL: results list, or a thrown error.

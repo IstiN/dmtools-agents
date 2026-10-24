@@ -26,6 +26,8 @@
 var configLoader = require('./configLoader.js');
 const { STATUSES, LABELS, resolveStatuses } = require('./config.js');
 var trackersModule = require('./common/trackers.js');
+// gh-823: load-time require — shared Bitrise/JQL/PR-match helpers (gh-1250).
+var bitriseTrigger = require('./common/bitriseTrigger.js');
 
 // ── Pure param/matrix builders (extracted from action, gh-929) ───────────────
 
@@ -36,16 +38,6 @@ function resolveInitialTrackerCustomParams(params) {
 
 function resolveJql(params) {
     return params.inputJql || (params.jobParams && params.jobParams.inputJql) || '';
-}
-
-function parseJqlTicketKey(jql) {
-    var keyMatch = jql.match(/key\s*=\s*([A-Z]+-\d+)/i);
-    return keyMatch ? keyMatch[1].toUpperCase() : '';
-}
-
-function parseIssueList(results) {
-    var parsed = (typeof results === 'string') ? JSON.parse(results) : results;
-    return (parsed && parsed.issues) ? parsed.issues : (Array.isArray(parsed) ? parsed : []);
 }
 
 function fetchTicketByKey(tracker, key) {
@@ -60,7 +52,7 @@ function fetchTicketByKey(tracker, key) {
 
 function searchFirstTicket(tracker, jql) {
     try {
-        var issues = parseIssueList(tracker.searchIssues(jql, { maxResults: 1 }));
+        var issues = bitriseTrigger.parseIssueList(tracker.searchIssues(jql, { maxResults: 1 }));
         if (!issues.length) return { error: 'No tickets found for JQL: ' + jql };
         return { ticket: issues[0] };
     } catch (e) {
@@ -75,7 +67,7 @@ function searchFirstTicket(tracker, jql) {
 function resolveTicketParams(params, tracker) {
     if (params.ticket) return { params: params };
     var jql = resolveJql(params);
-    var key = parseJqlTicketKey(jql);
+    var key = bitriseTrigger.parseJqlTicketKey(jql);
     if (key) {
         var byKey = fetchTicketByKey(tracker, key);
         return byKey.error ? byKey : { params: { ticket: byKey.ticket, jobParams: params.jobParams } };
@@ -115,26 +107,11 @@ function resolveFeaturePrConfig(customParams) {
     };
 }
 
-function prHeadRef(pr) {
-    return (pr.head && pr.head.ref) || '';
-}
-
-function prViewUrl(pr) {
-    return pr.html_url || pr.url || '';
-}
-
-function prMatchesTicket(pr, ticketKey) {
-    var prBranch = prHeadRef(pr);
-    return (pr.title || '').indexOf(ticketKey) !== -1 || prBranch.indexOf(ticketKey) !== -1;
-}
-
 function findFeaturePr(prs, ticketKey) {
-    for (var i = 0; i < (prs || []).length; i++) {
-        var pr = prs[i];
-        if (prMatchesTicket(pr, ticketKey)) {
-            console.log('✅ Found feature PR #' + pr.number + ': ' + (pr.title || ''));
-            return { url: prViewUrl(pr), number: String(pr.number || '') };
-        }
+    var pr = bitriseTrigger.findMatchingPr(prs, ticketKey);
+    if (pr) {
+        console.log('✅ Found feature PR #' + pr.number + ': ' + (pr.title || ''));
+        return { url: bitriseTrigger.prViewUrl(pr), number: String(pr.number || '') };
     }
     return { url: '', number: '' };
 }
@@ -422,8 +399,8 @@ if (typeof module !== 'undefined' && module.exports) {
         action: action,
         resolveInitialTrackerCustomParams: resolveInitialTrackerCustomParams,
         resolveJql: resolveJql,
-        parseJqlTicketKey: parseJqlTicketKey,
-        parseIssueList: parseIssueList,
+        parseJqlTicketKey: bitriseTrigger.parseJqlTicketKey,
+        parseIssueList: bitriseTrigger.parseIssueList,
         fetchTicketByKey: fetchTicketByKey,
         searchFirstTicket: searchFirstTicket,
         resolveTicketParams: resolveTicketParams,
@@ -432,9 +409,9 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveTicketSummary: resolveTicketSummary,
         resolveBitriseConfig: resolveBitriseConfig,
         resolveFeaturePrConfig: resolveFeaturePrConfig,
-        prHeadRef: prHeadRef,
-        prViewUrl: prViewUrl,
-        prMatchesTicket: prMatchesTicket,
+        prHeadRef: bitriseTrigger.prHeadRef,
+        prViewUrl: bitriseTrigger.prViewUrl,
+        prMatchesTicket: bitriseTrigger.prMatchesTicket,
         findFeaturePr: findFeaturePr,
         searchFeaturePr: searchFeaturePr,
         parseBuildList: parseBuildList,

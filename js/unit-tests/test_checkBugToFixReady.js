@@ -7,8 +7,9 @@ function loadCheckBugToFixReady(mocks, requireOverrides) {
     var requireMap = {
         './config.js': configModule,
         './configLoader.js': makeDefaultConfigLoaderMock(),
-        './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+        './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageCommentsSafely: function() {} },
         './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
+        './common/smLock.js': loadModule('js/common/smLock.js', makeRequire({}), {}),
         './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks)
     };
     if (requireOverrides) {
@@ -440,24 +441,48 @@ suite('checkBugToFixReady — gh-1188 extracted step helpers', function() {
         assert.deepEqual(removed, ['sm_l']);
     });
 
-    test('postTokenUsageSafely: delegates to the token usage comment module; failure swallowed', function() {
-        var posted = [];
+    test('postTokenUsageSafely: delegates to postTokenUsageCommentsSafely with initiator + customParams', function() {
+        var calls = [];
         var mod = loadCheckBugToFixReady({}, {
             './common/tokenUsageComment.js': {
-                postTokenUsageComments: function(key, ctx) { posted.push([key, ctx.initiator]); },
-                customParamsOf: function() { return { removeLabel: 'x' }; }
+                postTokenUsageCommentsSafely: function(key, options) { calls.push([key, options]); },
+                customParamsOf: function() { return { trackerProvider: 'github' }; }
             }
         });
         mod.postTokenUsageSafely('TS-1', { initiator: 'sm' });
-        assert.deepEqual(posted, [['TS-1', 'sm']]);
+        assert.equal(calls.length, 1, 'delegated exactly once');
+        assert.equal(calls[0][0], 'TS-1', 'ticketKey forwarded');
+        assert.equal(calls[0][1].initiator, 'sm', 'initiator forwarded');
+        assert.deepEqual(calls[0][1].customParams, { trackerProvider: 'github' }, 'customParamsOf result forwarded');
+    });
 
-        var failingMod = loadCheckBugToFixReady({}, {
-            './common/tokenUsageComment.js': {
-                postTokenUsageComments: function() { throw new Error('boom'); },
-                customParamsOf: function() { return {}; }
-            }
+    test('postTokenUsageCommentsSafely: a provider failure is logged and swallowed (gh-1250 contract)', function() {
+        // Load the real shared wrapper — the module under test relies on it never throwing.
+        var realTuc = loadModule('js/common/tokenUsageComment.js', makeRequire({
+            './trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), {})
+        }), { file_read: function() { return null; } });
+
+        var warned = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warned.push(String(m)); };
+        var threw = false;
+        var options = {};
+        Object.defineProperty(options, 'outputsDir', {
+            get: function() { throw new Error('provider down'); }
         });
-        failingMod.postTokenUsageSafely('TS-1', {});
+        try {
+            realTuc.postTokenUsageCommentsSafely('TS-2', options);
+        } catch (e) {
+            threw = true;
+        } finally {
+            console.warn = origWarn;
+        }
+        assert.equal(threw, false, 'failure never propagates');
+        assert.equal(warned.length, 1, 'exactly one warning');
+        assert.contains(warned[0], 'Failed to post token usage comments');
     });
 
     test('action: missing ticket key → failure result and lock release attempt', function() {

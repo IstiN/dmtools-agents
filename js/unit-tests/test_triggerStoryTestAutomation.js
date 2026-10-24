@@ -13,27 +13,48 @@ function loadTriggerStoryTestAutomation(mocks) {
         '../config.js': configModule,
         './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
     }), allMocks);
+
+    var autoStartMock = {
+        triggerConfiguredWorkflowForTicket: function(opts) {
+            return (mocks && mocks.triggerConfiguredWorkflowForTicket)
+                ? mocks.triggerConfiguredWorkflowForTicket(opts)
+                : false;
+        },
+        triggerSmIfIdle: function(opts) {
+            return (mocks && mocks.triggerSmIfIdle)
+                ? mocks.triggerSmIfIdle(opts)
+                : { success: true };
+        }
+    };
+    var autoStartTriggerMod = loadModule(
+        'js/common/autoStartTrigger.js',
+        makeRequire({ './autoStart.js': autoStartMock }),
+        {}
+    );
+
+    var tokenUsageMock = {
+        postTokenUsageComments: function(key, opts) {
+            if (mocks && mocks.postTokenUsageComments) mocks.postTokenUsageComments(key, opts);
+        },
+        customParamsOf: function(params) {
+            return (params && params.jobParams && params.jobParams.customParams) ||
+                (params && params.customParams) || {};
+        }
+    };
+    tokenUsageMock.postTokenUsageCommentsSafely = function(key, opts) {
+        try {
+            tokenUsageMock.postTokenUsageComments(key, opts);
+        } catch (e) {
+            console.warn('Failed to post token usage comments:', e);
+        }
+    };
+
     return loadModule(
         'js/triggerStoryTestAutomation.js',
         makeRequire({
             './common/trackers.js': trackersMod,
-            './common/autoStart.js': {
-                triggerConfiguredWorkflowForTicket: function(opts) {
-                    return (mocks && mocks.triggerConfiguredWorkflowForTicket)
-                        ? mocks.triggerConfiguredWorkflowForTicket(opts)
-                        : false;
-                },
-                triggerSmIfIdle: function(opts) {
-                    return (mocks && mocks.triggerSmIfIdle)
-                        ? mocks.triggerSmIfIdle(opts)
-                        : { success: true };
-                }
-            },
-            './common/tokenUsageComment.js': {
-                postTokenUsageComments: function(key, opts) {
-                    if (mocks && mocks.postTokenUsageComments) mocks.postTokenUsageComments(key, opts);
-                }
-            }
+            './common/autoStartTrigger.js': autoStartTriggerMod,
+            './common/tokenUsageComment.js': tokenUsageMock
         }),
         allMocks
     );

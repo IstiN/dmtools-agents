@@ -10,30 +10,17 @@
  */
 
 var configLoader = require('./configLoader.js');
-var prHelper = require('./common/pullRequest.js');
 var fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 var fetchLinkedTestsToInput = require('./fetchLinkedTestsToInput.js');
 const { LABELS, STATUSES, resolveStatuses } = require('./config.js');
 var trackersModule = require('./common/trackers.js');
-
-var _workingDir = null;
-function runCmd(args) {
-    if (typeof args === 'string') args = { command: args };
-    if (_workingDir) args.workingDirectory = _workingDir;
-    return cli_execute_command(args);
-}
-
-// Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
-// common/pullRequest.js once — this delegate keeps every local call site.
-function cleanCommandOutput(output) {
-    return prHelper.cleanCommandOutput(output);
-}
+var bugFixBatchCtx = require('./common/bugFixBatchContext.js');
 
 function ensureInputFolder(bugFolder) {
     try {
         // file_write will create parent directories, but an explicit mkdir keeps
         // the action deterministic and easy to inspect in tests.
-        runCmd({ command: 'bash -c "mkdir -p ' + bugFolder + '"' });
+        bugFixBatchCtx.runCmd({ command: 'bash -c "mkdir -p ' + bugFolder + '"' });
     } catch (e) {
         console.warn('Could not create input folder ' + bugFolder + ' (non-fatal):', e);
     }
@@ -184,18 +171,12 @@ function writeBatchBugsMarkdown(epicFolder, epic, bugs) {
 
 /** Pre-CLI params carry the input folder at the top level; jobs nest them under jobParams. */
 function resolveBatchParams(params) {
-    return params.inputFolderPath ? params : (params.jobParams || params);
+    return bugFixBatchCtx.resolveBatchParams(params);
 }
 
 /** Re-fetch the epic when the ticket payload carries no fields; a failed fetch degrades to key-only. */
 function resolveBatchEpic(tracker, epicKey, epic) {
-    if (epic.fields) return epic;
-    try {
-        return tracker.getIssue(epicKey, ['summary', 'description', 'status', 'labels']);
-    } catch (e) {
-        console.warn('Could not fetch Epic details (non-fatal):', e);
-        return { key: epicKey, fields: {} };
-    }
+    return bugFixBatchCtx.resolveBatchEpic(tracker, epicKey, epic);
 }
 
 /** Fetch per-bug input folders for every batch bug (questions + linked tests). */
@@ -217,26 +198,19 @@ function moveEpicToInDevelopment(tracker, epicKey, statuses) {
 
 function action(params) {
     try {
-        var actualParams = resolveBatchParams(params);
-        var config = configLoader.loadProjectConfig(actualParams);
-        _workingDir = config.workingDir || null;
+        var ctx = bugFixBatchCtx.resolveBatchActionContext(params);
 
-        var tracker = trackersModule.createTracker(config, actualParams.customParams || {});
-        var epicFolder = actualParams.inputFolderPath;
-        var epicKey = epicFolder.split('/').pop();
-        var epic = resolveBatchEpic(tracker, epicKey, actualParams.ticket || { key: epicKey, fields: {} });
-
-        var customParams = actualParams.customParams || {};
+        var customParams = ctx.actualParams.customParams || {};
         var statuses = resolveStatuses(customParams);
 
-        var bugs = findBugsInEpic(epicKey, tracker);
-        console.log('Found', bugs.length, 'bug(s) in batch Epic', epicKey);
+        var bugs = findBugsInEpic(ctx.epicKey, ctx.tracker);
+        console.log('Found', bugs.length, 'bug(s) in batch Epic', ctx.epicKey);
 
-        fetchBatchBugContexts(bugs, actualParams.jobParams || actualParams);
+        fetchBatchBugContexts(bugs, ctx.actualParams.jobParams || ctx.actualParams);
 
-        writeBatchBugsMarkdown(epicFolder, epic, bugs);
+        writeBatchBugsMarkdown(ctx.epicFolder, ctx.epic, bugs);
 
-        moveEpicToInDevelopment(tracker, epicKey, statuses);
+        moveEpicToInDevelopment(ctx.tracker, ctx.epicKey, statuses);
 
     } catch (error) {
         console.error('Error in prepareBugFixBatchContext:', error);

@@ -32,6 +32,8 @@ function loadPostBulkBugsCreation(mocks) {
         { file_read: function() { return null; } }
     );
 
+    var trackers = d2Trackers(Object.assign({}, defaults, mocks));
+
     return loadModule(
         'js/postBulkBugsCreation.js',
         makeRequire({
@@ -46,7 +48,10 @@ function loadPostBulkBugsCreation(mocks) {
                 postTokenUsageComments: function() {}
             },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
-            './common/trackers.js': d2Trackers(Object.assign({}, defaults, mocks))
+            './common/trackers.js': trackers,
+            './common/trackerSlot.js': loadModule('js/common/trackerSlot.js', makeRequire({
+                './trackers.js': trackers
+            }))
         }),
         Object.assign({}, defaults, mocks)
     );
@@ -714,8 +719,7 @@ suite('postBulkBugsCreation: recovery and create flows (gh-1010 characterization
         assert.contains(result.results.errors[0].error, 'create exploded');
     });
 
-    test('ignores invalid link entries missing tcKey or bugKey', function() {
-        var links = [];
+    test('ignores invalid link entries missing tcKey or bugKey', function() {        var links = [];
 
         var result = runBulk({
             file_read: function(opts) {
@@ -777,6 +781,125 @@ suite('postBulkBugsCreation: stage-label fallback (gh-916)', function() {
         assert.equal(result.results.linked.length, 1);
         assert.deepEqual(added, [{ key: 'TS-980', label: 'stage_bug_to_fix' }]);
     });
+});
+
+suite('postBulkBugsCreation: linkProcessedTcToBug branches (gh-1250)', function() {
+
+    test('existing-bug link: TC outside the processed list is skipped by the guard', function() {
+        var links = [];
+
+        var module = loadPostBulkBugsCreation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bulk_bug_decisions.json') {
+                    return JSON.stringify({
+                        processed: ['TS-950'],
+                        newBugs: [],
+                        links: [{ tcKey: 'TS-999', bugKey: 'BUG-700' }],
+                        skipped: []
+                    });
+                }
+                return null;
+            },
+            jira_link_issues: function(args) { links.push(args); }
+        });
+
+        var result = module.action({
+            jobParams: {
+                customParams: {
+                    removeLabel: 'sm_bug_creation_triggered',
+                    smTriggerLabel: 'sm_bulk_bugs_creation_triggered'
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(links, []);
+        assert.deepEqual(result.results.linked, []);
+        assert.deepEqual(result.results.errors, []);
+    });
+
+    test('existing-bug link: tracker failure records an error and the batch continues', function() {
+        var comments = [];
+
+        var module = loadPostBulkBugsCreation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bulk_bug_decisions.json') {
+                    return JSON.stringify({
+                        processed: ['TS-951', 'TS-952'],
+                        newBugs: [],
+                        links: [
+                            { tcKey: 'TS-951', bugKey: 'BUG-701' },
+                            { tcKey: 'TS-952', bugKey: 'BUG-702' }
+                        ],
+                        skipped: []
+                    });
+                }
+                return null;
+            },
+            jira_link_issues: function(args) {
+                if (args.anotherKey === 'BUG-701') throw new Error('link exploded');
+            },
+            jira_move_to_status: function() { return {}; },
+            jira_remove_label: function() {},
+            jira_post_comment: function(args) { comments.push(args); }
+        });
+
+        var result = module.action({
+            jobParams: {
+                customParams: {
+                    removeLabel: 'sm_bug_creation_triggered',
+                    smTriggerLabel: 'sm_bulk_bugs_creation_triggered'
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.results.linked.length, 1);
+        assert.equal(result.results.linked[0].tcKey, 'TS-952');
+        assert.equal(result.results.errors.length, 1);
+        assert.equal(result.results.errors[0].tcKey, 'TS-951');
+        assert.equal(result.results.errors[0].bugKey, 'BUG-701');
+        assert.contains(result.results.errors[0].error, 'link exploded');
+    });
+
+    test('new-bug link: tracker failure records an error and the batch continues', function() {
+        var module = loadPostBulkBugsCreation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bulk_bug_decisions.json') {
+                    return JSON.stringify({
+                        processed: ['TS-953'],
+                        newBugs: [
+                            { summary: 'Partial failure bug', priority: 'Medium', linkedTCs: ['TS-953'] }
+                        ],
+                        links: [],
+                        skipped: []
+                    });
+                }
+                return null;
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_create_ticket_basic: function() { return '{"key":"BUG-703"}'; },
+            jira_link_issues: function() { throw new Error('link down'); },
+            jira_move_to_status: function() { return {}; },
+            jira_remove_label: function() {}
+        });
+
+        var result = module.action({
+            jobParams: {
+                customParams: {
+                    removeLabel: 'sm_bug_creation_triggered',
+                    smTriggerLabel: 'sm_bulk_bugs_creation_triggered'
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.results.created.length, 0);
+        assert.equal(result.results.errors.length, 1);
+        assert.equal(result.results.errors[0].tcKey, 'TS-953');
+        assert.equal(result.results.errors[0].bugKey, 'BUG-703');
+    });
+
 });
 
 suite('postBulkBugsCreation.extractTickets', function() {
