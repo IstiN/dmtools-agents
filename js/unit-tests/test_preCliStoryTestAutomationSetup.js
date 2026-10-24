@@ -11,7 +11,7 @@ function loadPreCliStoryTestAutomationSetup(mocks) {
 
     var freshConfigLoader = loadModule(
         'js/configLoader.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return {}; } }
         }),
@@ -20,7 +20,7 @@ function loadPreCliStoryTestAutomationSetup(mocks) {
 
     var prHelper = loadModule(
         'js/common/pullRequest.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './config.js': configModule,
             './mergeState.js': loadModule('js/common/mergeState.js'),
             './common/mergeState.js': loadModule('js/common/mergeState.js')
@@ -37,9 +37,9 @@ function loadPreCliStoryTestAutomationSetup(mocks) {
     var allMocks = Object.assign({}, defaults, mocks);
     return loadModule(
         'js/preCliStoryTestAutomationSetup.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './config.js': configModule,
-            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks),
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks),
             './configLoader.js': freshConfigLoader,
             './common/pullRequest.js': prHelper,
             './common/githubHelpers.js': githubHelpers,
@@ -166,12 +166,12 @@ suite('preCliStoryTestAutomationSetup', function() {
 
         module = loadModule(
             'js/preCliStoryTestAutomationSetup.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './config.js': configModule,
-                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
+                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
                 './configLoader.js': loadModule(
                     'js/configLoader.js',
-                    makeRequire({
+                    makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                         './config.js': configModule,
                         './common/scm.js': { createScm: function() { return {}; } }
                     }),
@@ -179,7 +179,7 @@ suite('preCliStoryTestAutomationSetup', function() {
                 ),
                 './common/pullRequest.js': loadModule(
                     'js/common/pullRequest.js',
-                    makeRequire({
+                    makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                         './config.js': configModule,
                         './mergeState.js': loadModule('js/common/mergeState.js'),
                         './common/mergeState.js': loadModule('js/common/mergeState.js')
@@ -226,12 +226,12 @@ suite('preCliStoryTestAutomationSetup', function() {
 
         module = loadModule(
             'js/preCliStoryTestAutomationSetup.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './config.js': configModule,
-                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
+                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
                 './configLoader.js': loadModule(
                     'js/configLoader.js',
-                    makeRequire({
+                    makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                         './config.js': configModule,
                         './common/scm.js': { createScm: function() { return {}; } }
                     }),
@@ -239,7 +239,7 @@ suite('preCliStoryTestAutomationSetup', function() {
                 ),
                 './common/pullRequest.js': loadModule(
                     'js/common/pullRequest.js',
-                    makeRequire({
+                    makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                         './config.js': configModule,
                         './mergeState.js': loadModule('js/common/mergeState.js'),
                         './common/mergeState.js': loadModule('js/common/mergeState.js')
@@ -283,7 +283,7 @@ function loadForPrContext(mocks, opts) {
 
     var freshConfigLoader = loadModule(
         'js/configLoader.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return {}; } }
         }),
@@ -292,7 +292,7 @@ function loadForPrContext(mocks, opts) {
 
     var prHelper = loadModule(
         'js/common/pullRequest.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './config.js': configModule,
             './mergeState.js': loadModule('js/common/mergeState.js'),
             './common/mergeState.js': loadModule('js/common/mergeState.js')
@@ -309,9 +309,9 @@ function loadForPrContext(mocks, opts) {
     var allMocks = Object.assign({}, defaults, mocks);
     return loadModule(
         'js/preCliStoryTestAutomationSetup.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './config.js': configModule,
-            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks),
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks),
             './configLoader.js': freshConfigLoader,
             './common/pullRequest.js': prHelper,
             './common/githubHelpers.js': githubHelpers,
@@ -614,12 +614,12 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
     function loadStoryWithConflicts(githubHelpers, cliMock) {
         return loadModule(
             'js/preCliStoryTestAutomationSetup.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './config.js': configModule,
-                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
+                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
                 './configLoader.js': loadModule(
                     'js/configLoader.js',
-                    makeRequire({
+                    makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                         './config.js': configModule,
                         './common/scm.js': { createScm: function() { return {}; } }
                     }),
@@ -627,7 +627,7 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
                 ),
                 './common/pullRequest.js': loadModule(
                     'js/common/pullRequest.js',
-                    makeRequire({
+                    makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                         './config.js': configModule,
                         './mergeState.js': loadModule('js/common/mergeState.js'),
                         './common/mergeState.js': loadModule('js/common/mergeState.js')
@@ -752,11 +752,11 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
         // Re-load with a capturing file_write on the top-level globals.
         module = loadModule(
             'js/preCliStoryTestAutomationSetup.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './config.js': configModule,
-                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
-                './configLoader.js': loadModule('js/configLoader.js', makeRequire({ './config.js': configModule, './common/scm.js': { createScm: function() { return {}; } } }), { file_read: function() { return null; } }),
-                './common/pullRequest.js': loadModule('js/common/pullRequest.js', makeRequire({ './config.js': configModule, './mergeState.js': loadModule('js/common/mergeState.js'), './common/mergeState.js': loadModule('js/common/mergeState.js') }), { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function() {} }),
+                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
+                './configLoader.js': loadModule('js/configLoader.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), './config.js': configModule, './common/scm.js': { createScm: function() { return {}; } } }), { file_read: function() { return null; } }),
+                './common/pullRequest.js': loadModule('js/common/pullRequest.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), './config.js': configModule, './mergeState.js': loadModule('js/common/mergeState.js'), './common/mergeState.js': loadModule('js/common/mergeState.js') }), { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function() {} }),
                 './common/githubHelpers.js': githubHelpers,
                 './common/scm.js': { createScm: function() { return {}; } }
             }),
@@ -793,11 +793,11 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
 
         var module = loadModule(
             'js/preCliStoryTestAutomationSetup.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './config.js': configModule,
-                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
-                './configLoader.js': loadModule('js/configLoader.js', makeRequire({ './config.js': configModule, './common/scm.js': { createScm: function() { return {}; } } }), { file_read: function() { return null; } }),
-                './common/pullRequest.js': loadModule('js/common/pullRequest.js', makeRequire({ './config.js': configModule, './mergeState.js': loadModule('js/common/mergeState.js'), './common/mergeState.js': loadModule('js/common/mergeState.js') }), { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function() {} }),
+                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
+                './configLoader.js': loadModule('js/configLoader.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), './config.js': configModule, './common/scm.js': { createScm: function() { return {}; } } }), { file_read: function() { return null; } }),
+                './common/pullRequest.js': loadModule('js/common/pullRequest.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), './config.js': configModule, './mergeState.js': loadModule('js/common/mergeState.js'), './common/mergeState.js': loadModule('js/common/mergeState.js') }), { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function() {} }),
                 './common/githubHelpers.js': githubHelpers,
                 './common/scm.js': { createScm: function() { return {}; } }
             }),

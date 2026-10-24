@@ -27,18 +27,18 @@ function loadTestAutomationSetup(mocks) {
 
     return loadModule(
         'js/preCliTestAutomationSetup.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './configLoader.js': { loadProjectConfig: function() { return cfg; } },
             './config.js': configModule,
             './fetchLinkedBugsToInput.js': fetchLinkedBugs,
             './common/trackers.js': loadModule(
                 'js/common/trackers.js',
-                makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }),
+                makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }),
                 allMocks
             ),
             './common/pullRequest.js': loadModule(
                 'js/common/pullRequest.js',
-                makeRequire({
+                makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                     './config.js': configModule,
                     './mergeState.js': loadModule('js/common/mergeState.js'),
                     './common/mergeState.js': loadModule('js/common/mergeState.js')

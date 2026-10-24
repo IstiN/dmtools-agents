@@ -23,9 +23,6 @@ function getTracker() {
     return _trackerInst;
 }
 
-// Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
-// common/pullRequest.js once — branchSetup delegates straight to it.
-
 function runGit(command, workingDir) {
     var args = { command: command };
     if (workingDir) args.workingDirectory = workingDir;

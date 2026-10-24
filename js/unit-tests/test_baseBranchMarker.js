@@ -5,7 +5,7 @@
  */
 
 function loadBaseBranchMarker(mocks) {
-    return loadModule('js/common/baseBranchMarker.js', makeRequire({}), mocks || {});
+    return loadModule('js/common/baseBranchMarker.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),}), mocks || {});
 }
 
 function markerWrites(writeCalls) {

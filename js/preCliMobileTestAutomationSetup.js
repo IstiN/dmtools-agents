@@ -23,6 +23,7 @@
 
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
+var branchSetup = require('./common/branchSetup.js');
 var mergeState = require('./common/mergeState.js');
 const { STATUSES } = require('./config.js');
 var trackersModule = require('./common/trackers.js');
@@ -75,22 +76,12 @@ function syncWithBase(runInRepo, workingDir, baseBranch) {
 
 /** Configure the git author for automation commits (non-fatal). */
 function configureAutomationGitAuthor(config, workingDir) {
-    try {
-        runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
-        runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
-    } catch (e) {
-        console.warn('Failed to configure git author:', e);
-    }
+    branchSetup.configureGitAuthor(function (cmd) { return runInRepo(cmd, workingDir); }, config, false);
 }
 
 /** Targeted fetch of the automation branch and its base (non-fatal). */
 function fetchAutomationBranchRefs(branchName, baseBranch, workingDir) {
-    try {
-        var targetedFetch = prHelper.buildTargetedOriginFetchCommand([branchName, baseBranch]);
-        if (targetedFetch) runInRepo(targetedFetch, workingDir);
-    } catch (e) {
-        console.warn('Could not fetch remote branches:', e);
-    }
+    branchSetup.fetchBranchRefs(prHelper, function (cmd) { return runInRepo(cmd, workingDir); }, [branchName, baseBranch], 'Could not fetch remote branches:');
 }
 
 /** Checkout a remote-only branch (and sync it), or create one from the base. */
@@ -509,10 +500,13 @@ function installAppOnSimulator(appPath, folder, appId) {
 
 /** Everything the setup steps need, resolved once, in the original order. */
 function resolveMobileSetupInputs(params) {
-    var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
-    var folder = actualParams.inputFolderPath;
-    var ticketKey = folder.split('/').pop();
-    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var resolved = branchSetup.resolveInputParams(params, function (p) {
+        return configLoader.loadProjectConfig(p);
+    });
+    var actualParams = resolved.actualParams;
+    var folder = resolved.folder;
+    var ticketKey = resolved.ticketKey;
+    var config = resolved.config;
     var customParams = (params.jobParams || params).customParams || {};
     return {
         actualParams: actualParams,

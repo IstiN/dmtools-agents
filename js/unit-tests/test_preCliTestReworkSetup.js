@@ -117,7 +117,7 @@ function loadPreCliTestReworkSetup(overrides) {
     return {
         module: loadModule(
             'js/preCliTestReworkSetup.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './configLoader.js': configLoader,
                 './common/githubHelpers.js': gh,
                 './common/gitOps.js': gitOps,
@@ -689,7 +689,7 @@ suite('preCliTestReworkSetup.action — characterization (gh-928)', function() {
         var loaded = ctx.module;
         var trackers = loadModule(
             'js/common/trackers.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                 '../config.js': configModule,
                 './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
             }),

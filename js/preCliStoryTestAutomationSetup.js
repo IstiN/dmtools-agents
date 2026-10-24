@@ -10,6 +10,7 @@
 
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
+var branchSetup = require('./common/branchSetup.js');
 var scmModule = require('./common/scm.js');
 var gh = require('./common/githubHelpers.js');
 const { STATUSES, resolveStatuses } = require('./config.js');
@@ -43,45 +44,34 @@ function runGit(command, workingDir) {
 }
 
 function writeBranchConflictGuidance(storyKey, branchName, baseBranch, details) {
-    try {
-        file_write({
-            path: 'input/' + storyKey + '/merge_conflicts.md',
-            content: '# Branch Conflict Guidance\n\n' +
-                'Branch `' + branchName + '` has test automation work that is not already merged into `origin/' + baseBranch + '`, ' +
-                'and `origin/' + baseBranch + '` is not an ancestor of this branch.\n\n' +
-                'Before editing tests, sync the branch deliberately with `origin/' + baseBranch + '`. ' +
-                'In most cases, prefer `origin/' + baseBranch + '` for repository setup, generated workflow/config files, ' +
-                'and shared infrastructure, then re-apply only the ticket-specific test automation that is still relevant.\n\n' +
-                'Do not discard test files that are still needed for this ticket. Do not keep stale bootstrap/setup files just because they exist on the old branch.\n\n' +
-                'Details:\n\n```\n' + (details || '(not available)') + '\n```\n'
-        });
-    } catch (e) {
-        console.warn('Could not write branch conflict guidance:', e);
-    }
+    branchSetup.writeBranchConflictGuidance(
+        storyKey,
+        branchName,
+        baseBranch,
+        details,
+        'test automation work',
+        'Before editing tests, sync the branch deliberately with `origin/' + baseBranch + '`. ' +
+            'In most cases, prefer `origin/' + baseBranch + '` for repository setup, generated workflow/config files, ' +
+            'and shared infrastructure, then re-apply only the ticket-specific test automation that is still relevant.',
+        'Do not discard test files that are still needed for this ticket. Do not keep stale bootstrap/setup files just because they exist on the old branch.'
+    );
 }
 
 function isAncestorRef(ancestor, descendant, workingDir) {
-    try {
-        var output = cleanCommandOutput(
-            runGit('git rev-list -1 ' + ancestor + ' --not ' + descendant, workingDir) || ''
-        );
-        return output.trim() === '';
-    } catch (e) {
-        console.warn('Could not inspect branch ancestry for ' + ancestor + ' -> ' + descendant + ':', e);
-        return false;
-    }
+    return branchSetup.isAncestorRefRevList(
+        prHelper,
+        function (cmd) { return runGit(cmd, workingDir); },
+        ancestor,
+        descendant,
+        'Could not inspect branch ancestry for'
+    );
 }
 
 /** Fetch fresh remote refs for the branch and its base (non-fatal, targeted). */
 function refreshTestBranchRemoteRefs(branchName, baseBranch, workingDir) {
     // Make sure remote refs are fresh before any merge/ancestor decision —
     // targeted: just this branch and its base (owner rule 2026-10-03).
-    try {
-        var targetedFetch = prHelper.buildTargetedOriginFetchCommand([branchName, baseBranch]);
-        if (targetedFetch) runGit(targetedFetch, workingDir);
-    } catch (e) {
-        console.warn('Could not fetch remote branches during align:', e);
-    }
+    branchSetup.fetchBranchRefs(prHelper, function (cmd) { return runGit(cmd, workingDir); }, [branchName, baseBranch], 'Could not fetch remote branches during align:');
 }
 
 /** Create a fresh test branch from the base branch. */
@@ -198,21 +188,11 @@ function alignBranchWithBase(storyKey, branchName, baseBranch, workingDir, input
 function checkoutBranch(storyKey, config, inputFolder) {
     var branchName = configLoader.formatBranchName(config.git.branchPrefix.test, storyKey);
     var workingDir = config.workingDir || null;
+    var exec = function (cmd) { return runGit(cmd, workingDir); };
     console.log('Setting up branch:', branchName);
 
-    try {
-        runGit('git config user.name "' + config.git.authorName + '"', workingDir);
-        runGit('git config user.email "' + config.git.authorEmail + '"', workingDir);
-    } catch (e) {
-        console.warn('Failed to configure git author:', e);
-    }
-
-    try {
-        var setupFetch = prHelper.buildTargetedOriginFetchCommand([branchName, config.git.baseBranch]);
-        if (setupFetch) runGit(setupFetch, workingDir);
-    } catch (e) {
-        console.warn('Could not fetch remote branches:', e);
-    }
+    branchSetup.configureGitAuthor(exec, config, false);
+    branchSetup.fetchBranchRefs(prHelper, exec, [branchName, config.git.baseBranch], 'Could not fetch remote branches:');
 
     alignBranchWithBase(storyKey, branchName, config.git.baseBranch, workingDir, inputFolder);
 
@@ -269,16 +249,8 @@ function writeLinkedTestCases(storyKey, testCases) {
 }
 
 function findTestPr(scm, storyKey, config) {
-    try {
-        var branchName = configLoader.formatBranchName(config.git.branchPrefix.test, storyKey);
-        var openPRs = scm.listPrs('open') || [];
-        return openPRs.find(function(pr) {
-            return pr.head && pr.head.ref && pr.head.ref === branchName;
-        }) || null;
-    } catch (e) {
-        console.warn('Could not list open PRs for test branch:', e);
-        return null;
-    }
+    var branchName = configLoader.formatBranchName(config.git.branchPrefix.test, storyKey);
+    return branchSetup.findPrForBranch(scm, branchName, 'Could not list open PRs for test branch:');
 }
 
 // ── gh-930: writePrContext split into formatting helpers ────────────────────

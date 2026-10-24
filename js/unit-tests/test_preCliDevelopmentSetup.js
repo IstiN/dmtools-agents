@@ -19,13 +19,13 @@ var NOOP_CONFIG_JS = { GIT_CONFIG: {}, STATUSES: {}, resolveStatuses: function()
 // at load time (the shared truncation bound), so the stub must actually export it.
 var devSetupCommandsReal = loadModule('js/common/setupCommands.js');
 var devCommentMarkupModule = loadModule('js/common/commentMarkup.js',
-    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+    makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 
 // The real tracker factory (provider probing is pure config/env reads) so
 // action() tests exercise the actual github/jira provider gating.
 var trackersModuleReal = loadModule(
     'js/common/trackers.js',
-    makeRequire({
+    makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
         '../config.js': configModule,
         './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
     }),
@@ -33,12 +33,12 @@ var trackersModuleReal = loadModule(
 );
 
 var PR_HELPER_REAL = loadModule('js/common/pullRequest.js',
-    makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
+    makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), './mergeState.js': loadModule('js/common/mergeState.js') }));
 
 function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
     return loadModule(
         'js/preCliDevelopmentSetup.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './configLoader.js': configLoaderStub,
             './common/pullRequest.js': PR_HELPER_REAL,
             './config.js': NOOP_CONFIG_JS,
@@ -527,7 +527,7 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
     function loadPreCliDevelopmentSetupWithExtras(bag, config, githubBehavior, extraMocks) {
         return loadModule(
             'js/preCliDevelopmentSetup.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './configLoader.js': makeActionConfigLoaderStub(config),
                 './common/pullRequest.js': PR_HELPER_REAL,
                 './config.js': NOOP_CONFIG_JS,
@@ -542,7 +542,7 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
                 },
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
                 './common/commentMarkup.js': devCommentMarkupModule,
-                './common/trackers.js': extraMocks ? loadModule('js/common/trackers.js', makeRequire({
+                './common/trackers.js': extraMocks ? loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                     '../config.js': configModule,
                     './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
                 }), extraMocks) : trackersModuleReal
@@ -692,7 +692,7 @@ suite('preCliDevelopmentSetup.postSetupErrorComment — routes through the probe
     function loadWithTrackerStub(posted, postThrows) {
         return loadModule(
             'js/preCliDevelopmentSetup.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './configLoader.js': {
                     loadProjectConfig: function () { return makeConfig(); },
                     paramsForConfigLoad: function (p) { return p; }
@@ -919,13 +919,13 @@ suite('preCliDevelopmentSetup.action — branch-coverage characterization (gh-10
             fetchParentContext: { action: function () {} }
         }, opts || {});
         globals = globals || {};
-        var trackers = loadModule('js/common/trackers.js', makeRequire({
+        var trackers = loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             '../config.js': configModule,
             './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
         }), globals);
         return loadModule(
             'js/preCliDevelopmentSetup.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './configLoader.js': {
                     loadProjectConfig: function () { return config; },
                     paramsForConfigLoad: function (p) { return p; },
@@ -1156,7 +1156,7 @@ suite('preCliDevelopmentSetup — extracted helpers (gh-1042)', function() {
         var posted = [];
         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
-            makeRequire({
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
                 './configLoader.js': {
                     loadProjectConfig: function () { return makeConfig(); },
                     paramsForConfigLoad: function (p) { return p; }

@@ -18,7 +18,7 @@ function loadPreCli(mocks) {
 
     var freshConfigLoader = loadModule(
         'js/configLoader.js',
-        makeRequire({ './config.js': configModule }),
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), './config.js': configModule }),
         { file_read: fileReadMock }
     );
 
@@ -33,17 +33,17 @@ function loadPreCli(mocks) {
 
     var m = loadModule(
         'js/preCliMobileTestAutomationSetup.js',
-        makeRequire({
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
             './mergeState.js': loadModule('js/common/mergeState.js'),
             './preCliMobileTestAutomationSetupHelpers.js': loadModule('js/preCliMobileTestAutomationSetupHelpers.js'),
-            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks),
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks),
             // Real PR helper (gh-912): cleanCommandOutput + the remote-existence
             // probe live there — the strict ref-line parser must be exercised.
             './common/pullRequest.js': loadModule('js/common/pullRequest.js',
-                makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }))
+                makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), './mergeState.js': loadModule('js/common/mergeState.js') }))
         }),
         allMocks
     );

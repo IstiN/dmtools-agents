@@ -5,7 +5,7 @@
  */
 
 function d3Trackers(mocks) {
-    return loadModule('js/common/trackers.js', makeRequire({
+    return loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
         '../config.js': configModule,
         './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
     }), mocks);
@@ -18,7 +18,7 @@ function d3Boom(name) {
 // ── checkTaskStoriesDone ─────────────────────────────────────────────────────
 
 function d3LoadCheckTask(mocks) {
-    return loadModule('js/checkTaskStoriesDone.js', makeRequire({
+    return loadModule('js/checkTaskStoriesDone.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
         './configLoader.js': { loadProjectConfig: function() { return { jira: { statuses: { DONE: 'Done', READY_FOR_TESTING: 'Ready For Testing' } } }; } },
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
@@ -103,7 +103,7 @@ suite('checkTaskStoriesDone: tracker layer', function() {
 // ── intakePreAction ──────────────────────────────────────────────────────────
 
 function d3LoadIntakePre(mocks) {
-    return loadModule('js/intakePreAction.js', makeRequire({
+    return loadModule('js/intakePreAction.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
         './common/trackers.js': d3Trackers(mocks)
     }), mocks);
 }
@@ -166,11 +166,11 @@ suite('intakePreAction: tracker layer', function() {
 // ── createIntakeTickets ──────────────────────────────────────────────────────
 
 function d3LoadIntake(mocks) {
-    return loadModule('js/createIntakeTickets.js', makeRequire({
-        './common/aiResponseParser.js': loadModule('js/common/aiResponseParser.js', makeRequire({ '../config.js': configModule }), {}),
+    return loadModule('js/createIntakeTickets.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+        './common/aiResponseParser.js': loadModule('js/common/aiResponseParser.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule }), {}),
         './config.js': configModule,
         './configLoader.js': { loadProjectConfig: function() { return {}; } },
-        './common/issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {}),
+        './common/issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),}), {}),
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './common/trackers.js': d3Trackers(mocks)
     }), mocks);
@@ -258,7 +258,7 @@ suite('createIntakeTickets: tracker layer', function() {
 // ── preCliTestReworkSetup ────────────────────────────────────────────────────
 
 function d3LoadPreCli(mocks, scm) {
-    return loadModule('js/preCliTestReworkSetup.js', makeRequire({
+    return loadModule('js/preCliTestReworkSetup.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
         './configLoader.js': {
             loadProjectConfig: function() { return { jira: { statuses: { BACKLOG: 'Backlog' } }, git: { baseBranch: 'main' }, formats: { prTitle: { rework: 'x' } } }; },
             createScm: function() { return scm; }
