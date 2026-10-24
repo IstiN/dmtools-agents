@@ -52,13 +52,10 @@ function findTestPRForTicket(scm, ticketKey) {
             return { pr: openPr, merged: false };
         }
 
-        const closedPRs = scm.listPrs('closed');
-        const mergedMatch = closedPRs.filter(function(pr) {
-            return pr.head && pr.head.ref && pr.head.ref === branchName && pr.merged_at;
-        });
-        if (mergedMatch.length > 0) {
-            console.log('Found already-merged test PR #' + mergedMatch[0].number);
-            return { pr: mergedMatch[0], merged: true };
+        const mergedPr = branchSetup.findMergedPrForBranch(scm, branchName);
+        if (mergedPr) {
+            console.log('Found already-merged test PR #' + mergedPr.number);
+            return { pr: mergedPr, merged: true };
         }
 
         console.warn('No PR found for test branch:', branchName);
@@ -149,22 +146,31 @@ function ensureReviewPrExists(scm, ticketKey, config, jiraConfig, issueType) {
     }
 }
 
-// gh-965: PR already merged — move ticket to final status without re-reviewing.
-function handleAlreadyMergedPr(ticketKey, pr, issueType, jiraConfig) {
-    markTestPrMerged(ticketKey);
+// gh-1247: shared tail of the two "test code already merged" paths — marks the
+// PR merged, moves the ticket to its final status and posts the caller-built
+// notice when the move happened.
+function moveMergedTicketAndReport(ticketKey, issueType, jiraConfig, buildNotice, consoleMsg, warnPrefix) {
     try {
+        markTestPrMerged(ticketKey);
         const status = moveMergedTicketToFinalStatus(ticketKey, issueType, jiraConfig);
         const finalStatus = status.finalStatus;
         const moved = status.moved;
         if (moved.moved || moved.marked) {
-            getTracker().postComment(ticketKey, 'h3. ✅ Test PR Already Merged\n\n' +
-                    'PR [#' + pr.number + '|' + pr.html_url + '] for branch {code}test/' + ticketKey + '{code} was already merged.\n\n' +
-                    'Skipping re-review — moved ticket to *' + finalStatus + '*.');
-            console.log('✅ PR already merged — moved', ticketKey, 'to', finalStatus);
+            getTracker().postComment(ticketKey, buildNotice(finalStatus));
+            console.log(consoleMsg, ticketKey, 'to', finalStatus);
         }
     } catch (e) {
-        console.warn('Failed to handle already-merged PR:', e);
+        console.warn(warnPrefix, e);
     }
+}
+
+// gh-965: PR already merged — move ticket to final status without re-reviewing.
+function handleAlreadyMergedPr(ticketKey, pr, issueType, jiraConfig) {
+    moveMergedTicketAndReport(ticketKey, issueType, jiraConfig, function (finalStatus) {
+        return 'h3. ✅ Test PR Already Merged\n\n' +
+            'PR [#' + pr.number + '|' + pr.html_url + '] for branch {code}test/' + ticketKey + '{code} was already merged.\n\n' +
+            'Skipping re-review — moved ticket to *' + finalStatus + '*.';
+    }, '✅ PR already merged — moved', 'Failed to handle already-merged PR:');
 }
 
 // gh-965: a PR whose diff is empty carries no test code to review.
@@ -293,25 +299,16 @@ function markTestPrMerged(ticketKey) {
 }
 
 function finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType, jiraConfig) {
+    moveMergedTicketAndReport(ticketKey, issueType, jiraConfig, function (finalStatus) {
+        return 'h3. ✅ Test Code Already Merged\n\n' +
+            'Branch {code}' + branchName + '{code} has no commits ahead of main, so the test code is already in main.\n\n' +
+            'Moved ticket to *' + finalStatus + '* and removed the stale branch.';
+    }, '✅ Branch has no commits ahead of main — moved', 'Failed to finalize already-merged test case:');
     try {
-        markTestPrMerged(ticketKey);
-        const status = moveMergedTicketToFinalStatus(ticketKey, issueType, jiraConfig);
-        const finalStatus = status.finalStatus;
-        const moved = status.moved;
-        if (moved.moved || moved.marked) {
-            getTracker().postComment(ticketKey, 'h3. ✅ Test Code Already Merged\n\n' +
-                    'Branch {code}' + branchName + '{code} has no commits ahead of main, so the test code is already in main.\n\n' +
-                    'Moved ticket to *' + finalStatus + '* and removed the stale branch.');
-            console.log('✅ Branch has no commits ahead of main — moved', ticketKey, 'to', finalStatus);
-        }
-        try {
-            cli_execute_command({ command: 'git push origin --delete ' + branchName });
-            console.log('✅ Deleted stale branch:', branchName);
-        } catch (delErr) {
-            console.warn('Could not delete stale branch', branchName + ':', delErr);
-        }
-    } catch (e) {
-        console.warn('Failed to finalize already-merged test case:', e);
+        cli_execute_command({ command: 'git push origin --delete ' + branchName });
+        console.log('✅ Deleted stale branch:', branchName);
+    } catch (delErr) {
+        console.warn('Could not delete stale branch', branchName + ':', delErr);
     }
 }
 

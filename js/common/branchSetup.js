@@ -263,16 +263,44 @@ function findOpenTestPrForBranch(scm, branchName) {
 }
 
 /** First open PR whose head ref equals `branchName`, else null (warns on failure). */
-function findPrForBranch(scm, branchName, warnMessage) {
+function findPrForBranch(scm, branchName, warnMessage, logFn) {
     try {
         var openPRs = scm.listPrs('open') || [];
         return openPRs.find(function(pr) {
             return pr.head && pr.head.ref && pr.head.ref === branchName;
         }) || null;
     } catch (e) {
-        console.warn(warnMessage, e);
+        (logFn || console.warn)(warnMessage, e);
         return null;
     }
+}
+
+/** First merged (closed + merged_at) PR whose head ref equals `branchName`, else null. */
+function findMergedPrForBranch(scm, branchName) {
+    var closedPRs = scm.listPrs('closed') || [];
+    var mergedMatch = closedPRs.filter(function(pr) {
+        return pr.head && pr.head.ref && pr.head.ref === branchName && pr.merged_at;
+    });
+    return mergedMatch.length > 0 ? mergedMatch[0] : null;
+}
+
+/**
+ * gh-1247: shared checkout prologue for the preCli*Setup flows — formats the
+ * test branch name, wires the git exec helper, configures the author and
+ * fetches branch refs. `deps` carries the caller's {configLoader, prHelper,
+ * runGit} so this module stays free of concrete dependencies. Returns
+ * {branchName, workingDir, exec} for the ticket-specific tail.
+ */
+function checkoutTestBranchHead(ticketKey, config, deps) {
+    var branchName = deps.configLoader.formatBranchName(config.git.branchPrefix.test, ticketKey);
+    var workingDir = config.workingDir || null;
+    var exec = function (cmd) { return deps.runGit(cmd, workingDir); };
+    console.log('Setting up branch:', branchName);
+
+    configureGitAuthor(exec, config, false);
+    fetchBranchRefs(deps.prHelper, exec, [branchName, (config.git && config.git.baseBranch) || 'main'],
+        'Could not fetch remote branches:');
+    return { branchName: branchName, workingDir: workingDir, exec: exec };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -291,6 +319,8 @@ if (typeof module !== 'undefined' && module.exports) {
         isAncestorRefRevList: isAncestorRefRevList,
         resolveInputParams: resolveInputParams,
         findOpenTestPrForBranch: findOpenTestPrForBranch,
-        findPrForBranch: findPrForBranch
+        findPrForBranch: findPrForBranch,
+        findMergedPrForBranch: findMergedPrForBranch,
+        checkoutTestBranchHead: checkoutTestBranchHead
     };
 }

@@ -87,18 +87,10 @@ function alignBranchWithBase(ticketKey, branchName, baseBranch, workingDir) {
 }
 
 function checkoutBranch(ticketKey, config) {
-    var branchName = configLoader.formatBranchName(config.git.branchPrefix.test, ticketKey);
-    var workingDir = config.workingDir || null;
-    var exec = function (cmd) { return runGit(cmd, workingDir); };
-    console.log('Setting up branch:', branchName);
-
-    branchSetup.configureGitAuthor(exec, config, false);
-    branchSetup.fetchBranchRefs(
-        prHelper,
-        exec,
-        [branchName, (config.git && config.git.baseBranch) || 'main'],
-        'Could not fetch remote branches:'
-    );
+    var head = branchSetup.checkoutTestBranchHead(ticketKey, config, { configLoader: configLoader, prHelper: prHelper, runGit: runGit });
+    var branchName = head.branchName;
+    var workingDir = head.workingDir;
+    var exec = head.exec;
 
     var localBranches = branchSetup.readLocalBranchList(prHelper, exec, branchName, null);
 

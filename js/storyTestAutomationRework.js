@@ -14,6 +14,7 @@ var prHelper = require('./common/pullRequest.js');
 var mergeState = require('./common/mergeState.js');
 const { LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var branchSetup = require('./common/branchSetup.js');
 var trackersModule = require('./common/trackers.js');
 
 function smLabelForContext(contextId) {
@@ -284,16 +285,8 @@ function postThreadReplies(scm, pullRequestId) {
 }
 
 function findStoryPR(scm, storyKey) {
-    try {
-        const branchName = 'test/' + storyKey;
-        const openPRs = scm.listPrs('open') || [];
-        return openPRs.find(function(pr) {
-            return pr.head && pr.head.ref && pr.head.ref === branchName;
-        }) || null;
-    } catch (e) {
-        console.error('Failed to find PR:', e);
-        return null;
-    }
+    // gh-1247: reuse the shared open-PR lookup (kept console.error for parity).
+    return branchSetup.findPrForBranch(scm, 'test/' + storyKey, 'Failed to find PR:', console.error);
 }
 
 // ── gh-1080: pure parse helper extracted from action ─────────────────────────

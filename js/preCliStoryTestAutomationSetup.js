@@ -186,17 +186,11 @@ function alignBranchWithBase(storyKey, branchName, baseBranch, workingDir, input
 }
 
 function checkoutBranch(storyKey, config, inputFolder) {
-    var branchName = configLoader.formatBranchName(config.git.branchPrefix.test, storyKey);
-    var workingDir = config.workingDir || null;
-    var exec = function (cmd) { return runGit(cmd, workingDir); };
-    console.log('Setting up branch:', branchName);
+    var head = branchSetup.checkoutTestBranchHead(storyKey, config, { configLoader: configLoader, prHelper: prHelper, runGit: runGit });
 
-    branchSetup.configureGitAuthor(exec, config, false);
-    branchSetup.fetchBranchRefs(prHelper, exec, [branchName, config.git.baseBranch], 'Could not fetch remote branches:');
+    alignBranchWithBase(storyKey, head.branchName, config.git.baseBranch, head.workingDir, inputFolder);
 
-    alignBranchWithBase(storyKey, branchName, config.git.baseBranch, workingDir, inputFolder);
-
-    console.log('✅ Branch ready:', branchName);
+    console.log('✅ Branch ready:', head.branchName);
 }
 
 function fetchLinkedTestCases(storyKey, testCaseType, tracker) {
