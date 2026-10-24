@@ -31,7 +31,7 @@ var W1A_CFG = { jira: { statuses: { DONE: 'Done', IN_TESTING: 'In Testing', READ
 function w1aLoad(file, rec) {
     return loadModule('js/' + file, makeRequire({
         './configLoader.js': { loadProjectConfig: function() { return W1A_CFG; } },
-        './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+        './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageCommentsSafely: function() {} },
         './common/trackers.js': w1aTrackers(rec.mocks),
         './common/actionTicketContext.js': loadModule('js/common/actionTicketContext.js', makeRequire({
             '../configLoader.js': { loadProjectConfig: function() { return W1A_CFG; } },

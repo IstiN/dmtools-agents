@@ -60,4 +60,13 @@ suite('mergeObjects', function() {
         var merged = mergeObjects(base, null, false);
         assert.deepEqual(merged, { own: 1 }, 'prototype chain is ignored');
     });
+
+    test('skipUndefined applies to the override only — base undefined values are always copied', function() {
+        var mergeObjects = loadMergeObjects().mergeObjects;
+        var base = { a: undefined };
+        var override = { b: 2 };
+        var merged = mergeObjects(base, override, true);
+        assert.deepEqual(merged, { a: undefined, b: 2 });
+        assert.ok(Object.prototype.hasOwnProperty.call(merged, 'a'), 'base key with undefined value survives');
+    });
 });

@@ -12,18 +12,20 @@
  *     legacy semantics — kept for behavior parity).
  */
 
+/** Copy the caller's own enumerable keys into dest. */
+function copyOwnKeys(src, dest, skipUndefined) {
+    for (var key in (src || {})) {
+        if (!Object.prototype.hasOwnProperty.call(src, key)) continue;
+        if (skipUndefined && src[key] === undefined) continue;
+        dest[key] = src[key];
+    }
+    return dest;
+}
+
+/** Shallow-merge: base keys first, override keys win. */
 function mergeObjects(base, override, skipUndefined) {
-    var result = {};
-    var key;
-    for (key in (base || {})) {
-        if (Object.prototype.hasOwnProperty.call(base, key)) result[key] = base[key];
-    }
-    for (key in (override || {})) {
-        if (!Object.prototype.hasOwnProperty.call(override, key)) continue;
-        if (skipUndefined && override[key] === undefined) continue;
-        result[key] = override[key];
-    }
-    return result;
+    var result = copyOwnKeys(base, {}, false);
+    return copyOwnKeys(override, result, !!skipUndefined);
 }
 
 if (typeof module !== 'undefined' && module.exports) {
