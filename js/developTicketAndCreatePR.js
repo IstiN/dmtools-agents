@@ -924,32 +924,51 @@ function resumeDevelopmentAgent(params, ticketKey, customParams, stage, errorMes
  * branch, or a non-trivial working tree (runtime artifacts and the
  * factory-kit nested repo never count — they are machine-local noise).
  */
-function branchCarriesWork(baseBranch) {
-    var originRef = 'origin/' + (baseBranch || 'main');
+/** Commits ahead of origin/<base> (the leg's landed work); git failures are non-fatal. */
+function hasCommitsAheadOfBase(originRef) {
     try {
         var log = cleanCommandOutput(runCmd({ command: 'git log ' + originRef + '..HEAD --oneline' }) || '');
         if (log.trim()) return true;
     } catch (e) {
         console.warn('Landing guard: could not inspect ' + originRef + '..HEAD:', e);
     }
+    return false;
+}
+
+/**
+ * One `git status --porcelain` line: does it represent the leg's real work?
+ * Machine-local noise (runtime artifacts, the factory-kit nested repo, the
+ * job's own outputs/ scratch) never counts.
+ */
+function statusLineIndicatesWork(line) {
+    if (!line.trim()) return false;
+    if (gitStaging.isRuntimeArtifactStatusLine(line)) return false;
+    if (/^(\?\?|A )\s+factory-kit(\/|$)/.test(line)) return false;
+    // The job's own scratch output (response.md etc.) is the CLAIM,
+    // never the work — an untracked outputs/ leftover must not
+    // satisfy the guard on its own.
+    if (/^\?\?\s+outputs\//.test(line)) return false;
+    return true;
+}
+
+/** Dirty-tree probe (the commit-less work path of the guard). */
+function workingTreeCarriesWork() {
     try {
         var status = runCmd({ command: 'git status --porcelain' }) || '';
         var lines = status.split('\n');
         for (var i = 0; i < lines.length; i++) {
-            var line = lines[i];
-            if (!line.trim()) continue;
-            if (gitStaging.isRuntimeArtifactStatusLine(line)) continue;
-            if (/^(\?\?|A )\s+factory-kit(\/|$)/.test(line)) continue;
-            // The job's own scratch output (response.md etc.) is the CLAIM,
-            // never the work — an untracked outputs/ leftover must not
-            // satisfy the guard on its own.
-            if (/^\?\?\s+outputs\//.test(line)) continue;
-            return true;
+            if (statusLineIndicatesWork(lines[i])) return true;
         }
     } catch (e) {
         console.warn('Landing guard: could not inspect git status:', e);
     }
     return false;
+}
+
+function branchCarriesWork(baseBranch) {
+    var originRef = 'origin/' + (baseBranch || 'main');
+    if (hasCommitsAheadOfBase(originRef)) return true;
+    return workingTreeCarriesWork();
 }
 
 /**
@@ -1831,6 +1850,8 @@ if (typeof module !== 'undefined' && module.exports) {
         // characterization tests.
         isHardPushRejection, retryForcePushAfterRejection, performPushOnly,
         prepareDevelopmentGitStage, stageOutcomeOf, runPublishPipeline,
-        createDevelopmentPr, finalizeDevelopmentSuccess, concludeActionFailure
+        createDevelopmentPr, finalizeDevelopmentSuccess, concludeActionFailure,
+        // gh-1229: landing-guard decomposition — exported for direct tests.
+        branchCarriesWork, hasCommitsAheadOfBase, workingTreeCarriesWork, statusLineIndicatesWork
     };
 }

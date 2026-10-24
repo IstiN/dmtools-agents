@@ -56,10 +56,38 @@ function findPRForTicket(scm, ticketKey) {
     }
 }
 
+// ── gh-1229: small helpers extracted from action so it stays well under the
+//    CRAP gate; behavior is byte-identical to the previous inline flow. ──
+
+/** Custom params: jobParams wins (Teammate path), then the top-level bag. */
+function customParamsOf(params) {
+    return (params.jobParams && params.jobParams.customParams) || params.customParams;
+}
+
+/** Labels the SM may have armed the leg with — all stale once recovery re-routes. */
+var RECOVERY_LABELS = ['sm_story_development_triggered', 'sm_bug_development_triggered', 'sm_story_rework_triggered'];
+
+/** Best-effort status move with the shared outcome logs. */
+function moveTicketReportingOutcome(ticketKey, status) {
+    try {
+        getTracker().moveToStatus(ticketKey, status);
+        console.log('✅ Moved', ticketKey, 'to', status);
+    } catch (e) {
+        console.error('Failed to move to ' + status + ':', e);
+    }
+}
+
+/** Stale-label removal is best-effort — a tracker hiccup must not stop recovery. */
+function removeRecoveryLabelsQuietly(ticketKey) {
+    RECOVERY_LABELS.forEach(function(label) {
+        try { getTracker().removeLabel(ticketKey, label); } catch (e) {}
+    });
+}
+
 function action(params) {
     var ticketKey = params.ticket && params.ticket.key;
     var config = configLoader.loadProjectConfig(params.jobParams || params || {});
-    var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams;
+    var customParams = customParamsOf(params);
     var statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
     initTracker(config, customParams);
 
@@ -73,36 +101,20 @@ function action(params) {
     var scm = configLoader.createScm(config);
     var pr = findPRForTicket(scm, ticketKey);
 
-    var removableLabels = ['sm_story_development_triggered', 'sm_bug_development_triggered', 'sm_story_rework_triggered'];
-
     if (!pr) {
         console.log('No open PR found for', ticketKey, '— moving back to', statuses.READY_FOR_DEVELOPMENT);
-        try {
-            getTracker().moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
-            console.log('✅ Moved', ticketKey, 'to', statuses.READY_FOR_DEVELOPMENT);
-        } catch (e) {
-            console.error('Failed to move to ' + statuses.READY_FOR_DEVELOPMENT + ':', e);
-        }
-        removableLabels.forEach(function(label) {
-            try { getTracker().removeLabel(ticketKey, label); } catch (e) {}
-        });
+        moveTicketReportingOutcome(ticketKey, statuses.READY_FOR_DEVELOPMENT);
+        removeRecoveryLabelsQuietly(ticketKey);
         getTracker().postComment(ticketKey, '🔄 *Recovery*: Ticket was stuck in "' + statuses.IN_DEVELOPMENT + '" with no open PR. Moved back to ' + statuses.READY_FOR_DEVELOPMENT + ' for re-automation.');
         return { success: true, action: 'moved_to_ready_for_development', ticketKey: ticketKey };
     }
 
     console.log('Found open PR #' + pr.number + ': ' + pr.title + ' — moving ticket to', statuses.IN_REVIEW);
-    try {
-        getTracker().moveToStatus(ticketKey, statuses.IN_REVIEW);
-        console.log('✅ Moved', ticketKey, 'to', statuses.IN_REVIEW);
-    } catch (e) {
-        console.error('Failed to move to ' + statuses.IN_REVIEW + ':', e);
-    }
-    removableLabels.forEach(function(label) {
-        try { getTracker().removeLabel(ticketKey, label); } catch (e) {}
-    });
+    moveTicketReportingOutcome(ticketKey, statuses.IN_REVIEW);
+    removeRecoveryLabelsQuietly(ticketKey);
     getTracker().postComment(ticketKey, '🔄 *Recovery*: Ticket was stuck in "' + statuses.IN_DEVELOPMENT + '" with open PR #' + pr.number + '. Moved to ' + statuses.IN_REVIEW + ' for code review.');
 
     return { success: true, action: 'moved_to_review', ticketKey: ticketKey, prNumber: pr.number };
 }
 
-module.exports = { action };
+module.exports = { action: action, customParamsOf: customParamsOf };

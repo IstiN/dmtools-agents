@@ -150,20 +150,16 @@ function mergeMain(storyKey, config) {
     commitResolvedMerge(runInRepo, workingDir, storyKey);
 }
 
-function commitAndPush(storyKey, config) {
-    var workingDir = config.workingDir || null;
-    var branchName = cleanCommandOutput(runInRepo('git branch --show-current', workingDir) || '');
-    if (!branchName) throw new Error('Could not determine current git branch');
-    if (branchName === 'main' || branchName === 'master') {
-        throw new Error('Refusing to commit rework directly to "' + branchName + '". Expected test/' + storyKey);
-    }
+// ── gh-1229: commitAndPush decomposed into small steps; behavior is
+//    byte-identical to the previous inline flow. ──
 
-    console.log('Current branch:', branchName);
-    mergeMain(storyKey, config);
-    runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
-    runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
-    runInRepo('git add testing/', workingDir);
+/** Current checked-out branch, or '' when git could not tell. */
+function currentBranchName(workingDir) {
+    return cleanCommandOutput(runInRepo('git branch --show-current', workingDir) || '');
+}
 
+/** Commit the staged testing/ changes; a clean staging area only warns. */
+function commitTestingChanges(storyKey, config, workingDir) {
     var statusOutput = cleanCommandOutput(runInRepo('git diff --cached --stat', workingDir) || '');
     if (statusOutput.trim()) {
         var commitMsg = configLoader.formatTemplate(config.formats.commitMessage.testRework, {
@@ -175,23 +171,50 @@ function commitAndPush(storyKey, config) {
     } else {
         console.warn('No changes to commit in testing/ — pushing existing commits only');
     }
+}
 
+/** Push the branch; a rejected normal push falls back to --force. */
+function pushBranchToRemote(branchName, workingDir) {
     try {
         runInRepo('git push -u origin ' + branchName, workingDir);
     } catch (e) {
         console.log('Normal push failed, force pushing...');
         runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
     }
+}
 
-    var remoteBranchExists = false;
+/**
+ * gh-912: verify the push produced a real refs/heads/<branch> ref line —
+ * stderr noise never counts as the branch existing. Non-fatal probe.
+ */
+function remoteBranchExistsAfterPush(workingDir, branchName) {
     try {
-        // gh-912: verify the push produced a real refs/heads/<branch> ref
-        // line — stderr noise never counts as the branch existing.
-        remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
+        return prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
     } catch (lsRemoteErr) {
         console.warn('Error checking remote branches:', lsRemoteErr);
+        return false;
     }
-    if (!remoteBranchExists) throw new Error('Branch not found on remote after push');
+}
+
+function commitAndPush(storyKey, config) {
+    var workingDir = config.workingDir || null;
+    var branchName = currentBranchName(workingDir);
+    if (!branchName) throw new Error('Could not determine current git branch');
+    if (branchName === 'main' || branchName === 'master') {
+        throw new Error('Refusing to commit rework directly to "' + branchName + '". Expected test/' + storyKey);
+    }
+
+    console.log('Current branch:', branchName);
+    mergeMain(storyKey, config);
+    runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
+    runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
+    runInRepo('git add testing/', workingDir);
+
+    commitTestingChanges(storyKey, config, workingDir);
+
+    pushBranchToRemote(branchName, workingDir);
+
+    if (!remoteBranchExistsAfterPush(workingDir, branchName)) throw new Error('Branch not found on remote after push');
     console.log('✅ Pushed to remote branch:', branchName);
     return branchName;
 }
@@ -472,5 +495,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, mergeMain, postThreadReplies };
+    module.exports = { action, mergeMain, postThreadReplies, commitAndPush };
 }

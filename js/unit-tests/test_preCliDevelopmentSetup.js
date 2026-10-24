@@ -1456,3 +1456,97 @@ suite('preCliDevelopmentSetup.checkoutBranch — seam helpers (gh-1190)', functi
     });
 
 });
+
+// ── gh-1229 characterization: reportExistingDevBranch degradation branches
+//    pinned before helper extraction (direct calls, scripted git). ──
+suite('preCliDevelopmentSetup.reportExistingDevBranch — degradation branches (gh-1229)', function () {
+
+    var REPORT_CONFIG = makeConfig({ git: { featureBranch: { enabled: false } } });
+
+    function branchExists(calls, responses) {
+        responses['git ls-remote --heads origin ai/PROJ-7'] = '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/PROJ-7';
+    }
+
+    function loadReporter(calls, responses, writes, fileWriteImpl) {
+        var configLoaderStub = makeConfigLoaderStub({ development: 'ai/PROJ-7' }, 'main', null, []);
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: makeCliMock(calls, responses),
+            file_write: fileWriteImpl || function (args) { writes.push(args); }
+        });
+        return mod;
+    }
+
+    test('a failing rev-list count degrades to "?" without aborting the report', function () {
+        var calls = [];
+        var writes = [];
+        var responses = {};
+        branchExists(calls, responses);
+        // rev-list missing from responses? No — makeCliMock returns '' for
+        // unknown commands; force the failure by throwing instead.
+        var configLoaderStub = makeConfigLoaderStub({ development: 'ai/PROJ-7' }, 'main', null, []);
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: function (opts) {
+                var command = opts && opts.command;
+                calls.push(command);
+                if (command.indexOf('git rev-list --count') === 0) throw new Error('rev-list exploded');
+                if (responses[command] !== undefined) return responses[command];
+                return '';
+            },
+            file_write: function (args) { writes.push(args); }
+        });
+
+        var result = mod.reportExistingDevBranch('PROJ-7', REPORT_CONFIG, TICKET, 'input/PROJ-7');
+
+        assert.equal(result, true, 'the report is still written');
+        assert.contains(writes[0].content, 'Commits ahead of base: ?',
+            'the "?" placeholder marks the failed count');
+        assert.contains(writes[0].content, '(no diff)', 'empty diff renders as (no diff)');
+    });
+
+    test('a failed existing_work.md write is non-fatal and the step still reports true', function () {
+        var calls = [];
+        var responses = {};
+        branchExists(calls, responses);
+        var mod = loadReporter(calls, responses, [], function () { throw new Error('disk full'); });
+
+        var result = mod.reportExistingDevBranch('PROJ-7', REPORT_CONFIG, TICKET, 'input/PROJ-7');
+
+        assert.equal(result, true, 'the branch genuinely exists — the step must still report it');
+    });
+
+    test('an empty log omits the commits section from the report', function () {
+        var calls = [];
+        var writes = [];
+        var responses = {};
+        branchExists(calls, responses);
+        responses['git rev-list --count --right-only origin/main...origin/ai/PROJ-7'] = '0';
+        responses['git log --oneline -20 origin/main..origin/ai/PROJ-7'] = '';
+        responses['git diff --shortstat origin/main...origin/ai/PROJ-7'] = ' 2 files changed';
+        var mod = loadReporter(calls, responses, writes);
+
+        var result = mod.reportExistingDevBranch('PROJ-7', REPORT_CONFIG, TICKET, 'input/PROJ-7');
+
+        assert.equal(result, true);
+        assert.notContains(writes[0].content, '## Commits ahead of base',
+            'no commit list section when the log is empty');
+        assert.contains(writes[0].content, 'Diff vs base: 2 files changed');
+    });
+
+    test('helper exports keep the report-building contract', function () {
+        var mod = loadReporter([], {}, []);
+        var content = mod.buildExistingWorkReport('ai/PROJ-7', 'origin/main', 'origin/ai/PROJ-7', {
+            commitsAhead: '2', logLines: 'a1 one', diffStat: ' 1 file changed'
+        });
+        assert.contains(content, '# Existing Work on Remote Branch');
+        assert.contains(content, 'Commits ahead of base: 2');
+        assert.contains(content, '## Commits ahead of base');
+        assert.contains(content, 'Diff vs base:  1 file changed',
+            'the diff stat passes through verbatim (trimming is the metric collector\'s job)');
+
+        var minimal = mod.buildExistingWorkReport('ai/PROJ-7', 'origin/main', 'origin/ai/PROJ-7', {
+            commitsAhead: '0', logLines: '', diffStat: ''
+        });
+        assert.contains(minimal, 'Diff vs base: (no diff)');
+        assert.notContains(minimal, '## Commits ahead of base');
+    });
+});
