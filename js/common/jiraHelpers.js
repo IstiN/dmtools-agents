@@ -47,26 +47,16 @@ function assignForReview(ticketKey, initiatorId, wipLabel, targetStatus, tracker
 
 /**
  * Extract ticket key from Jira API response
- * 
+/**
+ * Extracted ticket key from a Jira API response — the canonical
+ * implementation lives in trackers.js (gh-1248: one copy; this module
+ * already holds the trackers reference).
+ *
  * @param {string|Object} result - Jira API response
  * @returns {string|null} Extracted ticket key or null if not found
  */
 function extractTicketKey(result) {
-    if (!result) {
-        return null;
-    }
-    if (typeof result === 'string') {
-        try {
-            const parsed = JSON.parse(result);
-            return parsed && parsed.key ? parsed.key : null;
-        } catch (error) {
-            return null;
-        }
-    }
-    if (typeof result === 'object' && typeof result.key === 'string') {
-        return result.key;
-    }
-    return null;
+    return trackersModule.extractTicketKey(result);
 }
 
 /**

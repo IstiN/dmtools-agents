@@ -639,8 +639,10 @@ suite('workflow contract — stub run-name carries the gh-1075 pr anchor', funct
     });
 
     test('a rendered fork-leg title keeps legOfRunName AND the pr anchor working end-to-end', function () {
-        var dedup = loadModule('js/common/teammateEventDedup.js');
-        var guard = loadModule('js/common/branchLegGuard.js');
+        var dedup = loadModule('js/common/teammateEventDedup.js',
+            makeRequire({ './legRunVocab.js': legRunVocabReal() }));
+        var guard = loadModule('js/common/branchLegGuard.js',
+            makeRequire({ './legRunVocab.js': legRunVocabReal() }));
         // The rendered shapes the new run-name produces:
         var forkTitle = 'teammate: workflow_dispatch # · pr-1591 rework';
         var issueTitle = 'teammate: assigned #1040 rework';

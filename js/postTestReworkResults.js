@@ -473,8 +473,8 @@ function isMergeInProgress() {
 }
 
 function isSubmodulePath(path) {
-    // Canonical probe in common/pullRequest.js (gh-1246) — kept as a local
-    // wrapper because this module runs commands without a workingDir.
+    // Canonical probe in common/pullRequest.js (gh-1246/gh-1248) — kept as a
+    // local wrapper because this module runs commands without a workingDir.
     return prHelper.isSubmodulePath(function(command) {
         return cli_execute_command({ command: command });
     }, null, path);

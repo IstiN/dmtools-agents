@@ -31,9 +31,11 @@
 
 'use strict';
 
+var legRunVocab = require('./legRunVocab.js');
+
 // The rework/review/dev leg workflow — the same default the dispatch side
 // (smAgent triggerWorkflow) and the gh-806 latch use.
-var DEFAULT_LEG_WORKFLOW = 'ai-teammate.yml';
+var DEFAULT_LEG_WORKFLOW = legRunVocab.DEFAULT_LEG_WORKFLOW;
 
 // Active-state vocabulary — one list, the validationLiveness shape the rest
 // of the engine already uses.
@@ -54,26 +56,20 @@ function workflowFileOf(opts) {
 
 /**
  * True when the run belongs to the leg workflow (path ends with
- * '/<workflowFile>') — reworkLatch.isLegRun parity: validation CI or
- * kicker runs on the same branch must never influence the guard.
+ * '/<workflowFile>') — canonical in legRunVocab (gh-1248: one copy shared
+ * with reworkLatch/teammateEventDedup): validation CI or kicker runs on
+ * the same branch must never influence the guard.
  */
 function isLegRun(run, workflowFile) {
-    if (!run) return false;
-    var suffix = '/' + String(workflowFile || DEFAULT_LEG_WORKFLOW);
-    var path = String(run.path || '');
-    return path.length >= suffix.length &&
-        path.slice(path.length - suffix.length) === suffix;
+    return legRunVocab.isLegRun(run, workflowFile);
 }
+
+// The freshness probes bound to this module's active-state vocabulary —
+// one factory call instead of per-module delegate copies (gh-1248 dedup).
+var runProbes = legRunVocab.makeRunProbes(ACTIVE_RUN_STATES);
 
 function isActiveStatus(status) {
-    return ACTIVE_RUN_STATES.indexOf(status) !== -1;
-}
-
-function runTimestampMs(run) {
-    var value = run && (run.updated_at || run.created_at);
-    if (!value) return null;
-    var ms = Date.parse(String(value));
-    return isNaN(ms) ? null : ms;
+    return runProbes.isActiveStatus(status);
 }
 
 /**
@@ -82,10 +78,7 @@ function runTimestampMs(run) {
  * in_progress run is never stale here (the caller gates on that).
  */
 function isStaleNonRunning(run, nowMs, staleMs) {
-    if (run && run.status === 'in_progress') return false;
-    var ts = runTimestampMs(run);
-    if (ts === null || nowMs === null) return false;
-    return (nowMs - ts) > staleMs;
+    return runProbes.isStaleNonRunning(run, nowMs, staleMs);
 }
 
 /**
@@ -125,12 +118,11 @@ function nowMsOf(opts) {
 /** The shared freshness vocabulary of both gates (gh-1028 branch and
  * gh-1075 fork): an ACTIVE run that is not a stale non-running zombie.
  * gh-1075 review (CRAP ratchet): folded into one helper so each
- * legRunOwns* predicate carries the freshness check as a single call. */
+ * legRunOwns* predicate carries the freshness check as a single call.
+ * Canonical in legRunVocab (gh-1248), bound to the local ACTIVE_RUN_STATES
+ * via runProbes — the sibling probes carry an extra 'requested' state. */
 function isFreshActiveRun(run, nowMs, staleMs) {
-    if (!run || !isActiveStatus(run.status)) return false;
-    if (run.status !== 'in_progress' && nowMs !== null &&
-        isStaleNonRunning(run, nowMs, staleMs)) return false;
-    return true;
+    return runProbes.isFreshActiveRun(run, nowMs, staleMs);
 }
 
 /** One run owns the branch: active, non-stale, the leg workflow, on-branch. */
@@ -139,15 +131,24 @@ function legRunOwnsBranch(run, branch, workflowFile, nowMs, staleMs) {
         isLegRun(run, workflowFile) && matchesBranch(run, branch);
 }
 
+/** True when ANY run satisfies the caller's owns predicate — the shared
+ * scan loop of the branch and fork gates (gh-1248). */
+function anyLegRunOwns(runs, owns) {
+    if (!Array.isArray(runs)) return false;
+    for (var i = 0; i < runs.length; i++) {
+        if (owns(runs[i])) return true;
+    }
+    return false;
+}
+
 function hasActiveLegRunOnBranch(runs, branch, opts) {
-    if (!branch || typeof branch !== 'string' || !Array.isArray(runs)) return false;
+    if (!branch || typeof branch !== 'string') return false;
     var workflowFile = workflowFileOf(opts);
     var staleMs = staleMsOf(opts);
     var nowMs = nowMsOf(opts);
-    for (var i = 0; i < runs.length; i++) {
-        if (legRunOwnsBranch(runs[i], branch, workflowFile, nowMs, staleMs)) return true;
-    }
-    return false;
+    return anyLegRunOwns(runs, function(run) {
+        return legRunOwnsBranch(run, branch, workflowFile, nowMs, staleMs);
+    });
 }
 
 // ── gh-1075 fork reroute: the pull-keyed leg probe ──────────────────────────
@@ -218,14 +219,13 @@ function legRunOwnsPull(run, prNumber, workflowFile, nowMs, staleMs) {
  * match keys on the pull ref or the run-title pr anchor instead of the
  * branch name. opts identical to hasActiveLegRunOnBranch. */
 function hasActiveLegRunForPull(runs, prNumber, opts) {
-    if (!prNumber || !Array.isArray(runs)) return false;
+    if (!prNumber) return false;
     var workflowFile = workflowFileOf(opts);
     var staleMs = staleMsOf(opts);
     var nowMs = nowMsOf(opts);
-    for (var i = 0; i < runs.length; i++) {
-        if (legRunOwnsPull(runs[i], prNumber, workflowFile, nowMs, staleMs)) return true;
-    }
-    return false;
+    return anyLegRunOwns(runs, function(run) {
+        return legRunOwnsPull(run, prNumber, workflowFile, nowMs, staleMs);
+    });
 }
 
 module.exports = {
@@ -237,6 +237,7 @@ module.exports = {
     isStaleNonRunning: isStaleNonRunning,
     matchesBranch: matchesBranch,
     legRunOwnsBranch: legRunOwnsBranch,
+    anyLegRunOwns: anyLegRunOwns,
     hasActiveLegRunOnBranch: hasActiveLegRunOnBranch,
     pullHeadRefOf: pullHeadRefOf,
     titleHasPrToken: titleHasPrToken,

@@ -34,11 +34,7 @@ function loadReviewThreadInventory() {
 }
 
 function loadScm(mocks) {
-    return loadModule(
-        'js/common/scm.js',
-        makeRequire({ './machineNotice.js': loadMachineNotice(), './reviewThreadInventory.js': loadReviewThreadInventory() }),
-        mocks || {}
-    );
+    return scmReal(mocks || {});
 }
 
 /** GitHub provider wired exactly as createScm does for a configured repo. */
@@ -68,7 +64,8 @@ function loadGithubHelpers(mocks) {
             './machineNotice.js': loadMachineNotice(),
             './reviewThreadInventory.js': loadReviewThreadInventory(),
             './ci.js': loadModule('js/common/ci.js'),
-            './ciViolations.js': loadModule('js/common/ciViolations.js')
+            './ciViolations.js': loadModule('js/common/ciViolations.js'),
+            './githubReviewFetch.js': githubReviewFetchReal(mocks),
         }),
         mocks || {}
     );

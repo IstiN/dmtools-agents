@@ -385,6 +385,57 @@ function makeDefaultConfigLoaderMock(extraConfig) {
     };
 }
 
+// ── gh-1248 shared real-module loaders ───────────────────────────────────────
+// The dedup extraction gave the runtime modules new leaf deps; every suite
+// that loads the REAL module maps the same closure through these helpers so
+// the makeRequire maps never drift (same contract as trackersMock above).
+
+function machineAuthorReal() {
+    return loadModule('js/common/machineAuthor.js');
+}
+
+function loseJsonReal() {
+    return loadModule('js/common/loseJson.js');
+}
+
+function legRunVocabReal() {
+    return loadModule('js/common/legRunVocab.js');
+}
+
+function publishParamsReal() {
+    return loadModule('js/factory/publishParams.js');
+}
+
+function reviewVerdictsReal() {
+    return loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': machineAuthorReal() }));
+}
+
+function githubReviewFetchReal() {
+    var machineNoticeModule = loadModule('js/common/machineNotice.js');
+    return loadModule('js/common/githubReviewFetch.js',
+        makeRequire({ './machineNotice.js': machineNoticeModule,
+                      './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js',
+                          makeRequire({ './machineNotice.js': machineNoticeModule })) }));
+}
+
+function pullRequestReal() {
+    return loadModule('js/common/pullRequest.js',
+        makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
+}
+
+// The real js/common/scm.js with its full gh-1248 dep closure mapped.
+function scmReal(mocks) {
+    return loadModule('js/common/scm.js',
+        makeRequire({
+            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js',
+                makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })),
+            './githubReviewFetch.js': githubReviewFetchReal(mocks),
+            './pullRequest.js': pullRequestReal(),
+            './loseJson.js': loseJsonReal()
+        }), mocks);
+}
+
 // ── Main action ───────────────────────────────────────────────────────────────
 
 function action(params) {
@@ -403,9 +454,7 @@ function action(params) {
         var machineNoticeModule = loadModule('js/common/machineNotice.js');
         var reviewThreadInventoryModule = loadModule('js/common/reviewThreadInventory.js',
             makeRequire({ './machineNotice.js': machineNoticeModule }));
-        var scmModule = loadModule('js/common/scm.js',
-            makeRequire({ './machineNotice.js': machineNoticeModule,
-                          './reviewThreadInventory.js': reviewThreadInventoryModule }));
+        var scmModule = scmReal();
         configLoaderModule = loadModule(
             'js/configLoader.js',
             makeRequire({
@@ -459,3 +508,44 @@ function action(params) {
 if (typeof module !== 'undefined') {
     module.exports = { action: action };
 }
+
+// gh-1248: shared real-dependency loaders for modules that gained module-scope
+// requires in the dedup. Top-level vars (GraalJS shares them with the suites,
+// same as test/suite/assert above).
+var machineAuthorReal = function () {
+    return loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+};
+var reviewVerdictsReal = function () {
+    return loadModule('js/common/reviewVerdicts.js',
+        makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
+};
+var legRunVocabReal = function () {
+    return loadModule('js/common/legRunVocab.js', makeRequire({}), {});
+};
+var loseJsonReal = function () {
+    return loadModule('js/common/loseJson.js', makeRequire({}), {});
+};
+var publishParamsReal = function () {
+    return loadModule('js/factory/publishParams.js', makeRequire({}), {});
+};
+var pullRequestReal = function () {
+    return loadModule('js/common/pullRequest.js',
+        makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js', makeRequire({}), {}) }), {});
+};
+var githubReviewFetchReal = function (mocks) {
+    var machineNotice = loadModule('js/common/machineNotice.js', makeRequire({}), {});
+    return loadModule('js/common/githubReviewFetch.js',
+        makeRequire({ './machineNotice.js': machineNotice,
+                      './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js',
+                          makeRequire({ './machineNotice.js': machineNotice }), {}) }), mocks || {});
+};
+var scmReal = function (mocks) {
+    return loadModule('js/common/scm.js',
+        makeRequire({
+            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js',
+                makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js', makeRequire({}), {}) }), {}),
+            './githubReviewFetch.js': githubReviewFetchReal(mocks),
+            './pullRequest.js': pullRequestReal(),
+            './loseJson.js': loseJsonReal()
+        }), mocks);
+};

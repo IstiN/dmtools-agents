@@ -181,7 +181,8 @@ suite('checkWipLabel — PR-anchored start gate (githubSource pr-N, fa #1212)', 
                 './machineNotice.js': loadModule('js/common/machineNotice.js'),
                 './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })),
                 './ci.js': loadModule('js/common/ci.js'),
-                './ciViolations.js': loadModule('js/common/ciViolations.js')
+                './ciViolations.js': loadModule('js/common/ciViolations.js'),
+                './githubReviewFetch.js': githubReviewFetchReal(),
             }),
             {}
         );
