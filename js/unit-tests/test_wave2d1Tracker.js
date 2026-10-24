@@ -223,6 +223,8 @@ suite('wave2d1 tracker — preCli setups / writeSolutionAndLabels', function() {
             cli_execute_command: function() { return ''; }
         }, rec.mocks);
         var mod = loadModule('js/preCliMobileTestAutomationSetup.js', makeRequire({
+            // gh-1247: the module now routes branch setup through common/branchSetup.js.
+            'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './configLoader.js': makeDefaultConfigLoaderMock(),
             './config.js': configModule,
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
@@ -248,6 +250,8 @@ suite('wave2d1 tracker — preCli setups / writeSolutionAndLabels', function() {
             cli_execute_command: function() { return ''; }
         }, rec.mocks);
         var mod = loadModule('js/preCliStoryTestAutomationSetup.js', makeRequire({
+            // gh-1247: the module now routes branch setup through common/branchSetup.js.
+            'branchSetup.js': loadModule('js/common/branchSetup.js'),
             './config.js': configModule,
             './common/trackers.js': d1Trackers(mocks),
             './configLoader.js': makeDefaultConfigLoaderMock(),
