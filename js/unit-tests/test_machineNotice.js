@@ -68,7 +68,8 @@ function loadGithubHelpers(mocks) {
             './machineNotice.js': loadMachineNotice(),
             './reviewThreadInventory.js': loadReviewThreadInventory(),
             './ci.js': loadModule('js/common/ci.js'),
-            './ciViolations.js': loadModule('js/common/ciViolations.js')
+            './ciViolations.js': loadModule('js/common/ciViolations.js'),
+            './githubReviewFetch.js': githubReviewFetchReal(),
         }),
         mocks || {}
     );

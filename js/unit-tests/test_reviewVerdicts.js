@@ -22,7 +22,7 @@
 /* global suite, test, assert, loadModule, makeRequire */
 
 suite('reviewVerdicts — marker protocol (gh-807 AC4)', function () {
-    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
 
     test('buildVerdictComment embeds the JSON payload in the structured marker', function () {
         var body = rv.buildVerdictComment({
@@ -148,7 +148,7 @@ suite('reviewVerdicts — marker protocol (gh-807 AC4)', function () {
 });
 
 suite('reviewVerdicts — newest wins per head (gh-807 AC1)', function () {
-    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
 
     var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
 
@@ -265,7 +265,7 @@ suite('reviewVerdicts — newest wins per head (gh-807 AC1)', function () {
 });
 
 suite('reviewVerdicts — label reconciliation (gh-807 AC2)', function () {
-    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
     var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
 
     function rec(verdict, at) {
@@ -414,7 +414,7 @@ suite('reviewVerdicts — label reconciliation (gh-807 AC2)', function () {
 });
 
 suite('reviewVerdicts — arming-side sticky approval (gh-807 AC3)', function () {
-    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
     var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
 
     function rec(verdict, blocking) {
@@ -493,7 +493,7 @@ suite('reviewVerdicts — arming-side sticky approval (gh-807 AC3)', function ()
 });
 
 suite('reviewVerdicts — post-APPROVE thread resolution (gh-828)', function () {
-    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
 
     var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
     var MACHINE = ['ai-teammate', 'github-actions[bot]'];
@@ -640,7 +640,7 @@ suite('reviewVerdicts — post-APPROVE thread resolution (gh-828)', function () 
 });
 
 suite('reviewVerdicts: [bot]-suffixed machine authors are trusted (gh-1025)', function () {
-    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
 
     test('a verdict marker authored by dmtools-factory-bot[bot] parses under the bare knob entry', function () {
         var body = rv.MARKER_PREFIX +
@@ -673,7 +673,7 @@ suite('reviewVerdicts: [bot]-suffixed machine authors are trusted (gh-1025)', fu
 // comment. Green before AND after the extraction — pure regression pins.
 
 suite('reviewVerdicts — parser internals characterization (gh-1196)', function () {
-    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
 
     var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
 
