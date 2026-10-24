@@ -758,3 +758,493 @@ suite('dfManager.applySafeRecovery branches (gh-1198 CRAP extraction)', function
         assert.deepEqual(ctx.actions, []);
     });
 });
+
+// ── gh-1227 CRAP — characterization suites ───────────────────────────────────
+// These lock the current branch behavior of detectPrMergeGaps /
+// detectRepeatedFailureLoops / parseJsonMaybe / action BEFORE the helper
+// extraction; the extraction must keep every assertion green.
+
+suite('dfManager.detectPrMergeGaps (gh-1227 characterization)', function() {
+    function gapContext(prs, ticketByKey) {
+        return { prs: prs || [], ticketByKey: ticketByKey || {}, anomalies: [] };
+    }
+    function gapPr(over) {
+        return Object.assign({
+            number: 42,
+            title: 'TS-100 fix the thing',
+            head: { ref: 'ai/TS-100' },
+            labels: ['pr_approved'],
+            mergeable_state: 'clean',
+            html_url: 'https://github.test/pr/42'
+        }, over || {});
+    }
+    function firstAnomaly(ctx) { return ctx.anomalies[0] || null; }
+
+    test('PR whose title/ref carries no ticket key is skipped', function() {
+        var ctx = gapContext([gapPr({ title: 'no key here', head: { ref: 'main' } })]);
+        makeDfManager().module.detectPrMergeGaps(ctx);
+        assert.equal(ctx.anomalies.length, 0);
+    });
+
+    test('PR without number/pullRequestId/id is skipped', function() {
+        var ctx = gapContext([gapPr({ number: undefined })]);
+        makeDfManager().module.detectPrMergeGaps(ctx);
+        assert.equal(ctx.anomalies.length, 0);
+    });
+
+    test('number falls back to pullRequestId, then id', function() {
+        var viaPullRequestId = gapContext([gapPr({ number: undefined, pullRequestId: 7 })]);
+        makeDfManager().module.detectPrMergeGaps(viaPullRequestId);
+        assert.equal(firstAnomaly(viaPullRequestId).prNumber, 7);
+
+        var viaId = gapContext([gapPr({ number: undefined, pullRequestId: undefined, id: 9 })]);
+        makeDfManager().module.detectPrMergeGaps(viaId);
+        assert.equal(firstAnomaly(viaId).prNumber, 9);
+    });
+
+    test('approved + clean → blocking approved-pr-not-merged with retry-merge action', function() {
+        var ctx = gapContext([gapPr({ mergeable_state: 'clean' })]);
+        makeDfManager().module.detectPrMergeGaps(ctx);
+        assert.equal(ctx.anomalies.length, 1);
+        var a = firstAnomaly(ctx);
+        assert.equal(a.type, 'approved-pr-not-merged');
+        assert.equal(a.severity, 'blocking');
+        assert.equal(a.ticketKey, 'TS-100');
+        assert.equal(a.prNumber, 42);
+        assert.equal(a.prUrl, 'https://github.test/pr/42');
+        assert.equal(a.mergeState, 'clean');
+        assert.equal(a.safeAction, 'trigger-sm-retry-merge');
+        assert.equal(a.message, 'PR is approved and clean but still open.');
+    });
+
+    test('approved + mergeable behaves like clean', function() {
+        var ctx = gapContext([gapPr({ mergeable_state: 'mergeable' })]);
+        makeDfManager().module.detectPrMergeGaps(ctx);
+        assert.equal(firstAnomaly(ctx).type, 'approved-pr-not-merged');
+        assert.equal(firstAnomaly(ctx).mergeState, 'mergeable');
+    });
+
+    test('approval via the Jira ticket labels alone + dirty → warning, no safe action', function() {
+        var ctx = gapContext(
+            [gapPr({ labels: [], mergeable_state: 'dirty' })],
+            { 'TS-100': { key: 'TS-100', fields: { labels: ['pr_approved'] } } });
+        makeDfManager().module.detectPrMergeGaps(ctx);
+        assert.equal(ctx.anomalies.length, 1);
+        var a = firstAnomaly(ctx);
+        assert.equal(a.type, 'approved-pr-not-mergeable');
+        assert.equal(a.severity, 'warning');
+        assert.equal(a.mergeState, 'dirty');
+        assert.equal(a.safeAction, null);
+    });
+
+    test('approved + behind → request-branch-update safe action', function() {
+        var ctx = gapContext([gapPr({ mergeable_state: 'behind' })]);
+        makeDfManager().module.detectPrMergeGaps(ctx);
+        assert.equal(firstAnomaly(ctx).type, 'approved-pr-not-mergeable');
+        assert.equal(firstAnomaly(ctx).safeAction, 'request-branch-update');
+    });
+
+    test('approved + unknown merge state → no anomaly', function() {
+        var ctx = gapContext([gapPr({ mergeable_state: 'unstable' })]);
+        makeDfManager().module.detectPrMergeGaps(ctx);
+        assert.equal(ctx.anomalies.length, 0);
+    });
+
+    test('not approved → no anomaly even when clean', function() {
+        var ctx = gapContext([gapPr({ labels: [] })]);
+        makeDfManager().module.detectPrMergeGaps(ctx);
+        assert.equal(ctx.anomalies.length, 0);
+    });
+
+    test('PR labels normalize to name objects (GitHub label shape)', function() {
+        var ctx = gapContext([gapPr({ labels: [{ name: 'pr_approved' }] })]);
+        makeDfManager().module.detectPrMergeGaps(ctx);
+        assert.equal(ctx.anomalies.length, 1);
+    });
+});
+
+suite('dfManager.detectRepeatedFailureLoops (gh-1227 characterization)', function() {
+    function loopContext(failedRuns, ticketByKey, smLabelSet) {
+        return {
+            failedRuns: failedRuns || [],
+            ticketByKey: ticketByKey || {},
+            smLabelSet: smLabelSet || {},
+            anomalies: []
+        };
+    }
+    function failedRun(over) {
+        return Object.assign({
+            status: 'completed',
+            conclusion: 'failure',
+            workflowName: 'wf_a',
+            display_title: 'agents/dev.json : TS-909',
+            html_url: 'https://github.test/run/1'
+        }, over || {});
+    }
+    function firstAnomaly(ctx) { return ctx.anomalies[0] || null; }
+
+    test('runs without a ticket key are skipped entirely', function() {
+        var ctx = loopContext([failedRun({ display_title: 'no digits' }),
+                               failedRun({ display_title: 'still none' }),
+                               failedRun({ display_title: 'nope' })]);
+        makeDfManager().module.detectRepeatedFailureLoops(ctx);
+        assert.equal(ctx.anomalies.length, 0);
+    });
+
+    test('two failures on one ticket stay silent', function() {
+        var ctx = loopContext([failedRun(), failedRun()]);
+        makeDfManager().module.detectRepeatedFailureLoops(ctx);
+        assert.equal(ctx.anomalies.length, 0);
+    });
+
+    test('three failures with no ticket → warning, bare message', function() {
+        var ctx = loopContext([failedRun(), failedRun(), failedRun()]);
+        makeDfManager().module.detectRepeatedFailureLoops(ctx);
+        assert.equal(ctx.anomalies.length, 1);
+        var a = firstAnomaly(ctx);
+        assert.equal(a.type, 'repeated-failure-loop');
+        assert.equal(a.severity, 'warning', 'no Failed status / label / >=5');
+        assert.equal(a.ticketKey, 'TS-909');
+        assert.equal(a.workflowRuns, 3);
+        assert.deepEqual(a.workflows, { wf_a: 3 });
+        assert.deepEqual(a.runUrls, ['https://github.test/run/1']);
+        assert.equal(a.status, '');
+        assert.equal(a.message, 'Ticket has 3 failed workflow runs (wf_a×3).');
+    });
+
+    test('status Failed → blocking', function() {
+        var ctx = loopContext([failedRun(), failedRun(), failedRun()],
+            { 'TS-909': { key: 'TS-909', fields: { status: { name: 'Failed' }, labels: [] } } });
+        makeDfManager().module.detectRepeatedFailureLoops(ctx);
+        assert.equal(firstAnomaly(ctx).severity, 'blocking');
+    });
+
+    test('an SM trigger label on the ticket → blocking', function() {
+        var ctx = loopContext([failedRun(), failedRun(), failedRun()],
+            { 'TS-909': { key: 'TS-909',
+                          fields: { status: { name: 'In Progress' },
+                                    labels: ['sm_bug_development_triggered'] } } },
+            { sm_bug_development_triggered: true });
+        makeDfManager().module.detectRepeatedFailureLoops(ctx);
+        assert.equal(firstAnomaly(ctx).severity, 'blocking');
+    });
+
+    test('five failures → blocking even without ticket context', function() {
+        var ctx = loopContext([failedRun(), failedRun(), failedRun(), failedRun(), failedRun()]);
+        makeDfManager().module.detectRepeatedFailureLoops(ctx);
+        assert.equal(firstAnomaly(ctx).severity, 'blocking');
+        assert.equal(firstAnomaly(ctx).workflowRuns, 5);
+    });
+
+    test('workflow fallbacks: name, then unknown-workflow; summary rides the message', function() {
+        var ctx = loopContext([
+            failedRun({ workflowName: undefined, name: 'deploy' }),
+            failedRun({ workflowName: undefined, name: undefined }),
+            failedRun({ workflowName: undefined, name: undefined })
+        ]);
+        makeDfManager().module.detectRepeatedFailureLoops(ctx);
+        var a = firstAnomaly(ctx);
+        assert.deepEqual(a.workflows, { deploy: 1, 'unknown-workflow': 2 });
+        assert.equal(a.message,
+            'Ticket has 3 failed workflow runs (deploy×1, unknown-workflow×2).');
+    });
+
+    test('run urls collected, deduped; url-less runs contribute nothing', function() {
+        var ctx = loopContext([
+            failedRun({ html_url: 'https://github.test/run/1' }),
+            failedRun({ html_url: 'https://github.test/run/1' }),
+            failedRun({ html_url: undefined, url: 'https://github.test/run/2' }),
+            failedRun({ html_url: undefined, url: undefined })
+        ]);
+        makeDfManager().module.detectRepeatedFailureLoops(ctx);
+        assert.deepEqual(firstAnomaly(ctx).runUrls,
+            ['https://github.test/run/1', 'https://github.test/run/2']);
+    });
+
+    test('message mentions the status when the ticket is tracked', function() {
+        var ctx = loopContext([failedRun(), failedRun(), failedRun()],
+            { 'TS-909': { key: 'TS-909',
+                          fields: { status: { name: 'In Review' }, labels: [] } } });
+        makeDfManager().module.detectRepeatedFailureLoops(ctx);
+        assert.equal(firstAnomaly(ctx).message,
+            'Ticket has 3 failed workflow runs (wf_a×3) while still in In Review.');
+    });
+});
+
+suite('dfManager.parseJsonMaybe (gh-1227 characterization)', function() {
+    function dfm() { return makeDfManager().module; }
+
+    test('null / undefined / empty string → fallback', function() {
+        var df = dfm();
+        assert.equal(df.parseJsonMaybe(null, 'fb'), 'fb');
+        assert.equal(df.parseJsonMaybe(undefined, 'fb'), 'fb');
+        assert.equal(df.parseJsonMaybe('', 'fb'), 'fb');
+    });
+
+    test('non-string values pass through untouched', function() {
+        var df = dfm();
+        var obj = { values: [1] };
+        var arr = ['a'];
+        assert.equal(df.parseJsonMaybe(obj, 'fb'), obj);
+        assert.equal(df.parseJsonMaybe(42, 'fb'), 42);
+        assert.equal(df.parseJsonMaybe(arr, 'fb'), arr);
+    });
+
+    test('valid JSON string parses', function() {
+        var df = dfm();
+        assert.deepEqual(df.parseJsonMaybe('{"a":1}', 'fb'), { a: 1 });
+        assert.deepEqual(df.parseJsonMaybe('[1,2]', 'fb'), [1, 2]);
+    });
+
+    test('invalid JSON string → fallback', function() {
+        var df = dfm();
+        assert.equal(df.parseJsonMaybe('{not json', 'fb'), 'fb');
+        assert.deepEqual(df.parseJsonMaybe('{not json', null), null);
+    });
+});
+
+suite('dfManager.action params resolution (gh-1227 characterization)', function() {
+    test('throws when repository info is missing', function() {
+        var df = makeDfManager({ projectConfig: { repository: {} } });
+        var threw = null;
+        try {
+            df.action({ jobParams: { customParams: { nowMs: 0 } } });
+        } catch (e) {
+            threw = e;
+        }
+        assert.ok(threw, 'must throw');
+        assert.equal(threw.message,
+            'DF Manager requires repository.owner/repo in config or an SCM remote.');
+    });
+
+    test('params.customParams is honored when jobParams is absent', function() {
+        var df = makeDfManager();
+        var report = df.action({ customParams: { jiraProject: 'TS', outputPath: 'outputs/custom-report.json' } });
+        assert.equal(report.jiraProject, 'TS');
+        assert.equal(df.written[0].path, 'outputs/custom-report.json');
+    });
+
+    test('params.jobParams without customParams is the params bag', function() {
+        var df = makeDfManager();
+        var report = df.action({ jobParams: { jiraProject: 'TS', outputPath: 'outputs/jp-report.json' } });
+        assert.equal(report.jiraProject, 'TS');
+        assert.equal(df.written[0].path, 'outputs/jp-report.json');
+    });
+
+    test('bare params (no jobParams/customParams) is the params bag', function() {
+        var df = makeDfManager();
+        var report = df.action({ jiraProject: 'TS', outputPath: 'outputs/bare-report.json' });
+        assert.equal(report.jiraProject, 'TS');
+        assert.equal(df.written[0].path, 'outputs/bare-report.json');
+    });
+
+    test('falsy primitive params degrade to an empty params bag', function() {
+        var df = makeDfManager();
+        var report = df.action(0);
+        assert.equal(report.jiraProject, 'TS', 'project falls back to config.jira.project');
+        assert.equal(report.counts.anomalies, 0);
+        assert.equal(df.written[0].path, 'outputs/df_manager_report.json');
+    });
+
+    test('report mode mirrors autoRecover (audit vs safe-recover)', function() {
+        assert.equal(makeDfManager().action({ jobParams: { customParams: { nowMs: 0 } } }).mode, 'audit');
+        assert.equal(makeDfManager().action({
+            jobParams: { customParams: { nowMs: 0, autoRecover: true } }
+        }).mode, 'safe-recover');
+    });
+
+    test('report counts mirror the context lists', function() {
+        var df = makeDfManager();
+        var report = df.action({ jobParams: { customParams: { nowMs: 0 } } });
+        assert.equal(report.success, true);
+        assert.ok(report.counts.smLabels > 0, 'default SM labels resolved');
+        assert.ok(report.counts.ticketsWithSmLabels === 0);
+        assert.ok(report.counts.activeRuns === 0);
+        assert.ok(report.counts.failedRuns === 0);
+        assert.ok(report.counts.actions === 0);
+    });
+});
+
+suite('dfManager gh-1227 extracted helpers (pure units)', function() {
+    function dfm() { return makeDfManager().module; }
+
+    test('helpers exist (extraction landed)', function() {
+        var df = dfm();
+        ['prNumberOf', 'hasPrApproval', 'approvedPrGapBase', 'approvedPrMergeGapAnomaly',
+         'groupFailureRuns', 'workflowSummary', 'failureLoopMessage', 'failureLoopAnomaly',
+         'jiraProjectOf', 'requireRepoInfo', 'buildReport'].forEach(function(name) {
+            assert.equal(typeof df[name], 'function', name);
+        });
+    });
+
+    test('prNumberOf falls back pullRequestId → id', function() {
+        var df = dfm();
+        assert.equal(df.prNumberOf({ number: 1 }), 1);
+        assert.equal(df.prNumberOf({ pullRequestId: 2 }), 2);
+        assert.equal(df.prNumberOf({ id: 3 }), 3);
+        assert.equal(df.prNumberOf({}), undefined);
+    });
+
+    test('hasPrApproval checks both label sources', function() {
+        var df = dfm();
+        assert.equal(df.hasPrApproval(['pr_approved'], []), true);
+        assert.equal(df.hasPrApproval([], ['pr_approved']), true);
+        assert.equal(df.hasPrApproval([], []), false);
+    });
+
+    test('approvedPrMergeGapAnomaly: not approved → null regardless of state', function() {
+        var df = dfm();
+        assert.equal(df.approvedPrMergeGapAnomaly('K-1', 1, {}, 'clean', false), null);
+        assert.equal(df.approvedPrMergeGapAnomaly('K-1', 1, {}, 'dirty', false), null);
+        assert.equal(df.approvedPrMergeGapAnomaly('K-1', 1, {}, 'unstable', true), null);
+    });
+
+    test('approvedPrMergeGapAnomaly: clean/mergeable/dirty/behind shapes', function() {
+        var df = dfm();
+        var pr = { html_url: 'u' };
+        var merged = df.approvedPrMergeGapAnomaly('K-1', 1, pr, 'clean', true);
+        assert.equal(merged.type, 'approved-pr-not-merged');
+        assert.equal(merged.safeAction, 'trigger-sm-retry-merge');
+        assert.equal(df.approvedPrMergeGapAnomaly('K-1', 1, pr, 'mergeable', true).type,
+            'approved-pr-not-merged');
+        var dirty = df.approvedPrMergeGapAnomaly('K-1', 1, pr, 'dirty', true);
+        assert.equal(dirty.type, 'approved-pr-not-mergeable');
+        assert.equal(dirty.safeAction, null);
+        var behind = df.approvedPrMergeGapAnomaly('K-1', 1, pr, 'behind', true);
+        assert.equal(behind.safeAction, 'request-branch-update');
+    });
+
+    test('approvedPrGapBase: the four payload fields shared by both variants', function() {
+        var df = dfm();
+        assert.deepEqual(df.approvedPrGapBase('K-1', 7, { html_url: 'u' }, 'clean'),
+            { ticketKey: 'K-1', prNumber: 7, prUrl: 'u', mergeState: 'clean' });
+        assert.deepEqual(df.approvedPrGapBase('K-2', 8, {}, 'behind'),
+            { ticketKey: 'K-2', prNumber: 8, prUrl: '', mergeState: 'behind' });
+    });
+
+    test('approvedPrMergeGapAnomaly: exact serialized payload per state (byte-identical contract)', function() {
+        var df = dfm();
+        var pr = { html_url: 'u' };
+        assert.deepEqual(df.approvedPrMergeGapAnomaly('K-1', 1, pr, 'clean', true), {
+            type: 'approved-pr-not-merged',
+            severity: 'blocking',
+            ticketKey: 'K-1',
+            prNumber: 1,
+            prUrl: 'u',
+            mergeState: 'clean',
+            safeAction: 'trigger-sm-retry-merge',
+            message: 'PR is approved and clean but still open.'
+        });
+        assert.deepEqual(df.approvedPrMergeGapAnomaly('K-1', 1, pr, 'mergeable', true), {
+            type: 'approved-pr-not-merged',
+            severity: 'blocking',
+            ticketKey: 'K-1',
+            prNumber: 1,
+            prUrl: 'u',
+            mergeState: 'mergeable',
+            safeAction: 'trigger-sm-retry-merge',
+            message: 'PR is approved and clean but still open.'
+        });
+        assert.deepEqual(df.approvedPrMergeGapAnomaly('K-1', 1, pr, 'dirty', true), {
+            type: 'approved-pr-not-mergeable',
+            severity: 'warning',
+            ticketKey: 'K-1',
+            prNumber: 1,
+            prUrl: 'u',
+            mergeState: 'dirty',
+            safeAction: null,
+            message: 'PR is approved but not currently mergeable.'
+        });
+        assert.deepEqual(df.approvedPrMergeGapAnomaly('K-1', 1, pr, 'behind', true), {
+            type: 'approved-pr-not-mergeable',
+            severity: 'warning',
+            ticketKey: 'K-1',
+            prNumber: 1,
+            prUrl: 'u',
+            mergeState: 'behind',
+            safeAction: 'request-branch-update',
+            message: 'PR is approved but not currently mergeable.'
+        });
+    });
+
+    test('groupFailureRuns buckets by ticket key', function() {
+        var df = dfm();
+        var grouped = df.groupFailureRuns([
+            { display_title: 'x TS-1', workflowName: 'w1', html_url: 'u1' },
+            { display_title: 'x TS-1', name: 'w2' },
+            { display_title: 'no key' }
+        ]);
+        assert.deepEqual(Object.keys(grouped), ['TS-1']);
+        assert.equal(grouped['TS-1'].total, 2);
+        assert.deepEqual(grouped['TS-1'].workflows, { w1: 1, w2: 1 }, 'name fallback counts');
+        assert.deepEqual(grouped['TS-1'].urls, ['u1']);
+    });
+
+    test('workflowSummary + failureLoopMessage ternaries', function() {
+        var df = dfm();
+        assert.equal(df.workflowSummary({ a: 2, b: 1 }), 'a×2, b×1');
+        assert.equal(df.failureLoopMessage(3, 'a×3', ''), 'Ticket has 3 failed workflow runs (a×3).');
+        assert.equal(df.failureLoopMessage(3, '', 'In Review'),
+            'Ticket has 3 failed workflow runs while still in In Review.');
+        assert.equal(df.failureLoopMessage(3, '', ''),
+            'Ticket has 3 failed workflow runs.');
+    });
+
+    test('failureLoopAnomaly null under threshold; shapes above it', function() {
+        var df = dfm();
+        var ctx = { ticketByKey: { 'TS-1': { key: 'TS-1', fields: { status: { name: 'Failed' }, labels: [] } } },
+                    smLabelSet: {} };
+        assert.equal(df.failureLoopAnomaly(ctx, 'TS-1', { total: 2, workflows: {}, urls: [] }), null);
+        var a = df.failureLoopAnomaly(ctx, 'TS-1', { total: 3, workflows: { w: 3 }, urls: ['u', 'u'] });
+        assert.equal(a.severity, 'blocking');
+        assert.deepEqual(a.runUrls, ['u'], 'urls uniq');
+        assert.equal(a.message, 'Ticket has 3 failed workflow runs (w×3) while still in Failed.');
+    });
+
+    test('jiraProjectOf: params win, config.jira.project next, missing jira tolerated', function() {
+        var df = dfm();
+        assert.equal(df.jiraProjectOf({ jiraProject: 'P1' }, { jira: { project: 'P2' } }), 'P1');
+        assert.equal(df.jiraProjectOf({}, { jira: { project: 'P2' } }), 'P2');
+        assert.equal(df.jiraProjectOf({}, { jira: null }), null, 'null jira → null (falsy either way)');
+        assert.equal(df.jiraProjectOf({}, {}), undefined);
+    });
+
+    test('requireRepoInfo throws without owner/repo, passes with both', function() {
+        var df = dfm();
+        var threw = null;
+        try { df.requireRepoInfo({ repoInfo: { owner: 'o' } }); } catch (e) { threw = e; }
+        assert.ok(threw, 'missing repo throws');
+        threw = null;
+        try { df.requireRepoInfo({ repoInfo: { repo: 'r' } }); } catch (e) { threw = e; }
+        assert.ok(threw, 'missing owner throws');
+        threw = null;
+        try { df.requireRepoInfo({ repoInfo: { owner: 'o', repo: 'r' } }); } catch (e) { threw = e; }
+        assert.equal(threw, null);
+    });
+
+    test('buildReport mirrors context + mode + project', function() {
+        var df = dfm();
+        var ctx = {
+            autoRecover: true,
+            repoInfo: { owner: 'o', repo: 'r' },
+            smLabels: ['a'],
+            tickets: [{ key: 'K' }],
+            prs: [],
+            activeRuns: [],
+            failedRuns: [],
+            anomalies: [{ type: 'x' }],
+            actions: [{ action: 'y' }]
+        };
+        var report = df.buildReport(ctx, { jiraProject: 'P' }, {});
+        assert.equal(report.success, true);
+        assert.equal(report.mode, 'safe-recover');
+        assert.deepEqual(report.repository, { owner: 'o', repo: 'r' });
+        assert.equal(report.jiraProject, 'P');
+        assert.deepEqual(report.counts, { smLabels: 1, ticketsWithSmLabels: 1, openPrs: 0,
+            activeRuns: 0, failedRuns: 0, anomalies: 1, actions: 1 });
+        assert.equal(report.anomalies, ctx.anomalies, 'anomalies ride by reference');
+        assert.equal(report.actions, ctx.actions, 'actions ride by reference');
+        assert.equal(df.buildReport(Object.assign({}, ctx, { autoRecover: false }), {}, { jira: { project: 'C' } }).mode,
+            'audit');
+    });
+});

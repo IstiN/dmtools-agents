@@ -304,6 +304,100 @@ suite('agentWorkflowGraph', function() {
 
 });
 
+// ── gh-1227 CRAP — generate() branch characterization ────────────────────────
+// Locks every rule-shape branch (status in / status =, issuetype in / =,
+// no jql, targetStatus, skipIfLabel / skipIfLabels, addLabel, flat
+// params.rules) before the table/edge helpers are extracted.
+
+suite('agentWorkflowGraph — branch characterization (gh-1227)', function() {
+
+    function graphFor(rules, smShape) {
+        var sm = smShape || { params: { jobParams: { rules: rules } } };
+        var mock = makeMockFs({ 'agents/sm.json': JSON.stringify(sm) });
+        var generator = loadModule(
+            'js/agentWorkflowGraph.js',
+            makeRequire({ 'fs': mock.fs, 'path': makeMockPath() }),
+            {}
+        );
+        var result = generator.generate();
+        return { result: result, content: mock.calls.write[0].content };
+    }
+
+    test('status in (...) + issuetype in (...) parse into cells, nodes and edges', function() {
+        var out = graphFor([{
+            description: 'multi',
+            jql: "project = TS AND issuetype in ('Story', 'Bug') AND status in ('Ready For Development', 'In Rework')",
+            configFile: 'agents/story_development.json',
+            targetStatus: 'In Review',
+            skipIfLabel: 'sm_story_development_triggered',
+            addLabel: 'sm_story_development_triggered'
+        }]);
+        assert.equal(out.result.success, true);
+        assert.contains(out.content, 'Story, Bug');
+        assert.contains(out.content, 'Ready For Development, In Rework');
+        assert.contains(out.content,
+            'S_Ready_For_Development["Ready For Development"] --> A0_["story_development"]');
+        assert.contains(out.content,
+            'S_In_Rework["In Rework"] --> A0_["story_development"]');
+        assert.contains(out.content,
+            'A0_["story_development"] --> S_In_Review["In Review"]');
+        assert.contains(out.content, '`sm_story_development_triggered`');
+    });
+
+    test('status = ... / issuetype = ... single-value forms parse', function() {
+        var out = graphFor([{
+            description: 'single',
+            jql: "project = TS AND issuetype = 'Task' AND status = 'In Progress'",
+            configFile: 'agents/story_questions.json'
+        }]);
+        assert.contains(out.content, 'Task');
+        assert.contains(out.content, 'In Progress');
+        assert.contains(out.content, 'S_In_Progress["In Progress"]');
+    });
+
+    test('rule without jql renders empty type/status cells', function() {
+        var out = graphFor([{
+            description: 'nojql',
+            configFile: 'agents/nojql.json'
+        }]);
+        assert.contains(out.content, '| nojql |  |  |');
+    });
+
+    test('skipIfLabels array renders quoted, comma-joined', function() {
+        var out = graphFor([{
+            description: 'labels',
+            jql: "status = 'In Progress'",
+            configFile: 'agents/a.json',
+            skipIfLabels: ['lbl_one', 'lbl_two']
+        }]);
+        assert.contains(out.content, '`lbl_one`, `lbl_two`');
+    });
+
+    test('flat params.rules (legacy sm shape) still drives the graph', function() {
+        var out = graphFor([{
+            description: 'flat',
+            jql: "status = 'In Progress'",
+            configFile: 'agents/flat.json'
+        }], { params: { rules: [{
+            description: 'flat',
+            jql: "status = 'In Progress'",
+            configFile: 'agents/flat.json'
+        }] } });
+        assert.equal(out.result.rules, 1);
+        assert.contains(out.content, 'flat');
+    });
+
+    test('rule fields missing (no targetStatus/skip labels/addLabel) render empty cells', function() {
+        var out = graphFor([{
+            description: 'plain',
+            jql: "status = 'In Progress'",
+            configFile: 'agents/plain.json'
+        }]);
+        assert.ok(out.content.indexOf('--> S_In_Progress["In Progress"]') === -1,
+            'no target edge without targetStatus');
+    });
+});
+
 suite('collectArtifacts', function() {
     function generator() {
         var mock = makeMockFs({ 'agents/js/agentDocGenerator.js': '// probe' });
@@ -597,5 +691,67 @@ suite('agentDocGenerator.renderAgentDoc (gh-119 characterization)', function() {
         }));
         assert.contains(doc, '## Custom params');
         assert.contains(doc, '- `removeLabel` _(used by JS action)_');
+    });
+});
+
+suite('agentWorkflowGraph — gh-1227 extracted helpers (pure units)', function() {
+    var graph = loadModule(
+        'js/agentWorkflowGraph.js',
+        makeRequire({ 'fs': makeMockFs({}).fs, 'path': makeMockPath() }),
+        {}
+    );
+
+    test('rulesOfSm: jobParams.rules, flat params.rules, missing links → []', function() {
+        var rules = [{ configFile: 'a.json' }];
+        assert.equal(graph.rulesOfSm({ params: { jobParams: { rules: rules } } }), rules);
+        assert.equal(graph.rulesOfSm({ params: { rules: rules } }), rules);
+        assert.deepEqual(graph.rulesOfSm({ params: { jobParams: {} } }), []);
+        assert.deepEqual(graph.rulesOfSm({ params: {} }), []);
+        assert.deepEqual(graph.rulesOfSm(null), []);
+        assert.deepEqual(graph.rulesOfSm({}), []);
+    });
+
+    test('rulesOfSm: jobParams without rules falls through to params.rules', function() {
+        var rules = [{ configFile: 'b.json' }];
+        assert.equal(graph.rulesOfSm({ params: { jobParams: { rules: null }, rules: rules } }), rules);
+    });
+
+    test('skipLabelsCell: single, list, then empty', function() {
+        assert.equal(graph.skipLabelsCell({ skipIfLabel: 'l1' }), '`l1`');
+        assert.equal(graph.skipLabelsCell({ skipIfLabels: ['l1', 'l2'] }), '`l1`, `l2`');
+        assert.equal(graph.skipLabelsCell({ skipIfLabels: [] }), '');
+        assert.equal(graph.skipLabelsCell({}), '');
+        assert.equal(graph.skipLabelsCell({ skipIfLabels: null }), '');
+    });
+
+    test('ruleTableRow renders every cell', function() {
+        var row = graph.ruleTableRow({
+            description: 'd| with pipe',
+            configFile: 'agents/a.json',
+            skipIfLabel: 's1',
+            addLabel: 'a1',
+            targetStatus: 'In Review'
+        }, 0, ['Story'], ['Ready']);
+        assert.equal(row, '1 | d\\| with pipe | Story | Ready | `agents/a.json` | `s1` | `a1` | In Review');
+    });
+
+    test('ruleTableRow: bare rule renders empty cells and the — placeholder', function() {
+        var row = graph.ruleTableRow({ description: 'd', configFile: 'a.json' }, 2, [], []);
+        assert.equal(row, '3 | d |  |  | `a.json` |  |  | —');
+    });
+
+    test('appendRuleEdges: source edges always, target edge only with targetStatus', function() {
+        var edges = [], used = {};
+        graph.appendRuleEdges(edges, used, { targetStatus: 'Done' }, 'A0_', ['New']);
+        assert.deepEqual(edges, [
+            '    S_New["New"] --> A0_',
+            '    A0_ --> S_Done["Done"]'
+        ]);
+        assert.deepEqual(Object.keys(used).sort(), ['Done', 'New']);
+
+        var noTarget = [], used2 = {};
+        graph.appendRuleEdges(noTarget, used2, {}, 'A1_', []);
+        assert.deepEqual(noTarget, []);
+        assert.deepEqual(used2, {});
     });
 });

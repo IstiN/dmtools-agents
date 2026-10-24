@@ -358,41 +358,60 @@ function detectStaleSmLabels(context) {
     });
 }
 
+// gh-1227 CRAP extraction — pure per-PR pieces of detectPrMergeGaps.
+function prNumberOf(pr) {
+    return pr.number || pr.pullRequestId || pr.id;
+}
+
+function hasPrApproval(labels, jiraLabels) {
+    return labels.indexOf('pr_approved') !== -1 || jiraLabels.indexOf('pr_approved') !== -1;
+}
+
+// The four payload fields shared by both approved-PR anomaly variants —
+// single-site so future common fields land once (review thread gh-1227).
+// Object.assign keeps the payload key order byte-identical to the former
+// inline literals.
+function approvedPrGapBase(key, number, pr, state) {
+    return { ticketKey: key, prNumber: number, prUrl: prUrl(pr), mergeState: state };
+}
+
+// The anomaly for one approved PR, or null when its merge state carries no
+// gap: clean/mergeable → still open (blocking); dirty/behind → not
+// mergeable (warning, branch update for behind); anything else → silent.
+function approvedPrMergeGapAnomaly(key, number, pr, state, hasApproval) {
+    if (!hasApproval) return null;
+    if (state === 'clean' || state === 'mergeable') {
+        return Object.assign({
+            type: 'approved-pr-not-merged',
+            severity: 'blocking'
+        }, approvedPrGapBase(key, number, pr, state), {
+            safeAction: 'trigger-sm-retry-merge',
+            message: 'PR is approved and clean but still open.'
+        });
+    }
+    if (state === 'dirty' || state === 'behind') {
+        return Object.assign({
+            type: 'approved-pr-not-mergeable',
+            severity: 'warning'
+        }, approvedPrGapBase(key, number, pr, state), {
+            safeAction: state === 'behind' ? 'request-branch-update' : null,
+            message: 'PR is approved but not currently mergeable.'
+        });
+    }
+    return null;
+}
+
 function detectPrMergeGaps(context) {
     context.prs.forEach(function(pr) {
         var key = extractTicketKey(prTitle(pr) + ' ' + prHeadRef(pr));
-        var labels = prLabels(pr);
-        var state = prMergeState(pr);
-        var number = pr.number || pr.pullRequestId || pr.id;
+        var number = prNumberOf(pr);
         if (!key || !number) return;
 
         var ticket = context.ticketByKey[key];
-        var jiraLabels = ticket ? ticketLabels(ticket) : [];
-        var hasApproval = labels.indexOf('pr_approved') !== -1 || jiraLabels.indexOf('pr_approved') !== -1;
-
-        if (hasApproval && (state === 'clean' || state === 'mergeable')) {
-            appendAnomaly(context.anomalies, {
-                type: 'approved-pr-not-merged',
-                severity: 'blocking',
-                ticketKey: key,
-                prNumber: number,
-                prUrl: prUrl(pr),
-                mergeState: state,
-                safeAction: 'trigger-sm-retry-merge',
-                message: 'PR is approved and clean but still open.'
-            });
-        } else if (hasApproval && (state === 'dirty' || state === 'behind')) {
-            appendAnomaly(context.anomalies, {
-                type: 'approved-pr-not-mergeable',
-                severity: 'warning',
-                ticketKey: key,
-                prNumber: number,
-                prUrl: prUrl(pr),
-                mergeState: state,
-                safeAction: state === 'behind' ? 'request-branch-update' : null,
-                message: 'PR is approved but not currently mergeable.'
-            });
-        }
+        var hasApproval = hasPrApproval(prLabels(pr),
+            ticket ? ticketLabels(ticket) : []);
+        var anomaly = approvedPrMergeGapAnomaly(key, number, pr, prMergeState(pr), hasApproval);
+        if (anomaly) appendAnomaly(context.anomalies, anomaly);
     });
 }
 
@@ -430,10 +449,11 @@ function detectDuplicateRuns(context) {
     });
 }
 
-function detectRepeatedFailureLoops(context) {
+// gh-1227 CRAP extraction — pure pieces of detectRepeatedFailureLoops.
+function groupFailureRuns(failedRuns) {
     var grouped = {};
 
-    context.failedRuns.forEach(function(run) {
+    failedRuns.forEach(function(run) {
         var key = extractTicketKey(runText(run));
         if (!key) return;
         if (!grouped[key]) {
@@ -452,31 +472,51 @@ function detectRepeatedFailureLoops(context) {
         if (url) bucket.urls.push(url);
     });
 
+    return grouped;
+}
+
+// 'deploy×1, unknown-workflow×2' — the workflow histogram for the message.
+function workflowSummary(workflows) {
+    return Object.keys(workflows).map(function(name) {
+        return name + '×' + workflows[name];
+    }).join(', ');
+}
+
+function failureLoopMessage(total, workflows, status) {
+    return 'Ticket has ' + total + ' failed workflow runs' +
+        (workflows ? ' (' + workflows + ')' : '') +
+        (status ? ' while still in ' + status + '.' : '.');
+}
+
+// The repeated-failure-loop anomaly for one ticket bucket, or null when the
+// bucket is under the 3-failure threshold.
+function failureLoopAnomaly(context, key, bucket) {
+    if (bucket.total < 3) return null;
+
+    var ticket = context.ticketByKey[key];
+    var status = ticketStatus(ticket);
+    var labelCount = ticketLabels(ticket).filter(function(label) {
+        return context.smLabelSet[label] === true;
+    }).length;
+
+    return {
+        type: 'repeated-failure-loop',
+        severity: (status === 'Failed' || labelCount > 0 || bucket.total >= 5) ? 'blocking' : 'warning',
+        ticketKey: key,
+        workflowRuns: bucket.total,
+        workflows: bucket.workflows,
+        runUrls: uniq(bucket.urls),
+        status: status,
+        message: failureLoopMessage(bucket.total, workflowSummary(bucket.workflows), status)
+    };
+}
+
+function detectRepeatedFailureLoops(context) {
+    var grouped = groupFailureRuns(context.failedRuns);
+
     Object.keys(grouped).forEach(function(key) {
-        var bucket = grouped[key];
-        if (bucket.total < 3) return;
-
-        var ticket = context.ticketByKey[key];
-        var status = ticketStatus(ticket);
-        var labelCount = ticketLabels(ticket).filter(function(label) {
-            return context.smLabelSet[label] === true;
-        }).length;
-        var workflows = Object.keys(bucket.workflows).map(function(name) {
-            return name + '×' + bucket.workflows[name];
-        }).join(', ');
-
-        appendAnomaly(context.anomalies, {
-            type: 'repeated-failure-loop',
-            severity: (status === 'Failed' || labelCount > 0 || bucket.total >= 5) ? 'blocking' : 'warning',
-            ticketKey: key,
-            workflowRuns: bucket.total,
-            workflows: bucket.workflows,
-            runUrls: uniq(bucket.urls),
-            status: status,
-            message: 'Ticket has ' + bucket.total + ' failed workflow runs' +
-                (workflows ? ' (' + workflows + ')' : '') +
-                (status ? ' while still in ' + status + '.' : '.')
-        });
+        var anomaly = failureLoopAnomaly(context, key, grouped[key]);
+        if (anomaly) appendAnomaly(context.anomalies, anomaly);
     });
 }
 
@@ -550,12 +590,19 @@ function writeReport(path, report) {
     }
 }
 
+// gh-1227 CRAP extraction — the jira project override shared by
+// buildContext (lookup key) and action (report field): params win over
+// config.jira.project.
+function jiraProjectOf(params, config) {
+    return params.jiraProject || config.jira && config.jira.project;
+}
+
 function buildContext(params, config, scm, tracker) {
     var rules = loadSmRules(params);
     var labels = resolveSmLabels(params, rules);
     var labelSet = {};
     labels.forEach(function(label) { labelSet[label] = true; });
-    var projectKey = params.jiraProject || config.jira && config.jira.project;
+    var projectKey = jiraProjectOf(params, config);
     if (!projectKey) throw new Error('DF Manager requires jira.project in config or customParams.jiraProject');
 
     var activeRuns = []
@@ -592,29 +639,14 @@ function buildContext(params, config, scm, tracker) {
     };
 }
 
-function action(params) {
-    var p = (params.jobParams && params.jobParams.customParams) || params.customParams || params.jobParams || params || {};
-    var config = configLoader.loadProjectConfig(params.jobParams || params);
-    var scm = scmModule.createScm(config);
-    var tracker = trackersModule.createTracker(config, p);
-    var context = buildContext(p, config, scm, tracker);
-
-    if (!context.repoInfo.owner || !context.repoInfo.repo) {
-        throw new Error('DF Manager requires repository.owner/repo in config or an SCM remote.');
-    }
-
-    detectStaleSmLabels(context);
-    detectPrMergeGaps(context);
-    detectFailedRuns(context);
-    detectDuplicateRuns(context);
-    detectRepeatedFailureLoops(context);
-    applySafeRecovery(context);
-
-    var report = {
+// gh-1227 CRAP extraction — the audit/safe-recover report of one tick.
+// anomalies/actions ride by reference (the arrays the detectors filled).
+function buildReport(context, p, config) {
+    return {
         success: true,
         mode: context.autoRecover ? 'safe-recover' : 'audit',
         repository: context.repoInfo,
-        jiraProject: p.jiraProject || config.jira && config.jira.project,
+        jiraProject: jiraProjectOf(p, config),
         counts: {
             smLabels: context.smLabels.length,
             ticketsWithSmLabels: context.tickets.length,
@@ -627,6 +659,31 @@ function action(params) {
         anomalies: context.anomalies,
         actions: context.actions
     };
+}
+
+// gh-1227 CRAP extraction — repo guard shared by the audit and recover paths.
+function requireRepoInfo(context) {
+    if (!context.repoInfo.owner || !context.repoInfo.repo) {
+        throw new Error('DF Manager requires repository.owner/repo in config or an SCM remote.');
+    }
+}
+
+function action(params) {
+    var p = (params.jobParams && params.jobParams.customParams) || params.customParams || params.jobParams || params || {};
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var scm = scmModule.createScm(config);
+    var tracker = trackersModule.createTracker(config, p);
+    var context = buildContext(p, config, scm, tracker);
+    requireRepoInfo(context);
+
+    detectStaleSmLabels(context);
+    detectPrMergeGaps(context);
+    detectFailedRuns(context);
+    detectDuplicateRuns(context);
+    detectRepeatedFailureLoops(context);
+    applySafeRecovery(context);
+
+    var report = buildReport(context, p, config);
     writeReport(p.outputPath || 'outputs/df_manager_report.json', report);
     return report;
 }
@@ -640,6 +697,19 @@ if (typeof module !== 'undefined' && module.exports) {
         extractTicketKey: extractTicketKey,
         detectStaleSmLabels: detectStaleSmLabels,
         detectPrMergeGaps: detectPrMergeGaps,
+        detectRepeatedFailureLoops: detectRepeatedFailureLoops,
+        parseJsonMaybe: parseJsonMaybe,
+        prNumberOf: prNumberOf,
+        hasPrApproval: hasPrApproval,
+        approvedPrGapBase: approvedPrGapBase,
+        approvedPrMergeGapAnomaly: approvedPrMergeGapAnomaly,
+        groupFailureRuns: groupFailureRuns,
+        workflowSummary: workflowSummary,
+        failureLoopMessage: failureLoopMessage,
+        failureLoopAnomaly: failureLoopAnomaly,
+        jiraProjectOf: jiraProjectOf,
+        requireRepoInfo: requireRepoInfo,
+        buildReport: buildReport,
         detectDuplicateRuns: detectDuplicateRuns,
         buildLabelStatusMap: buildLabelStatusMap,
         extractStatusesFromJql: extractStatusesFromJql,
