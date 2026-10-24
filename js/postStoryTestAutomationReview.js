@@ -240,11 +240,7 @@ function triggerOutcomeFollowUp(storyKey, config, customParams, isApproved) {
 
 /** Best-effort token-usage summary; failures must not fail the step. */
 function postTokenUsageSafely(storyKey, params) {
-    try {
-        tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    tokenUsageComment.postTokenUsageSafely(storyKey, params);
 }
 
 /** Outer-catch: report the failure to the tracker and fail the action. */

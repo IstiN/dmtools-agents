@@ -46,6 +46,85 @@ suite('unit-test mocks: trackersMock (the shared contentOutput tracker fallback)
     });
 });
 
+// ── gh-1244: module-mock compat (trackers holder + token-usage safely) ────────
+
+suite('unit-test mocks: gh-1244 module compat (trackers holder + token usage)', function () {
+
+    test('a trackers mock gains createTrackerHolder with canonical lazy semantics', function () {
+        var created = [];
+        var trackers = makeRequire({
+            './trackers.js': {
+                createTracker: function (config, customParams) {
+                    created.push({ config: config, customParams: customParams });
+                    return { id: created.length };
+                }
+            }
+        })('./trackers.js');
+
+        var holder = trackers.createTrackerHolder();
+        holder.initTracker({ jira: {} }, { trackerProvider: 'jira' });
+        var t1 = holder.getTracker();
+        assert.equal(t1, holder.getTracker(), 'same instance returned');
+        assert.equal(created.length, 1, 'created lazily, exactly once');
+
+        holder.initTracker();
+        var t2 = holder.getTracker();
+        assert.notEqual(t1, t2, 're-init creates a fresh tracker');
+        assert.equal(created.length, 2);
+        assert.equal(created[1].config, null);
+        assert.deepEqual(created[1].customParams, {});
+    });
+
+    test('a tokenUsageComment mock gains postTokenUsageSafely that delegates and swallows', function () {
+        var posted = [];
+        var tokenUsage = makeRequire({
+            './tokenUsageComment.js': {
+                postTokenUsageComments: function (key, options) {
+                    posted.push({ key: key, options: options });
+                },
+                customParamsOf: function (params) { return (params && params.cp) || {}; }
+            }
+        })('./tokenUsageComment.js');
+
+        tokenUsage.postTokenUsageSafely('TS-1', { initiator: 'sm', cp: { trackerProvider: 'jira' } });
+        assert.equal(posted.length, 1);
+        assert.equal(posted[0].key, 'TS-1');
+        assert.equal(posted[0].options.initiator, 'sm');
+        assert.deepEqual(posted[0].options.customParams, { trackerProvider: 'jira' });
+
+        tokenUsage.postTokenUsageSafely('TS-2', null, { initiator: 'other', tracker: { id: 1 } });
+        assert.equal(posted.length, 2);
+        assert.equal(posted[1].options.initiator, 'other');
+        assert.equal(posted[1].options.tracker.id, 1);
+
+        // failures must be swallowed (best-effort contract)
+        var throwing = makeRequire({
+            './tokenUsageComment.js': {
+                postTokenUsageComments: function () { throw new Error('boom'); }
+            }
+        })('./tokenUsageComment.js');
+        var threw = false;
+        try {
+            throwing.postTokenUsageSafely('TS-3', {});
+        } catch (e) {
+            threw = true;
+        }
+        assert.notOk(threw, 'postTokenUsageSafely must not propagate failures');
+    });
+
+    test('mocks that already pin the new shapes (or unrelated modules) are untouched', function () {
+        var holder = { initTracker: function () {}, getTracker: function () {} };
+        var trackers = makeRequire({
+            './trackers.js': { createTrackerHolder: function () { return holder; } }
+        })('./trackers.js');
+        assert.equal(trackers.createTrackerHolder(), holder, 'existing createTrackerHolder wins');
+
+        var plain = makeRequire({ './other.js': { foo: function () { return 1; } } })('./other.js');
+        assert.equal(typeof plain.createTrackerHolder, 'undefined', 'unrelated mock untouched');
+        assert.equal(typeof plain.postTokenUsageSafely, 'undefined', 'unrelated mock untouched');
+    });
+});
+
 // ── gh-1230 CRAP characterization: makeDefaultConfigLoaderMock merge contract ─
 
 suite('unit-test mocks: makeDefaultConfigLoaderMock (jira merge + patch contract)', function () {

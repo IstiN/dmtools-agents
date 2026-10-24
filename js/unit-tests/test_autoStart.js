@@ -1305,3 +1305,52 @@ suite('autoStart — buildEncodedConfig mock contract (gh-1230 characterization)
         assert.equal(remote.params.customParams, undefined, 'remote shape has no customParams');
     });
 });
+
+// ---------------------------------------------------------------------------
+// gh-1242: parseWorkflowRuns — every parse path (string/object/array/invalid)
+// ---------------------------------------------------------------------------
+
+suite('autoStart — parseWorkflowRuns', function() {
+
+    test('falsy raw (null / empty string) → empty list', function() {
+        var autoStart = loadAutoStartHelper();
+        assert.deepEqual(autoStart.parseWorkflowRuns(null), []);
+        assert.deepEqual(autoStart.parseWorkflowRuns(''), []);
+    });
+
+    test('JSON string array → the parsed runs (2+ items)', function() {
+        var autoStart = loadAutoStartHelper();
+        var runs = autoStart.parseWorkflowRuns('[{"id":1},{"id":2}]');
+        assert.equal(runs.length, 2);
+        assert.equal(runs[1].id, 2);
+    });
+
+    test('JSON string object → its workflow_runs (2+ items)', function() {
+        var autoStart = loadAutoStartHelper();
+        var runs = autoStart.parseWorkflowRuns('{"workflow_runs":[{"id":10},{"id":11}]}');
+        assert.equal(runs.length, 2);
+        assert.equal(runs[0].id, 10);
+    });
+
+    test('JSON string object without workflow_runs → empty list', function() {
+        var autoStart = loadAutoStartHelper();
+        assert.deepEqual(autoStart.parseWorkflowRuns('{"total_count":0}'), []);
+    });
+
+    test('invalid JSON string → empty list (warn, never throws)', function() {
+        var autoStart = loadAutoStartHelper();
+        assert.deepEqual(autoStart.parseWorkflowRuns('not-json{'), []);
+    });
+
+    test('object payload → array passthrough / workflow_runs extraction', function() {
+        var autoStart = loadAutoStartHelper();
+        var arr = [{ id: 1 }, { id: 2 }];
+        assert.equal(autoStart.parseWorkflowRuns(arr), arr, 'an array payload is returned as-is');
+        var runs = autoStart.parseWorkflowRuns({ workflow_runs: [{ id: 3 }] });
+        assert.equal(runs.length, 1);
+        assert.equal(runs[0].id, 3);
+        assert.deepEqual(autoStart.parseWorkflowRuns({ other: true }), [],
+            'object without workflow_runs → empty list');
+    });
+
+});

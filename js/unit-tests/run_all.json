@@ -81,6 +81,7 @@
         "js/unit-tests/test_recoverStuckDevelopment.js",
         "js/unit-tests/test_moveToInTesting.js",
         "js/unit-tests/test_moveToReadyForTesting.js",
+        "js/unit-tests/test_moveToDone.js",
         "js/unit-tests/test_wave1cTrackerMigration.js",
         "js/unit-tests/test_wave2d4Tracker.js",
         "js/unit-tests/test_workflowFailureReporter.js",
