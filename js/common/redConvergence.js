@@ -39,37 +39,6 @@
 'use strict';
 
 /**
- * One run participates in THIS head's streak only when it is a
- * workflow_dispatch run of the exact head, already completed. Null entries
- * never participate.
- */
-function isHeadDispatchRun(r, headSha) {
-    return r && r.event === 'workflow_dispatch' &&
-        r.head_sha === headSha && r.status === 'completed';
-}
-
-/**
- * The run's recency stamp (REST: updated_at, falling back to created_at,
- * then 0 — the unparsable-stamp run sorts oldest).
- */
-function runStampMs(r) {
-    return Date.parse(r.updated_at || r.created_at || 0);
-}
-
-/** Newest first: the streak reads the TRAILING window of the history. */
-function compareRunsNewestFirst(a, b) {
-    return runStampMs(b) - runStampMs(a);
-}
-
-/**
- * The verdict word of a concluded run: the conclusion as a string, or null
- * when absent/falsy (no verdict word — the run is invisible to the streak).
- */
-function concludedVerdictOf(run) {
-    return run.conclusion ? String(run.conclusion) : null;
-}
-
-/**
  * The head's consecutive concluded-red verdict count, derived from the
  * dispatched-run list (REST shape: [{ event, head_sha, status, conclusion,
  * created_at, updated_at }, …], any order — sorted here newest-first).
@@ -85,11 +54,17 @@ function concludedVerdictOf(run) {
  */
 function streakFromRuns(runs, headSha) {
     if (!headSha || !Array.isArray(runs)) return 0;
-    var mine = runs.filter(function (r) { return isHeadDispatchRun(r, headSha); });
-    mine.sort(compareRunsNewestFirst);
+    var mine = runs.filter(function (r) {
+        return r && r.event === 'workflow_dispatch' &&
+            r.head_sha === headSha && r.status === 'completed';
+    });
+    mine.sort(function (a, b) {
+        return Date.parse(b.updated_at || b.created_at || 0) -
+               Date.parse(a.updated_at || a.created_at || 0);
+    });
     var streak = 0;
     for (var i = 0; i < mine.length; i++) {
-        var c = concludedVerdictOf(mine[i]);
+        var c = mine[i].conclusion ? String(mine[i].conclusion) : null;
         if (!c || c === 'cancelled') continue;      // gh-755 — no verdict word
         if (c === 'success') break;                 // AC2 — green resets
         streak++;

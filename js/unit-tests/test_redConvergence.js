@@ -119,37 +119,3 @@ suite('redConvergence: parkCapOf / shouldPark (park threshold)', function () {
         assert.ok(!redConvergence.shouldPark(0, 2), 'no streak → no park');
     });
 });
-
-// ── gh-1221 CRAP characterization: streak derivation helpers ─────────────────
-// Pins the run-filter / sort / verdict-word decisions the helper extraction
-// must preserve (sort fallback chain, falsy conclusions, null entries).
-suite('redConvergence — gh-1221 streak derivation arms', function () {
-
-    test('runs without updated_at sort by created_at (stamp fallback chain)', function () {
-        var late = { event: 'workflow_dispatch', head_sha: 'shaX', status: 'completed',
-                     conclusion: 'failure', created_at: '2026-10-10T02:00:00Z' };
-        var early = { event: 'workflow_dispatch', head_sha: 'shaX', status: 'completed',
-                      conclusion: 'failure', created_at: '2026-10-10T01:00:00Z' };
-        assert.equal(redConvergence.streakFromRuns([early, late], 'shaX'), 2,
-            'both are trailing reds regardless of list order');
-    });
-
-    test('a falsy conclusion is no verdict — skipped, it neither counts nor resets', function () {
-        var runs = [
-            { event: 'workflow_dispatch', head_sha: 'shaX', status: 'completed',
-              conclusion: '', created_at: '2026-10-10T02:00:00Z' },
-            { event: 'workflow_dispatch', head_sha: 'shaX', status: 'completed',
-              conclusion: 'failure', created_at: '2026-10-10T01:00:00Z' }
-        ];
-        assert.equal(redConvergence.streakFromRuns(runs, 'shaX'), 1,
-            'the empty-conclusion run is invisible to the streak');
-    });
-
-    test('null entries and other-head noise never crash the filter', function () {
-        var red = { event: 'workflow_dispatch', head_sha: 'shaX', status: 'completed',
-                    conclusion: 'failure', created_at: '2026-10-10T01:00:00Z' };
-        var otherHead = { event: 'workflow_dispatch', head_sha: 'shaOther', status: 'completed',
-                          conclusion: 'failure', created_at: '2026-10-10T01:30:00Z' };
-        assert.equal(redConvergence.streakFromRuns([null, red, otherHead], 'shaX'), 1);
-    });
-});

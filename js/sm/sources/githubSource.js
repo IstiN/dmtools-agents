@@ -295,9 +295,7 @@ function hasOpenLinkedPr(q, item) {
 // the CRAP ratchet. Behaviour byte-identical: same guard order, same
 // fail-open/fail-closed shapes, same lazy provider reads (the side-effecting
 // probes — lastReview / latestVerdictRecord / reviewThreads /
-// cachedIssueLabels — keep their relative order). Since gh-1221 the flat
-// guard table is itself grouped into two composites (_lazyProbeGuardsFail,
-// _stateGuardsFail) — same order, same short-circuit, fewer chain slots.
+// cachedIssueLabels — keep their relative order).
 
 // Shared string-or-list normalizer (string|string[] → string[]|null).
 // gh-944 CI: every guard decision routed through the helpers keeps the
@@ -538,37 +536,21 @@ function _prLabelGuardsFail(q, item) {
     return _prLabelMatchGuardsFail(q, prLs);
 }
 
-// Composite: the guards whose reads are LAZY PROVIDER PROBES, in contract
-// order — merge-state latch (cached issue labels) → stale review verdict
-// (lastReview) → stale verdict record (lastReview) → verdict record
-// (latestVerdictRecord) → review threads. The probes are side-effecting
-// (label cache / verdict memo), so their relative order is contract; the
-// composite short-circuits on the first fail exactly like the flat table.
-function _lazyProbeGuardsFail(q, item, provider, machineAuthor, owner, repoInfo) {
-    if (q.mergeStateLatch && _mergeStateLatchGuardFail(q, item, repoInfo)) return true;
-    if (_reviewStaleGuardFail(q, item, provider)) return true;
-    if (_staleVerdictGuardFail(q, item, provider)) return true;
-    if (_verdictRecordGuardsFail(q, item, provider, machineAuthor)) return true;
-    return _threadsGuardsFail(q, item, provider);
-}
-
-// Composite: the post-probe PR-state guards — machine authorship, cross-repo
-// attribution, plain PR state, PR-side labels.
-function _stateGuardsFail(q, item, machineAuthor, owner, repoInfo) {
-    if (_machineAuthorGuardFail(q, item, machineAuthor, owner)) return true;
-    if (_crossRepoGuardFail(q, item, repoInfo)) return true;
-    if (_prStateGuardsFail(q, item)) return true;
-    return _prLabelGuardsFail(q, item);
-}
-
 function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
     var q = rule.query || {};
     var labels = item.labels || [];
     if (_issueCarrierGuardsFail(q, labels, item)) return false;
     if (_prChecksGuardsFail(q, item)) return false;
     if (_mergeStateGuardsFail(q, item)) return false;
-    if (_lazyProbeGuardsFail(q, item, provider, machineAuthor, owner, repoInfo)) return false;
-    if (_stateGuardsFail(q, item, machineAuthor, owner, repoInfo)) return false;
+    if (q.mergeStateLatch && _mergeStateLatchGuardFail(q, item, repoInfo)) return false;
+    if (_reviewStaleGuardFail(q, item, provider)) return false;
+    if (_staleVerdictGuardFail(q, item, provider)) return false;
+    if (_verdictRecordGuardsFail(q, item, provider, machineAuthor)) return false;
+    if (_threadsGuardsFail(q, item, provider)) return false;
+    if (_machineAuthorGuardFail(q, item, machineAuthor, owner)) return false;
+    if (_crossRepoGuardFail(q, item, repoInfo)) return false;
+    if (_prStateGuardsFail(q, item)) return false;
+    if (_prLabelGuardsFail(q, item)) return false;
     return true;
 }
 

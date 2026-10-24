@@ -13,36 +13,6 @@
 var trackersModule = require('../../common/trackers.js');
 
 /**
- * One ticket → the SM state-item shape (forge-agnostic). Labels live in
- * fields.labels (the REST shape); the flat t.labels stays as a fallback
- * for old shapes.
- */
-function stateItemOf(t) {
-    return {
-        key: t.key,
-        labels: (t.fields && t.fields.labels) || t.labels || [],
-        pr: null,
-        issueNumber: null,
-        prNumber: null
-    };
-}
-
-/**
- * Jira-key FIFO comparator: (project prefix, numeric suffix) so
- * multi-project JQL keeps per-project creation order and PROJ-30 never
- * sorts before PROJ-9 lexicographically. A key with no numeric suffix
- * sorts first within its prefix.
- */
-function compareJiraKeys(a, b) {
-    var ka = String(a.key || ''), kb = String(b.key || '');
-    var pa = ka.replace(/\d+$/, ''), pb = kb.replace(/\d+$/, '');
-    if (pa !== pb) return pa < pb ? -1 : 1;
-    var na = parseInt((/(\d+)$/.exec(ka) || [0, '0'])[1], 10);
-    var nb = parseInt((/(\d+)$/.exec(kb) || [0, '0'])[1], 10);
-    return na - nb;
-}
-
-/**
  * Queries Jira by the rule's JQL.
  * @param {Object} rule - the SM rule (uses rule.jql, interpolated upstream)
  * @param {Object} ctx  - { config, repoInfo } (unused by the Jira source;
@@ -58,13 +28,29 @@ function query(rule, ctx) {
     // issues; labels live in fields.labels (the flat t.labels is kept as a fallback for old shapes).
     var tracker = trackersModule.createTracker((ctx && ctx.config) || {}, {});
     var tickets = tracker.searchIssues(jql, { fields: ['key', 'labels'] }) || [];
+    var items = (Array.isArray(tickets) ? tickets : []).map(function (t) {
+        return {
+            key: t.key,
+            labels: (t.fields && t.fields.labels) || t.labels || [],
+            pr: null,
+            issueNumber: null,
+            prNumber: null
+        };
+    });
     // owner rule 2026-10-04: oldest first, always — the search API returns
     // newest-first (REST default), which starves the oldest ticket under
-    // limit:1 rules. Jira key order == per-project creation order (see
-    // compareJiraKeys). Same fairness fix as the GitHub source's
+    // limit:1 rules. Jira key order == per-project creation order: sort by
+    // (project prefix, numeric suffix) so multi-project JQL keeps
+    // per-project FIFO. Same fairness fix as the GitHub source's
     // issue/PR-number sorts and mergeBot's ascending list sort.
-    var items = (Array.isArray(tickets) ? tickets : []).map(stateItemOf);
-    items.sort(compareJiraKeys);
+    items.sort(function (a, b) {
+        var ka = String(a.key || ''), kb = String(b.key || '');
+        var pa = ka.replace(/\d+$/, ''), pb = kb.replace(/\d+$/, '');
+        if (pa !== pb) return pa < pb ? -1 : 1;
+        var na = parseInt((/(\d+)$/.exec(ka) || [0, '0'])[1], 10);
+        var nb = parseInt((/(\d+)$/.exec(kb) || [0, '0'])[1], 10);
+        return na - nb;
+    });
     return items;
 }
 
