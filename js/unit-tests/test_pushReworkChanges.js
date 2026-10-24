@@ -3649,8 +3649,8 @@ function makeOwnedGateFileRead(owned) {
 function loadCommitAndPush1082(mocks, moduleOverrides) {
     return loadModule(
         'js/pushReworkChanges.js',
-        './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
         makeRequire(Object.assign({
+            './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
