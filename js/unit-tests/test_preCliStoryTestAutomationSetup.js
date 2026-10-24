@@ -37,7 +37,7 @@ function loadPreCliStoryTestAutomationSetup(mocks) {
     var allMocks = Object.assign({}, defaults, mocks);
     return loadModule(
         'js/preCliStoryTestAutomationSetup.js',
-        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, allMocks),
             './config.js': configModule,
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks),
             './configLoader.js': freshConfigLoader,
@@ -164,9 +164,15 @@ suite('preCliStoryTestAutomationSetup', function() {
             trimLargeTextForInput: function(text) { return text || ''; }
         };
 
+        var outerMocks = { jira_search_by_jql: function() { return []; }, cli_execute_command: function(opts) {
+            if (opts.command === 'git branch --list "test/TS-213"') return '  test/TS-213';
+            if (opts.command.indexOf('git ls-remote --heads origin test/TS-213') === 0) return 'abc refs/heads/test/TS-213';
+            if (opts.command.indexOf('git rev-list -1 HEAD --not origin/main') === 0) return 'somecommit';
+            return '';
+        }, file_write: function(args) { written[args.path] = args.content; } };
         module = loadModule(
             'js/preCliStoryTestAutomationSetup.js',
-            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, outerMocks),
                 './config.js': configModule,
                 './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
                 './configLoader.js': loadModule(
@@ -224,9 +230,10 @@ suite('preCliStoryTestAutomationSetup', function() {
             trimLargeTextForInput: function(text) { return text || ''; }
         };
 
+        var outerMocks = { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function(args) { written[args.path] = args.content; } };
         module = loadModule(
             'js/preCliStoryTestAutomationSetup.js',
-            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, outerMocks),
                 './config.js': configModule,
                 './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
                 './configLoader.js': loadModule(
@@ -254,7 +261,7 @@ suite('preCliStoryTestAutomationSetup', function() {
                 if (opts.command.indexOf('git ls-remote --heads origin test/TS-213') === 0) return 'abc refs/heads/test/TS-213';
                 if (opts.command.indexOf('git rev-list -1 HEAD --not origin/main') === 0) return 'somecommit';
                 return '';
-            }, file_write: function(args) { written[args.path] = args.content; } }
+            } }
         );
 
         module.action({
@@ -309,7 +316,7 @@ function loadForPrContext(mocks, opts) {
     var allMocks = Object.assign({}, defaults, mocks);
     return loadModule(
         'js/preCliStoryTestAutomationSetup.js',
-        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, allMocks),
             './config.js': configModule,
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks),
             './configLoader.js': freshConfigLoader,
@@ -760,7 +767,7 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
                 './common/githubHelpers.js': githubHelpers,
                 './common/scm.js': { createScm: function() { return {}; } }
             }),
-            { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function(args) { written[args.path] = args.content; } }
+            outerMocks
         );
 
         module.action({
@@ -791,9 +798,10 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
             return '';
         };
 
+        var outerMocks = { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function(args) { written[args.path] = args.content; } };
         var module = loadModule(
             'js/preCliStoryTestAutomationSetup.js',
-            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, outerMocks),
                 './config.js': configModule,
                 './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
                 './configLoader.js': loadModule('js/configLoader.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), './config.js': configModule, './common/scm.js': { createScm: function() { return {}; } } }), { file_read: function() { return null; } }),
@@ -801,7 +809,7 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
                 './common/githubHelpers.js': githubHelpers,
                 './common/scm.js': { createScm: function() { return {}; } }
             }),
-            { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function(args) { written[args.path] = args.content; } }
+            outerMocks
         );
 
         module.action({

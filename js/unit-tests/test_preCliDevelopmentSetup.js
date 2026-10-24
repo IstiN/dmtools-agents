@@ -38,7 +38,7 @@ var PR_HELPER_REAL = loadModule('js/common/pullRequest.js',
 function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
     return loadModule(
         'js/preCliDevelopmentSetup.js',
-        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, mocks || {}),
             './configLoader.js': configLoaderStub,
             './common/pullRequest.js': PR_HELPER_REAL,
             './config.js': NOOP_CONFIG_JS,
@@ -525,29 +525,7 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
     }
 
     function loadPreCliDevelopmentSetupWithExtras(bag, config, githubBehavior, extraMocks) {
-        return loadModule(
-            'js/preCliDevelopmentSetup.js',
-            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
-                './configLoader.js': makeActionConfigLoaderStub(config),
-                './common/pullRequest.js': PR_HELPER_REAL,
-                './config.js': NOOP_CONFIG_JS,
-                './fetchQuestionsToInput.js': { action: function () {} },
-                './fetchLinkedTestsToInput.js': { action: function () {} },
-                './fetchParentContextToInput.js': { action: function () {} },
-                './restoreFromReleases.js': { action: function () {} },
-                './common/setupCommands.js': {
-                    runSetupCommands: function () { return null; },
-                    buildSetupWarningsMarkdown: function () { return null; },
-                    truncateSetupError: function (s) { return String(s); }
-                },
-                './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
-                './common/commentMarkup.js': devCommentMarkupModule,
-                './common/trackers.js': extraMocks ? loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
-                    '../config.js': configModule,
-                    './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
-                }), extraMocks) : trackersModuleReal
-            }),
-            Object.assign({
+        var modMocks = Object.assign({
                 cli_execute_command: makeCliMock(bag.cliCalls, {}),
                 jira_move_to_status: function (args) { bag.moves.push(args); },
                 file_write: function (args) { bag.writes.push(args); },
@@ -563,7 +541,30 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
                         throw new Error('label absent');
                     }
                 }
-            }, extraMocks || {})
+            }, extraMocks || {});
+        return loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, modMocks),
+                './configLoader.js': makeActionConfigLoaderStub(config),
+                './common/pullRequest.js': PR_HELPER_REAL,
+                './config.js': NOOP_CONFIG_JS,
+                './fetchQuestionsToInput.js': { action: function () {} },
+                './fetchLinkedTestsToInput.js': { action: function () {} },
+                './fetchParentContextToInput.js': { action: function () {} },
+                './restoreFromReleases.js': { action: function () {} },
+                './common/setupCommands.js': {
+                    runSetupCommands: function () { return null; },
+                    buildSetupWarningsMarkdown: function () { return null; },
+                    truncateSetupError: function (s) { return String(s); }
+                },
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
+                './common/commentMarkup.js': devCommentMarkupModule,
+                './common/trackers.js': extraMocks ? loadModule('js/common/trackers.js', makeRequire({
+                    '../config.js': configModule,
+                    './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+                }), extraMocks) : trackersModuleReal
+            }),
+            modMocks
         );
     }
 
@@ -692,7 +693,7 @@ suite('preCliDevelopmentSetup.postSetupErrorComment — routes through the probe
     function loadWithTrackerStub(posted, postThrows) {
         return loadModule(
             'js/preCliDevelopmentSetup.js',
-            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+            makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, {}),
                 './configLoader.js': {
                     loadProjectConfig: function () { return makeConfig(); },
                     paramsForConfigLoad: function (p) { return p; }

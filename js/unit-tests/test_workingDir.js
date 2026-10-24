@@ -114,9 +114,19 @@ function loadPreCli(workingDir) {
         { file_read: fileReadMock }
     );
 
-    var mod = loadModule(
+
+    var mod = var __wdMocks1 = {
+            cli_execute_command: mockCli,
+            file_read: fileReadMock,
+            file_write: function() {},
+            jira_search_by_jql: function() { return JSON.stringify({ issues: [] }); },
+            jira_transition_issue: function() {}
+        };
+    var mod = var __bs1 = loadModule('js/common/branchSetup.js', null, __wdMocks1);
+    var mod =     var mod = loadModule(
         'js/preCliDevelopmentSetup.js',
         makeRequire({
+                'branchSetup.js': __bs1,
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
             './common/pullRequest.js': PR_HELPER_REAL,
@@ -129,13 +139,7 @@ function loadPreCli(workingDir) {
             './common/commentMarkup.js': commentMarkupModule,
             './common/trackers.js': trackersModuleReal
         }),
-        {
-            cli_execute_command: mockCli,
-            file_read: fileReadMock,
-            file_write: function() {},
-            jira_search_by_jql: function() { return JSON.stringify({ issues: [] }); },
-            jira_transition_issue: function() {}
-        }
+        __wdMocks1
     );
 
     return { mod: mod, calls: calls };
@@ -225,9 +229,21 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             } }
         );
 
-        mod = loadModule(
+
+        mod = var __wdMocks2 = {
+                cli_execute_command: mockCli,
+                file_read: function(opts) {
+                    try { return file_read(opts); } catch (e) { return null; }
+                },
+                file_write: function() {},
+                jira_move_to_status: function() {},
+                jira_search_by_jql: function() { return []; }
+            };
+        mod = var __bs2 = loadModule('js/common/branchSetup.js', null, __wdMocks2);
+        mod =         mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
+                'branchSetup.js': __bs2,
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,
@@ -241,15 +257,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
         }),
-            {
-                cli_execute_command: mockCli,
-                file_read: function(opts) {
-                    try { return file_read(opts); } catch (e) { return null; }
-                },
-                file_write: function() {},
-                jira_move_to_status: function() {},
-                jira_search_by_jql: function() { return []; }
-            }
+            __wdMocks2
         );
 
         mod.action({
@@ -291,9 +299,21 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             } }
         );
 
-        var mod = loadModule(
+
+        var mod = var __wdMocks3 = {
+                cli_execute_command: mockCli,
+                file_read: function(opts) {
+                    try { return file_read(opts); } catch (e) { return null; }
+                },
+                file_write: function() {},
+                jira_move_to_status: function() {},
+                jira_search_by_jql: function() { return []; }
+            };
+        var mod = var __bs3 = loadModule('js/common/branchSetup.js', null, __wdMocks3);
+        var mod =         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
+                'branchSetup.js': __bs3,
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,
@@ -307,15 +327,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
         }),
-            {
-                cli_execute_command: mockCli,
-                file_read: function(opts) {
-                    try { return file_read(opts); } catch (e) { return null; }
-                },
-                file_write: function() {},
-                jira_move_to_status: function() {},
-                jira_search_by_jql: function() { return []; }
-            }
+            __wdMocks3
         );
 
         mod.action({
@@ -361,9 +373,21 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             } }
         );
 
-        var mod = loadModule(
+
+        var mod = var __wdMocks4 = {
+                cli_execute_command: mockCli,
+                file_read: function(opts) {
+                    try { return file_read(opts); } catch (e) { return null; }
+                },
+                file_write: function(args) { writes.push(args); },
+                jira_move_to_status: function() {},
+                jira_search_by_jql: function() { return []; }
+            };
+        var mod = var __bs4 = loadModule('js/common/branchSetup.js', null, __wdMocks4);
+        var mod =         var mod = loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
+                'branchSetup.js': __bs4,
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': PR_HELPER_REAL,
@@ -377,15 +401,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             ,
             './common/commentMarkup.js': commentMarkupModule,
         }),
-            {
-                cli_execute_command: mockCli,
-                file_read: function(opts) {
-                    try { return file_read(opts); } catch (e) { return null; }
-                },
-                file_write: function(args) { writes.push(args); },
-                jira_move_to_status: function() {},
-                jira_search_by_jql: function() { return []; }
-            }
+            __wdMocks4
         );
 
         mod.action({
