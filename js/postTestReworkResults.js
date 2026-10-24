@@ -315,11 +315,8 @@ function postReworkTrackerComment(ticketKey, config, customParams, pr, testStatu
 
 /** Token usage summary comments (outputs/*_usage.json); failures are non-fatal. */
 function postReworkUsageComments(ticketKey, params) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    // Canonical guarded wrapper in common/tokenUsageComment.js (gh-1246).
+    tokenUsageComment.postUsageSummariesSafely(ticketKey, params);
 }
 
 /**

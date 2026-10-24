@@ -33,7 +33,7 @@ function loadPostTestReworkResults(cliMock) {
                 './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
             }), {}),
             './common/pullRequest.js': prHelperRealForRework,
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postUsageSummariesSafely: function() {} },
             './mergeState.js': loadModule('js/common/mergeState.js'),
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
             './postStoryTestAutomationShared.js': loadModule('js/postStoryTestAutomationShared.js', makeRequire({}), { cli_execute_command: cliMock })
@@ -452,7 +452,10 @@ function loadReworkActionHarness(deps) {
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
             './common/tokenUsageComment.js': {
                 postTokenUsageComments: function(key, opts) { recorded.tokenUsage.push({ key: key, opts: opts }); },
-                customParamsOf: function(params) { return (params && params.customParams) || {}; }
+                postUsageSummariesSafely: function(key, params) {
+                    recorded.tokenUsage.push({ key: key, opts: { initiator: params.initiator, customParams: (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {} } });
+                },
+                customParamsOf: function(params) { return (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {}; }
             },
             './common/trackers.js': {
                 createTracker: function(config, customParams) { return tracker; }
