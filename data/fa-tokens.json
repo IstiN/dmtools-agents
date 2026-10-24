@@ -1,22 +1,4 @@
 {
-  "issue-842": [
-    {
-      "leg": "dev",
-      "at": "2026-10-10T16:12:06Z",
-      "prompt": 157299,
-      "completion": 50448,
-      "total": 207747,
-      "model": ""
-    },
-    {
-      "leg": "review",
-      "at": "2026-10-10T16:17:52Z",
-      "prompt": 48794,
-      "completion": 8057,
-      "total": 56851,
-      "model": ""
-    }
-  ],
   "issue-844": [
     {
       "leg": "dev",
@@ -4918,6 +4900,17 @@
       "total": 136250,
       "cacheRead": 2806464,
       "model": "glm-5.3-flash"
+    }
+  ],
+  "issue-1242": [
+    {
+      "leg": "dev",
+      "at": "2026-10-24T16:57:29Z",
+      "prompt": 147787,
+      "completion": 48126,
+      "total": 195913,
+      "cacheRead": 9619968,
+      "model": "kimi-for-coding"
     }
   ]
 }
