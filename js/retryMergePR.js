@@ -30,15 +30,26 @@ function getTracker() {
 }
 
 
+// ── gh-1185 (CRAP): pure remote-line selection + owner/repo parsing,
+// extracted verbatim from getGitHubRepoInfo — a non-github remote picks the
+// first github.com line, the regex's [:/] split and [^/?#\s] repo capture
+// are pinned by test_retryMergePR. ──
+function pickGitHubRemoteLine(rawOutput) {
+    return (rawOutput || '').split('\n')
+        .map(function(l) { return l.trim(); })
+        .filter(function(l) { return l.indexOf('github.com') !== -1; })[0] || '';
+}
+
+function parseGitHubRemote(remoteUrl) {
+    var match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/?#\s]+)/);
+    if (!match) return null;
+    return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
+}
+
 function getGitHubRepoInfo() {
     try {
-        const rawOutput = cli_execute_command({ command: 'git config --get remote.origin.url' }) || '';
-        const remoteUrl = rawOutput.split('\n')
-            .map(function(l) { return l.trim(); })
-            .filter(function(l) { return l.indexOf('github.com') !== -1; })[0] || '';
-        const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/?#\s]+)/);
-        if (!match) return null;
-        return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
+        return parseGitHubRemote(pickGitHubRemoteLine(
+            cli_execute_command({ command: 'git config --get remote.origin.url' })));
     } catch (e) {
         console.error('Failed to get repo info:', e);
         return null;
@@ -231,6 +242,127 @@ function finalizeMergedTicket(params, ticketKey, jiraConfig) {
     }
 }
 
+// ── gh-1185 (CRAP): action() decomposed into the verbatim steps — the
+// mergeability probe, the branch-update request, the pre-merge gate and the
+// merge+finalize tail. Same tracker/SCM/git calls in the same order; the
+// comment bodies and log lines are byte-identical. ──
+
+// The MERGE CONFLICT / MERGE FAILED comment bodies, verbatim.
+function buildConflictCommentBody(prNumber, prUrl) {
+    return '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE CONFLICT* — PR #' + prNumber + ' has a merge conflict with main. Please resolve conflicts and re-push.\n\n[View PR|' + prUrl + ']{panel}';
+}
+
+function buildMergeFailedCommentBody(prNumber, reason, prUrl) {
+    return '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE FAILED* — Could not merge PR #' + prNumber + ': ' + reason + '. Please check and re-push.\n\n[View PR|' + prUrl + ']{panel}';
+}
+
+// The PR-detail probe: a failing probe keeps mergeable/mergeableState null
+// (decideMergeReadiness reads that as 'retry') and logs the verbatim lines.
+function probeMergeability(scm, prNumber) {
+    var mergeableState = null;
+    var mergeable = null;
+    try {
+        const prDetail = scm.getPr(prNumber);
+        mergeable = prDetail && prDetail.mergeable;
+        mergeableState = prDetail && prDetail.mergeable_state;
+        console.log('PR mergeable: ' + mergeable + ', state: ' + mergeableState);
+    } catch (e) {
+        console.warn('Could not get PR details, will attempt merge anyway:', e);
+    }
+    return { mergeable: mergeable, mergeableState: mergeableState };
+}
+
+// The behind-base branch update: unsupported providers and update failures
+// both log a warning and defer the merge to the next cycle.
+function requestBranchUpdate(scm, prNumber, owner, repo) {
+    console.log('PR branch is behind base — requesting branch update');
+    try {
+        if (scm.updateBranch) {
+            scm.updateBranch(prNumber, owner, repo);
+        } else {
+            throw new Error('SCM provider does not support updateBranch');
+        }
+        console.log('Branch update requested — will retry merge next cycle after CI passes');
+    } catch (updateErr) {
+        console.warn('Could not update branch (may already be updating):', updateErr);
+    }
+}
+
+// Every not-ready decision: 'retry' waits (false), 'updateBranch' requests
+// the update and waits (false), 'conflict' escalates to In Rework (true).
+function handlePreMergeGate(gate) {
+    if (gate.readiness === 'retry') {
+        console.log('PR not ready to merge (' + gate.mergeableState + ') — will retry next cycle');
+        return false;
+    }
+    if (gate.readiness === 'updateBranch') {
+        requestBranchUpdate(gate.scm, gate.prNumber, gate.owner, gate.repo);
+        return false;
+    }
+    console.log('PR has merge conflict — moving ticket to In Rework');
+    escalateToInRework({
+        scm: gate.scm,
+        prNumber: gate.prNumber,
+        ticketKey: gate.ticketKey,
+        customParams: gate.customParams,
+        config: gate.config,
+        reason: 'merge conflict',
+        commentBody: buildConflictCommentBody(gate.prNumber, gate.prUrl)
+    });
+    return true;
+}
+
+// The merge attempt and post-merge finalization — success strips the labels
+// in the historical order (GitHub cosmetic strip → lock → ticket move →
+// pr_approved after the status move); failure classifies, and only a
+// non-temporary failure escalates + posts the token usage summary.
+function tryMergeAndFinalize(merge) {
+    try {
+        merge.scm.mergePr(merge.prNumber, 'squash');
+        console.log('✅ PR #' + merge.prNumber + ' merged successfully');
+
+        // Remove GitHub PR label immediately (cosmetic — PR is closed)
+        stripMergedPrLabel(merge.scm, merge.prNumber);
+        releaseLock(merge.ticketKey, merge.customParams);
+
+        finalizeMergedTicket(merge.params, merge.ticketKey, merge.jiraConfig);
+
+        // Now safe to remove pr_approved from Jira — status is already updated
+        stripApprovedLabelAfterMerge(merge.ticketKey);
+        return true;
+    } catch (mergeErr) {
+        console.warn('Merge failed:', mergeErr);
+        var failure = classifyMergeError(mergeErr);
+
+        if (failure === 'temporary') {
+            // Temporary block — retry next cycle, keep pr_approved
+            console.log('Merge blocked temporarily — will retry next cycle');
+            return false;
+        }
+
+        var reason = failure === 'conflict' ? 'merge conflict' : 'CI checks failing or PR not mergeable';
+        escalateToInRework({
+            scm: merge.scm,
+            prNumber: merge.prNumber,
+            ticketKey: merge.ticketKey,
+            customParams: merge.customParams,
+            config: merge.config,
+            reason: reason,
+            commentBody: buildMergeFailedCommentBody(merge.prNumber, reason, merge.prUrl)
+        });
+
+        // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
+        // wrote outputs/*_usage.json during the agent run.
+        try {
+            tokenUsageComment.postTokenUsageComments(merge.ticketKey, { initiator: merge.params.initiator, customParams: tokenUsageComment.customParamsOf(merge.params) });
+        } catch (e) {
+            console.warn('Failed to post token usage comments:', e);
+        }
+
+        return true;
+    }
+}
+
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
     if (!ticketKey) {
@@ -250,7 +382,8 @@ function action(params) {
         releaseLock(ticketKey, customParams);
         return false;
     }
-    const { owner, repo } = repoInfo;
+    const owner = repoInfo.owner;
+    const repo = repoInfo.repo;
 
     const pr = findPRForTicket(scm, ticketKey);
     if (!pr) {
@@ -264,102 +397,38 @@ function action(params) {
     console.log('Found PR #' + prNumber + ' for ticket ' + ticketKey);
 
     // Check PR mergeable status
-    let mergeableState = null;
-    let mergeable = null;
-    try {
-        const prDetail = scm.getPr(prNumber);
-        mergeable = prDetail && prDetail.mergeable;
-        mergeableState = prDetail && prDetail.mergeable_state;
-        console.log('PR mergeable: ' + mergeable + ', state: ' + mergeableState);
-    } catch (e) {
-        console.warn('Could not get PR details, will attempt merge anyway:', e);
-    }
+    const probe = probeMergeability(scm, prNumber);
 
-    // GitHub hasn't computed mergeability yet, or CI checks still running — retry next cycle
-    var readiness = decideMergeReadiness(mergeable, mergeableState);
-    if (readiness === 'retry') {
-        console.log('PR not ready to merge (' + mergeableState + ') — will retry next cycle');
-        return false;
-    }
-
-    // PR branch is behind base — update it so CI can re-run, then retry next cycle
-    if (readiness === 'updateBranch') {
-        console.log('PR branch is behind base — requesting branch update');
-        try {
-            if (scm.updateBranch) {
-                scm.updateBranch(prNumber, owner, repo);
-            } else {
-                throw new Error('SCM provider does not support updateBranch');
-            }
-            console.log('Branch update requested — will retry merge next cycle after CI passes');
-        } catch (updateErr) {
-            console.warn('Could not update branch (may already be updating):', updateErr);
-        }
-        return false;
-    }
-
-    // Conflict detected before attempting merge
-    if (readiness === 'conflict') {
-        console.log('PR has merge conflict — moving ticket to In Rework');
-        escalateToInRework({
+    // GitHub hasn't computed mergeability yet, CI checks still running, the
+    // branch is behind base, or the PR conflicts — the gate handles them all.
+    var readiness = decideMergeReadiness(probe.mergeable, probe.mergeableState);
+    if (readiness !== 'merge') {
+        return handlePreMergeGate({
+            readiness: readiness,
+            mergeableState: probe.mergeableState,
             scm: scm,
             prNumber: prNumber,
+            prUrl: prUrl,
             ticketKey: ticketKey,
             customParams: customParams,
             config: config,
-            reason: 'merge conflict',
-            commentBody: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE CONFLICT* — PR #' + prNumber + ' has a merge conflict with main. Please resolve conflicts and re-push.\n\n[View PR|' + prUrl + ']{panel}'
+            owner: owner,
+            repo: repo
         });
-        return true;
     }
 
-    // Attempt merge
-    try {
-        scm.mergePr(prNumber, 'squash');
-        console.log('✅ PR #' + prNumber + ' merged successfully');
-
-        // Remove GitHub PR label immediately (cosmetic — PR is closed)
-        stripMergedPrLabel(scm, prNumber);
-        releaseLock(ticketKey, customParams);
-
-        finalizeMergedTicket(params, ticketKey, jiraConfig);
-
-        // Now safe to remove pr_approved from Jira — status is already updated
-        stripApprovedLabelAfterMerge(ticketKey);
-        return true;
-    } catch (mergeErr) {
-        console.warn('Merge failed:', mergeErr);
-        var failure = classifyMergeError(mergeErr);
-
-        if (failure === 'temporary') {
-            // Temporary block — retry next cycle, keep pr_approved
-            console.log('Merge blocked temporarily — will retry next cycle');
-            return false;
-        }
-
-        var reason = failure === 'conflict' ? 'merge conflict' : 'CI checks failing or PR not mergeable';
-        escalateToInRework({
-            scm: scm,
-            prNumber: prNumber,
-            ticketKey: ticketKey,
-            customParams: customParams,
-            config: config,
-            reason: reason,
-            commentBody: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE FAILED* — Could not merge PR #' + prNumber + ': ' + reason + '. Please check and re-push.\n\n[View PR|' + prUrl + ']{panel}'
-        });
-
-        // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-        // wrote outputs/*_usage.json during the agent run.
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
-
-        return true;
-    }
+    return tryMergeAndFinalize({
+        params: params,
+        scm: scm,
+        prNumber: prNumber,
+        prUrl: prUrl,
+        ticketKey: ticketKey,
+        jiraConfig: jiraConfig,
+        customParams: customParams,
+        config: config
+    });
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams, triggerAutoStartRework, decideMergeReadiness, classifyMergeError };
+    module.exports = { action, getGitHubRepoInfo, parseGitHubRemote, pickGitHubRemoteLine, resolveCustomParams, triggerAutoStartRework, decideMergeReadiness, classifyMergeError };
 }

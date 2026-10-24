@@ -181,6 +181,35 @@ suite('machineSm decision core', function () {
         assert.equal(acts[0].type, 'skip');
     });
 
+    // ── CRAP-ratchet branch coverage (gh-1185): the three remaining skip
+    //    leaves of the decision core, pinned so the extracted helpers keep
+    //    100% branch coverage (CRAP <= 8 needs ~full coverage at CC 7). ──
+
+    test('no PR and no machine leg label → plain skip (nothing to re-fire)', function () {
+        var acts = agent.decideActions(st([], null), {});
+        assert.equal(acts.length, 1);
+        assert.equal(acts[0].type, 'skip');
+        assert.equal(acts[0].reason, 'no PR and no machine leg to (re)fire');
+    });
+
+    test('reviewed but not approved and NO agent:rework label → waiting skip', function () {
+        var greenPr = { number: 7, state: 'OPEN', checkConclusion: 'green',
+                        mergeState: 'CLEAN', mergeable: true };
+        var acts = agent.decideActions(st(['ai_pr_reviewed'], greenPr), {});
+        assert.equal(acts.length, 1);
+        assert.equal(acts[0].type, 'skip');
+        assert.equal(acts[0].reason, 'reviewed, verdict not approve — awaiting rework labeling');
+    });
+
+    test('green PR with no machine-leg labels at all → steady state', function () {
+        var greenPr = { number: 7, state: 'OPEN', checkConclusion: 'green',
+                        mergeState: 'CLEAN', mergeable: true };
+        var acts = agent.decideActions(st([], greenPr), {});
+        assert.equal(acts.length, 1);
+        assert.equal(acts[0].type, 'skip');
+        assert.equal(acts[0].reason, 'steady state');
+    });
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     test('issueFromRunTitle parses gh-N from run titles', function () {
@@ -328,6 +357,18 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
         assert.equal(p.calls.replies.length, 1, 'only the RESOLVED thread gets an ack');
         assert.equal(p.calls.replies[0].threadId, 'RT_2');
         assert.equal(p.calls.resolves.length, 1);
+    });
+
+    test('a failed ack reply after a successful resolve is logged, not fatal (gh-1185 branch coverage)', function () {
+        // Resolve-first order: the resolve is counted even when the
+        // cosmetic ack reply throws — the thread stays resolved and the
+        // next tick's re-selection filters it out.
+        var p = providerWith([sug(1), sug(2)]);
+        p.replyToThread = function () { throw new Error('comment API down'); };
+        var out = agent.resolveSuggestionThreads(p, 1457, HEAD,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 2, 'both resolves are credited despite the ack failures');
+        assert.equal(p.calls.resolves.length, 2);
     });
 
     test('the verdict gate passes the machine-author allowlist to verdictRecords (gh-828 review round 2)', function () {

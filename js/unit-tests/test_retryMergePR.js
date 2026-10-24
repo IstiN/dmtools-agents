@@ -228,6 +228,74 @@ suite('retryMergePR: stage-label fallback (gh-916)', function() {
     });
 });
 
+// ── gh-1185: characterization tests for getGitHubRepoInfo (the last
+// uncovered retryMergePR function) and the token-usage failure catch. ──
+
+suite('retryMergePR: getGitHubRepoInfo (gh-1185 characterization)', function () {
+    function loadWithCli(cliBehavior) {
+        var calls = [];
+        return {
+            calls: calls,
+            mod: loadModule('js/retryMergePR.js', makeRequire({
+                './config.js': configModule,
+                './configLoader.js': { loadProjectConfig: function () { return {}; }, resolveInstructions: configLoaderModule.resolveInstructions },
+                './common/scm.js': { createScm: function () { return {}; } },
+                './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function () { return false; } },
+                './common/tokenUsageComment.js': { postTokenUsageComments: function () {}, customParamsOf: function () { return {}; } },
+                './common/trackers.js': d4TrackersWith({ jira_remove_label: function () {}, jira_post_comment: function () {}, jira_move_to_status: function () {} })
+            }), {
+                cli_execute_command: function (opts) {
+                    calls.push(opts && opts.command);
+                    return cliBehavior();
+                }
+            })
+        };
+    }
+
+    test('parses owner/repo from an SSH remote line, stripping the .git suffix', function () {
+        var loaded = loadWithCli(function () { return 'origin  git@github.com:IstiN/trackstate.git\n'; });
+        assert.deepEqual(loaded.mod.getGitHubRepoInfo(), { owner: 'IstiN', repo: 'trackstate' });
+        assert.deepEqual(loaded.calls, ['git config --get remote.origin.url']);
+    });
+
+    test('parses owner/repo from an https remote line among noise', function () {
+        var loaded = loadWithCli(function () {
+            return 'some noise\nhttps://github.com/acme/widgets.git\nmore noise';
+        });
+        assert.deepEqual(loaded.mod.getGitHubRepoInfo(), { owner: 'acme', repo: 'widgets' });
+    });
+
+    test('a remote without a .git suffix is returned as-is', function () {
+        var loaded = loadWithCli(function () { return 'https://github.com/acme/widgets\n'; });
+        assert.deepEqual(loaded.mod.getGitHubRepoInfo(), { owner: 'acme', repo: 'widgets' });
+    });
+
+    test('multi-segment repo paths pin the regex semantics: the first segment after owner wins', function () {
+        var loaded = loadWithCli(function () { return 'git@github.com:acme/path/to/repo-name.git'; });
+        assert.deepEqual(loaded.mod.getGitHubRepoInfo(), { owner: 'acme', repo: 'path' });
+    });
+
+    test('path/query/fragment characters terminate the repo match (regex semantics pinned)', function () {
+        var loaded = loadWithCli(function () { return '\thttps://github.com/acme/widgets.git#main  \n'; });
+        assert.deepEqual(loaded.mod.getGitHubRepoInfo(), { owner: 'acme', repo: 'widgets' });
+    });
+
+    test('no github.com remote line → null', function () {
+        var loaded = loadWithCli(function () { return 'git@gitlab.internal:acme/widgets.git\n'; });
+        assert.equal(loaded.mod.getGitHubRepoInfo(), null);
+    });
+
+    test('empty CLI output → null', function () {
+        var loaded = loadWithCli(function () { return ''; });
+        assert.equal(loaded.mod.getGitHubRepoInfo(), null);
+    });
+
+    test('a failing git CLI → null (never throws)', function () {
+        var loaded = loadWithCli(function () { throw new Error('git not found'); });
+        assert.equal(loaded.mod.getGitHubRepoInfo(), null);
+    });
+});
+
 // ── gh-980: characterization tests for every action() branch, pinning the
 // behaviour the CRAP refactor must preserve (retry/skip decision branches,
 // merge error classification, tracker/SCM call order). ──
@@ -302,7 +370,10 @@ suite('retryMergePR: action branch characterization (gh-980)', function() {
                     triggerConfiguredWorkflowForTicket: function() { return true; }
                 },
                 './common/tokenUsageComment.js': {
-                    postTokenUsageComments: function(ticketKey, o) { tokenCalls.push({ ticketKey: ticketKey, opts: o }); },
+                    postTokenUsageComments: function(ticketKey, o) {
+                        if (opts.tokenUsageThrows) { throw opts.tokenUsageThrows; }
+                        tokenCalls.push({ ticketKey: ticketKey, opts: o });
+                    },
                     customParamsOf: function(params) {
                         return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
                     }
@@ -462,6 +533,18 @@ suite('retryMergePR: action branch characterization (gh-980)', function() {
             { key: 'TS-125', statusName: configModule.STATUSES.IN_REWORK });
         assert.equal(loaded.tokenCalls.length, 1, 'token usage summary posts once on the failing path');
         assert.equal(loaded.tokenCalls[0].ticketKey, 'TS-125');
+    });
+
+    test('a failing token-usage post never fails the action (gh-1185 branch coverage)', function() {
+        var loaded = load({
+            prDetail: { mergeable: true, mergeable_state: 'clean' },
+            mergeError: new Error('validation failed'),
+            tokenUsageThrows: new Error('comment API down')
+        });
+        var out = loaded.mod.action(runParams({ removeLabel: 'sm_pr_merge_triggered' }));
+        assert.equal(out, true, 'the escalation result survives the token-usage failure');
+        assert.deepEqual(toolsOf(loaded.calls, 'jira_move_to_status')[0].args,
+            { key: 'TS-125', statusName: configModule.STATUSES.IN_REWORK });
     });
 });
 

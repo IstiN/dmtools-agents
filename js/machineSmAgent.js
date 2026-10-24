@@ -65,122 +65,133 @@ var machineAuthorModule = require('./common/machineAuthor.js');
 //   activeRunForIssue: bool
 // }
 // cfg = { maxReworkRounds: int }
+//
+// gh-1185 (CRAP): the decision table is split into the pure per-stage
+// selectors below — engine-level skips, no-PR dead letters, closed-PR
+// handling, red-CI routing, approved-green routing and the unapproved-green
+// tail. decideActions stays the sequencer; every reason string and action
+// shape is verbatim.
 // ─────────────────────────────────────────────────────────────────────────────
-function decideActions(state, cfg) {
-    var actions = [];
-    var labels = (state.issue && state.issue.labels) || [];
-    var has = function (l) { return labels.indexOf(l) !== -1; };
-    var maxRounds = (cfg && cfg.maxReworkRounds) || 2;
 
-    // 'blocked' = human hold (fa #939): the official freeze switch — the
-    // reconciler skips the item ENTIRELY (no dead-letter re-fire, no branch
-    // update, no merge, no close) until a human removes the label.
-    // Engine-level, evaluated before every other decision; the SM rule
-    // engine (githubSource.matchesGuards) honors the same label.
+function issueLabelsOf(state) {
+    return (state.issue && state.issue.labels) || [];
+}
+
+function maxReworkRoundsOf(cfg) {
+    return (cfg && cfg.maxReworkRounds) || 2;
+}
+
+// 'blocked' = human hold (fa #939): the official freeze switch — the
+// reconciler skips the item ENTIRELY (no dead-letter re-fire, no branch
+// update, no merge, no close) until a human removes the label.
+// Engine-level, evaluated before every other decision; the SM rule
+// engine (githubSource.matchesGuards) honors the same label.
+function decideEngineSkip(has, activeRunForIssue) {
     if (has('blocked')) {
-        actions.push({ type: 'skip', reason: 'blocked — human hold; the machine skips this item entirely' });
-        return actions;
+        return { type: 'skip', reason: 'blocked — human hold; the machine skips this item entirely' };
     }
     if (has('needs-human')) {
-        actions.push({ type: 'skip', reason: 'needs-human — waiting for a human' });
-        return actions;
+        return { type: 'skip', reason: 'needs-human — waiting for a human' };
     }
-    if (state.activeRunForIssue) {
-        actions.push({ type: 'skip', reason: 'active AI Teammate run for this issue' });
-        return actions;
+    if (activeRunForIssue) {
+        return { type: 'skip', reason: 'active AI Teammate run for this issue' };
     }
+    return null;
+}
 
-    // Rework round cap — mirrors ai-teammate.yml MAX_AUTO_REWORK_ROUNDS:
-    // escalate instead of looping rework forever.
+// Highest rework-round label, 0 when none — mirrors ai-teammate.yml
+// MAX_AUTO_REWORK_ROUNDS bookkeeping.
+function countReworkRounds(labels) {
     var rounds = 0;
     labels.forEach(function (l) {
         var m = /^rework-round-(\d+)$/.exec(l);
         if (m) rounds = Math.max(rounds, parseInt(m[1], 10));
     });
-    var reworkExhausted = rounds >= maxRounds;
+    return rounds;
+}
 
-    var pr = state.pr;
-    if (!pr) {
-        // No open PR and nothing merged for this issue yet.
-        if (has('ai_developed')) {
-            actions.push({ type: 'dispatch', leg: 'rework',
-                reason: 'ai_developed but no open PR (dead dev run)' });
-        } else if (has('agent:dev')) {
-            actions.push({ type: 'dispatch', leg: 'dev',
-                reason: 'agent:dev labeled, no PR yet (dead dev letter)' });
-        } else if (has('agent:rework')) {
-            actions.push({ type: 'dispatch', leg: 'rework',
-                reason: 'stale agent:rework with no PR' });
-        } else {
-            actions.push({ type: 'skip', reason: 'no PR and no machine leg to (re)fire' });
-        }
-        return actions;
+// No open PR and nothing merged for this issue yet: re-fire the dead
+// letter of whichever machine leg last touched the issue.
+function decideNoPrActions(has) {
+    if (has('ai_developed')) {
+        return [{ type: 'dispatch', leg: 'rework',
+            reason: 'ai_developed but no open PR (dead dev run)' }];
     }
-
-    if (pr.state !== 'OPEN') {
-        if (pr.state === 'MERGED') {
-            actions.push({ type: 'closeIssue',
-                reason: 'linked PR #' + pr.number + ' merged (Fixes #N safety net)' });
-        } else {
-            actions.push({ type: 'skip', reason: 'linked PR #' + pr.number + ' is ' + pr.state });
-        }
-        return actions;
+    if (has('agent:dev')) {
+        return [{ type: 'dispatch', leg: 'dev',
+            reason: 'agent:dev labeled, no PR yet (dead dev letter)' }];
     }
-
-    if (pr.checkConclusion === 'pending') {
-        actions.push({ type: 'skip', reason: 'PR #' + pr.number + ' checks pending' });
-        return actions;
+    if (has('agent:rework')) {
+        return [{ type: 'dispatch', leg: 'rework',
+            reason: 'stale agent:rework with no PR' }];
     }
+    return [{ type: 'skip', reason: 'no PR and no machine leg to (re)fire' }];
+}
 
-    if (pr.checkConclusion === 'red') {
-        if (reworkExhausted) {
-            actions.push({ type: 'label', label: 'needs-human',
-                reason: 'CI red after ' + rounds + ' rework rounds — escalating' });
-        } else {
-            actions.push({ type: 'dispatch', leg: 'rework',
-                reason: 'CI red on PR #' + pr.number + (has('agent:rework')
-                    ? ' (stale agent:rework — dead letter re-fire)'
-                    : '') });
-        }
-        return actions;
+// Merged PR closes the issue (Fixes #N safety net); any other non-open
+// state is a plain skip.
+function decideClosedPrActions(pr) {
+    if (pr.state === 'MERGED') {
+        return [{ type: 'closeIssue',
+            reason: 'linked PR #' + pr.number + ' merged (Fixes #N safety net)' }];
     }
+    return [{ type: 'skip', reason: 'linked PR #' + pr.number + ' is ' + pr.state }];
+}
 
-    // ── green below ──────────────────────────────────────────────────────────
-    if (has('pr_approved')) {
-        if (pr.mergeState === 'BEHIND') {
-            actions.push({ type: 'updateBranch',
-                reason: 'approved but behind main — updating branch' });
-        } else if (pr.mergeState === 'CLEAN' || pr.mergeable === true) {
-            actions.push({ type: 'merge',
-                reason: 'approved + green + mergeable (merge-trigger parity)' });
-        } else if (pr.mergeState === 'BLOCKED') {
-            // gh-828 (live fa #1457–#1470, 2026-10-10): BLOCKED on an
-            // approved green head is the unresolved-thread conversation
-            // gate (gh-683 branch protection). The rework arm is withheld
-            // on APPROVE+blocking=0 (gh-807) and the rework leg is the
-            // only other owner of thread resolution — so the machine's own
-            // non-blocking suggestion threads held every approved PR
-            // BLOCKED for ~8h. Resolve them IN-TICK: gate on the head's
-            // effective machine verdict record (APPROVE + census
-            // blocking=0), then ack-reply + resolve each unresolved
-            // machine-authored non-blocking thread (bounded, idempotent).
-            // Human threads never resolve here (AC3) — they keep BLOCKED
-            // and surface to humans. If threads were not the blocker
-            // (e.g. a pending required check also reads BLOCKED), the leg
-            // is a harmless no-op and the next tick re-evaluates.
-            actions.push({ type: 'resolveSuggestionThreads',
-                reason: 'approved + BLOCKED — unresolved-thread conversation gate (gh-828): resolve machine-owned non-blocking threads in-tick' });
-        } else {
-            actions.push({ type: 'skip',
-                reason: 'approved but merge state ' + pr.mergeState });
-        }
-        return actions;
+// CI red: escalate to a human once the rework-round cap is spent, else
+// re-fire rework (a stale agent:rework here is a dead letter — re-fire it).
+function decideRedPrActions(pr, has, reworkExhausted, rounds) {
+    if (reworkExhausted) {
+        return [{ type: 'label', label: 'needs-human',
+            reason: 'CI red after ' + rounds + ' rework rounds — escalating' }];
     }
+    return [{ type: 'dispatch', leg: 'rework',
+        reason: 'CI red on PR #' + pr.number + (has('agent:rework')
+            ? ' (stale agent:rework — dead letter re-fire)'
+            : '') }];
+}
 
+// ── green + approved ─────────────────────────────────────────────────────
+// BEHIND updates the branch; CLEAN (or mergeable=true) merges with
+// merge-trigger parity; BLOCKED is the unresolved-thread conversation gate
+// (gh-828) resolved in-tick; anything else waits for a human look.
+function decideApprovedGreenActions(pr) {
+    if (pr.mergeState === 'BEHIND') {
+        return [{ type: 'updateBranch',
+            reason: 'approved but behind main — updating branch' }];
+    }
+    if (pr.mergeState === 'CLEAN' || pr.mergeable === true) {
+        return [{ type: 'merge',
+            reason: 'approved + green + mergeable (merge-trigger parity)' }];
+    }
+    if (pr.mergeState === 'BLOCKED') {
+        // gh-828 (live fa #1457–#1470, 2026-10-10): BLOCKED on an
+        // approved green head is the unresolved-thread conversation
+        // gate (gh-683 branch protection). The rework arm is withheld
+        // on APPROVE+blocking=0 (gh-807) and the rework leg is the
+        // only other owner of thread resolution — so the machine's own
+        // non-blocking suggestion threads held every approved PR
+        // BLOCKED for ~8h. Resolve them IN-TICK: gate on the head's
+        // effective machine verdict record (APPROVE + census
+        // blocking=0), then ack-reply + resolve each unresolved
+        // machine-authored non-blocking thread (bounded, idempotent).
+        // Human threads never resolve here (AC3) — they keep BLOCKED
+        // and surface to humans. If threads were not the blocker
+        // (e.g. a pending required check also reads BLOCKED), the leg
+        // is a harmless no-op and the next tick re-evaluates.
+        return [{ type: 'resolveSuggestionThreads',
+            reason: 'approved + BLOCKED — unresolved-thread conversation gate (gh-828): resolve machine-owned non-blocking threads in-tick' }];
+    }
+    return [{ type: 'skip',
+        reason: 'approved but merge state ' + pr.mergeState }];
+}
+
+// Green PR without approval: route the review leg, re-fire a dead rework
+// letter, or wait in the steady state.
+function decideGreenUnapprovedActions(has, pr) {
     if (has('ai_developed') && !has('ai_pr_reviewed')) {
-        actions.push({ type: 'dispatch', leg: 'review',
-            reason: 'green PR #' + pr.number + ' awaits machine review' });
-        return actions;
+        return [{ type: 'dispatch', leg: 'review',
+            reason: 'green PR #' + pr.number + ' awaits machine review' }];
     }
     if (has('ai_pr_reviewed') && !has('pr_approved')) {
         // Reviewed but the verdict never reached approve. The review leg
@@ -188,17 +199,44 @@ function decideActions(state, cfg) {
         // that label is present with no active run it is another dead
         // letter — re-fire it. Otherwise wait (verdict processing pending).
         if (has('agent:rework')) {
-            actions.push({ type: 'dispatch', leg: 'rework',
-                reason: 'stale agent:rework after review (dead letter re-fire)' });
-        } else {
-            actions.push({ type: 'skip',
-                reason: 'reviewed, verdict not approve — awaiting rework labeling' });
+            return [{ type: 'dispatch', leg: 'rework',
+                reason: 'stale agent:rework after review (dead letter re-fire)' }];
         }
-        return actions;
+        return [{ type: 'skip',
+            reason: 'reviewed, verdict not approve — awaiting rework labeling' }];
+    }
+    return [{ type: 'skip', reason: 'steady state' }];
+}
+
+function decideActions(state, cfg) {
+    var labels = issueLabelsOf(state);
+    var has = function (l) { return labels.indexOf(l) !== -1; };
+    var maxRounds = maxReworkRoundsOf(cfg);
+
+    var skip = decideEngineSkip(has, state.activeRunForIssue);
+    if (skip) return [skip];
+
+    // Rework round cap — mirrors ai-teammate.yml MAX_AUTO_REWORK_ROUNDS:
+    // escalate instead of looping rework forever.
+    var rounds = countReworkRounds(labels);
+    var reworkExhausted = rounds >= maxRounds;
+
+    var pr = state.pr;
+    if (!pr) return decideNoPrActions(has);
+
+    if (pr.state !== 'OPEN') return decideClosedPrActions(pr);
+
+    if (pr.checkConclusion === 'pending') {
+        return [{ type: 'skip', reason: 'PR #' + pr.number + ' checks pending' }];
     }
 
-    actions.push({ type: 'skip', reason: 'steady state' });
-    return actions;
+    if (pr.checkConclusion === 'red') {
+        return decideRedPrActions(pr, has, reworkExhausted, rounds);
+    }
+
+    // ── green below ──────────────────────────────────────────────────────────
+    if (has('pr_approved')) return decideApprovedGreenActions(pr);
+    return decideGreenUnapprovedActions(has, pr);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -246,49 +284,44 @@ function executeAction(provider, action, issue, cfg) {
 // everywhere: no head sha, no machine logins configured, missing provider
 // primitives (gitlab), or a non-APPROVE / blocking census record → zero
 // resolutions. A per-thread failure is logged and never aborts the rest.
-function resolveSuggestionThreads(provider, prNumber, headSha, cfg) {
-    var none = { resolved: 0 };
-    if (!provider || typeof provider.verdictRecords !== 'function' ||
-        typeof provider.reviewThreadList !== 'function' ||
-        typeof provider.replyToThread !== 'function' ||
-        typeof provider.resolveThread !== 'function') {
-        console.warn('  ⚠️ resolveSuggestionThreads: provider lacks the verdict/thread primitives — skipped (gitlab twin has none yet)');
-        return none;
-    }
-    var logins = (cfg && cfg.machineLogins) || [];
-    if (!headSha || !logins.length) {
-        console.log('  ⏭️  resolveSuggestionThreads on PR #' + prNumber +
-            ': no head sha or no machine logins configured — nothing resolves (fail closed)');
-        return none;
-    }
+//
+// gh-1185 (CRAP): decomposed into the verbatim stages — the provider
+// primitive gate, the cfg knobs, the verdict-thread selection and the
+// resolve-first per-thread loop.
+function supportsThreadResolution(provider) {
+    return !!provider && typeof provider.verdictRecords === 'function' &&
+        typeof provider.reviewThreadList === 'function' &&
+        typeof provider.replyToThread === 'function' &&
+        typeof provider.resolveThread === 'function';
+}
+
+function machineLoginsOf(cfg) {
+    return (cfg && cfg.machineLogins) || [];
+}
+
+function resolveMaxThreadsKnob(cfg) {
+    return (cfg && cfg.maxResolveThreads) || reviewVerdictsModule.DEFAULT_RESOLVE_THREADS_CAP;
+}
+
+function selectResolvableThreadsFor(provider, prNumber, headSha, logins, cfg) {
     var records = provider.verdictRecords(prNumber, { authorLogins: logins });
     var threads = provider.reviewThreadList(prNumber);
-    var sel = reviewVerdictsModule.selectResolvableThreads(records, headSha, threads, {
+    return reviewVerdictsModule.selectResolvableThreads(records, headSha, threads, {
         machineLogins: logins,
-        maxThreads: (cfg && cfg.maxResolveThreads) || reviewVerdictsModule.DEFAULT_RESOLVE_THREADS_CAP
+        maxThreads: resolveMaxThreadsKnob(cfg)
     });
-    if (sel.gate !== 'approve') {
-        console.log('  ⏭️  resolveSuggestionThreads on PR #' + prNumber +
-            ': verdict gate "' + sel.gate + '" — nothing resolves (fail closed)');
-        return none;
-    }
-    if (!sel.resolvable.length) {
-        console.log('  ⏭️  resolveSuggestionThreads on PR #' + prNumber +
-            ': no eligible threads (human ' + sel.skipped.human + ', blocking ' + sel.skipped.blocking +
-            ', already resolved ' + sel.skipped.resolved + ', no id ' + sel.skipped.noThreadId + ')');
-        return none;
-    }
-    var ack = reviewVerdictsModule.buildThreadAckReply();
+}
+
+// Resolve FIRST, ack only on success (gh-828 review round 3): with
+// reply-first, a persistent resolve failure (transient GraphQL error,
+// token drift) leaves the thread unresolved; the next tick re-selects it
+// and posts another ack — one duplicate per tick, unbounded. A resolved
+// thread missing its ack is a cosmetic loss the code already tolerates
+// (replyToThread may fail after a successful resolve); an unresolved
+// thread carrying fresh acks is spam. Returns the credited resolve count.
+function resolveEachThread(provider, prNumber, resolvable, ack) {
     var resolved = 0;
-    sel.resolvable.forEach(function (t) {
-        // gh-828 review round 3: resolve FIRST, ack only on success. With
-        // reply-first, a persistent resolve failure (transient GraphQL
-        // error, token drift) leaves the thread unresolved; the next tick
-        // re-selects it and posts another ack — one duplicate per tick,
-        // unbounded. A resolved thread missing its ack is a cosmetic loss
-        // the code already tolerates (replyToThread may fail after a
-        // successful resolve); an unresolved thread carrying fresh acks
-        // is spam.
+    resolvable.forEach(function (t) {
         try {
             provider.resolveThread(prNumber, t);
             resolved++;
@@ -302,6 +335,35 @@ function resolveSuggestionThreads(provider, prNumber, headSha, cfg) {
             console.warn('  ⚠️ ack reply failed on a resolved thread of PR #' + prNumber + ': ' + (eReply.message || eReply));
         }
     });
+    return resolved;
+}
+
+function resolveSuggestionThreads(provider, prNumber, headSha, cfg) {
+    var none = { resolved: 0 };
+    if (!supportsThreadResolution(provider)) {
+        console.warn('  ⚠️ resolveSuggestionThreads: provider lacks the verdict/thread primitives — skipped (gitlab twin has none yet)');
+        return none;
+    }
+    var logins = machineLoginsOf(cfg);
+    if (!headSha || !logins.length) {
+        console.log('  ⏭️  resolveSuggestionThreads on PR #' + prNumber +
+            ': no head sha or no machine logins configured — nothing resolves (fail closed)');
+        return none;
+    }
+    var sel = selectResolvableThreadsFor(provider, prNumber, headSha, logins, cfg);
+    if (sel.gate !== 'approve') {
+        console.log('  ⏭️  resolveSuggestionThreads on PR #' + prNumber +
+            ': verdict gate "' + sel.gate + '" — nothing resolves (fail closed)');
+        return none;
+    }
+    if (!sel.resolvable.length) {
+        console.log('  ⏭️  resolveSuggestionThreads on PR #' + prNumber +
+            ': no eligible threads (human ' + sel.skipped.human + ', blocking ' + sel.skipped.blocking +
+            ', already resolved ' + sel.skipped.resolved + ', no id ' + sel.skipped.noThreadId + ')');
+        return none;
+    }
+    var ack = reviewVerdictsModule.buildThreadAckReply();
+    var resolved = resolveEachThread(provider, prNumber, sel.resolvable, ack);
     console.log('  ✅ resolveSuggestionThreads on PR #' + prNumber + ': resolved ' + resolved +
         '/' + sel.resolvable.length + ' non-blocking machine thread(s)');
     return { resolved: resolved };
