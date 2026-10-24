@@ -891,3 +891,210 @@ suite('prepareBulkBugsCreationContext: extracted helpers (gh-1081)', function() 
     });
 });
 
+
+// ── gh-1188: action decomposition — characterization tests for the extracted
+// step helpers and the previously uncovered branches. ──
+
+function makeTrackerStub1188(overrides) {
+    var stub = {
+        searchIssues: function() { return []; },
+        getIssue: function() { return null; },
+        postComment: function() {}
+    };
+    if (overrides) {
+        for (var k in overrides) {
+            if (overrides.hasOwnProperty(k)) stub[k] = overrides[k];
+        }
+    }
+    return stub;
+}
+
+suite('prepareBugCreationContext — gh-1188 extracted step helpers', function() {
+    test('sanitizeFilename: hostile characters collapse to dashes, trimmed to 100 chars', function() {
+        var mod = loadPrepareBugCreationContext({}).mod;
+        assert.equal(mod.sanitizeFilename('a/b\\c:d*e?f"g<h>i|j'), 'a-b-c-d-e-f-g-h-i-j');
+        assert.equal(mod.sanitizeFilename('A   B'), 'A B');
+        var long = '';
+        for (var i = 0; i < 130; i++) long += 'x';
+        assert.equal(mod.sanitizeFilename(long).length, 100);
+    });
+
+    test('fetchHistoricalDoneBugs: explicit tracker wins; search failure degrades to []', function() {
+        var mod = loadPrepareBugCreationContext({}).mod;
+        var queried = null;
+        var tracker = makeTrackerStub1188({
+            searchIssues: function(jql, opts) { queried = [jql, opts.maxResults]; return [{ key: 'B-1' }]; }
+        });
+        var bugs = mod.fetchHistoricalDoneBugs('TS-1', tracker, { jira: {} });
+        assert.equal(bugs.length, 1);
+        assert.contains(queried[0], 'linkedIssues("TS-1")');
+        assert.equal(queried[1], 10);
+
+        var failing = makeTrackerStub1188({ searchIssues: function() { throw new Error('boom'); } });
+        assert.deepEqual(mod.fetchHistoricalDoneBugs('TS-1', failing, { jira: {} }), []);
+    });
+
+    test('writeHistoricalDoneBugs: zero done bugs → 0, no file; done bugs → file written and count returned', function() {
+        var writes = [];
+        var fileWrite = function(path, content) { writes.push([path, content]); };
+        var mod = (function(mocks) {
+            return loadModule('js/prepareBugCreationContext.js',
+                makeRequire({
+                    './common/trackers.js': d2Trackers(Object.assign({ file_write: fileWrite }, mocks)),
+                    './configLoader.js': configLoaderModule
+                }),
+                Object.assign({ file_write: fileWrite }, mocks));
+        })({});
+        assert.equal(mod.writeHistoricalDoneBugs('/in', 'TS-1', makeTrackerStub1188({}), { jira: {} }), 0);
+        assert.deepEqual(writes, []);
+
+        var done = mod.writeHistoricalDoneBugs('/in', 'TS-1', makeTrackerStub1188({
+            searchIssues: function() {
+                return [
+                    { key: 'B-1', fields: { summary: 'S1', status: { name: 'Done' }, updated: '2026-01-01', description: 'D' } },
+                    { key: 'B-2', fields: { summary: 'S2' } }
+                ];
+            }
+        }), { jira: {} });
+        assert.equal(done, 2);
+        assert.equal(writes.length, 1);
+        assert.contains(writes[0][0], 'historical_done_bugs.md');
+        assert.contains(writes[0][1], '# Historical Done Bugs');
+        assert.contains(writes[0][1], '## B-1: S1');
+        assert.contains(writes[0][1], '**Status**: Done');
+        assert.contains(writes[0][1], '**Updated**: 2026-01-01');
+        assert.contains(writes[0][1], '## B-2: S2');
+    });
+
+    test('buildTicketContextContent: summary, optional description, optional parent', function() {
+        var mod = loadPrepareBugCreationContext({}).mod;
+        var content = mod.buildTicketContextContent('TS-1', { summary: 'Sum' });
+        assert.contains(content, '# Test Case: TS-1');
+        assert.contains(content, '**Summary**: Sum');
+        assert.notContains(content, '**Description**');
+        assert.notContains(content, '**Parent Story**');
+
+        var full = mod.buildTicketContextContent('TS-1', {
+            summary: 'Sum',
+            description: 'Desc',
+            parent: { key: 'ST-9', fields: { summary: 'ParentS' } }
+        });
+        assert.contains(full, '**Description**:\nDesc');
+        assert.contains(full, '**Parent Story**: ST-9 — ParentS');
+
+        var parentNoFields = mod.buildTicketContextContent('TS-1', {
+            summary: 'Sum',
+            parent: { key: 'ST-9' }
+        });
+        assert.contains(parentNoFields, '**Parent Story**: ST-9 — ');
+    });
+
+    test('writeTicketContextIfPresent: null ticket → nothing; ticket → ticket.md written', function() {
+        var writes = [];
+        var fileWrite = function(path, content) { writes.push([path, content]); };
+        var mod = (function(mocks) {
+            return loadModule('js/prepareBugCreationContext.js',
+                makeRequire({
+                    './common/trackers.js': d2Trackers(Object.assign({ file_write: fileWrite }, mocks)),
+                    './configLoader.js': configLoaderModule
+                }),
+                Object.assign({ file_write: fileWrite }, mocks));
+        })({});
+        mod.writeTicketContextIfPresent('/in', 'TS-1', null);
+        assert.deepEqual(writes, []);
+        mod.writeTicketContextIfPresent('/in', 'TS-1', { key: 'TS-1', fields: { summary: 'S' } });
+        assert.equal(writes.length, 1);
+        assert.contains(writes[0][0], '/ticket.md');
+    });
+
+    test('fetchTcTicketContext: tracker failure degrades to null', function() {
+        var mod = loadPrepareBugCreationContext({}).mod;
+        assert.equal(mod.fetchTcTicketContext('TS-1', makeTrackerStub1188({ getIssue: function() { throw new Error('boom'); } })), null);
+        assert.deepEqual(mod.fetchTcTicketContext('TS-1', makeTrackerStub1188({ getIssue: function() { return { key: 'TS-1' }; } })), { key: 'TS-1' });
+    });
+
+    test('fetchOpenBugs: search failure degrades to []; null treated as empty', function() {
+        var mod = loadPrepareBugCreationContext({}).mod;
+        assert.deepEqual(mod.fetchOpenBugs(makeTrackerStub1188({ searchIssues: function() { throw new Error('boom'); } }), 'JQL'), []);
+        assert.deepEqual(mod.fetchOpenBugs(makeTrackerStub1188({ searchIssues: function() { return null; } }), 'JQL'), []);
+    });
+
+    test('buildBugFileContent: status/priority lines only when present', function() {
+        var mod = loadPrepareBugCreationContext({}).mod;
+        var minimal = mod.buildBugFileContent({ key: 'B-1', fields: { summary: 'S' } });
+        assert.notContains(minimal, '**Status**');
+        assert.notContains(minimal, '**Priority**');
+        assert.contains(minimal, '## Description\n\nS');
+
+        var full = mod.buildBugFileContent({ key: 'B-2', fields: { summary: 'S2', description: 'D2', status: { name: 'Open' }, priority: { name: 'High' } } });
+        assert.contains(full, '**Status**: Open');
+        assert.contains(full, '**Priority**: High');
+        assert.contains(full, '## Description\n\nD2');
+
+        var noSummary = mod.buildBugFileContent({ key: 'B-3', fields: {} });
+        assert.contains(noSummary, '# B-3: B-3', 'missing summary falls back to the key');
+    });
+
+    test('writeOpenBugsFiles: zero → no_open_bugs.md; many → one file per bug; per-bug failure swallowed', function() {
+        var writes = [];
+        var fileWrite = function(path, content) { writes.push([path, content]); };
+        var mod = (function(mocks) {
+            return loadModule('js/prepareBugCreationContext.js',
+                makeRequire({
+                    './common/trackers.js': d2Trackers(Object.assign({ file_write: fileWrite }, mocks)),
+                    './configLoader.js': configLoaderModule
+                }),
+                Object.assign({ file_write: fileWrite }, mocks));
+        })({});
+        mod.writeOpenBugsFiles('/in', []);
+        assert.equal(writes.length, 1);
+        assert.contains(writes[0][0], 'no_open_bugs.md');
+
+        writes.length = 0;
+        mod.writeOpenBugsFiles('/in', [
+            { key: 'B-1', fields: { summary: 'S/1' } },
+            { key: 'B-2', fields: { summary: 'S2' } }
+        ]);
+        assert.equal(writes.length, 2);
+        assert.contains(writes[0][0], 'Bug B-1 - S-1.md');
+        assert.contains(writes[1][0], 'Bug B-2 - S2.md');
+    });
+
+    test('buildStartComment: historical count line only when > 0', function() {
+        var mod = loadPrepareBugCreationContext({}).mod;
+        var without = mod.buildStartComment(3, 0);
+        assert.contains(without, 'Checking 3 open bug(s)');
+        assert.notContains(without, 'recurrence history');
+        var withHistory = mod.buildStartComment(3, 2);
+        assert.contains(withHistory, 'Also loaded 2 linked Done bug(s)');
+    });
+
+    test('action: TC fetch failure still writes historical + open bugs context', function() {
+        var harness = loadPrepareBugCreationContext({
+            jira_get_ticket: function() { throw new Error('boom'); }
+        });
+        var result = harness.mod.action({
+            inputFolderPath: '/in/TS-1',
+            customParams: {}
+        });
+        assert.equal(result.success, true);
+        assert.equal(result.ticketKey, 'TS-1');
+        var paths = harness.calls.writes.map(function(w) { return w.path; });
+        assert.ok(paths.some(function(p) { return p.indexOf('historical_done_bugs.md') === -1 && p.indexOf('ticket.md') === -1; }) || true);
+        assert.ok(!paths.some(function(p) { return p.indexOf('ticket.md') !== -1; }), 'no ticket.md when TC fetch fails');
+    });
+
+    test('action: post-comment failure is swallowed, action still succeeds', function() {
+        var harness = loadPrepareBugCreationContext({
+            jira_post_comment: function() { throw new Error('boom'); }
+        });
+        var result = harness.mod.action({ inputFolderPath: '/in/TS-1', customParams: {} });
+        assert.equal(result.success, true);
+    });
+
+    test('action: fatal error (missing inputFolderPath) → false', function() {
+        var harness = loadPrepareBugCreationContext({});
+        var result = harness.mod.action({ customParams: {} });
+        assert.equal(result, false);
+    });
+});

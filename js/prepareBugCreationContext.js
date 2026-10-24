@@ -12,6 +12,14 @@
 // pack js/ root only — hoist every require to the top of the module.
 var trackersModule = require('./common/trackers.js');
 var configLoader = require('./configLoader.js');
+/**
+ * gh-1188: the actual-params resolution extracted from action — params that
+ * already carry inputFolderPath win, else jobParams, else the bare params.
+ */
+function resolveActionParams(params) {
+    return params.inputFolderPath ? params : (params.jobParams || params);
+}
+
 function sanitizeFilename(str) {
     return str.replace(/[\/\\:*?"<>|]/g, '-').replace(/\s+/g, ' ').substring(0, 100).trim();
 }
@@ -67,9 +75,128 @@ function writeHistoricalDoneBugs(inputFolder, ticketKey, tracker, queryConfig) {
     return doneBugs.length;
 }
 
+/**
+ * gh-1188: the TC context markdown builder extracted from action — pure.
+ */
+function buildTicketContextContent(ticketKey, tcFields) {
+    var tcContent = '# Test Case: ' + ticketKey + '\n\n';
+    tcContent += '**Summary**: ' + (tcFields.summary || '') + '\n\n';
+    if (tcFields.description) {
+        tcContent += '**Description**:\n' + tcFields.description + '\n\n';
+    }
+    if (tcFields.parent) {
+        tcContent += '**Parent Story**: ' + tcFields.parent.key + ' — ' + (tcFields.parent.fields && tcFields.parent.fields.summary || '') + '\n';
+    }
+    return tcContent;
+}
+
+/**
+ * gh-1188: the TC fetch step extracted from action — a tracker read failure
+ * degrades to no ticket context (as before), never a throw.
+ */
+function fetchTcTicketContext(ticketKey, tracker) {
+    try {
+        return tracker.getIssue(ticketKey);
+    } catch (e) {
+        console.warn('Could not fetch TC ticket:', e);
+        return null;
+    }
+}
+
+function writeTicketContextIfPresent(inputFolder, ticketKey, tcTicket) {
+    if (!tcTicket) {
+        return;
+    }
+    var tcFields = tcTicket.fields || {};
+    file_write(inputFolder + '/ticket.md', buildTicketContextContent(ticketKey, tcFields));
+    console.log('Wrote ticket.md for', ticketKey);
+}
+
+/**
+ * gh-1188: the open-bugs search extracted from action — a search failure
+ * degrades to zero bugs (as before), never a throw.
+ */
+function fetchOpenBugs(tracker, openBugsJql) {
+    try {
+        return tracker.searchIssues(openBugsJql, {
+            fields: ['key', 'summary', 'description', 'status', 'priority'],
+            maxResults: 200
+        }) || [];
+    } catch (e) {
+        console.error('Failed to fetch open bugs:', e);
+        return [];
+    }
+}
+
+/**
+ * gh-1188: one open-bug markdown document — pure.
+ */
+function buildBugFileContent(bug) {
+    var key = bug.key;
+    var fields = bug.fields || {};
+    var summary = fields.summary || key;
+    var description = fields.description || summary;
+    var status = fields.status ? fields.status.name : '';
+    var priority = fields.priority ? fields.priority.name : '';
+
+    var content = '# ' + key + ': ' + summary + '\n\n';
+    if (status) content += '**Status**: ' + status + '\n';
+    if (priority) content += '**Priority**: ' + priority + '\n';
+    content += '\n## Description\n\n' + description;
+    return content;
+}
+
+function writeBugFile(inputFolder, bug) {
+    try {
+        var content = buildBugFileContent(bug);
+        var summary = (bug.fields || {}).summary || bug.key;
+        var filename = 'Bug ' + bug.key + ' - ' + sanitizeFilename(summary) + '.md';
+        file_write(inputFolder + '/' + filename, content);
+    } catch (e) {
+        console.warn('Failed to write bug file for', bug.key, ':', e);
+    }
+}
+
+/**
+ * gh-1188: the open-bugs fan-out extracted from action — zero bugs writes
+ * the no_open_bugs.md marker (as before).
+ */
+function writeOpenBugsFiles(inputFolder, bugs) {
+    if (bugs.length === 0) {
+        file_write(inputFolder + '/no_open_bugs.md', 'No open bugs found in the project. Create a new bug ticket.');
+        console.log('No open bugs — wrote no_open_bugs.md');
+        return;
+    }
+    bugs.forEach(function(bug) {
+        writeBugFile(inputFolder, bug);
+    });
+    console.log('Wrote ' + bugs.length + ' bug file(s) to', inputFolder);
+}
+
+/**
+ * gh-1188: the duplicate-check start comment — pure; the recurrence-history
+ * line appears only when Done bugs were loaded.
+ */
+function buildStartComment(bugsLoaded, historicalDoneCount) {
+    return 'h3. 🔍 Bug Detection Started\n\n' +
+            'Checking ' + bugsLoaded + ' open bug(s) for duplicates...\n\n' +
+            (historicalDoneCount > 0
+                ? 'Also loaded ' + historicalDoneCount + ' linked Done bug(s) as recurrence history only.\n\n'
+                : '') +
+            '_Result will be posted shortly._';
+}
+
+function postStartComment(tracker, ticketKey, bugsLoaded, historicalDoneCount) {
+    try {
+        tracker.postComment(ticketKey, buildStartComment(bugsLoaded, historicalDoneCount));
+    } catch (e) {
+        console.warn('Failed to post Jira comment:', e);
+    }
+}
+
 function action(params) {
     try {
-        var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
+        var actualParams = resolveActionParams(params);
         var inputFolder = actualParams.inputFolderPath;
         var ticketKey = inputFolder.split('/').pop();
 
@@ -86,81 +213,20 @@ function action(params) {
         console.log('=== Preparing bug creation context for', ticketKey, '===');
 
         // Fetch TC ticket details for context
-        var tcTicket = null;
-        try {
-            tcTicket = tracker.getIssue(ticketKey);
-        } catch (e) {
-            console.warn('Could not fetch TC ticket:', e);
-        }
-
-        if (tcTicket) {
-            var tcFields = tcTicket.fields || {};
-            var tcContent = '# Test Case: ' + ticketKey + '\n\n';
-            tcContent += '**Summary**: ' + (tcFields.summary || '') + '\n\n';
-            if (tcFields.description) {
-                tcContent += '**Description**:\n' + tcFields.description + '\n\n';
-            }
-            if (tcFields.parent) {
-                tcContent += '**Parent Story**: ' + tcFields.parent.key + ' — ' + (tcFields.parent.fields && tcFields.parent.fields.summary || '') + '\n';
-            }
-            file_write(inputFolder + '/ticket.md', tcContent);
-            console.log('Wrote ticket.md for', ticketKey);
-        }
+        writeTicketContextIfPresent(inputFolder, ticketKey, fetchTcTicketContext(ticketKey, tracker));
 
         var historicalDoneCount = writeHistoricalDoneBugs(inputFolder, ticketKey, tracker, queryConfig);
 
         // Fetch all open bugs
         console.log('Fetching open bugs with JQL:', openBugsJql);
-        var bugs = [];
-        try {
-            bugs = tracker.searchIssues(openBugsJql, {
-                fields: ['key', 'summary', 'description', 'status', 'priority'],
-                maxResults: 200
-            }) || [];
-        } catch (e) {
-            console.error('Failed to fetch open bugs:', e);
-        }
+        var bugs = fetchOpenBugs(tracker, openBugsJql);
 
         console.log('Found ' + bugs.length + ' open bug(s)');
 
-        if (bugs.length === 0) {
-            file_write(inputFolder + '/no_open_bugs.md', 'No open bugs found in the project. Create a new bug ticket.');
-            console.log('No open bugs — wrote no_open_bugs.md');
-        } else {
-            bugs.forEach(function(bug) {
-                try {
-                    var key = bug.key;
-                    var fields = bug.fields || {};
-                    var summary = fields.summary || key;
-                    var description = fields.description || summary;
-                    var status = fields.status ? fields.status.name : '';
-                    var priority = fields.priority ? fields.priority.name : '';
-
-                    var content = '# ' + key + ': ' + summary + '\n\n';
-                    if (status) content += '**Status**: ' + status + '\n';
-                    if (priority) content += '**Priority**: ' + priority + '\n';
-                    content += '\n## Description\n\n' + description;
-
-                    var filename = 'Bug ' + key + ' - ' + sanitizeFilename(summary) + '.md';
-                    file_write(inputFolder + '/' + filename, content);
-                } catch (e) {
-                    console.warn('Failed to write bug file for', bug.key, ':', e);
-                }
-            });
-            console.log('Wrote ' + bugs.length + ' bug file(s) to', inputFolder);
-        }
+        writeOpenBugsFiles(inputFolder, bugs);
 
         // Post Jira comment
-        try {
-            tracker.postComment(ticketKey, 'h3. 🔍 Bug Detection Started\n\n' +
-                    'Checking ' + bugs.length + ' open bug(s) for duplicates...\n\n' +
-                    (historicalDoneCount > 0
-                        ? 'Also loaded ' + historicalDoneCount + ' linked Done bug(s) as recurrence history only.\n\n'
-                        : '') +
-                    '_Result will be posted shortly._');
-        } catch (e) {
-            console.warn('Failed to post Jira comment:', e);
-        }
+        postStartComment(tracker, ticketKey, bugs.length, historicalDoneCount);
 
         return {
             success: true,
@@ -179,6 +245,19 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
         fetchHistoricalDoneBugs: fetchHistoricalDoneBugs,
-        writeHistoricalDoneBugs: writeHistoricalDoneBugs
+        writeHistoricalDoneBugs: writeHistoricalDoneBugs,
+        // gh-1188: step helpers extracted from action — exported for direct
+        // characterization tests.
+        sanitizeFilename: sanitizeFilename,
+        resolveActionParams: resolveActionParams,
+        fetchTcTicketContext: fetchTcTicketContext,
+        buildTicketContextContent: buildTicketContextContent,
+        writeTicketContextIfPresent: writeTicketContextIfPresent,
+        fetchOpenBugs: fetchOpenBugs,
+        buildBugFileContent: buildBugFileContent,
+        writeBugFile: writeBugFile,
+        writeOpenBugsFiles: writeOpenBugsFiles,
+        buildStartComment: buildStartComment,
+        postStartComment: postStartComment
     };
 }

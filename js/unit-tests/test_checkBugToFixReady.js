@@ -2,17 +2,23 @@
  * Unit tests for js/checkBugToFixReady.js
  */
 
-function loadCheckBugToFixReady(mocks) {
+function loadCheckBugToFixReady(mocks, requireOverrides) {
     mocks = mocks || {};
+    var requireMap = {
+        './config.js': configModule,
+        './configLoader.js': makeDefaultConfigLoaderMock(),
+        './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+        './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
+        './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks)
+    };
+    if (requireOverrides) {
+        for (var k in requireOverrides) {
+            if (requireOverrides.hasOwnProperty(k)) requireMap[k] = requireOverrides[k];
+        }
+    }
     return loadModule(
         'js/checkBugToFixReady.js',
-        makeRequire({
-            './config.js': configModule,
-            './configLoader.js': makeDefaultConfigLoaderMock(),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
-            './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
-            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks)
-        }),
+        makeRequire(requireMap),
         mocks
     );
 }
@@ -267,5 +273,235 @@ suite('checkBugToFixReady: stage-label fallback (gh-916)', function() {
         assert.equal(result.action, 'moved_to_backlog');
         assert.deepEqual(moved, [{ key: 'TS-96', statusName: 'Backlog' }]);
         assert.deepEqual(added, [], 'Backlog is not a tag-only stage — no marker');
+    });
+});
+
+// ── gh-1188: action decomposition — characterization tests for the extracted
+// step helpers and the previously uncovered branches (null/primitive toPlain,
+// label-removal failures, TC without key, missing ticket key, no linked bugs). ──
+
+function makeTrackerStub(overrides) {
+    var stub = {
+        provider: function() { return 'jira'; },
+        searchIssues: function() { return []; },
+        removeLabel: function() {},
+        moveToStatus: function() {},
+        moveToStatusOrMark: function() { return { moved: true }; },
+        postComment: function() {}
+    };
+    if (overrides) {
+        for (var k in overrides) {
+            if (overrides.hasOwnProperty(k)) stub[k] = overrides[k];
+        }
+    }
+    return stub;
+}
+
+suite('checkBugToFixReady — gh-1188 extracted step helpers', function() {
+    test('toPlain: null, primitives and objects', function() {
+        var mod = loadCheckBugToFixReady({});
+        assert.equal(mod.toPlain(null), null);
+        assert.equal(mod.toPlain(undefined), undefined);
+        assert.equal(mod.toPlain('s'), 's');
+        assert.equal(mod.toPlain(7), 7);
+        assert.equal(mod.toPlain(true), true);
+        assert.deepEqual(mod.toPlain({ key: 'K' }), { key: 'K' });
+    });
+
+    test('releaseLock: removed only when key and label are present; removal failure is swallowed', function() {
+        var removed = [];
+        var tracker = makeTrackerStub({ removeLabel: function(k, l) { removed.push(l); } });
+        loadCheckBugToFixReady({}).releaseLock(tracker, 'TS-1', 'sm_l');
+        assert.deepEqual(removed, ['sm_l']);
+
+        loadCheckBugToFixReady({}).releaseLock(tracker, 'TS-1', null);
+        assert.deepEqual(removed, ['sm_l'], 'no label → no call');
+
+        var failing = makeTrackerStub({ removeLabel: function() { throw new Error('boom'); } });
+        loadCheckBugToFixReady({}).releaseLock(failing, 'TS-1', 'sm_l');
+        assert.deepEqual(removed, ['sm_l'], 'removal failure must be swallowed');
+    });
+
+    test('findLinkedBugs/findNotDoneBugs/findLinkedTestCases: exact query shapes and null-tolerance', function() {
+        var queries = [];
+        var tracker = makeTrackerStub({
+            searchIssues: function(jql, opts) { queries.push([jql, opts.maxResults]); return null; }
+        });
+        var mod = loadCheckBugToFixReady({});
+        assert.deepEqual(mod.findLinkedBugs(tracker, 'jira', 'TS-1'), []);
+        assert.deepEqual(mod.findNotDoneBugs(tracker, 'jira', 'TS-1', 'Done'), []);
+        assert.deepEqual(mod.findLinkedTestCases(tracker, 'jira', 'TS-1'), []);
+        assert.equal(queries.length, 3);
+        assert.contains(queries[0][0], 'issuetype = Bug');
+        assert.contains(queries[1][0], 'issuetype = Bug AND status != "Done"');
+        assert.contains(queries[2][0], 'issuetype = "Test Case"');
+        assert.deepEqual(queries.map(function(q) { return q[1]; }), [50, 50, 100]);
+    });
+
+    test('findPendingBugsInLinkedTestCases: skips TCs without a key, collects per-TC pending bugs', function() {
+        var tracker = makeTrackerStub({
+            searchIssues: function(jql) {
+                if (jql.indexOf('issuetype = "Test Case"') !== -1) {
+                    return [
+                        { key: 'TC-1', fields: { status: { name: 'Bug To Fix' } } },
+                        { fields: { summary: 'no key' } }
+                    ];
+                }
+                return [
+                    { key: 'B-1', fields: { status: { name: 'In Progress' } } },
+                    { key: 'B-2', fields: { status: { name: 'Ready For Testing' } } }
+                ];
+            }
+        });
+        var pending = loadCheckBugToFixReady({}).findPendingBugsInLinkedTestCases(tracker, 'jira', 'TS-9', 'Done');
+        assert.deepEqual(pending, [
+            { tcKey: 'TC-1', bugKey: 'B-1', status: 'In Progress' },
+            { tcKey: 'TC-1', bugKey: 'B-2', status: 'Ready For Testing' }
+        ]);
+    });
+
+    test('formatPendingTcBugLines: one line per pending bug', function() {
+        var lines = loadCheckBugToFixReady({}).formatPendingTcBugLines([
+            { bugKey: 'B-1', status: 'In Progress', tcKey: 'TC-1' },
+            { bugKey: 'B-2', status: null, tcKey: 'TC-2' }
+        ]);
+        assert.equal(lines, '* B-1 (In Progress) via Test Case TC-1\n* B-2 (null) via Test Case TC-2');
+    });
+
+    test('moveStoryToReadyForTesting: moved → story_done_check label removed, lock released, comment posted', function() {
+        var removed = [];
+        var comments = [];
+        var tracker = makeTrackerStub({
+            moveToStatusOrMark: function() { return { moved: true }; },
+            removeLabel: function(k, l) { removed.push(l); },
+            postComment: function(k, c) { comments.push(c); }
+        });
+        loadCheckBugToFixReady({}).moveStoryToReadyForTesting(tracker, 'TS-1', 2, { READY_FOR_TESTING: 'Ready For Testing' }, 'sm_l');
+        assert.deepEqual(removed, ['sm_story_done_check_triggered', 'sm_l']);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0], 'Story Ready for Re-test');
+    });
+
+    test('moveStoryToReadyForTesting: neither moved nor marked → no labels, no comment', function() {
+        var removed = [];
+        var comments = [];
+        var tracker = makeTrackerStub({
+            moveToStatusOrMark: function() { return { moved: false, marked: false }; },
+            removeLabel: function(k, l) { removed.push(l); },
+            postComment: function(k, c) { comments.push(c); }
+        });
+        loadCheckBugToFixReady({}).moveStoryToReadyForTesting(tracker, 'TS-1', 2, {}, 'sm_l');
+        assert.deepEqual(removed, []);
+        assert.deepEqual(comments, []);
+    });
+
+    test('moveStoryToReadyForTesting: story_done_check label failure is swallowed', function() {
+        var removed = [];
+        var comments = [];
+        var tracker = makeTrackerStub({
+            moveToStatusOrMark: function() { return { moved: true }; },
+            removeLabel: function(k, l) {
+                if (l === 'sm_story_done_check_triggered') throw new Error('boom');
+                removed.push(l);
+            },
+            postComment: function(k, c) { comments.push(c); }
+        });
+        loadCheckBugToFixReady({}).moveStoryToReadyForTesting(tracker, 'TS-1', 1, {}, 'sm_l');
+        assert.deepEqual(removed, ['sm_l'], 'lock still released');
+        assert.equal(comments.length, 1, 'comment still posted');
+    });
+
+    test('moveTestCaseToBacklog: direct transition, automation label removed, lock released, comment posted', function() {
+        var moved = [];
+        var removed = [];
+        var comments = [];
+        var tracker = makeTrackerStub({
+            moveToStatus: function(k, s) { moved.push([k, s]); },
+            removeLabel: function(k, l) { removed.push(l); },
+            postComment: function(k, c) { comments.push(c); }
+        });
+        loadCheckBugToFixReady({}).moveTestCaseToBacklog(tracker, 'TS-2', 3, { BACKLOG: 'Backlog' }, 'sm_l');
+        assert.deepEqual(moved, [['TS-2', 'Backlog']]);
+        assert.deepEqual(removed, ['sm_test_automation_triggered', 'sm_l']);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0], 'Test Case Ready for Re-automation');
+    });
+
+    test('moveTestCaseToBacklog: automation-label failure is swallowed', function() {
+        var removed = [];
+        var tracker = makeTrackerStub({
+            removeLabel: function(k, l) {
+                if (l === 'sm_test_automation_triggered') throw new Error('boom');
+                removed.push(l);
+            },
+            postComment: function() {}
+        });
+        loadCheckBugToFixReady({}).moveTestCaseToBacklog(tracker, 'TS-2', 1, {}, 'sm_l');
+        assert.deepEqual(removed, ['sm_l']);
+    });
+
+    test('postTokenUsageSafely: delegates to the token usage comment module; failure swallowed', function() {
+        var posted = [];
+        var mod = loadCheckBugToFixReady({}, {
+            './common/tokenUsageComment.js': {
+                postTokenUsageComments: function(key, ctx) { posted.push([key, ctx.initiator]); },
+                customParamsOf: function() { return { removeLabel: 'x' }; }
+            }
+        });
+        mod.postTokenUsageSafely('TS-1', { initiator: 'sm' });
+        assert.deepEqual(posted, [['TS-1', 'sm']]);
+
+        var failingMod = loadCheckBugToFixReady({}, {
+            './common/tokenUsageComment.js': {
+                postTokenUsageComments: function() { throw new Error('boom'); },
+                customParamsOf: function() { return {}; }
+            }
+        });
+        failingMod.postTokenUsageSafely('TS-1', {});
+    });
+
+    test('action: missing ticket key → failure result and lock release attempt', function() {
+        var removed = [];
+        var module = loadCheckBugToFixReady({
+            jira_remove_label: function(args) { removed.push(args); }
+        });
+        var result = module.action({ ticket: {}, jobParams: { customParams: { removeLabel: 'sm_l' } } });
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'params.ticket.key is missing');
+        assert.ok(removed.length === 0 || removed.every(function(l) { return l.key === undefined; }), 'no key → no label target');
+    });
+
+    test('action: no linked Bugs → no_linked_bugs, lock released', function() {
+        var removed = [];
+        var module = loadCheckBugToFixReady({
+            jira_search_by_jql: function() { return []; },
+            jira_remove_label: function(args) { removed.push(args.label); }
+        });
+        var result = module.action({
+            ticket: makeTicket('TS-30', 'Test Case'),
+            jobParams: { customParams: { removeLabel: 'sm_bug_to_fix_check_triggered' } }
+        });
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'no_linked_bugs');
+        assert.deepEqual(removed, ['sm_bug_to_fix_check_triggered']);
+    });
+
+    test('action: completeStoryReady delegates the story branch', function() {
+        var result = loadCheckBugToFixReady({}).completeStoryReady({}, makeTrackerStub({}), 'jira', 'TS-1', 'Story', 2, {
+            statuses: { DONE: 'Done', READY_FOR_TESTING: 'Ready For Testing' },
+            issueTypes: { STORY: 'Story' }
+        }, 'sm_l');
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_ready_for_testing');
+        assert.equal(result.totalBugs, 2);
+    });
+
+    test('action: completeTestCaseReady delegates the Test Case branch', function() {
+        var result = loadCheckBugToFixReady({}).completeTestCaseReady({}, makeTrackerStub({}), 'TS-1', 'Test Case', 1, {
+            statuses: { DONE: 'Done', BACKLOG: 'Backlog' }
+        }, 'sm_l');
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_backlog');
+        assert.equal(result.totalBugs, 1);
     });
 });

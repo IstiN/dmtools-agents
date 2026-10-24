@@ -98,59 +98,118 @@ function updateSolutionField(ticketKey, ticketDescription, comments, params) {
     }
 }
 
+/**
+ * gh-1188: pure input resolution extracted from action — jobParams win,
+ * then the bare params' own customParams, then an empty object.
+ */
+function resolveActionCustomParams(params) {
+    return (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+}
+
+function resolveTicketDescription(ticket) {
+    return ticket && ticket.fields && ticket.fields.description
+        ? ticket.fields.description : '';
+}
+
+/**
+ * gh-1188: merge-notification body extracted from action so the wording is a
+ * pure, unit-testable constant.
+ */
+function buildMergeNotificationComment() {
+    return 'h3. ✅ Bug Fix Merged — Ready for Testing\n\n' +
+        'The bug fix PR has been merged and the ticket has been moved to *Ready For Testing*.\n\n' +
+        'The *Solution* field has been updated with the Root Cause Analysis and prevention notes for use by the test case generator.';
+}
+
+/**
+ * gh-1188: comment fetch step extracted from action — a tracker read failure
+ * degrades to no comments (as before), never a throw.
+ */
+function fetchCommentsForRca(ticketKey) {
+    try {
+        const comments = getTracker().getComments(ticketKey) || [];
+        console.log('Fetched', comments.length, 'comments for RCA extraction');
+        return comments;
+    } catch (e) {
+        console.warn('Could not fetch comments:', e);
+        return [];
+    }
+}
+
+function postMergeNotification(ticketKey) {
+    try {
+        getTracker().postComment(ticketKey, buildMergeNotificationComment());
+        console.log('✅ Posted merge notification to Jira');
+    } catch (e) {
+        console.warn('Failed to post Jira comment:', e);
+    }
+}
+
+function resolveWipLabel(params) {
+    return params.metadata && params.metadata.contextId
+        ? params.metadata.contextId + '_wip' : null;
+}
+
+function resolveSmRemoveLabel(params) {
+    const customParams = params.jobParams && params.jobParams.customParams;
+    return customParams && customParams.removeLabel;
+}
+
+function removeWipLabel(ticketKey, params) {
+    const wipLabel = resolveWipLabel(params);
+    if (wipLabel) {
+        try { getTracker().removeLabel(ticketKey, wipLabel); } catch (e) {}
+    }
+}
+
+function removeSmLabel(ticketKey, params) {
+    const removeLabel = resolveSmRemoveLabel(params);
+    if (removeLabel) {
+        try {
+            getTracker().removeLabel(ticketKey, removeLabel);
+            console.log('✅ Removed SM label:', removeLabel);
+        } catch (e) {}
+    }
+}
+
+/**
+ * gh-1188: token-usage summary step extracted from action — a provider
+ * failure here must never fail the merge notification.
+ */
+function postTokenUsageSafely(ticketKey, projectConfig, params) {
+    try {
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, config: projectConfig, customParams: tokenUsageComment.customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
 function action(params) {
     try {
         const ticketKey = params.ticket.key;
         const projectConfig = resolveProjectConfig(params);
-        initTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
-        const ticketDescription = params.ticket.fields && params.ticket.fields.description
-            ? params.ticket.fields.description : '';
+        initTracker(projectConfig, resolveActionCustomParams(params));
+        const ticketDescription = resolveTicketDescription(params.ticket);
         console.log('=== Bug merged notification for', ticketKey, '===');
 
         // Step 1: Fetch ticket comments for RCA extraction
-        let comments = [];
-        try {
-            comments = getTracker().getComments(ticketKey) || [];
-            console.log('Fetched', comments.length, 'comments for RCA extraction');
-        } catch (e) {
-            console.warn('Could not fetch comments:', e);
-        }
+        const comments = fetchCommentsForRca(ticketKey);
 
         // Step 2: Update Solution field with AI-generated RCA + prevention
         updateSolutionField(ticketKey, ticketDescription, comments, params);
 
         // Step 3: Post merge notification
-        try {
-            getTracker().postComment(ticketKey, 'h3. ✅ Bug Fix Merged — Ready for Testing\n\nThe bug fix PR has been merged and the ticket has been moved to *Ready For Testing*.\n\nThe *Solution* field has been updated with the Root Cause Analysis and prevention notes for use by the test case generator.');
-            console.log('✅ Posted merge notification to Jira');
-        } catch (e) {
-            console.warn('Failed to post Jira comment:', e);
-        }
+        postMergeNotification(ticketKey);
 
         // Step 4: Remove WIP label
-        const wipLabel = params.metadata && params.metadata.contextId
-            ? params.metadata.contextId + '_wip' : null;
-        if (wipLabel) {
-            try { getTracker().removeLabel(ticketKey, wipLabel); } catch (e) {}
-        }
+        removeWipLabel(ticketKey, params);
 
         // Step 5: Remove SM idempotency label
-        const customParams = params.jobParams && params.jobParams.customParams;
-        const removeLabel = customParams && customParams.removeLabel;
-        if (removeLabel) {
-            try {
-                getTracker().removeLabel(ticketKey, removeLabel);
-                console.log('✅ Removed SM label:', removeLabel);
-            } catch (e) {}
-        }
+        removeSmLabel(ticketKey, params);
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, config: projectConfig, customParams: tokenUsageComment.customParamsOf(params) });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
+        postTokenUsageSafely(ticketKey, projectConfig, params);
 
         return { success: true, ticketKey };
 
@@ -161,5 +220,21 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action,
+        // gh-1188: step helpers extracted from action — exported for direct
+        // characterization tests.
+        resolveActionCustomParams,
+        resolveTicketDescription,
+        buildMergeNotificationComment,
+        fetchCommentsForRca,
+        postMergeNotification,
+        resolveWipLabel,
+        resolveSmRemoveLabel,
+        removeWipLabel,
+        removeSmLabel,
+        postTokenUsageSafely,
+        updateSolutionField,
+        findDevSummaryComment
+    };
 }
