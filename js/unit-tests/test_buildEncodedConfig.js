@@ -695,6 +695,70 @@ suite('resolveParentMerge — parent inheritance', function() {
 
 
 
+// ── gh-122: extracted parent-merge helpers (tests written first, then the extraction) ──
+
+suite('resolveParentMerge — extracted helpers (gh-122)', function() {
+
+    test('hasParentRef requires a parent block with a path within the depth guard', function() {
+        var builder = loadBuilder({});
+        assert.equal(builder.hasParentRef({ parent: { path: 'p.json' } }, 0), true);
+        assert.equal(builder.hasParentRef({ parent: { path: 'p.json' } }, 10), true,
+            'depth 10 is still within the guard');
+        assert.equal(builder.hasParentRef({ parent: { path: 'p.json' } }, 11), false,
+            'deeper than 10 levels is refused');
+        assert.equal(builder.hasParentRef({}, 0), false);
+        assert.equal(builder.hasParentRef({ parent: {} }, 0), false, 'a parent without a path is no ref');
+        assert.equal(builder.hasParentRef(null, 0), false);
+    });
+
+    test('directiveKey strips the params. prefix', function() {
+        var builder = loadBuilder({});
+        assert.equal(builder.directiveKey('params.cliPrompts'), 'cliPrompts');
+        assert.equal(builder.directiveKey('cliPrompts'), 'cliPrompts', 'bare keys pass through');
+        assert.equal(builder.directiveKey('params.nested.path'), 'nested.path', 'only the first segment is stripped');
+    });
+
+    test('arrayOrEmpty passes arrays through and boxes everything else', function() {
+        var builder = loadBuilder({});
+        var arr = ['a'];
+        assert.equal(builder.arrayOrEmpty(arr), arr, 'the same array reference comes back');
+        assert.deepEqual(builder.arrayOrEmpty('not-an-array'), []);
+        assert.deepEqual(builder.arrayOrEmpty(42), []);
+        assert.deepEqual(builder.arrayOrEmpty(null), []);
+        assert.deepEqual(builder.arrayOrEmpty(undefined), []);
+    });
+
+    test('applyMergeDirective concatenates parent-first onto the merged object', function() {
+        var builder = loadBuilder({});
+        var merged = {};
+        builder.applyMergeDirective(merged, { cliPrompts: ['p1', 'p2'] }, { cliPrompts: ['c1'] }, 'params.cliPrompts');
+        assert.deepEqual(merged.cliPrompts, ['p1', 'p2', 'c1']);
+
+        builder.applyMergeDirective(merged, {}, { other: ['c'] }, 'other');
+        assert.deepEqual(merged.other, ['c'], 'parent side missing → empty parent list');
+    });
+
+    test('applyMergeDirectives applies every listed path and tolerates absent/invalid merge blocks', function() {
+        var builder = loadBuilder({});
+        var merged = {};
+        builder.applyMergeDirectives(merged, { parent: {} }, { cliPrompts: ['p'] }, { cliPrompts: ['c'] });
+        assert.deepEqual(merged, {}, 'no merge list → nothing applied');
+
+        builder.applyMergeDirectives(merged, { parent: { merge: 'junk' } }, { cliPrompts: ['p'] }, { cliPrompts: ['c'] });
+        assert.deepEqual(merged, {}, 'a non-array merge block applies nothing');
+
+        builder.applyMergeDirectives(
+            merged,
+            { parent: { merge: ['params.cliPrompts', 'sections'] } },
+            { cliPrompts: ['p'], sections: ['ps'] },
+            { cliPrompts: ['c'], sections: ['cs'] }
+        );
+        assert.deepEqual(merged.cliPrompts, ['p', 'c']);
+        assert.deepEqual(merged.sections, ['ps', 'cs']);
+    });
+
+});
+
 suite('buildEncodedConfig: ticket key format validation', function() {
 
     test('throws for an invalid ticket key format', function() {
