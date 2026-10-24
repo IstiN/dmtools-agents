@@ -1,14 +1,6 @@
 {
   "issue-840": [
     {
-      "leg": "review",
-      "at": "2026-10-10T13:50:15Z",
-      "prompt": 84289,
-      "completion": 22285,
-      "total": 106574,
-      "model": ""
-    },
-    {
       "leg": "rework",
       "at": "2026-10-10T14:17:48Z",
       "prompt": 109195,
@@ -4837,6 +4829,17 @@
       "completion": 19145,
       "total": 97893,
       "cacheRead": 2121344,
+      "model": "glm-5.3-flash"
+    }
+  ],
+  "pr-1238": [
+    {
+      "leg": "review",
+      "at": "2026-10-24T13:50:34Z",
+      "prompt": 75859,
+      "completion": 19851,
+      "total": 95710,
+      "cacheRead": 3259648,
       "model": "glm-5.3-flash"
     }
   ]
