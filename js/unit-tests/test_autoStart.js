@@ -1062,3 +1062,36 @@ function makeStubScm(listImpl, triggerImpl) {
         }
     };
 }
+
+// ── gh-1230 CRAP characterization: buildEncodedConfig mock contract ──────────
+
+suite('autoStart — buildEncodedConfig mock contract (gh-1230 characterization)', function() {
+
+    test('extractAgentName: empty/missing config file and nested paths', function() {
+        var m = makeBuildEncodedConfigMock();
+        assert.equal(m.extractAgentName(undefined), '');
+        assert.equal(m.extractAgentName(''), '');
+        assert.equal(m.extractAgentName('story_development.json'), 'story_development');
+        assert.equal(m.extractAgentName('agents/nested/dir/bug_development.json'), 'bug_development');
+    });
+
+    test('resolveConfigFile: rule without configFile and with one', function() {
+        var m = makeBuildEncodedConfigMock();
+        assert.equal(m.resolveConfigFile(undefined), undefined);
+        assert.equal(m.resolveConfigFile({}), undefined);
+        assert.equal(m.resolveConfigFile({ configFile: 'agents/pr_review.json' }), 'agents/pr_review.json');
+    });
+
+    test('buildEncodedConfig: local and remote shapes, projectKey default', function() {
+        var m = makeBuildEncodedConfigMock();
+        var local = JSON.parse(decodeURIComponent(m.buildEncodedConfig('GH-1', { configFile: 'a.json', projectKey: 'PROJ' }, null, true)));
+        assert.equal(local.params.inputJql, 'key = GH-1');
+        assert.equal(local.params.configFile, 'a.json');
+        assert.equal(local.params.projectKey, 'PROJ');
+        assert.equal(local.params.fromSharedBuilder, true);
+        assert.deepEqual(local.params.customParams, { localTeammate: true });
+        var remote = JSON.parse(decodeURIComponent(m.buildEncodedConfig('GH-2', { configFile: 'b.json' }, null, false)));
+        assert.equal(remote.params.projectKey, '', 'missing projectKey defaults to empty string');
+        assert.equal(remote.params.customParams, undefined, 'remote shape has no customParams');
+    });
+});

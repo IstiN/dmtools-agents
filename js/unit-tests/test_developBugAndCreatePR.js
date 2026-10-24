@@ -697,6 +697,66 @@ suite('developBugAndCreatePR', function() {
 // common/feedbackLoop.js + common/outputFiles.js (sharing the file map and cli
 // capture), while the bug module itself gets a feedbackLoop SPY — a direct
 // call from the bug leg is recorded and fails the delegation test.
+// ── gh-1230 CRAP: bug-resume fixture helpers (characterized at EOF) ──────────
+
+// file_read/file_write pair over a fixed in-memory file map (ENOENT on miss).
+function bugFileRig(files) {
+    function sharedFileRead(args) {
+        var path = args && (args.path || args);
+        if (files[path] !== undefined) return files[path];
+        throw new Error('ENOENT: ' + path);
+    }
+    function sharedFileWrite(args) {
+        files[args && args.path] = args && args.content;
+    }
+    return { read: sharedFileRead, write: sharedFileWrite };
+}
+
+// Canned base CLI responses for the bug-resume leg probes (pure).
+function bugBaseCliResponses(args) {
+    var command = args.command;
+    if (command.indexOf('gh pr list --head ') === 0) return '';
+    if (command.indexOf('git check-ignore') === 0) {
+        // gh-683 probe: not-ignored repo → keep exclusions
+        throw new Error('Command execution failed (exit code 1)');
+    }
+    if (command === 'git status --porcelain') return 'A  outputs/rca.md\n';
+    if (command === 'git branch --show-current') return 'main\n';
+    return '';
+}
+
+// cli_execute_command mock recording every command; wrapper invocations
+// honour opts.wrapperImpl, everything else falls back to baseCli.
+function bugRecordingCli(commands, opts, baseCli) {
+    function cliMock(args) {
+        commands.push(args.command);
+        if (args.command.indexOf('run-agent.sh') !== -1 && opts.wrapperImpl) {
+            return opts.wrapperImpl(args.command);
+        }
+        return baseCli(args);
+    }
+    return cliMock;
+}
+
+// The './developTicketAndCreatePR.js' recoverMissingResponse mock: records
+// every call, honours an opts impl override, delegates to the shared gate.
+function bugRecoverMissingResponseMock(recoverCalls, opts, sharedGateModule) {
+    function recoverMissingResponse(ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage) {
+        recoverCalls.push({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            developmentSummary: developmentSummary,
+            cliHasFatalError: cliHasFatalError,
+            cliErrorMessage: cliErrorMessage
+        });
+        if (opts.recoverMissingResponseImpl) {
+            return opts.recoverMissingResponseImpl(ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage);
+        }
+        return sharedGateModule.recoverMissingResponse(ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage);
+    }
+    return recoverMissingResponse;
+}
+
 function loadBugForMissingResponseResume(opts) {
     opts = opts || {};
     var files = {};
@@ -714,32 +774,10 @@ function loadBugForMissingResponseResume(opts) {
         makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
     var gitStagingModuleLocal = loadModule('js/common/gitStaging.js');
 
-    var sharedFileRead = function (args) {
-        var path = args && (args.path || args);
-        if (files[path] !== undefined) return files[path];
-        throw new Error('ENOENT: ' + path);
-    };
-    var sharedFileWrite = function (args) {
-        files[args && args.path] = args && args.content;
-    };
-    var baseCli = function (args) {
-        var command = args.command;
-        if (command.indexOf('gh pr list --head ') === 0) return '';
-        if (command.indexOf('git check-ignore') === 0) {
-            // gh-683 probe: not-ignored repo → keep exclusions
-            throw new Error('Command execution failed (exit code 1)');
-        }
-        if (command === 'git status --porcelain') return 'A  outputs/rca.md\n';
-        if (command === 'git branch --show-current') return 'main\n';
-        return '';
-    };
-    var cliMock = function (args) {
-        commands.push(args.command);
-        if (args.command.indexOf('run-agent.sh') !== -1 && opts.wrapperImpl) {
-            return opts.wrapperImpl(args.command);
-        }
-        return baseCli(args);
-    };
+    var fileRig = bugFileRig(files);
+    var sharedFileRead = fileRig.read;
+    var sharedFileWrite = fileRig.write;
+    var cliMock = bugRecordingCli(commands, opts, bugBaseCliResponses);
 
     var realFeedbackLoop = loadModule('js/common/feedbackLoop.js', null, {
         file_read: sharedFileRead,
@@ -806,19 +844,7 @@ function loadBugForMissingResponseResume(opts) {
                 classifyInterruptedText: sharedGateModule.classifyInterruptedText,
                 throwQuotaPark: sharedGateModule.throwQuotaPark,
                 throwInterruptedReset: sharedGateModule.throwInterruptedReset,
-                recoverMissingResponse: function (ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage) {
-                    recoverCalls.push({
-                        ticketKey: ticketKey,
-                        customParams: customParams,
-                        developmentSummary: developmentSummary,
-                        cliHasFatalError: cliHasFatalError,
-                        cliErrorMessage: cliErrorMessage
-                    });
-                    if (opts.recoverMissingResponseImpl) {
-                        return opts.recoverMissingResponseImpl(ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage);
-                    }
-                    return sharedGateModule.recoverMissingResponse(ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage);
-                }
+                recoverMissingResponse: bugRecoverMissingResponseMock(recoverCalls, opts, sharedGateModule)
             },
             './common/commentMarkup.js': commentMarkupModuleLocal
         }),
@@ -1706,5 +1732,76 @@ suite('developBugAndCreatePR — gh-1188 extracted step helpers', function() {
         });
         assert.equal(result.success, true, 'leg proceeds to the delegated development');
         assert.deepEqual(result.path, 'delegated');
+    });
+});
+
+// ── gh-1230 CRAP characterization: bug-resume fixture helpers ────────────────
+
+suite('developBugAndCreatePR — resume fixture helpers (gh-1230 characterization)', function () {
+
+    test('bugFileRig: read serves mapped files, throws ENOENT otherwise; write records', function () {
+        var files = { 'outputs/a.md': 'alpha' };
+        var rig = bugFileRig(files);
+        assert.equal(rig.read({ path: 'outputs/a.md' }), 'alpha');
+        assert.equal(rig.read('outputs/a.md'), 'alpha', 'string-arg shape works too');
+        var threw = null;
+        try { rig.read({ path: 'outputs/missing.md' }); } catch (e) { threw = e; }
+        assert.ok(threw, 'missing file must throw');
+        assert.contains(threw.message, 'ENOENT: outputs/missing.md');
+        rig.write({ path: 'outputs/b.md', content: 'beta' });
+        assert.equal(files['outputs/b.md'], 'beta');
+    });
+
+    test('bugBaseCliResponses: canned git/gh probe responses and empty fallback', function () {
+        assert.equal(bugBaseCliResponses({ command: 'gh pr list --head ai/TS-1' }), '');
+        var threw = null;
+        try { bugBaseCliResponses({ command: 'git check-ignore outputs/x' }); } catch (e) { threw = e; }
+        assert.ok(threw, 'check-ignore probe fails (not-ignored repo)');
+        assert.contains(threw.message, 'exit code 1');
+        assert.equal(bugBaseCliResponses({ command: 'git status --porcelain' }), 'A  outputs/rca.md\n');
+        assert.equal(bugBaseCliResponses({ command: 'git branch --show-current' }), 'main\n');
+        assert.equal(bugBaseCliResponses({ command: 'git rev-parse HEAD' }), '');
+    });
+
+    test('bugRecordingCli: records every command; wrapper command honours wrapperImpl, others fall back', function () {
+        var commands = [];
+        var cli = bugRecordingCli(commands, { wrapperImpl: function () { return 'wrapper-out'; } },
+            function (args) { return 'base:' + args.command; });
+        assert.equal(cli({ command: 'git status --porcelain' }), 'base:git status --porcelain');
+        assert.equal(cli({ command: 'bash agents/scripts/run-agent.sh --continue x' }), 'wrapper-out');
+        assert.equal(cli({ command: 'git branch --show-current' }), 'base:git branch --show-current');
+        assert.deepEqual(commands, [
+            'git status --porcelain',
+            'bash agents/scripts/run-agent.sh --continue x',
+            'git branch --show-current'
+        ]);
+        var cliNoImpl = bugRecordingCli([], {}, function () { return 'fallback'; });
+        assert.equal(cliNoImpl({ command: 'bash run-agent.sh --continue x' }), 'fallback',
+            'without wrapperImpl the wrapper command falls through to the base responses');
+    });
+
+    test('bugRecoverMissingResponseMock: records args, honours impl override, delegates to the shared gate', function () {
+        var calls = [];
+        var implResult = { attempted: true, reason: 'impl' };
+        var impl = bugRecoverMissingResponseMock(calls, {
+            recoverMissingResponseImpl: function () { return implResult; }
+        }, { recoverMissingResponse: function () { throw new Error('gate must not run when impl is set'); } });
+        assert.equal(impl('TS-1', { a: 1 }, 'summary', false, ''), implResult);
+        assert.deepEqual(calls, [{
+            ticketKey: 'TS-1', customParams: { a: 1 }, developmentSummary: 'summary',
+            cliHasFatalError: false, cliErrorMessage: ''
+        }]);
+
+        var calls2 = [];
+        var gateResult = { attempted: false, reason: 'gate' };
+        var delegate = bugRecoverMissingResponseMock(calls2, {}, {
+            recoverMissingResponse: function (ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage) {
+                return { attempted: false, reason: 'gate', ticketKey: ticketKey, hasFatal: cliHasFatalError, msg: cliErrorMessage, customParams: customParams, summary: developmentSummary };
+            }
+        });
+        assert.deepEqual(
+            delegate('TS-2', { b: 2 }, 'sum2', true, 'boom'),
+            { attempted: false, reason: 'gate', ticketKey: 'TS-2', hasFatal: true, msg: 'boom', customParams: { b: 2 }, summary: 'sum2' });
+        assert.equal(calls2.length, 1, 'delegated call recorded too');
     });
 });

@@ -279,36 +279,41 @@ function makeDefaultJiraConfig() {
 }
 
 function makeDefaultConfigLoaderMock(extraConfig) {
+    // gh-1230 CRAP: the loader body is a named declaration so the mock factory
+    // and the loader are measured as separate small functions.
+    function loadProjectConfig(params) {
+        var cfg = extraConfig || {};
+        var result = {
+            jira: makeDefaultJiraConfig()
+        };
+        if (cfg.repository) {
+            result.repository = cfg.repository;
+        }
+        if (cfg.jobParamPatches) {
+            result.jobParamPatches = cfg.jobParamPatches;
+        }
+        if (cfg.jira) {
+            if (cfg.jira.issueTypes) {
+                for (var it in cfg.jira.issueTypes) {
+                    if (cfg.jira.issueTypes.hasOwnProperty(it)) {
+                        result.jira.issueTypes[it] = cfg.jira.issueTypes[it];
+                    }
+                }
+            }
+            if (cfg.jira.statuses) {
+                for (var st in cfg.jira.statuses) {
+                    if (cfg.jira.statuses.hasOwnProperty(st)) {
+                        result.jira.statuses[st] = cfg.jira.statuses[st];
+                    }
+                }
+            }
+        }
+        return result;
+    }
     return {
-        loadProjectConfig: function(params) {
-            var cfg = extraConfig || {};
-            var result = {
-                jira: makeDefaultJiraConfig()
-            };
-            if (cfg.repository) {
-                result.repository = cfg.repository;
-            }
-            if (cfg.jobParamPatches) {
-                result.jobParamPatches = cfg.jobParamPatches;
-            }
-            if (cfg.jira) {
-                if (cfg.jira.issueTypes) {
-                    for (var it in cfg.jira.issueTypes) {
-                        if (cfg.jira.issueTypes.hasOwnProperty(it)) {
-                            result.jira.issueTypes[it] = cfg.jira.issueTypes[it];
-                        }
-                    }
-                }
-                if (cfg.jira.statuses) {
-                    for (var st in cfg.jira.statuses) {
-                        if (cfg.jira.statuses.hasOwnProperty(st)) {
-                            result.jira.statuses[st] = cfg.jira.statuses[st];
-                        }
-                    }
-                }
-            }
-            return result;
-        },
+        loadProjectConfig: loadProjectConfig,
+        // agents#855: scripts now resolve {jiraProject}/{status.*} through the loader; delegate to the real
+        // implementation so mocks of the loader keep behaving like it for query building.
         interpolateJql: function(jql, config, trackerProvider) {
             return configLoaderModule.interpolateJql(jql, config, trackerProvider);
         }

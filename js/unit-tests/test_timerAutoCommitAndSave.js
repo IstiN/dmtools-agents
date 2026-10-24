@@ -11,34 +11,37 @@
 
 var gitStagingModule = loadModule('js/common/gitStaging.js');
 
-function loadTimer(mocks, opts) {
-    opts = opts || {};
-    var uploadRawFileCalls = [];
-    var releaseArtefactsMock = {
-        buildTag: function(ticketKey, template) {
-            var t = (template || 'ai-{ticketKey}').replace(/\{ticketKey\}/g, ticketKey);
-            return t.toLowerCase().replace(/[^a-z0-9._/-]/g, '-');
-        },
-        buildReleaseName: function(ticketKey, template) {
-            return (template || '[AI] [{ticketKey}] Artefacts').replace(/\{ticketKey\}/g, ticketKey);
-        },
-        resolveArtefactRepository: function(customParams) {
-            if (!customParams) return null;
-            var repo = customParams.artefactRepository || customParams.aiRepository || customParams.targetRepository;
-            if (!repo || !repo.owner || !repo.repo) return null;
-            return { owner: repo.owner, repo: repo.repo };
-        },
-        uploadRawFile: function(owner, repo, ticketKey, releaseConfig, filePath, assetName, providerName) {
-            uploadRawFileCalls.push({
-                owner: owner, repo: repo, ticketKey: ticketKey, releaseConfig: releaseConfig,
-                filePath: filePath, assetName: assetName, providerName: providerName
-            });
-            if (opts.uploadRawFileImpl) return opts.uploadRawFileImpl(arguments);
-            return { success: true, releaseUrl: 'https://example.com/releases/1', assetUrl: 'https://example.com/asset', error: null };
-        }
-    };
+// ── gh-1230 CRAP: releaseArtefacts/config mock helpers (characterized at EOF) ─
 
-    var configLoaderMock = {
+function artefactBuildTag(ticketKey, template) {
+    var t = (template || 'ai-{ticketKey}').replace(/\{ticketKey\}/g, ticketKey);
+    return t.toLowerCase().replace(/[^a-z0-9._/-]/g, '-');
+}
+
+function artefactBuildReleaseName(ticketKey, template) {
+    return (template || '[AI] [{ticketKey}] Artefacts').replace(/\{ticketKey\}/g, ticketKey);
+}
+
+function artefactResolveRepository(customParams) {
+    if (!customParams) return null;
+    var repo = customParams.artefactRepository || customParams.aiRepository || customParams.targetRepository;
+    if (!repo || !repo.owner || !repo.repo) return null;
+    return { owner: repo.owner, repo: repo.repo };
+}
+
+function recordingUploadRawFile(uploadRawFileCalls, opts) {
+    return function(owner, repo, ticketKey, releaseConfig, filePath, assetName, providerName) {
+        uploadRawFileCalls.push({
+            owner: owner, repo: repo, ticketKey: ticketKey, releaseConfig: releaseConfig,
+            filePath: filePath, assetName: assetName, providerName: providerName
+        });
+        if (opts.uploadRawFileImpl) return opts.uploadRawFileImpl(arguments);
+        return { success: true, releaseUrl: 'https://example.com/releases/1', assetUrl: 'https://example.com/asset', error: null };
+    };
+}
+
+function timerConfigLoader(opts) {
+    return {
         loadProjectConfig: function(params) {
             var cfg = { scm: { provider: opts.scmProvider || 'github' } };
             if (opts.formats) cfg.formats = opts.formats;
@@ -48,6 +51,19 @@ function loadTimer(mocks, opts) {
         // the real implementation (the template is resolved through it)
         formatTemplate: function(t, v) { return configLoaderModule.formatTemplate(t, v); }
     };
+}
+
+function loadTimer(mocks, opts) {
+    opts = opts || {};
+    var uploadRawFileCalls = [];
+    var releaseArtefactsMock = {
+        buildTag: artefactBuildTag,
+        buildReleaseName: artefactBuildReleaseName,
+        resolveArtefactRepository: artefactResolveRepository,
+        uploadRawFile: recordingUploadRawFile(uploadRawFileCalls, opts)
+    };
+
+    var configLoaderMock = timerConfigLoader(opts);
 
     var requireFn = makeRequire({
         './common/releaseArtefacts.js': releaseArtefactsMock,
@@ -1084,5 +1100,61 @@ suite('timerAutoCommitAndSave — pure helpers (gh-119)', function() {
         assert.equal(mod.autoSaveCommitMessageOverride({ autoSaveCommitMessage: 'X {ticketKey}' }), 'X {ticketKey}');
         assert.equal(mod.autoSaveCommitMessageOverride({}), null);
         assert.equal(mod.autoSaveCommitMessageOverride({ autoSaveCommitMessage: '' }), null);
+    });
+});
+
+// ── gh-1230 CRAP characterization: timer releaseArtefacts/config mock helpers ─
+
+suite('timerAutoCommitAndSave — mock helper contracts (gh-1230 characterization)', function() {
+
+    test('artefactBuildTag: default and custom templates normalize to a release tag', function() {
+        assert.equal(artefactBuildTag('GH-1'), 'ai-gh-1');
+        assert.equal(artefactBuildTag('GH 12', 'rel-{ticketKey}'), 'rel-gh-12');
+        assert.equal(artefactBuildTag('A/B', 'ai-{ticketKey}'), 'ai-a/b');
+    });
+
+    test('artefactBuildReleaseName: default and custom templates', function() {
+        assert.equal(artefactBuildReleaseName('GH-1'), '[AI] [GH-1] Artefacts');
+        assert.equal(artefactBuildReleaseName('GH-2', 'Pack {ticketKey}'), 'Pack GH-2');
+    });
+
+    test('artefactResolveRepository: precedence artefact > ai > target, incomplete repos rejected', function() {
+        assert.equal(artefactResolveRepository(undefined), null);
+        assert.deepEqual(
+            artefactResolveRepository({
+                targetRepository: { owner: 't', repo: 'tr' },
+                aiRepository: { owner: 'a', repo: 'ar' },
+                artefactRepository: { owner: 'f', repo: 'fr' }
+            }),
+            { owner: 'f', repo: 'fr' });
+        assert.deepEqual(artefactResolveRepository({ aiRepository: { owner: 'a', repo: 'ar' } }), { owner: 'a', repo: 'ar' });
+        assert.deepEqual(artefactResolveRepository({ targetRepository: { owner: 't', repo: 'tr' } }), { owner: 't', repo: 'tr' });
+        assert.equal(artefactResolveRepository({ artefactRepository: { owner: 'f' } }), null);
+        assert.equal(artefactResolveRepository({ artefactRepository: { repo: 'r' } }), null);
+    });
+
+    test('recordingUploadRawFile: default success payload and impl delegation (2+ calls)', function() {
+        var calls = [];
+        var up = recordingUploadRawFile(calls, {});
+        var args = ['o', 'r', 'K', {}, '/f.txt', 'a.txt', 'github'];
+        assert.deepEqual(up.apply(null, args),
+            { success: true, releaseUrl: 'https://example.com/releases/1', assetUrl: 'https://example.com/asset', error: null });
+        assert.deepEqual(calls[0], {
+            owner: 'o', repo: 'r', ticketKey: 'K', releaseConfig: {},
+            filePath: '/f.txt', assetName: 'a.txt', providerName: 'github'
+        });
+        var implResult = { success: false, error: 'quota' };
+        var up2 = recordingUploadRawFile(calls, { uploadRawFileImpl: function() { return implResult; } });
+        assert.equal(up2('o', 'r', 'K', {}, '/g.txt', 'b.txt', 'github'), implResult);
+        assert.equal(calls.length, 2, 'both uploads recorded');
+    });
+
+    test('timerConfigLoader: provider default/override, formats opt-in, throw opt-in', function() {
+        assert.deepEqual(timerConfigLoader({}).loadProjectConfig({}), { scm: { provider: 'github' } });
+        assert.deepEqual(timerConfigLoader({ scmProvider: 'ado' }).loadProjectConfig({}), { scm: { provider: 'ado' } });
+        var withFormats = timerConfigLoader({ formats: ['md'] }).loadProjectConfig({});
+        assert.deepEqual(withFormats, { scm: { provider: 'github' }, formats: ['md'] });
+        assert.throws(function() { timerConfigLoader({ configThrows: true }).loadProjectConfig({}); },
+            /config unreadable/);
     });
 });

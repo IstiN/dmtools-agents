@@ -132,13 +132,34 @@ function collectInstructionFiles(dir, acc) {
     return acc;
 }
 
-// Build the union reference closure of all root configs.
-// Returns { reachable: {path->true}, dangling: [path] }.
-function buildClosure() {
-    var reachable = {};
-    var dangling = {};
-    var queue = [];
+// gh-1230 CRAP: pure — queue every path-shaped .md/.js reference found in a
+// parsed config value, recursing through arrays and objects.
+function queueConfigReferences(x, queue) {
+    if (typeof x === 'string') {
+        if (/\.(md|js)$/.test(x) && x.indexOf('/') !== -1) queue.push(rebase(x));
+    } else if (Array.isArray(x)) {
+        x.forEach(function (v) { queueConfigReferences(v, queue); });
+    } else if (x && typeof x === 'object') {
+        Object.keys(x).forEach(function (k) { queueConfigReferences(x[k], queue); });
+    }
+}
 
+// gh-1230 CRAP: queue the references of one root config file. Non-JSON names
+// and versions.json are skipped; invalid JSON configs parse to a skip.
+function queueRootConfigReferences(name, queue) {
+    if (name.slice(-5) !== '.json' || name === 'versions.json') return;
+    var raw = readText(name);
+    if (raw === null) {
+        throw new Error('cannot read base config: ' + name);
+    }
+    var cfg;
+    try { cfg = JSON.parse(raw); } catch (e) { return; }
+    queueConfigReferences(cfg, queue);
+}
+
+// gh-1230 CRAP: drain queued references — read reachable files, queue their
+// own references, record instructions/prompts danglers along the way.
+function drainReferenceQueue(queue, reachable, dangling) {
     function scanFile(p) {
         if (reachable[p]) return;
         var txt = readText(p);
@@ -153,30 +174,25 @@ function buildClosure() {
         }
     }
 
-    listNames('.').forEach(function (name) {
-        if (name.slice(-5) !== '.json' || name === 'versions.json') return;
-        var cfg;
-        var raw = readText(name);
-        if (raw === null) {
-            throw new Error('cannot read base config: ' + name);
-        }
-        try { cfg = JSON.parse(raw); } catch (e) { return; }
-        (function walk(x) {
-            if (typeof x === 'string') {
-                if (/\.(md|js)$/.test(x) && x.indexOf('/') !== -1) queue.push(rebase(x));
-            } else if (Array.isArray(x)) {
-                x.forEach(walk);
-            } else if (x && typeof x === 'object') {
-                Object.keys(x).forEach(function (k) { walk(x[k]); });
-            }
-        })(cfg);
-    });
-
     while (queue.length) {
         var p = queue.pop();
         if (existsOnDisk(p)) scanFile(p);
         else if (/^(?:instructions|prompts)\//.test(p)) dangling[p] = true;
     }
+}
+
+// Build the union reference closure of all root configs.
+// Returns { reachable: {path->true}, dangling: [path] }.
+function buildClosure() {
+    var reachable = {};
+    var dangling = {};
+    var queue = [];
+
+    listNames('.').forEach(function (name) {
+        queueRootConfigReferences(name, queue);
+    });
+
+    drainReferenceQueue(queue, reachable, dangling);
     return { reachable: reachable, dangling: Object.keys(dangling) };
 }
 
@@ -295,5 +311,46 @@ suite('instructionRefs — pack reference integrity', function () {
             assert.ok(Array.isArray(byTracker.github) && byTracker.github.indexOf('./agents/instructions/common/github_comment_format.md') !== -1,
                 name + ' must wire github_comment_format.md in cliPromptsByTracker.github');
         });
+    });
+});
+
+// ── gh-1230 CRAP characterization: reference-queue helpers ───────────────────
+
+suite('instructionRefs — reference queue helpers (gh-1230 characterization)', function () {
+
+    test('queueConfigReferences: only path-shaped .md/.js strings are queued (recursively)', function () {
+        var queue = [];
+        queueConfigReferences('instructions/common/github_comment_format.md', queue);
+        queueConfigReferences('agents/js/common/scm.js', queue);
+        queueConfigReferences('plain string without slash', queue);
+        queueConfigReferences('no-extension/path', queue);
+        queueConfigReferences(['instructions/a.md', ['js/b.js'], { nested: 'prompts/c.md' }], queue);
+        queueConfigReferences({ deep: { deeper: 'instructions/d.md' }, skip: 42 }, queue);
+        queueConfigReferences(null, queue);
+        queueConfigReferences(42, queue);
+        assert.deepEqual(queue, [
+            'instructions/common/github_comment_format.md',
+            'js/common/scm.js',
+            'instructions/a.md',
+            'js/b.js',
+            'prompts/c.md',
+            'instructions/d.md'
+        ]);
+    });
+
+    test('queueRootConfigReferences: non-JSON and versions.json names are skipped', function () {
+        var queue = [];
+        queueRootConfigReferences('versions.json', queue);
+        queueRootConfigReferences('README.md', queue);
+        queueRootConfigReferences('instruction.md', queue);
+        assert.deepEqual(queue, [], 'no references queued for skipped names');
+    });
+
+    test('queueRootConfigReferences: a real base config queues its referenced files', function () {
+        var queue = [];
+        queueRootConfigReferences('discovery.json', queue);
+        assert.ok(queue.length > 0, 'discovery.json references at least one file');
+        var allPaths = queue.every(function (p) { return /\.md$|\.js$/.test(p); });
+        assert.ok(allPaths, 'queued entries are .md/.js paths');
     });
 });

@@ -11,6 +11,120 @@ var githubHelpersStub = {
     findMergedPRForTicket: function() { return null; }
 };
 
+// ── gh-1230 CRAP: post-PR-review fixture factories (characterized at EOF) ────
+
+// file_read mock serving the pr_info.md payload (opts override or a default).
+function prInfoFileRead(opts, defaultPrInfo) {
+    function file_read(args) {
+        var p = args && (args.path || args);
+        if (p && p.indexOf('pr_info.md') !== -1) {
+            return opts.prInfoContent || defaultPrInfo;
+        }
+        return null;
+    }
+    return file_read;
+}
+
+// scm stub for the !isApproved + no-PR guard suite (#311): repoInfo defaults
+// to null (no remote), listPrs serves opts.openPrs.
+function actionScmStub(opts, scmAddLabelCalls) {
+    return {
+        listPrs: function() { return opts.openPrs || []; },
+        getRemoteRepoInfo: function() { return opts.repoInfo !== undefined ? opts.repoInfo : null; },
+        addLabel: function(number, label) { scmAddLabelCalls.push({ number: number, label: label }); },
+        fetchDiscussions: function() { return { rawThreads: { threads: [] } }; }
+    };
+}
+
+// outputFiles stub for the #311 suite: pr_review.json detail + null reads.
+function actionOutputFilesStub(opts) {
+    function readOutputFileDetailed() {
+        return { content: JSON.stringify(opts.reviewData), path: 'outputs/pr_review.json' };
+    }
+    function readOutputFile() { return null; }
+    return { readOutputFileDetailed: readOutputFileDetailed, readOutputFile: readOutputFile };
+}
+
+// jira recorder mocks for the #311 suite.
+function actionJiraMocks(jiraAddLabelCalls, jiraMoveToStatusCalls, jiraPostCommentCalls, opts) {
+    return {
+        file_read: prInfoFileRead(opts, null),
+        jira_add_label: function(args) { jiraAddLabelCalls.push(args); },
+        jira_move_to_status: function(args) { jiraMoveToStatusCalls.push(args); },
+        jira_post_comment: function(args) { jiraPostCommentCalls.push(args); },
+        jira_remove_label: function() {},
+        jira_assign_ticket_to: function() {}
+    };
+}
+
+// autoStart stub for the #311 suite: workflow trigger off, SM trigger recorded.
+function actionAutoStartStub(triggerSmIfIdleCalls) {
+    return {
+        triggerConfiguredWorkflowForTicket: function() { return false; },
+        triggerSmIfIdle: function(args) { triggerSmIfIdleCalls.push(args); }
+    };
+}
+
+// configLoader stub shared by both post-PR-review loaders.
+function configLoaderStub(opts) {
+    return {
+        loadProjectConfig: function() { return opts.config || {}; },
+        resolveInstructions: function() { return { jobParamPatch: {} }; }
+    };
+}
+
+// scm stub for the formal-review suite: submit/list/dismiss review recorders,
+// a populated default repoInfo (overridable with an explicit null).
+function formalScmStub(opts, sinks) {
+    return {
+        listPrs: function() { return opts.openPrs || []; },
+        getRemoteRepoInfo: function() { return opts.repoInfo !== undefined ? opts.repoInfo : { owner: 'IstiN', repo: 'dmtools-agents' }; },
+        addLabel: function(prId, label) { sinks.addLabelCalls.push({ prId: prId, label: label }); },
+        removeLabel: function() {},
+        fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
+        submitReview: function(prId, event, body) {
+            sinks.submitReviewCalls.push({ prId: prId, event: event, body: body });
+        },
+        listReviews: function() { return opts.existingReviews || []; },
+        dismissReview: function(prId, reviewId, message) {
+            sinks.dismissReviewCalls.push({ prId: prId, reviewId: reviewId, message: message });
+        }
+    };
+}
+
+// outputFiles stub for the formal-review suite: serves pr_review_general.md
+// only when opts.generalMdContent is set.
+function formalOutputFilesStub(opts) {
+    function readOutputFileDetailed() {
+        return { content: JSON.stringify(opts.reviewData), path: 'outputs/pr_review.json' };
+    }
+    function readOutputFile(p) {
+        if (opts.generalMdContent && p && String(p).indexOf('pr_review_general.md') !== -1) {
+            return opts.generalMdContent;
+        }
+        return null;
+    }
+    return { readOutputFileDetailed: readOutputFileDetailed, readOutputFile: readOutputFile };
+}
+
+// jira + github mocks for the formal-review suite (default pr_info payload,
+// github_get_pr serving the machine-PR rework re-arm body probe).
+function formalJiraMocks(opts) {
+    return {
+        file_read: prInfoFileRead(opts, '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n'),
+        jira_add_label: function() {},
+        jira_move_to_status: function() {},
+        jira_post_comment: function() {},
+        jira_remove_label: function() {},
+        jira_assign_ticket_to: function() {},
+        github_get_pr: function() {
+            // The machine-PR rework re-arm reads the PR body for a
+            // 'closes #N' linked issue (gh-728 test rides this).
+            return JSON.stringify({ body: opts.githubPrBody || '' });
+        }
+    };
+}
+
 /**
  * Load the real js/common/trackers.js with tool mocks, pinning the provider via
  * customParams so tests stay deterministic even when the runner process has
@@ -343,34 +457,11 @@ suite('postPRReviewComments', function() {
             var triggerSmIfIdleCalls = [];
             var scmAddLabelCalls = [];
 
-            var scm = {
-                listPrs: function() { return opts.openPrs || []; },
-                getRemoteRepoInfo: function() { return opts.repoInfo !== undefined ? opts.repoInfo : null; },
-                addLabel: function(number, label) { scmAddLabelCalls.push({ number: number, label: label }); },
-                fetchDiscussions: function() { return { rawThreads: { threads: [] } }; }
-            };
+            var scm = actionScmStub(opts, scmAddLabelCalls);
 
-            var outputFiles = {
-                readOutputFileDetailed: function() {
-                    return { content: JSON.stringify(opts.reviewData), path: 'outputs/pr_review.json' };
-                },
-                readOutputFile: function() { return null; }
-            };
+            var outputFiles = actionOutputFilesStub(opts);
 
-            var defaultMocks = {
-                file_read: function(args) {
-                    var p = args && (args.path || args);
-                    if (p && p.indexOf('pr_info.md') !== -1) {
-                        return opts.prInfoContent || null;
-                    }
-                    return null;
-                },
-                jira_add_label: function(args) { jiraAddLabelCalls.push(args); },
-                jira_move_to_status: function(args) { jiraMoveToStatusCalls.push(args); },
-                jira_post_comment: function(args) { jiraPostCommentCalls.push(args); },
-                jira_remove_label: function() {},
-                jira_assign_ticket_to: function() {}
-            };
+            var defaultMocks = actionJiraMocks(jiraAddLabelCalls, jiraMoveToStatusCalls, jiraPostCommentCalls, opts);
 
             var mergedMocks = Object.assign({}, defaultMocks, opts.mocks || {});
 
@@ -381,14 +472,8 @@ suite('postPRReviewComments', function() {
             './common/machineAuthor.js': machineAuthorModule,
                     './config.js': configModule,
                     './common/scm.js': { createScm: function() { return scm; } },
-                    './common/autoStart.js': {
-                        triggerConfiguredWorkflowForTicket: function() { return false; },
-                        triggerSmIfIdle: function(args) { triggerSmIfIdleCalls.push(args); }
-                    },
-                    './configLoader.js': {
-                        loadProjectConfig: function() { return opts.config || {}; },
-                        resolveInstructions: function() { return { jobParamPatch: {} }; }
-                    },
+                    './common/autoStart.js': actionAutoStartStub(triggerSmIfIdleCalls),
+                    './configLoader.js': configLoaderStub(opts),
                     './common/outputFiles.js': outputFiles,
                     './common/githubHelpers.js': githubHelpersStub,
                     './common/trackers.js': makeTrackersModule(mergedMocks),
@@ -622,52 +707,12 @@ suite('postPRReviewComments', function() {
             var submitReviewCalls = [];
             var dismissReviewCalls = [];
 
-            var scm = {
-                listPrs: function() { return opts.openPrs || []; },
-                getRemoteRepoInfo: function() { return opts.repoInfo !== undefined ? opts.repoInfo : { owner: 'IstiN', repo: 'dmtools-agents' }; },
-                addLabel: function(prId, label) { addLabelCalls.push({ prId: prId, label: label }); },
-                removeLabel: function() {},
-                fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
-                submitReview: function(prId, event, body) {
-                    submitReviewCalls.push({ prId: prId, event: event, body: body });
-                },
-                listReviews: function() { return opts.existingReviews || []; },
-                dismissReview: function(prId, reviewId, message) {
-                    dismissReviewCalls.push({ prId: prId, reviewId: reviewId, message: message });
-                }
-            };
+            var sinks = { addLabelCalls: addLabelCalls, submitReviewCalls: submitReviewCalls, dismissReviewCalls: dismissReviewCalls };
+            var scm = formalScmStub(opts, sinks);
 
-            var outputFiles = {
-                readOutputFileDetailed: function() {
-                    return { content: JSON.stringify(opts.reviewData), path: 'outputs/pr_review.json' };
-                },
-                readOutputFile: function(p) {
-                    if (opts.generalMdContent && p && String(p).indexOf('pr_review_general.md') !== -1) {
-                        return opts.generalMdContent;
-                    }
-                    return null;
-                }
-            };
+            var outputFiles = formalOutputFilesStub(opts);
 
-            var formalMocks = {
-                file_read: function(args) {
-                    var p = args && (args.path || args);
-                    if (p && p.indexOf('pr_info.md') !== -1) {
-                        return opts.prInfoContent || '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n';
-                    }
-                    return null;
-                },
-                jira_add_label: function() {},
-                jira_move_to_status: function() {},
-                jira_post_comment: function() {},
-                jira_remove_label: function() {},
-                jira_assign_ticket_to: function() {},
-                github_get_pr: function() {
-                    // The machine-PR rework re-arm reads the PR body for a
-                    // 'closes #N' linked issue (gh-728 test rides this).
-                    return JSON.stringify({ body: opts.githubPrBody || '' });
-                }
-            };
+            var formalMocks = formalJiraMocks(opts);
 
             var mod = loadModule(
                 'js/postPRReviewComments.js',
@@ -680,10 +725,7 @@ suite('postPRReviewComments', function() {
                         triggerConfiguredWorkflowForTicket: function() { return false; },
                         triggerSmIfIdle: function() {}
                     },
-                    './configLoader.js': {
-                        loadProjectConfig: function() { return opts.config || {}; },
-                        resolveInstructions: function() { return { jobParamPatch: {} }; }
-                    },
+                    './configLoader.js': configLoaderStub(opts),
                     './common/outputFiles.js': outputFiles,
                     './common/githubHelpers.js': githubHelpersStub,
                     './common/trackers.js': makeTrackersModule(formalMocks),
@@ -2627,5 +2669,113 @@ suite('postPRReviewComments.readPRInfoMarkdown — input folder chain', function
         var mod = loadPostPRReviewComments({ file_read: prInfoOnlyIn('input/nowhere', []) });
 
         assert.equal(mod.readPRInfoMarkdown(undefined, 'acme/widgets#5'), null);
+    });
+});
+
+// ── gh-1230 CRAP characterization: post-PR-review fixture factories ──────────
+
+suite('postPRReviewComments — fixture factories (gh-1230 characterization)', function() {
+
+    test('prInfoFileRead: pr_info.md path serves opts content or the default, others null', function() {
+        var fr = prInfoFileRead({ prInfoContent: '- **PR #**: 7\n' }, 'default-info');
+        assert.equal(fr({ path: 'input/PROJ-1/pr_info.md' }), '- **PR #**: 7\n');
+        assert.equal(fr('input/PROJ-1/pr_info.md'), '- **PR #**: 7\n', 'string-arg shape');
+        assert.equal(fr({ path: 'outputs/other.md' }), null);
+        var frDefault = prInfoFileRead({}, 'default-info');
+        assert.equal(frDefault({ path: 'input/PROJ-1/pr_info.md' }), 'default-info');
+        assert.equal(frDefault({ path: 'outputs/other.md' }), null, 'non-pr_info paths give null');
+    });
+
+    test('actionScmStub: openPrs default and override, repoInfo default null and override, addLabel records', function() {
+        var labels = [];
+        var scm = actionScmStub({}, labels);
+        assert.deepEqual(scm.listPrs(), []);
+        assert.equal(scm.getRemoteRepoInfo(), null);
+        scm.addLabel(42, 'sm_pr_rework_triggered');
+        assert.deepEqual(labels, [{ number: 42, label: 'sm_pr_rework_triggered' }]);
+        assert.deepEqual(scm.fetchDiscussions(), { rawThreads: { threads: [] } });
+
+        var labels2 = [];
+        var scm2 = actionScmStub({ openPrs: [{ number: 9 }], repoInfo: { owner: 'o', repo: 'r' } }, labels2);
+        assert.deepEqual(scm2.listPrs(), [{ number: 9 }]);
+        assert.deepEqual(scm2.getRemoteRepoInfo(), { owner: 'o', repo: 'r' });
+    });
+
+    test('actionOutputFilesStub: readOutputFileDetailed serves reviewData, readOutputFile null', function() {
+        var m = actionOutputFilesStub({ reviewData: { recommendation: 'APPROVE' } });
+        assert.deepEqual(m.readOutputFileDetailed(), { content: '{"recommendation":"APPROVE"}', path: 'outputs/pr_review.json' });
+        assert.equal(m.readOutputFile(), null);
+    });
+
+    test('actionJiraMocks: label/status/comment recorders capture args', function() {
+        var labels = [], moves = [], comments = [];
+        var mocks = actionJiraMocks(labels, moves, comments, {});
+        mocks.jira_add_label({ label: 'a' });
+        mocks.jira_move_to_status({ status: 's' });
+        mocks.jira_post_comment({ body: 'c' });
+        mocks.jira_remove_label({}); 
+        mocks.jira_assign_ticket_to();
+        assert.deepEqual(labels, [{ label: 'a' }]);
+        assert.deepEqual(moves, [{ status: 's' }]);
+        assert.deepEqual(comments, [{ body: 'c' }]);
+        assert.equal(typeof mocks.file_read, 'function');
+    });
+
+    test('actionAutoStartStub: workflow trigger off, SM trigger recorded', function() {
+        var triggers = [];
+        var auto = actionAutoStartStub(triggers);
+        assert.equal(auto.triggerConfiguredWorkflowForTicket(), false);
+        auto.triggerSmIfIdle({ key: 'PROJ-1' });
+        assert.deepEqual(triggers, [{ key: 'PROJ-1' }]);
+    });
+
+    test('configLoaderStub: project config default empty and override', function() {
+        assert.deepEqual(configLoaderStub({}).loadProjectConfig(), {});
+        assert.deepEqual(configLoaderStub({ config: { formalGithubReview: true } }).loadProjectConfig(), { formalGithubReview: true });
+        assert.deepEqual(configLoaderStub({}).resolveInstructions(), { jobParamPatch: {} });
+    });
+
+    test('formalScmStub: default repoInfo, review submission and dismissal recorders, listReviews', function() {
+        var sinks = { addLabelCalls: [], submitReviewCalls: [], dismissReviewCalls: [] };
+        var scm = formalScmStub({}, sinks);
+        assert.deepEqual(scm.getRemoteRepoInfo(), { owner: 'IstiN', repo: 'dmtools-agents' });
+        assert.deepEqual(scm.listPrs(), []);
+        assert.deepEqual(scm.listReviews(), []);
+        scm.addLabel(42, 'pr_approved');
+        scm.submitReview(42, 'APPROVE', 'nice');
+        scm.dismissReview(42, 3, 'stale');
+        assert.deepEqual(sinks.addLabelCalls, [{ prId: 42, label: 'pr_approved' }]);
+        assert.deepEqual(sinks.submitReviewCalls, [{ prId: 42, event: 'APPROVE', body: 'nice' }]);
+        assert.deepEqual(sinks.dismissReviewCalls, [{ prId: 42, reviewId: 3, message: 'stale' }]);
+        scm.removeLabel();
+        assert.deepEqual(scm.fetchDiscussions(), { rawThreads: { threads: [] } });
+
+        var sinks2 = { addLabelCalls: [], submitReviewCalls: [], dismissReviewCalls: [] };
+        var scm2 = formalScmStub({ openPrs: [{ number: 5 }], repoInfo: null, existingReviews: [{ id: 1 }] }, sinks2);
+        assert.equal(scm2.getRemoteRepoInfo(), null, 'explicit null repoInfo override honoured');
+        assert.deepEqual(scm2.listPrs(), [{ number: 5 }]);
+        assert.deepEqual(scm2.listReviews(), [{ id: 1 }]);
+    });
+
+    test('formalOutputFilesStub: general markdown served only for the pr_review_general.md path', function() {
+        var m = formalOutputFilesStub({ reviewData: { recommendation: 'APPROVE' }, generalMdContent: '# general' });
+        assert.deepEqual(m.readOutputFileDetailed(), { content: '{"recommendation":"APPROVE"}', path: 'outputs/pr_review.json' });
+        assert.equal(m.readOutputFile('pr_review_general.md'), '# general');
+        assert.equal(m.readOutputFile('pr_review_response.md'), null);
+        var mNoGeneral = formalOutputFilesStub({ reviewData: {} });
+        assert.equal(mNoGeneral.readOutputFile('pr_review_general.md'), null);
+        var mNoPath = formalOutputFilesStub({ reviewData: {}, generalMdContent: '# general' });
+        assert.equal(mNoPath.readOutputFile(), null, 'undefined path gives null');
+    });
+
+    test('formalJiraMocks: pr_info default, github_get_pr body default and override', function() {
+        var mocks = formalJiraMocks({});
+        assert.contains(mocks.file_read({ path: 'x/pr_info.md' }), '- **PR #**: 42');
+        assert.equal(mocks.file_read({ path: 'x/other.md' }), null);
+        assert.deepEqual(JSON.parse(mocks.github_get_pr()), { body: '' });
+        var mocks2 = formalJiraMocks({ prInfoContent: 'custom info', githubPrBody: 'closes #7' });
+        assert.equal(mocks2.file_read({ path: 'x/pr_info.md' }), 'custom info');
+        assert.deepEqual(JSON.parse(mocks2.github_get_pr()), { body: 'closes #7' });
+        mocks2.jira_add_label({}); mocks2.jira_move_to_status({}); mocks2.jira_post_comment({}); mocks2.jira_remove_label({}); mocks2.jira_assign_ticket_to();
     });
 });
