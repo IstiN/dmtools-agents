@@ -248,9 +248,43 @@ function postTokenUsageComments(ticketKey, options) {
     return { posted: posted, files: files, errors: errors };
 }
 
+/**
+ * Best-effort token-usage summary step (gh-1244): posts the usage comments
+ * for the ticket but NEVER throws — a provider failure here must not fail
+ * the calling action. Canonical replacement for the copy-pasted
+ * postTokenUsageSafely wrappers every post-action used to carry.
+ *
+ * @param {string} ticketKey - ticket to comment on.
+ * @param {Object} [params] - the action's params; initiator and customParams are read from it
+ *   (customParamsOf). Pass null when the caller has no action params.
+ * @param {Object} [overrides] - optional { initiator, tracker, config } that win over the
+ *   params-derived values (callers that resolved the tracker/config themselves).
+ */
+function postTokenUsageSafely(ticketKey, params, overrides) {
+    try {
+        postTokenUsageComments(ticketKey, tokenUsageSafelyOptions(params, overrides));
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
+// Option bag for postTokenUsageSafely (pure): initiator from the override or
+// the params, customParams via customParamsOf, tracker/config overrides win.
+function tokenUsageSafelyOptions(params, overrides) {
+    var options = {
+        initiator: (overrides && overrides.initiator) || (params && params.initiator),
+        customParams: customParamsOf(params)
+    };
+    if (!overrides) return options;
+    if (overrides.tracker) options.tracker = overrides.tracker;
+    if (overrides.config) options.config = overrides.config;
+    return options;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         postTokenUsageComments: postTokenUsageComments,
+        postTokenUsageSafely: postTokenUsageSafely,
         resolvePostTracker: resolvePostTracker,
         customParamsOf: customParamsOf,
         findUsageFiles: findUsageFiles,

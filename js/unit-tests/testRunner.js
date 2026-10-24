@@ -220,7 +220,7 @@ function loadModule(path, requireFn, mocks) {
  */
 function makeRequire(moduleMap) {
     return function(id) {
-        if (moduleMap[id]) return moduleMap[id];
+        if (moduleMap[id]) return withModuleCompat(moduleMap[id]);
 
         // Match by basename (e.g. './config.js' → 'config.js' → 'config')
         var base = id;
@@ -228,12 +228,97 @@ function makeRequire(moduleMap) {
         if (slash !== -1) base = id.substring(slash + 1);
         var noExt = base.replace(/\.js$/, '');
 
-        if (moduleMap[base]) return moduleMap[base];
-        if (moduleMap[noExt]) return moduleMap[noExt];
-        if (moduleMap['./' + base]) return moduleMap['./' + base];
+        if (moduleMap[base]) return withModuleCompat(moduleMap[base]);
+        if (moduleMap[noExt]) return withModuleCompat(moduleMap[noExt]);
+        if (moduleMap['./' + base]) return withModuleCompat(moduleMap['./' + base]);
 
         throw new Error('makeRequire: module not found: ' + id);
     };
+}
+
+/**
+ * gh-1244 compat: production modules build their lazy tracker holder from
+ * trackersModule.createTrackerHolder() at load time and delegate their
+ * token-usage summary to tokenUsageComment.postTokenUsageSafely(). Mocks
+ * written before gh-1244 provide only createTracker / postTokenUsageComments;
+ * extend them with the canonical semantics so every mock keeps matching the
+ * real js/common/trackers.js and js/common/tokenUsageComment.js contracts.
+ */
+function withModuleCompat(mock) {
+    return withTokenUsageCompat(withTrackerHolderCompat(mock));
+}
+
+/**
+ * tokenUsageComment mock compat (gh-1244): the canonical best-effort wrapper
+ * (js/common/tokenUsageComment.js postTokenUsageSafely) — initiator from
+ * params/override, customParams from customParamsOf, tracker/config override,
+ * failures swallowed with a warning.
+ */
+function withTokenUsageCompat(mock) {
+    if (mock && typeof mock === 'object' && typeof mock.postTokenUsageComments === 'function' &&
+        typeof mock.postTokenUsageSafely !== 'function') {
+        mock.postTokenUsageSafely = makeTokenUsageSafely(mock);
+    }
+    return mock;
+}
+
+// The best-effort wrapper itself: failures are swallowed with a warning so a
+// provider error never fails the calling action (pure option shape above).
+function makeTokenUsageSafely(mock) {
+    return function (ticketKey, params, overrides) {
+        try {
+            var options = {
+                initiator: (overrides && overrides.initiator) || (params && params.initiator),
+                customParams: tokenUsageCustomParamsOf(mock, params)
+            };
+            mock.postTokenUsageComments(ticketKey, tokenUsageSafelyOverrides(options, overrides));
+        } catch (e) {
+            console.warn('Failed to post token usage comments:', e);
+        }
+    };
+}
+
+// customParamsOf(params) when the mock provides it, {} otherwise — mirrors
+// the real module's customParamsOf(params) for callers without action params.
+function tokenUsageCustomParamsOf(mock, params) {
+    return typeof mock.customParamsOf === 'function' ? mock.customParamsOf(params) : {};
+}
+
+// tracker/config overrides win over the params-derived options (pure).
+function tokenUsageSafelyOverrides(options, overrides) {
+    if (!overrides) return options;
+    if (overrides.tracker) options.tracker = overrides.tracker;
+    if (overrides.config) options.config = overrides.config;
+    return options;
+}
+
+/**
+ * gh-1244 compat: production modules build their lazy tracker holder from
+ * trackersModule.createTrackerHolder() at load time. Trackers-module mocks
+ * written before gh-1244 provide only createTracker; extend them with the
+ * canonical holder semantics (lazy create via the mock's own createTracker,
+ * cached instance, reset on re-init) so every mock keeps matching the real
+ * js/common/trackers.js contract.
+ */
+function withTrackerHolderCompat(mock) {
+    if (mock && typeof mock === 'object' && typeof mock.createTracker === 'function' &&
+        typeof mock.createTrackerHolder !== 'function') {
+        mock.createTrackerHolder = function () {
+            var ctx = { config: null, customParams: {} };
+            var inst = null;
+            return {
+                initTracker: function (config, customParams) {
+                    ctx = { config: config || null, customParams: customParams || {} };
+                    inst = null;
+                },
+                getTracker: function () {
+                    if (!inst) inst = mock.createTracker(ctx.config, ctx.customParams);
+                    return inst;
+                }
+            };
+        };
+    }
+    return mock;
 }
 
 /**

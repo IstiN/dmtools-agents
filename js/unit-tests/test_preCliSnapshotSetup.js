@@ -390,3 +390,121 @@ suite('preCliSnapshotSetup — action branches', function() {
     });
 
 });
+
+// ---------------------------------------------------------------------------
+// gh-1242: checkoutSnapshotBranch — every branch path (direct, via the export)
+// ---------------------------------------------------------------------------
+
+suite('preCliSnapshotSetup — checkoutSnapshotBranch (gh-1242)', function() {
+
+    test('missing workingDir or branchName → false, no git', function() {
+        var calls = [];
+        var mod = loadPreCliSnapshotSetup(makeConfigLoaderStub('develop/3.9.0'), {
+            cli_execute_command: makeCliMock(calls, {})
+        });
+        assert.equal(mod.checkoutSnapshotBranch(null, 'develop/3.9.0'), false, 'no workingDir → false');
+        assert.equal(mod.checkoutSnapshotBranch('./dependencies/example-repo', ''), false, 'no branch → false');
+        assert.equal(calls.length, 0, 'no git commands on the early-return paths');
+    });
+
+    test('already on the branch + pull ok → true, no checkout', function() {
+        var calls = [];
+        var mod = loadPreCliSnapshotSetup(makeConfigLoaderStub('develop/3.9.0'), {
+            cli_execute_command: makeCliMock(calls, {
+                'git rev-parse --abbrev-ref HEAD': 'develop/3.9.0'
+            })
+        });
+        var result = mod.checkoutSnapshotBranch('./dependencies/example-repo', 'develop/3.9.0');
+        assert.equal(result, true);
+        assert.ok(calls.some(function(c) { return c.indexOf('git pull origin develop/3.9.0 --ff-only') !== -1; }));
+        assert.ok(!calls.some(function(c) { return c.indexOf('git checkout') !== -1; }), 'no checkout needed');
+        assert.ok(!calls.some(function(c) { return c.indexOf('git fetch') !== -1; }), 'no fetch needed');
+    });
+
+    test('already on the branch + pull failure → still true (stay on the branch)', function() {
+        var calls = [];
+        var mod = loadPreCliSnapshotSetup(makeConfigLoaderStub('develop/3.9.0'), {
+            cli_execute_command: function(opts) {
+                calls.push(opts.command);
+                if (opts.command.indexOf('git pull') !== -1) throw new Error('pull down');
+                if (opts.command === 'git rev-parse --abbrev-ref HEAD') return 'develop/3.9.0';
+                return '';
+            }
+        });
+        assert.equal(mod.checkoutSnapshotBranch('./dependencies/example-repo', 'develop/3.9.0'), true);
+    });
+
+    test('on another branch → fetch, checkout, fast-forward pull', function() {
+        var calls = [];
+        var mod = loadPreCliSnapshotSetup(makeConfigLoaderStub('develop/3.9.0'), {
+            cli_execute_command: makeCliMock(calls, {
+                'git rev-parse --abbrev-ref HEAD': 'master'
+            })
+        });
+        var result = mod.checkoutSnapshotBranch('./dependencies/example-repo', 'develop/3.9.0');
+        assert.equal(result, true);
+        assert.ok(calls.some(function(c) { return c.indexOf('git fetch origin develop/3.9.0') !== -1; }));
+        assert.ok(calls.some(function(c) { return c.indexOf('git checkout develop/3.9.0') !== -1; }));
+        assert.ok(calls.some(function(c) { return c.indexOf('git pull origin develop/3.9.0 --ff-only') !== -1; }));
+    });
+
+    test('fetch failure is non-fatal → checkout still attempted', function() {
+        var calls = [];
+        var mod = loadPreCliSnapshotSetup(makeConfigLoaderStub('develop/3.9.0'), {
+            cli_execute_command: function(opts) {
+                calls.push(opts.command);
+                if (opts.command.indexOf('git fetch') !== -1) throw new Error('fetch down');
+                if (opts.command === 'git rev-parse --abbrev-ref HEAD') return 'master';
+                return '';
+            }
+        });
+        assert.equal(mod.checkoutSnapshotBranch('./dependencies/example-repo', 'develop/3.9.0'), true);
+        assert.ok(calls.some(function(c) { return c.indexOf('git checkout develop/3.9.0') !== -1; }),
+            'checkout proceeds after a failed fetch');
+    });
+
+    test('local branch missing → recreated from origin via checkout -B', function() {
+        var calls = [];
+        var mod = loadPreCliSnapshotSetup(makeConfigLoaderStub('develop/3.9.0'), {
+            cli_execute_command: function(opts) {
+                calls.push(opts.command);
+                if (opts.command === 'git checkout develop/3.9.0') throw new Error('pathspec not found');
+                if (opts.command === 'git rev-parse --abbrev-ref HEAD') return 'master';
+                return '';
+            }
+        });
+        var result = mod.checkoutSnapshotBranch('./dependencies/example-repo', 'develop/3.9.0');
+        assert.equal(result, true);
+        assert.ok(calls.some(function(c) { return c.indexOf('git checkout -B develop/3.9.0 origin/develop/3.9.0') !== -1; }),
+            'the branch is recreated from its origin ref');
+    });
+
+    test('fast-forward pull after checkout fails → still true (warn only)', function() {
+        var calls = [];
+        var mod = loadPreCliSnapshotSetup(makeConfigLoaderStub('develop/3.9.0'), {
+            cli_execute_command: function(opts) {
+                calls.push(opts.command);
+                if (opts.command.indexOf('git pull') !== -1) throw new Error('ff impossible');
+                if (opts.command === 'git rev-parse --abbrev-ref HEAD') return 'master';
+                return '';
+            }
+        });
+        assert.equal(mod.checkoutSnapshotBranch('./dependencies/example-repo', 'develop/3.9.0'), true);
+        assert.ok(calls.some(function(c) { return c.indexOf('git checkout develop/3.9.0') !== -1; }));
+    });
+
+    test('current-branch probe failure → treated as "not on branch", full checkout path', function() {
+        var calls = [];
+        var mod = loadPreCliSnapshotSetup(makeConfigLoaderStub('develop/3.9.0'), {
+            cli_execute_command: function(opts) {
+                calls.push(opts.command);
+                if (opts.command === 'git rev-parse --abbrev-ref HEAD') throw new Error('git broken');
+                return '';
+            }
+        });
+        assert.equal(mod.checkoutSnapshotBranch('./dependencies/example-repo', 'develop/3.9.0'), true);
+        assert.ok(calls.some(function(c) { return c.indexOf('git fetch origin develop/3.9.0') !== -1; }));
+        assert.ok(calls.some(function(c) { return c.indexOf('git checkout develop/3.9.0') !== -1; }));
+    });
+
+});
