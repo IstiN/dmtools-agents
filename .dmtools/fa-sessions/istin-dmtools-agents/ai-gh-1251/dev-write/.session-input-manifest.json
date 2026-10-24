@@ -1,0 +1,223 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-24T20:05:12.676Z",
+  "ticketKey": "pr-1252",
+  "headSha": "7751404a0bd798200b67304050b8c93ca2b89adf",
+  "baseBranch": "main",
+  "reviewDecision": "NONE",
+  "labels": [],
+  "files": {
+    "ci_failures.md": {
+      "hash": "fnv1a64:278371154fa87f4d",
+      "size": 643
+    },
+    "ci_failures_full.log": {
+      "hash": "fnv1a64:59e4d1cb43a3baaf",
+      "size": 189
+    },
+    "pr_diff.txt": {
+      "hash": "fnv1a64:5736d50cfed6c477",
+      "size": 12302
+    },
+    "pr_discussions.md": {
+      "hash": "fnv1a64:054e96d601a95f6c",
+      "size": 26443
+    },
+    "pr_discussions_raw.json": {
+      "hash": "fnv1a64:42b23592208954f6",
+      "size": 6411
+    },
+    "pr_info.md": {
+      "hash": "fnv1a64:68133732eda80813",
+      "size": 2303
+    },
+    "review_state.md": {
+      "hash": "fnv1a64:4d77ff0ca8973d19",
+      "size": 1426
+    },
+    "rework_base_head.txt": {
+      "hash": "fnv1a64:11d12384c9f427bd",
+      "size": 40
+    },
+    "ticket.json": {
+      "hash": "fnv1a64:7c5dde43dcabc663",
+      "size": 2036
+    },
+    "ticket.md": {
+      "hash": "fnv1a64:d45a2658764cf763",
+      "size": 1961
+    }
+  },
+  "comments": [
+    {
+      "id": "PRRT_kwDORYAuYs6v7OyK",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "duplication-baseline.json:5",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: Red CI (`crap` check on head `7751404a`) — stale duplication baseline after the main merge, reproduced locally**\n\nThe Quality `crap` check is red on the current head. I reproduced the exact gate path locally with the pinned tool (`npm i git+https://github.com/IstiN/crap4js#83ee6201`) on this checkout (`7751404a`):\n\n```text\n$ crap4js duplicates --threshold 1 --exclude \"js/unit-tests/**\" js ci   # exit 2\n77/192 files over 1% duplication\n$ node ci/duplicationRatchet.js dup-gate.txt duplication-baseline.json 2   # exit 2\nduplication regression: js/checkSubtasksDoneForBA.js 9.09% -> 9.33%\nduplication regression: js/checkTaskStoriesDone.js 14.43% -> 15.05%\nduplication regression: js/createSolutionDesignTicketsAndAssignForReview.js 1.52% -> 2.17%\nduplication regression: js/enhanceSDAPIDescriptionAndAssess.js 6.22% -> 7.34%\nduplication regression: js/enhanceSolutionDesignDescriptionAndAssess.js 10.09% -> 11.37%\nduplication regression: js/mergeStoryTestAutomationPR.js 3.54% -> 3.58%\nduplication regression: js/postStoryTestAutomationReview.js 4.49% -> 4.55%\nduplication regression: js/postStoryTestAutomationShared.js 19.16% -> 19.75%\nduplication regression: js/recoverMergedPRTicket.js 8.37% -> 8.67%\nduplication regression: js/recoverStuckTestCase.js 2.60% -> 3.13%\nduplication regression: js/storyTestAutomationRework.js 4.81% -> 4.85%\nduplication regression: js/workflowFailureReporter.js 1.50% -> 2.15%\nduplication ratchet: FAIL — 0 fresh, 12 regressed (65 pinned debt files unchanged)\n```\n\nThe head merged `main` (gh-1244 dedup #1253) after this baseline was generated, so the pinned percentages no longer match the tree — exactly the ordering hazard the PR description warns about. The baseline's own `note` says to regenerate after dedup landings: run the pinned tool on the merged head and rewrite `pinned` with the reported files/percentages (77 entries now). Note the contract test pinning `files.length >= 85` must be relaxed in the same commit (see the comment on `test_qualityGateConfig.js`), and the cleared 8 entries should be dropped as part of the regeneration."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v7OzM",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "js/unit-tests/test_qualityGateConfig.js:99",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: the `>= 85` count pin fights the required baseline regeneration**\n\nThis test bakes in the point-in-time debt count (`85 at gh-1251`). The merge of main (gh-1244 dedup, #1253) already dropped the real count to **77** (verified locally with the pinned tool), so once the stale-baseline blocker is fixed by regenerating `duplication-baseline.json`, this assertion turns the unit suite red — the rework would trade a red CI job for a red test suite.\n\nPlease update the assertion in the same commit as the baseline regeneration. Consider asserting a non-drifting invariant instead of a magic number — e.g. `files.length > 0`, every entry a production JS file that exists, and `<=` the historically pinned maximum — so future dedup landings (gh-1245…gh-1250) don't require touching this test again."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v7O0S",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": "ci/duplicationRatchet.js:63",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: percentage-based ratchet trips on file shrinkage from dedup work — please confirm intent**\n\nThe red-CI root cause is instructive: the merge that landed was a **deduplication** PR (gh-1244), yet 12 pinned files \"regressed\". The most plausible mechanism is that extracting shared helpers shrank these files' denominators, so the *percentage* of duplicated lines rose even while the absolute number of duplicated lines fell. Since the remaining six dedup tickets (gh-1245…gh-1250) will keep shrinking exactly these files, every dedup landing can trip this gate on unrelated branches/PRs until someone regenerates the baseline — a steady stream of false-red gates and baseline churn.\n\nCan you confirm against the measurement whether absolute duplicated-line counts actually fell for the 12 flagged files? If yes, consider ratcheting on **absolute duplicated lines** (the clones-mode report carries per-clone line counts) instead of the percentage, or at minimum make baseline regeneration an explicit step of each gh-1245…gh-1250 dedup ticket's DoD so the debt burn-down doesn't keep redding other PRs. If the counts genuinely grew, the current behavior is correct and only the baseline needs regenerating."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v7O1l",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": ".github/workflows/quality.yml:27",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: stale \"85\" figures in the comments**\n\nThis comment (and the header comment at line 27, plus the gate-step comment at line 173) says \"85 production files/JS files already exceed 1%\", but the gh-1244 dedup landing already brought it to 77, and the number will keep drifting as gh-1245…gh-1250 land. Consider dropping the concrete number in favor of a pointer — e.g. \"see duplication-baseline.json for the current pinned set\" — so the workflow text doesn't silently rot with every dedup merge."
+    },
+    {
+      "id": "PRRT_kwDORYAuYs6v7O2V",
+      "kind": "review_thread",
+      "author": "unknown",
+      "createdAt": "",
+      "updatedAt": "",
+      "location": ".github/workflows/quality.yml:298",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `duplication=null%` in the badges log when the clones measurement crashed**\n\nIf the `duplicates --report clones` run above fails (it is `|| true`), `dupPct` stays `null` and this line prints `duplication=null%`, while the badge is silently skipped. Cosmetic, but a `duplication=${dupPct === null ? 'skipped' : dupPct + '%'}` (or skipping the key when null) would keep the run log readable when debugging a missing badge."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:57d6ff22",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🚨 **BLOCKING: Red CI (`crap` check on head `7751404a`) — stale duplication baseline after the main merge, reproduced locally**\n\nThe Quality `crap` check is red on the current head. I reproduced the exact gate path locally with the pinned tool (`npm i git+https://github.com/IstiN/crap4js#83ee6201`) on this checkout (`7751404a`):\n\n```text\n$ crap4js duplicates --threshold 1 --exclude \"js/unit-tests/**\" js ci   # exit 2\n77/192 files over 1% duplication\n$ node ci/duplicationRatchet.js dup-gate.txt duplication-baseline.json 2   # exit 2\nduplication regression: js/checkSubtasksDoneForBA.js 9.09% -> 9.33%\nduplication regression: js/checkTaskStoriesDone.js 14.43% -> 15.05%\nduplication regression: js/createSolutionDesignTicketsAndAssignForReview.js 1.52% -> 2.17%\nduplication regression: js/enhanceSDAPIDescriptionAndAssess.js 6.22% -> 7.34%\nduplication regression: js/enhanceSolutionDesignDescriptionAndAssess.js 10.09% -> 11.37%\nduplication regression: js/mergeStoryTestAutomationPR.js 3.54% -> 3.58%\nduplication regression: js/postStoryTestAutomationReview.js 4.49% -> 4.55%\nduplication regression: js/postStoryTestAutomationShared.js 19.16% -> 19.75%\nduplication regression: js/recoverMergedPRTicket.js 8.37% -> 8.67%\nduplication regression: js/recoverStuckTestCase.js 2.60% -> 3.13%\nduplication regression: js/storyTestAutomationRework.js 4.81% -> 4.85%\nduplication regression: js/workflowFailureReporter.js 1.50% -> 2.15%\nduplication ratchet: FAIL — 0 fresh, 12 regressed (65 pinned debt files unchanged)\n```\n\nThe head merged `main` (gh-1244 dedup #1253) after this baseline was generated, so the pinned percentages no longer match the tree — exactly the ordering hazard the PR description warns about. The baseline's own `note` says to regenerate after dedup landings: run the pinned tool on the merged head and rewrite `pinned` with the reported files/percentages (77 entries now). Note the contract test pinning `files.length >= 85` must be relaxed in the same commit (see the comment on `test_qualityGateConfig.js`), and the cleared 8 entries should be dropped as part of the regeneration."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:720e2570",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: the `>= 85` count pin fights the required baseline regeneration**\n\nThis test bakes in the point-in-time debt count (`85 at gh-1251`). The merge of main (gh-1244 dedup, #1253) already dropped the real count to **77** (verified locally with the pinned tool), so once the stale-baseline blocker is fixed by regenerating `duplication-baseline.json`, this assertion turns the unit suite red — the rework would trade a red CI job for a red test suite.\n\nPlease update the assertion in the same commit as the baseline regeneration. Consider asserting a non-drifting invariant instead of a magic number — e.g. `files.length > 0`, every entry a production JS file that exists, and `<=` the historically pinned maximum — so future dedup landings (gh-1245…gh-1250) don't require touching this test again."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:e1af3319",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "⚠️ **IMPORTANT: percentage-based ratchet trips on file shrinkage from dedup work — please confirm intent**\n\nThe red-CI root cause is instructive: the merge that landed was a **deduplication** PR (gh-1244), yet 12 pinned files \"regressed\". The most plausible mechanism is that extracting shared helpers shrank these files' denominators, so the *percentage* of duplicated lines rose even while the absolute number of duplicated lines fell. Since the remaining six dedup tickets (gh-1245…gh-1250) will keep shrinking exactly these files, every dedup landing can trip this gate on unrelated branches/PRs until someone regenerates the baseline — a steady stream of false-red gates and baseline churn.\n\nCan you confirm against the measurement whether absolute duplicated-line counts actually fell for the 12 flagged files? If yes, consider ratcheting on **absolute duplicated lines** (the clones-mode report carries per-clone line counts) instead of the percentage, or at minimum make baseline regeneration an explicit step of each gh-1245…gh-1250 dedup ticket's DoD so the debt burn-down doesn't keep redding other PRs. If the counts genuinely grew, the current behavior is correct and only the baseline needs regenerating."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:727025e7",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: stale \"85\" figures in the comments**\n\nThis comment (and the header comment at line 27, plus the gate-step comment at line 173) says \"85 production files/JS files already exceed 1%\", but the gh-1244 dedup landing already brought it to 77, and the number will keep drifting as gh-1245…gh-1250 land. Consider dropping the concrete number in favor of a pointer — e.g. \"see duplication-baseline.json for the current pinned set\" — so the workflow text doesn't silently rot with every dedup merge."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:14bff7cb",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "💡 **SUGGESTION: `duplication=null%` in the badges log when the clones measurement crashed**\n\nIf the `duplicates --report clones` run above fails (it is `|| true`), `dupPct` stays `null` and this line prints `duplication=null%`, while the badge is silently skipped. Cosmetic, but a `duplication=${dupPct === null ? 'skipped' : dupPct + '%'}` (or skipping the key when null) would keep the run log readable when debugging a missing badge."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:48ccc0a4",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 51ed0f98ad9dcd53ea6194c6734f65628cff10d4 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:5ab2a23d",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 51ed0f98ad9dcd53ea6194c6734f65628cff10d4 — red 2/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:95721a3c",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "## 🔧 Rework Complete — pr-1252\n\nAll PR review comments have been addressed. See fix summary below."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:a1565a16",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head cdbf4f2a391d21ef0908d00bac7669559966c323 — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:7fd4b280",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 7751404a0bd798200b67304050b8c93ca2b89adf — red 1/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:8008c814",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "# Review — PR #1252 (gh-1251): JS similarity + duplication ratchet gate + README badge\n\n## Summary\n\nThe approach is sound: the ratchet design (`ci/duplicationRatchet.js`) is clean, well-tested (19 + 8 contract tests pass locally), fail-closed on crashed measurements, and mirrors the repo's existing CRAP-ratchet philosophy. Acceptance (1) verified locally on the head: `crap4dart check --only similarity --baseline` → **329 files scanned, no similar files**. Acceptance (2) cannot pass as-is: the `crap` CI check is red on the current head.\n\n## Key Issues\n\n- 🚨 **BLOCKING — red CI (`crap` check on head `7751404a`), root-caused and reproduced locally.** The merge of `main` (gh-1244 dedup #1253) changed measured duplication: the pinned tool (`IstiN/crap4js@83ee6201`, installed locally at the pinned ref) now reports **77/192 files over 1%**, and `node ci/duplicationRatchet.js` exits **2** on **12 pinned files whose percentage grew** (e.g. `js/checkTaskStoriesDone.js` 14.43→15.05%, `js/postStoryTestAutomationShared.js` 19.16→19.75%, `js/workflowFailureReporter.js` 1.50→2.15%; 8 other pinned files cleared). The baseline was generated pre-merge and is stale — regenerate it on the merged head per its own in-file instructions.\n- ⚠️ Contract test `test_qualityGateConfig.js` pins `files.length >= 85`; after the required baseline regeneration the count is 77, so the fix for the blocker turns the suite red unless the test is updated in the same rework.\n- ⚠️ Percentage-based ratchet trips on file *shrinkage*: a merge whose only purpose was deduplication produced 12 \"regressions\". Worth confirming intent / assigning baseline regen to each dedup ticket.\n\n## Next Steps\n\n1. Regenerate `duplication-baseline.json` on the current head (77 files at measured %) and relax the `>= 85` contract-test pin in the same commit.\n2. Decide how gh-1245…gh-1250 should carry baseline regeneration so each dedup landing doesn't red unrelated branches.\n3. Re-run the Quality `crap` job — expected green."
+    },
+    {
+      "id": "pr_discussions.md:dmtools-factory-bot[bot]:2026-10-24:86b04219",
+      "kind": "comment",
+      "author": "dmtools-factory-bot[bot]",
+      "createdAt": "2026-10-24",
+      "updatedAt": "2026-10-24",
+      "location": "pr_discussions.md",
+      "resolved": false,
+      "body": "🔴 red head 7751404a0bd798200b67304050b8c93ca2b89adf — red 2/3 (owner directive 2026-10-04: red yields the slot — after 3 reds on the same head, validation waits for a NEW head)\n🔴 Red pre-merge gate on the head with no armed validation — rework armed (gh-917: first validation included, review or no review). The rework runner pushes a fix and validation re-runs on the new head (validate-fresh). After 3 red arming attempts on the SAME head the arm is withheld and a human is escalated (no infinite retry)."
+    }
+  ]
+}
