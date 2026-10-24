@@ -159,44 +159,60 @@ suite('writeSolutionAndDiagrams — module export', function() {
     });
 });
 
+// ── gh-1230 CRAP: diagram-flow fixture factories (characterized at EOF) ──────
+
+// outputFiles.readOutputFile mock for the diagram-flow suites: fixed fixtures
+// with per-file defaults.
+function wd3OutputFilesMock(responseMd, diagramMd, affectedRepos) {
+    function readOutputFile(name) {
+        if (name === 'response.md') return responseMd || '## Solution\nBody text';
+        if (name === 'diagram.md') return diagramMd || 'graph TD\nA --> B';
+        if (name === 'affected_repos.json') return affectedRepos || null;
+        return null;
+    }
+    return { readOutputFile: readOutputFile };
+}
+
+// Recorder globals for the diagram-flow suites: jira field updates and
+// confluence create/sync calls land in the given arrays; file_write only
+// records confluence sync index payloads; file_read always throws.
+function wd3DiagramGlobals(jiraUpdates, confluenceCalls, repliesFile) {
+    function file_write(path, content) {
+        if (typeof path === 'string' && path.indexOf('confluence_sync_') !== -1 && path.indexOf('index.md') !== -1) {
+            confluenceCalls.push({ op: 'write', path: path, content: content });
+        }
+    }
+    function file_read(opts) {
+        var path = opts && (opts.path || opts);
+        if (path === (repliesFile || 'outputs/confluence_replies.json')) throw new Error('no replies');
+        throw new Error('not found: ' + path);
+    }
+    return {
+        jira_update_field: function(args) { jiraUpdates.push(args); },
+        jira_get_ticket: function() { return { fields: {} }; },
+        jira_assign_ticket_to: function() {},
+        jira_move_to_status: function() {},
+        jira_add_label: function() {},
+        jira_remove_label: function() {},
+        jira_post_comment: function() {},
+        confluence_get_children_by_id: function() { return []; },
+        confluence_create_page: function(args) {
+            confluenceCalls.push({ op: 'create', title: args.title });
+            return { id: '777', title: args.title };
+        },
+        confluence_sync_markdown_directory: function(args) {
+            confluenceCalls.push({ op: 'sync', parentId: args.parentId });
+        },
+        file_write: file_write,
+        file_read: file_read
+    };
+}
+
 suite('writeSolutionAndDiagrams — diagram handling for Confluence targets', function() {
 
     function loadModuleWithDiagramFlow(jiraUpdates, confluenceCalls, repliesFile, affectedRepos, responseMd, diagramMd) {
-        var outputFilesMock = {
-            readOutputFile: function(name) {
-                if (name === 'response.md') return responseMd || '## Solution\nBody text';
-                if (name === 'diagram.md') return diagramMd || 'graph TD\nA --> B';
-                if (name === 'affected_repos.json') return affectedRepos || null;
-                return null;
-            }
-        };
-        var globals = {
-            jira_update_field: function(args) { jiraUpdates.push(args); },
-            jira_get_ticket: function() { return { fields: {} }; },
-            jira_assign_ticket_to: function() {},
-            jira_move_to_status: function() {},
-            jira_add_label: function() {},
-            jira_remove_label: function() {},
-            jira_post_comment: function() {},
-            confluence_get_children_by_id: function() { return []; },
-            confluence_create_page: function(args) {
-                confluenceCalls.push({ op: 'create', title: args.title });
-                return { id: '777', title: args.title };
-            },
-            confluence_sync_markdown_directory: function(args) {
-                confluenceCalls.push({ op: 'sync', parentId: args.parentId });
-            },
-            file_write: function(path, content) {
-                if (typeof path === 'string' && path.indexOf('confluence_sync_') !== -1 && path.indexOf('index.md') !== -1) {
-                    confluenceCalls.push({ op: 'write', path: path, content: content });
-                }
-            },
-            file_read: function(opts) {
-                var path = opts && (opts.path || opts);
-                if (path === (repliesFile || 'outputs/confluence_replies.json')) throw new Error('no replies');
-                throw new Error('not found: ' + path);
-            }
-        };
+        var outputFilesMock = wd3OutputFilesMock(responseMd, diagramMd, affectedRepos);
+        var globals = wd3DiagramGlobals(jiraUpdates, confluenceCalls, repliesFile);
         var module = loadModule(
             'js/writeSolutionAndDiagrams.js',
             makeRequire({
@@ -915,4 +931,69 @@ suite('writeSolutionAndDiagrams — gh-1187 extracted helpers', function() {
         assert.equal(env.jiraUpdates.length, 0, 'no field writes on missing solution');
     });
 
+});
+
+// ── gh-1230 CRAP characterization: diagram-flow fixture factories ────────────
+
+suite('writeSolutionAndDiagrams — fixture factories (gh-1230 characterization)', function() {
+
+    test('wd3OutputFilesMock: per-file defaults when fixtures are absent', function() {
+        var m = wd3OutputFilesMock(undefined, undefined, undefined);
+        assert.equal(m.readOutputFile('response.md'), '## Solution\nBody text');
+        assert.equal(m.readOutputFile('diagram.md'), 'graph TD\nA --> B');
+        assert.equal(m.readOutputFile('affected_repos.json'), null);
+        assert.equal(m.readOutputFile('other.md'), null);
+    });
+
+    test('wd3OutputFilesMock: fixture overrides win for every file (2+ shapes)', function() {
+        var m = wd3OutputFilesMock('# custom response', 'graph LR\nX --> Y', '[{"name":"api"}]');
+        assert.equal(m.readOutputFile('response.md'), '# custom response');
+        assert.equal(m.readOutputFile('diagram.md'), 'graph LR\nX --> Y');
+        assert.equal(m.readOutputFile('affected_repos.json'), '[{"name":"api"}]');
+    });
+
+    test('wd3DiagramGlobals: jira and confluence recorders land in the arrays', function() {
+        var jiraUpdates = [];
+        var calls = [];
+        var g = wd3DiagramGlobals(jiraUpdates, calls, 'outputs/replies-gh1230.json');
+        g.jira_update_field({ field: 'description', value: 'v1' });
+        g.jira_update_field({ field: 'description', value: 'v2' });
+        assert.deepEqual(jiraUpdates, [{ field: 'description', value: 'v1' }, { field: 'description', value: 'v2' }]);
+        var page = g.confluence_create_page({ title: 'T' });
+        assert.deepEqual(page, { id: '777', title: 'T' });
+        g.confluence_sync_markdown_directory({ parentId: '42' });
+        assert.deepEqual(calls, [{ op: 'create', title: 'T' }, { op: 'sync', parentId: '42' }]);
+        assert.deepEqual(g.jira_get_ticket(), { fields: {} });
+        assert.equal(g.confluence_get_children_by_id().length, 0);
+        g.jira_assign_ticket_to(); g.jira_move_to_status(); g.jira_add_label(); g.jira_remove_label(); g.jira_post_comment();
+    });
+
+    test('wd3DiagramGlobals: file_write records only confluence sync index payloads', function() {
+        var calls = [];
+        var g = wd3DiagramGlobals([], calls, null);
+        g.file_write('confluence_sync_DOC/index.md', 'body');
+        assert.deepEqual(calls, [{ op: 'write', path: 'confluence_sync_DOC/index.md', content: 'body' }]);
+        calls.length = 0;
+        g.file_write('confluence_sync_DOC/other.md', 'body');
+        g.file_write('outputs/index.md', 'body');
+        g.file_write(42, 'body');
+        assert.deepEqual(calls, [], 'non-sync-index writes are not recorded');
+    });
+
+    test('wd3DiagramGlobals: file_read throws no-replies for the replies path, not-found otherwise', function () {
+        var g = wd3DiagramGlobals([], [], 'outputs/my-replies.json');
+        var e1 = null;
+        try { g.file_read({ path: 'outputs/my-replies.json' }); } catch (e) { e1 = e; }
+        assert.ok(e1, 'replies path must throw');
+        assert.contains(e1.message, 'no replies');
+        var g2 = wd3DiagramGlobals([], [], null);
+        var e2 = null;
+        try { g2.file_read('outputs/confluence_replies.json'); } catch (e) { e2 = e; }
+        assert.ok(e2, 'default replies path throws when repliesFile is absent');
+        assert.contains(e2.message, 'no replies');
+        var e3 = null;
+        try { g2.file_read({ path: 'outputs/other.json' }); } catch (e) { e3 = e; }
+        assert.ok(e3, 'other paths must throw');
+        assert.contains(e3.message, 'not found: outputs/other.json');
+    });
 });

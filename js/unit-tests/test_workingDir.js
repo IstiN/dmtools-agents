@@ -44,29 +44,64 @@ var trackersModuleReal = loadModule(
 var PR_HELPER_REAL = loadModule('js/common/pullRequest.js',
     makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
 
+// ── gh-1230 CRAP: shared mock helper factories (characterized at file end) ───
+
+// cli_execute_command mock that records {command, workingDirectory} per call.
+function recordingCliMock(calls) {
+    return function(args) {
+        calls.push({ command: args.command, workingDirectory: args.workingDirectory || null });
+        return '';
+    };
+}
+
+// file_read mock with a fixed fileMap: hits served from the map, .dmtools/config
+// discovery blocked (parent-repo guard), real files passed through, failures null.
+function configBlockingFileRead(fileMap) {
+    return function(opts) {
+        var p = opts && (opts.path || opts);
+        if (fileMap && fileMap[p] !== undefined) return fileMap[p];
+        // Block all config discovery to prevent loading parent .dmtools/config.js
+        if (p && p.indexOf('.dmtools/config') !== -1) return null;
+        try { return file_read(opts); } catch (e) { return null; }
+    };
+}
+
+// file_read mock serving only from a fixed fileMap, real files as fallback.
+function mapReadingFileRead(fileMap) {
+    return function(opts) {
+        var p = opts && (opts.path || opts);
+        if (fileMap && fileMap[p] !== undefined) return fileMap[p];
+        try { return file_read(opts); } catch (e) { return null; }
+    };
+}
+
+// Canned responses for postTestAutomationResults CLI calls (gh-1230: extracted
+// from loadPostTestAutomation's inline stub so each branch stays <= CRAP 8).
+function postTestAutomationCliResponse(command) {
+    if (command === 'pwd') return '/workspace';
+    if (command.indexOf('git branch --show-current') === 0) return 'test/AITS-1';
+    if (command.indexOf('git diff --cached --stat') === 0) return ' tests/FooTest.php | 1 +';
+    if (command.indexOf('git ls-remote --heads origin') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/AITS-1';
+    if (command.indexOf('gh pr create') === 0) return 'https://github.com/ExampleOrg-Production/api-client-sdk/pull/1';
+    if (command.indexOf('gh pr list --head') === 0) return '';
+    if (command.indexOf('git config --get remote.origin.url') === 0) return 'git@github.com:ExampleOrg-Production/api-client-sdk.git';
+    return '';
+}
+
 /**
  * Load preCliDevelopmentSetup with controlled mocks.
  * Returns { module, calls } where calls accumulates every cli_execute_command invocation.
  */
 function loadPreCli(workingDir) {
     var calls = [];
-    var mockCli = function(args) {
-        calls.push({ command: args.command, workingDirectory: args.workingDirectory || null });
-        return '';
-    };
+    var mockCli = recordingCliMock(calls);
 
     var fileMap = {};
     if (workingDir) {
         fileMap['.dmtools/config.js'] = 'module.exports = { workingDir: "' + workingDir + '" };';
     }
 
-    var fileReadMock = function(opts) {
-        var p = opts && (opts.path || opts);
-        if (fileMap[p] !== undefined) return fileMap[p];
-        // Block all config discovery to prevent loading parent .dmtools/config.js
-        if (p && p.indexOf(".dmtools/config") !== -1) return null;
-        try { return file_read(opts); } catch (e) { return null; }
-    };
+    var fileReadMock = configBlockingFileRead(fileMap);
 
     var freshConfigLoader = loadModule(
         'js/configLoader.js',
@@ -378,10 +413,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
 
 function loadPreCliTestAutomation(workingDir) {
     var calls = [];
-    var mockCli = function(args) {
-        calls.push({ command: args.command, workingDirectory: args.workingDirectory || null });
-        return '';
-    };
+    var mockCli = recordingCliMock(calls);
 
     var fileReadMock = function(opts) {
         try { return file_read(opts); } catch (e) { return null; }
@@ -577,15 +609,7 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
     var calls = [];
     var mockCli = function(args) {
         calls.push({ command: args.command, workingDirectory: args.workingDirectory || null });
-
-        if (args.command === 'pwd') return '/workspace';
-        if (args.command.indexOf('git branch --show-current') === 0) return 'test/AITS-1';
-        if (args.command.indexOf('git diff --cached --stat') === 0) return ' tests/FooTest.php | 1 +';
-        if (args.command.indexOf('git ls-remote --heads origin') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/AITS-1';
-        if (args.command.indexOf('gh pr create') === 0) return 'https://github.com/ExampleOrg-Production/api-client-sdk/pull/1';
-        if (args.command.indexOf('gh pr list --head') === 0) return '';
-        if (args.command.indexOf('git config --get remote.origin.url') === 0) return 'git@github.com:ExampleOrg-Production/api-client-sdk.git';
-        return '';
+        return postTestAutomationCliResponse(args.command);
     };
 
     var fileMap = {
@@ -593,11 +617,7 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
         'outputs/response.md': 'h3. OK'
     };
 
-    var fileReadMock = function(opts) {
-        var p = opts && (opts.path || opts);
-        if (fileMap[p] !== undefined) return fileMap[p];
-        try { return file_read(opts); } catch (e) { return null; }
-    };
+    var fileReadMock = mapReadingFileRead(fileMap);
 
     var freshConfigLoader = loadModule(
         'js/configLoader.js',
@@ -750,16 +770,9 @@ suite('postTestAutomationResults > workingDir', function() {
 // ── configLoader: workingDir via targetRepository ────────────────────────────
 
 function makeIsolatedConfigLoader(fileMap) {
-    var fr = function(opts) {
-        var p = opts && (opts.path || opts);
-        if (fileMap && fileMap[p] !== undefined) return fileMap[p];
-        // Block all config discovery to prevent loading parent .dmtools/config.js
-        if (p && p.indexOf('.dmtools/config') !== -1) return null;
-        try { return file_read(opts); } catch (e) { return null; }
-    };
     return loadModule('js/configLoader.js', makeRequire({ './config.js': configModule ,
             './common/commentMarkup.js': commentMarkupModule,
-        }), { file_read: fr });
+        }), { file_read: configBlockingFileRead(fileMap) });
 }
 
 suite('configLoader > targetRepository.workingDir', function() {
@@ -812,6 +825,63 @@ suite('configLoader > targetRepository.workingDir', function() {
         assert.equal(config.repository.owner, 'acme');
         assert.equal(config.repository.repo, 'mobile-app');
         assert.equal(config.workingDir, 'dependencies/mobile-app');
+    });
+
+});
+
+// ── gh-1230 CRAP characterization: extracted mock helper factories ───────────
+
+suite('workingDir test mocks — gh-1230 characterization', function() {
+
+    test('recordingCliMock: records every command with workingDirectory defaulting to null', function() {
+        var calls = [];
+        var cli = recordingCliMock(calls);
+        assert.equal(cli({ command: 'git status' }), '');
+        assert.deepEqual(calls[0], { command: 'git status', workingDirectory: null });
+        assert.equal(cli({ command: 'gh pr view 3', workingDirectory: 'dependencies/x' }), '');
+        assert.deepEqual(calls[1], { command: 'gh pr view 3', workingDirectory: 'dependencies/x' });
+        assert.equal(calls.length, 2, 'both invocations recorded');
+    });
+
+    test('configBlockingFileRead: fileMap hit wins over pass-through (null and populated maps)', function() {
+        assert.equal(configBlockingFileRead({ 'a.txt': 'alpha' })({ path: 'a.txt' }), 'alpha');
+        // gh-1230 rework: probe pass-through with a repo-owned file (README.md), not a
+        // tooling config like crap4dart.yaml owned by the crap4dart gate.
+        assert.equal(configBlockingFileRead(null)({ path: 'README.md' }), file_read({ path: 'README.md' }),
+            'null map falls through to the real file_read');
+    });
+
+    test('configBlockingFileRead: blocks .dmtools/config discovery in every shape', function() {
+        assert.equal(configBlockingFileRead({})({ path: '.dmtools/config.js' }), null);
+        assert.equal(configBlockingFileRead(null)({ path: 'x/.dmtools/config.js' }), null);
+    });
+
+    test('configBlockingFileRead: real files pass through, missing files give null', function() {
+        var fr = configBlockingFileRead(null);
+        assert.equal(fr({ path: 'README.md' }), file_read({ path: 'README.md' }));
+        assert.equal(fr({ path: 'no/such/file-gh1230.txt' }), null);
+    });
+
+    test('mapReadingFileRead: map hit, real-file pass-through and null on failure', function() {
+        var fr = mapReadingFileRead({ 'outputs/x.json': '{"ok":true}' });
+        assert.equal(fr({ path: 'outputs/x.json' }), '{"ok":true}');
+        assert.equal(fr({ path: 'README.md' }), file_read({ path: 'README.md' }));
+        assert.equal(fr({ path: 'no/such/file-gh1230.txt' }), null);
+    });
+
+    test('postTestAutomationCliResponse: every canned branch', function() {
+        assert.equal(postTestAutomationCliResponse('pwd'), '/workspace');
+        assert.equal(postTestAutomationCliResponse('git branch --show-current'), 'test/AITS-1');
+        assert.equal(postTestAutomationCliResponse('git diff --cached --stat'), ' tests/FooTest.php | 1 +');
+        assert.equal(postTestAutomationCliResponse('git ls-remote --heads origin test/AITS-1'),
+            '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/AITS-1');
+        assert.equal(postTestAutomationCliResponse('gh pr create --title x'),
+            'https://github.com/ExampleOrg-Production/api-client-sdk/pull/1');
+        assert.equal(postTestAutomationCliResponse('gh pr list --head test/AITS-1'), '');
+        assert.equal(postTestAutomationCliResponse('git config --get remote.origin.url'),
+            'git@github.com:ExampleOrg-Production/api-client-sdk.git');
+        assert.equal(postTestAutomationCliResponse('git status --porcelain'), '',
+            'unrecognised commands get the empty-string fallback');
     });
 
 });

@@ -1409,6 +1409,9 @@ suite('pushReworkChanges — no-op rework token guard (2026-09-21, epam/dmtools-
         assert.equal(loaded.mod.headMovedSinceLastReview(reviewScm([]), null), true, 'no PR at all → fail-open');
     });
 
+    // gh-1230 CRAP: every branchy mock closure below is a named inner
+    // function declaration, so the fixture factory and each mock are measured
+    // as separate small functions (behaviour unchanged).
     function actionFixture(opts) {
         opts = opts || {};
         var cliCommandsRef = [];
@@ -1416,54 +1419,67 @@ suite('pushReworkChanges — no-op rework token guard (2026-09-21, epam/dmtools-
         var ghRemoveLabelCalls = [];
         var reviewTriggers = [];
         var ghCommentBodies = [];
+        function githubAddLabel(args) { ghAddLabelCalls.push(args); return '{}'; }
+        function githubAddLabels(args) {
+            (args.labels || []).forEach(function(l) { ghAddLabelCalls.push({ label: l, number: args.number }); });
+            return '{}';
+        }
+        function githubRemoveLabel(args) { ghRemoveLabelCalls.push(args); return '{}'; }
+        function githubCreateComment(args) { ghCommentBodies.push(args.body); return '{}'; }
+        function cliRecorder(args) {
+            cliCommandsRef.push(args.command);
+            if (args.command === 'git branch --show-current') return 'ai/gh-191\n';
+            if (args.command.indexOf('git ls-remote --heads origin') === 0) {
+                return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/gh-191\n';
+            }
+            return '';
+        }
+        function fileReadRecorder(args) {
+            var p2 = args && (args.path || args);
+            if (p2 && p2.indexOf('rework_setup_failed.md') !== -1) {
+                throw new Error('File does not exist');
+            }
+            if (p2 && p2.indexOf('pr_info.md') !== -1) {
+                return '**Branch**: `ai/gh-191` → `main`';
+            }
+            return null;
+        }
+        function listPrs() {
+            var p = prFixture();
+            if (opts.prApproved) {
+                p = Object.assign({}, p, { labels: [{ name: 'pr_approved' }, { name: 'ai_pr_reviewed' }] });
+            }
+            return [p];
+        }
+        function scmAddComment(n, body) { ghCommentBodies.push(body); }
+        function listReviews() {
+            return [{
+                state: 'CHANGES_REQUESTED',
+                commit_id: opts && opts.verdictOnHead ? HEAD : VERDICT_SHA,
+                submitted_at: '2026-09-21T18:58:00Z'
+            }];
+        }
+        function triggerSmIfIdle() {}
+        function triggerConfiguredWorkflowForTicket(args) { reviewTriggers.push(args); return true; }
         var loaded = loadPushReworkChangesForAction(
             {
-                github_add_label: function(args) { ghAddLabelCalls.push(args); return '{}'; },
-                github_add_labels: function(args) {
-                    (args.labels || []).forEach(function(l) { ghAddLabelCalls.push({ label: l, number: args.number }); });
-                    return '{}';
-                },
-                github_remove_label: function(args) { ghRemoveLabelCalls.push(args); return '{}'; },
-                github_create_comment: function(args) { ghCommentBodies.push(args.body); return '{}'; },
-                cli_execute_command: function(args) {
-                    cliCommandsRef.push(args.command);
-                    if (args.command === 'git branch --show-current') return 'ai/gh-191\n';
-                    if (args.command.indexOf('git ls-remote --heads origin') === 0) {
-                        return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/gh-191\n';
-                    }
-                    return '';
-                },
-                file_read: function(args) {
-                    var p2 = args && (args.path || args);
-                    if (p2 && p2.indexOf('rework_setup_failed.md') !== -1) {
-                        throw new Error('File does not exist');
-                    }
-                    if (p2 && p2.indexOf('pr_info.md') !== -1) {
-                        return '**Branch**: `ai/gh-191` → `main`';
-                    }
-                    return null;
-                }
+                github_add_label: githubAddLabel,
+                github_add_labels: githubAddLabels,
+                github_remove_label: githubRemoveLabel,
+                github_create_comment: githubCreateComment,
+                cli_execute_command: cliRecorder,
+                file_read: fileReadRecorder
             },
             {
                 config: { repository: { owner: 'epam', repo: 'dmtools-dart' } },
                 scm: {
-                    listPrs: function() {
-                        var p = prFixture();
-                        if (opts.prApproved) {
-                            p = Object.assign({}, p, { labels: [{ name: 'pr_approved' }, { name: 'ai_pr_reviewed' }] });
-                        }
-                        return [p];
-                    },
-                    addComment: function(n, body) { ghCommentBodies.push(body); },
-                    listReviews: function() { return [{
-                        state: 'CHANGES_REQUESTED',
-                        commit_id: opts && opts.verdictOnHead ? HEAD : VERDICT_SHA,
-                        submitted_at: '2026-09-21T18:58:00Z'
-                    }]; }
+                    listPrs: listPrs,
+                    addComment: scmAddComment,
+                    listReviews: listReviews
                 },
                 autoStart: {
-                    triggerSmIfIdle: function() {},
-                    triggerConfiguredWorkflowForTicket: function(args) { reviewTriggers.push(args); return true; }
+                    triggerSmIfIdle: triggerSmIfIdle,
+                    triggerConfiguredWorkflowForTicket: triggerConfiguredWorkflowForTicket
                 }
             }
         );
@@ -1544,6 +1560,23 @@ suite('pushReworkChanges — no-op rework token guard (2026-09-21, epam/dmtools-
             !fx.ghAddLabelCalls.some(function(c) { return c.label === 'agent:rework'; }),
             'no agent:rework re-arm on the productive path'
         );
+    });
+
+    // gh-1230 CRAP characterization: the fixture's recording surfaces, pinned
+    // on the head-moved flow (comment bodies, review trigger, latch removal).
+    test('fixture characterization: head-moved flow records the comment/trigger surfaces', function() {
+        var fx = actionFixture({ verdictOnHead: false });
+        var result = fx.run();
+
+        assert.equal(result.success, true);
+        assert.ok(fx.ghCommentBodies.length >= 1, 'comment bodies recorded');
+        assert.equal(fx.reviewTriggers.length, 1, 'exactly one review trigger recorded');
+        assert.ok(
+            fx.ghRemoveLabelCalls.some(function(c) { return c.label === 'ai_pr_reviewed'; }),
+            'the ai_pr_reviewed latch is cleared when the verdict no longer covers the head');
+        assert.ok(
+            fx.ghCommentBodies.some(function(b) { return String(b).indexOf('Fix summary') !== -1; }),
+            'the completion comment carries the rework summary');
     });
 });
 
@@ -1679,6 +1712,8 @@ suite('pushReworkChanges — PR-anchored lookup & loud lookup failure (fa #1212)
         html_url: 'https://github.com/IstiN/fa/pull/1212'
     };
 
+    // gh-1230 CRAP: named inner declarations keep the fixture factory and each
+    // mock closure separately measured (behaviour unchanged).
     function loadAnchoredAction(scmOverrides, extraMocks) {
         var getPrCalls = [];
         var listCalls = [];
@@ -1686,42 +1721,53 @@ suite('pushReworkChanges — PR-anchored lookup & loud lookup failure (fa #1212)
         var moveCalls = [];
         var removedLabels = [];
         var ticketComments = [];
+        function defaultGetRemoteRepoInfo() { return { owner: 'IstiN', repo: 'fa' }; }
+        // Single page of unrelated open PRs — #1212 is NOT in it (fa #1212
+        // lived past page 1 among 10+ open PRs).
+        function defaultListPrs(state) {
+            listCalls.push(state);
+            return [{ number: 1200, title: 'ai/gh-800: unrelated', head: { ref: 'ai/gh-800' }, changed_files: 2 }];
+        }
+        function defaultGetPr(id) { getPrCalls.push(id); return PR_1212; }
+        function defaultAddComment(prId, text) { addCommentCalls.push({ prId: prId, text: text }); }
+        function defaultListReviews() { return []; }
+        function anchoredCliResponses(args) {
+            if (args.command === 'git branch --show-current') return 'ai/gh-1204\n';
+            if (args.command.indexOf('git ls-remote --heads origin') === 0) {
+                return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/gh-1204\n';
+            }
+            return '';
+        }
+        function anchoredFileRead(args) {
+            var p = args && (args.path || args);
+            if (p && p.indexOf('rework_setup_failed.md') !== -1) {
+                throw new Error('File does not exist');
+            }
+            if (p && p.indexOf('pr_info.md') !== -1) {
+                return '**Branch**: `ai/gh-1204` → `main`';
+            }
+            return null;
+        }
+        function jiraPostCommentRecorder(args) { ticketComments.push(args.comment || args.body || ''); }
+        function jiraMoveRecorder(args) { moveCalls.push(args.statusName); }
+        function jiraRemoveLabelRecorder(args) { removedLabels.push(args.label); }
+        function jiraAssignNoop() {}
 
         var scm = Object.assign({
-            getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'fa' }; },
-            // Single page of unrelated open PRs — #1212 is NOT in it (fa #1212
-            // lived past page 1 among 10+ open PRs).
-            listPrs: function(state) {
-                listCalls.push(state);
-                return [{ number: 1200, title: 'ai/gh-800: unrelated', head: { ref: 'ai/gh-800' }, changed_files: 2 }];
-            },
-            getPr: function(id) { getPrCalls.push(id); return PR_1212; },
-            addComment: function(prId, text) { addCommentCalls.push({ prId: prId, text: text }); },
-            listReviews: function() { return []; }
+            getRemoteRepoInfo: defaultGetRemoteRepoInfo,
+            listPrs: defaultListPrs,
+            getPr: defaultGetPr,
+            addComment: defaultAddComment,
+            listReviews: defaultListReviews
         }, scmOverrides || {});
 
         var mocks = Object.assign({
-            cli_execute_command: function(args) {
-                if (args.command === 'git branch --show-current') return 'ai/gh-1204\n';
-                if (args.command.indexOf('git ls-remote --heads origin') === 0) {
-                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/gh-1204\n';
-                }
-                return '';
-            },
-            file_read: function(args) {
-                var p = args && (args.path || args);
-                if (p && p.indexOf('rework_setup_failed.md') !== -1) {
-                    throw new Error('File does not exist');
-                }
-                if (p && p.indexOf('pr_info.md') !== -1) {
-                    return '**Branch**: `ai/gh-1204` → `main`';
-                }
-                return null;
-            },
-            jira_post_comment: function(args) { ticketComments.push(args.comment || args.body || ''); },
-            jira_move_to_status: function(args) { moveCalls.push(args.statusName); },
-            jira_remove_label: function(args) { removedLabels.push(args.label); },
-            jira_assign_ticket_to: function() {}
+            cli_execute_command: anchoredCliResponses,
+            file_read: anchoredFileRead,
+            jira_post_comment: jiraPostCommentRecorder,
+            jira_move_to_status: jiraMoveRecorder,
+            jira_remove_label: jiraRemoveLabelRecorder,
+            jira_assign_ticket_to: jiraAssignNoop
         }, extraMocks || {});
 
         var loaded = loadPushReworkChangesForAction(mocks, { scm: scm });
@@ -1855,6 +1901,22 @@ suite('pushReworkChanges — PR-anchored lookup & loud lookup failure (fa #1212)
             'completion comment to the Jira ticket preserved'
         );
         assert.equal(result.branchName, 'bug/PROJ-123');
+    });
+
+    // gh-1230 CRAP characterization: scmOverrides merge precedence — an
+    // override replaces the built-in default for the SAME key only.
+    test('fixture characterization: scmOverrides replace same-key defaults, others keep recording', function() {
+        var seen = [];
+        var fx = loadAnchoredAction({
+            listPrs: function(state) { seen.push(state); return []; },
+            getPr: function(id) { return { number: Number(id), title: 'override pr', head: { ref: 'bug/x' }, labels: [] }; }
+        });
+        var result = fx.run();
+
+        assert.equal(result.success, true, 'the overridden lookup still completes the leg');
+        assert.deepEqual(fx.listCalls, [], 'anchored lookup with a working getPr never list-scans');
+        assert.equal(fx.getPrCalls.length, 0, 'default getPr bypassed — override served the PR');
+        assert.ok(fx.addCommentCalls.length >= 1, 'default addComment recorder still active');
     });
 });
 

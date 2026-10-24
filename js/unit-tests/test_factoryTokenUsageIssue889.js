@@ -30,6 +30,44 @@ var tokenUsage = loadModule('js/factory/token_usage.js', makeRequire({}, {}), {}
 
 var NOW = '2026-10-13T12:34:56Z';
 
+// gh-1230 CRAP: the per-command decision lives in the pure boardExecResponse
+// helper below; exec only guards the gh-only transport contract. Both are
+// file-level (named) so each stays a small, separately-measured function.
+function boardExecStub(map) {
+    var state = { puts: 0, trackerCalls: [], commands: [] };
+    function exec(args) {
+      var cmd = String((args && args.command) || args || '');
+      state.commands.push(cmd);
+      // #889 guard: the producer is gh-only. Any tracker tool call here
+      // (jira_post_comment / tracker_post_comment / ADO REST) is a break.
+      if (cmd.indexOf('gh') !== 0) {
+        state.trackerCalls.push(cmd);
+        throw new Error('#889: non-gh transport reached the publisher: ' + cmd);
+      }
+      return boardExecResponse(cmd, map, state);
+    }
+    return { state: state, exec: exec };
+}
+
+// gh-1230 CRAP: pure gh-command decision table (PUT puts-counter with a
+// 409 fail budget, sha probe, base64 body probe, empty fallback).
+function boardExecResponse(cmd, map, state) {
+    if (cmd.indexOf('-X PUT') !== -1) {
+      state.puts++;
+      if (state.puts <= (map.failPuts || 0)) throw new Error('gh: 409 sha was not supplied');
+      return { output: '' };
+    }
+    if (cmd.indexOf('--jq .sha') !== -1) {
+      if (map.sha == null) throw new Error('gh: Not Found (404)');
+      return { output: map.sha };
+    }
+    if (cmd.indexOf('base64 -d') !== -1) {
+      if (map.body == null) throw new Error('gh: Not Found (404)');
+      return { output: map.body };
+    }
+    return { output: '' };
+}
+
 // ── 1. producer side: copilot ledger rows reach the factory-data board ──────
 
 suite('issue889 — copilot usage rows reach the ADO board (factory-data producer)', function () {
@@ -43,37 +81,6 @@ suite('issue889 — copilot usage rows reach the ADO board (factory-data produce
     'fa-tokens:\t{"sessionId":"s1","segment":2,"input":1200,"output":640,"cacheRead":2100,"model":"copilot/claude-sonnet-4.5"}',
     '::log:: done'
   ].join('\n');
-
-  function boardExecStub(map) {
-    var state = { puts: 0, trackerCalls: [], commands: [] };
-    return {
-      state: state,
-      exec: function (args) {
-        var cmd = String((args && args.command) || args || '');
-        state.commands.push(cmd);
-        // #889 guard: the producer is gh-only. Any tracker tool call here
-        // (jira_post_comment / tracker_post_comment / ADO REST) is a break.
-        if (cmd.indexOf('gh') !== 0) {
-          state.trackerCalls.push(cmd);
-          throw new Error('#889: non-gh transport reached the publisher: ' + cmd);
-        }
-        if (cmd.indexOf('-X PUT') !== -1) {
-          state.puts++;
-          if (state.puts <= (map.failPuts || 0)) throw new Error('gh: 409 sha was not supplied');
-          return { output: '' };
-        }
-        if (cmd.indexOf('--jq .sha') !== -1) {
-          if (map.sha == null) throw new Error('gh: Not Found (404)');
-          return { output: map.sha };
-        }
-        if (cmd.indexOf('base64 -d') !== -1) {
-          if (map.body == null) throw new Error('gh: Not Found (404)');
-          return { output: map.body };
-        }
-        return { output: '' };
-      }
-    };
-  }
 
   test('copilot ledger segments sum onto one board row with the copilot model preserved', function () {
     var sums = tokenUsage.parseFaTokensLedger(COPILOT_RUN_OUTPUT);
@@ -193,4 +200,67 @@ suite('issue889 — copilot usage comment posts through the vendor-agnostic trac
     assert.equal(r.posted, 1);
     assert.deepEqual(r.errors, []);
   });
+});
+
+// ── 3. gh-1230 CRAP characterization: board exec stub contract ───────────────
+
+suite('issue889 — boardExecStub contract (gh-1230 characterization)', function () {
+
+    test('non-gh transport throws the #889 break and lands on trackerCalls (all shapes)', function () {
+      var stub = boardExecStub({});
+      var offenders = ['jira_post_comment x', 'tracker_post_comment y', 'curl -X PUT https://ado'];
+      for (var i = 0; i < offenders.length; i++) {
+        var threw = null;
+        try { stub.exec(offenders[i]); } catch (e) { threw = e; }
+        assert.ok(threw, offenders[i] + ' must be rejected');
+        assert.contains(threw.message, '#889: non-gh transport reached the publisher');
+        assert.equal(stub.state.trackerCalls[i], offenders[i], 'offender recorded in order');
+      }
+      assert.equal(stub.state.trackerCalls.length, 3);
+    });
+
+    test('gh commands are recorded and unknown gh commands get an empty output', function () {
+      var stub = boardExecStub({});
+      assert.equal(stub.exec({ command: 'gh api repos/x/y' }).output, '');
+      assert.equal(stub.exec('gh pr view 5').output, '');
+      assert.deepEqual(stub.state.commands, ['gh api repos/x/y', 'gh pr view 5']);
+      assert.deepEqual(stub.state.trackerCalls, []);
+    });
+
+    test('boardExecResponse: PUT succeeds, counts puts, honours failPuts 409 budget', function () {
+      var state = { puts: 0 };
+      assert.deepEqual(boardExecResponse('gh api -X PUT d', {}, state), { output: '' });
+      assert.equal(state.puts, 1);
+      var st2 = { puts: 0 };
+      var threw = null;
+      try { boardExecResponse('gh api -X PUT d', { failPuts: 2 }, st2); } catch (e) { threw = e; }
+      assert.ok(threw, 'first PUT within the fail budget must 409');
+      assert.contains(threw.message, 'gh: 409 sha was not supplied');
+      assert.equal(st2.puts, 1);
+      assert.deepEqual(boardExecResponse('gh api -X PUT d', { failPuts: 1 }, st2), { output: '' },
+        'PUT after the fail budget is exhausted succeeds');
+      assert.equal(st2.puts, 2);
+    });
+
+    test('boardExecResponse: sha probe returns map.sha, 404 when unset', function () {
+      var state = { puts: 0 };
+      assert.deepEqual(boardExecResponse('gh api --jq .sha x', { sha: 'abc' }, state), { output: 'abc' });
+      var threw = null;
+      try { boardExecResponse('gh api --jq .sha x', {}, state); } catch (e) { threw = e; }
+      assert.ok(threw, 'unset sha must 404');
+      assert.contains(threw.message, 'gh: Not Found (404)');
+    });
+
+    test('boardExecResponse: base64 body probe returns map.body, 404 when unset', function () {
+      var state = { puts: 0 };
+      assert.deepEqual(boardExecResponse('gh api x | base64 -d', { body: '{"a":1}' }, state), { output: '{"a":1}' });
+      var threw = null;
+      try { boardExecResponse('gh api x | base64 -d', {}, state); } catch (e) { threw = e; }
+      assert.ok(threw, 'unset body must 404');
+      assert.contains(threw.message, 'gh: Not Found (404)');
+    });
+
+    test('boardExecResponse: command with no special marker gets the empty fallback', function () {
+      assert.deepEqual(boardExecResponse('gh api repos/o/r', {}, { puts: 0 }), { output: '' });
+    });
 });

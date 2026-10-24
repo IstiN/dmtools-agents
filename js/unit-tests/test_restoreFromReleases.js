@@ -9,39 +9,49 @@
  * Uses: loadModule(), makeRequire(), assert, test(), suite()
  */
 
-function loadRestoreFromReleases(opts) {
-    opts = opts || {};
-    var downloadArtefactCalls = [];
-    var releaseArtefactsMock = {
-        buildTag: function(ticketKey, template) {
-            var t = (template || 'ai-{ticketKey}').replace(/\{ticketKey\}/g, ticketKey);
-            return t.toLowerCase().replace(/[^a-z0-9._/-]/g, '-');
-        },
-        buildReleaseName: function(ticketKey, template) {
-            return (template || '[AI] [{ticketKey}] Artefacts').replace(/\{ticketKey\}/g, ticketKey);
-        },
-        resolveTemplate: function(template, ticketKey) {
-            if (!template) return template;
-            return template.replace(/\{ticketKey\}/g, ticketKey);
-        },
-        resolveArtefactRepository: function(customParams) {
-            if (!customParams) return null;
-            var repo = customParams.artefactRepository || customParams.aiRepository || customParams.targetRepository;
-            if (!repo || !repo.owner || !repo.repo) return null;
-            return { owner: repo.owner, repo: repo.repo };
-        },
-        downloadArtefact: function(owner, repo, ticketKey, releaseConfig, asset, providerName) {
-            downloadArtefactCalls.push({ owner: owner, repo: repo, ticketKey: ticketKey, asset: asset, providerName: providerName });
-            if (opts.downloadArtefactImpl) return opts.downloadArtefactImpl(asset);
-            return { success: true, restored: true, error: null };
-        }
-    };
+// ─── gh-1230 CRAP: releaseArtefacts mock helpers (pure, characterized below) ─
 
-    var configLoaderMock = {
+// gh-1230 rework: the tag/name/repository rules are shared with
+// test_timerAutoCommitAndSave.js via one fixture module — the verbatim
+// duplicates lived in both files and had to be edited in lockstep.
+var releaseArtefactFixtures = loadModule('js/unit-tests/_fixtures/releaseArtefactsMock.js', makeRequire({}, {}), {});
+var artefactBuildTag = releaseArtefactFixtures.artefactBuildTag;
+var artefactBuildReleaseName = releaseArtefactFixtures.artefactBuildReleaseName;
+var artefactResolveRepository = releaseArtefactFixtures.artefactResolveRepository;
+
+function artefactResolveTemplate(template, ticketKey) {
+    if (!template) return template;
+    return template.replace(/\{ticketKey\}/g, ticketKey);
+}
+
+function recordingDownloadArtefact(downloadArtefactCalls, opts) {
+    return function(owner, repo, ticketKey, releaseConfig, asset, providerName) {
+        downloadArtefactCalls.push({ owner: owner, repo: repo, ticketKey: ticketKey, releaseConfig: releaseConfig, asset: asset, providerName: providerName });
+        if (opts.downloadArtefactImpl) return opts.downloadArtefactImpl(asset);
+        return { success: true, restored: true, error: null };
+    };
+}
+
+function restoreConfigLoader(opts) {
+    return {
         loadProjectConfig: function(params) {
             return { scm: { provider: opts.scmProvider || 'github' } };
         }
     };
+}
+
+function loadRestoreFromReleases(opts) {
+    opts = opts || {};
+    var downloadArtefactCalls = [];
+    var releaseArtefactsMock = {
+        buildTag: artefactBuildTag,
+        buildReleaseName: artefactBuildReleaseName,
+        resolveTemplate: artefactResolveTemplate,
+        resolveArtefactRepository: artefactResolveRepository,
+        downloadArtefact: recordingDownloadArtefact(downloadArtefactCalls, opts)
+    };
+
+    var configLoaderMock = restoreConfigLoader(opts);
 
     var requireFn = makeRequire({
         './common/releaseArtefacts.js': releaseArtefactsMock,
@@ -231,5 +241,62 @@ suite('restoreFromReleases — pure helpers (gh-119)', function() {
         assert.equal(mod.scmProviderOf({ scm: { provider: 'gitlab' } }), 'gitlab');
         assert.equal(mod.scmProviderOf({ scm: {} }), 'github');
         assert.equal(mod.scmProviderOf({}), 'github');
+    });
+});
+
+// ─── gh-1230 CRAP characterization: releaseArtefacts mock helpers ────────────
+
+suite('restoreFromReleases — artefact mock helpers (gh-1230 characterization)', function() {
+
+    test('artefactBuildTag: default and custom templates normalize to a release tag', function() {
+        assert.equal(artefactBuildTag('GH-1'), 'ai-gh-1');
+        assert.equal(artefactBuildTag('GH 12', 'rel-{ticketKey}'), 'rel-gh-12');
+        assert.equal(artefactBuildTag('A/B', 'ai-{ticketKey}'), 'ai-a/b', 'case normalized, path separators kept');
+    });
+
+    test('artefactBuildReleaseName: default and custom templates', function() {
+        assert.equal(artefactBuildReleaseName('GH-1'), '[AI] [GH-1] Artefacts');
+        assert.equal(artefactBuildReleaseName('GH-2', 'Pack {ticketKey}'), 'Pack GH-2');
+    });
+
+    test('artefactResolveTemplate: null passthrough and ticketKey substitution', function() {
+        assert.equal(artefactResolveTemplate(null, 'GH-1'), null);
+        assert.equal(artefactResolveTemplate('x-{ticketKey}-y', 'GH-9'), 'x-GH-9-y');
+    });
+
+    test('artefactResolveRepository: precedence artefact > ai > target, incomplete repos rejected', function() {
+        assert.equal(artefactResolveRepository(undefined), null);
+        assert.deepEqual(
+            artefactResolveRepository({
+                targetRepository: { owner: 't', repo: 'tr' },
+                aiRepository: { owner: 'a', repo: 'ar' },
+                artefactRepository: { owner: 'f', repo: 'fr' }
+            }),
+            { owner: 'f', repo: 'fr' },
+            'artefactRepository wins');
+        assert.deepEqual(
+            artefactResolveRepository({ targetRepository: { owner: 't', repo: 'tr' }, aiRepository: { owner: 'a', repo: 'ar' } }),
+            { owner: 'a', repo: 'ar' },
+            'aiRepository second');
+        assert.deepEqual(artefactResolveRepository({ targetRepository: { owner: 't', repo: 'tr' } }), { owner: 't', repo: 'tr' });
+        assert.equal(artefactResolveRepository({ artefactRepository: { owner: 'f' } }), null, 'missing repo rejected');
+        assert.equal(artefactResolveRepository({ artefactRepository: { repo: 'r' } }), null, 'missing owner rejected');
+    });
+
+    test('recordingDownloadArtefact: default success result and impl delegation (2+ calls)', function() {
+        var calls = [];
+        var dl = recordingDownloadArtefact(calls, {});
+        assert.deepEqual(dl('o', 'r', 'K', {}, 'asset-a', 'github'),
+            { success: true, restored: true, error: null });
+        assert.deepEqual(calls[0], { owner: 'o', repo: 'r', ticketKey: 'K', releaseConfig: {}, asset: 'asset-a', providerName: 'github' });
+        var implResult = { success: true, restored: false, error: null };
+        var dl2 = recordingDownloadArtefact(calls, { downloadArtefactImpl: function() { return implResult; } });
+        assert.equal(dl2('o', 'r', 'K', {}, 'asset-b', 'gitlab'), implResult);
+        assert.equal(calls.length, 2, 'both downloads recorded');
+    });
+
+    test('restoreConfigLoader: scm provider default and override', function() {
+        assert.deepEqual(restoreConfigLoader({}).loadProjectConfig({}), { scm: { provider: 'github' } });
+        assert.deepEqual(restoreConfigLoader({ scmProvider: 'gitlab' }).loadProjectConfig({}), { scm: { provider: 'gitlab' } });
     });
 });
