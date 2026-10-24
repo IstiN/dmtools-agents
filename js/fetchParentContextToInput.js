@@ -188,26 +188,36 @@ function isSystemField(fieldName) {
         fieldName === 'comment';
 }
 
+/** Guard: a falsy, system, or already-resolved customfield_* name is returned
+ *  as-is, without a tracker lookup; only other names need resolution. */
+function isPassThroughField(fieldName) {
+    return !fieldName || isSystemField(fieldName) || fieldName.indexOf('customfield_') === 0;
+}
+
+/** dmtools may wrap the field code in a {result: ...} envelope — unwrap once. */
+function unwrapTrackerResult(resolved) {
+    if (resolved && typeof resolved === 'object' && resolved.result) return resolved.result;
+    return resolved;
+}
+
+/** Record the human label for a resolved customfield_* code; null when not a code. */
+function resolvedCustomFieldCode(resolved, fieldName, fieldLabels) {
+    if (resolved && typeof resolved === 'string' && resolved.indexOf('customfield_') === 0) {
+        fieldLabels[resolved] = fieldName;
+        return resolved;
+    }
+    return null;
+}
+
 function resolveFieldName(fieldName, projectKey, fieldLabels, shouldResolve, tracker) {
-    if (!fieldName || isSystemField(fieldName) || fieldName.indexOf('customfield_') === 0) {
-        return fieldName;
-    }
-
-    if (!shouldResolve) {
-        return fieldName;
-    }
-
-    if (!tracker) {
+    if (isPassThroughField(fieldName) || !shouldResolve || !tracker) {
         return fieldName;
     }
 
     try {
-        var resolved = tracker.fieldCode(projectKey, fieldName);
-        if (resolved && typeof resolved === 'object' && resolved.result) resolved = resolved.result;
-        if (resolved && typeof resolved === 'string' && resolved.indexOf('customfield_') === 0) {
-            fieldLabels[resolved] = fieldName;
-            return resolved;
-        }
+        var resolved = unwrapTrackerResult(tracker.fieldCode(projectKey, fieldName));
+        var fieldCode = resolvedCustomFieldCode(resolved, fieldName, fieldLabels);
+        if (fieldCode) return fieldCode;
     } catch (e) {
         console.warn('fetchParentContextToInput: could not resolve field "' + fieldName + '" — using as provided');
     }
@@ -770,6 +780,11 @@ if (typeof module !== 'undefined' && module.exports) {
         action: action,
         // Pure helpers, exported for direct unit testing:
         resolveParentContextConfig: resolveParentContextConfig,
-        buildDefaultFields: buildDefaultFields
+        buildDefaultFields: buildDefaultFields,
+        resolveFieldName: resolveFieldName,
+        resolveFetchFields: resolveFetchFields,
+        isPassThroughField: isPassThroughField,
+        unwrapTrackerResult: unwrapTrackerResult,
+        resolvedCustomFieldCode: resolvedCustomFieldCode
     };
 }

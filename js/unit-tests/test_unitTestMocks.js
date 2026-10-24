@@ -13,7 +13,7 @@
 
 'use strict';
 
-/* global trackersMock, suite, test, assert */
+/* global trackersMock, suite, test, assert, makeDefaultConfigLoaderMock, makeDefaultJiraConfig, configLoaderModule */
 
 suite('unit-test mocks: trackersMock (the shared contentOutput tracker fallback)', function () {
 

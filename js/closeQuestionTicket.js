@@ -9,6 +9,37 @@ const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const trackersModule = require('./common/trackers.js');
 
+// ── Extracted step helpers (gh-1228 CRAP split): each step is independently
+// guarded — a single failing tracker/usage call must not abort the close flow.
+
+/** Add the ai_generated label; a failure is logged and skipped. */
+function addAiGeneratedLabelSafely(tracker, ticketKey) {
+    try {
+        tracker.addLabel(ticketKey, LABELS.AI_GENERATED);
+    } catch (e) {
+        console.warn('Failed to add ai_generated label:', e);
+    }
+}
+
+/** Remove the context WIP label when there is one; a failure is logged and skipped. */
+function removeWipLabelSafely(tracker, ticketKey, wipLabel) {
+    if (!wipLabel) return;
+    try {
+        tracker.removeLabel(ticketKey, wipLabel);
+    } catch (e) {
+        console.warn('Failed to remove WIP label:', e);
+    }
+}
+
+/** Post token usage summary comments; a failure is logged and skipped. */
+function postTokenUsageCommentsSafely(ticketKey, params, tracker) {
+    try {
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
@@ -19,21 +50,8 @@ function action(params) {
             ? params.metadata.contextId + '_wip'
             : null;
 
-        // Add ai_generated label
-        try {
-            tracker.addLabel(ticketKey, LABELS.AI_GENERATED);
-        } catch (e) {
-            console.warn('Failed to add ai_generated label:', e);
-        }
-
-        // Remove WIP label if present
-        if (wipLabel) {
-            try {
-                tracker.removeLabel(ticketKey, wipLabel);
-            } catch (e) {
-                console.warn('Failed to remove WIP label:', e);
-            }
-        }
+        addAiGeneratedLabelSafely(tracker, ticketKey);
+        removeWipLabelSafely(tracker, ticketKey, wipLabel);
 
         // Move to Done
         tracker.moveToStatus(ticketKey, jiraConfig.statuses.DONE);
@@ -41,11 +59,7 @@ function action(params) {
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
-        try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
-        } catch (e) {
-            console.warn('Failed to post token usage comments:', e);
-        }
+        postTokenUsageCommentsSafely(ticketKey, params, tracker);
 
         return { success: true, message: ticketKey + ' answered and closed' };
 

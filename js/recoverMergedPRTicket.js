@@ -35,17 +35,40 @@ function isMergedPR(pr) {
         pr.merged === true;
 }
 
-function findMergedPRForTicket(scm, ticketKey) {
-    try {
-        var open = scm.listPrs('open') || [];
-        for (var openIndex = 0; openIndex < open.length; openIndex++) {
-            if (prMatchesTicket(open[openIndex], ticketKey)) {
-                console.log('Open PR still exists for ' + ticketKey + ', skipping merged-PR recovery: #' + open[openIndex].number);
-                return null;
-            }
+/**
+ * The first OPEN PR matching the ticket, or null — its presence means the
+ * PR pipeline is still live and merged-PR recovery must not touch anything.
+ * Logs the guard outcome for the matched PR (same message as before gh-1229).
+ */
+function firstOpenMatchingPR(openPrs, ticketKey) {
+    for (var openIndex = 0; openIndex < openPrs.length; openIndex++) {
+        if (prMatchesTicket(openPrs[openIndex], ticketKey)) {
+            console.log('Open PR still exists for ' + ticketKey + ', skipping merged-PR recovery: #' + openPrs[openIndex].number);
+            return openPrs[openIndex];
         }
+    }
+    return null;
+}
+
+/** The first closed PR matching the ticket that is confirmed merged, or null. */
+function firstMergedClosedPR(closedPrs, ticketKey) {
+    for (var i = 0; i < closedPrs.length; i++) {
+        if (prMatchesTicket(closedPrs[i], ticketKey) && isMergedPR(closedPrs[i])) {
+            return closedPrs[i];
+        }
+    }
+    return null;
+}
+
+function findMergedPRForTicket(scm, ticketKey) {
+    var open = [];
+    try {
+        open = scm.listPrs('open') || [];
     } catch (openError) {
         console.warn('Could not list open PRs for merged recovery guard:', openError.message || openError);
+        return null;
+    }
+    if (firstOpenMatchingPR(open, ticketKey)) {
         return null;
     }
 
@@ -56,13 +79,7 @@ function findMergedPRForTicket(scm, ticketKey) {
         console.warn('Could not list closed PRs:', e.message || e);
         return null;
     }
-
-    for (var i = 0; i < closed.length; i++) {
-        if (prMatchesTicket(closed[i], ticketKey) && isMergedPR(closed[i])) {
-            return closed[i];
-        }
-    }
-    return null;
+    return firstMergedClosedPR(closed, ticketKey);
 }
 
 function removeLabel(ticketKey, label) {
@@ -176,6 +193,8 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
         findMergedPRForTicket: findMergedPRForTicket,
+        firstOpenMatchingPR: firstOpenMatchingPR,
+        firstMergedClosedPR: firstMergedClosedPR,
         prMatchesTicket: prMatchesTicket,
         isMergedPR: isMergedPR,
         prIdentity: prIdentity,

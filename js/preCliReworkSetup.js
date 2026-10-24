@@ -709,32 +709,154 @@ function reportActionError(params, tracker, error) {
     }
 }
 
+/**
+ * The runtime seam of one rework setup leg: project config, customParams, the
+ * SCM client and the resolved statuses. (gh-1220) Extracted from action().
+ */
+function createReworkRuntime(params, actualParams) {
+    // paramsForConfigLoad re-attaches params.ticket (sibling of jobParams in the
+    // real Teammate execution path) so baseBranchResolverFnPath can key off the
+    // ticket's fixVersion — see configLoader.js for details.
+    var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
+    var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+    return {
+        config: config,
+        customParams: customParams,
+        scm: configLoader.createScm(config),
+        statuses: resolveStatuses(customParams, config.jira && config.jira.statuses)
+    };
+}
+
+/**
+ * Restore configured artefacts (e.g. cosmo test reports) from GitHub Release.
+ * Non-fatal. (gh-1220) Extracted from action().
+ */
+function restoreArtefactsQuietly(params) {
+    try { restoreFromReleases.action(params); } catch (e) { console.warn('⚠️ restoreFromReleases failed (non-fatal):', e); }
+}
+
+/**
+ * Fetch + validate the PR details of the rework target: the details probe must
+ * succeed and name a head branch, or the setup fails (failSetup writes the
+ * marker + posts the comment, then throws). Returns { prDetails, branchName }.
+ * (gh-1220) Extracted from action() Steps 3-4.
+ */
+function fetchReworkPrDetails(scm, pr, tracker, ticketKey, inputFolder, customParams) {
+    // Step 3: PR details
+    const prDetails = gh.getPRDetails(scm, pr.number);
+    if (!prDetails) {
+        failSetup(tracker, ticketKey, inputFolder, 'Failed to fetch PR details for PR #' + pr.number, customParams);
+    }
+
+    // Step 4: branch of the PR head
+    const branchName = prDetails.head ? prDetails.head.ref : null;
+    if (!branchName) {
+        failSetup(tracker, ticketKey, inputFolder, 'Could not determine branch from PR details', customParams);
+    }
+    return { prDetails: prDetails, branchName: branchName };
+}
+
+/**
+ * Optionally sync the PR's base branch with its own upstream (Step 4.4 — see
+ * syncBaseBranchIfConfigured), then merge it into the PR branch and report the
+ * conflicting files (Step 4.5). This MUST run before the setup commands: setup
+ * commands build and test the repo, and a stale PR branch can carry fixes to
+ * the very tests they run. (gh-1220) Extracted from action().
+ */
+function syncBaseAndDetectConflicts(baseBranch, customParams, config, inputFolder) {
+    syncBaseBranchIfConfigured(baseBranch, customParams, config);
+    return gitOps.detectMergeConflicts(baseBranch, inputFolder, config.workingDir);
+}
+
+/**
+ * Write the rework input context (Steps 4.7-6): the PR diff, the failed CI
+ * checks probed against it, the discussions (human-readable + raw with ids),
+ * and the head this pass starts from. Returns the pieces later steps need.
+ * (gh-1220) Extracted from action().
+ */
+function writeReworkInputContext(inputFolder, config, scm, pr, prDetails, branchName, baseBranch) {
+    // Step 4.7: Detect failed CI checks — writes ci_failures.md if any failed.
+    // gh-1119: the PR diff is fetched FIRST and handed to detectFailedChecks,
+    // which tags every extracted gate violation owned/foreign against the
+    // diff file list (the #433 rework leg missed an owned violation because
+    // it was buried in the raw tails — now it opens ci_failures.md).
+    const headSha = (prDetails.head && prDetails.head.sha) || null;
+
+    // Step 5: Diff + discussions (human-readable + raw with IDs)
+    const diff = gitOps.getPRDiff(baseBranch, branchName, config.workingDir);
+
+    const failedChecks = gh.detectFailedChecks(
+        scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath, diff);
+
+    console.log('Fetching PR discussions...');
+    const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);
+
+    // Step 6: Write all context files
+    gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
+
+    // agents#827: remember the head this pass starts from, so pushReworkChanges can tell a real fix
+    // from a pass that only left housekeeping (outputs/, WIP auto-saves) behind.
+    writeReworkBaseHead(inputFolder, headSha);
+
+    return { headSha: headSha, failedChecks: failedChecks, discussionData: discussionData };
+}
+
+/**
+ * gh-799: pinned input contract — whatever armed this leg, the input folder
+ * now ALWAYS carries the complete open-item picture (threads with ids, CI
+ * failures, review verdict). Non-fatal: a placeholder write failure must not
+ * kill the leg. (gh-1220) Extracted from action().
+ */
+function enforceReworkInputContract(inputFolder, scm, prDetails, discussionData, failedChecks) {
+    try {
+        ensureInputContextContract(inputFolder, scm, prDetails.number, discussionData, failedChecks);
+    } catch (e) {
+        console.warn('Input contract enforcement failed (non-fatal):', e);
+    }
+}
+
+/**
+ * Step 8: the rework-started tracker comment — skipped for PR-anchored
+ * reworks (#544): a 'pr-N' key parses to no tracker ticket (the PR comment
+ * comes from the post action instead). (gh-1220) Extracted from action().
+ */
+function postReworkStartedCommentOrSkip(prAnchor, tracker, ticketKey, customParams, prDetails, branchName, conflictFiles, failedChecks) {
+    if (prAnchor) {
+        console.log('PR-anchored rework: skipping tracker comment (no ticket, #544)');
+        return;
+    }
+    postReworkStartedCommentStep(tracker, ticketKey, customParams, {
+        prNumber: prDetails.number,
+        prUrl: prDetails.html_url,
+        branchName: branchName,
+        conflictFiles: conflictFiles,
+        failedChecks: failedChecks
+    });
+}
+
 function action(params) {
+    var tracker = null;
     try {
         var parsed = parseReworkParams(params);
         var actualParams = parsed.actualParams;
         var inputFolder = parsed.inputFolder;
         var ticketKey = parsed.ticketKey;
         var prAnchor = parsed.prAnchor;
-        // paramsForConfigLoad re-attaches params.ticket (sibling of jobParams in the
-        // real Teammate execution path) so baseBranchResolverFnPath can key off the
-        // ticket's fixVersion — see configLoader.js for details.
-        var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
-        var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
-        var scm = configLoader.createScm(config);
-        var statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
+        var runtime = createReworkRuntime(params, actualParams);
+        var config = runtime.config;
+        var customParams = runtime.customParams;
+        var scm = runtime.scm;
         // Probe the tracker provider once — the same script then runs unchanged
         // on Jira / ADO / GitHub deployments.
-        var tracker = trackersModule.createTracker(config, customParams);
+        tracker = trackersModule.createTracker(config, customParams);
 
-        // Restore configured artefacts (e.g. cosmo test reports) from GitHub Release — non-fatal
-        try { restoreFromReleases.action(params); } catch (e) { console.warn('⚠️ restoreFromReleases failed (non-fatal):', e); }
+        restoreArtefactsQuietly(params);
 
         console.log('=== Rework setup for:', ticketKey, '===');
 
         // Mark the ticket actively-worked with the ACTUAL rework-phase status
         // (gh-802 AC3b) — see moveTicketToReworkStatus() for the full rationale.
-        moveTicketToReworkStatus(config, tracker, ticketKey, statuses, prAnchor);
+        moveTicketToReworkStatus(config, tracker, ticketKey, runtime.statuses, prAnchor);
 
         // Step 1: GitHub repo info — prefer targetRepository from config over git remote
         var repoInfo = resolveRepoInfo(config, scm);
@@ -756,17 +878,11 @@ function action(params) {
             );
         }
 
-        // Step 3: PR details
-        const prDetails = gh.getPRDetails(scm, pr.number);
-        if (!prDetails) {
-            failSetup(tracker, ticketKey, inputFolder, 'Failed to fetch PR details for PR #' + pr.number, customParams);
-        }
-
-        // Step 4: Checkout PR branch
-        const branchName = prDetails.head ? prDetails.head.ref : null;
-        if (!branchName) {
-            failSetup(tracker, ticketKey, inputFolder, 'Could not determine branch from PR details', customParams);
-        }
+        // Steps 3-4: PR details + head branch, failing the setup when either is
+        // missing, then checkout of the PR branch.
+        var details = fetchReworkPrDetails(scm, pr, tracker, ticketKey, inputFolder, customParams);
+        var prDetails = details.prDetails;
+        var branchName = details.branchName;
         checkoutReworkBranch(branchName, config, inputFolder, tracker, ticketKey, customParams,
             forkCheckout.resolvePullRef(forkCheckout.prPullRef(prDetails), forkCheckout.envCheckoutRef()));
 
@@ -779,86 +895,35 @@ function action(params) {
         // js/common/baseBranchMarker.js docblock for the full rationale.
         baseBranchMarker.writeBaseBranchMarker(baseBranch);
 
-        // Step 4.4: Optionally sync the PR's base branch with its own upstream — see
-        // syncBaseBranchIfConfigured() docblock for the rationale.
-        syncBaseBranchIfConfigured(baseBranch, customParams, config);
-
-        // Step 4.5: Merge base branch and detect conflicts.
-        // Always merges origin/{baseBranch} so the branch stays up to date.
-        // If conflicts exist, writes merge_conflicts.md to the input folder.
-        //
-        // This MUST run before Step 4.6 (setup commands): setupCommands typically builds
-        // and tests the repo (e.g. `mvn clean verify`), and the PR branch itself can be
-        // arbitrarily stale relative to baseBranch — including fixes to the very tests
-        // setupCommands runs (a flaky/broken test fixed on baseBranch stays broken on any
-        // PR branch forked before that fix, until the PR branch is brought up to date).
-        // Running the merge first means setup commands validate the code the CLI agent is
-        // about to work on top of (merged, even if only staged/uncommitted), not a stale
-        // pre-merge snapshot — this is the "auto-update the branch on every rework run"
-        // behavior that should hold out of the box, not depend on someone remembering to
-        // rebase the PR branch manually.
-        const conflictFiles = gitOps.detectMergeConflicts(baseBranch, inputFolder, config.workingDir);
+        // Steps 4.4-4.5: optionally sync the base branch, then merge it and
+        // detect conflicts (see syncBaseAndDetectConflicts for the ordering rule).
+        const conflictFiles = syncBaseAndDetectConflicts(baseBranch, customParams, config, inputFolder);
 
         // Step 4.6: Run project-specific prerequisite/setup commands (e.g. install
         // JDK/Maven, verify build credentials) before the CLI agent starts fixing code.
         runSetupCommandsStep(customParams, config, inputFolder, tracker, ticketKey);
 
-        // Step 4.7: Detect failed CI checks — writes ci_failures.md if any failed.
-        // gh-1119: the PR diff is fetched FIRST and handed to detectFailedChecks,
-        // which tags every extracted gate violation owned/foreign against the
-        // diff file list (the #433 rework leg missed an owned violation because
-        // it was buried in the raw tails — now it opens ci_failures.md).
-        const headSha = prDetails.head ? prDetails.head.sha : null;
-
-        // Step 5: Diff + discussions (human-readable + raw with IDs)
-        const diff = gitOps.getPRDiff(baseBranch, branchName, config.workingDir);
-
-        const failedChecks = gh.detectFailedChecks(
-            scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath, diff);
-
-        console.log('Fetching PR discussions...');
-        const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);
-
-        // Step 6: Write all context files
-        gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
-
-        // agents#827: remember the head this pass starts from, so pushReworkChanges can tell a real fix
-        // from a pass that only left housekeeping (outputs/, WIP auto-saves) behind.
-        writeReworkBaseHead(inputFolder, headSha);
+        // Steps 4.7-6: diff, failed CI checks, discussions, context files, base head.
+        var inputContext = writeReworkInputContext(inputFolder, config, scm, pr, prDetails, branchName, baseBranch);
 
         // gh-799: pinned input contract — whatever armed this leg, the input
         // folder now ALWAYS carries the complete open-item picture (threads
         // with ids, CI failures, review verdict). Non-fatal: a placeholder
         // write failure must not kill the leg.
-        try {
-            ensureInputContextContract(inputFolder, scm, prDetails.number, discussionData, failedChecks);
-        } catch (e) {
-            console.warn('Input contract enforcement failed (non-fatal):', e);
-        }
+        enforceReworkInputContract(inputFolder, scm, prDetails, inputContext.discussionData, inputContext.failedChecks);
 
         // Step 7 & parent context + gh-1064 session delta snapshot/manifest
         enrichReworkInputStep(params, actualParams, {
             inputFolder: inputFolder,
             ticketKey: ticketKey,
             repo: repoInfo.owner + '/' + repoInfo.repo,
-            headSha: headSha,
+            headSha: inputContext.headSha,
             baseBranch: baseBranch
         });
 
-        // Step 8: tracker comment — skipped for PR-anchored reworks (#544):
-        // a 'pr-N' key parses to no tracker ticket (the PR comment comes
-        // from the post action instead).
-        if (prAnchor) {
-            console.log('PR-anchored rework: skipping tracker comment (no ticket, #544)');
-        } else {
-            postReworkStartedCommentStep(tracker, ticketKey, customParams, {
-                prNumber: prDetails.number,
-                prUrl: prDetails.html_url,
-                branchName: branchName,
-                conflictFiles: conflictFiles,
-                failedChecks: failedChecks
-            });
-        }
+        // Step 8: tracker comment — skipped for PR-anchored reworks (#544).
+        postReworkStartedCommentOrSkip(prAnchor, tracker, ticketKey, customParams,
+            prDetails, branchName, conflictFiles, inputContext.failedChecks);
 
         console.log('✅ Rework setup complete — branch:', branchName, '| PR #' + prDetails.number);
 
@@ -909,6 +974,15 @@ if (typeof module !== 'undefined' && module.exports) {
         reportActionError,
         createErrorTracker,
         postErrorComment,
-        errorTicketKeyOf
+        errorTicketKeyOf,
+        // gh-1220: helpers extracted from action() — exported for direct unit
+        // testing (per-function CRAP ratchet).
+        createReworkRuntime,
+        restoreArtefactsQuietly,
+        fetchReworkPrDetails,
+        syncBaseAndDetectConflicts,
+        writeReworkInputContext,
+        enforceReworkInputContract,
+        postReworkStartedCommentOrSkip
     };
 }

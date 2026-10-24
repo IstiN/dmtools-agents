@@ -2713,7 +2713,7 @@ suite('postPRReviewComments — fixture factories (gh-1230 characterization)', f
         mocks.jira_add_label({ label: 'a' });
         mocks.jira_move_to_status({ status: 's' });
         mocks.jira_post_comment({ body: 'c' });
-        mocks.jira_remove_label({}); 
+        mocks.jira_remove_label({});
         mocks.jira_assign_ticket_to();
         assert.deepEqual(labels, [{ label: 'a' }]);
         assert.deepEqual(moves, [{ status: 's' }]);
@@ -2776,6 +2776,10 @@ suite('postPRReviewComments — fixture factories (gh-1230 characterization)', f
         var mocks2 = formalJiraMocks({ prInfoContent: 'custom info', githubPrBody: 'closes #7' });
         assert.equal(mocks2.file_read({ path: 'x/pr_info.md' }), 'custom info');
         assert.deepEqual(JSON.parse(mocks2.github_get_pr()), { body: 'closes #7' });
-        mocks2.jira_add_label({}); mocks2.jira_move_to_status({}); mocks2.jira_post_comment({}); mocks2.jira_remove_label({}); mocks2.jira_assign_ticket_to();
+        mocks2.jira_add_label({});
+        mocks2.jira_move_to_status({});
+        mocks2.jira_post_comment({});
+        mocks2.jira_remove_label({});
+        mocks2.jira_assign_ticket_to();
     });
 });

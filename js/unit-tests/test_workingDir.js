@@ -845,7 +845,9 @@ suite('workingDir test mocks — gh-1230 characterization', function() {
 
     test('configBlockingFileRead: fileMap hit wins over pass-through (null and populated maps)', function() {
         assert.equal(configBlockingFileRead({ 'a.txt': 'alpha' })({ path: 'a.txt' }), 'alpha');
-        assert.equal(configBlockingFileRead(null)({ path: 'crap4dart.yaml' }), file_read({ path: 'crap4dart.yaml' }),
+        // gh-1230 rework: probe pass-through with a repo-owned file (README.md), not a
+        // tooling config like crap4dart.yaml owned by the crap4dart gate.
+        assert.equal(configBlockingFileRead(null)({ path: 'README.md' }), file_read({ path: 'README.md' }),
             'null map falls through to the real file_read');
     });
 
@@ -856,14 +858,14 @@ suite('workingDir test mocks — gh-1230 characterization', function() {
 
     test('configBlockingFileRead: real files pass through, missing files give null', function() {
         var fr = configBlockingFileRead(null);
-        assert.equal(fr({ path: 'crap4dart.yaml' }), file_read({ path: 'crap4dart.yaml' }));
+        assert.equal(fr({ path: 'README.md' }), file_read({ path: 'README.md' }));
         assert.equal(fr({ path: 'no/such/file-gh1230.txt' }), null);
     });
 
     test('mapReadingFileRead: map hit, real-file pass-through and null on failure', function() {
         var fr = mapReadingFileRead({ 'outputs/x.json': '{"ok":true}' });
         assert.equal(fr({ path: 'outputs/x.json' }), '{"ok":true}');
-        assert.equal(fr({ path: 'crap4dart.yaml' }), file_read({ path: 'crap4dart.yaml' }));
+        assert.equal(fr({ path: 'README.md' }), file_read({ path: 'README.md' }));
         assert.equal(fr({ path: 'no/such/file-gh1230.txt' }), null);
     });
 

@@ -103,6 +103,33 @@ function collectPageComments(pageId, pageTitle, allComments) {
     }
 }
 
+/** Pull the storage-format body out of a confluence content payload ('' when absent). */
+function pageStorageBody(content) {
+    return (content && content.body && content.body.storage && content.body.storage.value) || '';
+}
+
+/** Write one page body as index.md (root of its tree level). */
+function writePageIndex(targetDir, body) {
+    file_write(targetDir + '/index.md', body || '_(existing page had no body)_');
+}
+
+/** List a page's children; a failed lookup degrades to "no children". */
+function fetchChildrenSafe(contentId) {
+    try {
+        return confluence_get_children_by_id({ contentId: contentId, format: 'md' }) || [];
+    } catch (e) {
+        return [];
+    }
+}
+
+/** Snapshot a leaf child as a single Markdown file named after its title. */
+function snapshotLeafChild(child, targetDir, allComments) {
+    var childBody = pageStorageBody(child);
+    childBody = injectCommentAnchors(child.id, childBody);
+    file_write(targetDir + '/' + sanitizeFileName(child.title) + '.md', childBody || '_(existing page had no body)_');
+    collectPageComments(child.id, child.title, allComments);
+}
+
 /**
  * Recursively snapshot an existing discovery page + all of its descendants
  * (any depth) as Markdown files directly into outputs/discovery/ (see module
@@ -128,23 +155,16 @@ function collectPageComments(pageId, pageTitle, allComments) {
 function snapshotPageTree(page, targetDir, allComments) {
     var total = 0;
     try {
-        var rootMd = confluence_content_by_id({ contentId: page.id, format: 'md' });
-        var rootBody = (rootMd && rootMd.body && rootMd.body.storage && rootMd.body.storage.value) || '';
+        var rootBody = pageStorageBody(confluence_content_by_id({ contentId: page.id, format: 'md' }));
         rootBody = injectCommentAnchors(page.id, rootBody);
-        file_write(targetDir + '/index.md', rootBody || '_(existing page had no body)_');
+        writePageIndex(targetDir, rootBody);
         collectPageComments(page.id, page.title, allComments);
 
         var children = confluence_get_children_by_id({ contentId: page.id, format: 'md' }) || [];
         children.forEach(function(child) {
             total += 1;
             var fileName = sanitizeFileName(child.title);
-
-            var grandchildren;
-            try {
-                grandchildren = confluence_get_children_by_id({ contentId: child.id, format: 'md' }) || [];
-            } catch (e) {
-                grandchildren = [];
-            }
+            var grandchildren = fetchChildrenSafe(child.id);
 
             if (grandchildren.length > 0) {
                 // This child has its own descendants — recurse into a subfolder
@@ -153,10 +173,7 @@ function snapshotPageTree(page, targetDir, allComments) {
                 total += snapshotPageTree(child, targetDir + '/' + fileName, allComments);
             } else {
                 // Leaf page — a single Markdown file is enough.
-                var childBody = (child.body && child.body.storage && child.body.storage.value) || '';
-                childBody = injectCommentAnchors(child.id, childBody);
-                file_write(targetDir + '/' + fileName + '.md', childBody || '_(existing page had no body)_');
-                collectPageComments(child.id, child.title, allComments);
+                snapshotLeafChild(child, targetDir, allComments);
             }
         });
 
@@ -279,5 +296,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, findTicketPage, sanitizeFileName, snapshotPageTree, injectCommentAnchors, collectPageComments, resolveTicketKey, applyDiscoveryConfig, fetchParentChildren, writeCollectedComments, writeDiscoveryMeta, writeDiscoveryMetaQuietly, seedExistingPageTree, DISCOVERY_OUTPUT_DIR, COMMENTS_BASE_NAME };
+    module.exports = { action, findTicketPage, sanitizeFileName, snapshotPageTree, injectCommentAnchors, collectPageComments, resolveTicketKey, applyDiscoveryConfig, fetchParentChildren, writeCollectedComments, writeDiscoveryMeta, writeDiscoveryMetaQuietly, seedExistingPageTree, pageStorageBody, fetchChildrenSafe, snapshotLeafChild, DISCOVERY_OUTPUT_DIR, COMMENTS_BASE_NAME };
 }

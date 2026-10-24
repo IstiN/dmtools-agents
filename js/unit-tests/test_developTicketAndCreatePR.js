@@ -2948,3 +2948,77 @@ suite('developTicketAndCreatePR > action seam clusters (gh-1190)', function () {
     });
 
 });
+
+// ── gh-1229 characterization: branchCarriesWork contract pinned before
+//    helper extraction (direct calls; cli_execute_command scripted). ──
+suite('developTicketAndCreatePR > branchCarriesWork contract (gh-1229)', function () {
+    function modWithGit(handler) {
+        return loadForLandingGuard({
+            cli_execute_command: function (args) { return handler(args.command) || ''; }
+        }, {}).mod;
+    }
+
+    function baseHandler() {
+        return function (command) {
+            if (command.indexOf('git rev-list --count') === 0) return '0';
+            return '';
+        };
+    }
+
+    test('commits ahead of the base branch alone carry work', function () {
+        var mod = modWithGit(function (command) {
+            if (command.indexOf('git log origin/main..HEAD --oneline') === 0) return 'a1b2c3 my work\n';
+            return baseHandler();
+        });
+        assert.equal(mod.branchCarriesWork('main'), true);
+    });
+
+    test('an untracked real work file carries work (loop with several noise lines first)', function () {
+        var mod = modWithGit(function (command) {
+            if (command === 'git status --porcelain') {
+                return '?? .dmtools/fa-sessions/' + '\n' +
+                    '?? factory-kit/' + '\n' +
+                    '?? outputs/response.md' + '\n' +
+                    ' M src/real_work.js' + '\n';
+            }
+            return baseHandler();
+        });
+        assert.equal(mod.branchCarriesWork(null), true, 'a null base falls back to origin/main');
+    });
+
+    test('runtime-artifact, factory-kit and outputs noise alone do not carry work', function () {
+        var mod = modWithGit(function (command) {
+            if (command === 'git status --porcelain') {
+                return '?? .dmtools/fa-sessions/' + '\n' +
+                    '?? factory-kit/' + '\n' +
+                    'A  factory-kit/sub' + '\n' +
+                    '?? outputs/response.md' + '\n' +
+                    '\n';
+            }
+            return baseHandler();
+        });
+        assert.equal(mod.branchCarriesWork('main'), false);
+    });
+
+    test('a failing git log probe falls through to the status scan instead of crashing', function () {
+        var mod = modWithGit(function (command) {
+            if (command.indexOf('git log origin/main..HEAD') === 0) throw new Error('git boom');
+            if (command === 'git status --porcelain') return ' M src/real_work.js' + '\n';
+            return baseHandler();
+        });
+        assert.equal(mod.branchCarriesWork('main'), true);
+    });
+
+    test('a failing status scan keeps the guard conservative: no work', function () {
+        var mod = modWithGit(function (command) {
+            if (command === 'git status --porcelain') throw new Error('git boom');
+            return baseHandler();
+        });
+        assert.equal(mod.branchCarriesWork('main'), false);
+    });
+
+    test('a totally clean tree and empty log carry no work', function () {
+        var mod = modWithGit(baseHandler());
+        assert.equal(mod.branchCarriesWork('develop'), false);
+    });
+});

@@ -77,6 +77,7 @@
         "js/unit-tests/test_recoverMergedPRTicket.js",
         "js/unit-tests/test_recoverDirtyReviewTestCase.js",
         "js/unit-tests/test_recoverStuckTestCase.js",
+        "js/unit-tests/test_recoverStuckDevelopment.js",
         "js/unit-tests/test_moveToInTesting.js",
         "js/unit-tests/test_moveToReadyForTesting.js",
         "js/unit-tests/test_wave1cTrackerMigration.js",
@@ -199,7 +200,10 @@
         "js/unit-tests/test_createSolutionDesignTicketsAndAssignForReview.js",
         "js/unit-tests/test_legacyRootScriptsTracker.js",
         "js/unit-tests/test_jiraHelpers.js",
-        "js/unit-tests/test_isCodeGraphAvailable.js"
+        "js/unit-tests/test_isCodeGraphAvailable.js",
+        "js/unit-tests/test_closeQuestionTicket.js",
+        "js/unit-tests/test_enhanceSolutionDesignDescriptionAndAssess.js",
+        "js/unit-tests/test_prepareBugFixBatchContext.js"
       ]
     }
   }

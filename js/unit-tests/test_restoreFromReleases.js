@@ -11,25 +11,17 @@
 
 // ─── gh-1230 CRAP: releaseArtefacts mock helpers (pure, characterized below) ─
 
-function artefactBuildTag(ticketKey, template) {
-    var t = (template || 'ai-{ticketKey}').replace(/\{ticketKey\}/g, ticketKey);
-    return t.toLowerCase().replace(/[^a-z0-9._/-]/g, '-');
-}
-
-function artefactBuildReleaseName(ticketKey, template) {
-    return (template || '[AI] [{ticketKey}] Artefacts').replace(/\{ticketKey\}/g, ticketKey);
-}
+// gh-1230 rework: the tag/name/repository rules are shared with
+// test_timerAutoCommitAndSave.js via one fixture module — the verbatim
+// duplicates lived in both files and had to be edited in lockstep.
+var releaseArtefactFixtures = loadModule('js/unit-tests/_fixtures/releaseArtefactsMock.js', makeRequire({}, {}), {});
+var artefactBuildTag = releaseArtefactFixtures.artefactBuildTag;
+var artefactBuildReleaseName = releaseArtefactFixtures.artefactBuildReleaseName;
+var artefactResolveRepository = releaseArtefactFixtures.artefactResolveRepository;
 
 function artefactResolveTemplate(template, ticketKey) {
     if (!template) return template;
     return template.replace(/\{ticketKey\}/g, ticketKey);
-}
-
-function artefactResolveRepository(customParams) {
-    if (!customParams) return null;
-    var repo = customParams.artefactRepository || customParams.aiRepository || customParams.targetRepository;
-    if (!repo || !repo.owner || !repo.repo) return null;
-    return { owner: repo.owner, repo: repo.repo };
 }
 
 function recordingDownloadArtefact(downloadArtefactCalls, opts) {
