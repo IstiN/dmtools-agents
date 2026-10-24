@@ -83,10 +83,7 @@ function loadPushReworkChanges() {
             './common/trackers.js': makeTrackersModule({}),
             './common/outputFiles.js': {
                 readOutputFile: function(path) {
-                    if (mocks.outputFiles && mocks.outputFiles[path] !== undefined) {
-                        return mocks.outputFiles[path];
-                    }
-                    return null;
+                    return readOutputFileFrom(mocks, path);
                 }
             },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
@@ -101,29 +98,85 @@ function loadPushReworkChanges() {
     );
 }
 
+// ── gh-1200 CRAP refactor: named mock-builder units ─────────────────────────
+// The branchy mock closures below used to fold their decisions into
+// loadPushReworkChangesForAction's CRAP. Extracted as small named helpers
+// with identical behavior (same captures, same call order, same canned
+// responses); the characterization suite at the bottom pins every branch.
+
+/** Push-capture: mocks[key] = (mocks[key] || []).concat([value]). */
+function appendCapture(mocks, key, value) {
+    mocks[key] = (mocks[key] || []).concat([value]);
+}
+
+/** Counter-capture: mocks[key] = (mocks[key] || 0) + 1. */
+function countCapture(mocks, key) {
+    mocks[key] = (mocks[key] || 0) + 1;
+}
+
+/** outputFiles.readOutputFile parity: fileMap hit or null. */
+function readOutputFileFrom(mocks, path) {
+    if (mocks.outputFiles && mocks.outputFiles[path] !== undefined) {
+        return mocks.outputFiles[path];
+    }
+    return null;
+}
+
+/** Static pr_info.md fixture read (throws for every other path, like the live tool). */
+function reworkPrInfoFileRead(args) {
+    if (args.path === 'input/TS-1293/pr_info.md') {
+        return '**Branch**: `ai/TS-1293` → `main`';
+    }
+    throw new Error('missing ' + args.path);
+}
+
+/** Canned git session for the TS-1293 fixture; records every command. */
+function reworkCliExecute(mocks, args) {
+    mocks.commands = mocks.commands || [];
+    mocks.commands.push(args.command);
+    if (args.command === 'git branch --show-current') return 'ai/TS-1293';
+    if (args.command === 'git push -u origin ai/TS-1293' && mocks.failFirstPush) {
+        mocks.failFirstPush = false;
+        throw new Error('rejected non-fast-forward');
+    }
+    if (args.command.indexOf('git ls-remote --heads origin ai/TS-1293') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/TS-1293';
+    return '';
+}
+
+/** resumeAgent stub: records the stage, honors onResume/resumeResult overrides. */
+function reworkResumeAgent(mocks, options) {
+    appendCapture(mocks, 'resumeCalls', options.stage);
+    if (typeof mocks.onResume === 'function') mocks.onResume(options);
+    return mocks.resumeResult || { attempted: false };
+}
+
+/** SCM provider stub wired to the capture bag (IstiN/trackstate fixture). */
+function reworkScmStub(mocks) {
+    return {
+        getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'trackstate' }; },
+        listPrs: function() { return [{ number: 1571, title: 'TS-1293 Fix', html_url: 'https://github.com/IstiN/trackstate/pull/1571', head: { ref: 'ai/TS-1293' } }]; },
+        addComment: function(prId, text) {
+            countCapture(mocks, 'prComments');
+            appendCapture(mocks, 'prCommentTexts', text);
+        },
+        replyToThread: function(prId, thread, text) {
+            countCapture(mocks, 'threadReplies');
+            appendCapture(mocks, 'replyTexts', text);
+        },
+        resolveThread: function() { countCapture(mocks, 'resolvedThreads'); }
+    };
+}
+
 function loadPushReworkChangesForAction(mocks) {
     mocks = mocks || {};
     var toolMocks = {
-        file_read: function(args) {
-            if (args.path === 'input/TS-1293/pr_info.md') {
-                return '**Branch**: `ai/TS-1293` → `main`';
-            }
-            throw new Error('missing ' + args.path);
-        },
+        file_read: reworkPrInfoFileRead,
         cli_execute_command: function(args) {
-            mocks.commands = mocks.commands || [];
-            mocks.commands.push(args.command);
-            if (args.command === 'git branch --show-current') return 'ai/TS-1293';
-            if (args.command === 'git push -u origin ai/TS-1293' && mocks.failFirstPush) {
-                mocks.failFirstPush = false;
-                throw new Error('rejected non-fast-forward');
-            }
-            if (args.command.indexOf('git ls-remote --heads origin ai/TS-1293') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/TS-1293';
-            return '';
+            return reworkCliExecute(mocks, args);
         },
-        jira_post_comment: function(args) { mocks.jiraComments = (mocks.jiraComments || []).concat([args.comment]); },
-        jira_move_to_status: function(args) { mocks.moves = (mocks.moves || []).concat([args.statusName]); },
-        jira_remove_label: function(args) { mocks.removedLabels = (mocks.removedLabels || []).concat([args.label]); },
+        jira_post_comment: function(args) { appendCapture(mocks, 'jiraComments', args.comment); },
+        jira_move_to_status: function(args) { appendCapture(mocks, 'moves', args.statusName); },
+        jira_remove_label: function(args) { appendCapture(mocks, 'removedLabels', args.label); },
         jira_assign_ticket_to: function() {}
     };
     return loadModule(
@@ -136,16 +189,7 @@ function loadPushReworkChangesForAction(mocks) {
             './configLoader.js': configLoaderModule,
             './common/scm.js': {
                 createScm: function() {
-                    return {
-                        getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'trackstate' }; },
-                        listPrs: function() { return [{ number: 1571, title: 'TS-1293 Fix', html_url: 'https://github.com/IstiN/trackstate/pull/1571', head: { ref: 'ai/TS-1293' } }]; },
-                        addComment: function(prId, text) { mocks.prComments = (mocks.prComments || 0) + 1; mocks.prCommentTexts = (mocks.prCommentTexts || []).concat(text); },
-                        replyToThread: function(prId, thread, text) {
-                            mocks.threadReplies = (mocks.threadReplies || 0) + 1;
-                            mocks.replyTexts = (mocks.replyTexts || []).concat(text);
-                        },
-                        resolveThread: function() { mocks.resolvedThreads = (mocks.resolvedThreads || 0) + 1; }
-                    };
+                    return reworkScmStub(mocks);
                 }
             },
             './common/submodules.js': { pushManagedSubmodules: function() {} },
@@ -159,9 +203,7 @@ function loadPushReworkChangesForAction(mocks) {
                 runPolicyGates: function() { return { success: true }; },
                 runPostPublishGates: function() { return { success: true }; },
                 resumeAgent: function(options) {
-                    mocks.resumeCalls = (mocks.resumeCalls || []).concat([options.stage]);
-                    if (typeof mocks.onResume === 'function') mocks.onResume(options);
-                    return mocks.resumeResult || { attempted: false };
+                    return reworkResumeAgent(mocks, options);
                 }
             },
             './common/autoStart.js': {
@@ -170,10 +212,7 @@ function loadPushReworkChangesForAction(mocks) {
             },
             './common/outputFiles.js': {
                 readOutputFile: function(path) {
-                    if (mocks.outputFiles && mocks.outputFiles[path] !== undefined) {
-                        return mocks.outputFiles[path];
-                    }
-                    return null;
+                    return readOutputFileFrom(mocks, path);
                 }
             },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
@@ -211,6 +250,87 @@ function loadPostTestReworkResults() {
         {}
     );
 }
+
+// ── gh-1200 characterization: the extracted rework mock builders ────────────
+
+suite('rework custom params — extracted mock builders (characterization, gh-1200)', function() {
+
+    test('reworkPrInfoFileRead: serves the TS-1293 pr_info fixture, throws otherwise', function() {
+        assert.equal(reworkPrInfoFileRead({ path: 'input/TS-1293/pr_info.md' }),
+            '**Branch**: `ai/TS-1293` → `main`');
+        var caught = null;
+        try { reworkPrInfoFileRead({ path: 'input/TS-1293/other.md' }); } catch (e) { caught = e; }
+        assert.ok(caught, 'non-pr_info paths throw');
+        assert.contains(String(caught && caught.message), 'missing input/TS-1293/other.md');
+    });
+
+    test('reworkCliExecute: canned branch/push/ls-remote responses, failFirstPush flips once', function() {
+        var mocks = {};
+        assert.equal(reworkCliExecute(mocks, { command: 'git branch --show-current' }), 'ai/TS-1293');
+        assert.equal(reworkCliExecute(mocks, { command: 'git ls-remote --heads origin ai/TS-1293' }),
+            '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/TS-1293');
+        assert.equal(reworkCliExecute(mocks, { command: 'git status' }), '', 'unknown command → empty');
+
+        var failing = { failFirstPush: true };
+        var thrown = null;
+        try { reworkCliExecute(failing, { command: 'git push -u origin ai/TS-1293' }); } catch (e) { thrown = e; }
+        assert.ok(thrown, 'the first push is rejected when failFirstPush is set');
+        assert.contains(String(thrown && thrown.message), 'rejected non-fast-forward');
+        assert.equal(failing.failFirstPush, false, 'the flag resets after one rejection');
+        assert.equal(reworkCliExecute(failing, { command: 'git push -u origin ai/TS-1293' }), '',
+            'the retried push succeeds');
+        assert.deepEqual(mocks.commands, ['git branch --show-current',
+            'git ls-remote --heads origin ai/TS-1293', 'git status'], 'every command recorded');
+        assert.deepEqual(failing.commands, ['git push -u origin ai/TS-1293', 'git push -u origin ai/TS-1293']);
+    });
+
+    test('appendCapture/countCapture: lazily create the capture bag', function() {
+        var m = {};
+        appendCapture(m, 'moves', 'In Review');
+        appendCapture(m, 'moves', 'Done');
+        assert.deepEqual(m.moves, ['In Review', 'Done']);
+        countCapture(m, 'prComments');
+        countCapture(m, 'prComments');
+        countCapture(m, 'prComments');
+        assert.equal(m.prComments, 3);
+    });
+
+    test('readOutputFileFrom: fileMap hit or null, without requiring an outputFiles bag', function() {
+        assert.equal(readOutputFileFrom({ outputFiles: { 'review_replies.json': '{}' } }, 'review_replies.json'), '{}');
+        assert.equal(readOutputFileFrom({ outputFiles: {} }, 'review_replies.json'), null, 'empty bag → null');
+        assert.equal(readOutputFileFrom({}, 'anything'), null, 'no bag at all → null');
+    });
+
+    test('reworkResumeAgent: records the stage, honors onResume and resumeResult', function() {
+        var seen = null;
+        var m = { onResume: function(o) { seen = o; }, resumeResult: { attempted: true } };
+        assert.deepEqual(reworkResumeAgent(m, { stage: 'rework_missing_outputs' }), { attempted: true });
+        assert.deepEqual(m.resumeCalls, ['rework_missing_outputs']);
+        assert.deepEqual(seen, { stage: 'rework_missing_outputs' });
+
+        var plain = {};
+        assert.deepEqual(reworkResumeAgent(plain, { stage: 'x' }), { attempted: false },
+            'default resume result without overrides');
+        assert.deepEqual(plain.resumeCalls, ['x']);
+    });
+
+    test('reworkScmStub: counters and text captures per provider call', function() {
+        var m = {};
+        var scm = reworkScmStub(m);
+        assert.deepEqual(scm.getRemoteRepoInfo(), { owner: 'IstiN', repo: 'trackstate' });
+        assert.equal(scm.listPrs().length, 1);
+        assert.equal(scm.listPrs()[0].number, 1571);
+        scm.addComment(1571, 'first');
+        scm.addComment(1571, 'second');
+        scm.replyToThread(1571, 'PRRT_1', 'reply text');
+        scm.resolveThread(1571, 'PRRT_1');
+        assert.equal(m.prComments, 2);
+        assert.deepEqual(m.prCommentTexts, ['first', 'second']);
+        assert.equal(m.threadReplies, 1);
+        assert.deepEqual(m.replyTexts, ['reply text']);
+        assert.equal(m.resolvedThreads, 1);
+    });
+});
 
 suite('rework custom params', function() {
     test('merges pr_rework jobParamPatches into runtime customParams', function() {
