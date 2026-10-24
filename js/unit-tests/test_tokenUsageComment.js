@@ -366,3 +366,92 @@ suite('tokenUsageComment — provider from the project config (agents#942)', fun
         assert.equal(jira.length, 1);
     });
 });
+
+// ── gh-1225 — postTokenUsageComments edge branches: empty manifest,
+// parse errors, a failing post, and trackers without a provider function.
+
+suite('tokenUsageComment — postTokenUsageComments edge branches (gh-1225)', function() {
+
+    function manifestMocks(manifest, files) {
+        return {
+            file_read: function(opts) {
+                if (opts.path === 'outputs/token_usage_files.json') {
+                    return manifest === null ? null : JSON.stringify(manifest);
+                }
+                return files && files[opts.path] !== undefined ? files[opts.path] : null;
+            }
+        };
+    }
+
+    test('a manifest with no *_usage.json entry → early return, nothing posted', function() {
+        var mod = loadTokenUsageComment(manifestMocks(['outputs/other_report.json', 'not-a-string', 42], {}));
+        var r = mod.postTokenUsageComments('TS-1');
+        assert.deepEqual(r, { posted: 0, files: [], errors: [] });
+    });
+
+    test('an empty manifest array → early return', function() {
+        var mod = loadTokenUsageComment(manifestMocks([], {}));
+        var r = mod.postTokenUsageComments('TS-1');
+        assert.deepEqual(r, { posted: 0, files: [], errors: [] });
+    });
+
+    test('a missing manifest → early return', function() {
+        var mod = loadTokenUsageComment(manifestMocks(null, {}));
+        var r = mod.postTokenUsageComments('TS-1');
+        assert.deepEqual(r, { posted: 0, files: [], errors: [] });
+    });
+
+    test('an unparseable usage file reports a parse error and keeps going', function() {
+        var calls = [];
+        var mod = loadTokenUsageComment({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/token_usage_files.json') {
+                    return JSON.stringify(['outputs/bad_usage.json', 'outputs/good_usage.json']);
+                }
+                if (opts.path === 'outputs/bad_usage.json') return '{not json';
+                if (opts.path === 'outputs/good_usage.json') return JSON.stringify({ total_tokens: 7 });
+                return null;
+            },
+            jira_post_comment: function(a) { calls.push(a); }
+        });
+        var r = mod.postTokenUsageComments('TS-2');
+        assert.equal(r.posted, 1);
+        assert.equal(r.files[0], 'outputs/good_usage.json');
+        assert.equal(r.errors.length, 1);
+        assert.contains(r.errors[0], 'outputs/bad_usage.json (parse error)');
+        assert.equal(calls.length, 1);
+    });
+
+    test('a failing postComment reports the error and continues with the next file', function() {
+        var calls = [];
+        var mod = loadTokenUsageComment({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/token_usage_files.json') {
+                    return JSON.stringify(['outputs/first_usage.json', 'outputs/second_usage.json']);
+                }
+                return JSON.stringify({ total_tokens: 1 });
+            },
+            jira_post_comment: function(a) {
+                if (String(a.comment || a).indexOf('[first]') !== -1) throw new Error('tracker down');
+                calls.push(a);
+            }
+        });
+        var r = mod.postTokenUsageComments('TS-3');
+        assert.equal(r.posted, 1, JSON.stringify(r));
+        assert.equal(r.errors.length, 1);
+        assert.contains(r.errors[0], 'Failed to post comment from outputs/first_usage.json: tracker down');
+        assert.equal(r.files[0], 'outputs/second_usage.json');
+        assert.equal(calls.length, 1);
+    });
+
+    test('an explicit tracker without a provider function still posts (provider null)', function() {
+        var calls = [];
+        var mod = loadTokenUsageComment(manifestMocks(['outputs/a_usage.json'], {
+            'outputs/a_usage.json': JSON.stringify({ total_tokens: 5 })
+        }));
+        var r = mod.postTokenUsageComments('TS-4', { tracker: { postComment: function(k, c) { calls.push([k, c]); } } });
+        assert.equal(r.posted, 1);
+        assert.equal(calls.length, 1);
+        assert.contains(calls[0][1], '[a]: {"total_tokens":5}');
+    });
+});
