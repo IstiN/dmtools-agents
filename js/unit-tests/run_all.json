@@ -20,6 +20,8 @@
         "js/unit-tests/test_fetchQuestionsToInput.js",
         "js/unit-tests/test_createIntakeTickets.js",
         "js/unit-tests/test_createQuestionsAndAssignForReview.js",
+        "js/unit-tests/test_aiResponseParser.js",
+        "js/unit-tests/test_enhanceSDAPIDescriptionAndAssess.js",
         "js/unit-tests/test_linkedIssuesReport.js",
         "js/unit-tests/test_fetchLinkedTestsToInput.js",
         "js/unit-tests/test_fetchLinkedBugsToInput.js",
