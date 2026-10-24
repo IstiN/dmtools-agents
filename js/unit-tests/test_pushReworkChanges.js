@@ -816,18 +816,53 @@ function opt(opts, key) {
     return (opts && opts[key]) || null;
 }
 
-function loadPushReworkChangesForAction(mocks, opts) {
-    var jiraPostCommentCalls = [];
-    var jiraMoveToStatusCalls = [];
-    var resumeAgentCalls = [];
-    var cliCommands = [];
+// ── gh-1200 CRAP refactor: named builder units for the action loader ────────
+// The branchy default mocks below used to fold their decisions into
+// loadPushReworkChangesForAction's CRAP; each is now a small named helper
+// with identical behavior, pinned by the characterization suite that ships
+// with this refactor ('pushRework action loader builders (gh-1200)').
 
+/** Default CLI session: branch probe + probed-branch ls-remote echo, rest ''. */
+function pushReworkDefaultCli(cliCommands, args) {
+    cliCommands.push(args.command);
+    if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+    if (args.command.indexOf('git ls-remote --heads origin') === 0) {
+        // gh-912: echo the PROBED branch — the strict ref-line parser
+        // matches refs/heads/<probed> exactly, so a fixed bug/PROJ-123
+        // ref line would (correctly) read as "other branch absent".
+        var probedBranch = args.command.substring('git ls-remote --heads origin '.length);
+        return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/' + probedBranch + '\n';
+    }
+    return '';
+}
+
+/** Default file_read: setup-failed marker must look missing; pr_info is the fixture. */
+function pushReworkDefaultFileRead(args) {
+    var p = args && (args.path || args);
+    if (p && p.indexOf('rework_setup_failed.md') !== -1) {
+        throw new Error('File does not exist');
+    }
+    if (p && p.indexOf('pr_info.md') !== -1) {
+        return '**Branch**: `bug/PROJ-123` → `develop`';
+    }
+    return null;
+}
+
+/** formatTemplate parity: {var} substitution, unknown vars keep the token. */
+function pushReworkFormatTemplate(template, vars) {
+    return template.replace(/\{(\w+)\}/g, function(m, key) {
+        return (vars && vars[key] !== undefined) ? vars[key] : m;
+    });
+}
+
+/** SCM stub: happy-path PR fixture page, overridable via opts.scm (merged in). */
+function pushReworkScm(opts) {
     // Default fixture: the jira-shaped ticket's own PR is in the listPrs page
     // (title/branch contain the key) — the normal happy-path shape. Before the
     // PR-LOOKUP-FAILED hardening this defaulted to [] and the happy-path
     // regression below passed only BECAUSE of the old silent skip; the lookup
     // failure path now fails loudly by design and needs its own test.
-    var scm = Object.assign({
+    return Object.assign({
         listPrs: function() {
             return [{
                 number: 123,
@@ -838,30 +873,52 @@ function loadPushReworkChangesForAction(mocks, opts) {
         },
         getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; }
     }, opt(opts, 'scm') || {});
+}
+
+/** feedbackLoop stub: opts override or green defaults, always resume-capturing. */
+function pushReworkFeedbackLoop(opts, resumeAgentCalls) {
+    var fl = opt(opts, 'feedbackLoop') || {
+        runQualityGates: function() { return { success: true }; },
+        runPolicyGates: function() { return { success: true }; },
+        runPostPublishGates: function() { return { success: true }; },
+        resumeAgent: function() { return { attempted: false }; }
+    };
+    var innerResume = fl.resumeAgent;
+    fl.resumeAgent = function(args) {
+        resumeAgentCalls.push(args);
+        return innerResume(args);
+    };
+    return fl;
+}
+
+function pushReworkStagedDiffStat(opts) {
+    return opt(opts, 'stagedDiffStat') || function() { return 'M file.txt\n'; };
+}
+
+function pushReworkAutoStart(opts) {
+    return opt(opts, 'autoStart') || {
+        triggerSmIfIdle: function() {},
+        triggerConfiguredWorkflowForTicket: function() { return false; }
+    };
+}
+
+function pushReworkOutputFiles(opts) {
+    return opt(opts, 'outputFiles') || { readOutputFile: function() { return null; } };
+}
+
+function loadPushReworkChangesForAction(mocks, opts) {
+    var jiraPostCommentCalls = [];
+    var jiraMoveToStatusCalls = [];
+    var resumeAgentCalls = [];
+    var cliCommands = [];
+
+    var scm = pushReworkScm(opts);
 
     var defaultMocks = {
         cli_execute_command: function(args) {
-            cliCommands.push(args.command);
-            if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
-            if (args.command.indexOf('git ls-remote --heads origin') === 0) {
-                // gh-912: echo the PROBED branch — the strict ref-line parser
-                // matches refs/heads/<probed> exactly, so a fixed bug/PROJ-123
-                // ref line would (correctly) read as "other branch absent".
-                var probedBranch = args.command.substring('git ls-remote --heads origin '.length);
-                return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/' + probedBranch + '\n';
-            }
-            return '';
+            return pushReworkDefaultCli(cliCommands, args);
         },
-        file_read: function(args) {
-            var p = args && (args.path || args);
-            if (p && p.indexOf('rework_setup_failed.md') !== -1) {
-                throw new Error('File does not exist');
-            }
-            if (p && p.indexOf('pr_info.md') !== -1) {
-                return '**Branch**: `bug/PROJ-123` → `develop`';
-            }
-            return null;
-        },
+        file_read: pushReworkDefaultFileRead,
         jira_post_comment: function(args) { jiraPostCommentCalls.push(args); },
         jira_move_to_status: function(args) { jiraMoveToStatusCalls.push(args); },
         jira_remove_label: function() {},
@@ -879,38 +936,18 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './configLoader.js': {
                 loadProjectConfig: function() { return baseConfig(opt(opts, 'config')); },
                 resolveInstructions: function() { return { jobParamPatch: {} }; },
-                formatTemplate: function(template, vars) {
-                    return template.replace(/\{(\w+)\}/g, function(m, key) {
-                        return (vars && vars[key] !== undefined) ? vars[key] : m;
-                    });
-                }
+                formatTemplate: pushReworkFormatTemplate
             },
             './common/scm.js': { createScm: function() { return scm; } },
             './common/submodules.js': { pushManagedSubmodules: function() {} },
             './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
-                readStagedDiffStat: opt(opts, 'stagedDiffStat') || function() { return 'M file.txt\n'; },
+                readStagedDiffStat: pushReworkStagedDiffStat(opts),
                 syncBranchWithBase: function() { return { success: true, updated: false }; }
             }),
             './common/githubHelpers.js': githubHelpersModule,
-            './common/feedbackLoop.js': (function() {
-                var fl = opt(opts, 'feedbackLoop') || {
-                    runQualityGates: function() { return { success: true }; },
-                    runPolicyGates: function() { return { success: true }; },
-                    runPostPublishGates: function() { return { success: true }; },
-                    resumeAgent: function() { return { attempted: false }; }
-                };
-                var innerResume = fl.resumeAgent;
-                fl.resumeAgent = function(args) {
-                    resumeAgentCalls.push(args);
-                    return innerResume(args);
-                };
-                return fl;
-            })(),
-            './common/autoStart.js': opt(opts, 'autoStart') || {
-                triggerSmIfIdle: function() {},
-                triggerConfiguredWorkflowForTicket: function() { return false; }
-            },
-            './common/outputFiles.js': opt(opts, 'outputFiles') || { readOutputFile: function() { return null; } },
+            './common/feedbackLoop.js': pushReworkFeedbackLoop(opts, resumeAgentCalls),
+            './common/autoStart.js': pushReworkAutoStart(opts),
+            './common/outputFiles.js': pushReworkOutputFiles(opts),
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },
@@ -932,6 +969,83 @@ function loadPushReworkChangesForAction(mocks, opts) {
         cliCommands: cliCommands
     };
 }
+
+// ── gh-1200 characterization: the extracted action-loader builders ──────────
+
+suite('pushRework action loader builders (characterization, gh-1200)', function() {
+
+    test('pushReworkDefaultCli: branch probe, probed-branch ls-remote echo, default empty', function() {
+        var commands = [];
+        assert.equal(pushReworkDefaultCli(commands, { command: 'git branch --show-current' }), 'bug/PROJ-123\n');
+        assert.equal(pushReworkDefaultCli(commands, { command: 'git ls-remote --heads origin bug/PROJ-123' }),
+            '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n');
+        assert.equal(pushReworkDefaultCli(commands, { command: 'git ls-remote --heads origin other-branch' }),
+            '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/other-branch\n',
+            'the PROBED branch is echoed, not a fixed bug/PROJ-123 ref');
+        assert.equal(pushReworkDefaultCli(commands, { command: 'git status' }), '');
+        assert.deepEqual(commands, ['git branch --show-current',
+            'git ls-remote --heads origin bug/PROJ-123',
+            'git ls-remote --heads origin other-branch', 'git status'], 'commands recorded');
+    });
+
+    test('pushReworkDefaultFileRead: setup-failed marker reads as missing; pr_info served; else null', function() {
+        var thrown = null;
+        try { pushReworkDefaultFileRead({ path: 'input/PROJ-123/rework_setup_failed.md' }); } catch (e) { thrown = e; }
+        assert.ok(thrown, 'rework_setup_failed.md must look missing');
+        assert.contains(String(thrown && thrown.message), 'File does not exist');
+        assert.equal(pushReworkDefaultFileRead({ path: 'input/PROJ-123/pr_info.md' }),
+            '**Branch**: `bug/PROJ-123` → `develop`');
+        assert.equal(pushReworkDefaultFileRead({ path: 'input/PROJ-123/notes.md' }), null);
+        assert.equal(pushReworkDefaultFileRead('some/pr_info.md'), '**Branch**: `bug/PROJ-123` → `develop`',
+            'bare-string path form supported');
+    });
+
+    test('pushReworkFormatTemplate: substitutes known vars, keeps unknown tokens', function() {
+        assert.equal(pushReworkFormatTemplate('hi {name}, ticket {key}', { name: 'ai', key: 'P-1' }),
+            'hi ai, ticket P-1');
+        assert.equal(pushReworkFormatTemplate('hi {missing}', {}), 'hi {missing}');
+        assert.equal(pushReworkFormatTemplate('hi {missing}', undefined), 'hi {missing}');
+    });
+
+    test('pushReworkScm: happy-path defaults; opts.scm entries win per key', function() {
+        var dflt = pushReworkScm({});
+        assert.equal(dflt.listPrs()[0].number, 123);
+        assert.deepEqual(dflt.getRemoteRepoInfo(), { owner: 'IstiN', repo: 'dmtools-agents' });
+        var custom = pushReworkScm({ scm: { listPrs: function() { return [{ number: 9 }]; } } });
+        assert.equal(custom.listPrs()[0].number, 9, 'override wins');
+        assert.deepEqual(custom.getRemoteRepoInfo(), { owner: 'IstiN', repo: 'dmtools-agents' },
+            'non-overridden defaults stay');
+    });
+
+    test('pushReworkFeedbackLoop: green defaults by default, capture wrapper always records', function() {
+        var calls = [];
+        var fl = pushReworkFeedbackLoop({}, calls);
+        assert.deepEqual(fl.runQualityGates(), { success: true });
+        assert.deepEqual(fl.runPolicyGates(), { success: true });
+        assert.deepEqual(fl.runPostPublishGates(), { success: true });
+        assert.deepEqual(fl.resumeAgent({ stage: 's1' }), { attempted: false });
+        assert.deepEqual(calls, [{ stage: 's1' }]);
+
+        var calls2 = [];
+        var custom = pushReworkFeedbackLoop({
+            feedbackLoop: { resumeAgent: function() { return { attempted: true, stage: 'x' }; } }
+        }, calls2);
+        assert.deepEqual(custom.resumeAgent({ stage: 's2' }), { attempted: true, stage: 'x' },
+            'the provided resumeAgent decides the result');
+        assert.deepEqual(calls2, [{ stage: 's2' }]);
+    });
+
+    test('pushReworkStagedDiffStat / AutoStart / OutputFiles: default vs opts override', function() {
+        assert.equal(pushReworkStagedDiffStat({})(), 'M file.txt\n');
+        assert.equal(pushReworkStagedDiffStat({ stagedDiffStat: function() { return 'X'; } })(), 'X');
+        assert.equal(pushReworkAutoStart({}).triggerConfiguredWorkflowForTicket(), false);
+        assert.equal(pushReworkAutoStart({ autoStart: { triggerConfiguredWorkflowForTicket: function() { return true; } } })
+            .triggerConfiguredWorkflowForTicket(), true);
+        assert.equal(pushReworkOutputFiles({}).readOutputFile('p'), null);
+        assert.equal(pushReworkOutputFiles({ outputFiles: { readOutputFile: function() { return 'hit'; } } })
+            .readOutputFile('p'), 'hit');
+    });
+});
 
 suite('pushReworkChanges.action — rework_setup_failed.md guard (#310)', function() {
 
