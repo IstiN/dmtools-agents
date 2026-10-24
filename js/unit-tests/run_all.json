@@ -45,6 +45,8 @@
         "js/unit-tests/test_checkRunZombies.js",
         "js/unit-tests/test_checkRunStamp.js",
         "js/unit-tests/test_workflowRuns.js",
+        "js/unit-tests/test_prLookup.js",
+        "js/unit-tests/test_labelList.js",
         "js/unit-tests/test_invisibleRequiredChecks.js",
         "js/unit-tests/test_triggerFailures.js",
         "js/unit-tests/test_quotaCircuitBreaker.js",

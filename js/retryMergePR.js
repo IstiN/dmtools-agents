@@ -12,6 +12,7 @@
 
 const { LABELS } = require('./config.js');
 var scmModule = require('./common/scm.js');
+var prLookup = require('./common/prLookup.js');
 var configLoader = require('./configLoader.js');
 var autoStart = require('./common/autoStart.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
@@ -56,20 +57,6 @@ function getGitHubRepoInfo() {
     }
 }
 
-function findPRForTicket(scm, ticketKey) {
-    try {
-        const prList = scm.listPrs('open');
-        const matched = (Array.isArray(prList) ? prList : []).find(function(pr) {
-            const titleMatch = pr.title && pr.title.indexOf(ticketKey) !== -1;
-            const branchMatch = pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1;
-            return titleMatch || branchMatch;
-        });
-        return matched || null;
-    } catch (e) {
-        console.error('Failed to list PRs:', e);
-        return null;
-    }
-}
 
 function removeApprovedLabels(scm, prNumber, ticketKey) {
     try {
@@ -385,7 +372,7 @@ function action(params) {
     const owner = repoInfo.owner;
     const repo = repoInfo.repo;
 
-    const pr = findPRForTicket(scm, ticketKey);
+    const pr = prLookup.findOpenPrForTicket(scm, ticketKey);
     if (!pr) {
         console.warn('No open PR found for ticket ' + ticketKey + ' — releasing lock');
         releaseLock(ticketKey, customParams);

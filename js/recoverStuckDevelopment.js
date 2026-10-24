@@ -26,6 +26,7 @@
  */
 
 var configLoader = require('./configLoader.js');
+var prLookup = require('./common/prLookup.js');
 const { resolveStatuses } = require('./config.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
@@ -41,20 +42,6 @@ function getTracker() {
     return _trackerInst;
 }
 
-function findPRForTicket(scm, ticketKey) {
-    try {
-        var prList = scm.listPrs('open');
-        var matched = (Array.isArray(prList) ? prList : []).find(function(pr) {
-            var titleMatch = pr.title && pr.title.indexOf(ticketKey) !== -1;
-            var branchMatch = pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1;
-            return titleMatch || branchMatch;
-        });
-        return matched || null;
-    } catch (e) {
-        console.error('Failed to list PRs:', e);
-        return null;
-    }
-}
 
 // ── gh-1229: small helpers extracted from action so it stays well under the
 //    CRAP gate; behavior is byte-identical to the previous inline flow. ──
@@ -99,7 +86,7 @@ function action(params) {
     console.log('Recovering stuck Story/Bug development:', ticketKey);
 
     var scm = configLoader.createScm(config);
-    var pr = findPRForTicket(scm, ticketKey);
+    var pr = prLookup.findOpenPrForTicket(scm, ticketKey);
 
     if (!pr) {
         console.log('No open PR found for', ticketKey, '— moving back to', statuses.READY_FOR_DEVELOPMENT);

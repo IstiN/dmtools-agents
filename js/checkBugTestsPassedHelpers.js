@@ -8,6 +8,8 @@
  * the tracker.
  */
 
+var prLookup = require('./common/prLookup.js');
+
 /**
  * Anti-cycle route decision once blocking Test Cases are found on a
  * finalized Bug: null (not finalized — keep waiting), 'rework' (first
@@ -61,14 +63,9 @@ function buildBugDoneComment(totalTCs) {
         'The bug has been automatically moved to *Done*.';
 }
 
-function prMentionsTicket(pr, ticketKey) {
-    // A null/entry-less item previously aborted the whole scan via the action's
-    // catch — treat it as a non-match instead so the scan stays total.
-    if (!pr) return false;
-    var titleMatch = pr.title && pr.title.indexOf(ticketKey) !== -1;
-    var branchMatch = pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1;
-    return !!(titleMatch || branchMatch);
-}
+// gh-1249: the match itself lives in js/common/prLookup.js (one shared
+// copy; null-safe so the scan stays total — a null entry is a non-match,
+// never an abort via the action's catch).
 
 /**
  * First open PR whose title or head branch mentions the ticket key, or null.
@@ -77,7 +74,7 @@ function prMentionsTicket(pr, ticketKey) {
 function findOpenTestPr(prList, ticketKey) {
     var list = prList || [];
     for (var i = 0; i < list.length; i++) {
-        if (prMentionsTicket(list[i], ticketKey)) return list[i];
+        if (prLookup.prMentionsTicket(list[i], ticketKey)) return list[i];
     }
     return null;
 }
@@ -90,7 +87,7 @@ if (typeof module !== 'undefined' && module.exports) {
         buildBlockedAfterReworkComment: buildBlockedAfterReworkComment,
         buildReworkComment: buildReworkComment,
         buildBugDoneComment: buildBugDoneComment,
-        prMentionsTicket: prMentionsTicket,
+        prMentionsTicket: prLookup.prMentionsTicket,
         findOpenTestPr: findOpenTestPr
     };
 }

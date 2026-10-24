@@ -32,7 +32,8 @@ function loadRecoverStuckTestCase(options) {
                 repository: { owner: 'IstiN', repo: 'trackstate' }
             }),
             './common/scm.js': { createScm: function() { return scm; } },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
         }),
         options.mocks || jiraMocks
     );

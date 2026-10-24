@@ -5,6 +5,7 @@
 
 const { LABELS } = require('./config.js');
 var scmModule = require('./common/scm.js');
+var prLookup = require('./common/prLookup.js');
 var configLoader = require('./configLoader.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
@@ -22,10 +23,7 @@ function getTracker() {
 }
 
 function prMatchesTicket(pr, ticketKey) {
-    if (!pr || !ticketKey) return false;
-    var titleMatch = pr.title && pr.title.indexOf(ticketKey) !== -1;
-    var branchMatch = pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1;
-    return !!(titleMatch || branchMatch);
+    return prLookup.prMentionsTicket(pr, ticketKey);
 }
 
 function isMergedPR(pr) {
@@ -146,13 +144,11 @@ function postRecoveryComment(ticketKey, prNumber, prUrl, mergedStatus) {
 /**
  * Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
  * wrote outputs/*_usage.json during the agent run (non-fatal on failure).
+ * gh-1249: the try/catch transport is shared with pushReworkChanges.js via
+ * tokenUsageComment.postRunTokenUsageSafely.
  */
 function postRunTokenUsage(params, ticketKey) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    tokenUsageComment.postRunTokenUsageSafely(params, ticketKey);
 }
 
 function action(params) {

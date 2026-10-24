@@ -62,6 +62,7 @@ function loadRetryMergePR(options) {
                 resolveInstructions: configLoaderModule.resolveInstructions
             },
             './common/scm.js': { createScm: function() { return scm; } },
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/autoStart.js': {
                 triggerConfiguredWorkflowForTicket: function(opts) {
                     autoStartCalls.push(opts);
@@ -242,7 +243,8 @@ suite('retryMergePR: getGitHubRepoInfo (gh-1185 characterization)', function () 
                 './common/scm.js': { createScm: function () { return {}; } },
                 './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function () { return false; } },
                 './common/tokenUsageComment.js': { postTokenUsageComments: function () {}, customParamsOf: function () { return {}; } },
-                './common/trackers.js': d4TrackersWith({ jira_remove_label: function () {}, jira_post_comment: function () {}, jira_move_to_status: function () {} })
+                './common/trackers.js': d4TrackersWith({ jira_remove_label: function () {}, jira_post_comment: function () {}, jira_move_to_status: function () {} }),
+                './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
             }), {
                 cli_execute_command: function (opts) {
                     calls.push(opts && opts.command);
@@ -366,6 +368,7 @@ suite('retryMergePR: action branch characterization (gh-980)', function() {
                     resolveInstructions: configLoaderModule.resolveInstructions
                 },
                 './common/scm.js': { createScm: function() { return scm; } },
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
                 './common/autoStart.js': {
                     triggerConfiguredWorkflowForTicket: function() { return true; }
                 },

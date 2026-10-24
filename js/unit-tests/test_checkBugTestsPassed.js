@@ -18,7 +18,10 @@ function loadCheckBugTestsPassed(mocks) {
         makeRequire({
             './config.js': configModule,
             './configLoader.js': configLoaderMock,
-            './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {}),
+            './checkBugTestsPassedHelpers.js': loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({
+                './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
+            }), {}),
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks),
@@ -547,7 +550,9 @@ suite('checkBugTestsPassed: stage-label fallback (gh-916)', function() {
 suite('checkBugTestsPassedHelpers', function() {
 
     function loadHelpers() {
-        return loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({}), {});
+        return loadModule('js/checkBugTestsPassedHelpers.js', makeRequire({
+            './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
+        }), {});
     }
 
     test('decidePostFixRoute: not finalized keeps waiting', function() {

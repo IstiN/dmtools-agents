@@ -24,7 +24,8 @@ function loadRecoverStuckDevelopment(mocks, scm) {
             createScm: function() { return scm || { listPrs: function() { return []; } }; }
         },
         './config.js': configModule,
-        './common/trackers.js': trackersWithMocks(mocks)
+        './common/trackers.js': trackersWithMocks(mocks),
+        './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
     }), mocks || {});
 }
 

@@ -2452,12 +2452,10 @@ function stampCompletionLapMarker(scm, pr, ticketKey, lapGate, lapResolutions) {
 
 function postCompletionTokenUsage(params, ticketKey) {
     // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-    // wrote outputs/*_usage.json during the agent run.
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
+    // wrote outputs/*_usage.json during the agent run. gh-1249: the
+    // try/catch transport is shared with recoverMergedPRTicket.js via
+    // tokenUsageComment.postRunTokenUsageSafely.
+    tokenUsageComment.postRunTokenUsageSafely(params, ticketKey);
 }
 
 // ── action stage helpers (gh-1011 CRAP rework) ──────────────────────────────

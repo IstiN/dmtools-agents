@@ -248,9 +248,25 @@ function postTokenUsageComments(ticketKey, options) {
     return { posted: posted, files: files, errors: errors };
 }
 
+/**
+ * The post-run token-usage step shared by pushReworkChanges.js
+ * (postCompletionTokenUsage) and recoverMergedPRTicket.js
+ * (postRunTokenUsage) — gh-1249 deduplicated the two verbatim try/catch
+ * copies. Posting is strictly best-effort: any failure logs the shared
+ * 'Failed to post token usage comments:' line and never propagates.
+ */
+function postRunTokenUsageSafely(params, ticketKey) {
+    try {
+        postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         postTokenUsageComments: postTokenUsageComments,
+        postRunTokenUsageSafely: postRunTokenUsageSafely,
         resolvePostTracker: resolvePostTracker,
         customParamsOf: customParamsOf,
         findUsageFiles: findUsageFiles,
