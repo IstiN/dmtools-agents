@@ -1,8 +1,12 @@
 /**
  * Shared helpers for the story test-automation post-actions
- * (js/postStoryTestAutomationResults.js, js/postStoryTestAutomationReview.js).
+ * (js/postStoryTestAutomationResults.js, js/postStoryTestAutomationReview.js,
+ * js/postTestAutomationResults.js, js/postMobileTestAutomationResults.js,
+ * js/postTestReworkResults.js, js/storyTestAutomationRework.js).
  *
- * Extracted in the gh-1008 CRAP split: the tracker lazy-init holder,
+ * Extracted in the gh-1008 CRAP split; extended in gh-1246 with the
+ * output-file readers, git-author config, autoStart-review trigger and
+ * test-PR creation previously duplicated across those post-actions. the tracker lazy-init holder,
  * resume-attempt markers, markdown→Jira-wiki conversion, quiet label removal
  * and the git publish/push operations. Behavior and posted strings stay
  * byte-identical to the originals — they are posted verbatim to the tracker.
@@ -77,6 +81,119 @@ function removeLabelSafely(getTracker, key, label) {
     } catch (e) {
         return false;
     }
+}
+
+/**
+ * gh-1246: output-file reader pair shared by the test-automation
+ * post-actions. readFile reads a root-relative outputs path; readOutputFile
+ * normalizes ticket-subdir and workingDir variants. Both delegate to the
+ * outputFiles module so path normalization stays in one place.
+ */
+function makeOutputFileReaders(outputFiles) {
+    function readFile(path) {
+        return outputFiles.readOutputFile(path, {});
+    }
+
+    function readOutputFile(relativePath, workingDir, ticketKey) {
+        return outputFiles.readOutputFile(relativePath, {
+            workingDir: workingDir,
+            ticketKey: ticketKey
+        });
+    }
+
+    return {
+        readFile: readFile,
+        readOutputFile: readOutputFile
+    };
+}
+
+/**
+ * gh-1246: file_read based output read used by the rework post-actions:
+ * null for missing/empty content, a warn (never a throw) on read errors.
+ */
+function readFileOrNull(path) {
+    try {
+        var content = file_read({ path: path });
+        return (content && content.trim()) ? content : null;
+    } catch (e) {
+        console.warn('Could not read file ' + path + ':', e);
+        return null;
+    }
+}
+
+/**
+ * gh-1246: configure the git author for commits (non-fatal). The runCommand
+ * dependency is called as runCommand(command, workingDir) so callers keep
+ * their own runInRepo semantics.
+ */
+function configureGitAuthor(runCommand, config, workingDir) {
+    try {
+        runCommand('git config user.name "' + config.git.authorName + '"', workingDir);
+        runCommand('git config user.email "' + config.git.authorEmail + '"', workingDir);
+    } catch (e) {
+        console.warn('Failed to configure git author:', e);
+    }
+}
+
+/**
+ * gh-1246: autoStartReview configured-workflow trigger shared by every
+ * test-automation post/rework action. Returns the trigger result, or false
+ * when not configured or the trigger threw (logged, never rethrown).
+ */
+function triggerAutoStartReviewWorkflow(autoStart, ticketKey, customParams, config, label) {
+    if (!customParams || !customParams.autoStartReview || !customParams.autoStartReviewConfigFile) {
+        return false;
+    }
+    try {
+        return autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            config: config,
+            configFile: customParams.autoStartReviewConfigFile,
+            label: label,
+            stripKeys: ['removeLabel', 'autoStartReview', 'autoStartReviewConfigFile']
+        });
+    } catch (e) {
+        console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
+        return false;
+    }
+}
+
+/**
+ * gh-1246: create (or find) the test-automation PR. gh-737: the merge bot
+ * links approved issues via 'Closes #N' — emitted by construction on every
+ * test PR. defaultBody is a caller option because the posted fallback body
+ * differs per action ('Automated test automation changes.' vs the story
+ * variant) and is posted verbatim.
+ */
+function createTestPullRequest(prHelper, runCommand, readFile, options) {
+    console.log('Creating Pull Request...');
+    return prHelper.createPullRequest({
+        title: options.title,
+        branchName: options.branchName,
+        baseBranch: options.baseBranch,
+        workingDir: options.workingDir,
+        scm: options.scm,
+        ticketKey: options.ticketKey,
+        bodyFileCandidates: ['outputs/pr_body.md', 'outputs/response.md'],
+        defaultBody: options.defaultBody,
+        runCommand: runCommand,
+        readFile: readFile
+    });
+}
+
+/**
+ * gh-1246: canonical success/failure results of a git-operations block —
+ * the log lines and result shapes are pinned by characterization tests.
+ */
+function gitOperationsSuccess(branchName) {
+    console.log('✅ Git operations completed');
+    return { success: true, branchName: branchName };
+}
+
+function gitOperationsFailure(error) {
+    console.error('Git operations failed:', error);
+    return { success: false, error: error.toString() };
 }
 
 function runInRepo(command, workingDir) {
@@ -195,16 +312,24 @@ function createGitOps(prHelper) {
     }
 
     /**
-     * Logs the working-tree state and stages the test path.
-     * Returns the `git diff --cached --stat` output (empty when nothing staged).
+     * Logs the working-tree state (gh-1190 diagnostic seam, exported so the
+     * post-actions keep their pinned test surface).
      */
-    function inspectAndStage(addPath, inspectPath, workingDir) {
+    function logStagingDiagnostics(inspectPath, workingDir) {
         try {
             var lsOutput = runInRepo('git status --short -- ' + inspectPath, workingDir) || '';
             console.log('Git status for ' + inspectPath + ':', cleanCommandOutput(lsOutput) || '(empty)');
         } catch (e) {
             console.warn('Could not list ' + inspectPath + ':', e);
         }
+    }
+
+    /**
+     * Logs the working-tree state and stages the test path.
+     * Returns the `git diff --cached --stat` output (empty when nothing staged).
+     */
+    function inspectAndStage(addPath, inspectPath, workingDir) {
+        logStagingDiagnostics(inspectPath, workingDir);
 
         console.log('Staging test path:', addPath);
         runInRepo('git add ' + addPath, workingDir);
@@ -297,12 +422,10 @@ function createGitOps(prHelper) {
             pushWithEscalation(branchName, workingDir);
             verifyRemoteBranchPresent(branchName, workingDir);
 
-            console.log('✅ Git operations completed');
-            return { success: true, branchName: branchName };
+            return gitOperationsSuccess(branchName);
 
         } catch (error) {
-            console.error('Git operations failed:', error);
-            return { success: false, error: error.toString() };
+            return gitOperationsFailure(error);
         }
     }
 
@@ -313,6 +436,7 @@ function createGitOps(prHelper) {
         syncDecision: syncDecision,
         pushBranchWithLease: pushBranchWithLease,
         publishExistingBranch: publishExistingBranch,
+        logStagingDiagnostics: logStagingDiagnostics,
         inspectAndStage: inspectAndStage,
         handleNoStagedChanges: handleNoStagedChanges,
         pushWithEscalation: pushWithEscalation,
@@ -329,6 +453,14 @@ if (typeof module !== 'undefined' && module.exports) {
         markdownToJiraWiki: markdownToJiraWiki,
         removeLabelSafely: removeLabelSafely,
         runInRepo: runInRepo,
-        createGitOps: createGitOps
+        createGitOps: createGitOps,
+        // gh-1246 dedup exports:
+        makeOutputFileReaders: makeOutputFileReaders,
+        readFileOrNull: readFileOrNull,
+        configureGitAuthor: configureGitAuthor,
+        triggerAutoStartReviewWorkflow: triggerAutoStartReviewWorkflow,
+        createTestPullRequest: createTestPullRequest,
+        gitOperationsSuccess: gitOperationsSuccess,
+        gitOperationsFailure: gitOperationsFailure
     };
 }

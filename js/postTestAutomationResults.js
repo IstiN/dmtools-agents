@@ -18,22 +18,18 @@ var outputFiles = require('./common/outputFiles.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var trackersModule = require('./common/trackers.js');
 var postHelpers = require('./postTestAutomationResultsHelpers.js');
+var shared = require('./postStoryTestAutomationShared.js');
 // Tracker-agnostic ticket ops; (re)created inside action() so no tracker exists at module load.
 var tracker = null;
 
+var gitOps = shared.createGitOps(prHelper);
+var runInRepo = shared.runInRepo;
+var outputReaders = shared.makeOutputFileReaders(outputFiles);
+var readFile = outputReaders.readFile;
+var readOutputFile = outputReaders.readOutputFile;
+
 function cleanCommandOutput(output) {
     return prHelper.cleanCommandOutput(output);
-}
-
-function readFile(path) {
-    return outputFiles.readOutputFile(path, {});
-}
-
-function readOutputFile(relativePath, workingDir, ticketKey) {
-    return outputFiles.readOutputFile(relativePath, {
-        workingDir: workingDir,
-        ticketKey: ticketKey
-    });
 }
 
 function resultBelongsToTicket(parsed, ticketKey) {
@@ -68,25 +64,8 @@ function readResultJson(workingDir, ticketKey) {
 }
 
 function markdownToJiraWiki(markdown) {
-    if (!markdown) return '';
-
-    var text = String(markdown);
-
-    text = text.replace(/```(\w+)?\n([\s\S]*?)```/g, function(_, language, code) {
-        return '{code' + (language ? ':' + language : '') + '}\n' + code.trim() + '\n{code}';
-    });
-
-    text = text
-        .replace(/^####\s+(.+)$/gm, 'h4. $1')
-        .replace(/^###\s+(.+)$/gm, 'h3. $1')
-        .replace(/^##\s+(.+)$/gm, 'h2. $1')
-        .replace(/^#\s+(.+)$/gm, 'h1. $1')
-        .replace(/^\s*-\s+/gm, '* ')
-        .replace(/\*\*([^*\n]+)\*\*/g, '*$1*')
-        .replace(/`([^`\n]+)`/g, '{{$1}}')
-        .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '[$1|$2]');
-
-    return text.trim();
+    // Canonical copy lives in postStoryTestAutomationShared.js (gh-1246).
+    return shared.markdownToJiraWiki(markdown);
 }
 
 function readJiraComment(params, workingDir, ticketKey) {
@@ -102,107 +81,15 @@ function readJiraComment(params, workingDir, ticketKey) {
     return markdownToJiraWiki(params.response || readOutputFile('response.md', workingDir, ticketKey) || '');
 }
 
-function runInRepo(command, workingDir) {
-    var args = { command: command };
-    if (workingDir) args.workingDirectory = workingDir;
-    return cli_execute_command(args);
-}
-
-function fetchRemoteBranch(branchName, workingDir) {
-    try {
-        runInRepo('git fetch origin ' + branchName, workingDir);
-        return true;
-    } catch (e) {
-        console.warn('Could not fetch remote branch origin/' + branchName + ':', e);
-        return false;
-    }
-}
-
-function revParse(ref, workingDir) {
-    try {
-        return cleanCommandOutput(runInRepo('git rev-parse ' + ref, workingDir) || '').trim();
-    } catch (e) {
-        return '';
-    }
-}
-
-function findMergeBase(left, right, workingDir) {
-    try {
-        return cleanCommandOutput(runInRepo('git merge-base ' + left + ' ' + right, workingDir) || '').trim();
-    } catch (e) {
-        return '';
-    }
-}
-
-function publishExistingBranch(branchName, workingDir) {
-    // Ensure the local remote-tracking ref is fresh before any push decision.
-    fetchRemoteBranch(branchName, workingDir);
-
-    var localSha = revParse('HEAD', workingDir);
-    var remoteSha = revParse('origin/' + branchName, workingDir);
-
-    // The identical check must stay BEFORE the merge-base call: when the
-    // branch is already in sync no `git merge-base` command may run.
-    var strategy;
-    if (localSha && remoteSha && localSha === remoteSha) {
-        strategy = 'identical';
-    } else {
-        var mergeBase = (localSha && remoteSha) ? findMergeBase('HEAD', 'origin/' + branchName, workingDir) : '';
-        // gh-1043: pure decision extracted (and unit-tested) in postHelpers —
-        // the strategies below keep the original command order and log lines.
-        strategy = postHelpers.decidePublishStrategy(localSha, remoteSha, mergeBase);
-    }
-
-    if (strategy === 'identical') {
-        console.log('Local branch already matches origin/' + branchName + '; no push needed');
-        return { success: true, noNewCommit: true };
-    }
-
-    if (strategy === 'ahead') {
-        // Local is strictly ahead of remote (fast-forward).
-        try {
-            runInRepo('git push -u origin ' + branchName, workingDir);
-            return { success: true, noNewCommit: true };
-        } catch (e) {
-            console.warn('Fast-forward push failed:', e);
-        }
-    } else if (strategy === 'behind') {
-        // Remote moved ahead while we had no local changes to keep. Adopt remote state.
-        console.log('Remote ' + branchName + ' is ahead of local branch; resetting to origin/' + branchName);
-        runInRepo('git reset --hard origin/' + branchName, workingDir);
-        return { success: true, noNewCommit: true };
-    }
-
-    // Branches diverged or no remote yet; fall back to push with refreshed lease.
-    try {
-        runInRepo('git push -u origin ' + branchName, workingDir);
-        return { success: true, noNewCommit: true };
-    } catch (pushErr) {
-        console.log('Normal push failed, retrying with --force-with-lease...');
-        try {
-            runInRepo('git push -u origin ' + branchName + ' --force-with-lease', workingDir);
-            return { success: true, noNewCommit: true };
-        } catch (forcePushErr) {
-            console.warn('Failed to publish existing branch:', forcePushErr);
-            return { success: false, error: 'No test files were written and the synced branch could not be pushed' };
-        }
-    }
-}
-
-// ── gh-1190: performGitOperations seam split ────────────────────────────────
-// Mirrors the gh-1083 action() split in this file: small side-effecting
-// clusters keep the orchestration function under the CRAP threshold. Same
-// probes/pushes in the same order, same log lines, same return shapes
-// (characterization tests: js/unit-tests/test_postTestAutomationResults.js).
+// ── gh-1190: performGitOperations seam split ────────────────────────────────────────────────────
+// The git machinery is canonical in postStoryTestAutomationShared.js
+// (gh-1246); these thin wrappers keep the exported test surface pinned by
+// test_postTestAutomationResults.js. Same probes/pushes in the same order,
+// same log lines, same return shapes.
 
 /** Diagnostic: list test files under `inspectPath` before staging (best-effort). */
 function logStagingDiagnostics(inspectPath, workingDir) {
-    try {
-        var lsOutput = runInRepo('git status --short -- ' + inspectPath, workingDir) || '';
-        console.log('Git status for ' + inspectPath + ':', cleanCommandOutput(lsOutput) || '(empty)');
-    } catch (e) {
-        console.warn('Could not list ' + inspectPath + ':', e);
-    }
+    return gitOps.logStagingDiagnostics(inspectPath, workingDir);
 }
 
 /**
@@ -213,31 +100,7 @@ function logStagingDiagnostics(inspectPath, workingDir) {
  * to be published; otherwise the remote test/<KEY> branch stays stale.
  */
 function publishNoStagedChanges(branchName, addPath, workingDir) {
-    console.warn('No new staged changes in ' + addPath + ' (files may already exist on branch)');
-    var remoteBranchExists = false;
-    try {
-        // gh-912: decide on a real refs/heads/<branch> ref line — a
-        // warning-only capture (central-mode insteadOf origin, git
-        // ≥ 2.54) must classify as "branch absent" so the push runs.
-        remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
-    } catch (lsRemoteErr) {
-        console.warn('Error checking remote branches:', lsRemoteErr);
-    }
-    if (!remoteBranchExists) {
-        console.log('No remote branch found, pushing current branch state...');
-        try {
-            runInRepo('git push -u origin ' + branchName, workingDir);
-        } catch (pushErr) {
-            console.warn('Failed to push branch:', pushErr);
-            return { success: false, error: 'No test files were written and could not push branch' };
-        }
-    } else {
-        var publishResult = publishExistingBranch(branchName, workingDir);
-        if (!publishResult.success) {
-            return publishResult;
-        }
-    }
-    return { success: true, branchName: branchName, noNewCommit: true };
+    return gitOps.handleNoStagedChanges(addPath, branchName, workingDir);
 }
 
 /**
@@ -247,83 +110,30 @@ function publishNoStagedChanges(branchName, addPath, workingDir) {
 function commitAndPushTestChanges(branchName, commitMessage, workingDir) {
     console.log('Committing...');
     runInRepo('git commit -m "' + prHelper.sanitizeCommitMessage(commitMessage) + '"', workingDir);
-
-    console.log('Pushing to remote...');
-    fetchRemoteBranch(branchName, workingDir);
-    try {
-        runInRepo('git push -u origin ' + branchName, workingDir);
-    } catch (e) {
-        console.log('Normal push failed, retrying with --force-with-lease...');
-        try {
-            runInRepo('git push -u origin ' + branchName + ' --force-with-lease', workingDir);
-        } catch (leaseErr) {
-            console.log('Force-with-lease push failed, force pushing...');
-            runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
-        }
-    }
+    gitOps.pushWithEscalation(branchName, workingDir);
 }
 
 /** Post-push verification: the branch must be a real ref on origin (gh-912). */
 function verifyBranchOnRemoteAfterPush(branchName, workingDir) {
-    var remoteBranchExists = false;
-    try {
-        // gh-912: verify the push produced a real refs/heads/<branch> ref
-        // line — stderr noise never counts as the branch existing.
-        remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
-    } catch (lsRemoteErr) {
-        console.warn('Error checking remote branches:', lsRemoteErr);
-    }
-    if (!remoteBranchExists) {
-        throw new Error('Branch not found on remote after push');
-    }
+    return gitOps.verifyRemoteBranchPresent(branchName, workingDir);
 }
 
 function performGitOperations(branchName, commitMessage, workingDir, testFilesPath) {
-    var addPath = testFilesPath || 'testing/';
-    var inspectPath = addPath.replace(/\/$/, '') || '.';
-    try {
-        // Diagnostic: list test files before staging
-        logStagingDiagnostics(inspectPath, workingDir);
-
-        // Stage the configured test path only (outputs/ is gitignored — test artifacts should not be committed)
-        console.log('Staging test path:', addPath);
-        runInRepo('git add ' + addPath, workingDir);
-
-        // Check for STAGED changes only (git status --porcelain also includes dirty submodule etc.)
-        var stagedOutput = cleanCommandOutput(runInRepo('git diff --cached --stat', workingDir) || '');
-        console.log('Staged changes:', stagedOutput || '(none)');
-
-        if (!stagedOutput || !stagedOutput.trim()) {
-            return publishNoStagedChanges(branchName, addPath, workingDir);
-        }
-
-        commitAndPushTestChanges(branchName, commitMessage, workingDir);
-        verifyBranchOnRemoteAfterPush(branchName, workingDir);
-
-        console.log('✅ Git operations completed');
-        return { success: true, branchName: branchName };
-
-    } catch (error) {
-        console.error('Git operations failed:', error);
-        return { success: false, error: error.toString() };
-    }
+    return gitOps.performGitOperations(branchName, commitMessage, workingDir, testFilesPath);
 }
 
 function createPullRequest(title, branchName, baseBranch, workingDir, scm, ticketKey) {
-    console.log('Creating Pull Request...');
-    return prHelper.createPullRequest({
+    // gh-737: merge bot links approved issues via 'Closes #N' — emitted by
+    // construction on every test-automation PR; the defaultBody fallback is
+    // posted verbatim.
+    return shared.createTestPullRequest(prHelper, runInRepo, readFile, {
+        defaultBody: 'Automated test automation changes.',
         title: title,
         branchName: branchName,
         baseBranch: baseBranch,
         workingDir: workingDir,
         scm: scm,
-        // gh-737: merge bot links approved issues via 'Closes #N' — emit it
-        // by construction on every test-automation PR.
-        ticketKey: ticketKey,
-        bodyFileCandidates: ['outputs/pr_body.md', 'outputs/response.md'],
-        defaultBody: 'Automated test automation changes.',
-        runCommand: runInRepo,
-        readFile: readFile
+        ticketKey: ticketKey
     });
 }
 
@@ -547,27 +357,7 @@ function autoStartTestReview(ticketKey, config, customParams, noCodeChanges) {
         console.log('ℹ️ autoStartReview: skipped — no test code changes to review');
         return false;
     }
-    if (!customParams || !customParams.autoStartReview || !customParams.autoStartReviewConfigFile) {
-        return false;
-    }
-
-    try {
-        return autoStart.triggerConfiguredWorkflowForTicket({
-            ticketKey: ticketKey,
-            customParams: customParams,
-            config: config,
-            configFile: customParams.autoStartReviewConfigFile,
-            label: 'pr_test_automation_review',
-            stripKeys: [
-                'removeLabel',
-                'autoStartReview',
-                'autoStartReviewConfigFile'
-            ]
-        });
-    } catch (e) {
-        console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
-        return false;
-    }
+    return shared.triggerAutoStartReviewWorkflow(autoStart, ticketKey, customParams, config, 'pr_test_automation_review');
 }
 
 // ── gh-1083: action() split — thin executors, same calls in the same order ──
