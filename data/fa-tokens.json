@@ -5167,6 +5167,15 @@
       "total": 65764,
       "cacheRead": 1468160,
       "model": "kimi-for-coding"
+    },
+    {
+      "leg": "rework",
+      "at": "2026-10-24T21:33:31Z",
+      "prompt": 98177,
+      "completion": 15280,
+      "total": 113457,
+      "cacheRead": 3411456,
+      "model": "kimi-for-coding"
     }
   ],
   "issue-1248": [
