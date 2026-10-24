@@ -1,3 +1,16 @@
+// gh-1226 (CRAP ratchet): the optional string fields copied onto the managed
+// module spec, in the original declaration order (branch, targetBranch,
+// commitMessage, tagPrefix) — pinned by the collectManagedSubmodules tests.
+function _managedModuleSpec(value) {
+    var module = { path: String(value.path) };
+    ['branch', 'targetBranch', 'commitMessage', 'tagPrefix'].forEach(function (key) {
+        if (value[key] !== undefined && value[key] !== null) {
+            module[key] = String(value[key]);
+        }
+    });
+    return module;
+}
+
 function addManySubmodules(target, value) {
     if (!value) return;
     if (typeof value === 'string') {
@@ -7,20 +20,7 @@ function addManySubmodules(target, value) {
             addManySubmodules(target, item);
         });
     } else if (typeof value === 'object' && value.path !== undefined && value.path !== null) {
-        var module = { path: String(value.path) };
-        if (value.branch !== undefined && value.branch !== null) {
-            module.branch = String(value.branch);
-        }
-        if (value.targetBranch !== undefined && value.targetBranch !== null) {
-            module.targetBranch = String(value.targetBranch);
-        }
-        if (value.commitMessage !== undefined && value.commitMessage !== null) {
-            module.commitMessage = String(value.commitMessage);
-        }
-        if (value.tagPrefix !== undefined && value.tagPrefix !== null) {
-            module.tagPrefix = String(value.tagPrefix);
-        }
-        target.push(module);
+        target.push(_managedModuleSpec(value));
     }
 }
 
