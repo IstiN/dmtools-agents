@@ -2,6 +2,15 @@
  * Unit tests for js/common/feedbackLoop.js
  */
 
+// gh-122: bare module loader for the pure missingResponse helpers (no file/exec side effects expected).
+function feedbackLoopModule() {
+    return loadModule('js/common/feedbackLoop.js', null, {
+        file_read: function() { throw new Error('unexpected file_read in pure-helper test'); },
+        file_write: function() {},
+        cli_execute_command: function() { return ''; }
+    });
+}
+
 function loadFeedbackLoop(mocks) {
     var files = {};
     var commands = [];
@@ -29,6 +38,71 @@ function loadFeedbackLoop(mocks) {
     );
     return { mod: mod, files: files, commands: commands };
 }
+
+// ── gh-122: extracted missingResponse helpers (tests written first, then the extraction) ──
+
+suite('feedbackLoop — extracted missingResponse helpers (gh-122)', function() {
+
+    test('missingResponseScoped extracts the scoped config or an empty object', function() {
+        assert.deepEqual(feedbackLoopModule().missingResponseScoped({ missingResponse: { a: 1 } }), { a: 1 });
+        assert.deepEqual(feedbackLoopModule().missingResponseScoped({}), {});
+        assert.deepEqual(feedbackLoopModule().missingResponseScoped({ missingResponse: 'junk' }), {},
+            'a non-object scoped block is ignored');
+        assert.deepEqual(feedbackLoopModule().missingResponseScoped({ missingResponse: null }), {},
+            'a null scoped block is ignored');
+    });
+
+    test('missingResponseDisabled: section opt-out wins over force, generic switch does not', function() {
+        var fb = feedbackLoopModule();
+        assert.equal(fb.missingResponseDisabled({ enabled: false }, { force: true }, {}), true,
+            'explicit missingResponse.enabled=false opts out even under force');
+        assert.equal(fb.missingResponseDisabled({}, {}, {}), true,
+            'generic feedbackLoop not enabled → disabled');
+        assert.equal(fb.missingResponseDisabled({}, { force: true }, {}), false,
+            'force bypasses the generic enablement switch');
+        assert.equal(fb.missingResponseDisabled({}, {}, { feedbackLoop: { enabled: true } }), false,
+            'an enabled generic switch lets the resume proceed');
+    });
+
+    test('missingResponseTimeoutSeconds falls back to the default on unusable values', function() {
+        assert.equal(feedbackLoopModule().missingResponseTimeoutSeconds({ timeoutSeconds: 600 }), 600);
+        assert.equal(feedbackLoopModule().missingResponseTimeoutSeconds({ timeoutSeconds: '900' }), 900);
+        assert.equal(feedbackLoopModule().missingResponseTimeoutSeconds({}), 2400);
+        assert.equal(feedbackLoopModule().missingResponseTimeoutSeconds({ timeoutSeconds: 0 }), 2400);
+        assert.equal(feedbackLoopModule().missingResponseTimeoutSeconds({ timeoutSeconds: -5 }), 2400);
+        assert.equal(feedbackLoopModule().missingResponseTimeoutSeconds({ timeoutSeconds: 'abc' }), 2400);
+    });
+
+    test('missingResponseResumeOptions assembles the bounded-resume invocation', function() {
+        var options = {
+            ticketKey: 'TS-9',
+            error: 'boom',
+            promptOverride: 'custom prompt',
+            extra: 'ignored'
+        };
+        var resumeOptions = feedbackLoopModule().missingResponseResumeOptions(options, { forced: true }, 300);
+        assert.deepEqual(resumeOptions, {
+            ticketKey: 'TS-9',
+            customParams: { forced: true },
+            section: 'missingResponse',
+            stage: 'missing_response',
+            error: 'boom',
+            promptOverride: 'custom prompt',
+            timeoutSeconds: 300
+        });
+    });
+
+    test('missingResponseResumeOptions defaults the prompt to the built missing-response text', function() {
+        var resumeOptions = feedbackLoopModule().missingResponseResumeOptions(
+            { ticketKey: 'TS-10', error: undefined }, {}, 2400);
+        assert.equal(resumeOptions.error, '');
+        assert.contains(resumeOptions.promptOverride, 'Ticket: TS-10');
+        assert.contains(resumeOptions.promptOverride, 'outputs/response.md');
+        assert.equal(resumeOptions.stage, 'missing_response');
+        assert.equal(resumeOptions.timeoutSeconds, 2400);
+    });
+
+});
 
 suite('feedbackLoop helper', function() {
 

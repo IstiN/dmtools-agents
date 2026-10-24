@@ -202,6 +202,85 @@ suite('configLoader.mergeProjectConfig', function() {
 
 });
 
+// ── gh-122: extracted merge helpers (tests written first, then the extraction) ──
+
+suite('configLoader — extracted merge helpers (gh-122)', function() {
+
+    test('isMergeableObject accepts plain objects and rejects arrays/null/scalars', function() {
+        assert.equal(configLoaderModule.isMergeableObject({}), true);
+        assert.equal(configLoaderModule.isMergeableObject({ a: 1 }), true);
+        assert.equal(configLoaderModule.isMergeableObject([]), false, 'arrays are replaced, not merged');
+        assert.equal(configLoaderModule.isMergeableObject(null), false);
+        assert.equal(configLoaderModule.isMergeableObject(undefined), false);
+        assert.equal(configLoaderModule.isMergeableObject('x'), false);
+        assert.equal(configLoaderModule.isMergeableObject(5), false);
+        assert.equal(configLoaderModule.isMergeableObject(true), false);
+    });
+
+    test('mergeKeyValues deep-merges only when both sides are mergeable objects', function() {
+        assert.deepEqual(configLoaderModule.mergeKeyValues({ x: 1 }, { y: 2 }), { x: 1, y: 2 },
+            'both plain objects → recursive merge');
+        assert.deepEqual(configLoaderModule.mergeKeyValues('scalar', { y: 2 }), { y: 2 },
+            'object source replaces a scalar target');
+        assert.deepEqual(configLoaderModule.mergeKeyValues({ x: 1 }, [1, 2]), [1, 2],
+            'array source replaces an object target');
+        assert.equal(configLoaderModule.mergeKeyValues({ x: 1 }, 'scalar'), 'scalar',
+            'scalar source replaces an object target');
+        assert.equal(configLoaderModule.mergeKeyValues({ x: 1 }, null), null,
+            'null source replaces');
+    });
+
+    test('restoreWipedJiraSections restores defaults and applies the questions replacement', function() {
+        var result = { jira: { statuses: null, issueTypes: null, questions: { fetchJql: 'custom' } } };
+        var overrides = { jira: { questions: { fetchJql: 'custom' } } };
+        configLoaderModule.restoreWipedJiraSections(result, configLoaderModule.DEFAULTS, overrides);
+
+        assert.equal(result.jira.statuses, configLoaderModule.DEFAULTS.jira.statuses, 'wiped statuses restored');
+        assert.equal(result.jira.issueTypes, configLoaderModule.DEFAULTS.jira.issueTypes, 'wiped issueTypes restored');
+        assert.deepEqual(result.jira.questions, { fetchJql: 'custom' }, 'questions fully replaced');
+    });
+
+    test('restoreWipedJiraSections is a no-op without a jira override', function() {
+        var result = { jira: { statuses: null } };
+        configLoaderModule.restoreWipedJiraSections(result, configLoaderModule.DEFAULTS, {});
+        assert.equal(result.jira.statuses, null, 'nothing restored — overrides.jira absent');
+    });
+
+    test('applyFullReplaceRules applies !== undefined semantics', function() {
+        var result = { smRules: 'old', smMergeRules: 'old' };
+        configLoaderModule.applyFullReplaceRules(result, { smRules: null, smMergeRules: [{ jql: 'x' }] });
+        assert.equal(result.smRules, null, 'explicit null replaces');
+        assert.deepEqual(result.smMergeRules, [{ jql: 'x' }]);
+
+        var untouched = { smRules: 'old', smMergeRules: 'old' };
+        configLoaderModule.applyFullReplaceRules(untouched, {});
+        assert.equal(untouched.smRules, 'old', 'undefined override leaves the value alone');
+        assert.equal(untouched.smMergeRules, 'old');
+    });
+
+    test('applyFullReplaceSections replaces only the provided truthy sections', function() {
+        var result = {
+            labels: 'old', additionalInstructions: 'old', instructionOverrides: 'old',
+            cliPrompts: 'old', cliPromptOverrides: 'old', cliPromptsByTracker: 'old',
+            agentParamPatches: 'old', jobParamPatches: 'old'
+        };
+        configLoaderModule.applyFullReplaceSections(result, {
+            labels: { ONLY: 'one' },
+            cliPrompts: { agent: ['p.md'] },
+            jobParamPatches: { wiki: { a: 1 } }
+        });
+        assert.deepEqual(result.labels, { ONLY: 'one' });
+        assert.deepEqual(result.cliPrompts, { agent: ['p.md'] });
+        assert.deepEqual(result.jobParamPatches, { wiki: { a: 1 } });
+        assert.equal(result.additionalInstructions, 'old', 'not provided → untouched');
+        assert.equal(result.instructionOverrides, 'old');
+        assert.equal(result.cliPromptOverrides, 'old');
+        assert.equal(result.cliPromptsByTracker, 'old');
+        assert.equal(result.agentParamPatches, 'old');
+    });
+
+});
+
 // ── loadProjectConfig ─────────────────────────────────────────────────────────
 
 suite('configLoader.loadProjectConfig', function() {

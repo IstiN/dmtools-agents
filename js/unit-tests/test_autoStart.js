@@ -1182,6 +1182,67 @@ suite('autoStart — collectActiveWorkflowRuns characterization (gh-122)', funct
 
 });
 
+// ── gh-122: extracted pure helpers (tests written first, then the extraction) ──
+
+suite('autoStart — extracted summary helpers (gh-122)', function() {
+
+    test('workflowRunTitle resolves the display chain with the workflow-run default', function() {
+        assert.equal(autoStartModule().workflowRunTitle({ display_title: 'T' }), 'T');
+        assert.equal(autoStartModule().workflowRunTitle({ displayTitle: 'T2' }), 'T2');
+        assert.equal(autoStartModule().workflowRunTitle({ name: 'N' }), 'N');
+        assert.equal(autoStartModule().workflowRunTitle({}), 'workflow run');
+        assert.equal(autoStartModule().workflowRunTitle(null), 'workflow run');
+    });
+
+    test('workflowRunStatus prefers the run status, then the fallback, then active', function() {
+        assert.equal(autoStartModule().workflowRunStatus({ status: 'queued' }, 'waiting'), 'queued');
+        assert.equal(autoStartModule().workflowRunStatus({}, 'waiting'), 'waiting');
+        assert.equal(autoStartModule().workflowRunStatus({}, undefined), 'active');
+        assert.equal(autoStartModule().workflowRunStatus({}, null), 'active');
+    });
+
+    test('workflowRunId resolves the identifier fallback chain', function() {
+        assert.equal(autoStartModule().workflowRunId({ id: 1, databaseId: 2 }), 1);
+        assert.equal(autoStartModule().workflowRunId({ databaseId: 2, run_number: 3 }), 2);
+        assert.equal(autoStartModule().workflowRunId({ run_number: 3, runNumber: 4 }), 3);
+        assert.equal(autoStartModule().workflowRunId({ runNumber: 4 }), 4);
+        assert.equal(autoStartModule().workflowRunId({}), '?');
+    });
+
+    test('workflowRunUrl resolves the url alias chain', function() {
+        assert.equal(autoStartModule().workflowRunUrl({ html_url: 'u1' }), 'u1');
+        assert.equal(autoStartModule().workflowRunUrl({ htmlUrl: 'u2' }), 'u2');
+        assert.equal(autoStartModule().workflowRunUrl({ url: 'u3' }), 'u3');
+        assert.equal(autoStartModule().workflowRunUrl({}), '');
+    });
+
+    test('activeRunKey prefers ids and falls back to title:index:status', function() {
+        assert.equal(autoStartModule().activeRunKey({ id: 7 }, 'queued', 0), 7);
+        assert.equal(autoStartModule().activeRunKey({ databaseId: 8 }, 'queued', 0), 8);
+        assert.equal(autoStartModule().activeRunKey({ run_number: 9 }, 'queued', 0), 9);
+        assert.equal(autoStartModule().activeRunKey({ display_title: 'T' }, 'queued', 2), 'T:2:queued');
+        assert.equal(autoStartModule().activeRunKey({ name: 'N' }, 'waiting', 3), 'N:3:waiting');
+        assert.equal(autoStartModule().activeRunKey({}, 'pending', 1), ':1:pending');
+    });
+
+    test('collectActiveRunsForStatus appends unique non-stale runs and returns how many', function() {
+        var seen = {};
+        var summaries = [];
+        var fresh = new Date(Date.now() - 60000).toISOString();
+        var stale = { id: 1, display_title: 'stale', status: 'queued', updated_at: '2020-01-01T00:00:00Z' };
+        var first = { id: 2, display_title: 'first', status: 'queued', updated_at: fresh };
+        var dupe = { id: 2, display_title: 'first again', status: 'queued', updated_at: fresh };
+
+        assert.equal(autoStartModule().collectActiveRunsForStatus([stale, first, dupe, null], 'queued', seen, summaries), 2,
+            'stale skipped, first added, duplicate skipped, null counted as anonymous');
+        assert.deepEqual(summaries, ['first [queued, age 1m, id 2]', 'workflow run [queued, age ?, id ?]']);
+        assert.equal(autoStartModule().collectActiveRunsForStatus([first], 'queued', seen, summaries), 0,
+            'a run already in seen is never added twice');
+        assert.equal(summaries.length, 2);
+    });
+
+});
+
 // ── gh-1183 test scaffolding ──
 
 function autoStartModule() {

@@ -98,13 +98,29 @@ function workflowRunAge(run) {
     return ageHours + 'h' + (remainingMinutes ? ' ' + remainingMinutes + 'm' : '');
 }
 
+function workflowRunTitle(run) {
+    return workflowRunDisplayName(run) || 'workflow run';
+}
+
+function workflowRunStatus(run, fallbackStatus) {
+    return run.status || fallbackStatus || 'active';
+}
+
+function workflowRunId(run) {
+    return run.id || run.databaseId || run.run_number || run.runNumber || '?';
+}
+
+function workflowRunUrl(run) {
+    return run.html_url || run.htmlUrl || run.url || '';
+}
+
 function formatWorkflowRunSummary(run, fallbackStatus) {
     run = run || {};
-    var title = run.display_title || run.displayTitle || run.name || 'workflow run';
-    var status = run.status || fallbackStatus || 'active';
+    var title = workflowRunTitle(run);
+    var status = workflowRunStatus(run, fallbackStatus);
     var age = workflowRunAge(run);
-    var id = run.id || run.databaseId || run.run_number || run.runNumber || '?';
-    var url = run.html_url || run.htmlUrl || run.url || '';
+    var id = workflowRunId(run);
+    var url = workflowRunUrl(run);
     return title + ' [' + status + ', age ' + (age || '?') + ', id ' + id + ']' + (url ? ' ' + url : '');
 }
 
@@ -112,6 +128,25 @@ function normalizePositiveInt(value) {
     if (typeof value !== 'number' || !isFinite(value)) return null;
     var normalized = Math.floor(value);
     return normalized > 0 ? normalized : null;
+}
+
+function activeRunKey(run, status, index) {
+    return run.id || run.databaseId || run.run_number ||
+        (workflowRunDisplayName(run) + ':' + index + ':' + status);
+}
+
+function collectActiveRunsForStatus(runs, status, seen, summaries) {
+    var added = 0;
+    for (var j = 0; j < runs.length; j++) {
+        var run = runs[j] || {};
+        if (isStaleNonRunningWorkflowRun(run, status)) continue;
+        var id = activeRunKey(run, status, j);
+        if (seen[id]) continue;
+        seen[id] = true;
+        added += 1;
+        summaries.push(formatWorkflowRunSummary(run, status));
+    }
+    return added;
 }
 
 function collectActiveWorkflowRuns(scm, workflowFile, owner, repo) {
@@ -128,18 +163,7 @@ function collectActiveWorkflowRuns(scm, workflowFile, owner, repo) {
             console.warn('autoStart: could not count ' + statuses[i] + ' workflow runs:', e.message || e);
             continue;
         }
-
-        var runs = parseWorkflowRuns(runsRaw);
-        for (var j = 0; j < runs.length; j++) {
-            var run = runs[j] || {};
-            if (isStaleNonRunningWorkflowRun(run, statuses[i])) continue;
-            var id = run.id || run.databaseId || run.run_number || ((run.display_title || run.displayTitle || run.name || '') + ':' + j + ':' + statuses[i]);
-            if (!seen[id]) {
-                seen[id] = true;
-                count += 1;
-                summaries.push(formatWorkflowRunSummary(run, statuses[i]));
-            }
-        }
+        count += collectActiveRunsForStatus(parseWorkflowRuns(runsRaw), statuses[i], seen, summaries);
     }
 
     return { count: count, summaries: summaries };
@@ -463,6 +487,12 @@ module.exports = {
     workflowRunDisplayName: workflowRunDisplayName,
     workflowRunMatchesTicket: workflowRunMatchesTicket,
     formatWorkflowRunSummary: formatWorkflowRunSummary,
+    workflowRunTitle: workflowRunTitle,
+    workflowRunStatus: workflowRunStatus,
+    workflowRunId: workflowRunId,
+    workflowRunUrl: workflowRunUrl,
+    activeRunKey: activeRunKey,
+    collectActiveRunsForStatus: collectActiveRunsForStatus,
     duplicateRunNotice: duplicateRunNotice,
     findActiveTargetRun: findActiveTargetRun,
     buildWorkflowDispatchPayload: buildWorkflowDispatchPayload,
