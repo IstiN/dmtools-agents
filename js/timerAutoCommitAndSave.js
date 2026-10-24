@@ -363,10 +363,9 @@ function autoCommitAndPush(customParams, ticketKey, params) {
 
 /** cacheToReleases tag/name templates, when the timer is configured to publish. */
 function releaseTemplatesOf(customParams) {
-    var cacheToReleases = customParams.cacheToReleases || {};
     return {
-        tagTemplate: cacheToReleases.releaseTagTemplate,
-        nameTemplate: cacheToReleases.releaseNameTemplate
+        tagTemplate: customParams.cacheToReleases && customParams.cacheToReleases.releaseTagTemplate,
+        nameTemplate: customParams.cacheToReleases && customParams.cacheToReleases.releaseNameTemplate
     };
 }
 
