@@ -125,6 +125,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
     var mod = loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -139,7 +140,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule({}),
             './cacheToReleases.js': { cacheSessionLog: noop },
-            './common/tokenUsageComment.js': { postTokenUsageComments: noop }
+            './common/tokenUsageComment.js': { postTokenUsageComments: noop, postRunTokenUsageSafely: noop, customParamsOf: noop }
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
@@ -526,6 +527,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -550,7 +552,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
             './common/outputFiles.js': { readOutputFile: function() { return null; } },
             './common/trackers.js': makeTrackersModule({}),
             './cacheToReleases.js': {},
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; } }
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
@@ -930,6 +932,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
     var mod = loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -951,7 +954,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; } }
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
@@ -1295,6 +1298,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
             './forkCheckout.js': forkCheckoutModule,
@@ -1314,7 +1318,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; } }
         ,
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
@@ -3466,6 +3470,7 @@ suite('pushReworkChanges.readInputViolations (gh-1119)', function() {
         return loadModule(
             'js/pushReworkChanges.js',
             makeRequire({
+                './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
                 './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
                 './common/gitStaging.js': gitStagingModule,
                 './forkCheckout.js': forkCheckoutModule,
@@ -3480,7 +3485,7 @@ suite('pushReworkChanges.readInputViolations (gh-1119)', function() {
                 './common/outputFiles.js': { readOutputFile: function() { return null; } },
                 './common/trackers.js': makeTrackersModule({}),
                 './cacheToReleases.js': {},
-                './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+                './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; } },
                 './common/ticketKeyShapes.js': ticketKeyShapesModule,
                 './common/commentMarkup.js': commentMarkupModule,
                 './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
@@ -3531,6 +3536,7 @@ suite('pushReworkChanges.runOwnedViolationsGate (gh-1119 AC6b / UT-8 wiring)', f
         return loadModule(
             'js/pushReworkChanges.js',
             makeRequire({
+                './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
                 './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
                 './common/gitStaging.js': gitStagingModule,
                 './forkCheckout.js': forkCheckoutModule,
@@ -3545,7 +3551,7 @@ suite('pushReworkChanges.runOwnedViolationsGate (gh-1119 AC6b / UT-8 wiring)', f
                 './common/outputFiles.js': { readOutputFile: function() { return null; } },
                 './common/trackers.js': makeTrackersModule({}),
                 './cacheToReleases.js': {},
-                './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+                './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; } },
                 './common/ticketKeyShapes.js': ticketKeyShapesModule,
                 './common/commentMarkup.js': commentMarkupModule,
                 './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
@@ -3643,6 +3649,7 @@ function makeOwnedGateFileRead(owned) {
 function loadCommitAndPush1082(mocks, moduleOverrides) {
     return loadModule(
         'js/pushReworkChanges.js',
+        './common/labelList.js': loadModule('js/common/labelList.js', makeRequire({}), {}),
         makeRequire(Object.assign({
             './common/toolchainSummary.js': { withToolchainLine: stubToolchainLine },
             './common/gitStaging.js': gitStagingModule,
@@ -3667,7 +3674,7 @@ function loadCommitAndPush1082(mocks, moduleOverrides) {
             './common/outputFiles.js': { readOutputFile: function() { return null; } },
             './common/trackers.js': makeTrackersModule({}),
             './cacheToReleases.js': {},
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; } },
             './common/ticketKeyShapes.js': ticketKeyShapesModule,
             './common/commentMarkup.js': commentMarkupModule,
             './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js')

@@ -22,7 +22,7 @@ function loadCheckBugTestsPassed(mocks) {
                 './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {})
             }), {}),
             './common/prLookup.js': loadModule('js/common/prLookup.js', makeRequire({}), {}),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; }, },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks),
             './common/scm.js': mocks.__scm || {

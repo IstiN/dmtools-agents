@@ -18,7 +18,7 @@ function loadCheckStoryTestsPassed(mocks) {
         makeRequire({
             './config.js': configModule,
             './configLoader.js': configLoaderMock,
-            './common/tokenUsageComment.js': mocks.tokenUsage || { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': mocks.tokenUsage || { postTokenUsageComments: function() {}, postRunTokenUsageSafely: function() { return undefined; }, customParamsOf: function(p) { return (p && p.customParams) || {}; } },
             './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'),
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
                 '../config.js': configModule,
@@ -528,7 +528,7 @@ suite('checkStoryTestsPassed: characterization (gh-1080 CRAP split)', function()
             jira_move_to_status: function() {},
             jira_post_comment: function() {},
             jira_remove_label: function() {},
-            tokenUsage: { postTokenUsageComments: function() { throw new Error('no ledger'); } }
+            tokenUsage: { postTokenUsageComments: function() { throw new Error('no ledger'); }, postRunTokenUsageSafely: function() { throw new Error('no ledger'); } }
         });
 
         var result = module.action({
