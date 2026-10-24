@@ -1090,3 +1090,59 @@ suite('mergeStoryTestAutomationPR: action/attemptMerge outcome mapping (gh-1186)
         assert.deepEqual(labelsAdded, ['test_pr_rework_needed']);
     });
 });
+
+// ── gh-1229 characterization: findPRForStory contract pinned before helper
+//    extraction (direct scm stubs, no tracker needed). ──
+suite('mergeStoryTestAutomationPR: findPRForStory contract (gh-1229)', function() {
+    function modWithScm(scm) {
+        var m = loadMergeStoryTestAutomationPR({});
+        return { find: function() { return m.findPRForStory(scm, 'TS-1'); } };
+    }
+
+    test('an open PR on test/<storyKey> (not merged) wins first', function() {
+        var open = { number: 7, head: { ref: 'test/TS-1' } };
+        var closedSeen = false;
+        var hit = modWithScm({
+            listPrs: function(state) {
+                if (state === 'open') return [{ number: 1, head: { ref: 'test/other' } }, open];
+                closedSeen = true;
+                return [];
+            }
+        }).find();
+        assert.deepEqual(hit, { pr: open, merged: false });
+        assert.equal(closedSeen, false, 'the closed list must not be scanned when an open PR matches');
+    });
+
+    test('a merged closed PR on test/<storyKey> is reported as merged', function() {
+        var merged = { number: 3, head: { ref: 'test/TS-1' }, merged_at: 't' };
+        var hit = modWithScm({
+            listPrs: function(state) {
+                return state === 'open' ? [] : [{ number: 2, head: { ref: 'test/other' }, merged_at: 'x' }, merged];
+            }
+        }).find();
+        assert.deepEqual(hit, { pr: merged, merged: true });
+    });
+
+    test('closed PRs on the branch that are not merged never count as merged', function() {
+        var hit = modWithScm({
+            listPrs: function(state) {
+                return state === 'open' ? [] : [{ number: 4, head: { ref: 'test/TS-1' }, merged_at: null }];
+            }
+        }).find();
+        assert.equal(hit, null);
+    });
+
+    test('an scm blow-up degrades to null instead of failing the action', function() {
+        var hit = modWithScm({
+            listPrs: function() { throw new Error('scm down'); }
+        }).find();
+        assert.equal(hit, null);
+    });
+
+    test('a non-array listing is tolerated as empty', function() {
+        var hit = modWithScm({
+            listPrs: function() { return null; }
+        }).find();
+        assert.equal(hit, null);
+    });
+});

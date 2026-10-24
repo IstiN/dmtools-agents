@@ -1086,3 +1086,93 @@ suite('timerAutoCommitAndSave — pure helpers (gh-119)', function() {
         assert.equal(mod.autoSaveCommitMessageOverride({ autoSaveCommitMessage: '' }), null);
     });
 });
+
+// ── gh-1229 characterization: saveSessionArtefact edge branches pinned before
+//    helper extraction (direct calls with the shared loadTimer mocks). ──
+suite('timerAutoCommitAndSave — saveSessionArtefact edges (gh-1229)', function() {
+
+    function artefactParams(output, extra) {
+        return {
+            ticket: { key: 'PROJ-9' },
+            jobParams: {
+                customParams: Object.assign({
+                    artefactRepository: { owner: 'Org', repo: 'repo' },
+                    cacheToReleases: { releaseTagTemplate: 'ai-{ticketKey}-snap', releaseNameTemplate: 'Snap {ticketKey}' }
+                }, extra || {}),
+                metadata: { contextId: 'ctx' }
+            },
+            currentCliOutput: output
+        };
+    }
+
+    test('whitespace-only CLI output is skipped like an empty one', function() {
+        var writes = [];
+        var m = loadTimer({
+            cli_execute_command: function() { return ''; },
+            file_write: function(a) { writes.push(a); },
+            file_delete: function() {}
+        });
+        m.saveSessionArtefact(artefactParams('   \n\t  '), artefactParams('   \n\t  ').jobParams.customParams, 'PROJ-9', 'ctx', '   \n\t  ');
+        assert.equal(writes.length, 0, 'no snapshot file written for blank output');
+        assert.equal(m._uploadRawFileCalls.length, 0, 'nothing uploaded for blank output');
+    });
+
+    test('a failed snapshot write skips the upload and the cleanup entirely', function() {
+        var deletes = [];
+        var m = loadTimer({
+            cli_execute_command: function() { return ''; },
+            file_write: function() { throw new Error('disk full'); },
+            file_delete: function(a) { deletes.push(a); }
+        }, {
+            uploadRawFileImpl: function() {
+                throw new Error('upload must not run after a failed write');
+            }
+        });
+        var p = artefactParams('some output');
+        m.saveSessionArtefact(p, p.jobParams.customParams, 'PROJ-9', 'ctx', 'some output');
+        assert.equal(deletes.length, 0, 'no cleanup when nothing was written');
+        assert.equal(m._uploadRawFileCalls.length, 0);
+    });
+
+    test('a failed upload still cleans the temp snapshot file up', function() {
+        var deletes = [];
+        var m = loadTimer({
+            cli_execute_command: function() { return ''; },
+            file_write: function() {},
+            file_delete: function(a) { deletes.push(a); }
+        }, {
+            uploadRawFileImpl: function() {
+                return { success: false, error: 'HTTP 401 Unauthorized' };
+            }
+        });
+        var p = artefactParams('some output');
+        m.saveSessionArtefact(p, p.jobParams.customParams, 'PROJ-9', 'ctx', 'some output');
+        assert.equal(deletes.length, 1, 'temp file removed even after a failed upload');
+    });
+
+    test('cacheToReleases templates flow into buildTag and the upload releaseConfig', function() {
+        var m = loadTimer({
+            cli_execute_command: function() { return ''; },
+            file_write: function() {},
+            file_delete: function() {}
+        });
+        var p = artefactParams('out');
+        m.saveSessionArtefact(p, p.jobParams.customParams, 'PROJ-9', 'ctx', 'out');
+        assert.equal(m._uploadRawFileCalls.length, 1);
+        var call = m._uploadRawFileCalls[0];
+        assert.equal(call.assetName, 'ctx-session.log');
+        assert.deepEqual(call.releaseConfig, {
+            tagTemplate: 'ai-{ticketKey}-snap',
+            nameTemplate: 'Snap {ticketKey}'
+        });
+    });
+
+    test('releaseTemplatesOf defaults to undefined templates without cacheToReleases', function() {
+        var m = loadTimer({});
+        assert.deepEqual(m.releaseTemplatesOf({}), { tagTemplate: undefined, nameTemplate: undefined });
+        assert.deepEqual(
+            m.releaseTemplatesOf({ cacheToReleases: { releaseTagTemplate: 't', releaseNameTemplate: 'n' } }),
+            { tagTemplate: 't', nameTemplate: 'n' }
+        );
+    });
+});
