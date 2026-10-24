@@ -282,20 +282,16 @@ function _newestAllowedMarker(comments, allow) {
     return found;
 }
 
-// The author-login spelling of the verdict markers (reviewVerdicts'
-// commentAuthorLogin/trustedLogin, kept local — no new module dep):
-// `user.login || author.login || author.name`, lowercased, [bot] suffix
-// stripped on both sides of the comparison.
+// The author-login spelling of the verdict markers — canonical in
+// machineAuthor.commentAuthorLogin/trustedLogin (gh-1248: one copy, the
+// marker modules delegate): `user.login || author.login || author.name`,
+// lowercased, [bot] suffix stripped on both sides of the comparison.
 function _commentAuthorLogin(item) {
-    if (!item) return null;
-    var u = item.user || item.author;
-    if (!u) return null;
-    var login = u.login || u.name;
-    return login ? String(login).toLowerCase() : null;
+    return machineAuthorModule.commentAuthorLogin(item);
 }
 
 function _trustedLogin(login) {
-    return String(login || '').toLowerCase().replace(/\[bot\]$/i, '');
+    return machineAuthorModule.trustedLogin(login);
 }
 
 function _authorAllowed(item, allow) {
