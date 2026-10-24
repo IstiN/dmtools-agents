@@ -27,7 +27,7 @@ function loadTestAutomationSetup(mocks) {
 
     return loadModule(
         'js/preCliTestAutomationSetup.js',
-        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+        makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js', null, allMocks),
             './configLoader.js': { loadProjectConfig: function() { return cfg; } },
             './config.js': configModule,
             './fetchLinkedBugsToInput.js': fetchLinkedBugs,

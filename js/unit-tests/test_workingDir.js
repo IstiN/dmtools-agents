@@ -516,7 +516,6 @@ suite('preCliTestAutomationSetup > workingDir', function() {
                 './common/pullRequest.js': PR_HELPER_REAL,
                 './fetchLinkedBugsToInput.js': { action: function() {} },
                 'branchSetup.js': loadModule('js/common/branchSetup.js'),
-            ,
             './common/commentMarkup.js': commentMarkupModule,
         }, { './common/trackers.js': trackersWith(_m) })), _m); })({
                 cli_execute_command: mockCli,
