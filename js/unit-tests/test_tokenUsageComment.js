@@ -227,17 +227,26 @@ suite('tokenUsageComment call sites pass the job context (agents#854)', function
     test('every action call passes a tracker or customParams, so ADO/GitHub runs never fall back to Jira', function() {
         var offenders = [];
         var seen = 0;
+        // gh-1250: direct postTokenUsageComments call sites dropped (24 → 19)
+        // as callers moved to the shared postTokenUsageCommentsSafely wrapper,
+        // so the corpus guard counts both call shapes (each must still carry a
+        // tracker or customParams).
+        var patterns = [
+            /tokenUsageComment\.postTokenUsageComments\(([^;]*?)\);/g,
+            /tokenUsageComment\.postTokenUsageCommentsSafely\(([^;]*?)\);/g
+        ];
         jsFiles().forEach(function(path) {
             var src = file_read({ path: path });
             if (!src) return;
-            var re = /tokenUsageComment\.postTokenUsageComments\(([^;]*?)\);/g;
-            var m;
-            while ((m = re.exec(src)) !== null) {
-                seen++;
-                if (m[1].indexOf('tracker') === -1 && m[1].indexOf('customParams') === -1) {
-                    offenders.push(path + ': ' + m[0].substring(0, 100));
+            patterns.forEach(function(re) {
+                var m;
+                while ((m = re.exec(src)) !== null) {
+                    seen++;
+                    if (m[1].indexOf('tracker') === -1 && m[1].indexOf('customParams') === -1) {
+                        offenders.push(path + ': ' + m[0].substring(0, 100));
+                    }
                 }
-            }
+            });
         });
         assert.ok(seen > 20, 'expected many call sites, saw ' + seen);
         assert.deepEqual(offenders, [], 'call sites without tracker/customParams:\n' + offenders.join('\n'));

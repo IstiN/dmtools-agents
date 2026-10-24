@@ -164,10 +164,18 @@ function loadFinalizeBugFixBatchMerge(mocks) {
         jira_post_comment: function(args) { comments.push(args); }
     }, mocks);
 
+    // wave2d3: the module routes transitions through the tracker layer — the
+    // real trackers module (with the per-test jira_* mocks) is required.
+    var realTrackers = loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), allMocks);
+
     var mod = loadModule(
         'js/finalizeBugFixBatchMerge.js',
         makeRequire({
             './config.js': configModule,
+            './common/trackers.js': realTrackers,
             './prepareBugFixBatchContext.js': mocks.batchContextStub || { findBugsInEpic: function() { return []; } }
         }),
         allMocks
@@ -210,7 +218,9 @@ suite('common/bugFixBatchContext require paths (gh-823)', function() {
         var cfgSpecs = specs.filter(function(s) { return s.indexOf('configLoader') !== -1; });
         assert.deepEqual(cfgSpecs, ['../configLoader.js'],
             'configLoader must be required one directory up, saw: ' + JSON.stringify(specs));
-        assert.ok(!file_read({ path: 'js/common/configLoader.js' }),
+        var nested = null;
+        try { nested = file_read({ path: 'js/common/configLoader.js' }); } catch (e) { nested = null; }
+        assert.ok(!nested,
             'js/common/configLoader.js must not exist (the spec must point one directory up)');
         assert.ok(file_read({ path: 'js/configLoader.js' }),
             'js/configLoader.js must exist at the resolved location');
@@ -339,7 +349,7 @@ suite('developBugFixBatchAndCreatePR', function() {
         loaded.mod.action({
             inputFolderPath: 'input/10',
             ticket: makeEpic('10'),
-            jobParams: { customParams: { trackerProvider: 'ado' } }
+            customParams: { trackerProvider: 'ado' }
         });
         var moves = adoCalls.filter(function(c) { return c.t === 'move'; }).map(function(c) { return String(c.a.id); }).sort();
         assert.deepEqual(moves, ['10', '11']);

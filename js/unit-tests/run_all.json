@@ -213,6 +213,7 @@
         "js/unit-tests/test_actionTicketContext.js",
         "js/unit-tests/test_checkTaskStoriesDone.js",
         "js/unit-tests/test_developBugFixBatchAndCreatePR.js",
+        "js/unit-tests/test_bugFixBatchDevelopment.js",
         "js/unit-tests/test_smLock.js",
         "js/unit-tests/test_trackerFieldValue.js",
         "js/unit-tests/test_affectedReposSection.js",
