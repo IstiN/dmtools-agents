@@ -424,15 +424,43 @@ if (typeof module !== 'undefined') {
     module.exports = { action: action };
 }
 
-// gh-1248: shared real-dependency loaders for modules that now require
-// machineAuthor / reviewVerdicts / legRunVocab at module scope.
-global.machineAuthorReal = function () {
+// gh-1248: shared real-dependency loaders for modules that gained module-scope
+// requires in the dedup. Top-level vars (GraalJS shares them with the suites,
+// same as test/suite/assert above).
+var machineAuthorReal = function () {
     return loadModule('js/common/machineAuthor.js', makeRequire({}), {});
 };
-global.reviewVerdictsReal = function () {
+var reviewVerdictsReal = function () {
     return loadModule('js/common/reviewVerdicts.js',
-        makeRequire({ './machineAuthor.js': global.machineAuthorReal() }), {});
+        makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
 };
-global.legRunVocabReal = function () {
+var legRunVocabReal = function () {
     return loadModule('js/common/legRunVocab.js', makeRequire({}), {});
+};
+var loseJsonReal = function () {
+    return loadModule('js/common/loseJson.js', makeRequire({}), {});
+};
+var publishParamsReal = function () {
+    return loadModule('js/factory/publishParams.js', makeRequire({}), {});
+};
+var pullRequestReal = function () {
+    return loadModule('js/common/pullRequest.js',
+        makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js', makeRequire({}), {}) }), {});
+};
+var githubReviewFetchReal = function () {
+    var machineNotice = loadModule('js/common/machineNotice.js', makeRequire({}), {});
+    return loadModule('js/common/githubReviewFetch.js',
+        makeRequire({ './machineNotice.js': machineNotice,
+                      './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js',
+                          makeRequire({ './machineNotice.js': machineNotice }), {}) }), {});
+};
+var scmReal = function (mocks) {
+    return loadModule('js/common/scm.js',
+        makeRequire({
+            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js',
+                makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js', makeRequire({}), {}) }), {}),
+            './githubReviewFetch.js': githubReviewFetchReal(),
+            './pullRequest.js': pullRequestReal(),
+            './loseJson.js': loseJsonReal()
+        }), mocks);
 };

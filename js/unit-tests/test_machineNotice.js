@@ -34,11 +34,7 @@ function loadReviewThreadInventory() {
 }
 
 function loadScm(mocks) {
-    return loadModule(
-        'js/common/scm.js',
-        makeRequire({ './machineNotice.js': loadMachineNotice(), './reviewThreadInventory.js': loadReviewThreadInventory() }),
-        mocks || {}
-    );
+    return scmReal(mocks || {});
 }
 
 /** GitHub provider wired exactly as createScm does for a configured repo. */

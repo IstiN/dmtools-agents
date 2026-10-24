@@ -29,7 +29,7 @@ function loadGithubHelpers(mocks) {
             './ciViolations.js': loadModule('js/common/ciViolations.js'),
             // gh-1248: githubHelpers delegates the review-discussion
             // fetch/render blocks to it — the canonical copy must be mapped.
-            './githubReviewFetch.js': githubReviewFetchReal()
+            './githubReviewFetch.js': githubReviewFetchReal(mocks)
         }),
         mocks || {}
     );
@@ -51,12 +51,7 @@ var gitOpsStub = {
 };
 
 function loadScm(mocks) {
-    return loadModule(
-        'js/common/scm.js',
-        makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js'),
-            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })) }),
-        mocks || {}
-    );
+    return scmReal(mocks || {});
 }
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -2912,7 +2907,11 @@ suite('githubHelpers.fetchDiscussionsAndRawData — inventory build failure', fu
                 './reviewThreadInventory.js': brokenInventory,
                 './ci.js': loadModule('js/common/ci.js'),
                 './ciViolations.js': loadModule('js/common/ciViolations.js'),
-                './githubReviewFetch.js': githubReviewFetchReal(),
+                './githubReviewFetch.js': githubReviewFetchReal({
+                    github_get_pr_conversations: function() { return [makeConversation({ id: 1, body: 'b' })]; },
+                    github_get_pr_review_threads: function() { return makeGraphQLResponse([]); },
+                    github_get_pr_comments: function() { return [{ user: { login: 'a' }, created_at: '2026-01-01', body: 'note' }]; }
+                }),
             }),
             {
                 github_get_pr_conversations: function() { return [makeConversation({ id: 1, body: 'b' })]; },
