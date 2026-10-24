@@ -117,102 +117,136 @@ function _scorePR(pr, normalizedKey, numericPart) {
     return score;
 }
 
-function findPRForTicket(scmOrWorkspace, repositoryOrTicketKey, ticketKeyOpt, optionsOpt) {
-    var openPRs, ticketKey, options;
+// gh-1194: findPRForTicket stage helpers (CRAP ratchet) — pure splits of the
+// former inline blocks. Same calls, logs, fallback order and try/catch reach.
+
+// Calling-convention juggling: (scm, ticketKey[, options]) vs the legacy
+// (workspace, repository, ticketKey[, options]).
+function _ticketLookupForm(scmOrWorkspace, repositoryOrTicketKey, ticketKeyOpt, optionsOpt) {
+    if (_isScm(scmOrWorkspace)) {
+        return {
+            isScmForm: true,
+            ticketKey: repositoryOrTicketKey,
+            options: ticketKeyOpt || {}
+        };
+    }
+    return {
+        isScmForm: false,
+        ticketKey: ticketKeyOpt,
+        options: optionsOpt || {}
+    };
+}
+
+// PR-anchored lookup (githubSource #544): a pseudo-ticket key 'pr-N' IS
+// the PR number — fetch it directly (REST pulls/{n}) instead of
+// list-scanning. The scan can never reliably match a pseudo key: the
+// PR's title/head reference the ORIGINAL work item, and a single
+// listPrs page may not even contain the PR (live fa #1212, 2026-10-04:
+// key 'pr-1212', PR titled/branched 'ai/gh-1204' among 10+ open PRs —
+// the scan produced "No open Pull Request found" false negatives at
+// the start gate and in the post-action). Case-sensitive lowercase,
+// same convention as preCliReworkSetup's anchor — a real uppercase
+// Jira key like 'PR-1212' keeps the list-scan path.
+// No list-scan fallback for anchored keys: a failed direct fetch IS
+// the answer (missing/hidden/closed PR). Scanning would reintroduce
+// the false-negative race this path exists to eliminate.
+function _anchoredPrForTicket(isScmForm, scmOrWorkspace, repository, ticketKey, anchorMatch) {
+    var prNumber = anchorMatch[1];
     try {
-        var isScmForm = _isScm(scmOrWorkspace);
-        if (isScmForm) {
-            ticketKey = repositoryOrTicketKey;
-            options = ticketKeyOpt || {};
-        } else {
-            ticketKey = ticketKeyOpt;
-            options = optionsOpt || {};
+        var anchoredPr = isScmForm
+            ? scmOrWorkspace.getPr(prNumber)
+            : github_get_pr({
+                workspace: scmOrWorkspace,
+                repository: repository,
+                pullRequestId: prNumber
+            });
+        if (anchoredPr) {
+            if (anchoredPr.state && String(anchoredPr.state) !== 'open') {
+                console.warn('PR #' + prNumber + ' (anchor of ' + ticketKey + ') is ' + anchoredPr.state + ' — treating as not found');
+                return null;
+            }
+            console.log('PR-anchored lookup:', ticketKey, '→ PR #' + prNumber + ':', anchoredPr.title);
+            return anchoredPr;
         }
+    } catch (anchorError) {
+        console.error('Failed to fetch PR #' + prNumber + ' for ticket ' + ticketKey + ':', anchorError.message || anchorError);
+    }
+    console.warn('No open PR found for ticket', ticketKey, '(direct PR #' + prNumber + ' lookup failed)');
+    return null;
+}
+
+// Open-PR candidates for the list-scan: only PRs whose title or head branch
+// carries the ticket key (score > 0).
+function _scoredCandidates(openPRs, normalizedKey, numericPart) {
+    var candidates = [];
+    for (var i = 0; i < openPRs.length; i++) {
+        var pr = openPRs[i];
+        var score = _scorePR(pr, normalizedKey, numericPart);
+        if (score > 0) {
+            candidates.push({ pr: pr, score: score });
+        }
+    }
+    return candidates;
+}
+
+// Best candidate first: score desc, then fewest changed files (smallest, most
+// focused change wins a tie).
+function _rankCandidates(candidates) {
+    candidates.sort(function(a, b) {
+        if (b.score !== a.score) return b.score - a.score;
+        var aFiles = a.pr.changed_files || 0;
+        var bFiles = b.pr.changed_files || 0;
+        return aFiles - bFiles;
+    });
+}
+
+// Project prSearchFn hook — non-fatal: a hook result wins, a missing hook or
+// a failed one yields null (the caller keeps the ranked top candidate).
+function _applyPrSearchHook(candidates, ticketKey, options) {
+    if (typeof options.prSearchFn !== 'function') return null;
+    try {
+        var hookResult = options.prSearchFn(
+            candidates.map(function(c) { return c.pr; }),
+            ticketKey,
+            options
+        );
+        if (hookResult) {
+            console.log('Project prSearchFn selected PR #' + hookResult.number + ':', hookResult.title);
+            return hookResult;
+        }
+    } catch (hookErr) {
+        console.warn('prSearchFn hook failed (non-fatal):', hookErr);
+    }
+    return null;
+}
+
+function findPRForTicket(scmOrWorkspace, repositoryOrTicketKey, ticketKeyOpt, optionsOpt) {
+    try {
+        var form = _ticketLookupForm(scmOrWorkspace, repositoryOrTicketKey, ticketKeyOpt, optionsOpt);
+        var ticketKey = form.ticketKey;
         console.log('Searching for PR related to', ticketKey);
 
-        // PR-anchored lookup (githubSource #544): a pseudo-ticket key 'pr-N' IS
-        // the PR number — fetch it directly (REST pulls/{n}) instead of
-        // list-scanning. The scan can never reliably match a pseudo key: the
-        // PR's title/head reference the ORIGINAL work item, and a single
-        // listPrs page may not even contain the PR (live fa #1212, 2026-10-04:
-        // key 'pr-1212', PR titled/branched 'ai/gh-1204' among 10+ open PRs —
-        // the scan produced "No open Pull Request found" false negatives at
-        // the start gate and in the post-action). Case-sensitive lowercase,
-        // same convention as preCliReworkSetup's anchor — a real uppercase
-        // Jira key like 'PR-1212' keeps the list-scan path below.
         var anchorMatch = /^pr-(\d+)$/.exec(String(ticketKey || ''));
         if (anchorMatch) {
-            var prNumber = anchorMatch[1];
-            try {
-                var anchoredPr = isScmForm
-                    ? scmOrWorkspace.getPr(prNumber)
-                    : github_get_pr({
-                        workspace: scmOrWorkspace,
-                        repository: repositoryOrTicketKey,
-                        pullRequestId: prNumber
-                    });
-                if (anchoredPr) {
-                    if (anchoredPr.state && String(anchoredPr.state) !== 'open') {
-                        console.warn('PR #' + prNumber + ' (anchor of ' + ticketKey + ') is ' + anchoredPr.state + ' — treating as not found');
-                        return null;
-                    }
-                    console.log('PR-anchored lookup:', ticketKey, '→ PR #' + prNumber + ':', anchoredPr.title);
-                    return anchoredPr;
-                }
-            } catch (anchorError) {
-                console.error('Failed to fetch PR #' + prNumber + ' for ticket ' + ticketKey + ':', anchorError.message || anchorError);
-            }
-            // No list-scan fallback for anchored keys: a failed direct fetch IS
-            // the answer (missing/hidden/closed PR). Scanning would reintroduce
-            // the false-negative race this path exists to eliminate.
-            console.warn('No open PR found for ticket', ticketKey, '(direct PR #' + prNumber + ' lookup failed)');
-            return null;
+            return _anchoredPrForTicket(form.isScmForm, scmOrWorkspace, repositoryOrTicketKey, ticketKey, anchorMatch);
         }
 
-        openPRs = isScmForm
+        var openPRs = form.isScmForm
             ? scmOrWorkspace.listPrs('open')
             : github_list_prs({ workspace: scmOrWorkspace, repository: repositoryOrTicketKey, state: 'open' });
         console.log('Found', openPRs.length, 'open PRs');
 
-        var normalizedKey = _normalizeForMatch(ticketKey);
-        var numericPart = _extractNumericPart(ticketKey);
-        var candidates = [];
-
-        for (var i = 0; i < openPRs.length; i++) {
-            var pr = openPRs[i];
-            var score = _scorePR(pr, normalizedKey, numericPart);
-            if (score > 0) {
-                candidates.push({ pr: pr, score: score });
-            }
-        }
+        var candidates = _scoredCandidates(openPRs, _normalizeForMatch(ticketKey), _extractNumericPart(ticketKey));
 
         if (candidates.length === 0) {
             console.warn('No open PR found for ticket', ticketKey);
             return null;
         }
 
-        candidates.sort(function(a, b) {
-            if (b.score !== a.score) return b.score - a.score;
-            var aFiles = a.pr.changed_files || 0;
-            var bFiles = b.pr.changed_files || 0;
-            return aFiles - bFiles;
-        });
+        _rankCandidates(candidates);
 
-        if (typeof options.prSearchFn === 'function') {
-            try {
-                var hookResult = options.prSearchFn(
-                    candidates.map(function(c) { return c.pr; }),
-                    ticketKey,
-                    options
-                );
-                if (hookResult) {
-                    console.log('Project prSearchFn selected PR #' + hookResult.number + ':', hookResult.title);
-                    return hookResult;
-                }
-            } catch (hookErr) {
-                console.warn('prSearchFn hook failed (non-fatal):', hookErr);
-            }
-        }
+        var hooked = _applyPrSearchHook(candidates, ticketKey, form.options);
+        if (hooked) return hooked;
 
         console.log('Selected open PR #' + candidates[0].pr.number + ':', candidates[0].pr.title);
         return candidates[0].pr;
@@ -1067,6 +1101,12 @@ module.exports = {
     getGitHubRepoInfo: getGitHubRepoInfo,
     _isScm: _isScm,
     findPRForTicket: findPRForTicket,
+    // gh-1194: findPRForTicket stage helpers exposed as testable pure helpers
+    _ticketLookupForm: _ticketLookupForm,
+    _anchoredPrForTicket: _anchoredPrForTicket,
+    _scoredCandidates: _scoredCandidates,
+    _rankCandidates: _rankCandidates,
+    _applyPrSearchHook: _applyPrSearchHook,
     findMergedPRForTicket: findMergedPRForTicket,
     getPRDetails: getPRDetails,
     fetchDiscussionsAndRawData: fetchDiscussionsAndRawData,
