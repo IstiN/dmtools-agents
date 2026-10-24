@@ -1945,3 +1945,116 @@ suite('trackers.js — gh-1163 config resolution & no createTracker(null / initT
     });
 });
 
+
+suite('trackers.js comment normalization (gh-119 characterization)', function () {
+    function commentsPage(entries) {
+        var mocks = { jira_get_comments: recorder('jira_get_comments', JSON.stringify({ comments: entries })) };
+        var t = loadTrackers(mocks).createTracker({}, { trackerProvider: 'jira' });
+        return t.getComments('PROJ-123');
+    }
+
+    test('multi-item page: every author candidate shape resolves (jira/github/ado)', function () {
+        var out = commentsPage([
+            { author: 'Plain String', body: 'b1', created: '2026-01-01' },
+            { author: { displayName: 'Display Name' }, body: 'b2', created: '2026-01-02' },
+            { user: { login: 'github-login' }, body: 'b3', created_at: '2026-01-03' },
+            { createdBy: { uniqueName: 'ado@unique' }, body: 'b4', createdDate: '2026-01-04' }
+        ]);
+        assert.equal(out.length, 4);
+        assert.equal(out[0].author, 'Plain String');
+        assert.equal(out[0].created, '2026-01-01');
+        assert.equal(out[1].author, 'Display Name');
+        assert.equal(out[2].author, 'github-login');
+        assert.equal(out[2].created, '2026-01-03');
+        assert.equal(out[3].author, 'ado@unique');
+        assert.equal(out[3].created, '2026-01-04');
+    });
+
+    test('an author candidate with no usable name defers to the next candidate', function () {
+        var out = commentsPage([{ author: { accountId: 'id-only' }, user: 'Fallback User', body: 'x' }]);
+        assert.equal(out[0].author, 'Fallback User');
+    });
+
+    test('displayName wins over login and uniqueName on the same candidate', function () {
+        var out = commentsPage([{ user: { displayName: 'D', login: 'l', uniqueName: 'u' }, body: 'x' }]);
+        assert.equal(out[0].author, 'D');
+        var out2 = commentsPage([{ user: { login: 'l', uniqueName: 'u' }, body: 'x' }]);
+        assert.equal(out2[0].author, 'l');
+    });
+
+    test('body falls back to text; author absent yields empty string; created absent yields null', function () {
+        var out = commentsPage([{ text: 'raw text note' }]);
+        assert.equal(out[0].body, 'raw text note');
+        assert.equal(out[0].author, '');
+        assert.equal(out[0].created, null);
+    });
+
+    test('empty body AND empty text keep the empty-string body', function () {
+        var out = commentsPage([{ author: 'A', body: '', text: '' }]);
+        assert.equal(out[0].body, '');
+    });
+
+    test('unparseable entries are dropped (null, garbage, numbers)', function () {
+        var out = commentsPage([null, 'not json', 42, { author: 'Keep', body: 'ok' }]);
+        assert.equal(out.length, 1);
+        assert.equal(out[0].author, 'Keep');
+    });
+
+    test('multi-item ADO page: createdDate fallback and candidate scan (2+ items)', function () {
+        var mocks = { ado_get_work_item_comments: recorder('ado_get_work_item_comments', [
+            { createdBy: { displayName: 'Ado A' }, text: 't1', createdDate: '2026-02-01' },
+            { text: 't2' }
+        ]) };
+        var t = loadTrackers(mocks).createTracker({}, { trackerProvider: 'ado' });
+        var out = t.getComments('4242');
+        assert.equal(out.length, 2);
+        assert.equal(out[0].author, 'Ado A');
+        assert.equal(out[0].created, '2026-02-01');
+        assert.equal(out[1].created, null);
+    });
+});
+
+suite('trackers.js toIssueView branch coverage (gh-119 characterization)', function () {
+    function t(provider) { return loadTrackers({}).createTracker({ tracker: { provider: provider } }); }
+
+    test('a Jira payload fetched with a fields filter passes through UNCHANGED (no summary, no System.*)', function () {
+        var raw = { key: 'A-9', id: '9', fields: { description: 'desc only', labels: ['x'] } };
+        var v = t('jira').toIssueView(raw);
+        assert.equal(v, raw);
+        assert.equal(v.fields.description, 'desc only');
+    });
+
+    test('ADO fields shape (System.*) is NOT treated as a filtered Jira payload', function () {
+        var raw = { id: 77, fields: { 'System.Title': 'Ado ticket', 'System.State': 'Active', 'System.WorkItemType': 'Bug' } };
+        var v = t('ado').toIssueView(raw);
+        assert.notEqual(v, raw);
+        assert.equal(v.key, '77');
+        assert.equal(v.fields.summary, 'Ado ticket');
+        assert.equal(v.fields.issuetype.name, 'Bug');
+    });
+
+    test('a GitHub issue becomes a Jira-shaped view; assignee/parent/fixVersions defaults hold', function () {
+        var v = t('github').toIssueView({ number: 12, title: 'GH issue', state: 'OPEN',
+            labels: [{ name: 'bug' }, { name: 'ai' }], assignee: { login: 'octo' }, body: 'gh body', html_url: 'https://example.com/12' });
+        assert.equal(v.key, '#12');
+        assert.equal(v.fields.summary, 'GH issue');
+        assert.equal(v.fields.status.name, 'OPEN');
+        assert.deepEqual(v.fields.labels, ['bug', 'ai']);
+        assert.equal(v.fields.assignee.displayName, 'octo');
+        assert.equal(v.fields.description, 'gh body');
+        assert.deepEqual(v.fields.fixVersions, []);
+        assert.equal(v.fields.parent, undefined);
+        assert.equal(v.fields.issuetype.name, undefined);
+    });
+
+    test('a flat payload with no assignee maps to a null assignee field', function () {
+        var v = t('jira').toIssueView({ key: 'FLAT-1', title: 'Flat', status: 'Open' });
+        assert.equal(v.fields.assignee, null);
+        assert.equal(v.fields.summary, 'Flat');
+    });
+
+    test('arrays and primitive payloads return null', function () {
+        assert.equal(t('jira').toIssueView([1, 2, 3]), null);
+        assert.equal(t('jira').toIssueView('42'), null);
+    });
+});

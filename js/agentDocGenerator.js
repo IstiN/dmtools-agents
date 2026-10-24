@@ -377,6 +377,26 @@ function analyzeActionFile(filePath, phase) {
     };
 }
 
+/**
+ * One rendered bullet group ("- Heading:" + indented items) when the list is
+ * non-empty; nothing for an empty one.
+ */
+function pushBulletList(lines, heading, items, formatItem) {
+    if (!items || items.length === 0) return;
+    lines.push(heading);
+    items.forEach(function(item) {
+        lines.push('  - ' + formatItem(item));
+    });
+}
+
+/** True when an action file showed no file I/O, side effects, or customParams usage. */
+function hasNoDetectedArtifacts(analysis) {
+    return analysis.artifacts.reads.length === 0 &&
+        analysis.artifacts.writes.length === 0 &&
+        analysis.effects.length === 0 &&
+        (!analysis.paramsUsed || analysis.paramsUsed.length === 0);
+}
+
 function renderActionSection(label, filePath, phase) {
     if (!filePath) return '';
 
@@ -390,38 +410,20 @@ function renderActionSection(label, filePath, phase) {
     }
     lines.push('- Source: `' + canonicalRef(filePath) + '`');
 
-    if (analysis.artifacts.reads.length > 0) {
-        lines.push('- Reads:');
-        analysis.artifacts.reads.forEach(function(p) {
-            lines.push('  - `' + p + '`');
-        });
-    }
+    pushBulletList(lines, '- Reads:', analysis.artifacts.reads, function(p) {
+        return '`' + p + '`';
+    });
+    pushBulletList(lines, '- Writes:', analysis.artifacts.writes, function(p) {
+        return '`' + p + '`';
+    });
+    pushBulletList(lines, '- Side effects:', analysis.effects, function(effect) {
+        return effect;
+    });
+    pushBulletList(lines, '- Parameters (customParams):', analysis.paramsUsed, function(p) {
+        return '`' + p + '`';
+    });
 
-    if (analysis.artifacts.writes.length > 0) {
-        lines.push('- Writes:');
-        analysis.artifacts.writes.forEach(function(p) {
-            lines.push('  - `' + p + '`');
-        });
-    }
-
-    if (analysis.effects.length > 0) {
-        lines.push('- Side effects:');
-        analysis.effects.forEach(function(effect) {
-            lines.push('  - ' + effect);
-        });
-    }
-
-    if (analysis.paramsUsed && analysis.paramsUsed.length > 0) {
-        lines.push('- Parameters (customParams):');
-        analysis.paramsUsed.forEach(function(p) {
-            lines.push('  - `' + p + '`');
-        });
-    }
-
-    if (analysis.artifacts.reads.length === 0 &&
-        analysis.artifacts.writes.length === 0 &&
-        analysis.effects.length === 0 &&
-        (!analysis.paramsUsed || analysis.paramsUsed.length === 0)) {
+    if (hasNoDetectedArtifacts(analysis)) {
         lines.push('- No detected file I/O or side effects.');
     }
 
@@ -482,82 +484,76 @@ function humanDocPath(fileName, params) {
     return null;
 }
 
-function renderAgentDoc(fileName, config) {
+/** "story_acceptance_criteria.json" → "Story Acceptance Criteria" (page title). */
+function agentDisplayName(fileName) {
+    return fileName.replace(/\.json$/, '').replace(/_/g, ' ')
+        .replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+}
+
+/** Every params-derived value the doc renders, with the display defaults applied. */
+function resolveAgentIdentity(fileName, config) {
     var params = config.params || {};
     var metadata = params.metadata || {};
-    var customParams = params.customParams || {};
-    var outputSchemas = params.outputSchemas || null;
+    return {
+        params: params,
+        metadata: metadata,
+        customParams: params.customParams || {},
+        outputSchemas: params.outputSchemas || null,
+        jobClass: config.name || '—',
+        contextId: metadata.contextId || '—'
+    };
+}
 
-    var jobClass = config.name || '—';
-    var contextId = metadata.contextId || '—';
-
-    // Humanized config name as the page title: "story_acceptance_criteria" →
-    // "Story acceptance criteria". The job class and file name stay in the
-    // Attributes table — a title like `Teammate (story_acceptance_criteria.json)`
-    // renders as an unreadable headline in HTML.
-    var displayName = fileName.replace(/\.json$/, '').replace(/_/g, ' ')
-        .replace(/\b\w/g, function(c) { return c.toUpperCase(); });
-
-    var lines = [];
-    lines.push('# ' + displayName);
-    lines.push('');
-
-    // Human-readable description lives in docs/agents/<name>.md (strict naming
-    // convention, see humanDocPath). It is embedded verbatim so the generated
-    // reference stays self-contained and HTML-renderable.
+/**
+ * Embed the human-readable doc from docs/agents/<name>.md (strict naming
+ * convention, see humanDocPath) verbatim — minus its own title — so the
+ * generated reference stays self-contained and HTML-renderable.
+ */
+function appendHumanDoc(lines, fileName, params) {
     var human = humanDocPath(fileName, params);
-    if (human) {
-        var humanBody = human.content.trim()
-            .replace(/^#\s+.*\n/, '')       // drop the human doc's own title
-            .trim();
-        lines.push(humanBody);
-        lines.push('');
-        lines.push('_Human doc: [`' + human.ref + '`](' + human.ref + ')_');
-        lines.push('');
-    }
+    if (!human) return;
+    var humanBody = human.content.trim()
+        .replace(/^#\s+.*\n/, '')       // drop the human doc's own title
+        .trim();
+    lines.push(humanBody);
+    lines.push('');
+    lines.push('_Human doc: [`' + human.ref + '`](' + human.ref + ')_');
+    lines.push('');
+}
 
+/** The Attributes table (job class, config, context id, output knobs). */
+function appendAttributes(lines, identity, fileName) {
     lines.push('## Attributes');
     lines.push('');
     lines.push('| Attribute | Value |');
     lines.push('|---|---|');
-    lines.push('| Job | `' + jobClass + '` |');
+    lines.push('| Job | `' + identity.jobClass + '` |');
     lines.push('| Config | `' + fileName + '` |');
-    lines.push('| ContextId | `' + contextId + '` |');
-    lines.push('| outputType | `' + (params.outputType || '—') + '` |');
-    lines.push('| skipAIProcessing | `' + (params.skipAIProcessing || false) + '` |');
+    lines.push('| ContextId | `' + identity.contextId + '` |');
+    lines.push('| outputType | `' + (identity.params.outputType || '—') + '` |');
+    lines.push('| skipAIProcessing | `' + (identity.params.skipAIProcessing || false) + '` |');
     lines.push('');
+}
 
+/**
+ * The "Prompt snapshot" section for an existing snapshot file. Returns the
+ * snapshot ref (null when none) — the LLM-step section reuses it.
+ */
+function appendPromptSnapshot(lines, fileName) {
     var snap = snapshotPath(fileName);
-    if (snap) {
-        lines.push('## Prompt snapshot');
-        lines.push('');
-        lines.push('Full prompt / instruction set: [`' + snap + '`](' + snap + ')');
-        lines.push('');
-    }
-
-    lines.push('## Actions');
+    if (!snap) return null;
+    lines.push('## Prompt snapshot');
     lines.push('');
-    lines.push(renderActionSection('preJSAction', params.preJSAction, 'pre'));
-    lines.push(renderActionSection('preCliJSAction', params.preCliJSAction, 'pre'));
-    lines.push(renderActionSection('postCliJSAction', params.postCliJSAction, 'post'));
-    lines.push(renderActionSection('postJSAction', params.postJSAction, 'post'));
-    lines.push(renderActionSection('timerJSAction', params.timerJSAction, 'post'));
-
-    lines.push('## LLM step');
+    lines.push('Full prompt / instruction set: [`' + snap + '`](' + snap + ')');
     lines.push('');
-    lines.push('- outputType: `' + (params.outputType || 'none') + '`');
-    if (snap) {
-        lines.push('- Prompt snapshot: `' + snap + '`');
-    }
-    lines.push('');
+    return snap;
+}
 
-    var schemasMd = renderOutputSchemas(outputSchemas);
-    if (schemasMd) {
-        lines.push(schemasMd);
-    }
-
-    // Merge customParams declared in the JSON with customParams paths used by
-    // the referenced JS actions, so the doc lists every tunable in one place.
+/**
+ * Merge customParams declared in the JSON with customParams paths used by
+ * the referenced JS actions, so the doc lists every tunable in one place.
+ */
+function collectJsParamsUsed(params) {
     var jsParamsUsed = [];
     var jsParamsSeen = {};
     [params.preJSAction, params.preCliJSAction, params.postCliJSAction, params.postJSAction, params.timerJSAction]
@@ -570,33 +566,81 @@ function renderAgentDoc(fileName, config) {
                 }
             });
         });
+    return jsParamsUsed;
+}
 
-    if (Object.keys(customParams).length > 0 || jsParamsUsed.length > 0) {
-        lines.push('## Custom params');
-        lines.push('');
-        Object.keys(customParams).forEach(function(k) {
-            var value = customParams[k];
-            if (value !== null && typeof value === 'object') {
-                // Objects/arrays as inline code wrap into unreadable blobs —
-                // give them a fenced block instead.
-                lines.push('- `' + k + '`:\n');
-                lines.push('  ```json');
-                lines.push('  ' + JSON.stringify(value, null, 2).split('\n').join('\n  '));
-                lines.push('  ```');
-            } else {
-                lines.push('- `' + k + '`: `' + escapeMd(JSON.stringify(value)) + '`');
-            }
-        });
-        jsParamsUsed.forEach(function(p) {
-            // Skip when the JSON already documents the same root key — a
-            // duplicate row ("`contentOutput` (used by JS action)" right after
-            // "`contentOutput`: {...}") reads as noise.
-            var rootKey = p.split('.')[0];
-            if (Object.prototype.hasOwnProperty.call(customParams, rootKey)) return;
-            lines.push('- `' + p + '` _(used by JS action)_');
-        });
-        lines.push('');
+/** One customParams row: scalars inline, objects/arrays as a fenced json block. */
+function appendCustomParam(lines, key, value) {
+    if (value !== null && typeof value === 'object') {
+        // Objects/arrays as inline code wrap into unreadable blobs —
+        // give them a fenced block instead.
+        lines.push('- `' + key + '`:\n');
+        lines.push('  ```json');
+        lines.push('  ' + JSON.stringify(value, null, 2).split('\n').join('\n  '));
+        lines.push('  ```');
+    } else {
+        lines.push('- `' + key + '`: `' + escapeMd(JSON.stringify(value)) + '`');
     }
+}
+
+/** The "Custom params" section — omitted entirely when there is nothing to document. */
+function appendCustomParams(lines, customParams, jsParamsUsed) {
+    if (Object.keys(customParams).length === 0 && jsParamsUsed.length === 0) return;
+    lines.push('## Custom params');
+    lines.push('');
+    Object.keys(customParams).forEach(function(k) {
+        appendCustomParam(lines, k, customParams[k]);
+    });
+    jsParamsUsed.forEach(function(p) {
+        // Skip when the JSON already documents the same root key — a
+        // duplicate row ("`contentOutput` (used by JS action)" right after
+        // "`contentOutput`: {...}") reads as noise.
+        var rootKey = p.split('.')[0];
+        if (Object.prototype.hasOwnProperty.call(customParams, rootKey)) return;
+        lines.push('- `' + p + '` _(used by JS action)_');
+    });
+    lines.push('');
+}
+
+function renderAgentDoc(fileName, config) {
+    var identity = resolveAgentIdentity(fileName, config);
+
+    // Humanized config name as the page title: "story_acceptance_criteria" →
+    // "Story acceptance criteria". The job class and file name stay in the
+    // Attributes table — a title like `Teammate (story_acceptance_criteria.json)`
+    // renders as an unreadable headline in HTML.
+    var lines = [];
+    lines.push('# ' + agentDisplayName(fileName));
+    lines.push('');
+
+    appendHumanDoc(lines, fileName, identity.params);
+
+    appendAttributes(lines, identity, fileName);
+
+    var snap = appendPromptSnapshot(lines, fileName);
+
+    lines.push('## Actions');
+    lines.push('');
+    lines.push(renderActionSection('preJSAction', identity.params.preJSAction, 'pre'));
+    lines.push(renderActionSection('preCliJSAction', identity.params.preCliJSAction, 'pre'));
+    lines.push(renderActionSection('postCliJSAction', identity.params.postCliJSAction, 'post'));
+    lines.push(renderActionSection('postJSAction', identity.params.postJSAction, 'post'));
+    lines.push(renderActionSection('timerJSAction', identity.params.timerJSAction, 'post'));
+
+    lines.push('## LLM step');
+    lines.push('');
+    lines.push('- outputType: `' + (identity.params.outputType || 'none') + '`');
+    if (snap) {
+        lines.push('- Prompt snapshot: `' + snap + '`');
+    }
+    lines.push('');
+
+    var schemasMd = renderOutputSchemas(identity.outputSchemas);
+    if (schemasMd) {
+        lines.push(schemasMd);
+    }
+
+    appendCustomParams(lines, identity.customParams, collectJsParamsUsed(identity.params));
 
     lines.push('---');
     lines.push('_Generated by js/agentDocGenerator.js_');
@@ -623,7 +667,12 @@ function generate() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { generate, collectArtifacts };
+    module.exports = {
+        generate: generate,
+        collectArtifacts: collectArtifacts,
+        renderAgentDoc: renderAgentDoc,
+        renderActionSection: renderActionSection
+    };
 }
 
 if (require.main === module) {

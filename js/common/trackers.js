@@ -95,6 +95,39 @@ function _labelNames(raw) {
 }
 
 /**
+ * One author candidate → its display name, or null when the candidate carries
+ * none: plain strings win as-is; objects are read as Jira (displayName),
+ * GitHub (login) or ADO (uniqueName) identities.
+ */
+function _identityName(a) {
+    if (!a) return null;
+    if (typeof a === 'string') return a;
+    return a.displayName || a.login || a.uniqueName || null;
+}
+
+/**
+ * First candidate that carries a usable name, or null. Unknown-shape
+ * candidates (objects without any name field) do not stop the scan.
+ */
+function _firstIdentityName(candidates) {
+    for (var i = 0; i < candidates.length; i++) {
+        var name = _identityName(candidates[i]);
+        if (name) return name;
+    }
+    return null;
+}
+
+/** Comment body: Jira body, GitHub text — '' when neither carries text. */
+function _commentBody(c) {
+    return c.body || c.text || '';
+}
+
+/** Comment timestamp across backend field namings, null when absent. */
+function _commentCreated(c) {
+    return c.created || c.created_at || c.createdDate || null;
+}
+
+/**
  * Normalize one comment into { author, body, created }.
  * Candidates cover Jira, GitHub, and ADO field namings; unknown shapes
  * keep their raw body field when present.
@@ -102,21 +135,10 @@ function _labelNames(raw) {
 function _normalizeComment(raw) {
     var c = _parseJson(raw);
     if (!c || typeof c !== 'object') return null;
-    var author = '';
-    var authorCandidates = [c.author, c.user, c.createdBy];
-    for (var i = 0; i < authorCandidates.length; i++) {
-        var a = authorCandidates[i];
-        if (!a) continue;
-        if (typeof a === 'string') { author = a; break; }
-        if (a.displayName || a.login || a.uniqueName) {
-            author = a.displayName || a.login || a.uniqueName;
-            break;
-        }
-    }
     return {
-        author: author,
-        body: c.body || c.text || '',
-        created: c.created || c.created_at || c.createdDate || null
+        author: _firstIdentityName([c.author, c.user, c.createdBy]) || '',
+        body: _commentBody(c),
+        created: _commentCreated(c)
     };
 }
 
@@ -1054,22 +1076,23 @@ function createTracker(config, customParams) {
     }
 
 
+    /** A Jira-shaped payload with a summary passes through toIssueView unchanged. */
+    function isJiraTicketView(t) {
+        return Boolean(t && typeof t === 'object' && t.fields && t.fields.summary !== undefined);
+    }
+
     /**
-     * Jira-shaped view of any backend's ticket: { key, id, fields: { summary, status:{name},
-     * labels:[...], issuetype:{name}, description, assignee, parent:{key}, fixVersions:[{name}] }, raw }.
-     * Many scripts read ticket.fields.* (43 files); this keeps them provider-neutral without
-     * rewriting each reader. Jira payloads pass through UNCHANGED (full fidelity: custom fields,
-     * issuelinks, ...); other providers get the neutral subset built from normalizeTicket().
+     * Jira payload fetched with a fields filter (e.g. fields:['Description'])
+     * carries no summary — still a Jira payload: pass it through unchanged.
+     * (ADO items always carry System.Title; GitHub items carry no fields.)
      */
-    function toIssueView(rawTicket) {
-        var t = _parseJson(rawTicket);
-        if (t && typeof t === 'object' && t.fields && t.fields.summary !== undefined) return t;
-        // Jira payload fetched with a fields filter (e.g. fields:['Description']) carries no summary —
-        // still a Jira payload: pass it through unchanged (ADO items always carry System.Title).
-        if (t && typeof t === 'object' && !Array.isArray(t) && t.fields && typeof t.fields === 'object' &&
-            !_isAdoFields(t.fields)) return t;
-        var n = normalizeTicket(t);
-        if (!n) return null;
+    function isFilteredJiraTicketView(t) {
+        return Boolean(t && typeof t === 'object' && !Array.isArray(t) && t.fields &&
+            typeof t.fields === 'object' && !_isAdoFields(t.fields));
+    }
+
+    /** The Jira-shaped fields block built from a normalizeTicket() flat view. */
+    function issueViewFields(n) {
         var fields = {
             summary: n.title,
             status: { name: n.status },
@@ -1080,7 +1103,23 @@ function createTracker(config, customParams) {
             fixVersions: (n.fixVersions || []).map(function (v) { return { name: v }; })
         };
         if (n.parentKey) fields.parent = { key: n.parentKey };
-        return { key: n.key, id: n.id, fields: fields, raw: t };
+        return fields;
+    }
+
+    /**
+     * Jira-shaped view of any backend's ticket: { key, id, fields: { summary, status:{name},
+     * labels:[...], issuetype:{name}, description, assignee, parent:{key}, fixVersions:[{name}] }, raw }.
+     * Many scripts read ticket.fields.* (43 files); this keeps them provider-neutral without
+     * rewriting each reader. Jira payloads pass through UNCHANGED (full fidelity: custom fields,
+     * issuelinks, ...); other providers get the neutral subset built from normalizeTicket().
+     */
+    function toIssueView(rawTicket) {
+        var t = _parseJson(rawTicket);
+        if (isJiraTicketView(t)) return t;
+        if (isFilteredJiraTicketView(t)) return t;
+        var n = normalizeTicket(t);
+        if (!n) return null;
+        return { key: n.key, id: n.id, fields: issueViewFields(n), raw: t };
     }
 
     /** A search result (page object or bare array) as an array of Jira-shaped issue views. */
