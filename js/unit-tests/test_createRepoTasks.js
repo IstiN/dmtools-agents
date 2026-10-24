@@ -5,6 +5,14 @@ function d2Trackers(mocks) {
     }), mocks);
 }
 
+function loadRepoTaskShared(globals) {
+    return loadModule('js/common/repoTaskShared.js', makeRequire({
+        '../config.js': configModule,
+        './trackers.js': d2Trackers(globals),
+        './linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js')
+    }), globals);
+}
+
 /**
  * Unit tests for js/createRepoTasks.js
  */
@@ -23,7 +31,7 @@ function makeModule(globals) {
 
     return loadModule(
         'js/createRepoTasks.js',
-        makeRequire({ './config.js': configModule, './common/trackers.js': d2Trackers(defaultGlobals), './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js') }),
+        makeRequire({ './config.js': configModule, './common/trackers.js': d2Trackers(defaultGlobals), './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'), './common/repoTaskShared.js': loadRepoTaskShared(defaultGlobals) }),
         defaultGlobals
     );
 }
