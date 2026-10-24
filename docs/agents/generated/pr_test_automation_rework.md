@@ -54,6 +54,7 @@ _Pre-CLI Test Rework Setup Action (preCliJSAction for pr_test_automation_rework)
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
   - git checkout
+  - git merge
 - Parameters (customParams):
   - `adoTextFormat`
   - `branchCreateFnPath`

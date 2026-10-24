@@ -157,24 +157,6 @@ function readQuestionsJson() {
 }
 
 /**
- * Read a description file, falling back to the entry summary
- */
-function readDescriptionFile(filePath, fallbackSummary) {
-    if (!filePath) {
-        return fallbackSummary || '';
-    }
-    try {
-        var content = file_read(filePath);
-        if (content && content.trim() !== '') {
-            return content;
-        }
-    } catch (error) {
-        console.warn('Could not read description file ' + filePath + ':', error);
-    }
-    return fallbackSummary || '';
-}
-
-/**
  * When the agent decides no clarifying questions are needed, it must still
  * explain why in outputs/response.md. Post that explanation as a Jira comment
  * so a human reviewer sees the reasoning instead of a silent skip.
@@ -285,7 +267,7 @@ function createAdoQuestion(tracker, projectKey, entry, summary, description, par
  */
 function createQuestion(entry, parentKey, projectKey, jiraConfig, priorityMap) {
     var summary = ensureQPrefix(buildSummary(entry.summary, 0));
-    var description = readDescriptionFile(entry.description, entry.summary);
+    var description = outputFiles.readDescriptionFile(entry.description, entry.summary);
     var fieldsJson = buildQuestionFieldsJson(entry, summary, description, parentKey, jiraConfig, priorityMap);
 
     try {
@@ -467,17 +449,6 @@ function triggerAutoStartQuestionAnswer(customParams, projectConfig, createdTick
     }
 }
 
-/**
- * Token usage comments (non-fatal).
- */
-function postTokenUsageCommentsSafe(ticketKey, params) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
-}
-
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
@@ -529,7 +500,7 @@ function action(params) {
         var stageOutcome = moveToPoReview(ticketKey, jiraConfig.statuses.PO_REVIEW);
         removeWipLabel(ticketKey, wipLabel);
         triggerAutoStartQuestionAnswer(customParams, projectConfig, createdTickets);
-        postTokenUsageCommentsSafe(ticketKey, params);
+        tokenUsageComment.postTokenUsageSafely(ticketKey, params);
 
         return {
             success: true,

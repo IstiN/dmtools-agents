@@ -21,15 +21,28 @@ var tokenUsage = require('./token_usage.js');
  * access is guarded and missing env simply yields '' — the caller's
  * defaults take over.
  */
-function envValue(name) {
+// The java.lang.System env bridge when this runtime has one, else null.
+// Guarded on purpose: QuickJS has no java bridge, so every access is
+// wrapped and missing env simply yields '' (the caller defaults take over).
+function _envBridge() {
     try {
         if (typeof java !== 'undefined' && java && java.lang &&
             java.lang.System && typeof java.lang.System.getenv === 'function') {
-            var v = java.lang.System.getenv(name);
-            return (v === null || v === undefined) ? '' : String(v);
+            return java.lang.System;
         }
     } catch (e) { /* no env bridge on this runtime */ }
-    return '';
+    return null;
+}
+
+function envValue(name) {
+    var system = _envBridge();
+    if (!system) return '';
+    var v = system.getenv(name);
+    return (v === null || v === undefined) ? '' : String(v);
+}
+
+function _isBlank(v) {
+    return v === undefined || v === null || v === '';
 }
 
 /**
@@ -44,8 +57,8 @@ function resolveParams(params, envMap) {
     }
     function pick(key, envName, dflt) {
         var v = custom[key];
-        if (v === undefined || v === null || v === '') v = env(envName);
-        if (v === undefined || v === null || v === '') v = dflt;
+        if (_isBlank(v)) v = env(envName);
+        if (_isBlank(v)) v = dflt;
         return v === undefined || v === null ? '' : String(v);
     }
     return {

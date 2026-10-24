@@ -290,6 +290,18 @@ function markTestPrMerged(ticketKey) {
     }
 }
 
+/**
+ * gh-965/gh-1247: finalize an already-merged test case — move the ticket to
+ * its final status, post the notice, then delete the stale test branch.
+ *
+ * Behavior note (review follow-up on PR #1257): the branch deletion now runs
+ * even when the tracker move above fails (moveMergedTicketAndReport swallows
+ * its own errors). Before the gh-1247 extraction both steps shared one try,
+ * so a tracker failure kept the branch. The decoupling is intentional: a
+ * merged test branch is stale regardless of tracker-move success. Pinned by
+ * test_prepareTestPRForReview.js ('stale branch is still deleted when the
+ * tracker move fails').
+ */
 function finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType, jiraConfig) {
     moveMergedTicketAndReport(ticketKey, issueType, jiraConfig, function (finalStatus) {
         return 'h3. ✅ Test Code Already Merged\n\n' +

@@ -29,9 +29,8 @@ function _parseJson(raw) {
 function _toArray(raw) {
     var parsed = _parseJson(raw);
     if (Array.isArray(parsed)) return parsed;
-    if (parsed && parsed.value) return parsed.value;
-    if (parsed && parsed.workflow_runs) return parsed.workflow_runs;
-    if (parsed && parsed.runs) return parsed.runs;
+    var list = parsed && (parsed.value || parsed.workflow_runs || parsed.runs);
+    if (list) return list;
     return parsed ? [parsed] : [];
 }
 

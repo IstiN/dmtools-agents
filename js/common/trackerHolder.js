@@ -4,10 +4,18 @@
  * Why this exists (gh-1247): ~20 action scripts each carried an identical
  * module-level lazy-singleton block (`_trackerCtx` / `_trackerInst` /
  * `initTracker` / `getTracker`), which the duplication gate flagged as one
- * 23-file clone group. The canonical implementation lives here ONCE; each
- * action creates its own holder via `create(trackersModule)` and keeps a
- * thin local delegate so call sites (`initTracker(config, customParams)`,
- * `getTracker()`) are unchanged.
+ * 23-file clone group. Each migrated action creates its own holder via
+ * `create(trackersModule)` and keeps a thin local delegate so call sites
+ * (`initTracker(config, customParams)`, `getTracker()`) are unchanged.
+ *
+ * ⚠️ NOT the only implementation (review follow-up on PR #1257): gh-1247
+ * deliberately migrated only the 2 SUTs in its clone group
+ * (preCliTestAutomationSetup.js, prepareTestPRForReview.js) to stay under
+ * the 50-token clone window. `js/common/trackers.js` still exports its own
+ * `createTrackerHolder()` (used by ~20 action files via
+ * `trackersModule.createTrackerHolder()`), with the same lazy-singleton /
+ * re-init semantics. Any semantic fix here must be mirrored there until a
+ * follow-up consolidation ticket merges the two — see gh-1261.
  *
  * Design constraints:
  * - ZERO requires on purpose: the trackers module is injected by the caller

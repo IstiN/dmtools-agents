@@ -57,6 +57,9 @@ _Check WIP Label Pre-Action_
 _Pre-CLI Development Setup Action_
 
 - Source: `agents/js/preCliDevelopmentSetup.js`
+- Writes:
+  - `input/<KEY>/merge_conflicts.md`
+  - `outputs/pr_base_branch.txt`
 - Side effects:
   - post ticket comment (via tracker)
   - git push

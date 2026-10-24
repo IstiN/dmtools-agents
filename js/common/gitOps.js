@@ -135,6 +135,16 @@ function _switchOrPullRef(branchName, cmd, pullRef) {
  *        (the branch is absent on origin); omitted for same-repo PRs.
  * @returns {{ branch: string, hadConflict: boolean }}
  */
+// Porcelain output reduced to the dirty lines that matter for the preflight
+// snapshot: blank lines dropped and factory-kit entries excluded (the nested
+// machine-infra repo is a gitlink `git add -A` cannot stage — gh-1000).
+function nonFactoryKitDirtyLines(porcelain) {
+    return cleanCommandOutput(porcelain || '')
+        .split('\n')
+        .filter(function (line) { return line.trim() && !/^(\?\?|A )\s+factory-kit(\/|$)/.test(line); })
+        .join('\n').trim();
+}
+
 function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef) {
     console.log('Checking out PR branch:', branchName);
     var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
@@ -147,10 +157,7 @@ function checkoutPRBranch(branchName, workingDir, baseBranch, pullRef) {
     // factory-kit excluded: the factory workflow's nested machine-infra repo
     // (git init inside the workspace) is a gitlink `git add -A` cannot stage
     // (exit 128, live gh-1000 timer auto-commits failing all session long).
-    var dirty = cleanCommandOutput(cmd('git status --porcelain') || '')
-        .split('\n')
-        .filter(function (line) { return line.trim() && !/^(\?\?|A )\s+factory-kit(\/|$)/.test(line); })
-        .join('\n').trim();
+    var dirty = nonFactoryKitDirtyLines(cmd('git status --porcelain'));
     var stashed = false;
     if (dirty) {
         console.log('Working tree has local changes — stashing before branch switch');

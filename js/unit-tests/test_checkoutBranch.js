@@ -44,7 +44,7 @@ function makeConfigLoaderStub(config, branchNameByRole, hookFn, hookLoadCalls) {
 // Real PR helper (gh-912): the remote-existence probes live there — the
 // strict ref-line parser must be exercised, not a stub.
 var DEFAULT_PR_HELPER_STUB = loadModule('js/common/pullRequest.js',
-    makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), './mergeState.js': loadModule('js/common/mergeState.js') }));
+    makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
 
 function loadCheckoutBranch(configLoaderStub, mocks) {
     return loadModule(

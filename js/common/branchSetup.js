@@ -300,6 +300,10 @@ function checkoutTestBranchHead(ticketKey, config, deps) {
     console.log('Setting up branch:', branchName);
 
     configureGitAuthor(exec, config, false);
+    // gh-1247: the `|| 'main'` fallback is preCliTestAutomationSetup's original
+    // behavior, kept as intentional hardening for callers whose config always
+    // sets git.baseBranch (preCliStoryTestAutomationSetup previously had no
+    // default — with baseBranch set the fetch list is identical).
     fetchBranchRefs(deps.prHelper, exec, [branchName, (config.git && config.git.baseBranch) || 'main'],
         'Could not fetch remote branches:');
     return { branchName: branchName, workingDir: workingDir, exec: exec };

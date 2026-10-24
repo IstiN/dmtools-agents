@@ -19,7 +19,7 @@ var NOOP_CONFIG_JS = { GIT_CONFIG: {}, STATUSES: {}, resolveStatuses: function()
 // at load time (the shared truncation bound), so the stub must actually export it.
 var devSetupCommandsReal = loadModule('js/common/setupCommands.js');
 var devCommentMarkupModule = loadModule('js/common/commentMarkup.js',
-    makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 
 // The real tracker factory (provider probing is pure config/env reads) so
 // action() tests exercise the actual github/jira provider gating.
@@ -33,7 +33,7 @@ var trackersModuleReal = loadModule(
 );
 
 var PR_HELPER_REAL = loadModule('js/common/pullRequest.js',
-    makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), './mergeState.js': loadModule('js/common/mergeState.js') }));
+    makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
 
 function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
     return loadModule(
@@ -920,7 +920,7 @@ suite('preCliDevelopmentSetup.action — branch-coverage characterization (gh-10
             fetchParentContext: { action: function () {} }
         }, opts || {});
         globals = globals || {};
-        var trackers = loadModule('js/common/trackers.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+        var trackers = loadModule('js/common/trackers.js', makeRequire({
             '../config.js': configModule,
             './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
         }), globals);

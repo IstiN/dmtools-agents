@@ -20,7 +20,7 @@ function jiraBoom(name) {
 }
 
 function loadRecoverStuck(mocks, scm) {
-    return loadModule('js/recoverStuckDevelopment.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+    return loadModule('js/recoverStuckDevelopment.js', makeRequire({
                                                                      'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
         './configLoader.js': {
             loadProjectConfig: function() { return { jira: {} }; },
@@ -65,11 +65,11 @@ suite('recoverStuckDevelopment: tracker layer', function() {
 });
 
 function loadEnhanceSD(mocks) {
-    return loadModule('js/enhanceSDAPIDescriptionAndAssess.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'),
+    return loadModule('js/enhanceSDAPIDescriptionAndAssess.js', makeRequire({
                                                                               'trackerHolder.js': loadModule('js/common/trackerHolder.js'),
         './common/jiraHelpers.js': { extractTicketKey: function(k) { return k; } },
         './config.js': configModule,
-        './common/aiResponseParser.js': loadModule('js/common/aiResponseParser.js', makeRequire({ 'branchSetup.js': loadModule('js/common/branchSetup.js'), '../config.js': configModule }), {}),
+        './common/aiResponseParser.js': loadModule('js/common/aiResponseParser.js', makeRequire({ '../config.js': configModule }), {}),
         './common/trackers.js': trackersWithMocks(mocks)
     }), mocks);
 }

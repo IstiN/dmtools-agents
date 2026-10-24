@@ -65,6 +65,7 @@ _Close Question Ticket Post-Action_
 - Source: `agents/js/closeQuestionTicket.js`
 - Side effects:
   - move ticket to status (via tracker)
+  - post ticket comment (via tracker)
 - Parameters (customParams):
   - `adoTextFormat`
   - `branchCreateFnPath`

@@ -769,7 +769,7 @@ suite('preCliStoryTestAutomationSetup — gh-1223 characterization: alignBranchW
 
         var module = loadStoryWithConflicts(githubHelpers, cliMock);
         // Re-load with a capturing file_write on the top-level globals.
-var outerMocks = { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function(args) { written[args.path] = args.content; } };
+        var outerMocks = { jira_search_by_jql: function() { return []; }, cli_execute_command: cliMock, file_write: function(args) { written[args.path] = args.content; } };
         module = loadModule(
             'js/preCliStoryTestAutomationSetup.js',
             makeRequire({

@@ -38,7 +38,6 @@ _Create Repository Development Sub-tasks — Multi-Task Variant_
 - Source: `agents/js/createRepoTasksMulti.js`
 - Side effects:
   - post ticket comment (via tracker)
-  - move ticket to status (via tracker)
 - Parameters (customParams):
   - `adoTextFormat`
   - `blockedStatus`
