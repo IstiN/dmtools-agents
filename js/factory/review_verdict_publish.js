@@ -34,36 +34,12 @@
 
 var reviewVerdict = require('./review_verdict.js');
 var shellQuote = require('./token_usage.js').shellQuote;
+// gh-1248: the env reader + pick closure are canonical in publishParams.js
+// (one copy shared by the three *_publish entries).
+var publishParams = require('./publishParams.js');
 
-/**
- * Env reader for the fallback path (guarded — no java bridge on QuickJS).
- */
-function envValue(name) {
-    try {
-        if (typeof java !== 'undefined' && java && java.lang &&
-            java.lang.System && typeof java.lang.System.getenv === 'function') {
-            var v = java.lang.System.getenv(name);
-            return (v === null || v === undefined) ? '' : String(v);
-        }
-    } catch (e) { /* no env bridge on this runtime */ }
-    return '';
-}
-
-/**
- * customParams > env > sh-step defaults. envMap is a test seam.
- */
 function resolveParams(params, envMap) {
-    var custom = (params && params.jobParams && params.jobParams.customParams) || {};
-    function env(name) {
-        if (envMap && Object.prototype.hasOwnProperty.call(envMap, name)) return envMap[name];
-        return envValue(name);
-    }
-    function pick(key, envName, dflt) {
-        var v = custom[key];
-        if (v === undefined || v === null || v === '') v = env(envName);
-        if (v === undefined || v === null || v === '') v = dflt;
-        return v === undefined || v === null ? '' : String(v);
-    }
+    var pick = publishParams.makePicker(params, envMap);
     return {
         repo: pick('repo', 'GITHUB_REPOSITORY', ''),
         number: pick('number', 'NUMBER', ''),
@@ -210,7 +186,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
         resolveParams: resolveParams,
-        envValue: envValue,
+        envValue: publishParams.envValue,
         productionSleepMs: productionSleepMs
     };
 }

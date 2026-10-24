@@ -23,6 +23,9 @@ const gitOps = require('./gitOps.js');
 const reviewThreadInventory = require('./reviewThreadInventory.js');
 const ciModule = require('./ci.js');
 const ciViolations = require('./ciViolations.js');
+// gh-1248: the review-discussion fetch/render blocks — one canonical copy
+// shared with js/common/scm.js' github provider.
+const githubReviewFetch = require('./githubReviewFetch.js');
 
 // Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
 // common/pullRequest.js once — this delegate keeps every local call site.
@@ -344,37 +347,18 @@ function getPRDetails(scmOrWorkspace, repositoryOrPrId, pullRequestIdOpt) {
     }
 }
 
-// ── fetchDiscussionsAndRawData helpers (gh-1086 extraction) ──────────────────
+// ── fetchDiscussionsAndRawData helpers (gh-1086 extraction; gh-1248: the
+// implementations moved to githubReviewFetch.js — one canonical copy shared
+// with js/common/scm.js' github provider) ──────────────────────────────────
 // Each helper keeps the exact call order, log text and fallback semantics of
 // the original inline implementation.
 
 function fetchPrConversations(workspace, repository, prIdStr) {
-    var conversations = [];
-    try {
-        conversations = github_get_pr_conversations({
-            workspace: workspace,
-            repository: repository,
-            pullRequestId: prIdStr
-        }) || [];
-    } catch (e) {
-        console.warn('github_get_pr_conversations failed:', e.message || e);
-    }
-    return conversations;
+    return githubReviewFetch.fetchPrConversations(workspace, repository, prIdStr);
 }
 
 function fetchPrReviewThreadsRaw(workspace, repository, prIdStr) {
-    var graphqlRaw = null;
-    try {
-        graphqlRaw = github_get_pr_review_threads({
-            workspace: workspace,
-            repository: repository,
-            pullRequestId: prIdStr
-        });
-        console.log('Got', reviewThreadInventory.parseGraphQLNodes(graphqlRaw).length, 'review threads for GraphQL IDs');
-    } catch (e) {
-        console.warn('github_get_pr_review_threads failed (falling back to conversations-only inventory):', e.message || e);
-    }
-    return graphqlRaw;
+    return githubReviewFetch.fetchPrReviewThreadsRaw(workspace, repository, prIdStr);
 }
 
 /**
@@ -390,13 +374,7 @@ function appendReviewThreadInventory(conversations, graphqlRaw, sections, rawThr
         if (conversations.length > 0 || inv.threads.length > 0) {
             inv.threads.forEach(function(t) { rawThreads.push(t); });
             sections.push(inv.markdownSection);
-            var invCounts = inv.counts;
-            console.log('Discussions: ' + invCounts.total + ' threads (' + invCounts.open + ' open, ' + invCounts.resolved + ' resolved, ' + invCounts.bot + ' bot, ' + invCounts.notices + ' machine notices),',
-                rawThreads.filter(function(t) { return t.rootCommentId; }).length + ' reply IDs,',
-                rawThreads.filter(function(t) { return t.threadId; }).length + ' resolve IDs' +
-                (inv.census.graphqlUnresolved !== null
-                    ? ' — GraphQL census: ' + inv.census.graphqlUnresolved + ' unresolved (arm-rule count)'
-                    : ''));
+            githubReviewFetch.logInventoryCounts(inv, rawThreads);
         }
     } catch (e) {
         console.warn('review-thread inventory build failed:', e.message || e);
@@ -410,15 +388,7 @@ function appendReviewThreadInventory(conversations, graphqlRaw, sections, rawThr
  * non-empty, exactly like the pre-extraction inline code.
  */
 function buildGeneralCommentsSection(comments) {
-    var section = '## General PR Comments\n\n';
-    comments.forEach(function(comment) {
-        if (_isDmtoolsMarkerComment(comment)) return;
-        var author = (comment.user && comment.user.login) ? comment.user.login : 'unknown';
-        var date = comment.created_at ? comment.created_at.substring(0, 10) : '';
-        section += '**' + author + '** (' + date + '):\n\n';
-        section += (comment.body || '').trim() + '\n\n---\n\n';
-    });
-    return section;
+    return githubReviewFetch.buildGeneralCommentsSection(comments);
 }
 
 /**
@@ -502,12 +472,9 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
     return { markdown: markdown, rawThreads: raw };
 }
 
-// gh-1097 follow-up: hidden `<!-- dmtools:` audit comments (naked-pr-rearm
-// etc.) are machine bookkeeping — never review feedback. Mirrors
-// machineNotice.isDmtoolsMarkerBody (inlined: keeps loader maps unchanged).
-function _isDmtoolsMarkerComment(comment) {
-    return String((comment && comment.body) || '').replace(/^\s+/, '').indexOf('<!-- dmtools:') === 0;
-}
+// gh-1097 follow-up: hidden `<!-- dmtools:` audit comments are machine
+// bookkeeping — the marker predicate is machineNotice.isDmtoolsMarkerBody,
+// applied inside githubReviewFetch.buildGeneralCommentsSection (gh-1248).
 
 /**
  * Unwrap a dmtools tool result: when the raw value is a JSON string

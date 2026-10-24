@@ -408,7 +408,7 @@ function makeSmAgent(opts) {
     if (opts.github && opts.github.realSource) {
         var realProvider = { prStatus: realPrStatus };
         var smProviderRealMod = loadModule('js/common/smProvider.js', makeRequire({
-            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
             './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
         }), {});
         var smProviderStub = { createSmProvider: function () { return realProvider; },
@@ -460,10 +460,16 @@ function makeSmAgent(opts) {
             './common/guestTransplant.js': loadModule('js/common/guestTransplant.js', makeRequire({
                 './machineAuthor.js': machineAuthorModule
             }), {}),
-            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
-            './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({}), {}),
-            './common/reworkConsumption.js': loadModule('js/common/reworkConsumption.js', makeRequire({}), {}),
-            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js'),
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+            './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {}),
+            './common/reworkConsumption.js': loadModule('js/common/reworkConsumption.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': reviewVerdictsReal()
+            }), {}),
+            './common/reworkLoopGuard.js': loadModule('js/common/reworkLoopGuard.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': reviewVerdictsReal()
+            })),
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
             // gh-1249: the shared workflow-run probe family — pure leaf, loaded real.
@@ -494,7 +500,7 @@ function makeSmAgent(opts) {
             './sm/sources/githubSource.js': {
                 takeMutexTickSnapshot: function () { return null; }
             },
-            './common/branchLegGuard.js': loadModule('js/common/branchLegGuard.js', makeRequire({}), {}),
+            './common/branchLegGuard.js': loadModule('js/common/branchLegGuard.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {}),
             './common/nakedPrReconcile.js': loadModule('js/common/nakedPrReconcile.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
             './common/issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {}),
@@ -518,7 +524,7 @@ function makeSmAgent(opts) {
             './factoryState.js': loadModule('js/factoryState.js',
                 makeRequire({
                     './common/machineAuthor.js': machineAuthorModule,
-                    './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({}), {})
+                    './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {})
                 }), {}),
         }),
         smMocks
@@ -1157,7 +1163,10 @@ suite('smAgent: arm_rework no-op loop guard (gh-957)', function () {
     // (default 2) empty laps on the UNCHANGED head: escalation marker ONCE
     // per head, arm resumes after a real fix push (new head = fresh budget).
 
-    var guard = loadModule('js/common/reworkLoopGuard.js', makeRequire({}), {});
+    var guard = loadModule('js/common/reworkLoopGuard.js', makeRequire({
+                './machineAuthor.js': machineAuthorReal(),
+                './reviewVerdicts.js': reviewVerdictsReal()
+            }), {});
 
     var RULE = {
         description: 'unresolved review threads on a machine-authored reviewed PR -> arm agent:rework',
@@ -13801,7 +13810,7 @@ suite('smAgent: fail-closed agent:rework consumption (gh-840)', function () {
     });
 
     test('AC2 — gh-807 verdict gate preserved: APPROVE head with clean census is NOT re-armed by the sweep', function () {
-        var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {});
         var verdictBody = rv.buildVerdictComment({
             head: HEAD, verdict: 'APPROVE', blocking: 0, important: 0, suggestions: 0,
             at: '2026-10-10T08:55:00.000Z', source: 'pr_review.json'

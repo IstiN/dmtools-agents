@@ -9,7 +9,7 @@
 var assert = globalThis.assert;
 
 var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
-var reworkLatchModule = loadModule('js/common/reworkLatch.js', makeRequire({}), {});
+var reworkLatchModule = loadModule('js/common/reworkLatch.js', makeRequire({ './legRunVocab.js': legRunVocabReal() }), {});
 var fsModule = loadModule('js/factoryState.js',
     makeRequire({
         './common/machineAuthor.js': machineAuthorModule,

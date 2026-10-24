@@ -50,15 +50,10 @@ function wrapTriggerWorkflowMock(fn) {
 
 function loadAutoStartHelper(scmMocks, builderMock, extraMocks) {
     var rawMocks = scmMocks || {};
-    var scm = loadModule(
-        'js/common/scm.js',
-        makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js'),
-            './reviewThreadInventory.js': loadModule('js/common/reviewThreadInventory.js', makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') })) }),
-        Object.assign({}, rawMocks, {
+    var scm = scmReal(Object.assign({}, rawMocks, {
             github_list_workflow_runs: wrapListWorkflowRunsMock(rawMocks.github_list_workflow_runs),
             github_trigger_workflow: wrapTriggerWorkflowMock(rawMocks.github_trigger_workflow)
-        })
-    );
+        }));
     var buildEncodedConfig = builderMock || makeBuildEncodedConfigMock();
     return loadModule(
         'js/common/autoStart.js',

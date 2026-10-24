@@ -14,40 +14,13 @@
  */
 
 var tokenUsage = require('./token_usage.js');
+// gh-1248: the env reader + pick closure are canonical in publishParams.js
+// (one copy shared by the three *_publish entries).
+var publishParams = require('./publishParams.js');
 
-/**
- * Env reader for the fallback path. The dmtools JS runtimes do not
- * guarantee a java bridge (GraalJS has one; QuickJS does not), so every
- * access is guarded and missing env simply yields '' — the caller's
- * defaults take over.
- */
-function envValue(name) {
-    try {
-        if (typeof java !== 'undefined' && java && java.lang &&
-            java.lang.System && typeof java.lang.System.getenv === 'function') {
-            var v = java.lang.System.getenv(name);
-            return (v === null || v === undefined) ? '' : String(v);
-        }
-    } catch (e) { /* no env bridge on this runtime */ }
-    return '';
-}
-
-/**
- * customParams > env > sh-step defaults. envMap is a test seam (name →
- * value); production passes nothing and reads the process env.
- */
 function resolveParams(params, envMap) {
+    var pick = publishParams.makePicker(params, envMap);
     var custom = (params && params.jobParams && params.jobParams.customParams) || {};
-    function env(name) {
-        if (envMap && Object.prototype.hasOwnProperty.call(envMap, name)) return envMap[name];
-        return envValue(name);
-    }
-    function pick(key, envName, dflt) {
-        var v = custom[key];
-        if (v === undefined || v === null || v === '') v = env(envName);
-        if (v === undefined || v === null || v === '') v = dflt;
-        return v === undefined || v === null ? '' : String(v);
-    }
     return {
         runOutput: pick('runOutput', 'RUN_OUTPUT', ''),
         configPath: pick('configPath', 'CONFIG', ''),
@@ -117,6 +90,6 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
         resolveParams: resolveParams,
-        envValue: envValue
+        envValue: publishParams.envValue
     };
 }
