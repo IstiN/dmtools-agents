@@ -204,7 +204,17 @@
         "js/unit-tests/test_isCodeGraphAvailable.js",
         "js/unit-tests/test_closeQuestionTicket.js",
         "js/unit-tests/test_enhanceSolutionDesignDescriptionAndAssess.js",
-        "js/unit-tests/test_prepareBugFixBatchContext.js"
+        "js/unit-tests/test_prepareBugFixBatchContext.js",
+        "js/unit-tests/test_bitriseTrigger.js",
+        "js/unit-tests/test_mcpParse.js",
+        "js/unit-tests/test_actionTicketContext.js",
+        "js/unit-tests/test_checkTaskStoriesDone.js",
+        "js/unit-tests/test_developBugFixBatchAndCreatePR.js",
+        "js/unit-tests/test_smLock.js",
+        "js/unit-tests/test_moveToDone.js",
+        "js/unit-tests/test_trackerFieldValue.js",
+        "js/unit-tests/test_affectedReposSection.js",
+        "js/unit-tests/test_mergeObjects.js"
       ]
     }
   }

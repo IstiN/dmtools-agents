@@ -310,15 +310,25 @@ suite('wave2d2 ado — prepareBugFixBatchContext', function() {
             ado_get_work_item: function(a) { return w2Wi(Number(a.id), 'Epic', 'New', { 'System.WorkItemType': 'Epic' }); }
         });
         var stub = { action: function() {} };
+        var trackers = w2Trackers(rec.mocks);
+        var configLoaderMock = makeDefaultConfigLoaderMock();
+        // gh-1250: shared batch runtime helper — real module, requires mapped.
+        var sharedBatchCtx = loadModule('js/common/bugFixBatchContext.js', makeRequire({
+            './pullRequest.js': loadModule('js/common/pullRequest.js',
+                makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
+            './configLoader.js': configLoaderMock,
+            './trackers.js': trackers
+        }), Object.assign({ file_write: function() {}, cli_execute_command: function() { return ''; } }, rec.mocks));
         var mod = loadModule('js/prepareBugFixBatchContext.js', makeRequire({
             './config.js': configModule,
-            './configLoader.js': makeDefaultConfigLoaderMock(),
+            './configLoader.js': configLoaderMock,
             './fetchQuestionsToInput.js': stub, './fetchLinkedTestsToInput.js': stub,
             // Real PR helper (gh-912): prepareBugFixBatchContext delegates
             // cleanCommandOutput to it — canonical implementation required.
             './common/pullRequest.js': loadModule('js/common/pullRequest.js',
                 makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
-            './common/trackers.js': w2Trackers(rec.mocks)
+            './common/trackers.js': trackers,
+            './common/bugFixBatchContext.js': sharedBatchCtx
         }), Object.assign({ file_write: function() {}, cli_execute_command: function() { return ''; } }, rec.mocks));
         mod.action({ inputFolderPath: 'input/20', customParams: { trackerProvider: 'ado' } });
         assert.equal(w2Args(rec.calls, 'ado_search_by_wiql').length, 1);

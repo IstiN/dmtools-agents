@@ -237,6 +237,21 @@ suite('smDoneCheck', function() {
         assert.deepEqual(removedLabels, [{ key: 'T-1', label: 'sm_lock' }]);
     });
 
+    test('resolveActionContext tolerates bare params without jobParams or ticket', function() {
+        var smDoneCheck = loadSmDoneCheck();
+        var loadedWith = null;
+        var ctx = smDoneCheck.resolveActionContext(
+            {},
+            { loadProjectConfig: function(p) { loadedWith = p; return { cfg: true }; } },
+            { createTracker: function(cfg, cp) { return { cfgSeen: cfg, cpSeen: cp }; } }
+        );
+        assert.equal(ctx.ticketKey, undefined);
+        assert.equal(ctx.removeLabel, undefined);
+        assert.deepEqual(loadedWith, {}, 'loadProjectConfig falls back to bare params');
+        assert.equal(ctx.tracker.cfgSeen.cfg, true);
+        assert.deepEqual(ctx.tracker.cpSeen, {}, 'customParams defaults to {}');
+    });
+
     test('runDoneCheckAction fails when ticketKey is missing', function() {
         var smDoneCheck = loadSmDoneCheck();
         var result = smDoneCheck.runDoneCheckAction(

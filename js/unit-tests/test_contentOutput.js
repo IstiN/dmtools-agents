@@ -11,7 +11,7 @@
 function loadLib() {
     return loadModule(
         'js/common/contentOutput.js',
-        makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock() }),
+        makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock(), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }),
         {}
     );
 }
@@ -69,6 +69,57 @@ suite('contentOutput.injectCommentPlaceholders', function() {
         var lib = loadLib();
         var result = lib.injectCommentPlaceholders('# Nothing here', [{ ref: REF_A, text: 'Missing text' }]);
         assert.deepEqual(result.missed, [REF_A]);
+    });
+});
+
+suite('contentOutput.injectPageCommentAnchors (gh-1250)', function() {
+
+    var STORAGE_WITH_MARKERS = '<p>Some <ac:inline-comment-marker ac:ref="' + REF_A + '">important text</ac:inline-comment-marker> here, ' +
+        'and <ac:inline-comment-marker ac:ref="' + REF_B + '">vanished words</ac:inline-comment-marker> too.</p>';
+
+    test('returns null when the page storage carries no comment anchors (caller keeps the body)', function() {
+        var calls = [];
+        var lib = loadLibWithGlobals({
+            confluence_content_by_id: function(args) {
+                calls.push(args);
+                return { body: { storage: { value: '<p>Plain body, no markers</p>' } } };
+            }
+        });
+        var result = lib.injectPageCommentAnchors('# Markdown body', 'page-1');
+        assert.equal(result, null);
+        assert.deepEqual(calls, [{ contentId: 'page-1' }], 'exactly one storage lookup');
+    });
+
+    test('returns null when the storage payload has no body at all', function() {
+        var lib = loadLibWithGlobals({
+            confluence_content_by_id: function() { return {}; }
+        });
+        assert.equal(lib.injectPageCommentAnchors('# Markdown body', 'page-1'), null);
+    });
+
+    test('injects every found anchor into the Markdown body and reports the missed ones', function() {
+        var lib = loadLibWithGlobals({
+            confluence_content_by_id: function() { return { body: { storage: { value: STORAGE_WITH_MARKERS } } }; }
+        });
+        var md = '# Doc\n\nSome important text here.\n';
+        var result = lib.injectPageCommentAnchors(md, 'page-1');
+        assert.notEqual(result, null);
+        assert.deepEqual(result.injected, [REF_A], 'found anchor injected');
+        assert.deepEqual(result.missed, [REF_B], 'anchor text absent from the Markdown is reported');
+        assert.ok(result.content.indexOf('[[ic:' + REF_A + ']]important text[[/ic]]') !== -1);
+    });
+
+    test('propagates a failing storage lookup (callers wrap: fetchConfluenceOutputContext catches, prepareDiscoveryContext warns)', function() {
+        var lib = loadLibWithGlobals({
+            confluence_content_by_id: function() { throw new Error('confluence down'); }
+        });
+        var threw = false;
+        try {
+            lib.injectPageCommentAnchors('# Markdown body', 'page-1');
+        } catch (e) {
+            threw = true;
+        }
+        assert.ok(threw, 'the lookup failure is not swallowed here');
     });
 });
 
@@ -226,7 +277,7 @@ suite('contentOutput.extractCommentBody', function() {
 function loadLibWithGlobals(globalMocks) {
     return loadModule(
         'js/common/contentOutput.js',
-        makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock() }),
+        makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock(), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }),
         globalMocks || {}
     );
 }
@@ -682,7 +733,8 @@ suite('contentOutput.resolveConfig helpers (gh-1224)', function() {
                         return { contentOutput: { space: 'DOC' } };
                     }
                 },
-                './trackers.js': trackersMock()
+                './trackers.js': trackersMock(),
+                './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({}))
             }),
             {}
         );
@@ -711,7 +763,8 @@ suite('contentOutput.resolveConfig helpers (gh-1224)', function() {
                 '../configLoader.js': {
                     loadProjectConfig: function() { return { contentOutput: { space: 'PROJ', operationType: 'append' } }; }
                 },
-                './trackers.js': trackersMock()
+                './trackers.js': trackersMock(),
+                './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({}))
             }),
             {}
         );

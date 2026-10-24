@@ -566,6 +566,7 @@ if (typeof module !== 'undefined' && module.exports) {
         publishPage: publishPage,
         findTicketPage: findTicketPage,
         buildPageTitle: buildPageTitle,
+        buildPageUrl: buildPageUrl,
         resolvePageUrl: resolvePageUrl,
         sanitizeFileName: sanitizeFileName,
         fetchPageInlineComments: fetchPageInlineComments,

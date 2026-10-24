@@ -18,7 +18,8 @@ function loadFetchParentContextWithConfigLoader(configLoaderMock, mocks) {
         './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
             '../config.js': configModule,
             './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
-        }), mocks || {})
+        }), mocks || {}),
+        './common/mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({}))
     };
     if (configLoaderMock) requireMap['./configLoader.js'] = configLoaderMock;
     return loadModule(
@@ -1413,7 +1414,7 @@ suite('fetchParentContextToInput — resolveFieldName', function() {
                 './common/trackers.js': { createTracker: function() {
                     if (makeTrackerThrow) { throw new Error('tracker creation failed'); }
                     return tracker;
-                } }
+                } }, './common/mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({}))
             }),
             { file_read: function() { return null; }, file_write: function() {} }
         );
@@ -1535,7 +1536,7 @@ suite('fetchParentContextToInput — resolveFieldName helpers', function() {
             'js/fetchParentContextToInput.js',
             makeRequire({
                 './configLoader.js': { loadProjectConfig: function() { return {}; } },
-                './common/trackers.js': { createTracker: function() { return {}; } }
+                './common/trackers.js': { createTracker: function() { return {}; } }, './common/mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({}))
             }),
             { file_read: function() { return null; }, file_write: function() {} }
         );

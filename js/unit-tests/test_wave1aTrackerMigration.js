@@ -32,7 +32,11 @@ function w1aLoad(file, rec) {
     return loadModule('js/' + file, makeRequire({
         './configLoader.js': { loadProjectConfig: function() { return W1A_CFG; } },
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
-        './common/trackers.js': w1aTrackers(rec.mocks)
+        './common/trackers.js': w1aTrackers(rec.mocks),
+        './common/actionTicketContext.js': loadModule('js/common/actionTicketContext.js', makeRequire({
+            '../configLoader.js': { loadProjectConfig: function() { return W1A_CFG; } },
+            './trackers.js': w1aTrackers(rec.mocks)
+        }), rec.mocks)
     }), rec.mocks);
 }
 function w1aParams(key, ado) {

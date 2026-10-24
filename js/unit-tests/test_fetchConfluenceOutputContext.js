@@ -11,7 +11,8 @@ function loadFetchConfluenceContext(mocks, projectConfig) {
         makeRequire({
             '../configLoader.js': configLoaderMock,
             // gh-823: contentOutput requires ./trackers.js at load time
-            './trackers.js': trackersMock()
+            './trackers.js': trackersMock(),
+            './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({}))
         }),
         Object.assign({}, mocks || {})
     );
@@ -365,5 +366,69 @@ suite('fetchConfluenceOutputContext — pure helpers (gh-119)', function() {
         assert.deepEqual(mod.buildTargetMarker(cfg, 'Title'), {
             target: 'confluence', format: 'markdown', pageTitle: 'Title', space: 'DOC', parentPageId: '42'
         });
+    });
+});
+
+suite('fetchConfluenceOutputContext — gh-1250 anchor delegation', function() {
+
+    test('a failing storage lookup for anchors is non-fatal — the page body is still written', function() {
+        var writes = {};
+        var warns = [];
+        var origWarn = console.warn;
+        console.warn = function(m) { warns.push(String(m)); };
+        var mod;
+        try {
+            mod = loadFetchConfluenceContext({
+                confluence_get_children_by_id: function() {
+                    return [{ id: 'p1', title: 'PROJ-10 Story', body: { storage: { value: '# Existing body' } } }];
+                },
+                confluence_content_by_id: function(args) {
+                    if (args.format === 'md') return null;
+                    throw new Error('storage down');
+                },
+                confluence_get_page_inline_comments: function() { return '{"results":[]}'; },
+                file_write: function(p, c) { writes[p] = c; }
+            });
+        } finally {
+            console.warn = origWarn;
+        }
+
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42' } }
+        }));
+
+        assert.equal(result.action, 'context_fetched');
+        assert.equal(writes['input/PROJ-10/confluence_output_current.md'], '# Existing body',
+            'body written unchanged when the anchor re-injection fails');
+    });
+
+    test('a page without comment anchors is written unchanged (no placeholder log line)', function() {
+        var writes = {};
+        var logs = [];
+        var origLog = console.log;
+        console.log = function(m) { logs.push(String(m)); };
+        var mod;
+        try {
+            mod = loadFetchConfluenceContext({
+                confluence_get_children_by_id: function() {
+                    return [{ id: 'p1', title: 'PROJ-10 Story', body: { storage: { value: '# Plain body' } } }];
+                },
+                confluence_content_by_id: function() {
+                    return { body: { storage: { value: '<p>no markers here</p>' } } };
+                },
+                confluence_get_page_inline_comments: function() { return '{"results":[]}'; },
+                file_write: function(p, c) { writes[p] = c; }
+            });
+        } finally {
+            console.log = origLog;
+        }
+
+        var result = mod.action(makeParams({
+            customParams: { contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42' } }
+        }));
+
+        assert.equal(result.action, 'context_fetched');
+        assert.equal(writes['input/PROJ-10/confluence_output_current.md'], '# Plain body');
+        assert.ok(!logs.some(function(l) { return l.indexOf('injected') !== -1; }), 'no injection logged without anchors');
     });
 });

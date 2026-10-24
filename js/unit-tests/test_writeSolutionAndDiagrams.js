@@ -132,7 +132,8 @@ function wd3LoadFull(opts) {
             './common/contentOutput.js': loadModule('js/common/contentOutput.js',
                 makeRequire({
                     '../configLoader.js': configLoaderMock,
-                    './trackers.js': trackersMock()
+                    './trackers.js': trackersMock(),
+                    './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({}))
                 }),
                 globals)
         }),
@@ -163,7 +164,7 @@ suite('writeSolutionAndDiagrams — module export', function() {
                 './common/autoStart.js': {},
                 './common/outputFiles.js': outputFiles,
                 './common/tokenUsageComment.js': tokenUsageComment,
-                './common/contentOutput.js': loadModule('js/common/contentOutput.js', makeRequire({ '../configLoader.js': configLoaderModule, './trackers.js': trackersMock() }), {})
+                './common/contentOutput.js': loadModule('js/common/contentOutput.js', makeRequire({ '../configLoader.js': configLoaderModule, './trackers.js': trackersMock(), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }), {})
             }),
             {}
         );
@@ -241,7 +242,7 @@ suite('writeSolutionAndDiagrams — diagram handling for Confluence targets', fu
                 './common/outputFiles.js': outputFilesMock,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
                 './common/contentOutput.js': loadModule('js/common/contentOutput.js',
-                    makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock() }),
+                    makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock(), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }),
                     globals),
                 './writeSolutionAndLabels.js': loadModule('js/writeSolutionAndLabels.js',
                     makeRequire({
@@ -427,7 +428,7 @@ suite('writeSolutionAndDiagrams — required outputs', function() {
                 './common/autoStart.js': {},
                 './common/outputFiles.js': outputFiles,
                 './common/tokenUsageComment.js': tokenUsageComment,
-                './common/contentOutput.js': loadModule('js/common/contentOutput.js', makeRequire({ '../configLoader.js': configLoaderModule, './trackers.js': trackersMock() }), {})
+                './common/contentOutput.js': loadModule('js/common/contentOutput.js', makeRequire({ '../configLoader.js': configLoaderModule, './trackers.js': trackersMock(), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }), {})
             }),
             {
                 file_read: function(opts) {
@@ -486,7 +487,7 @@ suite('writeSolutionAndDiagrams — ado tracker (wave2d3)', function() {
             './common/outputFiles.js': outputFilesMock,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/contentOutput.js': loadModule('js/common/contentOutput.js',
-                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': wd3Trackers(globals) }), globals)
+                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': wd3Trackers(globals), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }), globals)
         }), globals);
         var result = module.action({
             ticket: { key: '55', fields: { summary: 's' } },
@@ -846,7 +847,7 @@ function gh1187LoadWithOutputs(outputs) {
             './common/outputFiles.js': { readOutputFile: function(name) { return outputs[name] === undefined ? null : outputs[name]; } },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/contentOutput.js': loadModule('js/common/contentOutput.js',
-                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock() }),
+                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock(), './mergeObjects.js': loadModule('js/common/mergeObjects.js', makeRequire({})) }),
                 globals)
         }),
         globals
