@@ -63,6 +63,19 @@ function resolveParams(params, envMap) {
 }
 
 /**
+ * The raw gh body from the transport: a result object ({output|stdout}) is
+ * unwrapped, a bare string rides as-is, and a null/undefined result becomes
+ * '' — String(res) would feed '[object Object]' to the flip and silently
+ * no-op every marker. No .trim(): the sh consumes the gh body
+ * byte-for-byte (trailing newline included) and the awk-port ORS semantics
+ * handle the rest.
+ */
+function execResultText(exec, cmd) {
+    var res = exec({ command: cmd });
+    return String((res && (res.output || res.stdout)) || res || '');
+}
+
+/**
  * JSRunner action. deps is a test seam: production resolves the dmtools
  * globals (cli_execute_command / file_write) exactly like
  * token_usage_publish.js wires its transport.
@@ -76,14 +89,7 @@ function action(params, deps) {
     var opts = resolveParams(params, deps.env);
     var result = markJobDone.markJobDone(opts, {
         exec: function (cmd) {
-            // Defensive unwrap (token_usage.js execOut pattern): some dmtools
-            // runtimes return a result object from cli_execute_command —
-            // String(res) would feed '[object Object]' to the flip and
-            // silently no-op every marker. No .trim(): the sh consumes the
-            // gh body byte-for-byte (trailing newline included) and the
-            // awk-port ORS semantics handle the rest.
-            var res = exec({ command: cmd });
-            return String((res && (res.output || res.stdout)) || res || '');
+            return execResultText(exec, cmd);
         },
         writeFile: function (path, content) {
             if (!write) throw new Error('file_write is not available on this runtime');
@@ -101,6 +107,7 @@ function action(params, deps) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
+        execResultText: execResultText,
         resolveParams: resolveParams,
         envValue: envValue
     };

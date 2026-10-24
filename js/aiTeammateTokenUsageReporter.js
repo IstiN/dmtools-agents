@@ -74,31 +74,16 @@ function parseRequestsLine(line) {
 // Extracts the JSON payload of an fa-tokens ledger line by balanced-brace
 // scanning, so a payload wrapped in a larger log line (or followed by trailing
 // text) is found reliably. Returns null when no complete {...} object follows
-// the 'fa-tokens:' marker.
+// the 'fa-tokens:' marker. The scanner itself is shared with the factory
+// producer (tokenUsage.jsonPayloadEndFrom) so both fa readers stay in lockstep.
 function extractFaPayload(text) {
     var marker = String(text || '').indexOf('fa-tokens:');
     if (marker === -1) return null;
     var start = text.indexOf('{', marker);
     if (start === -1) return null;
-    var depth = 0;
-    var inString = false;
-    var escaped = false;
-    for (var i = start; i < text.length; i++) {
-        var ch = text.charAt(i);
-        if (inString) {
-            if (escaped) escaped = false;
-            else if (ch === '\\') escaped = true;
-            else if (ch === '"') inString = false;
-            continue;
-        }
-        if (ch === '"') inString = true;
-        else if (ch === '{') depth++;
-        else if (ch === '}') {
-            depth--;
-            if (depth === 0) return text.substring(start, i + 1);
-        }
-    }
-    return null;
+    var end = tokenUsage.jsonPayloadEndFrom(text, start);
+    if (end === -1) return null;
+    return text.substring(start, end + 1);
 }
 
 // parseInt-or-zero for the ledger's numeric fields.
@@ -569,14 +554,30 @@ function formatDuration(seconds) {
     return secs + 's';
 }
 
-function calculateDurationSeconds(run) {
-    run = run || {};
-    var start = run.run_started_at || run.runStartedAt || run.started_at || run.startedAt || run.created_at || run.createdAt;
-    var end = run.updated_at || run.updatedAt || run.completed_at || run.completedAt;
-    var startMs = Date.parse(start || '');
-    var endMs = Date.parse(end || '');
+// The run's start/end timestamps: snake_case first (the GitHub list-runs
+// shape), then the camelCase shapes, then created/started as the last
+// resort.
+function runStartStampOf(run) {
+    return firstDefined(run.run_started_at, run.runStartedAt, run.started_at,
+        run.startedAt, run.created_at, run.createdAt);
+}
+
+function runEndStampOf(run) {
+    return firstDefined(run.updated_at, run.updatedAt, run.completed_at, run.completedAt);
+}
+
+// Math.round((end - start) / 1000), with the guard contract: either side
+// unparseable or end before start → 0.
+function durationSecondsBetween(startMs, endMs) {
     if (isNaN(startMs) || isNaN(endMs) || endMs < startMs) return 0;
     return Math.round((endMs - startMs) / 1000);
+}
+
+function calculateDurationSeconds(run) {
+    run = run || {};
+    var startMs = Date.parse(runStartStampOf(run) || '');
+    var endMs = Date.parse(runEndStampOf(run) || '');
+    return durationSecondsBetween(startMs, endMs);
 }
 
 // Run start in ms: startedAt (or createdAt), with the createdAt fallback when
@@ -1815,6 +1816,10 @@ if (typeof module !== 'undefined' && module.exports) {
         matchedGroupOf: matchedGroupOf,
         cliTokensSampleOf: cliTokensSampleOf,
         extractTokenUsage: extractTokenUsage,
+        extractFaPayload: extractFaPayload,
+        durationSecondsBetween: durationSecondsBetween,
+        runStartStampOf: runStartStampOf,
+        runEndStampOf: runEndStampOf,
         newUsageTracking: newUsageTracking,
         parseResumeSignal: parseResumeSignal,
         parseRateLimitSignal: parseRateLimitSignal,
