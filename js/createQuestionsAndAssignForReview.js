@@ -24,16 +24,9 @@ const outputFiles = require('./common/outputFiles.js');
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
-var _trackerCtx = { config: null, customParams: {} };
-var _trackerInst = null;
-function initTracker(config, customParams) {
-    _trackerCtx = { config: config || null, customParams: customParams || {} };
-    _trackerInst = null;
-}
-function getTracker() {
-    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
-    return _trackerInst;
-}
+var lazyTracker = require('./common/lazyTracker.js').createLazyTracker(trackersModule);
+var initTracker = lazyTracker.initTracker;
+var getTracker = lazyTracker.getTracker;
 
 /**
  * Ensure summary starts with [Q] prefix
@@ -164,24 +157,6 @@ function readQuestionsJson() {
 }
 
 /**
- * Read a description file, falling back to the entry summary
- */
-function readDescriptionFile(filePath, fallbackSummary) {
-    if (!filePath) {
-        return fallbackSummary || '';
-    }
-    try {
-        var content = file_read(filePath);
-        if (content && content.trim() !== '') {
-            return content;
-        }
-    } catch (error) {
-        console.warn('Could not read description file ' + filePath + ':', error);
-    }
-    return fallbackSummary || '';
-}
-
-/**
  * When the agent decides no clarifying questions are needed, it must still
  * explain why in outputs/response.md. Post that explanation as a Jira comment
  * so a human reviewer sees the reasoning instead of a silent skip.
@@ -292,7 +267,7 @@ function createAdoQuestion(tracker, projectKey, entry, summary, description, par
  */
 function createQuestion(entry, parentKey, projectKey, jiraConfig, priorityMap) {
     var summary = ensureQPrefix(buildSummary(entry.summary, 0));
-    var description = readDescriptionFile(entry.description, entry.summary);
+    var description = outputFiles.readDescriptionFile(entry.description, entry.summary);
     var fieldsJson = buildQuestionFieldsJson(entry, summary, description, parentKey, jiraConfig, priorityMap);
 
     try {
@@ -474,17 +449,6 @@ function triggerAutoStartQuestionAnswer(customParams, projectConfig, createdTick
     }
 }
 
-/**
- * Token usage comments (non-fatal).
- */
-function postTokenUsageCommentsSafe(ticketKey, params) {
-    try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
-    } catch (e) {
-        console.warn('Failed to post token usage comments:', e);
-    }
-}
-
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
@@ -536,7 +500,7 @@ function action(params) {
         var stageOutcome = moveToPoReview(ticketKey, jiraConfig.statuses.PO_REVIEW);
         removeWipLabel(ticketKey, wipLabel);
         triggerAutoStartQuestionAnswer(customParams, projectConfig, createdTickets);
-        postTokenUsageCommentsSafe(ticketKey, params);
+        tokenUsageComment.postTokenUsageCommentsSafe(ticketKey, params);
 
         return {
             success: true,

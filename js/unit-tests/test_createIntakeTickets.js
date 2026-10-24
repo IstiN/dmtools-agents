@@ -20,6 +20,7 @@ function loadIntake(mocks, projectConfig) {
         './configLoader.js': { loadProjectConfig: function() { return projectConfig || {}; } },
         './common/issuePlan.js': loadModule('js/common/issuePlan.js', makeRequire({}), {}),
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+        './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), mocks),
         './common/trackers.js': intakeTrackers(mocks)
     }), mocks);
 }

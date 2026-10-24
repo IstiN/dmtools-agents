@@ -248,9 +248,23 @@ function postTokenUsageComments(ticketKey, options) {
     return { posted: posted, files: files, errors: errors };
 }
 
+/**
+ * postTokenUsageComments guarded so a provider failure here never fails the
+ * calling action — the usage comment is informational (gh-1245: shared by the
+ * question-creation post-action and the bug ready-check).
+ */
+function postTokenUsageCommentsSafe(ticketKey, params) {
+    try {
+        postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: customParamsOf(params) });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         postTokenUsageComments: postTokenUsageComments,
+        postTokenUsageCommentsSafe: postTokenUsageCommentsSafe,
         resolvePostTracker: resolvePostTracker,
         customParamsOf: customParamsOf,
         findUsageFiles: findUsageFiles,

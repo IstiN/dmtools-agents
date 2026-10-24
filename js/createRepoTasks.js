@@ -12,286 +12,87 @@
  * Duplicate-safe: skips repos that already have a matching Sub-task under the parent.
  *
  * gh-1004: action was one 200+ line function (CRAP 180.9). The pure decisions
- * and payload builders are extracted below so action only orchestrates; every
+ * and payload builders are extracted so action only orchestrates; every
  * helper is covered directly by js/unit-tests/test_createRepoTasks.js.
+ * gh-1245: every helper shared with createRepoTasksMulti.js lives in
+ * js/common/repoTaskShared.js — this module only shapes per-repo Sub-task
+ * plans on top of the shared creation loop.
  */
 
-var configModule = require('./config.js');
+var shared = require('./common/repoTaskShared.js');
 var trackersModule = require('./common/trackers.js');
-var linkedIssuesReport = require('./common/linkedIssuesReport.js');
-var configLoader = null;
-try { configLoader = require('./configLoader.js'); } catch (e) {}
-var truncateSummary = configModule.truncateSummary;
-var JIRA_SUMMARY_MAX_LENGTH = configModule.JIRA_SUMMARY_MAX_LENGTH;
-
-function resolveProjectConfig(params) {
-    return configLoader ? configLoader.loadProjectConfig(params) : null;
-}
-
-function getJiraBaseUrl() {
-    try {
-        var url = java.lang.System.getenv('JIRA_BASE_PATH');
-        return url ? url.replace(/\/$/, '') : '';
-    } catch (e) {
-        return '';
-    }
-}
-
-function jiraLink(key, baseUrl) {
-    return '[' + key + '|' + baseUrl + '/browse/' + key + ']';
-}
-
-function parseAffectedRepos(description) {
-    if (!description) return [];
-    var startMarker = '{code:json|title=affected_repos}';
-    var endMarker = '{code}';
-    var startIdx = description.indexOf(startMarker);
-    if (startIdx === -1) {
-        console.warn('No {code:json|title=affected_repos} block found in description');
-        return [];
-    }
-    var jsonStart = startIdx + startMarker.length;
-    var endIdx = description.indexOf(endMarker, jsonStart);
-    if (endIdx === -1) {
-        console.warn('Closing {code} not found after affected_repos block');
-        return [];
-    }
-    var jsonStr = description.substring(jsonStart, endIdx).trim();
-    try {
-        var parsed = JSON.parse(jsonStr);
-        return Array.isArray(parsed) ? parsed : [];
-    } catch (e) {
-        console.warn('Failed to parse affected_repos JSON:', e);
-        return [];
-    }
-}
 
 // ---------------------------------------------------------------------------
-// Pure helpers (gh-1004) — no tracker calls, unit-tested directly
+// Plan shaping (gh-1245): one plan per repository, consumed by the shared
+// createSubTasks() creation loop in js/common/repoTaskShared.js.
 // ---------------------------------------------------------------------------
 
-function decideDuplicate(existingSummaries, repoName) {
-    return existingSummaries.some(function(s) {
-        return s.indexOf('[' + repoName + ']') !== -1;
-    });
-}
-
-function buildRepoSummary(repoName, parentSummary) {
-    // Parent summary is Jira-controlled and usually short, but a "[repo] "
-    // prefix plus a long parent summary could still exceed the 255-char
-    // hard limit — truncate defensively (see createRepoTasksMulti.js).
-    return truncateSummary('[' + repoName + '] ' + parentSummary, JIRA_SUMMARY_MAX_LENGTH);
-}
-
-function buildScopeDescription(repoName, saKey, parentKey, baseUrl) {
-    var saRef  = baseUrl ? jiraLink(saKey, baseUrl)    : saKey;
-    var parRef = baseUrl ? jiraLink(parentKey, baseUrl) : parentKey;
-    return 'Your scope only development for *' + repoName +
-           '* based on solution in ' + saRef +
-           ' and parent acceptance criteria ' + parRef;
-}
-
-function extractCreatedKey(result) {
-    try {
-        var parsed = typeof result === 'string' ? (/^[A-Za-z0-9_-]+$/.test(result) ? { key: result } : JSON.parse(result)) : result;
-        return parsed && (parsed.key || parsed.id) ? (parsed.key || parsed.id) : null;
-    } catch (e) {
-        // key extraction failed — non-critical
-        return null;
-    }
-}
-
-function buildSummaryComment(created, skipped, baseUrl) {
-    var comment = 'h3. Development Sub-tasks\n\n';
-    created.forEach(function(c) {
-        if (c.error) {
-            comment += '* ❌ ' + c.repo + ': ' + c.error + '\n';
-        } else {
-            var ref = c.key && baseUrl ? jiraLink(c.key, baseUrl) : (c.key || c.summary);
-            comment += '* ✅ ' + ref + ' — ' + c.repo + '\n';
-        }
-    });
-    if (skipped.length > 0) {
-        comment += '\n_Skipped (already exist): ' + skipped.join(', ') + '_\n';
-    }
-    return comment;
-}
-
-// ---------------------------------------------------------------------------
-// Tracker-backed helpers (gh-1004) — each failure mode is non-fatal by design
-// ---------------------------------------------------------------------------
-
-function loadExistingSummaries(tracker, parentKey) {
-    var existingSummaries = [];
-    try {
-        var provider = tracker && typeof tracker.provider === 'function' ? tracker.provider() : 'jira';
-        var existing = tracker.searchIssues(
-            // JQL text: provider-specific query (WIQL on ado)
-            linkedIssuesReport.buildChildrenQuery(provider, parentKey, 'parent = ' + parentKey + ' AND issuetype = Sub-task', 'Sub-task'), {
-            fields: ['summary']
-        });
-        if (Array.isArray(existing)) {
-            existing.forEach(function(t) {
-                var s = t.fields && t.fields.summary ? t.fields.summary : (t.summary || '');
-                existingSummaries.push(s);
-            });
-        }
-    } catch (e) {
-        console.warn('Could not fetch existing Sub-tasks (will create without dedup check):', e);
-    }
-    return existingSummaries;
-}
-
-function createSubTasks(tracker, repos, projectKey, parentKey, parentSummary, saKey, baseUrl, ticketLabels, existingSummaries) {
-    var created = [];
-    var skipped = [];
-    // repoName → created Jira key (for dependency linking)
-    var repoKeyMap = {};
-
+function buildRepoSubTaskPlans(repos, parentSummary, saKey, parentKey, baseUrl) {
+    var plans = [];
     repos.forEach(function(repo) {
         var repoName = typeof repo === 'string' ? repo : repo.name;
         if (!repoName) return;
 
-        var summary = buildRepoSummary(repoName, parentSummary);
+        var summary = shared.buildScopedSummary(repoName, parentSummary);
+        var description = shared.buildScopeDescription(repoName, saKey, parentKey, baseUrl);
 
-        // Skip if a sub-task with this repo tag already exists
-        if (decideDuplicate(existingSummaries, repoName)) {
-            console.log('Skipping ' + repoName + ' — sub-task already exists');
-            skipped.push(repoName);
-            return;
-        }
-
-        var desc = buildScopeDescription(repoName, saKey, parentKey, baseUrl);
-
-        try {
-            var result = tracker.createTicketWithParent(projectKey, 'Sub-task', summary, desc, parentKey, { labels: ticketLabels });
-
-            var createdKey = extractCreatedKey(result);
-
-            console.log('Created Sub-task ' + (createdKey || '(key unavailable)') + ': ' + summary);
-            created.push({ repo: repoName, key: createdKey, summary: summary, depends_on: repo.depends_on || [] });
-            if (createdKey) repoKeyMap[repoName] = createdKey;
-
-        } catch (e) {
-            console.error('Failed to create Sub-task for ' + repoName + ':', e);
-            created.push({ repo: repoName, key: null, error: e.toString(), depends_on: [] });
-        }
-    });
-
-    return { created: created, skipped: skipped, repoKeyMap: repoKeyMap };
-}
-
-function linkDependency(tracker, blockerKey, dependentKey, blocksRelationship) {
-    try {
-        tracker.linkIssues(blockerKey, dependentKey, blocksRelationship);
-        console.log(blockerKey + ' ' + blocksRelationship + ' ' + dependentKey);
-        return true;
-    } catch (e) {
-        console.warn('Failed to link ' + blockerKey + ' ' + blocksRelationship + ' ' + dependentKey + ':', e);
-        return false;
-    }
-}
-
-function moveToBlocked(tracker, key, blockedStatus) {
-    try {
-        tracker.moveToStatus(key, blockedStatus);
-        console.log('Moved ' + key + ' to ' + blockedStatus);
-    } catch (e) {
-        console.warn('Failed to move ' + key + ' to ' + blockedStatus + ':', e);
-    }
-}
-
-function wireDependencies(tracker, created, repoKeyMap, blocksRelationship, blockedStatus) {
-    created.forEach(function(c) {
-        if (!c.key || !Array.isArray(c.depends_on) || c.depends_on.length === 0) return;
-        var anyLinked = false;
-        c.depends_on.forEach(function(depRepo) {
-            var blockerKey = repoKeyMap[depRepo];
-            if (!blockerKey) {
-                console.warn('Cannot resolve depends_on "' + depRepo + '" for ' + c.key + ' — skipping link');
-                return;
+        plans.push({
+            summary: summary,
+            description: description,
+            // A repo is a duplicate when any existing summary carries its tag.
+            dedupeLabel: '[' + repoName + ']',
+            skipLog: repoName,
+            skipValue: repoName,
+            mapKey: repoName,
+            buildRecord: function(createdKey) {
+                return { repo: repoName, key: createdKey, summary: summary, depends_on: repo.depends_on || [] };
+            },
+            buildErrorRecord: function(e) {
+                return { repo: repoName, key: null, error: e.toString(), depends_on: [] };
             }
-            if (linkDependency(tracker, blockerKey, c.key, blocksRelationship)) anyLinked = true;
         });
-        if (anyLinked) moveToBlocked(tracker, c.key, blockedStatus);
     });
+    return plans;
 }
 
-function postSummaryComment(tracker, saKey, comment) {
-    try {
-        tracker.postComment(saKey, comment);
-    } catch (e) {
-        console.warn('Failed to post summary comment on ' + saKey + ':', e);
-    }
+function createSubTasks(tracker, repos, projectKey, parentKey, parentSummary, saKey, baseUrl, ticketLabels, existingSummaries) {
+    var plans = buildRepoSubTaskPlans(repos, parentSummary, saKey, parentKey, baseUrl);
+    var outcome = shared.createSubTasks(tracker, plans, {
+        projectKey: projectKey,
+        parentKey: parentKey,
+        ticketLabels: ticketLabels
+    }, existingSummaries);
+    return { created: outcome.created, skipped: outcome.skipped, repoKeyMap: outcome.keyMap };
 }
 
 // ---------------------------------------------------------------------------
-// Action-phase helpers (gh-1197) — each decision or fetch of the original
-// action body, small and directly unit-testable; same tracker/file calls in
-// the same order as before.
+// Per-module behaviour wrappers (gh-1245) — the exported names and contracts
+// are unchanged since gh-1004/gh-1197; each delegates to the shared helper.
 // ---------------------------------------------------------------------------
 
-function extractSaKey(params) {
-    var saKey = params.ticket && params.ticket.key;
-    if (!saKey) {
-        return { error: 'No ticket key in params' };
-    }
-    return { saKey: saKey };
+function decideDuplicate(existingSummaries, repoName) {
+    return shared.decideDuplicate(existingSummaries, '[' + repoName + ']');
 }
 
-function resolveTaskOptions(params) {
-    // Customisable via customParams (or .dmtools/config.js jobParamPatches.createRepoTasks.customParams)
-    var customParams = params.customParams || (params.jobParams && params.jobParams.customParams) || {};
-    return {
-        customParams: customParams,
-        blocksRelationship: customParams.blocksRelationship || 'Blocks',
-        blockedStatus:      customParams.blockedStatus      || 'Blocked',
-        ticketLabels:       customParams.labels             || ['development']
-    };
+function buildRepoSummary(repoName, parentSummary) {
+    return shared.buildScopedSummary(repoName, parentSummary);
 }
 
-function resolveSaTicketContext(tracker, saKey) {
-    // Fetch the SA ticket to get description + parent
-    var saTicket = tracker.getIssue(saKey, ['description', 'summary', 'parent']);
-    var saFields = saTicket && saTicket.fields ? saTicket.fields : saTicket;
-    var description = saFields.description ? saFields.description.toString() : '';
-
-    // Resolve parent key
-    var parentInfo = saFields.parent;
-    var parentKey = parentInfo && typeof parentInfo === 'object' ? parentInfo.key : null;
-    return { description: description, parentKey: parentKey };
+function buildScopeDescription(repoName, saKey, parentKey, baseUrl) {
+    return shared.buildScopeDescription(repoName, saKey, parentKey, baseUrl);
 }
 
-function resolveParentSummary(tracker, parentKey) {
-    // Fetch parent summary
-    var parentTicket = tracker.getIssue(parentKey, ['summary']);
-    var parentFields = parentTicket && parentTicket.fields ? parentTicket.fields : parentTicket;
-    return (parentFields.summary || parentKey).toString();
-}
-
-function requireAffectedRepos(description, saKey) {
-    // Extract repos from description
-    var repos = parseAffectedRepos(description);
-    if (repos.length === 0) {
-        return { error: 'No affected repos found in ' + saKey + ' — ensure writeSolutionAndLabels ran first' };
-    }
-    return { repos: repos };
-}
-
-function repoNamesCsv(repos) {
-    return repos.map(function(r) { return typeof r === 'string' ? r : r.name; }).join(', ');
+function buildSummaryComment(created, skipped, baseUrl) {
+    return shared.buildSummaryComment(created, skipped, baseUrl, 'repo');
 }
 
 function postOutcomeSummaryComment(tracker, saKey, baseUrl, outcome) {
-    // Post summary comment on the SA ticket
-    if (outcome.created.length > 0 || outcome.skipped.length > 0) {
-        postSummaryComment(tracker, saKey, buildSummaryComment(outcome.created, outcome.skipped, baseUrl));
-    }
+    shared.postOutcomeSummaryComment(tracker, saKey, baseUrl, outcome, 'repo');
 }
 
 function action(params) {
     try {
-        var saInfo = extractSaKey(params);
+        var saInfo = shared.extractSaKey(params);
         if (saInfo.error) {
             return { success: false, error: saInfo.error };
         }
@@ -299,34 +100,34 @@ function action(params) {
 
         console.log('createRepoTasks: processing SA ticket ' + saKey);
 
-        var options = resolveTaskOptions(params);
-        var tracker = trackersModule.createTracker(resolveProjectConfig(params), options.customParams);
+        var options = shared.resolveTaskOptions(params);
+        var tracker = trackersModule.createTracker(shared.resolveProjectConfig(params), options.customParams);
 
-        var saContext = resolveSaTicketContext(tracker, saKey);
+        var saContext = shared.resolveSaTicketContext(tracker, saKey);
         if (!saContext.parentKey) {
             return { success: false, error: 'SA ticket ' + saKey + ' has no parent ticket' };
         }
         console.log('Parent ticket: ' + saContext.parentKey);
 
-        var parentSummary = resolveParentSummary(tracker, saContext.parentKey);
+        var parentSummary = shared.resolveParentSummary(tracker, saContext.parentKey);
 
-        var reposInfo = requireAffectedRepos(saContext.description, saKey);
+        var reposInfo = shared.requireAffectedRepos(saContext.description, saKey);
         if (reposInfo.error) {
             return { success: false, error: reposInfo.error };
         }
         var repos = reposInfo.repos;
-        console.log('Found ' + repos.length + ' affected repo(s): ' + repoNamesCsv(repos));
+        console.log('Found ' + repos.length + ' affected repo(s): ' + shared.repoNamesCsv(repos));
 
-        var baseUrl = getJiraBaseUrl();
+        var baseUrl = shared.getJiraBaseUrl();
         var projectKey = saContext.parentKey.split('-')[0];
 
         // Load existing Sub-tasks under the parent to avoid duplicates
-        var existingSummaries = loadExistingSummaries(tracker, saContext.parentKey);
+        var existingSummaries = shared.loadExistingSummaries(tracker, saContext.parentKey);
 
         var outcome = createSubTasks(tracker, repos, projectKey, saContext.parentKey, parentSummary, saKey, baseUrl, options.ticketLabels, existingSummaries);
 
         // Wire dependencies: blocker Blocks dependent + move dependent to Blocked status
-        wireDependencies(tracker, outcome.created, outcome.repoKeyMap, options.blocksRelationship, options.blockedStatus);
+        shared.wireDependencies(tracker, outcome.created, outcome.repoKeyMap, options.blocksRelationship, options.blockedStatus);
 
         postOutcomeSummaryComment(tracker, saKey, baseUrl, outcome);
 
@@ -347,22 +148,23 @@ function action(params) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
-        parseAffectedRepos: parseAffectedRepos,
+        buildRepoSubTaskPlans: buildRepoSubTaskPlans,
+        createSubTasks: createSubTasks,
         decideDuplicate: decideDuplicate,
         buildRepoSummary: buildRepoSummary,
         buildScopeDescription: buildScopeDescription,
-        extractCreatedKey: extractCreatedKey,
         buildSummaryComment: buildSummaryComment,
-        loadExistingSummaries: loadExistingSummaries,
-        createSubTasks: createSubTasks,
-        wireDependencies: wireDependencies,
-        postSummaryComment: postSummaryComment,
-        extractSaKey: extractSaKey,
-        resolveTaskOptions: resolveTaskOptions,
-        resolveSaTicketContext: resolveSaTicketContext,
-        resolveParentSummary: resolveParentSummary,
-        requireAffectedRepos: requireAffectedRepos,
-        repoNamesCsv: repoNamesCsv,
-        postOutcomeSummaryComment: postOutcomeSummaryComment
+        postOutcomeSummaryComment: postOutcomeSummaryComment,
+        parseAffectedRepos: shared.parseAffectedRepos,
+        extractCreatedKey: shared.extractCreatedKey,
+        loadExistingSummaries: shared.loadExistingSummaries,
+        wireDependencies: shared.wireDependencies,
+        postSummaryComment: shared.postSummaryComment,
+        extractSaKey: shared.extractSaKey,
+        resolveTaskOptions: shared.resolveTaskOptions,
+        resolveSaTicketContext: shared.resolveSaTicketContext,
+        resolveParentSummary: shared.resolveParentSummary,
+        requireAffectedRepos: shared.requireAffectedRepos,
+        repoNamesCsv: shared.repoNamesCsv
     };
 }

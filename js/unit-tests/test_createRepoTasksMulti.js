@@ -2,6 +2,13 @@
  * Unit tests for js/createRepoTasksMulti.js
  */
 
+function loadRepoTaskShared(globals) {
+    return loadModule('js/common/repoTaskShared.js', makeRequire({
+        '../config.js': configModule,
+        './linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js')
+    }), globals);
+}
+
 function makeModule(globals) {
     var defaultGlobals = {
         java: { lang: { System: { getenv: function() { return 'https://jira.example.com'; } } } },
@@ -16,7 +23,7 @@ function makeModule(globals) {
 
     return loadModule(
         'js/createRepoTasksMulti.js',
-        makeRequire({ './config.js': configModule, './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'), './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), defaultGlobals) }),
+        makeRequire({ './config.js': configModule, './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'), './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), defaultGlobals), './common/repoTaskShared.js': loadRepoTaskShared(defaultGlobals) }),
         defaultGlobals
     );
 }

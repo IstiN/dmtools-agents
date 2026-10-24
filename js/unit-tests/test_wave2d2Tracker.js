@@ -188,8 +188,13 @@ suite('wave2d2 ado — createRepoTasks', function() {
             ado_search_by_wiql: function() { return []; },
             ado_create_work_item: function() { n++; return { id: 200 + n }; }
         });
-        var mod = loadModule('js/createRepoTasks.js', makeRequire({ './config.js': configModule, './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'), './common/trackers.js': w2Trackers(rec.mocks) }),
-            Object.assign({ java: { lang: { System: { getenv: function() { return ''; } } } } }, rec.mocks));
+        var globals = Object.assign({ java: { lang: { System: { getenv: function() { return ''; } } } } }, rec.mocks);
+        var shared = loadModule('js/common/repoTaskShared.js', makeRequire({
+            '../config.js': configModule,
+            './linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js')
+        }), globals);
+        var mod = loadModule('js/createRepoTasks.js', makeRequire({ './config.js': configModule, './common/linkedIssuesReport.js': loadModule('js/common/linkedIssuesReport.js'), './common/trackers.js': w2Trackers(rec.mocks), './common/repoTaskShared.js': shared }),
+            globals);
         var r = mod.action({ ticket: { key: '100' }, customParams: { trackerProvider: 'ado' } });
         assert.equal(r.success, true);
         var created = w2Args(rec.calls, 'ado_create_work_item');
@@ -211,8 +216,9 @@ suite('wave2d2 ado — createQuestionsAndAssignForReview', function() {
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {}, postTokenUsageCommentsSafe: function() {} },
             './common/outputFiles.js': outputFiles,
+            './common/lazyTracker.js': loadModule('js/common/lazyTracker.js'),
             './common/trackers.js': w2Trackers(rec.mocks)
         }), Object.assign({ file_read: function() { return null; } }, rec.mocks));
         var r = mod.action({ ticket: { key: '829' }, metadata: { contextId: 'story_questions' }, initiator: 'a@b.c', jobParams: W2_ADO });
