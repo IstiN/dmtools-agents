@@ -2003,7 +2003,6 @@ suite('pushReworkChanges — findPRForTicket delegates to prLookup (gh-1249)', f
 
     test('non-array listPrs payload (null provider result) fails closed with the PR-LOOKUP-FAILED marker — no TypeError', function () {
         var fx = runJiraLookup(function(state) { return null; });
-        console.log('DBG typeof:', typeof fx.result.error, 'idx:', String(fx.result.error).indexOf('PR-LOOKUP-FAILED')); console.log('DBG codes:', String(fx.result.error).slice(0,40).split('').map(function(c){return c.charCodeAt(0)}).join(','));
         assert.equal(fx.result.success, false, 'lookup failure must fail the leg loudly');
         assert.contains(String(fx.result.error), 'PR-LOOKUP-FAILED');
         assert.ok(

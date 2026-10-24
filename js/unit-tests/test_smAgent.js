@@ -8,6 +8,21 @@
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// gh-1249: the REAL smProvider module, loaded once, for the shared pure
+// helpers that smAgent now delegates to (reviewThreadNodesOf — the GraphQL
+// reviewThreads envelope nav). Stubs reference the REAL implementation
+// instead of re-declaring the envelope chain (a verbatim stub copy would
+// re-form the clone window this rework removed).
+var smProviderRealModCache = null;
+function smProviderRealForGh1249() {
+    if (smProviderRealModCache) return smProviderRealModCache;
+    smProviderRealModCache = loadModule('js/common/smProvider.js', makeRequire({
+        './reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({ './machineAuthor.js': machineAuthorReal() }), {}),
+        './validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {})
+    }), {});
+    return smProviderRealModCache;
+}
+
 /**
  * Create a smAgent instance with full mock injection.
  *
@@ -522,7 +537,10 @@ function makeSmAgent(opts) {
                 // cached open-PR list after mutating labels.
                 ioCacheDrop: function (o, r, kind, id) {
                     capturedIoCacheDrops.push({ owner: o, repo: r, kind: kind, id: id });
-                }
+                },
+                // gh-1249: smAgent.fetchPrReviewThreadNodes delegates to the
+                // shared envelope nav — stubs must serve the real one.
+                reviewThreadNodesOf: smProviderRealForGh1249().reviewThreadNodesOf
             },
             './factoryState.js': loadModule('js/factoryState.js',
                 makeRequire({
