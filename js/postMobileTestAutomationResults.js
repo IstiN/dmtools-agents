@@ -224,15 +224,29 @@ function normalizeResult(result) {
     if (!result.status) {
         var counts = getResultCounts(result);
         var passRate = String(result.passRate || result.pass_rate || '').trim();
-        if (counts.failed > 0) {
-            result.status = 'failed';
-        } else if (counts.passed > 0 || passRate === '100%' || passRate === '100') {
-            result.status = 'passed';
-        } else if (result.results && Array.isArray(result.results) && result.results.length > 0) {
-            result.status = 'failed';
+        var implied = decideImpliedStatus(counts, passRate, result.results);
+        if (implied) {
+            result.status = implied;
         }
     }
     return result;
+}
+
+/**
+ * Status implied by a result payload that carries no explicit status
+ * (null = leave the status unset). gh-1223: extracted from normalizeResult.
+ */
+function decideImpliedStatus(counts, passRate, results) {
+    if (counts.failed > 0) {
+        return 'failed';
+    }
+    if (counts.passed > 0 || passRate === '100%' || passRate === '100') {
+        return 'passed';
+    }
+    if (Array.isArray(results) && results.length > 0) {
+        return 'failed';
+    }
+    return null;
 }
 
 /** Run a command inside the automation repo directory. */
@@ -329,31 +343,39 @@ function createAutomationPR(title, branchName, baseBranch, workingDir, scm, tick
 }
 
 /**
+ * First open PR whose title or head branch mentions ticketKey
+ * (null when none matches). gh-1223: extracted from findFeaturePR.
+ */
+function matchFeaturePrByTicket(prs, ticketKey) {
+    for (var i = 0; i < prs.length; i++) {
+        var pr = prs[i];
+        var prTitle = pr.title || '';
+        var prBranch = (pr.head && pr.head.ref) || '';
+        if (prTitle.indexOf(ticketKey) !== -1 || prBranch.indexOf(ticketKey) !== -1) {
+            console.log('✅ Found feature PR #' + pr.number + ': ' + prTitle + ' (' + prBranch + ')');
+            return pr;
+        }
+    }
+    return null;
+}
+
+/**
  * Find the feature PR/MR in the main app repo by trigger ticket key.
  */
 function findFeaturePR(ticketKey, scm, owner, repo) {
     try {
-        var raw = scm.listPrs('open');
-        var parsed = parseMcpResult(raw);
-        var prs = Array.isArray(parsed) ? parsed : (parsed && parsed.data ? parsed.data : []);
+        var prs = mobileHelpers.parseMcpPrList(parseMcpResult(scm.listPrs('open')));
 
         if (!prs || prs.length === 0) {
             console.log('No open PRs found in', owner + '/' + repo);
             return null;
         }
 
-        for (var i = 0; i < prs.length; i++) {
-            var pr = prs[i];
-            var prTitle = pr.title || '';
-            var prBranch = (pr.head && pr.head.ref) || '';
-            if (prTitle.indexOf(ticketKey) !== -1 || prBranch.indexOf(ticketKey) !== -1) {
-                console.log('✅ Found feature PR #' + pr.number + ': ' + prTitle + ' (' + prBranch + ')');
-                return pr;
-            }
+        var matched = matchFeaturePrByTicket(prs, ticketKey);
+        if (!matched) {
+            console.log('No feature PR found matching', ticketKey, 'in', owner + '/' + repo);
         }
-
-        console.log('No feature PR found matching', ticketKey, 'in', owner + '/' + repo);
-        return null;
+        return matched;
     } catch (e) {
         console.warn('Failed to find feature PR:', e);
         return null;
